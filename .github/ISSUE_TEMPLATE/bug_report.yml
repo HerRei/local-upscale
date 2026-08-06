@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible LocalSR problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the expected and actual behavior.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: LocalSR version or commit
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Hardware and settings
+      description: CPU/GPU, available RAM/VRAM, model, device, tile, halo, and precision.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs or error message
+      render: text
+  - type: checkboxes
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed private paths, images, and credentials from the report.
+          required: true

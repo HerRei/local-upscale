@@ -1,0 +1,52 @@
+[project]
+name = "localsr"
+version = "0.2.0"
+description = "A desktop GUI for running local image super-resolution models using PyTorch and Spandrel."
+authors = [{name = "Hermes Reisner"}]
+readme = "README.md"
+license = "MIT"
+keywords = ["super-resolution", "upscaling", "PySide6", "PyTorch", "Spandrel"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "spandrel>=0.4.0",
+    "Pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "tifffile>=2023.0.0"
+]
+requires-python = ">=3.11"
+
+[project.urls]
+Repository = "https://github.com/HerRei/local-upscale"
+Issues = "https://github.com/HerRei/local-upscale/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "pytest-qt>=4.2.0", "ruff>=0.1.0"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+localsr = "localsr.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

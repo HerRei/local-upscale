@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a focused improvement to LocalSR.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: Problem
+      description: What is difficult today, and who encounters it?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful solution.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives and constraints
