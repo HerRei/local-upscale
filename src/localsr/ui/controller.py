@@ -551,6 +551,7 @@ class LocalSRController(QObject):
                 f"{mode_name} prepared: {model.name} · {decision.device_id} · "
                 f"{decision.precision.upper()} · {decision.tile_size}px tiles."
             )
+            self.startUpscale()
             self._pending_preset = None
         except ValueError as error:
             self._preset_message = f"Automatic settings need attention: {error}"

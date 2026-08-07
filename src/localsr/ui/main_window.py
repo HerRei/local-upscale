@@ -79,7 +79,8 @@ class MainWindow(QMainWindow):
         self.custom_model_path = None
         self.model_scale = 1
         self.current_model_info = {}
-        self.output_dir = os.path.expanduser("~")
+        desktop = os.path.expanduser("~/Desktop")
+        self.output_dir = desktop if os.path.isdir(desktop) else os.path.expanduser("~")
         self.current_job_id = None
         self.current_estimate = None
         self.pending_output_scale = None

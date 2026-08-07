@@ -241,18 +241,8 @@ class WorkerServer:
 
             now = time.monotonic()
             elapsed = now - (inference_started_at or now)
-            if last_progress_at is None:
-                seconds_per_tile = elapsed / max(completed, 1)
-            else:
-                completed_delta = max(1, completed - last_completed)
-                seconds_per_tile = (now - last_progress_at) / completed_delta
-            if smoothed_seconds_per_tile is None:
-                smoothed_seconds_per_tile = seconds_per_tile
-            else:
-                smoothed_seconds_per_tile = (
-                    smoothed_seconds_per_tile * 0.65 + seconds_per_tile * 0.35
-                )
-            estimated_remaining = smoothed_seconds_per_tile * max(0, total - completed)
+            seconds_per_tile = elapsed / max(completed, 1)
+            estimated_remaining = seconds_per_tile * max(0, total - completed)
             last_progress_at = now
             last_completed = completed
 

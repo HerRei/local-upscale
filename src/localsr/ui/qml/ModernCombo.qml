@@ -58,6 +58,7 @@ ComboBox {
         id: delegateItem
         required property var model
         required property int index
+        required property string modelData
         width: control.width - 12
         height: 38
         highlighted: control.highlightedIndex === index

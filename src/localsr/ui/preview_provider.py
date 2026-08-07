@@ -145,12 +145,11 @@ class PreviewImageProvider(QQuickImageProvider):
                 or self._output_height != image_height
             ):
                 return False
-            target = QRect(
-                round(output_x / image_width * self._progressive.width()),
-                round(output_y / image_height * self._progressive.height()),
-                max(1, round(output_width / image_width * self._progressive.width())),
-                max(1, round(output_height / image_height * self._progressive.height())),
-            )
+            left = round(output_x / image_width * self._progressive.width())
+            top = round(output_y / image_height * self._progressive.height())
+            right = round((output_x + output_width) / image_width * self._progressive.width())
+            bottom = round((output_y + output_height) / image_height * self._progressive.height())
+            target = QRect(left, top, max(1, right - left), max(1, bottom - top))
             painter = QPainter(self._progressive)
             painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
             painter.drawImage(target, tile)

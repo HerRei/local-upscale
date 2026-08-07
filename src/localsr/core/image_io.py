@@ -68,7 +68,6 @@ class ImageManager:
                     315: "Artist",
                     316: "HostComputer",
                     33432: "Copyright",
-                    34665: "ExifOffset",
                     34853: "GPSInfo",
                 }
                 for k, v in exif_data.items():

@@ -331,44 +331,114 @@ ApplicationWindow {
                         color: "#080b10"
                         border.color: "#202938"
 
-                        Image {
-                            id: previewImage
+                        Flickable {
+                            id: flickable
                             anchors.fill: parent
                             anchors.margins: 2
-                            source: window.showLiveResult
-                                ? localSR.progressivePreviewSource
-                                : localSR.sourcePreviewSource
-                            cache: false
-                            asynchronous: true
-                            fillMode: Image.PreserveAspectFit
-                            mipmap: true
-                            smooth: true
-                            visible: localSR.imageReady
-                        }
+                            clip: true
+                            contentWidth: imageContainer.width * imageContainer.scale
+                            contentHeight: imageContainer.height * imageContainer.scale
+                            interactive: imageContainer.scale > 1.0
 
-                        Rectangle {
-                            id: activeTileRect
-                            visible: localSR.tileActive && window.showLiveResult
-                            x: previewImage.x + (previewImage.width - previewImage.paintedWidth) / 2
-                                + localSR.activeTileX * previewImage.paintedWidth
-                            y: previewImage.y + (previewImage.height - previewImage.paintedHeight) / 2
-                                + localSR.activeTileY * previewImage.paintedHeight
-                            width: Math.max(2, localSR.activeTileWidth * previewImage.paintedWidth)
-                            height: Math.max(2, localSR.activeTileHeight * previewImage.paintedHeight)
-                            color: "transparent"
-                            border.color: teal
-                            border.width: 2
-                            radius: 3
-                            Rectangle {
-                                anchors.fill: parent
-                                color: teal
-                                opacity: 0.09
+                            Item {
+                                id: imageContainer
+                                width: flickable.width
+                                height: flickable.height
+                                transformOrigin: Item.TopLeft
+                                
+                                Image {
+                                    id: previewImage
+                                    anchors.fill: parent
+                                    source: localSR.sourcePreviewSource
+                                    cache: false
+                                    asynchronous: false
+                                    fillMode: Image.PreserveAspectFit
+                                    mipmap: true
+                                    smooth: true
+                                    visible: localSR.imageReady
+                                }
+
+                                Item {
+                                    id: resultClip
+                                    anchors.fill: previewImage
+                                    visible: window.showLiveResult && localSR.imageReady
+                                    clip: true
+                                    width: compareSlider.active ? compareSlider.x + (compareSlider.width / 2) : previewImage.width
+                                    
+                                    Image {
+                                        id: resultImage
+                                        width: previewImage.width
+                                        height: previewImage.height
+                                        source: localSR.progressivePreviewSource
+                                        cache: false
+                                        asynchronous: false
+                                        fillMode: Image.PreserveAspectFit
+                                        mipmap: true
+                                        smooth: true
+                                    }
+                                }
+                                
+                                Rectangle {
+                                    id: compareSlider
+                                    property bool active: !localSR.tileActive && window.showLiveResult && localSR.imageReady && localSR.progress >= 1.0
+                                    visible: active
+                                    width: Math.max(2, 4 / imageContainer.scale)
+                                    height: previewImage.height
+                                    x: previewImage.width / 2
+                                    color: teal
+                                    
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        anchors.margins: -15 / imageContainer.scale
+                                        cursorShape: Qt.SizeHorCursor
+                                        drag.target: compareSlider
+                                        drag.axis: Drag.XAxis
+                                        drag.minimumX: 0
+                                        drag.maximumX: previewImage.width
+                                    }
+                                }
+
+                                Rectangle {
+                                    id: activeTileRect
+                                    visible: localSR.tileActive && window.showLiveResult
+                                    x: previewImage.x + (previewImage.width - previewImage.paintedWidth) / 2
+                                        + localSR.activeTileX * previewImage.paintedWidth
+                                    y: previewImage.y + (previewImage.height - previewImage.paintedHeight) / 2
+                                        + localSR.activeTileY * previewImage.paintedHeight
+                                    width: Math.max(2, localSR.activeTileWidth * previewImage.paintedWidth)
+                                    height: Math.max(2, localSR.activeTileHeight * previewImage.paintedHeight)
+                                    color: "transparent"
+                                    border.color: teal
+                                    border.width: 2
+                                    radius: 3
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: teal
+                                        opacity: 0.09
+                                    }
+                                    SequentialAnimation on opacity {
+                                        running: activeTileRect.visible
+                                        loops: Animation.Infinite
+                                        NumberAnimation { from: 0.55; to: 1.0; duration: 600 }
+                                        NumberAnimation { from: 1.0; to: 0.55; duration: 600 }
+                                    }
+                                }
                             }
-                            SequentialAnimation on opacity {
-                                running: activeTileRect.visible
-                                loops: Animation.Infinite
-                                NumberAnimation { from: 0.55; to: 1.0; duration: 600 }
-                                NumberAnimation { from: 1.0; to: 0.55; duration: 600 }
+
+                            WheelHandler {
+                                onWheel: function(event) {
+                                    var factor = event.angleDelta.y > 0 ? 1.1 : 1/1.1;
+                                    var newScale = Math.max(1.0, Math.min(10.0, imageContainer.scale * factor));
+                                    
+                                    var point = event.point.position;
+                                    var oldContentX = flickable.contentX;
+                                    var oldContentY = flickable.contentY;
+                                    
+                                    imageContainer.scale = newScale;
+                                    
+                                    flickable.contentX = (oldContentX + point.x) * (newScale / (imageContainer.scale / factor)) - point.x;
+                                    flickable.contentY = (oldContentY + point.y) * (newScale / (imageContainer.scale / factor)) - point.y;
+                                }
                             }
                         }
 
