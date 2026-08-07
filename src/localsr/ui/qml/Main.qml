@@ -263,13 +263,16 @@ ApplicationWindow {
                             boundsBehavior: Flickable.StopAtBounds
                             contentWidth: imageContainer.width * imageContainer.scale
                             contentHeight: imageContainer.height * imageContainer.scale
+                            leftMargin: Math.max(0, (width - contentWidth) / 2)
+                            topMargin: Math.max(0, (height - contentHeight) / 2)
                             interactive: imageContainer.scale > 1.0
 
                             Item {
                                 id: imageContainer
                                 property real baseScale: 1.0
-                                width: flickable.width
-                                height: flickable.height
+                                property real fitRatio: localSR.imageReady ? Math.min(flickable.width / Math.max(1, previewImage.implicitWidth), flickable.height / Math.max(1, previewImage.implicitHeight)) : 1.0
+                                width: localSR.imageReady ? previewImage.implicitWidth * fitRatio : flickable.width
+                                height: localSR.imageReady ? previewImage.implicitHeight * fitRatio : flickable.height
                                 transformOrigin: Item.TopLeft
                                 
                                 Image {
@@ -278,7 +281,7 @@ ApplicationWindow {
                                     source: localSR.sourcePreviewSource
                                     cache: false
                                     asynchronous: false
-                                    fillMode: Image.PreserveAspectFit
+                                    fillMode: Image.Stretch
                                     mipmap: imageContainer.scale < 10.0
                                     smooth: imageContainer.scale < 10.0
                                     visible: localSR.imageReady
@@ -298,7 +301,7 @@ ApplicationWindow {
                                         source: localSR.progressivePreviewSource
                                         cache: false
                                         asynchronous: false
-                                        fillMode: Image.PreserveAspectFit
+                                        fillMode: Image.Stretch
                                         mipmap: imageContainer.scale < 10.0
                                         smooth: imageContainer.scale < 10.0
                                     }
@@ -358,17 +361,27 @@ ApplicationWindow {
                                     var newScale = Math.max(1.0, Math.min(50.0, imageContainer.scale * factor));
                                     
                                     var point = event.point.position;
-                                    var oldContentX = flickable.contentX;
-                                    var oldContentY = flickable.contentY;
+                                    var imageX = flickable.contentX + point.x;
+                                    var imageY = flickable.contentY + point.y;
                                     
                                     var oldScale = imageContainer.scale;
                                     imageContainer.scale = newScale;
                                     
-                                    var newContentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
-                                    var newContentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
+                                    var newImageX = imageX * (newScale / oldScale);
+                                    var newImageY = imageY * (newScale / oldScale);
                                     
-                                    flickable.contentX = Math.max(0, Math.min(newContentX, imageContainer.width * newScale - flickable.width));
-                                    flickable.contentY = Math.max(0, Math.min(newContentY, imageContainer.height * newScale - flickable.height));
+                                    var newContentWidth = imageContainer.width * newScale;
+                                    var newContentHeight = imageContainer.height * newScale;
+                                    var newLeftMargin = Math.max(0, (flickable.width - newContentWidth) / 2);
+                                    var newTopMargin = Math.max(0, (flickable.height - newContentHeight) / 2);
+                                    
+                                    var minX = -newLeftMargin;
+                                    var maxX = newContentWidth > flickable.width ? newContentWidth - flickable.width : minX;
+                                    var minY = -newTopMargin;
+                                    var maxY = newContentHeight > flickable.height ? newContentHeight - flickable.height : minY;
+                                    
+                                    flickable.contentX = Math.max(minX, Math.min(newImageX - point.x, maxX));
+                                    flickable.contentY = Math.max(minY, Math.min(newImageY - point.y, maxY));
                                 }
                             }
 
@@ -380,17 +393,28 @@ ApplicationWindow {
                                 onScaleChanged: {
                                     var newScale = Math.max(1.0, Math.min(50.0, imageContainer.baseScale * scale));
                                     var point = centroid.position;
-                                    var oldContentX = flickable.contentX;
-                                    var oldContentY = flickable.contentY;
+                                    
+                                    var imageX = flickable.contentX + point.x;
+                                    var imageY = flickable.contentY + point.y;
                                     
                                     var oldScale = imageContainer.scale;
                                     imageContainer.scale = newScale;
                                     
-                                    var newContentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
-                                    var newContentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
+                                    var newImageX = imageX * (newScale / oldScale);
+                                    var newImageY = imageY * (newScale / oldScale);
                                     
-                                    flickable.contentX = Math.max(0, Math.min(newContentX, imageContainer.width * newScale - flickable.width));
-                                    flickable.contentY = Math.max(0, Math.min(newContentY, imageContainer.height * newScale - flickable.height));
+                                    var newContentWidth = imageContainer.width * newScale;
+                                    var newContentHeight = imageContainer.height * newScale;
+                                    var newLeftMargin = Math.max(0, (flickable.width - newContentWidth) / 2);
+                                    var newTopMargin = Math.max(0, (flickable.height - newContentHeight) / 2);
+                                    
+                                    var minX = -newLeftMargin;
+                                    var maxX = newContentWidth > flickable.width ? newContentWidth - flickable.width : minX;
+                                    var minY = -newTopMargin;
+                                    var maxY = newContentHeight > flickable.height ? newContentHeight - flickable.height : minY;
+                                    
+                                    flickable.contentX = Math.max(minX, Math.min(newImageX - point.x, maxX));
+                                    flickable.contentY = Math.max(minY, Math.min(newImageY - point.y, maxY));
                                 }
                             }
                         }
