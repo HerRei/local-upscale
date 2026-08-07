@@ -31,8 +31,10 @@ jobs:
         run: |
           python packaging/build_icons.py
           pyinstaller --clean --noconfirm packaging/localsr.spec
-      - name: Smoke-test packaged GUI and worker
+      - name: Smoke-test packaged GUI
         run: dist/LocalSR.app/Contents/MacOS/LocalSR --smoke-test
+      - name: Smoke-test packaged worker
+        run: python packaging/smoke_worker.py dist/LocalSR.app/Contents/MacOS/LocalSRWorker
       - name: Import Apple signing certificate
         if: ${{ env.MACOS_CERTIFICATE != '' }}
         env:
@@ -103,12 +105,14 @@ jobs:
         run: |
           python packaging/build_icons.py
           pyinstaller --clean --noconfirm packaging/localsr.spec
-      - name: Smoke-test packaged GUI and worker
+      - name: Smoke-test packaged GUI
         shell: pwsh
         run: |
           $process = Start-Process -FilePath "dist\LocalSR\LocalSR.exe" -ArgumentList "--smoke-test" -PassThru
           if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Packaged GUI timed out" }
           if ($process.ExitCode -ne 0) { throw "Packaged GUI exited with $($process.ExitCode)" }
+      - name: Smoke-test packaged worker
+        run: python packaging/smoke_worker.py dist\LocalSR\LocalSRWorker.exe
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
       - name: Build installer
@@ -154,10 +158,12 @@ jobs:
         run: |
           python packaging/build_icons.py
           pyinstaller --clean --noconfirm packaging/localsr.spec
-      - name: Smoke-test packaged GUI and worker
+      - name: Smoke-test packaged GUI
         env:
           QT_QPA_PLATFORM: offscreen
         run: timeout 30 dist/LocalSR/LocalSR --smoke-test
+      - name: Smoke-test packaged worker
+        run: python packaging/smoke_worker.py dist/LocalSR/LocalSRWorker
       - name: Download and verify official appimagetool
         env:
           GH_TOKEN: ${{ github.token }}

@@ -15,6 +15,7 @@ def main():
     app.setApplicationName("LocalSR")
     app.setOrganizationName("LocalSR")
     app.setApplicationDisplayName("LocalSR")
+    smoke_test = "--smoke-test" in sys.argv
     if "--legacy" in sys.argv:
         from localsr.ui.main_window import MainWindow
 
@@ -23,8 +24,8 @@ def main():
     else:
         from localsr.ui.qml_app import create_qml_application
 
-        engine, _controller = create_qml_application()
-    if "--smoke-test" in sys.argv:
+        engine, _controller = create_qml_application(start_worker=not smoke_test)
+    if smoke_test:
         QTimer.singleShot(1500, app.quit)
     sys.exit(app.exec())
 

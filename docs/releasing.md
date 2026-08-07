@@ -11,8 +11,10 @@ does not cross-compile. Model checkpoints are not included in any package.
 | Windows Server 2022 x86-64 | `LocalSR-Windows-x86_64-Setup.exe` |
 | Ubuntu 22.04 x86-64 | `LocalSR-Linux-x86_64.AppImage` and portable `.tar.gz` |
 
-Every job builds the PyInstaller directory and runs `LocalSR --smoke-test`. That starts the real
-packaged worker, loads the QML interface, waits briefly, and verifies clean shutdown. Linux downloads
+Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` for the QML process, and
+independently asks the packaged worker for capabilities over JSONL before requesting clean shutdown.
+Keeping these smoke tests separate avoids conflating slow first-time Torch startup with GUI startup.
+Linux downloads
 the official AppImage `appimagetool` asset and verifies its publisher-provided SHA-256 digest before
 use. A `v*` tag publishes all successful artifacts as a GitHub Release; manual workflow runs retain
 them as Actions artifacts without creating a release.
