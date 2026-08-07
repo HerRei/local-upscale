@@ -348,9 +348,8 @@ class LocalSRController(QObject):
 
     @Slot()
     def chooseImage(self):
-        before = self.backend.image_path
         self.backend.choose_image()
-        if self.backend.image_path and self.backend.image_path != before:
+        if self.backend.image_path:
             self._load_preview(self.backend.image_path)
 
     @Slot(str)
@@ -358,9 +357,8 @@ class LocalSRController(QObject):
         path = QUrl(value).toLocalFile() if value.startswith("file:") else value
         if not path:
             return
-        before = self.backend.image_path
         self.backend.set_image(path)
-        if self.backend.image_path and self.backend.image_path != before:
+        if self.backend.image_path:
             self._load_preview(self.backend.image_path)
 
     def _load_preview(self, path: str):
@@ -374,8 +372,8 @@ class LocalSRController(QObject):
                 "The preview could not be decoded, but the worker may still load it."
             )
         self._bump_preview()
-
         self._update_preset_estimates()
+        self.stateChanged.emit()
 
     @Slot(int)
     def setModelIndex(self, index):
