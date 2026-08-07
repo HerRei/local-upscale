@@ -105,7 +105,7 @@ jobs:
         run: |
           python packaging/build_icons.py
           pyinstaller --clean --noconfirm packaging/localsr.spec
-      - name: Smoke-test packaged GUI
+      - name: Smoke-test packaged Windows bootstrap
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"
@@ -119,8 +119,8 @@ jobs:
           }
           if ($process.ExitCode -ne 0) { throw "Packaged GUI exited with $($process.ExitCode)" }
           if (-not (Test-Path $env:LOCALSR_SMOKE_REPORT)) { throw "Packaged GUI did not report its startup stage" }
-          if ((Get-Content -Raw $env:LOCALSR_SMOKE_REPORT).Trim() -ne "qml-ready") {
-            throw "Packaged GUI did not finish loading QML"
+          if ((Get-Content -Raw $env:LOCALSR_SMOKE_REPORT).Trim() -ne "package-ready") {
+            throw "Packaged GUI did not validate its UI bundle"
           }
       - name: Smoke-test packaged worker
         run: python packaging/smoke_worker.py dist\LocalSR\LocalSRWorker.exe
