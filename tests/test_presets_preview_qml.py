@@ -14,13 +14,13 @@ from localsr.ui.qml_app import create_qml_application
 def test_quick_and_best_rank_distinct_catalog_models():
     quick = rank_models_for_preset(
         MODEL_CATALOG,
-        PresetMode.QUICK,
+        PresetMode.QUICK_UPSCALE,
         purpose=ModelPurpose.PHOTO,
         output_scale=4,
     )
     best = rank_models_for_preset(
         MODEL_CATALOG,
-        PresetMode.BEST,
+        PresetMode.BEST_UPSCALE,
         purpose=ModelPurpose.PHOTO,
         output_scale=4,
     )
@@ -34,7 +34,7 @@ def test_quick_preset_selects_accelerator_fp16_and_fitting_tile():
     model = CATALOG_BY_ID["span_x4_official"]
     settings = resolve_settings_for_model(
         model=model,
-        mode=PresetMode.QUICK,
+        mode=PresetMode.QUICK_UPSCALE,
         devices=[
             {
                 "id": "cpu",
@@ -74,7 +74,7 @@ def test_best_preset_preserves_fp32_quality():
     model = CATALOG_BY_ID["hat_l_x4_imagenet"]
     settings = resolve_settings_for_model(
         model=model,
-        mode=PresetMode.BEST,
+        mode=PresetMode.BEST_UPSCALE,
         devices=[
             {
                 "id": "mps",

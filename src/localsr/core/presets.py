@@ -134,7 +134,7 @@ def resolve_settings_for_model(
 
         precision_order = ["fp32"]
         if (
-            mode == PresetMode.QUICK
+            mode in (PresetMode.QUICK_UPSCALE, PresetMode.QUICK_DENOISE)
             and model_half_supported
             and bool(device.get("supports_fp16", False))
             and device_type != "cpu"

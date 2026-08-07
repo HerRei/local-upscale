@@ -35,8 +35,10 @@ def test_catalog_has_pinned_optional_downloads():
         "hat_s_x4",
         "hat_x4_imagenet",
         "hat_l_x4_imagenet",
+        "scunet_color_real_psnr",
+        "denoise_realplksr_1x",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 5
+    assert len({model.filename for model in MODEL_CATALOG}) == 7
     hat_models = [model for model in MODEL_CATALOG if model.architecture == "HAT"]
     assert all(CATALOG_REVISION in model.download_url for model in hat_models)
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)
