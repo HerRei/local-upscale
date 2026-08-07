@@ -5,6 +5,7 @@ Rectangle {
     id: root
     property string title: ""
     property string subtitle: ""
+    property string estimate: ""
     property string badge: ""
     property color accent: "#7c6cff"
     signal selected()
@@ -55,6 +56,12 @@ Rectangle {
                 wrapMode: Text.WordWrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
+            }
+            Text {
+                visible: root.estimate !== ""
+                text: root.estimate
+                color: "#6b7a90"
+                font.pixelSize: 10
             }
         }
 

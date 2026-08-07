@@ -53,85 +53,7 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 66
-            color: "#0d121a"
-            border.color: "#1c2532"
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 22
-                anchors.rightMargin: 22
-                spacing: 12
-
-                Rectangle {
-                    Layout.preferredWidth: 34
-                    Layout.preferredHeight: 34
-                    radius: 10
-                    gradient: Gradient {
-                        GradientStop { position: 0; color: "#958aff" }
-                        GradientStop { position: 1; color: "#4e45c9" }
-                    }
-                    Text {
-                        anchors.centerIn: parent
-                        text: "SR"
-                        color: "white"
-                        font.pixelSize: 11
-                        font.weight: Font.Bold
-                    }
-                }
-
-                ColumnLayout {
-                    spacing: 0
-                    Text {
-                        text: "LocalSR"
-                        color: "#f5f7fb"
-                        font.pixelSize: 18
-                        font.weight: Font.DemiBold
-                    }
-                    Text {
-                        text: "Local · private · precise"
-                        color: "#7f8ca0"
-                        font.pixelSize: 10
-                        font.letterSpacing: 0.7
-                    }
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Rectangle {
-                    Layout.preferredWidth: pressureRow.implicitWidth + 22
-                    Layout.preferredHeight: 34
-                    radius: 17
-                    color: "#141c27"
-                    border.color: "#263247"
-                    RowLayout {
-                        id: pressureRow
-                        anchors.centerIn: parent
-                        spacing: 7
-                        Rectangle {
-                            Layout.preferredWidth: 8
-                            Layout.preferredHeight: 8
-                            radius: 4
-                            color: localSR.pressureColor
-                        }
-                        Text {
-                            text: localSR.pressureLabel
-                            color: "#b9c4d5"
-                            font.pixelSize: 11
-                            font.weight: Font.Medium
-                        }
-                    }
-                }
-
-                ModernButton {
-                    text: "Refresh hardware"
-                    implicitHeight: 34
-                    onClicked: localSR.refreshHardware()
-                }
-            }
-        }
 
         RowLayout {
             Layout.fillWidth: true
@@ -244,6 +166,7 @@ ApplicationWindow {
                         subtitle: "Fast model, fastest safe accelerator and efficient precision."
                         badge: "⚡"
                         accent: teal
+                        estimate: localSR.quickEstimate
                         onSelected: localSR.applyPreset("quick")
                     }
 
@@ -253,6 +176,7 @@ ApplicationWindow {
                         subtitle: "Highest-quality compatible model with safe automatic tiling."
                         badge: "HQ"
                         accent: window.accent
+                        estimate: localSR.bestEstimate
                         onSelected: localSR.applyPreset("best")
                     }
 
@@ -342,6 +266,7 @@ ApplicationWindow {
 
                             Item {
                                 id: imageContainer
+                                property real baseScale: 1.0
                                 width: flickable.width
                                 height: flickable.height
                                 transformOrigin: Item.TopLeft
@@ -353,8 +278,8 @@ ApplicationWindow {
                                     cache: false
                                     asynchronous: false
                                     fillMode: Image.PreserveAspectFit
-                                    mipmap: true
-                                    smooth: true
+                                    mipmap: imageContainer.scale < 10.0
+                                    smooth: imageContainer.scale < 10.0
                                     visible: localSR.imageReady
                                 }
 
@@ -373,8 +298,8 @@ ApplicationWindow {
                                         cache: false
                                         asynchronous: false
                                         fillMode: Image.PreserveAspectFit
-                                        mipmap: true
-                                        smooth: true
+                                        mipmap: imageContainer.scale < 10.0
+                                        smooth: imageContainer.scale < 10.0
                                     }
                                 }
                                 
@@ -428,7 +353,7 @@ ApplicationWindow {
                             WheelHandler {
                                 onWheel: function(event) {
                                     var factor = event.angleDelta.y > 0 ? 1.1 : 1/1.1;
-                                    var newScale = Math.max(1.0, Math.min(10.0, imageContainer.scale * factor));
+                                    var newScale = Math.max(1.0, Math.min(50.0, imageContainer.scale * factor));
                                     
                                     var point = event.point.position;
                                     var oldContentX = flickable.contentX;
@@ -438,6 +363,25 @@ ApplicationWindow {
                                     
                                     flickable.contentX = (oldContentX + point.x) * (newScale / (imageContainer.scale / factor)) - point.x;
                                     flickable.contentY = (oldContentY + point.y) * (newScale / (imageContainer.scale / factor)) - point.y;
+                                }
+                            }
+
+                            PinchHandler {
+                                target: null
+                                onActiveChanged: if (active) {
+                                    imageContainer.baseScale = imageContainer.scale;
+                                }
+                                onScaleChanged: {
+                                    var newScale = Math.max(1.0, Math.min(50.0, imageContainer.baseScale * scale));
+                                    var point = centroid.position;
+                                    var oldContentX = flickable.contentX;
+                                    var oldContentY = flickable.contentY;
+                                    
+                                    var oldScale = imageContainer.scale;
+                                    imageContainer.scale = newScale;
+                                    
+                                    flickable.contentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
+                                    flickable.contentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
                                 }
                             }
                         }
@@ -779,6 +723,43 @@ ApplicationWindow {
                                     onMoved: localSR.setJpegQuality(Math.round(value))
                                 }
                             }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        
+                        Rectangle {
+                            Layout.preferredWidth: pressureRow.implicitWidth + 22
+                            Layout.preferredHeight: 34
+                            radius: 17
+                            color: "#141c27"
+                            border.color: "#263247"
+                            RowLayout {
+                                id: pressureRow
+                                anchors.centerIn: parent
+                                spacing: 7
+                                Rectangle {
+                                    Layout.preferredWidth: 8
+                                    Layout.preferredHeight: 8
+                                    radius: 4
+                                    color: localSR.pressureColor
+                                }
+                                Text {
+                                    text: localSR.pressureLabel
+                                    color: "#b9c4d5"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Medium
+                                }
+                            }
+                        }
+
+                        ModernButton {
+                            Layout.fillWidth: true
+                            text: "Refresh hardware"
+                            implicitHeight: 34
+                            onClicked: localSR.refreshHardware()
                         }
                     }
                     Item { Layout.preferredHeight: 8 }

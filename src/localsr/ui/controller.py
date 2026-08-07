@@ -375,6 +375,8 @@ class LocalSRController(QObject):
             )
         self._bump_preview()
 
+        self._update_preset_estimates()
+
     @Slot(int)
     def setModelIndex(self, index):
         if index < 0 or index >= self.backend.combo_model.count():

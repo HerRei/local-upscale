@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         desktop = os.path.expanduser("~/Desktop")
         self.output_dir = desktop if os.path.isdir(desktop) else os.path.expanduser("~")
         self.current_job_id = None
+        self.last_output_path = None
         self.current_estimate = None
         self.pending_output_scale = None
         self.job_started_at = None
@@ -962,7 +963,10 @@ class MainWindow(QMainWindow):
             self.btn_upscale.setToolTip("")
 
     def on_log(self, data):
-        print(f"[{data.get('level', 'info').upper()}] {data.get('message', '')}")
+        msg = data.get('message', '')
+        if msg == "Writing final output...":
+            self.progress_label.setText("Saving final image to disk... (this may take a moment)")
+        print(f"[{data.get('level', 'info').upper()}] {msg}")
 
     def get_output_path(self):
         base = os.path.splitext(os.path.basename(self.image_path))[0]
@@ -1118,6 +1122,7 @@ class MainWindow(QMainWindow):
                 self.settings.setValue(key, calibrated_value)
         self.current_job_id = None
         self.job_started_at = None
+        self.last_output_path = result.get("output_path")
         self.runtime_warning = ""
         self.btn_cancel.setEnabled(False)
         self.progress_bar.setValue(100)
@@ -1208,8 +1213,8 @@ class MainWindow(QMainWindow):
             self.worker.start()
 
     def open_result(self):
-        path = self.get_output_path()
-        if not os.path.exists(path):
+        path = getattr(self, "last_output_path", None)
+        if not path or not os.path.exists(path):
             return
         if sys.platform == "darwin":
             subprocess.call(["open", path])
@@ -1219,8 +1224,8 @@ class MainWindow(QMainWindow):
             subprocess.call(["xdg-open", path])
 
     def reveal_result(self):
-        path = self.get_output_path()
-        if not os.path.exists(path):
+        path = getattr(self, "last_output_path", None)
+        if not path or not os.path.exists(path):
             return
         if sys.platform == "darwin":
             subprocess.call(["open", "-R", path])
