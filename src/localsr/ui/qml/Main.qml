@@ -162,32 +162,52 @@ ApplicationWindow {
 
                     ModeCard {
                         Layout.fillWidth: true
-                        title: "Quick"
+                        title: "Quick Upscale"
                         subtitle: "Fast model, fastest safe accelerator and efficient precision."
                         badge: "⚡"
                         accent: teal
-                        estimate: localSR.quickEstimate
-                        onSelected: localSR.applyPreset("quick")
+                        estimate: localSR.quickUpscaleEstimate
+                        onSelected: localSR.applyPreset("quick_upscale")
                     }
 
                     ModeCard {
                         Layout.fillWidth: true
-                        title: "Best Quality"
+                        title: "Quality Upscale"
                         subtitle: "Highest-quality compatible model with safe automatic tiling."
                         badge: "HQ"
                         accent: window.accent
-                        estimate: localSR.bestEstimate
-                        onSelected: localSR.applyPreset("best")
+                        estimate: localSR.bestUpscaleEstimate
+                        onSelected: localSR.applyPreset("best_upscale")
                     }
 
                     ModeCard {
                         Layout.fillWidth: true
-                        title: "Denoise Only"
-                        subtitle: "Remove noise and artifacts while preserving original size."
+                        title: "Upscale + Denoise"
+                        subtitle: "Restore heavily degraded photos and enlarge them."
+                        badge: "✨"
+                        accent: "#8e44ad"
+                        estimate: localSR.comboEstimate
+                        onSelected: localSR.applyPreset("combo")
+                    }
+
+                    ModeCard {
+                        Layout.fillWidth: true
+                        title: "Quick Denoise"
+                        subtitle: "Rapidly remove noise and artifacts while preserving original size."
                         badge: "1x"
                         accent: "#f39c12"
-                        estimate: localSR.denoiseEstimate
-                        onSelected: localSR.applyPreset("denoise")
+                        estimate: localSR.quickDenoiseEstimate
+                        onSelected: localSR.applyPreset("quick_denoise")
+                    }
+
+                    ModeCard {
+                        Layout.fillWidth: true
+                        title: "Quality Denoise"
+                        subtitle: "Deep restoration for severe noise and artifacts, preserving size."
+                        badge: "1x"
+                        accent: "#d35400"
+                        estimate: localSR.bestDenoiseEstimate
+                        onSelected: localSR.applyPreset("best_denoise")
                     }
 
                     Text {

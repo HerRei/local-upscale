@@ -186,6 +186,26 @@ MODEL_CATALOG = (
         source_url="https://github.com/cszn/KAIR",
         time_factor=1.5,
     ),
+    CatalogModel(
+        model_id="denoise_realplksr_1x",
+        name="RealPLKSR Denoise (Fast)",
+        filename="1xDeNoise_realplksr_otf.pth",
+        description="A very fast, lightweight denoising model trained on Nomosv2 to rapidly clean up noisy photos.",
+        size_bytes=29_559_554,
+        sha256="f4774fbe13ceaa9df390343c2baaa980061458ef27292fa6aca6740d87608a8e",
+        download_url="https://github.com/Phhofm/models/releases/download/1xDeNoise_realplksr_otf/1xDeNoise_realplksr_otf.pth",
+        architecture="RealPLKSR",
+        native_scale=1,
+        purposes=(ModelPurpose.DENOISE, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=8,
+        source_url="https://github.com/Phhofm/models",
+        license_name="CC-BY-4.0",
+        author="Philip Hofmann",
+        memory_factor=0.38,
+        time_factor=0.25,
+    ),
 )
 
 CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}

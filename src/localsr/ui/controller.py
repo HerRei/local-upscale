@@ -41,9 +41,11 @@ class LocalSRController(QObject):
         self._preview_error = ""
         self._active_tile = (0.0, 0.0, 0.0, 0.0)
         self._memory_snapshot = dict(backend.capability_report)
-        self._quick_estimate = ""
-        self._best_estimate = ""
-        self._denoise_estimate = ""
+        self._quick_upscale_estimate = ""
+        self._best_upscale_estimate = ""
+        self._quick_denoise_estimate = ""
+        self._best_denoise_estimate = ""
+        self._combo_estimate = ""
         self._show_progressive = False
         self._shutdown = False
 
@@ -277,16 +279,24 @@ class LocalSRController(QObject):
         return self.backend.estimate_label.text()
 
     @Property(str, notify=stateChanged)
-    def quickEstimate(self):
-        return getattr(self, "_quick_estimate", "")
+    def quickUpscaleEstimate(self):
+        return getattr(self, "_quick_upscale_estimate", "")
 
     @Property(str, notify=stateChanged)
-    def bestEstimate(self):
-        return getattr(self, "_best_estimate", "")
+    def bestUpscaleEstimate(self):
+        return getattr(self, "_best_upscale_estimate", "")
 
     @Property(str, notify=stateChanged)
-    def denoiseEstimate(self):
-        return getattr(self, "_denoise_estimate", "")
+    def quickDenoiseEstimate(self):
+        return getattr(self, "_quick_denoise_estimate", "")
+
+    @Property(str, notify=stateChanged)
+    def bestDenoiseEstimate(self):
+        return getattr(self, "_best_denoise_estimate", "")
+
+    @Property(str, notify=stateChanged)
+    def comboEstimate(self):
+        return getattr(self, "_combo_estimate", "")
 
     @Property(str, notify=stateChanged)
     def hardwareText(self):
@@ -397,10 +407,24 @@ class LocalSRController(QObject):
         from localsr.core.estimator import format_duration_range
         from localsr.core.model_catalog import MODEL_CATALOG, ModelPurpose
         
-        for mode, attr in [(PresetMode.QUICK, "_quick_estimate"), (PresetMode.BEST, "_best_estimate"), (PresetMode.DENOISE, "_denoise_estimate")]:
+        pairs = [
+            (PresetMode.QUICK_UPSCALE, "_quick_upscale_estimate"),
+            (PresetMode.BEST_UPSCALE, "_best_upscale_estimate"),
+            (PresetMode.QUICK_DENOISE, "_quick_denoise_estimate"),
+            (PresetMode.BEST_DENOISE, "_best_denoise_estimate"),
+            (PresetMode.COMBO, "_combo_estimate"),
+        ]
+        for mode, attr in pairs:
             try:
-                scale = 1 if mode == PresetMode.DENOISE else 4
-                purpose = ModelPurpose.DENOISE if mode == PresetMode.DENOISE else ModelPurpose.PHOTO
+                if mode in (PresetMode.QUICK_DENOISE, PresetMode.BEST_DENOISE):
+                    scale = 1
+                    purpose = ModelPurpose.DENOISE
+                elif mode == PresetMode.COMBO:
+                    scale = 4
+                    purpose = ModelPurpose.DENOISE
+                else:
+                    scale = 4
+                    purpose = ModelPurpose.PHOTO
                 model = select_model_for_preset(MODEL_CATALOG, mode, output_scale=scale, purpose=purpose, installed_model_ids=self._installed_ids())
                 if not model:
                     continue
@@ -498,8 +522,15 @@ class LocalSRController(QObject):
             return
         try:
             mode = PresetMode(name)
-            scale = 1 if mode == PresetMode.DENOISE else 4
-            purpose = ModelPurpose.DENOISE if mode == PresetMode.DENOISE else ModelPurpose.PHOTO
+            if mode in (PresetMode.QUICK_DENOISE, PresetMode.BEST_DENOISE):
+                scale = 1
+                purpose = ModelPurpose.DENOISE
+            elif mode == PresetMode.COMBO:
+                scale = 4
+                purpose = ModelPurpose.DENOISE
+            else:
+                scale = 4
+                purpose = ModelPurpose.PHOTO
             ranked = rank_models_for_preset(
                 MODEL_CATALOG,
                 mode,
@@ -605,7 +636,7 @@ class LocalSRController(QObject):
             if scale_index >= 0:
                 self.backend.combo_output_scale.setCurrentIndex(scale_index)
             self.backend.update_estimate()
-            mode_name = "Quick" if self._pending_preset == PresetMode.QUICK else "Best Quality"
+            mode_name = name.replace("_", " ").title()
             self._preset_message = (
                 f"{mode_name} prepared: {model.name} · {decision.device_id} · "
                 f"{decision.precision.upper()} · {decision.tile_size}px tiles."

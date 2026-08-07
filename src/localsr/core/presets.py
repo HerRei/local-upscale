@@ -7,9 +7,11 @@ from .model_catalog import CatalogModel, ModelPurpose
 
 
 class PresetMode(StrEnum):
-    QUICK = "quick"
-    BEST = "best"
-    DENOISE = "denoise"
+    QUICK_UPSCALE = "quick_upscale"
+    BEST_UPSCALE = "best_upscale"
+    QUICK_DENOISE = "quick_denoise"
+    BEST_DENOISE = "best_denoise"
+    COMBO = "combo"
 
 
 class NoCompatibleModelError(ValueError):
@@ -54,7 +56,7 @@ def rank_models_for_preset(
         for model in models
         if model.native_scale >= output_scale and _purpose_match(model, purpose)
     ]
-    if mode == PresetMode.QUICK:
+    if mode in (PresetMode.QUICK_UPSCALE, PresetMode.QUICK_DENOISE, PresetMode.COMBO):
         eligible.sort(
             key=lambda model: (
                 -int(model.speed_tier),
