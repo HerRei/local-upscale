@@ -108,8 +108,10 @@ jobs:
       - name: Smoke-test packaged GUI
         shell: pwsh
         run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:QT_QUICK_BACKEND = "software"
           $process = Start-Process -FilePath "dist\LocalSR\LocalSR.exe" -ArgumentList "--smoke-test" -PassThru
-          if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Packaged GUI timed out" }
+          if (-not $process.WaitForExit(120000)) { $process.Kill(); throw "Packaged GUI timed out" }
           if ($process.ExitCode -ne 0) { throw "Packaged GUI exited with $($process.ExitCode)" }
       - name: Smoke-test packaged worker
         run: python packaging/smoke_worker.py dist\LocalSR\LocalSRWorker.exe

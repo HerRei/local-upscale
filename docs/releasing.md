@@ -14,6 +14,8 @@ does not cross-compile. Model checkpoints are not included in any package.
 Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` for the QML process, and
 independently asks the packaged worker for capabilities over JSONL before requesting clean shutdown.
 Keeping these smoke tests separate avoids conflating slow first-time Torch startup with GUI startup.
+The headless Windows runner uses Qt's offscreen software backend and permits extra time for Windows
+to inspect the large first-run bundle; installed builds continue to use the native graphics backend.
 Linux downloads
 the official AppImage `appimagetool` asset and verifies its publisher-provided SHA-256 digest before
 use. A `v*` tag publishes all successful artifacts as a GitHub Release; manual workflow runs retain
