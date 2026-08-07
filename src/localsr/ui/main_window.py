@@ -998,6 +998,7 @@ class MainWindow(QMainWindow):
 
         self.save_settings()
         out_path = self.get_output_path()
+        self.last_output_path = out_path
 
         self.current_job_id = str(uuid.uuid4())
         self.runtime_warning = ""
@@ -1123,7 +1124,8 @@ class MainWindow(QMainWindow):
                 self.settings.setValue(key, calibrated_value)
         self.current_job_id = None
         self.job_started_at = None
-        self.last_output_path = result.get("output_path")
+        if result.get("output_path"):
+            self.last_output_path = result.get("output_path")
         self.runtime_warning = ""
         self.btn_cancel.setEnabled(False)
         self.progress_bar.setValue(100)

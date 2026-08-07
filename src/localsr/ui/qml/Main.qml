@@ -313,7 +313,7 @@ ApplicationWindow {
                                     id: compareSlider
                                     property bool active: !localSR.tileActive && window.showLiveResult && localSR.imageReady && localSR.progress >= 1.0
                                     visible: active
-                                    width: Math.max(2, 4 / imageContainer.scale)
+                                    width: 2 / imageContainer.scale
                                     height: previewImage.height
                                     x: previewImage.width / 2
                                     color: teal
