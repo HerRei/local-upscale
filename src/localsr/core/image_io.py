@@ -7,6 +7,22 @@ import numpy as np
 import torch
 from PIL import Image, ImageCms, ImageOps
 
+from localsr.core.image_formats import is_raw_input
+
+
+def _develop_dng(path: str) -> np.ndarray:
+    # Keep LibRaw out of the GUI process. ImageManager is instantiated by the
+    # isolated worker for real jobs, and the import occurs only for RAW input.
+    import rawpy
+
+    with rawpy.imread(path) as raw:
+        return raw.postprocess(
+            use_camera_wb=True,
+            use_auto_wb=False,
+            output_color=rawpy.ColorSpace.sRGB,
+            output_bps=8,
+        )
+
 
 class ImageManager:
     def __init__(self):
@@ -21,13 +37,29 @@ class ImageManager:
         - If RGBA, extracts alpha channel.
         - Returns a dict containing the tensor and metadata.
         """
-        img = Image.open(path)
+        self.alpha_channel = None
+        is_raw = is_raw_input(path)
+
+        # Pillow can read metadata from many DNG containers even though it cannot
+        # reliably develop their sensor data. Metadata extraction therefore stays
+        # separate from the LibRaw pixel decode below.
+        metadata_img = None
+        try:
+            metadata_img = Image.open(path)
+        except (OSError, SyntaxError, ValueError) as error:
+            if not is_raw:
+                raise
+            warnings.warn(
+                f"Could not read DNG metadata: {error}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         # 1. Strip raw EXIF dimensions/thumbnails by just extracting what we need or resetting.
         # But for now, we'll just not copy EXIF natively. We will only copy safe tags.
         safe_exif = {}
         try:
-            exif_data = img.getexif()
+            exif_data = metadata_img.getexif() if metadata_img is not None else None
             if exif_data is not None:
                 # 274 is Orientation.
                 # Safe tags: Copyright, DateTime, GPS, Make, Model, Software
@@ -49,12 +81,22 @@ class ImageManager:
                 stacklevel=2,
             )
 
-        # Apply EXIF orientation
-        img = ImageOps.exif_transpose(img)
+        if is_raw:
+            try:
+                rgb = _develop_dng(path)
+                img = Image.fromarray(rgb)
+                converted_icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+            finally:
+                if metadata_img is not None:
+                    metadata_img.close()
+        else:
+            if metadata_img is None:  # pragma: no cover - guarded by the exception above
+                raise OSError(f"Could not open image: {path}")
+            img = ImageOps.exif_transpose(metadata_img)
+            converted_icc = None
 
         # ICC Profile handling
-        icc_profile_bytes = img.info.get("icc_profile")
-        converted_icc = None
+        icc_profile_bytes = None if is_raw else img.info.get("icc_profile")
         has_invalid_icc = False
 
         if icc_profile_bytes:
@@ -102,6 +144,7 @@ class ImageManager:
         icc_profile: bytes | None = None,
         safe_exif: dict | None = None,
         scale: int = 1,
+        output_scale: int | None = None,
     ):
         """
         Saves the memory-mapped numpy array to the final destination.
@@ -122,6 +165,7 @@ class ImageManager:
             icc_profile=icc_profile,
             safe_exif=safe_exif,
             scale=scale,
+            output_scale=output_scale,
         )
 
     def save_from_writer(
@@ -134,14 +178,30 @@ class ImageManager:
         icc_profile: bytes | None,
         safe_exif: dict,
         scale: int,
+        output_scale: int | None = None,
     ):
 
         arr = np.transpose(writer_mmap, (1, 2, 0))
         out_img = Image.fromarray(arr, mode="RGB")
 
+        final_scale = scale if output_scale is None else int(output_scale)
+        if final_scale < 1 or final_scale > scale:
+            raise ValueError(
+                f"Output scale must be between 1 and the model's native {scale}× scale."
+            )
+        if final_scale != scale:
+            target_size = (
+                round(out_img.width * final_scale / scale),
+                round(out_img.height * final_scale / scale),
+            )
+            out_img = out_img.resize(target_size, Image.Resampling.LANCZOS)
+
         # Handle Alpha scaling
         if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff"]:
-            new_size = (self.alpha_channel.width * scale, self.alpha_channel.height * scale)
+            new_size = (
+                self.alpha_channel.width * final_scale,
+                self.alpha_channel.height * final_scale,
+            )
             scaled_alpha = self.alpha_channel.resize(new_size, Image.Resampling.LANCZOS)
             out_img.putalpha(scaled_alpha)
 

@@ -10,6 +10,33 @@ from .output_writer import OutputWriter
 from .tiling import generate_tiles
 
 
+def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | None:
+    """Apply a hard allocator ceiling and return its fraction of device capacity."""
+    if device.type in {"cuda", "xpu"}:
+        backend = torch.cuda if device.type == "cuda" else torch.xpu
+        free_memory, total_memory = backend.mem_get_info(device)
+        if total_memory <= 0:
+            return None
+        # Cap against memory that was free immediately before model loading, while
+        # also ensuring LocalSR never owns more than 90% of total visible VRAM.
+        free_share = free_memory / total_memory
+        headroom = 0.80 if safe_memory else 0.90
+        fraction = max(0.01, min(0.90, free_share * headroom))
+        backend.set_per_process_memory_fraction(fraction, device)
+        return fraction
+
+    if device.type == "mps":
+        # MPS uses unified memory, but Metal allocations still receive a hard
+        # ceiling. Non-GPU macOS memory pressure remains advisory in preflight.
+        fraction = 0.52 if safe_memory else 0.62
+        setter = getattr(torch.mps, "set_per_process_memory_fraction", None)
+        if callable(setter):
+            setter(fraction)
+        return fraction
+
+    return None
+
+
 class InferenceEngine:
     def __init__(self, model_adapter):
         self.model_adapter = model_adapter
@@ -34,6 +61,8 @@ class InferenceEngine:
             if precision_str == "fp16" and model_info.half_supported
             else torch.float32
         )
+
+        _apply_gpu_memory_limit(device, safe_memory)
 
         # Load model dynamically
         model, _ = self.model_adapter.load(model_path, device, precision)
@@ -141,6 +170,8 @@ class InferenceEngine:
                                 torch.mps.empty_cache()
                             elif device.type == "cuda":
                                 torch.cuda.empty_cache()
+                            elif device.type == "xpu":
+                                torch.xpu.empty_cache()
                             gc.collect()
 
                     return writer
@@ -157,6 +188,8 @@ class InferenceEngine:
                             torch.mps.empty_cache()
                         elif device.type == "cuda":
                             torch.cuda.empty_cache()
+                        elif device.type == "xpu":
+                            torch.xpu.empty_cache()
                         gc.collect()
 
                         current_tile_size = current_tile_size // 2

@@ -159,11 +159,13 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
         icc_profile=None,
         safe_exif=None,
         scale=1,
+        output_scale=None,
     ):
         save_kwargs_captured["output_writer"] = output_writer
         save_kwargs_captured["icc_profile"] = icc_profile
         save_kwargs_captured["safe_exif"] = safe_exif
         save_kwargs_captured["scale"] = scale
+        save_kwargs_captured["output_scale"] = output_scale
 
     monkeypatch.setattr(ImageManager, "load", fake_load)
     monkeypatch.setattr(ImageManager, "save", fake_save)
@@ -181,6 +183,7 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
         "jpeg_quality": 98,
         "preserve_metadata": True,
         "safe_memory": True,
+        "output_scale": 2,
     }
 
     server._run_job("job_100", job_data)
@@ -190,6 +193,7 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
     assert save_kwargs_captured["icc_profile"] == b"dummy_icc"
     assert save_kwargs_captured["safe_exif"] == {315: "Artist"}
     assert save_kwargs_captured["scale"] == 2  # scale from DummyModelAdapter.inspect()
+    assert save_kwargs_captured["output_scale"] == 2
 
     # Check F1.4 cleanup in finally
     assert writer_instance.cleaned_up is True

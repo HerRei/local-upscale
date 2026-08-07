@@ -16,6 +16,7 @@ class JobRequest:
     jpeg_quality: int
     preserve_metadata: bool
     safe_memory: bool
+    output_scale: int | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})

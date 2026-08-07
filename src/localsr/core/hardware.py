@@ -103,6 +103,11 @@ def get_memory_snapshot(device_id: str) -> dict:
         index = int(raw_index or 0)
         free, total = torch.cuda.mem_get_info(index)
         device_total, device_free = int(total), int(free)
+    elif device_id.startswith("xpu") and hasattr(torch, "xpu") and torch.xpu.is_available():
+        _, _, raw_index = device_id.partition(":")
+        index = int(raw_index or 0)
+        free, total = torch.xpu.mem_get_info(index)
+        device_total, device_free = int(total), int(free)
 
     return {
         "device_total_memory": int(device_total),
@@ -131,6 +136,9 @@ def get_capability_report() -> dict:
         )
 
     if torch.cuda.is_available():
+        is_rocm = bool(getattr(torch.version, "hip", None))
+        backend_type = "rocm" if is_rocm else "cuda"
+        backend_name = "ROCm" if is_rocm else "CUDA"
         for index in range(torch.cuda.device_count()):
             with torch.cuda.device(index):
                 free, total = torch.cuda.mem_get_info(index)
@@ -139,12 +147,32 @@ def get_capability_report() -> dict:
             devices.append(
                 {
                     "id": f"cuda:{index}",
-                    "type": "cuda",
-                    "name": properties.name,
+                    "type": backend_type,
+                    "name": f"{properties.name} ({backend_name})",
                     "total_memory": int(total),
                     "free_memory": int(free),
                     "supports_fp16": (major, minor) >= (5, 3),
                     "recommended_tile_sizes": _recommended_tiles(int(free)),
+                    "is_integrated": False,
+                }
+            )
+
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        for index in range(torch.xpu.device_count()):
+            free, total = torch.xpu.mem_get_info(index)
+            properties = torch.xpu.get_device_properties(index)
+            integrated = bool(getattr(properties, "is_integrated_gpu", False))
+            kind = "integrated" if integrated else "discrete"
+            devices.append(
+                {
+                    "id": f"xpu:{index}",
+                    "type": "xpu",
+                    "name": f"{properties.name} (Intel XPU, {kind})",
+                    "total_memory": int(total),
+                    "free_memory": int(free),
+                    "supports_fp16": bool(getattr(properties, "has_fp16", False)),
+                    "recommended_tile_sizes": _recommended_tiles(int(free)),
+                    "is_integrated": integrated,
                 }
             )
 

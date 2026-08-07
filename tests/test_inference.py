@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from localsr.core.inference import InferenceEngine
+from localsr.core.inference import InferenceEngine, _apply_gpu_memory_limit
 from localsr.core.model_adapter import NormalizedModelInfo
 
 
@@ -40,6 +40,41 @@ class DummyAdapter:
 
     def release(self):
         pass
+
+
+def test_hard_gpu_memory_limits(monkeypatch):
+    gib = 1024**3
+    calls = []
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _device: (4 * gib, 8 * gib))
+    monkeypatch.setattr(
+        torch.cuda,
+        "set_per_process_memory_fraction",
+        lambda fraction, device: calls.append(("cuda", fraction, str(device))),
+    )
+
+    cuda_fraction = _apply_gpu_memory_limit(torch.device("cuda:0"), safe_memory=False)
+    assert cuda_fraction == pytest.approx(0.45)
+    assert calls[-1] == ("cuda", pytest.approx(0.45), "cuda:0")
+
+    monkeypatch.setattr(torch.xpu, "mem_get_info", lambda _device: (6 * gib, 8 * gib))
+    monkeypatch.setattr(
+        torch.xpu,
+        "set_per_process_memory_fraction",
+        lambda fraction, device: calls.append(("xpu", fraction, str(device))),
+    )
+
+    xpu_fraction = _apply_gpu_memory_limit(torch.device("xpu:0"), safe_memory=True)
+    assert xpu_fraction == pytest.approx(0.60)
+    assert calls[-1] == ("xpu", pytest.approx(0.60), "xpu:0")
+
+    monkeypatch.setattr(
+        torch.mps,
+        "set_per_process_memory_fraction",
+        lambda fraction: calls.append(("mps", fraction)),
+    )
+    mps_fraction = _apply_gpu_memory_limit(torch.device("mps"), safe_memory=True)
+    assert mps_fraction == pytest.approx(0.52)
+    assert calls[-1] == ("mps", pytest.approx(0.52))
 
 
 def test_inference_dimensions():

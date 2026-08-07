@@ -103,6 +103,27 @@ def test_estimate_blocks_an_unsafe_device_configuration():
     assert any("smaller tile" in warning for warning in estimate.warnings)
 
 
+def test_mps_memory_pressure_warns_but_does_not_block():
+    estimate = estimate_resources(
+        image_width=4000,
+        image_height=3000,
+        scale=4,
+        tile_size=512,
+        halo=64,
+        precision="fp32",
+        device_type="mps",
+        available_device_memory=512 * 1024**2,
+        available_system_memory=512 * 1024**2,
+        available_disk=100 * 1024**3,
+        model_file_size=160 * 1024**2,
+        memory_factor=1.8,
+        time_factor=1.8,
+    )
+
+    assert not estimate.blocking
+    assert any("run is still allowed" in warning.lower() for warning in estimate.warnings)
+
+
 def test_measured_estimate_uses_a_narrower_calibrated_range():
     common = {
         "image_width": 1536,
@@ -175,6 +196,11 @@ def test_gui_restricts_controls_to_reported_capabilities(qapp, tmp_path):
     assert "first-run range" in window.estimate_label.text()
     assert "VRAM now:" in window.memory_label.text()
     assert "RAM now:" in window.memory_label.text()
+    assert "Estimated LocalSR peak:" in window.hardware_label.text()
+    assert "of 2.0 GB" in window.hardware_label.text()
+    assert "VRAM" in window.hardware_label.text()
+    assert "of 16.0 GB" in window.hardware_label.text()
+    assert "RAM" in window.hardware_label.text()
 
     window.on_progress(
         {
@@ -193,4 +219,36 @@ def test_gui_restricts_controls_to_reported_capabilities(qapp, tmp_path):
     assert not window.model_download_progress.isHidden()
     window.on_model_download_finished()
     assert window.model_download_progress.isHidden()
+
+    window.on_capabilities(
+        {
+            "system_ram_total": 16 * 1024**3,
+            "system_ram_available": 8 * 1024**3,
+            "devices": [
+                {
+                    "id": "mps",
+                    "type": "mps",
+                    "name": "Test Apple GPU",
+                    "total_memory": 16 * 1024**3,
+                    "free_memory": 8 * 1024**3,
+                    "supports_fp16": True,
+                    "recommended_tile_sizes": [64, 128],
+                }
+            ],
+        }
+    )
+    assert "Estimated LocalSR peak:" in window.hardware_label.text()
+    assert "of 16.0 GB" in window.hardware_label.text()
+    assert "unified memory" in window.hardware_label.text()
+    assert "Hard Metal allocation cap" in window.hardware_label.text()
+    assert window.btn_upscale.isEnabled()
+
+    assert [
+        window.combo_output_scale.itemData(index)
+        for index in range(window.combo_output_scale.count())
+    ] == [2, 3, 4]
+    window.combo_output_scale.setCurrentIndex(window.combo_output_scale.findData(3))
+    assert window.selected_output_scale() == 3
+    assert "4608x3072 (3×)" in window.predicted_size_label.text()
+    assert window.get_output_path().endswith("image_upscaled_3x.png")
     window.close()

@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QThread
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -33,6 +32,7 @@ from localsr.core.estimator import (
     format_duration,
     format_duration_range,
 )
+from localsr.core.image_formats import IMAGE_FILE_DIALOG_FILTER, is_raw_input, probe_image_size
 from localsr.core.model_catalog import CATALOG_BY_ID, MODEL_CATALOG, ModelStore
 from localsr.protocol.client import WorkerClient
 from localsr.protocol.messages import (
@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         self.output_dir = os.path.expanduser("~")
         self.current_job_id = None
         self.current_estimate = None
+        self.pending_output_scale = None
         self.job_started_at = None
         self.job_effective_megapixels = 0.0
         self.runtime_warning = ""
@@ -212,6 +213,14 @@ class MainWindow(QMainWindow):
         self.combo_format = QComboBox()
         self.combo_format.addItems(["png", "jpg", "tif"])
         out_layout.addRow("Format:", self.combo_format)
+        self.combo_output_scale = QComboBox()
+        self.combo_output_scale.addItem("Load a model first", None)
+        self.combo_output_scale.setEnabled(False)
+        self.combo_output_scale.setToolTip(
+            "Choose the final enlargement. Factors below the model's native scale use one "
+            "high-quality Lanczos downsample after restoration."
+        )
+        out_layout.addRow("Scale:", self.combo_output_scale)
         layout.addWidget(out_group)
 
         self.btn_adv = QToolButton()
@@ -232,6 +241,10 @@ class MainWindow(QMainWindow):
         device_row.addWidget(self.btn_refresh_hardware)
         self.hardware_label = QLabel("Hardware detection runs in the isolated worker.")
         self.hardware_label.setWordWrap(True)
+        self.hardware_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.hardware_label.setMinimumHeight(
+            self.hardware_label.fontMetrics().lineSpacing() * 4 + 8
+        )
 
         self.combo_tile = QComboBox()
         self.combo_tile.addItems(["64", "128", "192", "256"])
@@ -248,7 +261,11 @@ class MainWindow(QMainWindow):
         self.check_safe_mem.setChecked(True)
 
         settings_layout.addRow("Device:", device_row)
-        settings_layout.addRow("Detected:", self.hardware_label)
+        detected_title = QLabel("Detected:")
+        detected_title.setStyleSheet("font-weight: 600;")
+        settings_layout.addRow(detected_title)
+        # A spanning row avoids the narrow field column clipping wrapped hardware text.
+        settings_layout.addRow(self.hardware_label)
         settings_layout.addRow("Tile Size:", self.combo_tile)
         settings_layout.addRow("Halo:", self.combo_halo)
         settings_layout.addRow("Precision:", self.combo_precision)
@@ -289,6 +306,9 @@ class MainWindow(QMainWindow):
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
+        self.progress_bar.setMinimumHeight(22)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("Ready")
         self.progress_label = QLabel("")
         self.progress_label.setWordWrap(True)
         layout.addWidget(self.progress_bar)
@@ -297,6 +317,12 @@ class MainWindow(QMainWindow):
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.clicked.connect(self.cancel_job)
         self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setMinimumHeight(34)
+        self.btn_cancel.setStyleSheet(
+            "QPushButton { font-weight: 600; }"
+            "QPushButton:disabled { color: #b8b8b8; background-color: #4a4a4a; "
+            "border: 1px solid #777; }"
+        )
         layout.addWidget(self.btn_cancel)
 
         actions_layout = QHBoxLayout()
@@ -316,6 +342,7 @@ class MainWindow(QMainWindow):
         self.combo_halo.currentTextChanged.connect(self.update_estimate)
         self.combo_precision.currentTextChanged.connect(self.update_estimate)
         self.combo_format.currentTextChanged.connect(self.update_estimate)
+        self.combo_output_scale.currentIndexChanged.connect(self.on_output_scale_changed)
         self.check_safe_mem.toggled.connect(self.update_estimate)
         self.on_model_selection_changed()
         self.on_tile_changed()
@@ -332,6 +359,7 @@ class MainWindow(QMainWindow):
         self.combo_precision.setCurrentText(str(self.settings.value("precision", "fp32")))
         self.spin_jpg.setValue(int(self.settings.value("jpeg_quality", 98)))
         self.combo_format.setCurrentText(str(self.settings.value("format", "png")))
+        self.pending_output_scale = int(self.settings.value("output_scale", 4))
         self.output_dir = str(self.settings.value("output_dir", self.output_dir))
         self.out_dir_label.setText(self.output_dir)
 
@@ -350,6 +378,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("precision", self.combo_precision.currentText())
         self.settings.setValue("jpeg_quality", self.spin_jpg.value())
         self.settings.setValue("format", self.combo_format.currentText())
+        self.settings.setValue("output_scale", self.selected_output_scale())
         self.settings.setValue("output_dir", self.output_dir)
         self.settings.setValue("selected_model_id", self.combo_model.currentData())
         if self.combo_model.currentData() == CUSTOM_MODEL_ID and self.model_path:
@@ -365,6 +394,7 @@ class MainWindow(QMainWindow):
         self.btn_download_model.setVisible(not is_custom)
         self.current_model_info = {}
         self.model_scale = 1
+        self._configure_output_scales()
         self._clear_model_info()
 
         if is_custom:
@@ -499,21 +529,29 @@ class MainWindow(QMainWindow):
             self,
             "Select Image",
             "",
-            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.webp)",
+            IMAGE_FILE_DIALOG_FILTER,
         )
         if path:
             self.set_image(path)
 
     def set_image(self, path):
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
+        try:
+            width, height = probe_image_size(path)
+        except (OSError, RuntimeError, ValueError) as error:
             if self.isVisible():
-                QMessageBox.warning(self, "Unsupported Image", "LocalSR could not read this image.")
+                QMessageBox.warning(
+                    self,
+                    "Unsupported Image",
+                    f"LocalSR could not read this image.\n\n{error}",
+                )
             return
         self.image_path = path
-        self.image_w = pixmap.width()
-        self.image_h = pixmap.height()
-        self.img_info_label.setText(f"{os.path.basename(path)} | {self.image_w}x{self.image_h}")
+        self.image_w = width
+        self.image_h = height
+        raw_note = " | RAW: camera WB → sRGB" if is_raw_input(path) else ""
+        self.img_info_label.setText(
+            f"{os.path.basename(path)} | {self.image_w}x{self.image_h}{raw_note}"
+        )
         self.update_predict()
 
     def choose_model(self):
@@ -544,12 +582,41 @@ class MainWindow(QMainWindow):
         self.mi_arch.setText(info["architecture"])
         self.model_scale = int(info["scale"])
         self.mi_scale.setText(f"{self.model_scale}×")
+        self._configure_output_scales()
         parameter_count = int(info.get("parameter_count", 0))
         self.mi_params.setText(
             f"{parameter_count / 1_000_000:.1f} million" if parameter_count else "unknown"
         )
         self.mi_warn.setText("\n".join(info.get("warnings", [])))
         self.apply_hardware_constraints()
+        self.update_predict()
+
+    def _configure_output_scales(self):
+        current = self.combo_output_scale.currentData()
+        desired = self.pending_output_scale if self.pending_output_scale is not None else current
+        self.combo_output_scale.blockSignals(True)
+        self.combo_output_scale.clear()
+        if self.model_scale > 1:
+            for factor in range(2, self.model_scale + 1):
+                label = f"{factor}×"
+                if factor == self.model_scale:
+                    label += " (native)"
+                self.combo_output_scale.addItem(label, factor)
+            chosen = int(desired) if desired in range(2, self.model_scale + 1) else self.model_scale
+            self.combo_output_scale.setCurrentIndex(self.combo_output_scale.findData(chosen))
+            self.combo_output_scale.setEnabled(True)
+            self.pending_output_scale = None
+        else:
+            self.combo_output_scale.addItem("Load a model first", None)
+            self.combo_output_scale.setEnabled(False)
+        self.combo_output_scale.blockSignals(False)
+
+    def selected_output_scale(self):
+        value = self.combo_output_scale.currentData()
+        return int(value) if value is not None else max(1, self.model_scale)
+
+    def on_output_scale_changed(self, _index):
+        self.save_settings()
         self.update_predict()
 
     def refresh_hardware(self):
@@ -596,13 +663,7 @@ class MainWindow(QMainWindow):
     def apply_hardware_constraints(self):
         device = self.current_device()
         free_memory = int(device.get("free_memory", 0))
-        total_memory = int(device.get("total_memory", 0))
-        self.hardware_label.setText(
-            f"{device.get('name', device.get('id', 'Device'))}: "
-            f"{format_bytes(free_memory)} free of {format_bytes(total_memory)}. "
-            f"System RAM available: "
-            f"{format_bytes(self.capability_report.get('system_ram_available'))}."
-        )
+        self._update_hardware_summary(device)
 
         previous_tile = int(self.combo_tile.currentText() or 128)
         recommended = sorted(
@@ -645,6 +706,92 @@ class MainWindow(QMainWindow):
 
         self.on_tile_changed()
 
+    def _update_hardware_summary(self, device, estimate=None):
+        device_type = str(device.get("type", "cpu"))
+        device_name = str(device.get("name", device.get("id", "Device")))
+        device_free = int(device.get("free_memory", 0)) or None
+        device_total = int(device.get("total_memory", 0)) or None
+        ram_available = int(self.capability_report.get("system_ram_available", 0)) or None
+        ram_total = int(self.capability_report.get("system_ram_total", 0)) or None
+
+        if device_type == "mps":
+            free_values = [value for value in (device_free, ram_available) if value is not None]
+            total_values = [value for value in (device_total, ram_total) if value is not None]
+            available = min(free_values) if free_values else None
+            total = min(total_values) if total_values else None
+            detected = (
+                f"{device_name}: {format_bytes(available)} currently free of "
+                f"{format_bytes(total)} unified memory."
+            )
+            usage = (
+                self._format_estimated_memory_use(
+                    estimate.system_memory_bytes,
+                    total,
+                    "unified memory",
+                )
+                if estimate is not None
+                else "Estimated LocalSR peak: choose an image and model first."
+            )
+            cap_fraction = 52 if self.check_safe_mem.isChecked() else 62
+            limit = f"Hard Metal allocation cap: {cap_fraction}% of Metal's recommended maximum."
+        elif device_type in {"cuda", "rocm", "xpu"}:
+            memory_name = "shared GPU memory" if device.get("is_integrated") else "VRAM"
+            detected = (
+                f"{device_name}: {format_bytes(device_free)} currently free of "
+                f"{format_bytes(device_total)} {memory_name}. System RAM: "
+                f"{format_bytes(ram_available)} currently available of {format_bytes(ram_total)}."
+            )
+            usage = (
+                "Estimated LocalSR peak: "
+                f"{self._format_memory_share(estimate.device_memory_bytes, device_total)} "
+                f"{memory_name}; "
+                f"{self._format_memory_share(estimate.system_memory_bytes, ram_total)} RAM."
+                if estimate is not None
+                else "Estimated LocalSR peak: choose an image and model first."
+            )
+            free_fraction = 80 if self.check_safe_mem.isChecked() else 90
+            limit = (
+                f"Hard GPU-memory cap at job start: {free_fraction}% of then-free memory, "
+                "never more than 90% of total GPU memory."
+            )
+        else:
+            detected = (
+                f"{device_name}: {format_bytes(ram_available)} currently available of "
+                f"{format_bytes(ram_total)} system RAM."
+            )
+            usage = (
+                self._format_estimated_memory_use(
+                    estimate.system_memory_bytes,
+                    ram_total,
+                    "system RAM",
+                )
+                if estimate is not None
+                else "Estimated LocalSR peak: choose an image and model first."
+            )
+            limit = ""
+
+        lines = [detected, usage]
+        if limit:
+            lines.append(limit)
+        self.hardware_label.setText("\n".join(lines))
+
+    @staticmethod
+    def _format_memory_share(estimated_bytes, total_bytes):
+        if total_bytes:
+            percentage = estimated_bytes / total_bytes * 100
+            return (
+                f"{format_bytes(estimated_bytes)} of {format_bytes(total_bytes)} "
+                f"({percentage:.0f}%)"
+            )
+        return f"{format_bytes(estimated_bytes)} (total unavailable)"
+
+    @classmethod
+    def _format_estimated_memory_use(cls, estimated_bytes, total_bytes, memory_name):
+        return (
+            f"Estimated LocalSR peak: "
+            f"{cls._format_memory_share(estimated_bytes, total_bytes)} {memory_name}."
+        )
+
     def on_tile_changed(self):
         tile = int(self.combo_tile.currentText() or 64)
         previous = int(self.combo_halo.currentText() or 16)
@@ -661,9 +808,10 @@ class MainWindow(QMainWindow):
 
     def update_predict(self):
         if self.image_w > 0 and self.model_scale > 1:
+            output_scale = self.selected_output_scale()
             self.predicted_size_label.setText(
-                f"Predicted Output: {self.image_w * self.model_scale}x"
-                f"{self.image_h * self.model_scale}"
+                f"Predicted Output: {self.image_w * output_scale}x"
+                f"{self.image_h * output_scale} ({output_scale}×)"
             )
         else:
             self.predicted_size_label.setText("Predicted Output: -")
@@ -679,6 +827,7 @@ class MainWindow(QMainWindow):
     def update_estimate(self, *_args):
         if self.image_w <= 0 or self.image_h <= 0 or self.model_scale <= 1:
             self.current_estimate = None
+            self._update_hardware_summary(self.current_device())
             self.estimate_label.setText(
                 "Choose an image and a valid model to calculate an estimate."
             )
@@ -711,7 +860,8 @@ class MainWindow(QMainWindow):
         self.current_estimate = estimate_resources(
             image_width=self.image_w,
             image_height=self.image_h,
-            scale=self.model_scale,
+            scale=self.selected_output_scale(),
+            model_scale=self.model_scale,
             tile_size=int(self.combo_tile.currentText()),
             halo=int(self.combo_halo.currentText()),
             precision=self.combo_precision.currentText(),
@@ -725,8 +875,10 @@ class MainWindow(QMainWindow):
             memory_factor=model.memory_factor if model else 1.0,
             time_factor=model.time_factor if model else 1.0,
             measured_seconds_per_megapixel=measured_throughput,
+            device_memory_shared=bool(device.get("is_integrated", False)),
         )
         estimate = self.current_estimate
+        self._update_hardware_summary(device, estimate)
         confidence = (
             "calibrated from a completed run on this device"
             if estimate.calibrated
@@ -742,9 +894,10 @@ class MainWindow(QMainWindow):
         device_type = str(device.get("type", "cpu"))
         device_available = int(device.get("free_memory", 0)) or None
         ram_available = int(self.capability_report.get("system_ram_available", 0)) or None
-        if device_type == "cuda":
+        if device_type in {"cuda", "rocm", "xpu"}:
+            memory_name = "shared GPU memory" if device.get("is_integrated") else "VRAM"
             memory_text = (
-                f"VRAM now: {format_bytes(device_available)} available → about "
+                f"{memory_name} now: {format_bytes(device_available)} available → about "
                 f"{format_bytes(estimate.device_memory_remaining)} left. "
                 f"RAM now: {format_bytes(ram_available)} available → about "
                 f"{format_bytes(estimate.system_memory_remaining)} left."
@@ -780,6 +933,10 @@ class MainWindow(QMainWindow):
             estimate.warnings
         )
         self.preflight_warning.setText("\n".join(warnings))
+        if estimate.blocking or self.runtime_warning:
+            self.preflight_warning.setStyleSheet("color: #b3261e; font-weight: 600;")
+        else:
+            self.preflight_warning.setStyleSheet("color: #b26a00; font-weight: 600;")
         self._refresh_upscale_enabled()
 
     def _refresh_upscale_enabled(self):
@@ -804,7 +961,12 @@ class MainWindow(QMainWindow):
     def get_output_path(self):
         base = os.path.splitext(os.path.basename(self.image_path))[0]
         ext = self.combo_format.currentText()
-        return os.path.join(self.output_dir, f"{base}_upscaled.{ext}")
+        output_scale = self.selected_output_scale()
+        suffix = "_upscaled" if output_scale == self.model_scale else f"_upscaled_{output_scale}x"
+        return os.path.join(
+            self.output_dir,
+            f"{base}{suffix}.{ext}",
+        )
 
     def start_upscale(self):
         if not self.btn_upscale.isEnabled():
@@ -847,10 +1009,12 @@ class MainWindow(QMainWindow):
             jpeg_quality=self.spin_jpg.value(),
             preserve_metadata=self.check_meta.isChecked(),
             safe_memory=self.check_safe_mem.isChecked(),
+            output_scale=self.selected_output_scale(),
         )
         self.btn_upscale.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
         self.progress_label.setText("Starting…")
         self.live_resource_label.setText("Loading the model; live memory starts with inference…")
         self.btn_open.setEnabled(False)
@@ -861,10 +1025,12 @@ class MainWindow(QMainWindow):
         if self.current_job_id:
             self.worker.send_request(CancelRequest(job_id=self.current_job_id))
             self.progress_label.setText("Cancelling…")
+            self.progress_bar.setFormat("Cancelling…")
             self.btn_cancel.setEnabled(False)
 
     def on_progress(self, data):
         self.progress_bar.setValue(int(data["percentage"]))
+        self.progress_bar.setFormat("%p%")
         self.progress_label.setText(
             f"Tile {data['completed_tiles']}/{data['total_tiles']} "
             f"(size {data.get('active_tile_size')}) · {data['percentage']:.1f}% · "
@@ -873,9 +1039,12 @@ class MainWindow(QMainWindow):
         device_free = int(data.get("device_free_memory", 0)) or None
         ram_available = int(data.get("system_ram_available", 0)) or None
         device_type = self.current_device().get("type", "cpu")
-        if device_type == "cuda":
+        if device_type in {"cuda", "rocm", "xpu"}:
+            memory_name = (
+                "shared GPU memory" if self.current_device().get("is_integrated") else "VRAM"
+            )
             live_memory = (
-                f"Live: {format_bytes(device_free)} VRAM left · "
+                f"Live: {format_bytes(device_free)} {memory_name} left · "
                 f"{format_bytes(ram_available)} RAM left"
             )
         elif device_type == "mps":
@@ -893,12 +1062,14 @@ class MainWindow(QMainWindow):
     def on_worker_ready(self):
         if not self.current_job_id:
             self.progress_label.setText("Worker ready.")
+            self.progress_bar.setFormat("Ready")
         self.refresh_hardware()
         self.inspect_selected_model()
 
     def on_job_started(self, job_id):
         self.btn_upscale.setEnabled(False)
         self.btn_cancel.setEnabled(True)
+        self.progress_bar.setFormat("%p%")
         self.progress_label.setText("Processing job…")
         self.live_resource_label.setText("Loading the model; live memory starts with inference…")
 
@@ -925,6 +1096,7 @@ class MainWindow(QMainWindow):
         self.runtime_warning = ""
         self.btn_cancel.setEnabled(False)
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Complete")
         self.progress_label.setText("Completed successfully!")
         self.live_resource_label.setText("Run complete; refreshing available memory…")
         self.btn_open.setEnabled(True)
@@ -937,6 +1109,8 @@ class MainWindow(QMainWindow):
         self.job_started_at = None
         self.runtime_warning = ""
         self.btn_cancel.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Cancelled")
         self.progress_label.setText("Cancelled by user.")
         self.live_resource_label.setText("Cancelled; refreshing available memory…")
         output_exists = os.path.exists(self.get_output_path()) if self.image_path else False
@@ -949,6 +1123,8 @@ class MainWindow(QMainWindow):
         self.current_job_id = None
         self.job_started_at = None
         self.btn_cancel.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Failed")
         friendly = self._friendly_error(error_message)
         self.runtime_warning = friendly
         self.progress_label.setText(f"Failed: {friendly}")
@@ -973,8 +1149,10 @@ class MainWindow(QMainWindow):
                 "The output drive ran out of free space. Choose another output folder or free "
                 f"disk space. Technical detail: {message}"
             )
-        if "cuda" in lower and ("driver" in lower or "available" in lower):
-            return f"The CUDA device is unavailable. Refresh hardware or choose CPU. {message}"
+        if any(name in lower for name in ("cuda", "rocm", "xpu")) and (
+            "driver" in lower or "available" in lower
+        ):
+            return f"The GPU is unavailable. Refresh hardware or choose CPU. {message}"
         return message
 
     def on_warning(self, message):
@@ -999,6 +1177,7 @@ class MainWindow(QMainWindow):
         self.progress_label.setText(error)
         self.current_job_id = None
         self.btn_cancel.setEnabled(False)
+        self.progress_bar.setFormat("Worker error")
         self._refresh_upscale_enabled()
         if "exited" in error and "code 0" not in error:
             self.worker.start()

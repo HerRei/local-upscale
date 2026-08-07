@@ -263,6 +263,7 @@ class WorkerServer:
                 icc_profile=img_data.get("icc_profile"),
                 safe_exif=img_data.get("safe_exif", {}),
                 scale=info.scale,
+                output_scale=int(data.get("output_scale") or info.scale),
             )
 
             if out_file is not None:

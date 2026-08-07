@@ -1,4 +1,6 @@
 import os
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,6 +11,53 @@ from localsr.core.image_io import ImageManager
 
 def create_srgb_profile():
     return ImageCms.createProfile("sRGB").tobytes()
+
+
+class FakeRawDecode:
+    def __init__(self, rgb):
+        self.rgb = rgb
+        self.kwargs = None
+        self.sizes = SimpleNamespace(width=6, height=4, flip=0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def postprocess(self, **kwargs):
+        self.kwargs = kwargs
+        return self.rgb
+
+
+def test_dng_load_uses_libraw_camera_wb_and_srgb(tmp_path, monkeypatch):
+    path = tmp_path / "input.DNG"
+    metadata_image = Image.new("RGB", (6, 4))
+    exif = metadata_image.getexif()
+    exif[315] = "RAW Photographer"
+    metadata_image.save(path, format="TIFF", exif=exif)
+
+    decoded = np.full((4, 6, 3), 128, dtype=np.uint8)
+    fake_raw = FakeRawDecode(decoded)
+    fake_color_space = SimpleNamespace(sRGB=object())
+    fake_rawpy = SimpleNamespace(
+        imread=lambda _path: fake_raw,
+        ColorSpace=fake_color_space,
+    )
+    monkeypatch.setitem(sys.modules, "rawpy", fake_rawpy)
+
+    data = ImageManager().load(str(path))
+
+    assert data["tensor"].shape == (3, 4, 6)
+    assert data["tensor"].dtype.is_floating_point
+    assert data["safe_exif"][315] == "RAW Photographer"
+    assert data["icc_profile"]
+    assert fake_raw.kwargs == {
+        "use_camera_wb": True,
+        "use_auto_wb": False,
+        "output_color": fake_color_space.sRGB,
+        "output_bps": 8,
+    }
 
 
 def test_rgba_processing(tmp_path):
@@ -35,6 +84,29 @@ def test_rgba_processing(tmp_path):
     out_img = Image.open(out_path)
     assert out_img.mode == "RGBA"
     assert out_img.size == (20, 20)
+
+
+def test_native_model_output_can_be_saved_at_a_smaller_selected_scale(tmp_path):
+    manager = ImageManager()
+    manager.alpha_channel = Image.new("L", (10, 8), color=180)
+    native_4x_output = np.zeros((3, 32, 40), dtype=np.uint8)
+    output_path = str(tmp_path / "selected_2x.png")
+
+    manager.save_from_writer(
+        native_4x_output,
+        output_path,
+        "png",
+        98,
+        False,
+        None,
+        {},
+        4,
+        output_scale=2,
+    )
+
+    with Image.open(output_path) as output:
+        assert output.size == (20, 16)
+        assert output.mode == "RGBA"
 
 
 def test_exif_sanitization(tmp_path):

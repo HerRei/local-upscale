@@ -3,19 +3,23 @@
 [![CI](https://github.com/HerRei/local-upscale/actions/workflows/ci.yml/badge.svg)](https://github.com/HerRei/local-upscale/actions/workflows/ci.yml)
 
 LocalSR is a cross-platform desktop application for running local image super-resolution
-models on your own hardware. Apple Silicon (MPS) is prioritized, with CUDA and CPU support.
+models on your own hardware. Apple Silicon (MPS) is prioritized, with NVIDIA CUDA, AMD ROCm,
+Intel XPU, and CPU support when the installed PyTorch build exposes those backends.
 
 ## What it does
 
 - Runs open-source PyTorch upscaling models (HAT, ESRGAN, SwinIR, etc.) via Spandrel.
+- Lets the user choose the final enlargement up to the model's native scale (for example, 2×,
+  3×, or native 4× from a HAT 4× model).
 - Performs robust tiled inference to keep memory usage low and prevent system crashes on large images.
 - Safely cancels jobs cooperatively without locking up your system.
 - Correctly handles color profiles (ICC), preserving image colors faithfully.
 - Converts everything safely to sRGB during processing and re-embeds the profile on output.
+- Develops `.dng` camera RAW files through LibRaw using camera white balance and sRGB output.
 - Offers three HAT sizes as optional, on-demand downloads while still accepting your own
   Spandrel-compatible checkpoints.
-- Detects available devices and memory in the isolated worker, then limits tile and precision
-  choices to settings supported by the selected hardware and model.
+- Detects available Apple, NVIDIA, AMD, and Intel devices and memory in the isolated worker, then
+  limits tile and precision choices to settings supported by the selected hardware and model.
 - Provides conservative first-run estimates for time, device memory, RAM, disk, and tile count.
 - Explains memory, disk, and device failures with practical recovery steps.
 
@@ -29,11 +33,21 @@ models on your own hardware. Apple Silicon (MPS) is prioritized, with CUDA and C
 ## Current Platform Support
 
 - macOS with Apple Silicon MPS or CPU
-- Windows with CUDA or CPU
-- Linux with CUDA or CPU
+- Windows with NVIDIA CUDA, supported Intel XPU GPUs/iGPUs, or CPU
+- Linux with NVIDIA CUDA, AMD ROCm, supported Intel XPU GPUs/iGPUs, or CPU
 
 The source application and automated tests are cross-platform. Signed native installers are not yet
 part of the project.
+
+AMD ROCm intentionally uses `cuda:N` device identifiers internally because PyTorch reuses its CUDA
+API for HIP; the GUI labels these devices as ROCm. Intel GPUs use `xpu:N` and are shown only when
+`torch.xpu.is_available()` succeeds. This includes supported Intel client and integrated GPUs.
+Vendor drivers and a matching PyTorch build are still required.
+
+Upscayl reaches a wider set of consumer GPUs through NCNN/Vulkan. LocalSR does not currently use
+that backend because NCNN models are not interchangeable with arbitrary Spandrel/PyTorch
+checkpoints. DirectML is also not exposed because this version requires an enforceable per-process
+GPU-memory ceiling; unsupported GPUs fall back to CPU instead of being advertised optimistically.
 
 ## Models
 
@@ -68,8 +82,18 @@ Spandrel supports.
 
 ## Supported Formats
 
-- Input: `.jpg`, `.png`, `.tif`, `.tiff`
+- Input: `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`, `.webp`, `.dng`
 - Output: `.jpg`, `.png`, `.tif`
+
+DNG input is developed from the original RAW data before upscaling. LocalSR does not overwrite the
+source DNG; the result is written as the selected standard output format.
+
+## Output Scale
+
+After a model is inspected, the Output section lists every integer enlargement from 2× through the
+model's native scale. The neural model always performs its native restoration pass; selecting a
+smaller final factor applies one Lanczos downsample before the atomic save. LocalSR does not claim
+that conventional resizing beyond a model's native scale creates additional model detail.
 
 ## Apple MPS Safe Mode
 
@@ -87,6 +111,12 @@ PyTorch on MPS can easily exhaust unified memory and crash macOS. LocalSR combat
   context, then crops that region away. Halo choices are constrained by the tile size.
 - **Precision**: FP16 appears only when both the selected device and inspected model support it.
 - **Safe Memory Mode**: Automatically required when less than 3 GB of device memory is available.
+
+Every GPU job has a runtime allocator ceiling. CUDA, ROCm, and Intel XPU jobs are capped against
+the memory that is free when the job starts and never above 90% of total device memory. Metal uses
+PyTorch's hard MPS high-watermark limit. Apple unified-memory pressure is advisory rather than a
+start blocker because macOS can compress and swap inactive memory; disk-space and discrete-GPU
+VRAM failures remain blocking.
 
 Before a first run, LocalSR displays a broad time range because hardware generation, thermal state,
 model architecture, tile overlap, and storage speed cannot be inferred reliably. After a successful

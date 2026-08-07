@@ -38,6 +38,9 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 | F6.5 | Hardware-safe controls | Restrict device, precision, tile, halo, and Safe Memory Mode based on reported capability | M5 | R6 |
 | F6.6 | Resource estimates and warnings | Estimate time/memory/disk/tiles, learn successful throughput, block unsafe starts, and explain runtime failures | M5 | R6 |
 | F6.7 | Live resource feedback | Show calibrated time ranges and sample remaining RAM/VRAM/unified memory during inference | M5 | R6 |
+| F7.1 | DNG RAW input | Probe DNG dimensions in the GUI and develop sensor data with LibRaw, camera white balance, orientation, and sRGB output in the worker | M6 | R7 |
+| F8.1 | Multi-vendor GPU backends | Detect NVIDIA CUDA, AMD ROCm, and Intel XPU/iGPU devices exposed by PyTorch, apply hard allocator caps, and retain CPU fallback | M7 | R8 |
+| F9.1 | Selectable output scale | Offer every integer output factor through the model's native scale, resize once with Lanczos when needed, and reflect the choice in estimates, dimensions, filenames, alpha, and metadata | M8 | R9 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -47,6 +50,9 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 | M3 | Genuine Integration Test Suite | R4: Subprocess IPC test suite verifying startup, dummy job 2x output, cancel, restart, cleanup | M1, M2 | DONE |
 | M4 | Model Architecture Verification (HAT) | R5: real Spandrel HAT loading/inference with generated lightweight weights and tiled image checks | M1, M2, M3 | DONE |
 | M5 | Model Catalog & Resource-Aware UX | R6: optional verified models, hardware capability IPC, constrained settings, estimates, and actionable failures | M1–M4 | DONE |
+| M6 | Camera RAW Input | R7: cross-platform DNG selection, lightweight dimension probing, isolated LibRaw development, and regression coverage | M1–M5 | DONE |
+| M7 | Multi-vendor GPU Safety | R8: ROCm/XPU discovery, shared-memory awareness, hard CUDA/ROCm/XPU/MPS allocator caps, advisory MPS pressure, and visible progress controls | M1–M6 | DONE |
+| M8 | Output Scale Selection | R9: hardware-aware output-factor UI, native-model inference, high-quality final resizing, protocol propagation, and regression coverage | M1–M7 | DONE |
 | M_E2E | Requirement-Driven E2E Test Suite | Dual Track: Independent opaque-box test suite for R1..R5 generating TEST_READY.md | none | DONE (TEST_READY.md published) |
 
 ## Verification Boundary

@@ -115,6 +115,12 @@ def test_main_window_button_states_and_signals(tmp_path):
     window.model_scale = 2
     window.update_predict()
 
+    line_height = window.hardware_label.fontMetrics().lineSpacing()
+    assert window.hardware_label.wordWrap()
+    assert window.hardware_label.minimumHeight() >= line_height * 4
+    assert window.progress_bar.minimumHeight() >= 22
+    assert window.progress_bar.format() == "Ready"
+
     # Ready inputs enable upscale.
     assert window.btn_upscale.isEnabled() is True
     assert window.btn_cancel.isEnabled() is False
@@ -125,6 +131,7 @@ def test_main_window_button_states_and_signals(tmp_path):
     window.on_job_started("job_100")
     assert window.btn_upscale.isEnabled() is False
     assert window.btn_cancel.isEnabled() is True
+    assert window.progress_bar.format() == "%p%"
 
     # Simulate job_completed
     window.on_job_completed("job_100", {"success": True})
@@ -132,6 +139,7 @@ def test_main_window_button_states_and_signals(tmp_path):
     assert window.btn_cancel.isEnabled() is False
     assert window.btn_open.isEnabled() is True
     assert window.btn_reveal.isEnabled() is True
+    assert window.progress_bar.format() == "Complete"
 
     # Reset button state and simulate job_cancelled
     window.on_job_started("job_101")
@@ -139,6 +147,7 @@ def test_main_window_button_states_and_signals(tmp_path):
     window.on_job_cancelled("job_101")
     assert window.btn_upscale.isEnabled() is True
     assert window.btn_cancel.isEnabled() is False
+    assert window.progress_bar.format() == "Cancelled"
 
     # Check F3.3: on_worker_error with _is_shutting_down = True
     window.worker._is_shutting_down = True
