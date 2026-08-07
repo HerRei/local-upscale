@@ -289,7 +289,9 @@ ApplicationWindow {
 
                                 Item {
                                     id: resultClip
-                                    anchors.fill: previewImage
+                                    x: previewImage.x
+                                    y: previewImage.y
+                                    height: previewImage.height
                                     visible: window.showLiveResult && localSR.imageReady
                                     clip: true
                                     width: compareSlider.active ? compareSlider.x + (compareSlider.width / 2) : previewImage.width
@@ -354,68 +356,69 @@ ApplicationWindow {
                                 }
                             }
 
-                            WheelHandler {
-                                onWheel: function(event) {
-                                    var zoomDelta = event.angleDelta.y / 120.0;
-                                    var factor = Math.pow(1.15, zoomDelta);
-                                    var newScale = Math.max(1.0, Math.min(50.0, imageContainer.scale * factor));
-                                    
-                                    var point = event.point.position;
-                                    var imageX = flickable.contentX + point.x;
-                                    var imageY = flickable.contentY + point.y;
-                                    
-                                    var oldScale = imageContainer.scale;
-                                    imageContainer.scale = newScale;
-                                    
-                                    var newImageX = imageX * (newScale / oldScale);
-                                    var newImageY = imageY * (newScale / oldScale);
-                                    
-                                    var newContentWidth = imageContainer.width * newScale;
-                                    var newContentHeight = imageContainer.height * newScale;
-                                    var newLeftMargin = Math.max(0, (flickable.width - newContentWidth) / 2);
-                                    var newTopMargin = Math.max(0, (flickable.height - newContentHeight) / 2);
-                                    
-                                    var minX = -newLeftMargin;
-                                    var maxX = newContentWidth > flickable.width ? newContentWidth - flickable.width : minX;
-                                    var minY = -newTopMargin;
-                                    var maxY = newContentHeight > flickable.height ? newContentHeight - flickable.height : minY;
-                                    
-                                    flickable.contentX = Math.max(minX, Math.min(newImageX - point.x, maxX));
-                                    flickable.contentY = Math.max(minY, Math.min(newImageY - point.y, maxY));
-                                }
-                            }
+                        } // End of Flickable
 
-                            PinchHandler {
-                                target: null
-                                onActiveChanged: if (active) {
-                                    imageContainer.baseScale = imageContainer.scale;
-                                }
-                                onScaleChanged: {
-                                    var newScale = Math.max(1.0, Math.min(50.0, imageContainer.baseScale * scale));
-                                    var point = centroid.position;
-                                    
-                                    var imageX = flickable.contentX + point.x;
-                                    var imageY = flickable.contentY + point.y;
-                                    
-                                    var oldScale = imageContainer.scale;
-                                    imageContainer.scale = newScale;
-                                    
-                                    var newImageX = imageX * (newScale / oldScale);
-                                    var newImageY = imageY * (newScale / oldScale);
-                                    
-                                    var newContentWidth = imageContainer.width * newScale;
-                                    var newContentHeight = imageContainer.height * newScale;
-                                    var newLeftMargin = Math.max(0, (flickable.width - newContentWidth) / 2);
-                                    var newTopMargin = Math.max(0, (flickable.height - newContentHeight) / 2);
-                                    
-                                    var minX = -newLeftMargin;
-                                    var maxX = newContentWidth > flickable.width ? newContentWidth - flickable.width : minX;
-                                    var minY = -newTopMargin;
-                                    var maxY = newContentHeight > flickable.height ? newContentHeight - flickable.height : minY;
-                                    
-                                    flickable.contentX = Math.max(minX, Math.min(newImageX - point.x, maxX));
-                                    flickable.contentY = Math.max(minY, Math.min(newImageY - point.y, maxY));
-                                }
+                        WheelHandler {
+                            onWheel: function(event) {
+                                var zoomDelta = event.angleDelta.y / 120.0;
+                                var factor = Math.pow(1.15, zoomDelta);
+                                var newScale = Math.max(1.0, Math.min(50.0, imageContainer.scale * factor));
+                                
+                                var point = event.point.position;
+                                var imageX = flickable.contentX + point.x;
+                                var imageY = flickable.contentY + point.y;
+                                
+                                var oldScale = imageContainer.scale;
+                                imageContainer.scale = newScale;
+                                
+                                var newImageX = imageX * (newScale / oldScale);
+                                var newImageY = imageY * (newScale / oldScale);
+                                
+                                var newContentWidth = imageContainer.width * newScale;
+                                var newContentHeight = imageContainer.height * newScale;
+                                var newLeftMargin = Math.max(0, (flickable.width - newContentWidth) / 2);
+                                var newTopMargin = Math.max(0, (flickable.height - newContentHeight) / 2);
+                                
+                                var minX = -newLeftMargin;
+                                var maxX = newContentWidth > flickable.width ? newContentWidth - flickable.width : minX;
+                                var minY = -newTopMargin;
+                                var maxY = newContentHeight > flickable.height ? newContentHeight - flickable.height : minY;
+                                
+                                flickable.contentX = Math.max(minX, Math.min(newImageX - point.x, maxX));
+                                flickable.contentY = Math.max(minY, Math.min(newImageY - point.y, maxY));
+                            }
+                        }
+
+                        PinchHandler {
+                            target: null
+                            onActiveChanged: if (active) {
+                                imageContainer.baseScale = imageContainer.scale;
+                            }
+                            onScaleChanged: {
+                                var newScale = Math.max(1.0, Math.min(50.0, imageContainer.baseScale * scale));
+                                var point = centroid.position;
+                                
+                                var imageX = flickable.contentX + point.x;
+                                var imageY = flickable.contentY + point.y;
+                                
+                                var oldScale = imageContainer.scale;
+                                imageContainer.scale = newScale;
+                                
+                                var newImageX = imageX * (newScale / oldScale);
+                                var newImageY = imageY * (newScale / oldScale);
+                                
+                                var newContentWidth = imageContainer.width * newScale;
+                                var newContentHeight = imageContainer.height * newScale;
+                                var newLeftMargin = Math.max(0, (flickable.width - newContentWidth) / 2);
+                                var newTopMargin = Math.max(0, (flickable.height - newContentHeight) / 2);
+                                
+                                var minX = -newLeftMargin;
+                                var maxX = newContentWidth > flickable.width ? newContentWidth - flickable.width : minX;
+                                var minY = -newTopMargin;
+                                var maxY = newContentHeight > flickable.height ? newContentHeight - flickable.height : minY;
+                                
+                                flickable.contentX = Math.max(minX, Math.min(newImageX - point.x, maxX));
+                                flickable.contentY = Math.max(minY, Math.min(newImageY - point.y, maxY));
                             }
                         }
 
