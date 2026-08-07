@@ -318,6 +318,12 @@ ApplicationWindow {
                                     x: previewImage.width / 2
                                     color: teal
                                     
+                                    onActiveChanged: {
+                                        if (active) {
+                                            compareSlider.x = Qt.binding(function() { return previewImage.width / 2; })
+                                        }
+                                    }
+                                    
                                     MouseArea {
                                         anchors.fill: parent
                                         anchors.margins: -15 / imageContainer.scale
