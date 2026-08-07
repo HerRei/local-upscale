@@ -657,12 +657,6 @@ class LocalSRController(QObject):
 
     def _on_job_completed(self, _job_id, _result):
         self._active_tile = (0.0, 0.0, 0.0, 0.0)
-        output_path = self.backend.get_output_path() if self.backend.image_path else ""
-        if output_path and os.path.exists(output_path):
-            self.preview_provider.set_source_path(output_path)
-            self._preview_revision += 1
-            self._progressive_revision = 0
-            self.previewChanged.emit()
         self.stateChanged.emit()
 
     def _on_job_stopped(self, _job_id):

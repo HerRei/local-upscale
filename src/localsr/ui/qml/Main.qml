@@ -354,7 +354,7 @@ ApplicationWindow {
                             WheelHandler {
                                 onWheel: function(event) {
                                     var zoomDelta = event.angleDelta.y / 120.0;
-                                    var factor = Math.pow(1.5, zoomDelta);
+                                    var factor = Math.pow(1.15, zoomDelta);
                                     var newScale = Math.max(1.0, Math.min(50.0, imageContainer.scale * factor));
                                     
                                     var point = event.point.position;
@@ -364,8 +364,11 @@ ApplicationWindow {
                                     var oldScale = imageContainer.scale;
                                     imageContainer.scale = newScale;
                                     
-                                    flickable.contentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
-                                    flickable.contentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
+                                    var newContentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
+                                    var newContentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
+                                    
+                                    flickable.contentX = Math.max(0, Math.min(newContentX, imageContainer.width * newScale - flickable.width));
+                                    flickable.contentY = Math.max(0, Math.min(newContentY, imageContainer.height * newScale - flickable.height));
                                 }
                             }
 
@@ -383,8 +386,11 @@ ApplicationWindow {
                                     var oldScale = imageContainer.scale;
                                     imageContainer.scale = newScale;
                                     
-                                    flickable.contentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
-                                    flickable.contentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
+                                    var newContentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
+                                    var newContentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
+                                    
+                                    flickable.contentX = Math.max(0, Math.min(newContentX, imageContainer.width * newScale - flickable.width));
+                                    flickable.contentY = Math.max(0, Math.min(newContentY, imageContainer.height * newScale - flickable.height));
                                 }
                             }
                         }
