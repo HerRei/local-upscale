@@ -11,7 +11,8 @@ does not cross-compile. Model checkpoints are not included in any package.
 | Windows Server 2022 x86-64 | `LocalSR-Windows-x86_64-Setup.exe` |
 | Ubuntu 22.04 x86-64 | `LocalSR-Linux-x86_64.AppImage` and portable `.tar.gz` |
 
-Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` for the QML process, and
+Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` to instantiate and cleanly
+tear down the packaged QML/controller without entering an interactive event loop, and
 independently asks the packaged worker for capabilities over JSONL before requesting clean shutdown.
 Keeping these smoke tests separate avoids conflating slow first-time Torch startup with GUI startup.
 The headless Windows runner uses Qt's offscreen software backend and permits extra time for Windows

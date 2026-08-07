@@ -1,6 +1,5 @@
 import sys
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 
@@ -21,12 +20,17 @@ def main():
 
         window = MainWindow()
         window.show()
+        if smoke_test:
+            window.close()
+            return
     else:
         from localsr.ui.qml_app import create_qml_application
 
         engine, _controller = create_qml_application(start_worker=not smoke_test)
-    if smoke_test:
-        QTimer.singleShot(1500, app.quit)
+        if smoke_test:
+            _controller.shutdown()
+            engine.clearComponentCache()
+            return
     sys.exit(app.exec())
 
 
