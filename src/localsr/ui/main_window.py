@@ -589,6 +589,9 @@ class MainWindow(QMainWindow):
             self.update_estimate()
 
     def on_model_info(self, info):
+        expected_filename = os.path.basename(self.model_path) if getattr(self, "model_path", None) else ""
+        if info.get("filename") and expected_filename and info.get("filename") != expected_filename:
+            return
         self.current_model_info = dict(info)
         self.mi_name.setText(info["filename"])
         self.mi_arch.setText(info["architecture"])
@@ -961,7 +964,7 @@ class MainWindow(QMainWindow):
         ready = bool(
             self.image_path
             and self.model_path
-            and self.model_scale > 1
+            and self.model_scale >= 1
             and self.current_job_id is None
             and self.download_worker is None
             and not blocking

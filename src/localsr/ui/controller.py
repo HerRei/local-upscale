@@ -702,7 +702,11 @@ class LocalSRController(QObject):
         self._memory_snapshot.update(data)
         self.stateChanged.emit()
 
-    def _on_model_info(self, _data):
+    def _on_model_info(self, data):
+        import os
+        expected_filename = os.path.basename(self.backend.model_path) if getattr(self.backend, "model_path", None) else ""
+        if data.get("filename") and expected_filename and data.get("filename") != expected_filename:
+            return
         if self._pending_preset is not None:
             QTimer.singleShot(0, self._apply_pending_preset)
         self.stateChanged.emit()
