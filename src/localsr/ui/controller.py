@@ -505,7 +505,15 @@ class LocalSRController(QObject):
             if index < 0:
                 raise NoCompatibleModelError("The selected model is missing from the interface.")
             self._pending_preset = mode
-            self.backend.combo_model.setCurrentIndex(index)
+            if self.backend.combo_model.currentIndex() == index:
+                if self.backend.model_store.is_installed(model):
+                    if not self.backend.current_model_info:
+                        self.backend.inspect_selected_model()
+                    else:
+                        from PySide6.QtCore import QTimer
+                        QTimer.singleShot(0, self._apply_pending_preset)
+            else:
+                self.backend.combo_model.setCurrentIndex(index)
             self._preset_message = f"{model.name} selected. " + (
                 "Downloading and verifying it now…"
                 if not self.backend.model_store.is_installed(model)
