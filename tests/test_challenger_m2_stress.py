@@ -272,6 +272,7 @@ class TestMainWindowButtonStatesAndResets:
         win.image_h = 100
         win.model_scale = 2
         win.output_dir = str(tmp_path)
+        win.last_output_path = str(out_file)
         win.update_predict()
 
         win.on_job_started("job_cancel_exists")

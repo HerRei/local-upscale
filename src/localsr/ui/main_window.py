@@ -555,6 +555,11 @@ class MainWindow(QMainWindow):
         self.image_path = path
         self.image_w = width
         self.image_h = height
+        
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("")
+        self.live_resource_label.setText("")
+        
         raw_note = " | RAW: camera WB → sRGB" if is_raw_input(path) else ""
         self.img_info_label.setText(
             f"{os.path.basename(path)} | {self.image_w}x{self.image_h}{raw_note}"
@@ -973,10 +978,15 @@ class MainWindow(QMainWindow):
         ext = self.combo_format.currentText()
         output_scale = self.selected_output_scale()
         suffix = "_upscaled" if output_scale == self.model_scale else f"_upscaled_{output_scale}x"
-        return os.path.join(
+        out_path = os.path.join(
             self.output_dir,
             f"{base}{suffix}.{ext}",
         )
+        counter = 1
+        while os.path.exists(out_path):
+            out_path = os.path.join(self.output_dir, f"{base}{suffix}_{counter}.{ext}")
+            counter += 1
+        return out_path
 
     def start_upscale(self):
         if not self.btn_upscale.isEnabled():
@@ -988,15 +998,6 @@ class MainWindow(QMainWindow):
 
         self.save_settings()
         out_path = self.get_output_path()
-        if os.path.exists(out_path):
-            result = QMessageBox.question(
-                self,
-                "Overwrite?",
-                f"{os.path.basename(out_path)} exists. Overwrite?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if result != QMessageBox.Yes:
-                return
 
         self.current_job_id = str(uuid.uuid4())
         self.runtime_warning = ""
@@ -1143,7 +1144,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setFormat("Cancelled")
         self.progress_label.setText("Cancelled by user.")
         self.live_resource_label.setText("Cancelled; refreshing available memory…")
-        output_exists = os.path.exists(self.get_output_path()) if self.image_path else False
+        last = getattr(self, "last_output_path", None)
+        output_exists = os.path.exists(last) if last else False
         self.btn_open.setEnabled(output_exists)
         self.btn_reveal.setEnabled(output_exists)
         self.refresh_hardware()

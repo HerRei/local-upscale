@@ -260,6 +260,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             anchors.margins: 2
                             clip: true
+                            boundsBehavior: Flickable.StopAtBounds
                             contentWidth: imageContainer.width * imageContainer.scale
                             contentHeight: imageContainer.height * imageContainer.scale
                             interactive: imageContainer.scale > 1.0
@@ -352,17 +353,19 @@ ApplicationWindow {
 
                             WheelHandler {
                                 onWheel: function(event) {
-                                    var factor = event.angleDelta.y > 0 ? 1.1 : 1/1.1;
+                                    var zoomDelta = event.angleDelta.y / 120.0;
+                                    var factor = Math.pow(1.5, zoomDelta);
                                     var newScale = Math.max(1.0, Math.min(50.0, imageContainer.scale * factor));
                                     
                                     var point = event.point.position;
                                     var oldContentX = flickable.contentX;
                                     var oldContentY = flickable.contentY;
                                     
+                                    var oldScale = imageContainer.scale;
                                     imageContainer.scale = newScale;
                                     
-                                    flickable.contentX = (oldContentX + point.x) * (newScale / (imageContainer.scale / factor)) - point.x;
-                                    flickable.contentY = (oldContentY + point.y) * (newScale / (imageContainer.scale / factor)) - point.y;
+                                    flickable.contentX = (oldContentX + point.x) * (newScale / oldScale) - point.x;
+                                    flickable.contentY = (oldContentY + point.y) * (newScale / oldScale) - point.y;
                                 }
                             }
 
@@ -782,6 +785,8 @@ ApplicationWindow {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 6
+                    opacity: (localSR.progress > 0 || localSR.canCancel || localSR.progressText !== "") ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 200 } }
                     RowLayout {
                         Layout.fillWidth: true
                         Text {
