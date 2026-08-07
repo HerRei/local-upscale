@@ -136,7 +136,7 @@ ApplicationWindow {
                                     anchors.fill: parent
                                     onDropped: function(drop) {
                                         if (drop.hasUrls && drop.urls.length > 0)
-                                            localSR.setImageFromUrl(drop.urls[0].toString())
+                                            localSR.addImagesFromUrls(drop.urls)
                                     }
                                 }
                             }
@@ -486,7 +486,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             onDropped: function(drop) {
                                 if (drop.hasUrls && drop.urls.length > 0)
-                                    localSR.setImageFromUrl(drop.urls[0].toString())
+                                    localSR.addImagesFromUrls(drop.urls)
                             }
                         }
 
@@ -867,7 +867,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Text {
                             Layout.fillWidth: true
-                            text: localSR.progressText
+                            text: localSR.batchProgressText ? localSR.batchProgressText + " - " + localSR.progressText : localSR.progressText
                             color: "#d6deeb"
                             font.pixelSize: 12
                             font.weight: Font.Medium

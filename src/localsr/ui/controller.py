@@ -48,6 +48,9 @@ class LocalSRController(QObject):
         self._combo_estimate = ""
         self._show_progressive = False
         self._shutdown = False
+        self._batch_queue = []
+        self._batch_total = 0
+        self._batch_current = 0
 
         worker = backend.worker
         worker.preview_ready.connect(self._on_preview_ready)
@@ -330,6 +333,12 @@ class LocalSRController(QObject):
     def canStart(self):
         return self.backend.btn_upscale.isEnabled()
 
+    @Property(str, notify=stateChanged)
+    def batchProgressText(self):
+        if self._batch_total > 1:
+            return f"Processing image {self._batch_current} of {self._batch_total}"
+        return ""
+
     @Property(bool, notify=stateChanged)
     def canCancel(self):
         return self.backend.btn_cancel.isEnabled()
@@ -379,14 +388,55 @@ class LocalSRController(QObject):
         if self.backend.image_path:
             self._load_preview(self.backend.image_path)
 
-    @Slot(str)
-    def setImageFromUrl(self, value):
-        path = QUrl(value).toLocalFile() if value.startswith("file:") else value
-        if not path:
+    @Slot('QVariantList')
+    def addImagesFromUrls(self, urls):
+        paths = []
+        for u in urls:
+            u_str = u.toString() if hasattr(u, 'toString') else str(u)
+            path = QUrl(u_str).toLocalFile() if u_str.startswith("file:") else u_str
+            if path:
+                paths.append(path)
+        
+        if not paths:
             return
+            
+        if self.backend.current_job_id:
+            # Add to existing batch
+            self._batch_queue.extend(paths)
+            self._batch_total += len(paths)
+            self.stateChanged.emit()
+        else:
+            # Start new batch
+            self._batch_queue = paths
+            self._batch_total = len(paths)
+            self._batch_current = 0
+            self._process_next_batch_item()
+
+    def _process_next_batch_item(self):
+        if not self._batch_queue:
+            self._batch_total = 0
+            self._batch_current = 0
+            self.stateChanged.emit()
+            return
+
+        self._batch_current += 1
+        path = self._batch_queue.pop(0)
         self.backend.set_image(path)
+        
         if self.backend.image_path:
             self._load_preview(self.backend.image_path)
+            
+        self.stateChanged.emit()
+        
+        # Start immediately if a preset or settings are ready
+        if self.backend.btn_upscale.isEnabled():
+            from PySide6.QtCore import QTimer
+            # Slight delay to let UI breathe and load preview
+            QTimer.singleShot(200, self.startUpscale)
+
+    @Slot(str)
+    def setImageFromUrl(self, value):
+        self.addImagesFromUrls([value])
 
     def _load_preview(self, path: str):
         self._preview_error = ""
@@ -750,6 +800,7 @@ class LocalSRController(QObject):
     def _on_job_completed(self, _job_id, _result):
         self._active_tile = (0.0, 0.0, 0.0, 0.0)
         self.stateChanged.emit()
+        self._process_next_batch_item()
 
     def _on_job_stopped(self, _job_id):
         self._active_tile = (0.0, 0.0, 0.0, 0.0)
