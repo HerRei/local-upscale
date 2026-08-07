@@ -1,6 +1,14 @@
+import os
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
+
+
+def _record_smoke_stage(stage: str) -> None:
+    report_path = os.environ.get("LOCALSR_SMOKE_REPORT")
+    if report_path:
+        Path(report_path).write_text(stage, encoding="utf-8")
 
 
 def main():
@@ -15,6 +23,8 @@ def main():
     app.setOrganizationName("LocalSR")
     app.setApplicationDisplayName("LocalSR")
     smoke_test = "--smoke-test" in sys.argv
+    if smoke_test:
+        _record_smoke_stage("qt-ready")
     if "--legacy" in sys.argv:
         from localsr.ui.main_window import MainWindow
 
@@ -28,8 +38,13 @@ def main():
 
         engine, _controller = create_qml_application(start_worker=not smoke_test)
         if smoke_test:
+            _record_smoke_stage("qml-ready")
+            # Frozen Qt Quick processes can deadlock during teardown on the
+            # non-interactive Windows Server desktop used by GitHub Actions.
+            # Reaching this point proves that the packaged QML/controller loaded.
+            if sys.platform == "win32" and getattr(sys, "frozen", False):
+                os._exit(0)
             _controller.shutdown()
-            engine.clearComponentCache()
             return
     sys.exit(app.exec())
 

@@ -16,7 +16,10 @@ tear down the packaged QML/controller without entering an interactive event loop
 independently asks the packaged worker for capabilities over JSONL before requesting clean shutdown.
 Keeping these smoke tests separate avoids conflating slow first-time Torch startup with GUI startup.
 The headless Windows runner uses Qt's offscreen software backend and permits extra time for Windows
-to inspect the large first-run bundle; installed builds continue to use the native graphics backend.
+to inspect the large first-run bundle. Frozen Qt Quick teardown can block on that non-interactive
+desktop, so the Windows smoke process records a `qml-ready` sentinel after constructing the real
+interface and then exits directly. Normal installed builds continue to use the native graphics
+backend and normal lifecycle; source tests plus the macOS/Linux package smokes cover clean teardown.
 Linux downloads
 the official AppImage `appimagetool` asset and verifies its publisher-provided SHA-256 digest before
 use. A `v*` tag publishes all successful artifacts as a GitHub Release; manual workflow runs retain

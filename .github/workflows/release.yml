@@ -110,9 +110,18 @@ jobs:
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"
           $env:QT_QUICK_BACKEND = "software"
+          $env:LOCALSR_SMOKE_REPORT = Join-Path $PWD "localsr-smoke-stage.txt"
           $process = Start-Process -FilePath "dist\LocalSR\LocalSR.exe" -ArgumentList "--smoke-test" -PassThru
-          if (-not $process.WaitForExit(120000)) { $process.Kill(); throw "Packaged GUI timed out" }
+          if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            if (Test-Path $env:LOCALSR_SMOKE_REPORT) { Get-Content $env:LOCALSR_SMOKE_REPORT }
+            throw "Packaged GUI timed out"
+          }
           if ($process.ExitCode -ne 0) { throw "Packaged GUI exited with $($process.ExitCode)" }
+          if (-not (Test-Path $env:LOCALSR_SMOKE_REPORT)) { throw "Packaged GUI did not report its startup stage" }
+          if ((Get-Content -Raw $env:LOCALSR_SMOKE_REPORT).Trim() -ne "qml-ready") {
+            throw "Packaged GUI did not finish loading QML"
+          }
       - name: Smoke-test packaged worker
         run: python packaging/smoke_worker.py dist\LocalSR\LocalSRWorker.exe
       - name: Install Inno Setup
