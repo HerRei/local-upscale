@@ -9,6 +9,8 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 ## What it does
 
 - Runs open-source PyTorch upscaling models (HAT, ESRGAN, SwinIR, etc.) via Spandrel.
+- Starts with **Quick** and **Best Quality** modes that choose a compatible model, accelerator,
+  precision, tile size, and overlap while keeping all decisions visible and editable.
 - Lets the user choose the final enlargement up to the model's native scale (for example, 2×,
   3×, or native 4× from a HAT 4× model).
 - Performs robust tiled inference to keep memory usage low and prevent system crashes on large images.
@@ -16,11 +18,13 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 - Correctly handles color profiles (ICC), preserving image colors faithfully.
 - Converts everything safely to sRGB during processing and re-embeds the profile on output.
 - Develops `.dng` camera RAW files through LibRaw using camera white balance and sRGB output.
-- Offers three HAT sizes as optional, on-demand downloads while still accepting your own
-  Spandrel-compatible checkpoints.
+- Offers lightweight SPAN and RealPLKSR photo models plus three HAT sizes as optional, on-demand
+  downloads while still accepting your own Spandrel-compatible checkpoints.
 - Detects available Apple, NVIDIA, AMD, and Intel devices and memory in the isolated worker, then
   limits tile and precision choices to settings supported by the selected hardware and model.
 - Provides conservative first-run estimates for time, device memory, RAM, disk, and tile count.
+- Shows the active tile and progressively composites finished tiles into a bounded live preview.
+- Shows live macOS memory pressure, compression, swap, and MPS allocator values during work.
 - Explains memory, disk, and device failures with practical recovery steps.
 
 ## What it intentionally does NOT do
@@ -36,8 +40,9 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 - Windows with NVIDIA CUDA, supported Intel XPU GPUs/iGPUs, or CPU
 - Linux with NVIDIA CUDA, AMD ROCm, supported Intel XPU GPUs/iGPUs, or CPU
 
-The source application and automated tests are cross-platform. Signed native installers are not yet
-part of the project.
+The release workflow builds a macOS Apple Silicon DMG, Windows x86-64 Setup executable, and Linux
+x86-64 AppImage plus portable archive. Builds are unsigned unless the repository signing secrets
+documented in [the release guide](docs/releasing.md) are configured.
 
 AMD ROCm intentionally uses `cuda:N` device identifiers internally because PyTorch reuses its CUDA
 API for HIP; the GUI labels these devices as ROCm. Intel GPUs use `xpu:N` and are shown only when
@@ -49,19 +54,30 @@ that backend because NCNN models are not interchangeable with arbitrary Spandrel
 checkpoints. DirectML is also not exposed because this version requires an enforceable per-process
 GPU-memory ceiling; unsupported GPUs fall back to CPU instead of being advertised optimistically.
 
-## Models
+## Models and automatic modes
 
-The model menu contains three HAT ×4 choices:
+The model menu is a generic catalog rather than a HAT-only selector:
 
-- **HAT-S — Fast**: the lowest memory and compute cost.
-- **HAT — Balanced**: the normal ImageNet-pretrained model.
-- **HAT-L — Maximum**: the largest and most demanding variant.
+| Model | Intended use | Download | License |
+|---|---|---:|---|
+| SPAN ×4 official | Fast everyday upscaling | 9 MB | Apache-2.0 |
+| Nomos Web Photo RealPLKSR ×4 | Fast photographic restoration | 30 MB | CC-BY-4.0 |
+| HAT-S ×4 | High-quality laptop/default model | 81 MB | Apache-2.0 |
+| HAT ×4 ImageNet | High-quality balanced model | 85 MB | Apache-2.0 |
+| HAT-L ×4 ImageNet | Maximum-quality, high-cost model | 166 MB | Apache-2.0 |
+
+**Quick** prioritizes the fastest suitable catalog model and a safe accelerated FP16 configuration
+when both the model and device support it. **Best Quality** prioritizes the highest quality tier and
+FP32. These are transparent presets, not separate inference implementations: applying one fills in
+the same device, scale, tile, halo, and precision settings found under Advanced.
 
 Each download is pinned to a specific remote revision and verified against an embedded SHA-256
 digest before the temporary file is atomically installed. A failed or cancelled download removes
-its partial file. Models live in the platform application-data directory and are not included in
-the LocalSR package. The GUI links to the [official HAT project](https://github.com/XPixelGroup/HAT)
-and shows its declared Apache-2.0 license.
+its partial file. Models live in the platform application-data directory and are never included in
+the LocalSR installer. Every entry records its source, author, architecture, intended content, and
+license. SPAN comes from the [official SPAN project](https://github.com/hongyuanyu/SPAN), Nomos Web
+Photo comes from [Philip Hofmann's model release](https://github.com/Phhofm/models/releases/tag/4xNomosWebPhoto_RealPLKSR),
+and HAT comes from the [official HAT project](https://github.com/XPixelGroup/HAT).
 
 Choose **Use my own checkpoint…** to load any local `.pth`, `.pt`, or `.safetensors` model that
 Spandrel supports.
@@ -79,6 +95,9 @@ Spandrel supports.
    localsr
    ```
    (Alternatively, `python -m localsr`)
+
+The modern Qt Quick interface is the default. `localsr --legacy` remains available as a fallback
+while the compatibility controller is gradually extracted from the original widget interface.
 
 ## Supported Formats
 
@@ -124,8 +143,38 @@ run it stores a rolling local calibration for that model/device pair and narrows
 inference begins, the live ETA uses smoothed completed-tile timings.
 
 The resource panel shows currently available RAM, VRAM or Apple unified memory and disk space,
-together with conservative projected headroom. Live remaining memory is sampled during inference.
-These figures are safety guidance rather than allocation guarantees.
+together with conservative projected headroom. On MPS it additionally reports macOS pressure,
+compressed memory, swap, tensor allocations, Metal driver allocations, and Metal's recommended
+maximum. LocalSR refreshes idle pressure periodically and samples it during inference. These figures
+are safety guidance rather than allocation guarantees.
+
+The live canvas is intentionally bounded to 1600 pixels on its longest side. Finished output tiles
+are JPEG-encoded at preview quality inside the worker and composited into this small display image;
+the full-resolution output still goes directly to the disk-backed memmap and atomic writer. Preview
+rendering therefore does not create a second full-size output in GUI memory.
+
+## Interface development
+
+The visible interface is Qt Quick/QML in `src/localsr/ui/qml`. Open
+`src/localsr/ui/qml/LocalSR.qmlproject` in Qt Design Studio for a visual, what-you-see-is-what-you-get
+canvas. `DesignMock.qml` supplies realistic design-time values; the Python controller replaces it at
+runtime. Keep Torch and Spandrel out of this layer—the hidden compatibility controller and isolated
+worker preserve the existing tested safety behavior.
+
+## Native packages
+
+Install PyInstaller support and build the current platform package with:
+
+```bash
+python -m pip install -e ".[package]"
+python packaging/build_icons.py
+pyinstaller --clean --noconfirm packaging/localsr.spec
+```
+
+The spec emits a windowed `LocalSR` executable and a separate console `LocalSRWorker`, allowing
+JSON-line IPC to keep working in Windows GUI packages. Release tags matching `v*` run the native
+build on all three operating systems. Full commands, artifact names, signing secrets, and the manual
+workflow procedure are in [docs/releasing.md](docs/releasing.md).
 
 ## Tests
 
@@ -134,10 +183,12 @@ Run tests using:
 python -m pytest -q
 ruff check src tests smoke_test_gui.py
 ruff format --check src tests smoke_test_gui.py
+pyside6-qmllint --unqualified disable --max-warnings 0 src/localsr/ui/qml/*.qml
 ```
 
-GitHub Actions runs the suite independently on Windows, macOS, and Linux and builds a wheel and
-source distribution on every push and pull request.
+GitHub Actions runs the suite independently on Windows, macOS, and Linux, compiles the QML files,
+and builds a wheel and source distribution on every push and pull request. The separate native
+release workflow smoke-tests each packaged GUI/worker pair before publishing installers.
 
 The automated suite verifies real Spandrel ESRGAN/HAT loading and inference using lightweight
 generated checkpoints. It also tests the curated catalog, checksum/partial-file behavior, resource

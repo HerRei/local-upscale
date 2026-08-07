@@ -1,5 +1,6 @@
 import threading
 
+import numpy as np
 import pytest
 import torch
 from torch import nn
@@ -98,6 +99,37 @@ def test_inference_dimensions():
         arr = writer.get_array()
         assert arr.shape == (3, 33 * scale, 47 * scale)
         writer.cleanup()
+
+
+def test_inference_reports_started_and_completed_tiles():
+    adapter = DummyAdapter(2)
+    engine = InferenceEngine(adapter)
+    events = []
+
+    writer = engine.process_image(
+        {"tensor": torch.rand((3, 19, 23))},
+        adapter.model_info,
+        "dummy",
+        "cpu",
+        "fp32",
+        12,
+        3,
+        threading.Event(),
+        lambda _completed, _total, _size: None,
+        False,
+        lambda phase, tile, data, completed, total, width, height, active_size: events.append(
+            (phase, tile, data, completed, total, width, height, active_size)
+        ),
+    )
+
+    started = [event for event in events if event[0] == "started"]
+    completed = [event for event in events if event[0] == "completed"]
+    assert len(started) == len(completed) > 1
+    assert all(event[2] is None for event in started)
+    assert all(event[2].dtype == np.uint8 for event in completed)
+    assert completed[-1][3] == completed[-1][4]
+    assert completed[-1][5:7] == (46, 38)
+    writer.cleanup()
 
 
 def test_inference_small_image_large_halo():

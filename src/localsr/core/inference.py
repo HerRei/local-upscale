@@ -53,6 +53,7 @@ class InferenceEngine:
         cancel_event: threading.Event,
         progress_callback: Callable[[int, int, int], None],
         safe_memory: bool = True,
+        tile_callback: Callable[..., None] | None = None,
     ) -> OutputWriter:
 
         device = torch.device(device_str)
@@ -86,6 +87,18 @@ class InferenceEngine:
                         if cancel_event.is_set():
                             writer.cleanup()
                             raise InterruptedError("Cancelled")
+
+                        if tile_callback is not None:
+                            tile_callback(
+                                "started",
+                                t,
+                                None,
+                                i,
+                                total_tiles,
+                                w * scale,
+                                h * scale,
+                                current_tile_size,
+                            )
 
                         # Extract halo region (clamped to image bounds internally, but tiling.py gives exact coords)
                         tile_input = img_tensor[
@@ -163,6 +176,18 @@ class InferenceEngine:
 
                         writer.write_tile(out_core_np, t.out_x, t.out_y)
 
+                        if tile_callback is not None:
+                            tile_callback(
+                                "completed",
+                                t,
+                                out_core_np,
+                                i + 1,
+                                total_tiles,
+                                w * scale,
+                                h * scale,
+                                current_tile_size,
+                            )
+
                         progress_callback(i + 1, total_tiles, current_tile_size)
 
                         if safe_memory:
@@ -198,6 +223,18 @@ class InferenceEngine:
                             raise RuntimeError(
                                 "Out of memory. Reduced tile size to minimum and still failed."
                             ) from e
+
+                        if tile_callback is not None:
+                            tile_callback(
+                                "reset",
+                                None,
+                                None,
+                                0,
+                                0,
+                                w * scale,
+                                h * scale,
+                                current_tile_size,
+                            )
 
                         # Re-initialize output writer cleanly
                         writer.cleanup()

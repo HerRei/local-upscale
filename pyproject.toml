@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.2.0"
+version = "0.3.0"
 description = "A desktop GUI for running local image super-resolution models using PyTorch and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -33,6 +33,7 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "pytest-qt>=4.2.0", "ruff>=0.1.0"]
+package = ["pyinstaller>=6.21.0,<7", "pillow>=10.0.0"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -51,3 +52,6 @@ select = ["E4", "E7", "E9", "F", "I", "B"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+"localsr.ui" = ["qml/*.qml", "qml/*.qmlproject"]

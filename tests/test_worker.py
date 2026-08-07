@@ -41,6 +41,7 @@ class DummyEngine:
         cancel_event,
         progress_callback,
         safe_memory,
+        tile_callback=None,
     ):
         progress_callback(0, 4, tile_size)
         import time

@@ -2,7 +2,9 @@
 
 ## Architecture
 LocalSR is a desktop super-resolution application built with PySide6 (Qt) and PyTorch / Spandrel.
-- **UI Process**: `MainWindow` (`src/localsr/ui/main_window.py`) manages UI controls and communicates with `WorkerClient` (`src/localsr/protocol/client.py`).
+- **UI Process**: the Qt Quick interface (`src/localsr/ui/qml`) binds to `LocalSRController`; the
+  original `MainWindow` remains hidden as the tested compatibility/state layer. `WorkerClient`
+  (`src/localsr/protocol/client.py`) owns subprocess IPC. Neither visible UI layer imports Torch.
 - **Worker Subprocess**: Spawns `localsr.worker.__main__` (`WorkerServer` in `src/localsr/worker/server.py`) over stdin/stdout JSON IPC protocol.
 - **Inference & I/O Engine**: `InferenceEngine` (`src/localsr/core/inference.py`), `ModelAdapter` (`src/localsr/core/model_adapter.py`), and `ImageManager` (`src/localsr/core/image_io.py`) handle image loading, tiling, model execution, memmap writer allocation (`OutputWriter`), and atomic final saving.
 
@@ -41,6 +43,12 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 | F7.1 | DNG RAW input | Probe DNG dimensions in the GUI and develop sensor data with LibRaw, camera white balance, orientation, and sRGB output in the worker | M6 | R7 |
 | F8.1 | Multi-vendor GPU backends | Detect NVIDIA CUDA, AMD ROCm, and Intel XPU/iGPU devices exposed by PyTorch, apply hard allocator caps, and retain CPU fallback | M7 | R8 |
 | F9.1 | Selectable output scale | Offer every integer output factor through the model's native scale, resize once with Lanczos when needed, and reflect the choice in estimates, dimensions, filenames, alpha, and metadata | M8 | R9 |
+| F10.1 | Generic curated catalog | Describe architecture, content purpose, speed/quality tier, license, source, and native scale for SPAN, RealPLKSR, and HAT checkpoints | M9 | R10 |
+| F10.2 | Quick and Best presets | Rank compatible models and derive visible device, precision, tile, halo, and safe-memory settings from reported capabilities | M9 | R10 |
+| F11.1 | Progressive preview | Send bounded completed-tile previews and active tile coordinates without copying the full output into GUI memory | M10 | R11 |
+| F11.2 | Apple memory pressure | Report system pressure, compression, swap, tensor allocation, driver allocation, and MPS recommended maximum | M10 | R11 |
+| F12.1 | Modern designable interface | Ship a responsive Qt Quick interface plus Qt Design Studio project and mock data | M11 | R12 |
+| F13.1 | Native distribution | Build and smoke-test DMG, Windows Setup, AppImage, and portable archive artifacts with optional code signing | M12 | R13 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -53,6 +61,10 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 | M6 | Camera RAW Input | R7: cross-platform DNG selection, lightweight dimension probing, isolated LibRaw development, and regression coverage | M1–M5 | DONE |
 | M7 | Multi-vendor GPU Safety | R8: ROCm/XPU discovery, shared-memory awareness, hard CUDA/ROCm/XPU/MPS allocator caps, advisory MPS pressure, and visible progress controls | M1–M6 | DONE |
 | M8 | Output Scale Selection | R9: hardware-aware output-factor UI, native-model inference, high-quality final resizing, protocol propagation, and regression coverage | M1–M7 | DONE |
+| M9 | Catalog & Automatic Modes | R10: generic metadata, lightweight models, Quick/Best ranking and safe setting resolution | M1–M8 | DONE |
+| M10 | Live Preview & Telemetry | R11: bounded tile preview, active region overlay, MPS/system pressure telemetry, and improved tile ETA | M1–M9 | DONE |
+| M11 | Qt Quick Interface | R12: polished QML UI, design-time mock, Design Studio project, and QWidget compatibility controller | M1–M10 | DONE |
+| M12 | Native Packages | R13: separate packaged worker, minimized QML bundle, installer workflows, signing hooks, and smoke tests | M1–M11 | DONE |
 | M_E2E | Requirement-Driven E2E Test Suite | Dual Track: Independent opaque-box test suite for R1..R5 generating TEST_READY.md | none | DONE (TEST_READY.md published) |
 
 ## Verification Boundary
@@ -71,6 +83,9 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
   - `{"type": "job_failed", "job_id": str, "error": str}`
   - `{"type": "warning", "message": str}`
   - `{"type": "shutdown_request"}`
+  - `{"type": "preview_ready", "jpeg_base64": str, ...}`
+  - `{"type": "tile_update", "phase": "started|completed|reset", ...}`
+  - progress/capability messages include system and accelerator memory telemetry.
 
 ### Image IO Contract
 - `ImageManager.save(output_writer, destination_path, format, quality, preserve_metadata, icc_profile, safe_exif, scale)`
@@ -83,8 +98,13 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 - `src/localsr/core/model_catalog.py`: Curated model metadata, model storage, verified downloads.
 - `src/localsr/core/hardware.py`: Worker-side device and memory capability discovery.
 - `src/localsr/core/estimator.py`: Conservative resource/time preflight calculations.
+- `src/localsr/core/presets.py`: Pure Quick/Best model ranking and hardware setting selection.
 - `src/localsr/worker/server.py`: WorkerServer, job execution loop, memmap cleanup.
 - `src/localsr/protocol/client.py`: WorkerClient, QProcess management, signal emission.
-- `src/localsr/ui/main_window.py`: MainWindow UI logic, button states.
+- `src/localsr/ui/main_window.py`: Tested compatibility/state layer and legacy interface.
+- `src/localsr/ui/controller.py`: QML-facing property and action bridge.
+- `src/localsr/ui/preview_provider.py`: Bounded source/progressive image provider.
+- `src/localsr/ui/qml/`: Modern interface and Qt Design Studio project.
 - `src/localsr/ui/model_download.py`: Cancellable background model download worker.
+- `packaging/`: PyInstaller spec, selective QML hook, icons, and native installer inputs.
 - `tests/`: Unit & integration tests (`test_integration.py`, `test_hat_model.py`, `test_e2e_requirements.py`).

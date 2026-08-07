@@ -7,6 +7,13 @@ stable release is published.
 
 ### Added
 
+- Modern Qt Quick/QML interface with a Qt Design Studio project and design-time mock data.
+- Quick and Best Quality presets with transparent model/device/precision/tile decisions.
+- Lightweight SPAN ×4 and photo-oriented RealPLKSR ×4 catalog entries with pinned hashes.
+- Active-tile overlay and bounded progressive output preview over the worker protocol.
+- Live macOS memory-pressure, compression, swap, and MPS allocator telemetry.
+- Native macOS DMG, Windows Inno Setup, and Linux AppImage release automation.
+- Separate packaged worker executable so stdout remains valid JSON in windowed Windows builds.
 - On-demand HAT-S, HAT, and HAT-L model catalog with pinned SHA-256 verification.
 - Bring-your-own Spandrel checkpoint support.
 - Worker-side MPS, CUDA, CPU, RAM, and VRAM detection.
@@ -22,6 +29,7 @@ stable release is published.
 
 - Model download progress now disappears when the background download thread finishes.
 - Live ETA is based on completed tiles and smoothed tile duration instead of model-loading time.
+- Packaged QML dependencies exclude unused WebEngine and 3D modules.
 - Process-lifecycle tests no longer depend on Unix-only `ps`, `pgrep`, or signal-zero behavior.
 - Apple unified-memory pressure is advisory and no longer prevents a job from starting.
 - Hardware details, progress state, and the disabled Cancel control remain readable in dark mode.

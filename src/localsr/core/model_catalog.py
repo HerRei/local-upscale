@@ -6,6 +6,7 @@ import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import BinaryIO
 
@@ -14,6 +15,25 @@ CATALOG_BASE_URL = (
     f"https://huggingface.co/jaideepsingh/upscale_models/resolve/{CATALOG_REVISION}/HAT"
 )
 HAT_SOURCE_URL = "https://github.com/XPixelGroup/HAT"
+PROJECT_URL = "https://github.com/HerRei/local-upscale"
+
+
+class ModelPurpose(StrEnum):
+    GENERAL = "general"
+    PHOTO = "photo"
+    ILLUSTRATION = "illustration"
+
+
+class QualityTier(IntEnum):
+    STANDARD = 1
+    HIGH = 2
+    MAXIMUM = 3
+
+
+class SpeedTier(IntEnum):
+    SLOW = 1
+    MEDIUM = 2
+    FAST = 3
 
 
 @dataclass(frozen=True)
@@ -25,8 +45,15 @@ class CatalogModel:
     size_bytes: int
     sha256: str
     download_url: str
+    architecture: str = "Unknown"
+    native_scale: int = 4
+    purposes: tuple[ModelPurpose, ...] = (ModelPurpose.GENERAL,)
+    quality_tier: QualityTier = QualityTier.STANDARD
+    speed_tier: SpeedTier = SpeedTier.MEDIUM
+    recommended_halo: int = 16
     source_url: str = HAT_SOURCE_URL
     license_name: str = "Apache-2.0"
+    author: str = ""
     memory_factor: float = 1.0
     time_factor: float = 1.0
 
@@ -37,6 +64,58 @@ class CatalogModel:
 
 MODEL_CATALOG = (
     CatalogModel(
+        model_id="span_x4_official",
+        name="SPAN ×4 — Ultra Fast",
+        filename="4x-spanx4-ch48.pth",
+        description=(
+            "The official lightweight SPAN ×4 checkpoint. Fastest recommended choice for "
+            "clean images and everyday upscaling."
+        ),
+        size_bytes=9_004_922,
+        sha256="c79e716b8eb24182c1d7fcc74fa10ae074bdb34fee7c6e67c73053ff5498c667",
+        download_url=(
+            "https://objectstorage.us-phoenix-1.oraclecloud.com/n/ax6ygfvpvzka/b/"
+            "open-modeldb-files/o/4x-spanx4-ch48.pth"
+        ),
+        architecture="SPAN",
+        native_scale=4,
+        purposes=(ModelPurpose.GENERAL, ModelPurpose.PHOTO, ModelPurpose.ILLUSTRATION),
+        quality_tier=QualityTier.STANDARD,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=16,
+        source_url="https://github.com/hongyuanyu/SPAN",
+        license_name="Apache-2.0",
+        author="Hongyuan Yu and SPAN contributors",
+        memory_factor=0.18,
+        time_factor=0.12,
+    ),
+    CatalogModel(
+        model_id="nomos_web_photo_realplksr_x4",
+        name="Nomos Web Photo ×4 — Fast Photo",
+        filename="4xNomosWebPhoto_RealPLKSR.pth",
+        description=(
+            "A compact RealPLKSR model trained for photographs with realistic blur, noise, "
+            "JPEG and WebP degradation."
+        ),
+        size_bytes=29_683_482,
+        sha256="a9db66c9b674c6a5025b6ef3bee71a57c33b8605d8a2de0980470f89002efbbe",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/"
+            "4xNomosWebPhoto_RealPLKSR/4xNomosWebPhoto_RealPLKSR.pth"
+        ),
+        architecture="RealPLKSR",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=16,
+        source_url=("https://github.com/Phhofm/models/releases/tag/4xNomosWebPhoto_RealPLKSR"),
+        license_name="CC-BY-4.0",
+        author="Philip Hofmann",
+        memory_factor=0.38,
+        time_factor=0.25,
+    ),
+    CatalogModel(
         model_id="hat_s_x4",
         name="HAT-S ×4 — Fast",
         filename="HAT-S_SRx4.pth",
@@ -44,6 +123,13 @@ MODEL_CATALOG = (
         size_bytes=81_089_561,
         sha256="a92f81bd2c0c1aaa371a6e4d6cac69e749fde2e36196885ee47a4a3667542c9a",
         download_url=f"{CATALOG_BASE_URL}/HAT-S_SRx4.pth?download=true",
+        architecture="HAT",
+        native_scale=4,
+        purposes=(ModelPurpose.GENERAL, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        author="XPixel Group",
         memory_factor=0.65,
         time_factor=0.65,
     ),
@@ -55,6 +141,13 @@ MODEL_CATALOG = (
         size_bytes=85_137_601,
         sha256="4ee053c42461187846dc0e93aa5abd34591c0725a8e044a59000e92ee215e833",
         download_url=f"{CATALOG_BASE_URL}/HAT_SRx4_ImageNet-pretrain.pth?download=true",
+        architecture="HAT",
+        native_scale=4,
+        purposes=(ModelPurpose.GENERAL, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=16,
+        author="XPixel Group",
         memory_factor=1.0,
         time_factor=1.0,
     ),
@@ -66,6 +159,13 @@ MODEL_CATALOG = (
         size_bytes=165_774_123,
         sha256="5992bd38522f2b8faf11ea4bd8ee08de92465bb66892166576999afc36d60043",
         download_url=f"{CATALOG_BASE_URL}/HAT-L_SRx4_ImageNet-pretrain.pth?download=true",
+        architecture="HAT",
+        native_scale=4,
+        purposes=(ModelPurpose.GENERAL, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=16,
+        author="XPixel Group",
         memory_factor=1.8,
         time_factor=1.8,
     ),
@@ -136,7 +236,7 @@ def download_model(
     success = False
     request = urllib.request.Request(
         model.download_url,
-        headers={"User-Agent": "LocalSR/0.2 (+https://github.com/XPixelGroup/HAT)"},
+        headers={"User-Agent": f"LocalSR/0.3 (+{PROJECT_URL})"},
     )
     open_request = opener or _open_download
 

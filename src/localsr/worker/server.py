@@ -1,3 +1,6 @@
+import base64
+import gc
+import io
 import json
 import os
 import queue
@@ -5,6 +8,8 @@ import sys
 import threading
 import time
 import traceback
+
+from PIL import Image
 
 # Set MPS memory limits before torch is imported
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
@@ -22,7 +27,10 @@ from localsr.protocol.messages import (
     JobStarted,
     LogMessage,
     ModelInfo,
+    PreviewFailed,
+    PreviewReady,
     ProgressUpdate,
+    TileUpdate,
     WarningMessage,
     WorkerReady,
 )
@@ -35,6 +43,26 @@ def send_message(msg):
     with print_lock:
         sys.stdout.write(msg.to_json() + "\n")
         sys.stdout.flush()
+
+
+def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
+    if hasattr(image, "detach"):
+        array = image.detach().to("cpu").clamp(0, 1).mul(255).byte().numpy()
+    else:
+        array = image
+    if array.ndim != 3:
+        raise ValueError("Preview data must use channel-height-width layout.")
+    if array.shape[0] == 1:
+        array = array.repeat(3, axis=0)
+    if array.shape[0] < 3:
+        raise ValueError("Preview data must contain at least one or three channels.")
+    rgb = array[:3].transpose(1, 2, 0)
+    preview = Image.fromarray(rgb)
+    maximum = max(64, min(2048, int(max_dimension)))
+    preview.thumbnail((maximum, maximum), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    preview.save(output, format="JPEG", quality=quality, optimize=True)
+    return base64.b64encode(output.getvalue()).decode("ascii")
 
 
 class WorkerServer:
@@ -128,6 +156,29 @@ class WorkerServer:
                     report = get_capability_report()
                     send_message(CapabilitiesInfo(**report))
 
+                elif req_type == "preview_request":
+                    image_path = str(data.get("image_path", ""))
+                    try:
+                        preview_data = ImageManager().load(image_path)
+                        tensor = preview_data["tensor"]
+                        _, height, width = tensor.shape
+                        send_message(
+                            PreviewReady(
+                                image_path=image_path,
+                                width=int(width),
+                                height=int(height),
+                                jpeg_base64=_encode_chw_jpeg(
+                                    tensor,
+                                    int(data.get("max_dimension", 1600)),
+                                    quality=82,
+                                ),
+                            )
+                        )
+                        del preview_data
+                        gc.collect()
+                    except Exception as error:  # noqa: BLE001
+                        send_message(PreviewFailed(image_path=image_path, error_message=str(error)))
+
                 elif req_type == "cancel_request":
                     # Already handled in reader_thread to set the event, but we can acknowledge if no job is active
                     with self.state_lock:
@@ -172,7 +223,9 @@ class WorkerServer:
                 send_message(LogMessage(level="error", message=f"Worker loop error: {e}"))
 
     def _run_job(self, job_id, data):
+        job_started_at = time.monotonic()
         inference_started_at = None
+        processing_call_started_at = None
         last_progress_at = None
         last_completed = 0
         smoothed_seconds_per_tile = None
@@ -220,7 +273,62 @@ class WorkerServer:
                     estimated_remaining_seconds=estimated_remaining,
                     active_tile_size=active_tile_size,
                     device_free_memory=memory_snapshot.get("device_free_memory", 0),
+                    device_allocated_memory=memory_snapshot.get("device_allocated_memory", 0),
                     system_ram_available=memory_snapshot.get("system_ram_available", 0),
+                    system_memory_pressure_percent=memory_snapshot.get(
+                        "system_memory_pressure_percent", 0.0
+                    ),
+                    system_memory_pressure_level=memory_snapshot.get(
+                        "system_memory_pressure_level", "unknown"
+                    ),
+                    system_compressed_memory=memory_snapshot.get("system_compressed_memory", 0),
+                    system_swap_used=memory_snapshot.get("system_swap_used", 0),
+                    mps_tensor_allocated_memory=memory_snapshot.get(
+                        "mps_tensor_allocated_memory", 0
+                    ),
+                    mps_driver_allocated_memory=memory_snapshot.get(
+                        "mps_driver_allocated_memory", 0
+                    ),
+                    mps_recommended_max_memory=memory_snapshot.get("mps_recommended_max_memory", 0),
+                )
+            )
+
+        def tile_cb(
+            phase,
+            tile,
+            tile_data,
+            completed,
+            total,
+            output_width,
+            output_height,
+            active_tile_size,
+        ):
+            nonlocal inference_started_at
+            if phase == "started" and inference_started_at is None:
+                # Model loading happens before the first tile. Starting the ETA
+                # clock here prevents that one-off cost from being multiplied by
+                # every remaining tile.
+                inference_started_at = time.monotonic()
+            jpeg_base64 = ""
+            if phase == "completed" and tile_data is not None:
+                try:
+                    jpeg_base64 = _encode_chw_jpeg(tile_data, 192, quality=72)
+                except (OSError, TypeError, ValueError):
+                    jpeg_base64 = ""
+            send_message(
+                TileUpdate(
+                    job_id=job_id,
+                    phase=phase,
+                    completed_tiles=completed,
+                    total_tiles=total,
+                    output_x=int(tile.out_x) if tile is not None else 0,
+                    output_y=int(tile.out_y) if tile is not None else 0,
+                    output_width=int(tile.out_w) if tile is not None else 0,
+                    output_height=int(tile.out_h) if tile is not None else 0,
+                    image_width=int(output_width),
+                    image_height=int(output_height),
+                    active_tile_size=int(active_tile_size),
+                    jpeg_base64=jpeg_base64,
                 )
             )
 
@@ -235,7 +343,7 @@ class WorkerServer:
         out_file = None
         try:
             send_message(LogMessage(level="info", message="Starting inference..."))
-            inference_started_at = time.monotonic()
+            processing_call_started_at = time.monotonic()
             out_file = self.engine.process_image(
                 img_data=img_data,
                 model_info=info,
@@ -247,6 +355,7 @@ class WorkerServer:
                 cancel_event=self.cancel_event,
                 progress_callback=progress_cb,
                 safe_memory=data["safe_memory"],
+                tile_callback=tile_cb,
             )
 
             if self.cancel_event.is_set():
@@ -270,7 +379,15 @@ class WorkerServer:
                 out_file.cleanup()
                 out_file = None
 
-            send_message(JobCompleted(job_id=job_id))
+            completed_at = time.monotonic()
+            send_message(
+                JobCompleted(
+                    job_id=job_id,
+                    elapsed_seconds=completed_at - job_started_at,
+                    inference_seconds=completed_at
+                    - (inference_started_at or processing_call_started_at),
+                )
+            )
 
         except InterruptedError:
             send_message(JobCancelled(job_id=job_id))

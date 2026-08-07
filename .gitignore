@@ -8,6 +8,8 @@ __pycache__/
 htmlcov/
 build/
 dist/
+release/
+packaging/icons/*.iconset/
 
 # Virtual environments
 .venv/

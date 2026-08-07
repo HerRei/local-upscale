@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=LocalSR
+Comment=Private local image super-resolution
+Exec=LocalSR
+Icon=localsr
+Categories=Graphics;Photography;
+Terminal=false

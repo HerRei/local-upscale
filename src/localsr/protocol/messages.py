@@ -37,6 +37,15 @@ class CapabilitiesRequest:
 
 
 @dataclass
+class PreviewRequest:
+    image_path: str
+    max_dimension: int = 1600
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "preview_request", "data": asdict(self)})
+
+
+@dataclass
 class CancelRequest:
     job_id: str
 
@@ -81,6 +90,11 @@ class CapabilitiesInfo:
     system_ram_total: int
     system_ram_available: int
     devices: list[dict]
+    system_memory_pressure_percent: float = 0.0
+    system_memory_pressure_level: str = "unknown"
+    system_compressed_memory: int = 0
+    system_swap_total: int = 0
+    system_swap_used: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "capabilities_info", "data": asdict(self)})
@@ -104,10 +118,57 @@ class ProgressUpdate:
     estimated_remaining_seconds: float
     active_tile_size: int
     device_free_memory: int = 0
+    device_allocated_memory: int = 0
     system_ram_available: int = 0
+    system_memory_pressure_percent: float = 0.0
+    system_memory_pressure_level: str = "unknown"
+    system_compressed_memory: int = 0
+    system_swap_used: int = 0
+    mps_tensor_allocated_memory: int = 0
+    mps_driver_allocated_memory: int = 0
+    mps_recommended_max_memory: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "progress", "data": asdict(self)})
+
+
+@dataclass
+class PreviewReady:
+    image_path: str
+    width: int
+    height: int
+    jpeg_base64: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "preview_ready", "data": asdict(self)})
+
+
+@dataclass
+class PreviewFailed:
+    image_path: str
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "preview_failed", "data": asdict(self)})
+
+
+@dataclass
+class TileUpdate:
+    job_id: str
+    phase: str
+    completed_tiles: int
+    total_tiles: int
+    output_x: int
+    output_y: int
+    output_width: int
+    output_height: int
+    image_width: int
+    image_height: int
+    active_tile_size: int
+    jpeg_base64: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "tile_update", "data": asdict(self)})
 
 
 @dataclass
@@ -130,6 +191,8 @@ class WarningMessage:
 @dataclass
 class JobCompleted:
     job_id: str
+    elapsed_seconds: float = 0.0
+    inference_seconds: float = 0.0
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_completed", "data": asdict(self)})

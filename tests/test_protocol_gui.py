@@ -6,7 +6,8 @@ import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from localsr.protocol.client import WorkerClient
+from localsr.protocol import client as client_module
+from localsr.protocol.client import WorkerClient, worker_command
 from localsr.ui.main_window import MainWindow
 
 
@@ -34,6 +35,9 @@ def test_worker_client_signal_emission():
     client.job_cancelled.connect(lambda j_id: emitted.append(("job_cancelled", j_id)))
     client.job_failed.connect(lambda j_id, err: emitted.append(("job_failed", (j_id, err))))
     client.warning.connect(lambda msg: emitted.append(("warning", msg)))
+    client.preview_ready.connect(lambda data: emitted.append(("preview_ready", data)))
+    client.preview_failed.connect(lambda data: emitted.append(("preview_failed", data)))
+    client.tile_updated.connect(lambda data: emitted.append(("tile_update", data)))
 
     # 1. worker_ready
     client.buffer = json.dumps({"type": "worker_ready", "data": {}}) + "\n"
@@ -69,6 +73,34 @@ def test_worker_client_signal_emission():
     client.handle_stdout()
     assert emitted[-1] == ("warning", "Low memory")
 
+    client.buffer = (
+        json.dumps(
+            {"type": "preview_ready", "data": {"image_path": "raw.dng", "jpeg_base64": "abc"}}
+        )
+        + "\n"
+    )
+    client.handle_stdout()
+    assert emitted[-1][0] == "preview_ready"
+
+    client.buffer = (
+        json.dumps(
+            {"type": "preview_failed", "data": {"image_path": "raw.dng", "error_message": "x"}}
+        )
+        + "\n"
+    )
+    client.handle_stdout()
+    assert emitted[-1][0] == "preview_failed"
+
+    client.buffer = (
+        json.dumps({"type": "tile_update", "data": {"job_id": "job_1", "phase": "completed"}})
+        + "\n"
+    )
+    client.handle_stdout()
+    assert emitted[-1] == (
+        "tile_update",
+        {"job_id": "job_1", "phase": "completed"},
+    )
+
 
 def test_worker_client_shutdown_state():
     """
@@ -98,6 +130,19 @@ def test_worker_client_shutdown_state():
     client._is_shutting_down = False
     client.handle_finished(0, 0)
     assert len(error_emitted) == 1
+
+
+def test_packaged_worker_command_prefers_sibling_executable(monkeypatch, tmp_path):
+    gui_name = "LocalSR.exe" if sys.platform == "win32" else "LocalSR"
+    worker_name = "LocalSRWorker.exe" if sys.platform == "win32" else "LocalSRWorker"
+    gui = tmp_path / gui_name
+    worker = tmp_path / worker_name
+    gui.touch()
+    worker.touch()
+    monkeypatch.setattr(client_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(client_module.sys, "executable", str(gui))
+
+    assert worker_command() == (str(worker), [])
 
 
 def test_main_window_button_states_and_signals(tmp_path):

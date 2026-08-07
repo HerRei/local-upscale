@@ -1,0 +1,204 @@
+name: Native installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  macos:
+    name: macOS Apple Silicon DMG
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install -e ".[package]"
+      - name: Build application bundle
+        run: |
+          python packaging/build_icons.py
+          pyinstaller --clean --noconfirm packaging/localsr.spec
+      - name: Smoke-test packaged GUI and worker
+        run: dist/LocalSR.app/Contents/MacOS/LocalSR --smoke-test
+      - name: Import Apple signing certificate
+        if: ${{ env.MACOS_CERTIFICATE != '' }}
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > build-certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import build-certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+      - name: Sign application
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          if [ -n "$MACOS_CERTIFICATE" ]; then
+            codesign --deep --force --options runtime --timestamp \
+              --entitlements packaging/macos/entitlements.plist \
+              --sign "$MACOS_SIGNING_IDENTITY" dist/LocalSR.app
+          else
+            codesign --deep --force --sign - dist/LocalSR.app
+          fi
+          codesign --verify --deep --strict --verbose=2 dist/LocalSR.app
+      - name: Create DMG
+        run: |
+          mkdir -p release/dmg-root
+          cp -a dist/LocalSR.app release/dmg-root/
+          ln -s /Applications release/dmg-root/Applications
+          hdiutil create -volname LocalSR -srcfolder release/dmg-root \
+            -ov -format UDZO release/LocalSR-macOS-arm64.dmg
+      - name: Notarize and staple DMG
+        if: ${{ env.APPLE_ID != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit release/LocalSR-macOS-arm64.dmg \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple release/LocalSR-macOS-arm64.dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LocalSR-macOS-arm64
+          path: release/LocalSR-macOS-arm64.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86-64 installer
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU PyTorch
+        run: python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+      - name: Install build dependencies
+        run: python -m pip install -e ".[package]"
+      - name: Build application directory
+        run: |
+          python packaging/build_icons.py
+          pyinstaller --clean --noconfirm packaging/localsr.spec
+      - name: Smoke-test packaged GUI and worker
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "dist\LocalSR\LocalSR.exe" -ArgumentList "--smoke-test" -PassThru
+          if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Packaged GUI timed out" }
+          if ($process.ExitCode -ne 0) { throw "Packaged GUI exited with $($process.ExitCode)" }
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"$').Matches.Groups[1].Value
+          $env:LOCALSR_VERSION = $version
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\LocalSR.iss
+      - name: Sign installer when credentials are configured
+        if: ${{ env.WINDOWS_CERTIFICATE != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          & signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+            /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+            release\LocalSR-Windows-x86_64-Setup.exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LocalSR-Windows-x86_64
+          path: release/LocalSR-Windows-x86_64-Setup.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86-64 AppImage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Linux GUI runtime libraries
+        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+      - name: Install CPU PyTorch
+        run: python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+      - name: Install build dependencies
+        run: python -m pip install -e ".[package]"
+      - name: Build application directory
+        run: |
+          python packaging/build_icons.py
+          pyinstaller --clean --noconfirm packaging/localsr.spec
+      - name: Smoke-test packaged GUI and worker
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: timeout 30 dist/LocalSR/LocalSR --smoke-test
+      - name: Download and verify official appimagetool
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_id=$(gh api repos/AppImage/appimagetool/releases/tags/continuous \
+            --jq '.assets[] | select(.name == "appimagetool-x86_64.AppImage") | .id')
+          digest=$(gh api repos/AppImage/appimagetool/releases/tags/continuous \
+            --jq '.assets[] | select(.name == "appimagetool-x86_64.AppImage") | .digest')
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/AppImage/appimagetool/releases/assets/$asset_id" > appimagetool
+          if [ -n "$digest" ] && [ "$digest" != "null" ]; then
+            echo "${digest#sha256:}  appimagetool" | sha256sum --check -
+          fi
+          chmod +x appimagetool
+      - name: Build AppImage and portable archive
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          packaging/linux/build_appimage.sh dist/LocalSR "$PWD/appimagetool"
+          tar -C dist -czf release/LocalSR-Linux-x86_64.tar.gz LocalSR
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LocalSR-Linux-x86_64
+          path: |
+            release/LocalSR-Linux-x86_64.AppImage
+            release/LocalSR-Linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: LocalSR-*
+          path: release-assets
+      - name: Create release and upload installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/*/* --generate-notes --verify-tag

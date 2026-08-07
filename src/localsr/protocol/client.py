@@ -1,9 +1,24 @@
 import json
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, Signal
 
 from localsr.protocol.messages import ShutdownRequest
+
+
+def worker_command() -> tuple[str, list[str]]:
+    """Return the isolated worker command for source and packaged builds."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable, ["-u", "-m", "localsr.worker.__main__"]
+
+    executable = Path(sys.executable)
+    suffix = ".exe" if sys.platform == "win32" else ""
+    packaged_worker = executable.with_name(f"LocalSRWorker{suffix}")
+    if packaged_worker.is_file():
+        return str(packaged_worker), []
+    # Compatibility fallback for single-executable development bundles.
+    return sys.executable, ["--worker"]
 
 
 class WorkerClient(QObject):
@@ -12,6 +27,9 @@ class WorkerClient(QObject):
     capabilities_received = Signal(dict)
     job_started = Signal(str)
     progress_updated = Signal(dict)
+    tile_updated = Signal(dict)
+    preview_ready = Signal(dict)
+    preview_failed = Signal(dict)
     job_completed = Signal(str, object)
     job_cancelled = Signal(str)
     job_failed = Signal(str, str)
@@ -34,10 +52,8 @@ class WorkerClient(QObject):
         if self.process.state() != QProcess.NotRunning:
             return
         self._is_shutting_down = False
-        # Find the python executable
-        python_exe = sys.executable
-        # -u for unbuffered output
-        self.process.start(python_exe, ["-u", "-m", "localsr.worker.__main__"])
+        program, arguments = worker_command()
+        self.process.start(program, arguments)
 
     def send_request(self, req):
         if self.process.state() == QProcess.Running:
@@ -73,6 +89,12 @@ class WorkerClient(QObject):
                     self.job_started.emit(d.get("job_id", ""))
                 elif t == "progress":
                     self.progress_updated.emit(d)
+                elif t == "tile_update":
+                    self.tile_updated.emit(d)
+                elif t == "preview_ready":
+                    self.preview_ready.emit(d)
+                elif t == "preview_failed":
+                    self.preview_failed.emit(d)
                 elif t == "log":
                     self.log_received.emit(d)
                 elif t == "warning":

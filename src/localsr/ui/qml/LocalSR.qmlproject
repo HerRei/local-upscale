@@ -1,0 +1,7 @@
+import QmlProject
+
+Project {
+    mainFile: "Main.qml"
+    mainUiFile: "Main.qml"
+    QmlFiles { files: ["*.qml"] }
+}

@@ -28,16 +28,23 @@ def _small_model(content=b"verified model"):
     )
 
 
-def test_catalog_has_three_pinned_hat_downloads():
+def test_catalog_has_pinned_optional_downloads():
     assert [model.model_id for model in MODEL_CATALOG] == [
+        "span_x4_official",
+        "nomos_web_photo_realplksr_x4",
         "hat_s_x4",
         "hat_x4_imagenet",
         "hat_l_x4_imagenet",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 3
-    assert all(CATALOG_REVISION in model.download_url for model in MODEL_CATALOG)
+    assert len({model.filename for model in MODEL_CATALOG}) == 5
+    hat_models = [model for model in MODEL_CATALOG if model.architecture == "HAT"]
+    assert all(CATALOG_REVISION in model.download_url for model in hat_models)
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)
-    assert all(model.license_name == "Apache-2.0" for model in MODEL_CATALOG)
+    assert {model.license_name for model in MODEL_CATALOG} == {
+        "Apache-2.0",
+        "CC-BY-4.0",
+    }
+    assert all(len(model.sha256) == 64 for model in MODEL_CATALOG)
 
 
 def test_model_download_is_atomic_and_checksum_verified(tmp_path):

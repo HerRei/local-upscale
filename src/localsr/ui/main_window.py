@@ -117,6 +117,11 @@ class MainWindow(QMainWindow):
         return {
             "system_ram_total": 0,
             "system_ram_available": 0,
+            "system_memory_pressure_percent": 0.0,
+            "system_memory_pressure_level": "unknown",
+            "system_compressed_memory": 0,
+            "system_swap_total": 0,
+            "system_swap_used": 0,
             "devices": [
                 {
                     "id": "cpu",
@@ -412,7 +417,7 @@ class MainWindow(QMainWindow):
         else:
             self.model_description.setText(
                 f"{model.description}<br>"
-                f"<a href='{model.source_url}'>Official HAT project</a> · "
+                f"<a href='{model.source_url}'>Model source</a> · "
                 f"{model.license_name} · {model.size_megabytes:.0f} MB download"
             )
             installed_path = self.model_store.path_for(model)
@@ -1055,6 +1060,23 @@ class MainWindow(QMainWindow):
                 f"Live: {format_bytes(min(available_values) if available_values else None)} "
                 "unified memory left"
             )
+            pressure = data.get("system_memory_pressure_percent")
+            pressure_level = data.get("system_memory_pressure_level", "unknown")
+            if pressure is not None:
+                live_memory += f" · {float(pressure):.0f}% pressure ({pressure_level})"
+            driver = int(data.get("mps_driver_allocated_memory", 0))
+            recommended = int(data.get("mps_recommended_max_memory", 0))
+            if recommended:
+                live_memory += (
+                    f"\nMetal driver: {format_bytes(driver)} of "
+                    f"{format_bytes(recommended)} recommended maximum"
+                )
+            compressed = int(data.get("system_compressed_memory", 0))
+            swap = int(data.get("system_swap_used", 0))
+            if compressed or swap:
+                live_memory += (
+                    f" · compressed {format_bytes(compressed)} · swap {format_bytes(swap)}"
+                )
         else:
             live_memory = f"Live: {format_bytes(ram_available)} RAM left"
         self.live_resource_label.setText(live_memory)
@@ -1075,7 +1097,9 @@ class MainWindow(QMainWindow):
 
     def on_job_completed(self, job_id, result):
         if self.job_started_at and self.job_effective_megapixels > 0:
-            elapsed = time.monotonic() - self.job_started_at
+            elapsed = float(result.get("inference_seconds", 0.0)) or (
+                time.monotonic() - self.job_started_at
+            )
             seconds_per_megapixel = elapsed / self.job_effective_megapixels
             if elapsed >= 3.0:
                 device_type = self.current_device().get("type", "cpu")

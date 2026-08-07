@@ -19,10 +19,15 @@ Run the checks used by CI:
 ruff check src tests smoke_test_gui.py
 ruff format --check src tests smoke_test_gui.py
 QT_QPA_PLATFORM=offscreen pytest -q  # PowerShell: $env:QT_QPA_PLATFORM="offscreen"
+pyside6-qmllint --unqualified disable --max-warnings 0 src/localsr/ui/qml/*.qml
 ```
 
 Run `localsr` for any interface or end-to-end change. Do not commit model checkpoints, generated
 outputs, virtual environments, or application preferences.
+
+Open `src/localsr/ui/qml/LocalSR.qmlproject` in Qt Design Studio for visual interface work.
+`DesignMock.qml` is design-time data only; production values come from `LocalSRController`. Preserve
+that boundary so QML stays previewable without importing the inference stack.
 
 ## Engineering boundaries
 
@@ -34,6 +39,8 @@ outputs, virtual environments, or application preferences.
 - Resource figures are estimates. Display uncertainty and prefer measured local calibration.
 - Avoid adding generative image synthesis; LocalSR is a conventional super-resolution harness.
 - Keep behavior portable across Windows, macOS, and Linux.
+- Keep curated model downloads optional, license-attributed, size-pinned, and SHA-256 verified.
+- Run a packaged `--smoke-test` after changing PyInstaller hooks, QML imports, or worker startup.
 
 ## Pull requests
 

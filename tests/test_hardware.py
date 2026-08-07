@@ -7,6 +7,17 @@ from localsr.core import hardware
 def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):
     gib = 1024**3
     monkeypatch.setattr(hardware, "_system_memory", lambda: (16 * gib, 8 * gib))
+    monkeypatch.setattr(
+        hardware,
+        "_system_pressure_snapshot",
+        lambda _total, _available: {
+            "system_memory_pressure_percent": 50.0,
+            "system_memory_pressure_level": "low",
+            "system_compressed_memory": 0,
+            "system_swap_total": 0,
+            "system_swap_used": 0,
+        },
+    )
     monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: False)
     monkeypatch.setattr(hardware.torch.version, "hip", "6.4")
 
@@ -49,3 +60,43 @@ def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):
     snapshot = hardware.get_memory_snapshot("xpu:0")
     assert snapshot["device_total_memory"] == 8 * gib
     assert snapshot["device_free_memory"] == 5 * gib
+
+
+def test_macos_pressure_and_swap_parsers():
+    assert hardware._parse_macos_pressure("System-wide memory free percentage: 71%\n") == 29.0
+    assert hardware._parse_macos_pressure("not available") is None
+    assert hardware._parse_macos_swap("total = 2.00G  used = 384.50M  free = 1.62G") == (
+        2 * 1024**3,
+        int(384.5 * 1024**2),
+    )
+    assert hardware._pressure_level(74.9) == "low"
+    assert hardware._pressure_level(75.0) == "moderate"
+    assert hardware._pressure_level(90.0) == "high"
+
+
+def test_mps_snapshot_exposes_allocator_and_pressure(monkeypatch):
+    gib = 1024**3
+    monkeypatch.setattr(hardware, "_system_memory", lambda: (16 * gib, 5 * gib))
+    monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(hardware.torch.mps, "current_allocated_memory", lambda: 1 * gib)
+    monkeypatch.setattr(hardware.torch.mps, "driver_allocated_memory", lambda: 2 * gib)
+    monkeypatch.setattr(hardware.torch.mps, "recommended_max_memory", lambda: 10 * gib)
+    monkeypatch.setattr(
+        hardware,
+        "_system_pressure_snapshot",
+        lambda _total, _available: {
+            "system_memory_pressure_percent": 82.0,
+            "system_memory_pressure_level": "moderate",
+            "system_compressed_memory": 3 * gib,
+            "system_swap_total": 4 * gib,
+            "system_swap_used": 1 * gib,
+        },
+    )
+
+    snapshot = hardware.get_memory_snapshot("mps")
+
+    assert snapshot["mps_tensor_allocated_memory"] == 1 * gib
+    assert snapshot["mps_driver_allocated_memory"] == 2 * gib
+    assert snapshot["mps_recommended_max_memory"] == 10 * gib
+    assert snapshot["system_memory_pressure_level"] == "moderate"
+    assert snapshot["system_compressed_memory"] == 3 * gib
