@@ -388,13 +388,13 @@ class LocalSRController(QObject):
         self.stateChanged.emit()
 
     def _update_preset_estimates(self):
-        from localsr.core.model_catalog import PresetMode
+        from localsr.core.presets import PresetMode, resolve_settings_for_model, select_model_for_preset
         from localsr.core.estimator import format_duration_range
-        from localsr.core.presets import resolve_settings_for_model
+        from localsr.core.model_catalog import MODEL_CATALOG, ModelPurpose
         
-        for mode, attr in [(PresetMode.QUICK, "_quick_estimate"), (PresetMode.BEST_QUALITY, "_best_estimate")]:
+        for mode, attr in [(PresetMode.QUICK, "_quick_estimate"), (PresetMode.BEST, "_best_estimate")]:
             try:
-                model = self.backend.model_store.suggest_model(mode)
+                model = select_model_for_preset(MODEL_CATALOG, mode, output_scale=4, installed_model_ids=self._installed_ids())
                 if not model:
                     continue
                 
@@ -413,7 +413,7 @@ class LocalSRController(QObject):
                     installed_model_ids=self._installed_ids(),
                 )
                 est_str = format_duration_range(decision.estimate.seconds_low, decision.estimate.seconds_high)
-                setattr(self, attr, f"{est_str}")
+                setattr(self, attr, f"({est_str})")
             except Exception:
                 setattr(self, attr, "")
 
