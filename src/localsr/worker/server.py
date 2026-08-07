@@ -376,6 +376,7 @@ class WorkerServer:
                     elapsed_seconds=completed_at - job_started_at,
                     inference_seconds=completed_at
                     - (inference_started_at or processing_call_started_at),
+                    output_path=data["output_path"],
                 )
             )
 

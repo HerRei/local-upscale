@@ -193,6 +193,7 @@ class JobCompleted:
     job_id: str
     elapsed_seconds: float = 0.0
     inference_seconds: float = 0.0
+    output_path: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_completed", "data": asdict(self)})

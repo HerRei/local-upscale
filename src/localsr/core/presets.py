@@ -56,9 +56,10 @@ def rank_models_for_preset(
         for model in models
         if model.native_scale >= output_scale and _purpose_match(model, purpose)
     ]
-    if mode in (PresetMode.QUICK_UPSCALE, PresetMode.QUICK_DENOISE, PresetMode.COMBO):
+    if mode in (PresetMode.QUICK_UPSCALE, PresetMode.QUICK_DENOISE):
         eligible.sort(
             key=lambda model: (
+                -_purpose_match(model, purpose),
                 -int(model.speed_tier),
                 model.memory_factor,
                 -(model.model_id in installed_model_ids),
@@ -69,8 +70,8 @@ def rank_models_for_preset(
     else:
         eligible.sort(
             key=lambda model: (
-                -int(model.quality_tier),
                 -_purpose_match(model, purpose),
+                -int(model.quality_tier),
                 -int(model.speed_tier),
                 -(model.model_id in installed_model_ids),
                 model.model_id,

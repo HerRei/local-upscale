@@ -555,10 +555,11 @@ class MainWindow(QMainWindow):
         self.image_path = path
         self.image_w = width
         self.image_h = height
-        
         self.progress_bar.setValue(0)
         self.progress_label.setText("")
         self.live_resource_label.setText("")
+        self.btn_open.setEnabled(False)
+        self.btn_reveal.setEnabled(False)
         
         raw_note = " | RAW: camera WB → sRGB" if is_raw_input(path) else ""
         self.img_info_label.setText(
