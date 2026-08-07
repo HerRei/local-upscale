@@ -618,6 +618,11 @@ class MainWindow(QMainWindow):
             self.combo_output_scale.setCurrentIndex(self.combo_output_scale.findData(chosen))
             self.combo_output_scale.setEnabled(True)
             self.pending_output_scale = None
+        elif self.model_scale == 1 and getattr(self, "current_model_info", None):
+            self.combo_output_scale.addItem("1× (Denoise only)", 1)
+            self.combo_output_scale.setCurrentIndex(self.combo_output_scale.findData(1))
+            self.combo_output_scale.setEnabled(False)
+            self.pending_output_scale = None
         else:
             self.combo_output_scale.addItem("Load a model first", None)
             self.combo_output_scale.setEnabled(False)

@@ -22,6 +22,7 @@ class ModelPurpose(StrEnum):
     GENERAL = "general"
     PHOTO = "photo"
     ILLUSTRATION = "illustration"
+    DENOISE = "denoise"
 
 
 class QualityTier(IntEnum):
@@ -168,6 +169,22 @@ MODEL_CATALOG = (
         author="XPixel Group",
         memory_factor=1.8,
         time_factor=1.8,
+    ),
+    CatalogModel(
+        model_id="scunet_color_real_psnr",
+        name="SCUNet Real Denoise",
+        filename="scunet_color_real_psnr.pth",
+        description="A powerful state-of-the-art denoising model that excels at removing noise from real-world photos without losing fine details.",
+        size_bytes=71_982_841,
+        sha256="fa78899ba2caec9d235a900e91d96c689da71c42029230c2028b00f09f809c2e",
+        download_url="https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth",
+        architecture="SCUNet",
+        native_scale=1,
+        purposes=(ModelPurpose.DENOISE, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        source_url="https://github.com/cszn/KAIR",
+        time_factor=1.5,
     ),
 )
 

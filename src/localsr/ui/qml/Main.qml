@@ -180,6 +180,16 @@ ApplicationWindow {
                         onSelected: localSR.applyPreset("best")
                     }
 
+                    ModeCard {
+                        Layout.fillWidth: true
+                        title: "Denoise Only"
+                        subtitle: "Remove noise and artifacts while preserving original size."
+                        badge: "1x"
+                        accent: "#f39c12"
+                        estimate: localSR.denoiseEstimate
+                        onSelected: localSR.applyPreset("denoise")
+                    }
+
                     Text {
                         Layout.fillWidth: true
                         Layout.leftMargin: 4

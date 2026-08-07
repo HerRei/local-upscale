@@ -9,6 +9,7 @@ from .model_catalog import CatalogModel, ModelPurpose
 class PresetMode(StrEnum):
     QUICK = "quick"
     BEST = "best"
+    DENOISE = "denoise"
 
 
 class NoCompatibleModelError(ValueError):

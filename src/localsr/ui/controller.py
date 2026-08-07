@@ -43,6 +43,7 @@ class LocalSRController(QObject):
         self._memory_snapshot = dict(backend.capability_report)
         self._quick_estimate = ""
         self._best_estimate = ""
+        self._denoise_estimate = ""
         self._show_progressive = False
         self._shutdown = False
 
@@ -284,6 +285,10 @@ class LocalSRController(QObject):
         return getattr(self, "_best_estimate", "")
 
     @Property(str, notify=stateChanged)
+    def denoiseEstimate(self):
+        return getattr(self, "_denoise_estimate", "")
+
+    @Property(str, notify=stateChanged)
     def hardwareText(self):
         return self.backend.hardware_label.text()
 
@@ -392,9 +397,11 @@ class LocalSRController(QObject):
         from localsr.core.estimator import format_duration_range
         from localsr.core.model_catalog import MODEL_CATALOG, ModelPurpose
         
-        for mode, attr in [(PresetMode.QUICK, "_quick_estimate"), (PresetMode.BEST, "_best_estimate")]:
+        for mode, attr in [(PresetMode.QUICK, "_quick_estimate"), (PresetMode.BEST, "_best_estimate"), (PresetMode.DENOISE, "_denoise_estimate")]:
             try:
-                model = select_model_for_preset(MODEL_CATALOG, mode, output_scale=4, installed_model_ids=self._installed_ids())
+                scale = 1 if mode == PresetMode.DENOISE else 4
+                purpose = ModelPurpose.DENOISE if mode == PresetMode.DENOISE else ModelPurpose.PHOTO
+                model = select_model_for_preset(MODEL_CATALOG, mode, output_scale=scale, purpose=purpose, installed_model_ids=self._installed_ids())
                 if not model:
                     continue
                 
@@ -491,11 +498,13 @@ class LocalSRController(QObject):
             return
         try:
             mode = PresetMode(name)
+            scale = 1 if mode == PresetMode.DENOISE else 4
+            purpose = ModelPurpose.DENOISE if mode == PresetMode.DENOISE else ModelPurpose.PHOTO
             ranked = rank_models_for_preset(
                 MODEL_CATALOG,
                 mode,
-                purpose=ModelPurpose.PHOTO,
-                output_scale=4,
+                purpose=purpose,
+                output_scale=scale,
                 installed_model_ids=self._installed_ids(),
             )
             if not ranked:
