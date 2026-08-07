@@ -536,6 +536,13 @@ ApplicationWindow {
                             width: parent.width
                             spacing: 9
                             SectionLabel { text: "Output" }
+                            ModernButton {
+                                Layout.fillWidth: true
+                                text: "Upscale"
+                                enabled: localSR.canUpscale && !localSR.isUpscaling
+                                visible: localSR.progress < 1.0
+                                onClicked: localSR.startUpscale()
+                            }
                             Text { text: "Scale"; color: muted; font.pixelSize: 10 }
                             ModernCombo {
                                 Layout.fillWidth: true

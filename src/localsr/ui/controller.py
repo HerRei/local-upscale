@@ -41,6 +41,9 @@ class LocalSRController(QObject):
         self._preview_error = ""
         self._active_tile = (0.0, 0.0, 0.0, 0.0)
         self._memory_snapshot = dict(backend.capability_report)
+        self._quick_estimate = ""
+        self._best_estimate = ""
+        self._show_progressive = False
         self._shutdown = False
 
         worker = backend.worker
@@ -67,6 +70,7 @@ class LocalSRController(QObject):
 
     def _bump_preview(self, progressive: bool = False):
         if progressive:
+            self._show_progressive = True
             self._progressive_revision += 1
         else:
             self._preview_revision += 1
@@ -151,7 +155,7 @@ class LocalSRController(QObject):
 
     @Property(str, notify=previewChanged)
     def progressivePreviewSource(self):
-        if self._progressive_revision <= 0:
+        if not getattr(self, "_show_progressive", False):
             return self.sourcePreviewSource
         return f"image://localsr/progressive?r={self._progressive_revision}"
 
@@ -272,6 +276,14 @@ class LocalSRController(QObject):
         return self.backend.estimate_label.text()
 
     @Property(str, notify=stateChanged)
+    def quickEstimate(self):
+        return getattr(self, "_quick_estimate", "")
+
+    @Property(str, notify=stateChanged)
+    def bestEstimate(self):
+        return getattr(self, "_best_estimate", "")
+
+    @Property(str, notify=stateChanged)
     def hardwareText(self):
         return self.backend.hardware_label.text()
 
@@ -363,7 +375,7 @@ class LocalSRController(QObject):
 
     def _load_preview(self, path: str):
         self._preview_error = ""
-        self._progressive_revision = 0
+        self._show_progressive = False
         if is_raw_input(path):
             self.preview_provider.clear()
             self.backend.worker.send_request(PreviewRequest(image_path=path))
@@ -374,6 +386,36 @@ class LocalSRController(QObject):
         self._bump_preview()
         self._update_preset_estimates()
         self.stateChanged.emit()
+
+    def _update_preset_estimates(self):
+        from localsr.core.model_catalog import PresetMode
+        from localsr.core.estimator import format_duration_range
+        from localsr.core.presets import resolve_settings_for_model
+        
+        for mode, attr in [(PresetMode.QUICK, "_quick_estimate"), (PresetMode.BEST_QUALITY, "_best_estimate")]:
+            try:
+                model = self.backend.model_store.suggest_model(mode)
+                if not model:
+                    continue
+                
+                decision = resolve_settings_for_model(
+                    model=model,
+                    mode=mode,
+                    devices=self.backend.capability_report.get("devices", []),
+                    image_width=self.backend.image_w,
+                    image_height=self.backend.image_h,
+                    output_scale=model.native_scale,
+                    available_system_memory=int(self.backend.capability_report.get("system_ram_available", 0)) or None,
+                    available_disk=None,
+                    model_half_supported=bool(self.backend.current_model_info.get("half_supported", False)),
+                    parameter_count=int(self.backend.current_model_info.get("parameter_count", 0)),
+                    model_file_size=int(self.backend.current_model_info.get("model_file_size", model.size_bytes)),
+                    installed_model_ids=self._installed_ids(),
+                )
+                est_str = format_duration_range(decision.estimate.seconds_low, decision.estimate.seconds_high)
+                setattr(self, attr, f"{est_str}")
+            except Exception:
+                setattr(self, attr, "")
 
     @Slot(int)
     def setModelIndex(self, index):
@@ -620,7 +662,7 @@ class LocalSRController(QObject):
             int(data.get("output_width", 0)) / image_width,
             int(data.get("output_height", 0)) / image_height,
         )
-        if phase == "started" and self._progressive_revision <= 0:
+        if phase == "started" and not getattr(self, "_show_progressive", False):
             self.preview_provider.reset_progressive(image_width, image_height)
             self._bump_preview(progressive=True)
         elif phase == "completed" and self.preview_provider.apply_tile(
@@ -649,7 +691,7 @@ class LocalSRController(QObject):
         self.stateChanged.emit()
 
     def _on_job_started(self, _job_id):
-        self._progressive_revision = 0
+        self._show_progressive = False
         self._active_tile = (0.0, 0.0, 0.0, 0.0)
         self.stateChanged.emit()
 
