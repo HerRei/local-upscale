@@ -331,10 +331,22 @@ def test_queue_and_result_action_callbacks_round_trip(tmp_path):
         output.write_bytes(b"result")
         application.last_output_path = str(output)
         launches = []
+        startfiles = []
         slint_app.subprocess.Popen = lambda command: launches.append(command)
+        if slint_app.sys.platform == "win32":
+            slint_app.os.startfile = lambda path: startfiles.append(path)
         application.ui.open_result()
         application.ui.reveal_result()
-        assert launches == [["open", str(output)], ["open", "-R", str(output)]]
+        if slint_app.sys.platform == "darwin":
+            assert launches == [["open", str(output)], ["open", "-R", str(output)]]
+        elif slint_app.sys.platform == "win32":
+            assert startfiles == [str(output)]
+            assert launches == [["explorer", "/select,", str(output)]]
+        else:
+            assert launches == [
+                ["xdg-open", str(output)],
+                ["xdg-open", str(output.parent)],
+            ]
         application.ui.poll_backend()
         application.shutdown()
         """
