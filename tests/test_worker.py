@@ -124,6 +124,31 @@ def test_worker_cancellation(monkeypatch, capsys):
     assert "job_cancelled" in output
 
 
+def test_cancel_requested_before_job_activation_is_not_lost():
+    server = WorkerServer()
+
+    server._request_cancel("queued-job")
+    assert not server.cancel_event.is_set()
+
+    server._activate_job("queued-job")
+    assert server.active_job_id == "queued-job"
+    assert server.cancel_event.is_set()
+
+    server._deactivate_job("queued-job")
+    assert not server.cancel_event.is_set()
+    assert "queued-job" not in server.pending_cancel_job_ids
+
+
+def test_queued_cancel_does_not_affect_a_different_job():
+    server = WorkerServer()
+
+    server._request_cancel("other-job")
+    server._activate_job("active-job")
+
+    assert server.active_job_id == "active-job"
+    assert not server.cancel_event.is_set()
+
+
 def test_worker_job_completion_and_cleanup(monkeypatch):
     server = WorkerServer()
     server.model_adapter = DummyModelAdapter()

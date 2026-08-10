@@ -106,7 +106,7 @@ MODEL_CATALOG = (
         ),
         architecture="RealPLKSR",
         native_scale=4,
-        purposes=(ModelPurpose.PHOTO,),
+        purposes=(ModelPurpose.PHOTO, ModelPurpose.DENOISE),
         quality_tier=QualityTier.HIGH,
         speed_tier=SpeedTier.FAST,
         recommended_halo=16,
@@ -172,9 +172,12 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="scunet_color_real_psnr",
-        name="SCUNet Real Denoise",
+        name="SCUNet Blind Denoise — General",
         filename="scunet_color_real_psnr.pth",
-        description="A powerful state-of-the-art denoising model that excels at removing noise from real-world photos without losing fine details.",
+        description=(
+            "The official SCUNet PSNR checkpoint for practical blind denoising. A strong "
+            "general-purpose choice for unknown real-world noise without generative synthesis."
+        ),
         size_bytes=71_982_841,
         sha256="fa78899ba2caec9d235a900e91d96c689da71c42029230c2028b00f09f809c2e",
         download_url="https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth",
@@ -185,6 +188,33 @@ MODEL_CATALOG = (
         speed_tier=SpeedTier.SLOW,
         source_url="https://github.com/cszn/KAIR",
         time_factor=1.5,
+    ),
+    CatalogModel(
+        model_id="nafnet_sidd_width64",
+        name="NAFNet SIDD Width64 — Maximum",
+        filename="NAFNet-SIDD-width64.pth",
+        description=(
+            "The official NAFNet Width64 checkpoint trained for real camera noise in SIDD. "
+            "Highest-fidelity denoising preset, but substantially larger and slower to download."
+        ),
+        size_bytes=464_154_961,
+        sha256="cd685efaae01f7c4e9951f2deab05780079c8eb1e49ed664b72f6db04dabb445",
+        download_url=(
+            "https://huggingface.co/spaces/chuxiaojie/NAFNet/resolve/"
+            "5964ed4955416df99210106b708e4a2df9e9eca0/"
+            "NAFNet-SIDD-width64.pth?download=true"
+        ),
+        architecture="NAFNet",
+        native_scale=1,
+        purposes=(ModelPurpose.DENOISE, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=32,
+        source_url="https://github.com/megvii-research/NAFNet",
+        license_name="MIT",
+        author="Liangyu Chen, Xiaojie Chu, Xiangyu Zhang, and Jian Sun",
+        memory_factor=1.45,
+        time_factor=1.25,
     ),
     CatalogModel(
         model_id="denoise_realplksr_1x",

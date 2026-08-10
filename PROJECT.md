@@ -1,10 +1,12 @@
 # Project: LocalSR End-to-End Integration
 
 ## Architecture
-LocalSR is a desktop super-resolution application built with PySide6 (Qt) and PyTorch / Spandrel.
-- **UI Process**: the Qt Quick interface (`src/localsr/ui/qml`) binds to `LocalSRController`; the
-  original `MainWindow` remains hidden as the tested compatibility/state layer. `WorkerClient`
-  (`src/localsr/protocol/client.py`) owns subprocess IPC. Neither visible UI layer imports Torch.
+LocalSR is a desktop super-resolution application with a Slint UI and a Python/PyTorch worker.
+- **UI Process**: `src/localsr/ui/slint/main.slint` binds to `SlintApplication`, which owns only
+  presentation state, queues, estimates, downloads, settings, previews, and JSON-line IPC.
+  `SlintWorkerClient` uses a standard-library subprocess and never imports Torch or Spandrel.
+- **Legacy UI**: the previous Qt Quick/QWidget implementation remains source-available behind
+  `localsr --legacy` as a temporary rollback path, but it is not the default frontend.
 - **Worker Subprocess**: Spawns `localsr.worker.__main__` (`WorkerServer` in `src/localsr/worker/server.py`) over stdin/stdout JSON IPC protocol.
 - **Inference & I/O Engine**: `InferenceEngine` (`src/localsr/core/inference.py`), `ModelAdapter` (`src/localsr/core/model_adapter.py`), and `ImageManager` (`src/localsr/core/image_io.py`) handle image loading, tiling, model execution, memmap writer allocation (`OutputWriter`), and atomic final saving.
 
@@ -49,6 +51,11 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 | F11.2 | Apple memory pressure | Report system pressure, compression, swap, tensor allocation, driver allocation, and MPS recommended maximum | M10 | R11 |
 | F12.1 | Modern designable interface | Ship a responsive Qt Quick interface plus Qt Design Studio project and mock data | M11 | R12 |
 | F13.1 | Native distribution | Build and smoke-test DMG, Windows Setup, AppImage, and portable archive artifacts with optional code signing | M12 | R13 |
+| F14.1 | Slint desktop frontend | Replace the visible QML frontend with reusable Slint components, Single/Batch queues, task/model/output/hardware controls, before/after preview, advanced settings, and bottom status/action strip | M13 | R14 |
+| F14.2 | Slint process isolation | Keep Slint/Winit separate from Torch/Spandrel worker inference, use OS-native dialog services without another GUI toolkit, and test Slint behavior in isolated subprocesses on macOS | M13 | R14 |
+| F15.1 | Document-tool workspace | Remove the duplicate application header, consolidate job-changing controls and Advanced on the left, and reserve the right inspector for contextual job/resource information | M14 | R15 |
+| F15.2 | Immediate contextual recipes | Reveal Quick/Best after task selection, automatically install a verified missing checkpoint, resolve hardware-safe settings, and start the job without a second command | M14 | R15 |
+| F15.3 | Maximum-fidelity denoising | Add pinned NAFNet SIDD Width64 alongside SCUNet blind denoising and quick RealPLKSR, with explicit task-specific recipe ranking | M14 | R15 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -65,6 +72,8 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 | M10 | Live Preview & Telemetry | R11: bounded tile preview, active region overlay, MPS/system pressure telemetry, and improved tile ETA | M1–M9 | DONE |
 | M11 | Qt Quick Interface | R12: polished QML UI, design-time mock, Design Studio project, and QWidget compatibility controller | M1–M10 | DONE |
 | M12 | Native Packages | R13: separate packaged worker, minimized QML bundle, installer workflows, signing hooks, and smoke tests | M1–M11 | DONE |
+| M13 | Slint Interface | R14: compact non-web desktop UI, reusable Slint controls, complete workflow bridge, isolated native dialogs, packaging data, and cross-platform compile/smoke tests | M1–M12 | DONE |
+| M14 | Contextual Workspace & Recipes | R15: evidence-based pane hierarchy, immediate Quick/Best commands, verified NAFNet catalog integration, and regression coverage | M1–M13 | DONE |
 | M_E2E | Requirement-Driven E2E Test Suite | Dual Track: Independent opaque-box test suite for R1..R5 generating TEST_READY.md | none | DONE (TEST_READY.md published) |
 
 ## Verification Boundary
@@ -100,11 +109,14 @@ LocalSR is a desktop super-resolution application built with PySide6 (Qt) and Py
 - `src/localsr/core/estimator.py`: Conservative resource/time preflight calculations.
 - `src/localsr/core/presets.py`: Pure Quick/Best model ranking and hardware setting selection.
 - `src/localsr/worker/server.py`: WorkerServer, job execution loop, memmap cleanup.
+- `src/localsr/ui/slint/main.slint`: Default compact desktop interface.
+- `src/localsr/ui/slint/components.slint`: Reusable flat Slint controls and section primitives.
+- `src/localsr/ui/slint_app.py`: Slint-facing state/actions, queue, downloads, estimates, settings.
+- `src/localsr/ui/slint_worker.py`: Standard-library JSON-line worker subprocess bridge.
+- `src/localsr/ui/slint_preview.py`: Bounded source and progressive tile preview compositor.
+- `src/localsr/ui/native_dialog.py`: Native OS file-dialog adapters without a GUI toolkit dependency.
 - `src/localsr/protocol/client.py`: WorkerClient, QProcess management, signal emission.
-- `src/localsr/ui/main_window.py`: Tested compatibility/state layer and legacy interface.
-- `src/localsr/ui/controller.py`: QML-facing property and action bridge.
-- `src/localsr/ui/preview_provider.py`: Bounded source/progressive image provider.
-- `src/localsr/ui/qml/`: Modern interface and Qt Design Studio project.
+- `src/localsr/ui/main_window.py`, `controller.py`, `preview_provider.py`, `qml/`: legacy rollback UI.
 - `src/localsr/ui/model_download.py`: Cancellable background model download worker.
-- `packaging/`: PyInstaller spec, selective QML hook, icons, and native installer inputs.
+- `packaging/`: PyInstaller spec, Slint assets/runtime, icons, and native installer inputs.
 - `tests/`: Unit & integration tests (`test_integration.py`, `test_hat_model.py`, `test_e2e_requirements.py`).

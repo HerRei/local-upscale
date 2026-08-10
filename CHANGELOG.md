@@ -5,8 +5,18 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.1-alpha] - 2026-08-10
+
 ### Added
 
+- A compact Slint desktop interface with flat platform-neutral panels, reusable controls, a large
+  before/after canvas, Single and Batch queues, task-specific model choices, hardware telemetry,
+  collapsible advanced settings, and a persistent status/action strip.
+- A pinned, optional NAFNet SIDD Width64 checkpoint for maximum-fidelity real camera denoising,
+  alongside SCUNet for general blind noise and RealPLKSR for quick denoising.
+- A standard-library subprocess bridge for the Slint host so Torch and Spandrel remain isolated,
+  plus a bounded Pillow compositor for live tile previews.
+- Sequential batch processing for Upscale, Denoise, and Upscale + Denoise tasks.
 - Modern Qt Quick/QML interface with a Qt Design Studio project and design-time mock data.
 - Quick and Best Quality presets with transparent model/device/precision/tile decisions.
 - Lightweight SPAN ×4 and photo-oriented RealPLKSR ×4 catalog entries with pinned hashes.
@@ -27,6 +37,34 @@ stable release is published.
 
 ### Fixed
 
+- Before/after preview zoom and pan preserve image aspect ratio and stay synchronized on both
+  sides; the comparison divider is hidden while a render is incomplete.
+- The primary processing action is centered within the inspector pane at desktop widths.
+- The macOS bundle is a foreground application even though it contains a console worker, so the
+  visible LocalSR window can reliably become active and receive pointer/keyboard input.
+- Immediate cancellation is retained while a just-submitted job is still waiting to become active,
+  instead of being lost in the worker startup race.
+- The macOS image picker now uses valid AppleScript multiple-selection syntax, and stale missing
+  custom-model settings fall back to a compatible catalog model instead of exposing a false 1×
+  upscale choice.
+- macOS file and folder panels are hosted by foreground Finder instead of a background-only
+  `osascript` process, preventing the visible picker from becoming click-through above LocalSR.
+- Packaged macOS builds use a small bundled AppKit picker helper, avoiding Automation permission
+  prompts while keeping file, folder, model, DNG, and multi-select dialogs foreground-interactive.
+- Download progress fills are anchored to the left edge, and cancelling an automatic-recipe
+  download now clears the pending recipe/status as well as its partial checkpoint.
+- The left workflow pane remains stationary before task selection, and custom Slint controls expose
+  button, checkbox, selection, and combo semantics to desktop accessibility and GUI automation.
+- Trackpad scrolling over a closed settings selector now scrolls the workflow pane instead of
+  silently cycling the selector's value; open selector popups retain their own scrolling.
+- Removed the redundant in-app branding/hardware bar, moved every job-changing control—including
+  Advanced—to the left workflow pane, and made the right pane a read-only job/resource inspector.
+- Quick and Best now appear only after task selection and start processing automatically after
+  resolving settings and, when needed, downloading and verifying the selected model.
+- Slint and Qt/Winit event loops no longer coexist in one macOS process; native dialogs and legacy
+  tests run out of process.
+- Slint model, format, device, tile, halo, and precision selectors use two-way state bindings.
+- Idle hardware and memory pressure refresh automatically every five seconds.
 - Model download progress now disappears when the background download thread finishes.
 - Live ETA is based on completed tiles and smoothed tile duration instead of model-loading time.
 - Packaged QML dependencies exclude unused WebEngine and 3D modules.

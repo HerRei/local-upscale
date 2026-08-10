@@ -11,20 +11,20 @@ does not cross-compile. Model checkpoints are not included in any package.
 | Windows Server 2022 x86-64 | `LocalSR-Windows-x86_64-Setup.exe` |
 | Ubuntu 22.04 x86-64 | `LocalSR-Linux-x86_64.AppImage` and portable `.tar.gz` |
 
-Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` to instantiate and cleanly
-tear down the packaged QML/controller without entering an interactive event loop, and
+Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` to compile and instantiate
+the packaged Slint component without entering an interactive event loop, and
 independently asks the packaged worker for capabilities over JSONL before requesting clean shutdown.
 Keeping these smoke tests separate avoids conflating slow first-time Torch startup with GUI startup.
-The headless Windows runner uses Qt's offscreen software backend and permits extra time for Windows
-to inspect the large first-run bundle. Frozen Qt Quick construction blocks on that non-interactive
-desktop, so its packaged probe boots Qt, imports the real UI/controller dependency graph, verifies
-the bundled `Main.qml`, records `package-ready`, and exits directly. Normal installed builds use the
-native graphics backend and normal lifecycle. Windows source CI instantiates the interface, while
-the macOS/Linux package smokes cover full packaged QML construction and clean teardown.
-Linux downloads
+Linux source and package smoke tests run under Xvfb because Slint's Winit backend requires a display
+connection even though the smoke never presents a window. Native file pickers delegate to the host
+OS and add no second GUI runtime to the package. Windows records `package-ready` after the
+Slint component and packaged resources load successfully. Normal installed builds use the native
+graphics backend and lifecycle. Linux downloads
 the official AppImage `appimagetool` asset and verifies its publisher-provided SHA-256 digest before
 use. A `v*` tag publishes all successful artifacts as a GitHub Release; manual workflow runs retain
-them as Actions artifacts without creating a release.
+them as Actions artifacts without creating a release. Installer jobs also mount/install/extract the
+final distributable and repeat the GUI and worker smoke tests from that installed form. Tags with a
+suffix such as `-alpha` are automatically published as GitHub prereleases.
 
 ## Local build
 
@@ -37,8 +37,8 @@ pyinstaller --clean --noconfirm packaging/localsr.spec
 ```
 
 On macOS the output is `dist/LocalSR.app`; Windows and Linux use `dist/LocalSR/`. The bundle contains
-both `LocalSR` and `LocalSRWorker`. The custom QtQml hook intentionally includes only QtQml, QtQuick,
-Layouts, Templates, Window, and the Basic Controls style.
+both `LocalSR` and `LocalSRWorker`. The PyInstaller spec collects the Slint Python runtime and the
+application's `.slint` source files; model weights remain external on-demand downloads.
 
 ## Optional signing and notarization
 
@@ -68,7 +68,8 @@ cloud signing requires replacing this step with the certificate provider's suppo
 
 1. Ensure CI is green on `main`.
 2. Update `pyproject.toml` and this document if artifact support changes.
-3. Create and push an annotated version tag, for example `git tag -a v0.3.0 -m "LocalSR 0.3.0"`.
+3. Create and push an annotated version tag, for example
+   `git tag -a v0.0.1-alpha -m "LocalSR 0.0.1 Alpha"`.
 4. Watch all three native jobs. A release is created only after every platform succeeds.
 5. Test installation on physical Windows, macOS, and Linux hardware before describing a build as
    stable. CI proves packaging and startup; it cannot prove each GPU driver/backend combination.

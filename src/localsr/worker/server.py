@@ -72,8 +72,32 @@ class WorkerServer:
         self.state_lock = threading.Lock()
         self.running = True
         self.active_job_id = None
+        self.pending_cancel_job_ids: set[str] = set()
         self.model_adapter = ModelAdapter()
         self.engine = InferenceEngine(self.model_adapter)
+
+    def _request_cancel(self, requested_job_id: str) -> None:
+        """Remember cancellation even if the matching job is still queued."""
+        if not requested_job_id:
+            return
+        with self.state_lock:
+            self.pending_cancel_job_ids.add(requested_job_id)
+            if requested_job_id == self.active_job_id:
+                self.cancel_event.set()
+
+    def _activate_job(self, job_id: str) -> None:
+        with self.state_lock:
+            self.active_job_id = job_id
+            if job_id in self.pending_cancel_job_ids:
+                self.cancel_event.set()
+            else:
+                self.cancel_event.clear()
+
+    def _deactivate_job(self, job_id: str) -> None:
+        with self.state_lock:
+            self.active_job_id = None
+            self.pending_cancel_job_ids.discard(job_id)
+            self.cancel_event.clear()
 
     def reader_thread_func(self):
         for line in sys.stdin:
@@ -98,10 +122,8 @@ class WorkerServer:
             if request_type == "shutdown_request":
                 self.cancel_event.set()
             elif request_type == "cancel_request":
-                requested_job_id = msg.get("data", {}).get("job_id")
-                with self.state_lock:
-                    if requested_job_id == self.active_job_id:
-                        self.cancel_event.set()
+                requested_job_id = str(msg.get("data", {}).get("job_id") or "")
+                self._request_cancel(requested_job_id)
 
         # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
         self.cancel_event.set()
@@ -180,10 +202,13 @@ class WorkerServer:
                         send_message(PreviewFailed(image_path=image_path, error_message=str(error)))
 
                 elif req_type == "cancel_request":
-                    # Already handled in reader_thread to set the event, but we can acknowledge if no job is active
+                    # The reader has already signalled an active or queued job.
+                    # Once this ordered message reaches the main loop with no
+                    # matching active job, its pending marker can be discarded.
+                    requested_job_id = str(data.get("job_id") or "")
                     with self.state_lock:
-                        if self.active_job_id is None:
-                            self.cancel_event.clear()
+                        if requested_job_id != self.active_job_id:
+                            self.pending_cancel_job_ids.discard(requested_job_id)
 
                 elif req_type == "job_request":
                     if self.active_job_id is not None:
@@ -195,9 +220,7 @@ class WorkerServer:
                         continue
 
                     job_id = data["job_id"]
-                    with self.state_lock:
-                        self.cancel_event.clear()
-                        self.active_job_id = job_id
+                    self._activate_job(job_id)
 
                     try:
                         send_message(JobStarted(job_id=job_id))
@@ -209,9 +232,7 @@ class WorkerServer:
                         traceback.print_exc(file=sys.stderr)
                         send_message(JobFailed(job_id=job_id, error_message=str(e)))
                     finally:
-                        with self.state_lock:
-                            self.active_job_id = None
-                            self.cancel_event.clear()
+                        self._deactivate_job(job_id)
                         self.model_adapter.release()
 
             except queue.Empty:

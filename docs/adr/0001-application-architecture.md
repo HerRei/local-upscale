@@ -1,5 +1,8 @@
 # Architecture Decision Record: 0001 - Application Architecture
 
+Status: Superseded for the UI host by ADR 0002. The isolated Python inference-worker decision
+remains in force.
+
 ## Context
 We are building LocalSR, a desktop GUI for local image super-resolution using PyTorch and Spandrel. The primary constraint is running on Apple Silicon (MPS) with limited unified memory. PyTorch MPS inference for large images can easily exhaust unified memory, causing kernel panics, system instability, or application crashes.
 

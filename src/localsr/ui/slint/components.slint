@@ -1,0 +1,475 @@
+import { ScrollView } from "std-widgets.slint";
+
+// LocalSR's settings live inside a scrolling pane. Slint 1.9's standard
+// ComboBox consumes trackpad/wheel events even when it does not have focus,
+// which silently changes settings while the user is only scrolling the pane.
+// This desktop combo deliberately leaves closed-control wheel events to the
+// parent ScrollView; scrolling is confined to the popup while it is open.
+export component DesktopComboBox inherits Rectangle {
+    in property <[string]> model;
+    in property <bool> enabled: true;
+    in-out property <int> current-index: 0;
+    out property <string> current-value:
+        root.current-index >= 0 && root.current-index < root.model.length ?
+            root.model[root.current-index] : "";
+    callback selected(string);
+
+    height: 30px;
+    min-width: 120px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    border-width: 1px;
+    border-color: !root.enabled ? #2b323c : control-touch.has-hover ? #4a586a : #343e4a;
+    border-radius: 3px;
+    background: !root.enabled ? #1b2027 : control-touch.pressed ? #29323d : #20262f;
+    clip: true;
+    forward-focus: control-focus;
+
+    accessible-role: combobox;
+    accessible-enabled: root.enabled;
+    accessible-label: root.current-value;
+    accessible-value: root.current-value;
+    accessible-action-default => {
+        if (root.enabled) {
+            popup.show();
+        }
+    }
+
+    Text {
+        x: 9px;
+        width: parent.width - 34px;
+        text: root.current-value;
+        color: root.enabled ? #e2e7ed : #717b88;
+        font-size: 10px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width - 25px;
+        width: 16px;
+        text: "⌄";
+        color: root.enabled ? #aeb7c2 : #626b76;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    control-focus := FocusScope {
+        key-pressed(event) => {
+            if (!root.enabled) {
+                return reject;
+            }
+            if (event.text == Key.UpArrow) {
+                root.choose(max(0, root.current-index - 1));
+                return accept;
+            } else if (event.text == Key.DownArrow) {
+                root.choose(min(root.model.length - 1, root.current-index + 1));
+                return accept;
+            } else if (event.text == Key.Return) {
+                popup.show();
+                return accept;
+            }
+            return reject;
+        }
+
+        control-touch := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: pointer;
+            clicked => {
+                control-focus.focus();
+                popup.show();
+            }
+            scroll-event(event) => {
+                // Never cycle a closed settings combo with the wheel/trackpad.
+                // Rejecting here lets the containing settings pane scroll.
+                return reject;
+            }
+        }
+    }
+
+    function choose(index: int) {
+        if (!root.enabled || index < 0 || index >= root.model.length) {
+            return;
+        }
+        root.current-index = index;
+        root.selected(root.current-value);
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: root.width;
+        height: max(1, min(6, root.model.length)) * 30px + 8px;
+        close-policy: close-on-click-outside;
+        forward-focus: popup-focus;
+
+        popup-focus := FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.UpArrow) {
+                    root.choose(max(0, root.current-index - 1));
+                    return accept;
+                } else if (event.text == Key.DownArrow) {
+                    root.choose(min(root.model.length - 1, root.current-index + 1));
+                    return accept;
+                } else if (event.text == Key.Return || event.text == Key.Escape) {
+                    popup.close();
+                    return accept;
+                }
+                return reject;
+            }
+
+            Rectangle {
+                background: #1b2129;
+                border-width: 1px;
+                border-color: #465161;
+                border-radius: 3px;
+
+                ScrollView {
+                    x: 4px;
+                    y: 4px;
+                    width: parent.width - 8px;
+                    height: parent.height - 8px;
+                    viewport-width: self.width;
+
+                    VerticalLayout {
+                        width: parent.width;
+                        spacing: 0px;
+
+                        for value[index] in root.model: Rectangle {
+                            height: 30px;
+                            width: parent.width;
+                            background: option-touch.pressed ? #345f9f :
+                                index == root.current-index ? #2c4e7e :
+                                option-touch.has-hover ? #293542 : transparent;
+
+                            Text {
+                                x: 8px;
+                                width: parent.width - 16px;
+                                text: value;
+                                color: #e4e9ef;
+                                font-size: 10px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            option-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.choose(index);
+                                    popup.close();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ThinSeparator inherits Rectangle {
+    in property <bool> vertical: false;
+    background: #29313b;
+    width: root.vertical ? 1px : 10px;
+    height: root.vertical ? 10px : 1px;
+    horizontal-stretch: root.vertical ? 0 : 1;
+    vertical-stretch: root.vertical ? 1 : 0;
+}
+
+export component SectionTitle inherits Rectangle {
+    in property <int> step: 1;
+    in property <string> title: "SECTION";
+    background: transparent;
+    height: 29px;
+
+    Rectangle {
+        x: 0px;
+        y: 2px;
+        width: 22px;
+        height: 22px;
+        border-width: 1px;
+        border-color: #5e6978;
+        border-radius: 11px;
+        background: #171c23;
+
+        Text {
+            text: root.step;
+            color: #b8c1cc;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Text {
+        x: 34px;
+        width: parent.width - 34px;
+        height: 26px;
+        text: root.title;
+        color: #e4e8ed;
+        font-size: 11px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+}
+
+export component FlatButton inherits Rectangle {
+    in property <string> text: "Button";
+    in property <bool> active: true;
+    in property <bool> primary: false;
+    in property <bool> compact: false;
+    callback clicked();
+
+    height: root.compact ? 28px : 34px;
+    min-width: 72px;
+    border-width: root.primary ? 0px : 1px;
+    border-color: root.active ? #3a4554 : #2b323c;
+    border-radius: 4px;
+    background: !root.active ? #242a32 : touch.pressed ?
+        (root.primary ? #3569be : #303945) : touch.has-hover ?
+        (root.primary ? #457ee0 : #29323e) : (root.primary ? #3d73cf : #222933);
+
+    accessible-role: button;
+    accessible-enabled: root.active;
+    accessible-label: root.text;
+    accessible-action-default => {
+        if (root.active) {
+            root.clicked();
+        }
+    }
+
+    Text {
+        text: root.text;
+        color: root.active ? #f1f3f6 : #717b88;
+        font-size: root.compact ? 10px : 12px;
+        font-weight: root.primary ? 600 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SegmentedButton inherits Rectangle {
+    in property <string> text: "Choice";
+    in property <bool> selected: false;
+    in property <bool> active: true;
+    callback clicked();
+
+    height: 31px;
+    min-width: 54px;
+    background: root.selected ? #3e72cb : touch.has-hover ? #29323d : #20262f;
+    border-width: 1px;
+    border-color: root.selected ? #4a80dc : #303944;
+
+    accessible-role: button;
+    accessible-enabled: root.active;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.text;
+    accessible-action-default => {
+        if (root.active) {
+            root.clicked();
+        }
+    }
+
+    Text {
+        text: root.text;
+        color: root.active ? #eef2f7 : #707984;
+        font-size: 11px;
+        font-weight: root.selected ? 600 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component TaskChoice inherits Rectangle {
+    in property <string> title: "Task";
+    in property <string> detail: "Description";
+    in property <bool> selected: false;
+    in property <bool> active: true;
+    callback clicked();
+
+    height: 43px;
+    background: root.active && touch.has-hover ? #1d242d : transparent;
+
+    accessible-role: button;
+    accessible-enabled: root.active;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.title + ". " + root.detail;
+    accessible-action-default => {
+        if (root.active) {
+            root.clicked();
+        }
+    }
+
+    Rectangle {
+        x: 2px;
+        y: 10px;
+        width: 15px;
+        height: 15px;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: !root.active ? #343c47 : root.selected ? #4e87ec : #586473;
+        background: transparent;
+
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            x: 3px;
+            y: 3px;
+            border-radius: 4px;
+            background: #4e87ec;
+            visible: root.selected;
+        }
+    }
+
+    Text {
+        x: 26px;
+        y: 3px;
+        width: parent.width - 28px;
+        height: 20px;
+        text: root.title;
+        color: root.active ? #e5e9ee : #69727d;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 26px;
+        y: 22px;
+        width: parent.width - 28px;
+        height: 17px;
+        text: root.detail;
+        color: root.active ? #7f8a98 : #555e69;
+        font-size: 10px;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component CheckControl inherits Rectangle {
+    in property <string> text: "Option";
+    in property <bool> checked: false;
+    in property <bool> active: true;
+    callback toggled(bool);
+
+    height: 24px;
+    background: transparent;
+
+    accessible-role: checkbox;
+    accessible-enabled: root.active;
+    accessible-checked: root.checked;
+    accessible-label: root.text;
+    accessible-action-default => {
+        if (root.active) {
+            root.toggled(!root.checked);
+        }
+    }
+
+    Rectangle {
+        x: 0px;
+        y: 4px;
+        width: 15px;
+        height: 15px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: root.checked ? #4f83dd : #56616e;
+        background: root.checked ? #3d73cf : #151a21;
+
+        Text {
+            text: root.checked ? "✓" : "";
+            color: white;
+            font-size: 11px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Text {
+        x: 23px;
+        width: parent.width - 23px;
+        text: root.text;
+        color: root.active ? #c9d0d9 : #69727d;
+        font-size: 10px;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.checked); }
+    }
+}
+
+export component ProgressTrack inherits Rectangle {
+    in property <float> value: 0;
+    in property <brush> fill-color: #4c83e2;
+    horizontal-stretch: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: #323a45;
+    clip: true;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: max(0px, min(parent.width, parent.width * root.value));
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: root.fill-color;
+    }
+}
+
+export component FieldLabel inherits Text {
+    in property <string> label: "Label";
+    text: root.label;
+    color: #8d98a6;
+    font-size: 10px;
+    height: 18px;
+    vertical-alignment: center;
+}
+
+export component ValueLine inherits Rectangle {
+    in property <string> label: "Label";
+    in property <string> value: "—";
+    background: transparent;
+    height: 26px;
+
+    Text {
+        text: root.label;
+        color: #8d98a6;
+        font-size: 10px;
+        vertical-alignment: center;
+        width: 48%;
+    }
+
+    Text {
+        x: parent.width * 0.48;
+        width: 52%;
+        text: root.value;
+        color: #c8d0da;
+        font-size: 10px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}

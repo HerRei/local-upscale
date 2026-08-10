@@ -50,7 +50,9 @@ jobs:
           cache: pip
       - name: Install Linux GUI runtime libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libegl1 libgl1 libxkbcommon0 libwayland-client0 xvfb
       - name: Install CPU PyTorch on Linux and Windows
         if: runner.os != 'macOS'
         shell: bash
@@ -63,19 +65,14 @@ jobs:
         run: python -m pip install torch torchvision
       - name: Install LocalSR and test dependencies
         run: python -m pip install -e ".[dev]"
+      - name: Run test suite (Linux virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q --junitxml=test-results.xml
       - name: Run test suite
+        if: runner.os != 'Linux'
         run: python -m pytest -q --junitxml=test-results.xml
-      - name: Compile QML interface
-        run: >-
-          pyside6-qmllint
-          --unqualified disable
-          --max-warnings 0
-          src/localsr/ui/qml/Main.qml
-          src/localsr/ui/qml/Panel.qml
-          src/localsr/ui/qml/ModernButton.qml
-          src/localsr/ui/qml/ModernCombo.qml
-          src/localsr/ui/qml/ModeCard.qml
-          src/localsr/ui/qml/SectionLabel.qml
+      - name: Compile Slint interface
+        run: python -m localsr.ui.slint_check
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v7

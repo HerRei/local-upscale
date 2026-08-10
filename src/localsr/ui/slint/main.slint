@@ -1,0 +1,1078 @@
+import { ListView, ScrollView } from "std-widgets.slint";
+import {
+    CheckControl,
+    DesktopComboBox,
+    FieldLabel,
+    FlatButton,
+    ProgressTrack,
+    SectionTitle,
+    SegmentedButton,
+    TaskChoice,
+    ThinSeparator,
+    ValueLine
+} from "components.slint";
+
+export struct QueueEntry {
+    name: string,
+    detail: string,
+    selected: bool,
+}
+
+export component MainWindow inherits Window {
+    title: "LocalSR";
+    preferred-width: 1500px;
+    preferred-height: 930px;
+    min-width: 1120px;
+    min-height: 720px;
+    background: #0d1117;
+
+    in-out property <bool> batch-mode: false;
+    in-out property <bool> controls-enabled: true;
+    in-out property <bool> model-selection-enabled: true;
+    in-out property <[QueueEntry]> queue-items;
+    in-out property <bool> task-selected: false;
+    in-out property <int> task-index: -1;
+    in-out property <[string]> model-options;
+    in-out property <int> model-index: 0;
+    in-out property <string> model-description: "Choose a task first.";
+    in-out property <string> model-status: "Waiting for worker.";
+    in-out property <string> model-action-text: "Download Model";
+    in-out property <bool> model-action-visible: false;
+    in-out property <bool> model-action-enabled: true;
+    in-out property <bool> download-visible: false;
+    in-out property <float> download-progress: 0;
+
+    in-out property <[string]> scale-options;
+    in-out property <int> scale-index: 0;
+    in-out property <[string]> format-options: ["PNG", "JPEG", "TIFF"];
+    in-out property <int> format-index: 0;
+    in-out property <string> output-directory: "";
+    in-out property <bool> preserve-metadata: true;
+    in-out property <int> jpeg-quality: 98;
+
+    in-out property <[string]> device-options;
+    in-out property <int> device-index: 0;
+    in-out property <string> hardware-summary: "Hardware detection is starting.";
+    in-out property <string> memory-usage-text: "Memory unavailable";
+    in-out property <float> memory-usage-ratio: 0;
+    in-out property <string> pressure-text: "Checking pressure";
+    in-out property <brush> pressure-color: #788391;
+
+    in-out property <string> estimate-time: "—";
+    in-out property <string> estimate-output: "—";
+    in-out property <string> estimate-detail: "Choose an image and model.";
+    in-out property <string> estimate-warning: "";
+
+    in-out property <bool> advanced-open: false;
+    in-out property <[string]> tile-options;
+    in-out property <int> tile-index: 0;
+    in-out property <[string]> halo-options;
+    in-out property <int> halo-index: 0;
+    in-out property <[string]> precision-options;
+    in-out property <int> precision-index: 0;
+    in-out property <bool> safe-memory: true;
+    in-out property <bool> safe-memory-enabled: true;
+
+    // Read-only inspector summaries. Workflow controls deliberately live on the left.
+    in-out property <string> input-summary: "No image selected";
+    in-out property <string> task-summary: "Choose a task";
+    in-out property <string> profile-summary: "—";
+    in-out property <string> model-summary: "—";
+    in-out property <string> scale-summary: "—";
+    in-out property <string> output-summary: "—";
+    in-out property <string> device-summary: "Detecting hardware";
+
+    in-out property <image> source-image;
+    in-out property <image> result-image;
+    in-out property <bool> image-ready: false;
+    // A progressive image exists while inference is running. It is intentionally
+    // distinct from result-ready: the before/after divider is only valid once the
+    // complete output has been saved.
+    in-out property <bool> live-result-ready: false;
+    in-out property <bool> result-ready: false;
+    in-out property <string> source-label: "Original";
+    in-out property <string> result-label: "Preview";
+    in-out property <float> preview-aspect: 1;
+    in-out property <float> compare-position: 0.5;
+    in-out property <float> preview-zoom: 1;
+    in-out property <length> preview-pan-x: 0px;
+    in-out property <length> preview-pan-y: 0px;
+    in-out property <bool> tile-active: false;
+    in-out property <float> tile-x: 0;
+    in-out property <float> tile-y: 0;
+    in-out property <float> tile-width: 0;
+    in-out property <float> tile-height: 0;
+
+    in-out property <float> progress: 0;
+    in-out property <string> status-title: "Ready";
+    in-out property <string> status-detail: "Add an image, then choose a task.";
+    in-out property <string> batch-progress: "";
+    in-out property <bool> can-start: false;
+    in-out property <bool> can-cancel: false;
+    in-out property <bool> can-open-result: false;
+    in-out property <string> action-text: "Start";
+
+    callback poll-backend();
+    callback choose-images();
+    callback choose-folder();
+    callback clear-queue();
+    callback remove-queue-item(int);
+    callback select-queue-item(int);
+    callback task-changed(int);
+    callback model-changed(int);
+    callback quick-setup();
+    callback best-setup();
+    callback model-action();
+    callback scale-changed(int);
+    callback format-changed(int);
+    callback choose-output-directory();
+    callback preserve-metadata-changed(bool);
+    callback device-changed(int);
+    callback refresh-hardware();
+    callback tile-changed(int);
+    callback halo-changed(int);
+    callback precision-changed(int);
+    callback safe-memory-changed(bool);
+    callback jpeg-quality-changed(int);
+    callback start-job();
+    callback cancel-job();
+    callback open-result();
+    callback reveal-result();
+
+    Timer {
+        interval: 50ms;
+        running: true;
+        triggered => { root.poll-backend(); }
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            // Leading workflow pane: source selection and every setting that changes the job.
+            Rectangle {
+                width: 318px;
+                background: #151a21;
+
+                ScrollView {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: self.width;
+                    enabled: root.task-selected;
+                    vertical-scrollbar-policy: root.task-selected ?
+                        ScrollBarPolicy.as-needed : ScrollBarPolicy.always-off;
+
+                    VerticalLayout {
+                        width: 286px;
+                        x: 16px;
+                        y: 10px;
+                        spacing: 8px;
+
+                        SectionTitle { step: 1; title: "IMPORT"; }
+
+                        HorizontalLayout {
+                            height: 30px;
+                            spacing: 0px;
+                            SegmentedButton {
+                                text: "Single";
+                                selected: !root.batch-mode;
+                                active: root.controls-enabled;
+                                clicked => { root.batch-mode = false; }
+                            }
+                            SegmentedButton {
+                                text: "Batch";
+                                selected: root.batch-mode;
+                                active: root.controls-enabled;
+                                clicked => { root.batch-mode = true; }
+                            }
+                        }
+
+                        Text {
+                            text: root.batch-mode ? "Add images to the queue below." :
+                                "Choose one image to work on.";
+                            color: #7f8996;
+                            font-size: 9px;
+                            height: 18px;
+                            vertical-alignment: center;
+                        }
+
+                        HorizontalLayout {
+                            height: 29px;
+                            spacing: 6px;
+                            FlatButton {
+                                text: root.batch-mode ? "Add Images…" : "Choose Image…";
+                                compact: true;
+                                active: root.controls-enabled;
+                                clicked => { root.choose-images(); }
+                            }
+                            FlatButton {
+                                text: "Add Folder…";
+                                compact: true;
+                                visible: root.batch-mode;
+                                active: root.controls-enabled;
+                                clicked => { root.choose-folder(); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            height: 25px;
+                            Text {
+                                text: root.batch-mode ? "Batch queue (" + root.queue-items.length + ")" :
+                                    "Selected image";
+                                color: #d7dde5;
+                                font-size: 10px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            FlatButton {
+                                text: "Clear";
+                                compact: true;
+                                width: 52px;
+                                active: root.controls-enabled && root.queue-items.length > 0;
+                                clicked => { root.clear-queue(); }
+                            }
+                        }
+
+                        ListView {
+                            height: root.batch-mode ? 128px : 46px;
+                            width: parent.width;
+
+                            for item[index] in root.queue-items: Rectangle {
+                                height: 38px;
+                                width: parent.width;
+                                background: item.selected ? #293341 : queue-touch.has-hover ? #202731 : #1b212a;
+                                border-radius: 3px;
+
+                                Rectangle {
+                                    x: 7px;
+                                    y: 8px;
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 2px;
+                                    background: item.selected ? #3d73cf : #303943;
+                                    Text {
+                                        text: "▧";
+                                        color: #c6ced8;
+                                        font-size: 10px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Text {
+                                    x: 37px;
+                                    y: 4px;
+                                    width: parent.width - 68px;
+                                    height: 18px;
+                                    text: item.name;
+                                    color: #dce2e9;
+                                    font-size: 10px;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    x: 37px;
+                                    y: 20px;
+                                    width: parent.width - 68px;
+                                    height: 14px;
+                                    text: item.detail;
+                                    color: #76818e;
+                                    font-size: 8px;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    x: parent.width - 26px;
+                                    width: 22px;
+                                    height: parent.height;
+                                    text: "×";
+                                    color: remove-touch.has-hover ? #ffffff : #9aa4b0;
+                                    font-size: 15px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                queue-touch := TouchArea {
+                                    width: parent.width - 30px;
+                                    enabled: root.controls-enabled;
+                                    mouse-cursor: pointer;
+                                    clicked => { root.select-queue-item(index); }
+                                }
+
+                                remove-touch := TouchArea {
+                                    x: parent.width - 30px;
+                                    width: 30px;
+                                    enabled: root.controls-enabled;
+                                    mouse-cursor: pointer;
+                                    clicked => { root.remove-queue-item(index); }
+                                }
+                            }
+                        }
+
+                        ThinSeparator { }
+                        SectionTitle { step: 2; title: "TASK"; }
+                        Text {
+                            text: "What should LocalSR do?";
+                            color: #7f8996;
+                            font-size: 9px;
+                            height: 16px;
+                        }
+                        TaskChoice {
+                            title: "Upscale";
+                            detail: "Increase resolution";
+                            selected: root.task-selected && root.task-index == 0;
+                            active: root.model-selection-enabled;
+                            clicked => { root.task-changed(0); }
+                        }
+                        TaskChoice {
+                            title: "Denoise";
+                            detail: "Remove photographic noise at the original size";
+                            selected: root.task-selected && root.task-index == 1;
+                            active: root.model-selection-enabled;
+                            clicked => { root.task-changed(1); }
+                        }
+                        TaskChoice {
+                            title: "Upscale + Denoise";
+                            detail: "Restore a degraded image while enlarging it";
+                            selected: root.task-selected && root.task-index == 2;
+                            active: root.model-selection-enabled;
+                            clicked => { root.task-changed(2); }
+                        }
+
+                        VerticalLayout {
+                            visible: root.task-selected;
+                            spacing: 7px;
+
+                            Text {
+                                text: "RUN AN AUTOMATIC RECIPE";
+                                color: #aab3bf;
+                                font-size: 9px;
+                                font-weight: 600;
+                                height: 20px;
+                                vertical-alignment: bottom;
+                            }
+                            HorizontalLayout {
+                                height: 34px;
+                                spacing: 6px;
+                                FlatButton {
+                                    text: "Quick";
+                                    primary: true;
+                                    active: root.model-selection-enabled && root.image-ready;
+                                    clicked => { root.quick-setup(); }
+                                }
+                                FlatButton {
+                                    text: "Best";
+                                    active: root.model-selection-enabled && root.image-ready;
+                                    clicked => { root.best-setup(); }
+                                }
+                            }
+                            Text {
+                                text: root.image-ready ?
+                                    "Starts immediately. A required model is downloaded first." :
+                                    "Add an image to enable Quick and Best.";
+                                color: #7c8794;
+                                font-size: 8px;
+                                wrap: word-wrap;
+                                height: 25px;
+                            }
+
+                            ThinSeparator { }
+                            SectionTitle { step: 3; title: "MANUAL CONFIGURATION"; }
+                            FieldLabel { label: "Restoration model"; }
+                            DesktopComboBox {
+                                height: 32px;
+                                model: root.model-options;
+                                enabled: root.model-selection-enabled;
+                                current-index <=> root.model-index;
+                                selected(value) => { root.model-changed(root.model-index); }
+                            }
+                            Text {
+                                text: root.model-description;
+                                color: #858f9c;
+                                font-size: 9px;
+                                wrap: word-wrap;
+                                height: 42px;
+                            }
+                            FlatButton {
+                                text: root.model-action-text;
+                                compact: true;
+                                visible: root.model-action-visible;
+                                active: root.controls-enabled && root.model-action-enabled;
+                                clicked => { root.model-action(); }
+                            }
+                            ProgressTrack {
+                                visible: root.download-visible;
+                                value: root.download-progress;
+                            }
+                            Text {
+                                text: root.model-status;
+                                color: #7d8895;
+                                font-size: 8px;
+                                wrap: word-wrap;
+                                height: 30px;
+                            }
+
+                            VerticalLayout {
+                                visible: root.task-index != 1;
+                                spacing: 5px;
+                                FieldLabel { label: "Output scale"; }
+                                HorizontalLayout {
+                                    height: 31px;
+                                    spacing: 0px;
+                                    for option[index] in root.scale-options: SegmentedButton {
+                                        text: option;
+                                        selected: root.scale-index == index;
+                                        active: root.controls-enabled;
+                                        clicked => {
+                                            root.scale-index = index;
+                                            root.scale-changed(index);
+                                        }
+                                    }
+                                }
+                            }
+
+                            ThinSeparator { }
+                            SectionTitle { step: 4; title: "OUTPUT"; }
+                            FieldLabel { label: "Format"; }
+                            DesktopComboBox {
+                                height: 30px;
+                                model: root.format-options;
+                                enabled: root.controls-enabled;
+                                current-index <=> root.format-index;
+                                selected(value) => { root.format-changed(root.format-index); }
+                            }
+                            FieldLabel { label: "Output folder"; }
+                            HorizontalLayout {
+                                height: 29px;
+                                spacing: 5px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: #11161c;
+                                    border-width: 1px;
+                                    border-color: #303943;
+                                    border-radius: 3px;
+                                    Text {
+                                        x: 7px;
+                                        width: parent.width - 14px;
+                                        text: root.output-directory;
+                                        color: #8e98a5;
+                                        font-size: 8px;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                FlatButton {
+                                    text: "Choose…";
+                                    compact: true;
+                                    width: 70px;
+                                    active: root.controls-enabled;
+                                    clicked => { root.choose-output-directory(); }
+                                }
+                            }
+                            CheckControl {
+                                text: "Preserve safe metadata";
+                                checked: root.preserve-metadata;
+                                active: root.controls-enabled;
+                                toggled(value) => {
+                                    root.preserve-metadata = value;
+                                    root.preserve-metadata-changed(value);
+                                }
+                            }
+
+                            ThinSeparator { }
+                            Rectangle {
+                                height: 34px;
+                                background: advanced-touch.has-hover ? #1b222b : transparent;
+                                Text {
+                                    text: "ADVANCED";
+                                    color: #dce2e9;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    x: parent.width - 24px;
+                                    width: 20px;
+                                    text: root.advanced-open ? "⌃" : "⌄";
+                                    color: #cbd2db;
+                                    font-size: 14px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                advanced-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.advanced-open = !root.advanced-open; }
+                                }
+                            }
+
+                            VerticalLayout {
+                                visible: root.advanced-open;
+                                spacing: 6px;
+                                FieldLabel { label: "Compute device"; }
+                                DesktopComboBox {
+                                    height: 30px;
+                                    model: root.device-options;
+                                    enabled: root.controls-enabled;
+                                    current-index <=> root.device-index;
+                                    selected(value) => { root.device-changed(root.device-index); }
+                                }
+                                FieldLabel { label: "Tile size"; }
+                                DesktopComboBox {
+                                    height: 30px;
+                                    model: root.tile-options;
+                                    enabled: root.controls-enabled;
+                                    current-index <=> root.tile-index;
+                                    selected(value) => { root.tile-changed(root.tile-index); }
+                                }
+                                FieldLabel { label: "Overlap / halo"; }
+                                DesktopComboBox {
+                                    height: 30px;
+                                    model: root.halo-options;
+                                    enabled: root.controls-enabled;
+                                    current-index <=> root.halo-index;
+                                    selected(value) => { root.halo-changed(root.halo-index); }
+                                }
+                                FieldLabel { label: "Precision"; }
+                                DesktopComboBox {
+                                    height: 30px;
+                                    model: root.precision-options;
+                                    enabled: root.controls-enabled;
+                                    current-index <=> root.precision-index;
+                                    selected(value) => { root.precision-changed(root.precision-index); }
+                                }
+                                CheckControl {
+                                    text: "Safe memory mode";
+                                    checked: root.safe-memory;
+                                    active: root.controls-enabled && root.safe-memory-enabled;
+                                    toggled(value) => {
+                                        root.safe-memory = value;
+                                        root.safe-memory-changed(value);
+                                    }
+                                }
+                                VerticalLayout {
+                                    visible: root.format-index == 1;
+                                    spacing: 2px;
+                                    FieldLabel { label: "JPEG quality: " + root.jpeg-quality; }
+                                    Rectangle {
+                                        height: 22px;
+                                        background: transparent;
+                                        ProgressTrack {
+                                            y: 9px;
+                                            width: parent.width;
+                                            value: (root.jpeg-quality - 70) / 30;
+                                        }
+                                        Rectangle {
+                                            x: (parent.width - 10px) * (root.jpeg-quality - 70) / 30;
+                                            y: 4px;
+                                            width: 10px;
+                                            height: 10px;
+                                            border-radius: 5px;
+                                            background: #dce2e9;
+                                        }
+                                        quality-touch := TouchArea {
+                                            enabled: root.controls-enabled;
+                                            mouse-cursor: pointer;
+                                            moved => {
+                                                root.jpeg-quality = max(70, min(100, round(70 + self.mouse-x / self.width * 30)));
+                                                root.jpeg-quality-changed(root.jpeg-quality);
+                                            }
+                                            clicked => {
+                                                root.jpeg-quality = max(70, min(100, round(70 + self.mouse-x / self.width * 30)));
+                                                root.jpeg-quality-changed(root.jpeg-quality);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ThinSeparator { x: parent.width - 1px; height: parent.height; vertical: true; }
+            }
+
+            // Document window: the image remains the dominant visual element.
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 480px;
+                background: #0d1117;
+
+                Rectangle {
+                    x: 13px;
+                    y: 13px;
+                    width: parent.width - 26px;
+                    height: parent.height - 26px;
+                    background: #080b10;
+                    border-width: 1px;
+                    border-color: #252d37;
+                    clip: true;
+
+                    property <length> fit-width: min(
+                        self.width,
+                        self.height * max(0.01, root.preview-aspect)
+                    );
+                    property <length> fit-height: self.fit-width / max(0.01, root.preview-aspect);
+                    property <length> max-pan-x: max(
+                        0px,
+                        (self.fit-width * root.preview-zoom - self.width) / 2
+                    );
+                    property <length> max-pan-y: max(
+                        0px,
+                        (self.fit-height * root.preview-zoom - self.height) / 2
+                    );
+
+                    preview-content := Rectangle {
+                        x: (parent.width - self.width) / 2 + root.preview-pan-x;
+                        y: (parent.height - self.height) / 2 + root.preview-pan-y;
+                        width: parent.fit-width * root.preview-zoom;
+                        height: parent.fit-height * root.preview-zoom;
+                        background: #080b10;
+
+                        Image {
+                            source: root.source-image;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: fill;
+                            visible: root.image-ready;
+                        }
+
+                        Rectangle {
+                            width: root.result-ready ? parent.width * root.compare-position : parent.width;
+                            height: parent.height;
+                            clip: true;
+                            background: transparent;
+                            visible: root.live-result-ready;
+
+                            Image {
+                                source: root.result-image;
+                                width: preview-content.width;
+                                height: preview-content.height;
+                                image-fit: fill;
+                            }
+                        }
+
+                        Rectangle {
+                            x: root.tile-x * parent.width;
+                            y: root.tile-y * parent.height;
+                            width: root.tile-width * parent.width;
+                            height: root.tile-height * parent.height;
+                            background: #3279d118;
+                            border-width: 2px / root.preview-zoom;
+                            border-color: #54a3ff;
+                            visible: root.tile-active;
+                        }
+
+                        Rectangle {
+                            x: parent.width * root.compare-position - 1px;
+                            width: 2px;
+                            height: parent.height;
+                            background: #d8dde4;
+                            visible: root.result-ready && !root.tile-active;
+
+                            Rectangle {
+                                x: -18px;
+                                y: parent.height / 2 - 18px;
+                                width: 38px;
+                                height: 38px;
+                                border-radius: 19px;
+                                border-width: 1px;
+                                border-color: #b5bec9;
+                                background: #151a21e8;
+                                Text {
+                                    text: "‹  ›";
+                                    color: #f1f3f6;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: "Add an image to begin";
+                        color: #4f5966;
+                        font-size: 16px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        visible: !root.image-ready;
+                    }
+
+                    Rectangle {
+                        x: 12px;
+                        y: parent.height - 36px;
+                        width: min(230px, parent.width / 2 - 20px);
+                        height: 24px;
+                        border-radius: 3px;
+                        background: #0b0f15cc;
+                        visible: root.image-ready;
+                        Text {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            text: root.source-label;
+                            color: #e2e6eb;
+                            font-size: 10px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        x: parent.width - self.width - 12px;
+                        y: parent.height - 36px;
+                        width: min(180px, parent.width / 2 - 20px);
+                        height: 24px;
+                        border-radius: 3px;
+                        background: #0b0f15cc;
+                        visible: root.result-ready;
+                        Text {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            text: root.result-label;
+                            color: #e2e6eb;
+                            font-size: 10px;
+                            horizontal-alignment: right;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    preview-touch := TouchArea {
+                        property <length> pan-start-x: 0px;
+                        property <length> pan-start-y: 0px;
+                        property <bool> dragging-divider: false;
+                        property <float> zoom-anchor-x: 0.5;
+                        property <float> zoom-anchor-y: 0.5;
+                        property <float> next-zoom: 1;
+                        property <length> next-width: 0px;
+                        property <length> next-height: 0px;
+                        property <length> next-max-pan-x: 0px;
+                        property <length> next-max-pan-y: 0px;
+                        enabled: root.image-ready;
+                        mouse-cursor: root.result-ready &&
+                            abs(self.mouse-x - (preview-content.x +
+                                preview-content.width * root.compare-position)) <= 18px ?
+                            col-resize : root.preview-zoom > 1 ? move : default;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                self.pan-start-x = root.preview-pan-x;
+                                self.pan-start-y = root.preview-pan-y;
+                                self.dragging-divider = root.result-ready &&
+                                    abs(self.mouse-x - (preview-content.x +
+                                        preview-content.width * root.compare-position)) <= 18px;
+                            }
+                            if (event.kind == PointerEventKind.up ||
+                                event.kind == PointerEventKind.cancel) {
+                                self.dragging-divider = false;
+                            }
+                        }
+                        moved => {
+                            if (self.dragging-divider) {
+                                root.compare-position = max(
+                                    0.03,
+                                    min(0.97, (self.mouse-x - preview-content.x) /
+                                        preview-content.width)
+                                );
+                            } else if (root.preview-zoom > 1) {
+                                root.preview-pan-x = max(
+                                    -parent.max-pan-x,
+                                    min(parent.max-pan-x,
+                                        self.pan-start-x + self.mouse-x - self.pressed-x)
+                                );
+                                root.preview-pan-y = max(
+                                    -parent.max-pan-y,
+                                    min(parent.max-pan-y,
+                                        self.pan-start-y + self.mouse-y - self.pressed-y)
+                                );
+                            }
+                        }
+                        double-clicked => {
+                            root.preview-zoom = 1;
+                            root.preview-pan-x = 0px;
+                            root.preview-pan-y = 0px;
+                        }
+                        scroll-event(event) => {
+                            self.zoom-anchor-x = max(0, min(1,
+                                (self.mouse-x - preview-content.x) /
+                                    max(1px, preview-content.width)));
+                            self.zoom-anchor-y = max(0, min(1,
+                                (self.mouse-y - preview-content.y) /
+                                    max(1px, preview-content.height)));
+                            self.next-zoom = event.delta-y < 0px ?
+                                min(8, root.preview-zoom * 1.12) :
+                                max(1, root.preview-zoom / 1.12);
+                            self.next-width = parent.fit-width * self.next-zoom;
+                            self.next-height = parent.fit-height * self.next-zoom;
+                            self.next-max-pan-x = max(0px, (self.next-width - parent.width) / 2);
+                            self.next-max-pan-y = max(0px, (self.next-height - parent.height) / 2);
+                            root.preview-zoom = self.next-zoom;
+                            root.preview-pan-x = max(
+                                -self.next-max-pan-x,
+                                min(self.next-max-pan-x,
+                                    self.mouse-x - self.zoom-anchor-x * self.next-width -
+                                        (parent.width - self.next-width) / 2)
+                            );
+                            root.preview-pan-y = max(
+                                -self.next-max-pan-y,
+                                min(self.next-max-pan-y,
+                                    self.mouse-y - self.zoom-anchor-y * self.next-height -
+                                        (parent.height - self.next-height) / 2)
+                            );
+                            if (self.next-zoom <= 1) {
+                                root.preview-pan-x = 0px;
+                                root.preview-pan-y = 0px;
+                            }
+                            return accept;
+                        }
+                    }
+                }
+            }
+
+            // Trailing inspector: contextual facts, estimates, and telemetry only.
+            Rectangle {
+                width: 304px;
+                background: #151a21;
+
+                inspector-scroll := Flickable {
+                    x: 1px;
+                    width: parent.width - 1px;
+                    height: parent.height;
+                    interactive: true;
+                    viewport-width: self.width;
+                    viewport-height: root.can-open-result ? 760px :
+                        root.estimate-warning != "" ? 710px : 640px;
+
+                    VerticalLayout {
+                        width: 270px;
+                        x: 16px;
+                        y: 12px;
+                        spacing: 8px;
+
+                        Text {
+                            text: "JOB INSPECTOR";
+                            color: #e0e5eb;
+                            font-size: 11px;
+                            font-weight: 600;
+                            height: 26px;
+                            vertical-alignment: center;
+                        }
+
+                        FieldLabel { label: "Selected input"; }
+                        Text {
+                            text: root.input-summary;
+                            color: #cbd2db;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                            height: 38px;
+                        }
+                        ValueLine { label: "Task"; value: root.task-summary; }
+                        ValueLine { label: "Recipe"; value: root.profile-summary; }
+                        FieldLabel { label: "Model"; }
+                        Text {
+                            text: root.model-summary;
+                            color: #cbd2db;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                            height: 34px;
+                        }
+                        ValueLine { label: "Scale"; value: root.scale-summary; }
+                        ValueLine { label: "Output"; value: root.output-summary; }
+
+                        ThinSeparator { }
+                        Rectangle {
+                            height: 30px;
+                            background: transparent;
+                            Text {
+                                text: "SYSTEM";
+                                color: #e0e5eb;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            FlatButton {
+                                x: parent.width - 68px;
+                                y: 2px;
+                                width: 68px;
+                                text: "Refresh";
+                                compact: true;
+                                active: !root.can-cancel;
+                                clicked => { root.refresh-hardware(); }
+                            }
+                        }
+                        ValueLine { label: "Pressure"; value: root.pressure-text; }
+                        ValueLine { label: "Device"; value: root.device-summary; }
+                        ValueLine { label: "Memory"; value: root.memory-usage-text; }
+                        ProgressTrack {
+                            value: root.memory-usage-ratio;
+                            fill-color: root.memory-usage-ratio > 0.85 ? #e7665b :
+                                root.memory-usage-ratio > 0.65 ? #e3a947 : #54b9dc;
+                        }
+                        Text {
+                            text: root.hardware-summary;
+                            color: #798493;
+                            font-size: 9px;
+                            wrap: word-wrap;
+                            height: 58px;
+                        }
+
+                        ThinSeparator { }
+                        Text {
+                            text: "ESTIMATE";
+                            color: #e0e5eb;
+                            font-size: 11px;
+                            font-weight: 600;
+                            height: 25px;
+                            vertical-alignment: center;
+                        }
+                        ValueLine { label: "Time"; value: root.estimate-time; }
+                        ValueLine { label: "File size"; value: root.estimate-output; }
+                        Text {
+                            text: root.estimate-detail;
+                            color: #76818e;
+                            font-size: 9px;
+                            wrap: word-wrap;
+                            height: 42px;
+                        }
+                        Text {
+                            text: root.estimate-warning;
+                            color: #e2a449;
+                            font-size: 9px;
+                            wrap: word-wrap;
+                            height: root.estimate-warning == "" ? 0px : 58px;
+                            visible: root.estimate-warning != "";
+                        }
+
+                        VerticalLayout {
+                            visible: root.can-open-result;
+                            spacing: 7px;
+                            ThinSeparator { }
+                            Text {
+                                text: "RESULT";
+                                color: #e0e5eb;
+                                font-size: 11px;
+                                font-weight: 600;
+                                height: 24px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: "The latest completed output is ready.";
+                                color: #7e8996;
+                                font-size: 9px;
+                                height: 20px;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: parent.width - 4px;
+                    y: 8px;
+                    width: 2px;
+                    height: parent.height - 16px;
+                    border-radius: 1px;
+                    background: #28313b;
+                    visible: inspector-scroll.viewport-height > inspector-scroll.height;
+
+                    Rectangle {
+                        width: parent.width;
+                        height: max(28px, parent.height * inspector-scroll.height /
+                            inspector-scroll.viewport-height);
+                        y: (parent.height - self.height) *
+                            (-inspector-scroll.viewport-y /
+                                max(1px, inspector-scroll.viewport-height - inspector-scroll.height));
+                        border-radius: 1px;
+                        background: #626e7c;
+                    }
+                }
+            }
+        }
+
+        // Persistent activity strip. It is operational, not an application-brand header.
+        Rectangle {
+            height: 76px;
+            background: #171c24;
+            ThinSeparator { width: parent.width; }
+
+            Text {
+                x: 24px;
+                y: 18px;
+                text: root.status-title;
+                color: #e2e7ed;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            Text {
+                x: 24px;
+                y: 40px;
+                width: root.can-open-result && !root.can-cancel ?
+                    parent.width - 672px : parent.width - 352px;
+                text: root.batch-progress == "" ? root.status-detail :
+                    root.batch-progress + " · " + root.status-detail;
+                color: #818c99;
+                font-size: 9px;
+                overflow: elide;
+            }
+            ProgressTrack {
+                x: 24px;
+                y: 63px;
+                width: root.can-open-result && !root.can-cancel ?
+                    parent.width - 672px : parent.width - 352px;
+                value: root.progress;
+                visible: root.can-cancel || root.progress > 0;
+            }
+
+            HorizontalLayout {
+                x: parent.width - 624px;
+                y: 18px;
+                width: 296px;
+                height: 42px;
+                spacing: 8px;
+                FlatButton {
+                    text: "Open Result";
+                    active: root.can-open-result;
+                    visible: root.can-open-result && !root.can-cancel;
+                    clicked => { root.open-result(); }
+                }
+                FlatButton {
+                    text: "Show in Folder";
+                    active: root.can-open-result;
+                    visible: root.can-open-result && !root.can-cancel;
+                    clicked => { root.reveal-result(); }
+                }
+            }
+
+            // Align the primary action to the center of the 304px inspector above.
+            Rectangle {
+                x: parent.width - 304px;
+                y: 17px;
+                width: 304px;
+                height: 44px;
+                background: transparent;
+
+                FlatButton {
+                    x: (parent.width - self.width) / 2;
+                    width: 236px;
+                    height: parent.height;
+                    text: root.can-cancel ? "Cancel" : root.action-text;
+                    primary: !root.can-cancel;
+                    active: root.can-cancel || root.can-start;
+                    clicked => {
+                        if (root.can-cancel) {
+                            root.cancel-job();
+                        } else {
+                            root.start-job();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

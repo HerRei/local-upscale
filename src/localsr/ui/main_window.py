@@ -560,7 +560,7 @@ class MainWindow(QMainWindow):
         self.live_resource_label.setText("")
         self.btn_open.setEnabled(False)
         self.btn_reveal.setEnabled(False)
-        
+
         raw_note = " | RAW: camera WB → sRGB" if is_raw_input(path) else ""
         self.img_info_label.setText(
             f"{os.path.basename(path)} | {self.image_w}x{self.image_h}{raw_note}"
@@ -590,7 +590,9 @@ class MainWindow(QMainWindow):
             self.update_estimate()
 
     def on_model_info(self, info):
-        expected_filename = os.path.basename(self.model_path) if getattr(self, "model_path", None) else ""
+        expected_filename = (
+            os.path.basename(self.model_path) if getattr(self, "model_path", None) else ""
+        )
         if info.get("filename") and expected_filename and info.get("filename") != expected_filename:
             return
         self.current_model_info = dict(info)
@@ -977,7 +979,7 @@ class MainWindow(QMainWindow):
             self.btn_upscale.setToolTip("")
 
     def on_log(self, data):
-        msg = data.get('message', '')
+        msg = data.get("message", "")
         if msg == "Writing final output...":
             self.progress_label.setText("Saving final image to disk... (this may take a moment)")
         print(f"[{data.get('level', 'info').upper()}] {msg}")

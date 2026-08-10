@@ -29,6 +29,24 @@ def test_quick_and_best_rank_distinct_catalog_models():
     assert best[0].model_id == "hat_l_x4_imagenet"
 
 
+def test_denoise_recipes_rank_fast_and_maximum_fidelity_models():
+    quick = rank_models_for_preset(
+        MODEL_CATALOG,
+        PresetMode.QUICK_DENOISE,
+        purpose=ModelPurpose.DENOISE,
+        output_scale=1,
+    )
+    best = rank_models_for_preset(
+        MODEL_CATALOG,
+        PresetMode.BEST_DENOISE,
+        purpose=ModelPurpose.DENOISE,
+        output_scale=1,
+    )
+
+    assert quick[0].model_id == "denoise_realplksr_1x"
+    assert best[0].model_id == "nafnet_sidd_width64"
+
+
 def test_quick_preset_selects_accelerator_fp16_and_fitting_tile():
     gib = 1024**3
     model = CATALOG_BY_ID["span_x4_official"]

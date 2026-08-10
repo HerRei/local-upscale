@@ -9,8 +9,9 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 ## What it does
 
 - Runs open-source PyTorch upscaling models (HAT, ESRGAN, SwinIR, etc.) via Spandrel.
-- Starts with **Quick** and **Best Quality** modes that choose a compatible model, accelerator,
-  precision, tile size, and overlap while keeping all decisions visible and editable.
+- Reveals **Quick** and **Best** only after the user chooses Upscale, Denoise, or both. Either recipe
+  chooses a compatible model, accelerator, precision, tile size, and overlap, then starts immediately;
+  when its model is missing, LocalSR downloads and verifies it before starting automatically.
 - Lets the user choose the final enlargement up to the model's native scale (for example, 2×,
   3×, or native 4× from a HAT 4× model).
 - Performs robust tiled inference to keep memory usage low and prevent system crashes on large images.
@@ -31,14 +32,16 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 
 - No generative AI (Stable Diffusion, outpainting, generative fill).
 - No bundled model weights. Curated checkpoints are downloaded only when selected.
-- No batch processing or video (first version focuses on single-image stability).
+- No video processing. Batch mode deliberately runs images sequentially so only one inference job
+  occupies the accelerator at a time.
 - No cloud processing or analytics.
 
 ## Current Platform Support
 
-- macOS with Apple Silicon MPS or CPU
-- Windows with NVIDIA CUDA, supported Intel XPU GPUs/iGPUs, or CPU
-- Linux with NVIDIA CUDA, AMD ROCm, supported Intel XPU GPUs/iGPUs, or CPU
+The 0.0.1 alpha packages support Apple Silicon MPS or CPU on macOS and CPU processing on Windows
+and Linux. Source installations can additionally use Windows NVIDIA CUDA or supported Intel XPU
+GPUs/iGPUs, and Linux NVIDIA CUDA, AMD ROCm, or supported Intel XPU GPUs/iGPUs when their installed
+PyTorch build exposes that backend.
 
 The release workflow builds a macOS Apple Silicon DMG, Windows x86-64 Setup executable, and Linux
 x86-64 AppImage plus portable archive. Builds are unsigned unless the repository signing secrets
@@ -65,11 +68,23 @@ The model menu is a generic catalog rather than a HAT-only selector:
 | HAT-S ×4 | High-quality laptop/default model | 81 MB | Apache-2.0 |
 | HAT ×4 ImageNet | High-quality balanced model | 85 MB | Apache-2.0 |
 | HAT-L ×4 ImageNet | Maximum-quality, high-cost model | 166 MB | Apache-2.0 |
+| RealPLKSR Denoise ×1 | Fast photographic denoising | 30 MB | CC-BY-4.0 |
+| SCUNet Blind Denoise ×1 | Strong general-purpose blind denoising | 72 MB | Apache-2.0 |
+| NAFNet SIDD Width64 ×1 | Maximum-fidelity real camera denoising | 464 MB | MIT |
+
+The speed and quality labels are relative to this curated LocalSR catalog and to each model's
+intended degradation; they are not claims of global state of the art across every restoration
+benchmark or source image.
 
 **Quick** prioritizes the fastest suitable catalog model and a safe accelerated FP16 configuration
-when both the model and device support it. **Best Quality** prioritizes the highest quality tier and
-FP32. These are transparent presets, not separate inference implementations: applying one fills in
-the same device, scale, tile, halo, and precision settings found under Advanced.
+when both the model and device support it. **Best** prioritizes the highest-fidelity compatible
+checkpoint and FP32. For denoising, Quick chooses the lightweight RealPLKSR checkpoint; Best chooses
+the official NAFNet SIDD Width64 checkpoint. SCUNet remains available as the stronger general blind
+denoiser when the source noise is not specifically camera/sensor noise. These are conventional
+image-to-image restoration networks, not generative synthesis.
+
+Quick and Best are immediate commands, not configuration toggles. Their derived settings remain
+visible and editable under Manual Configuration and Advanced for subsequent runs.
 
 Each download is pinned to a specific remote revision and verified against an embedded SHA-256
 digest before the temporary file is atomically installed. A failed or cancelled download removes
@@ -77,7 +92,10 @@ its partial file. Models live in the platform application-data directory and are
 the LocalSR installer. Every entry records its source, author, architecture, intended content, and
 license. SPAN comes from the [official SPAN project](https://github.com/hongyuanyu/SPAN), Nomos Web
 Photo comes from [Philip Hofmann's model release](https://github.com/Phhofm/models/releases/tag/4xNomosWebPhoto_RealPLKSR),
-and HAT comes from the [official HAT project](https://github.com/XPixelGroup/HAT).
+HAT comes from the [official HAT project](https://github.com/XPixelGroup/HAT), SCUNet comes from
+the [official SCUNet project](https://github.com/cszn/SCUNet), and NAFNet comes from the
+[official NAFNet project](https://github.com/megvii-research/NAFNet). The NAFNet download points to
+a pinned checkpoint uploaded by the project's coauthor and is verified before installation.
 
 Choose **Use my own checkpoint…** to load any local `.pth`, `.pt`, or `.safetensors` model that
 Spandrel supports.
@@ -88,7 +106,7 @@ Spandrel supports.
    ```bash
    python3.11 -m venv .venv
    source .venv/bin/activate
-   pip install -e ".[dev]"
+   pip install -e .
    ```
 2. Run the application:
    ```bash
@@ -96,8 +114,8 @@ Spandrel supports.
    ```
    (Alternatively, `python -m localsr`)
 
-The modern Qt Quick interface is the default. `localsr --legacy` remains available as a fallback
-while the compatibility controller is gradually extracted from the original widget interface.
+The Slint interface is the default. `localsr --legacy` remains temporarily available as an optional
+rollback path for the previous QWidget interface; install `.[legacy]` if you need it.
 
 ## Supported Formats
 
@@ -155,11 +173,20 @@ rendering therefore does not create a second full-size output in GUI memory.
 
 ## Interface development
 
-The visible interface is Qt Quick/QML in `src/localsr/ui/qml`. Open
-`src/localsr/ui/qml/LocalSR.qmlproject` in Qt Design Studio for a visual, what-you-see-is-what-you-get
-canvas. `DesignMock.qml` supplies realistic design-time values; the Python controller replaces it at
-runtime. Keep Torch and Spandrel out of this layer—the hidden compatibility controller and isolated
-worker preserve the existing tested safety behavior.
+The visible interface is written in Slint in `src/localsr/ui/slint/main.slint`, with reusable controls
+in `components.slint`. The Slint extension for VS Code provides syntax support and a live visual
+preview while editing these files. `slint_app.py` owns presentation state and speaks JSON lines to
+the isolated worker through `slint_worker.py`; neither the Slint files nor the UI host imports Torch
+or Spandrel.
+
+The workspace follows a document-tool layout: import, task, model, output, and Advanced controls are
+in the leading pane; the center is reserved for the image; and the trailing inspector is read-only
+context for the selected input, active recipe, device pressure, estimates, and completed result. The
+redundant in-app branding bar was removed so the operating-system title bar is the only static header.
+
+File selection uses the host operating system's own dialog service, so the normal application does
+not carry a second GUI toolkit. PySide is an optional dependency only for the temporary `--legacy`
+rollback path and development tests.
 
 ## Native packages
 
@@ -180,13 +207,14 @@ workflow procedure are in [docs/releasing.md](docs/releasing.md).
 
 Run tests using:
 ```bash
+python -m pip install -e ".[dev]"
 python -m pytest -q
 ruff check src tests smoke_test_gui.py
 ruff format --check src tests smoke_test_gui.py
-pyside6-qmllint --unqualified disable --max-warnings 0 src/localsr/ui/qml/*.qml
+python -m localsr.ui.slint_check
 ```
 
-GitHub Actions runs the suite independently on Windows, macOS, and Linux, compiles the QML files,
+GitHub Actions runs the suite independently on Windows, macOS, and Linux, compiles the Slint files,
 and builds a wheel and source distribution on every push and pull request. The separate native
 release workflow smoke-tests each packaged GUI/worker pair before publishing installers.
 
@@ -203,5 +231,6 @@ can execute arbitrary code. Prefer `.safetensors` for custom models when availab
 
 ## Licensing
 
-LocalSR is distributed under the [MIT License](LICENSE). Spandrel, PyTorch, and individual model
-checkpoints retain their own licenses.
+LocalSR is distributed under the [MIT License](LICENSE). Slint, Spandrel, PyTorch, and individual
+model checkpoints retain their own licenses; review Slint's royalty-free/GPL/commercial terms for
+the way you distribute the application.

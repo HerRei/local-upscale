@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QSettings, QTimer, QUrl, Signal, Slot
 
-from localsr.core.estimator import format_bytes
+from localsr.core.estimator import format_bytes, format_duration_range
 from localsr.core.image_formats import is_raw_input
 from localsr.core.model_catalog import MODEL_CATALOG, ModelPurpose
 from localsr.core.presets import (
@@ -12,6 +12,7 @@ from localsr.core.presets import (
     PresetMode,
     rank_models_for_preset,
     resolve_settings_for_model,
+    select_model_for_preset,
 )
 from localsr.protocol.messages import CapabilitiesRequest, PreviewRequest
 
@@ -388,18 +389,18 @@ class LocalSRController(QObject):
         if self.backend.image_path:
             self._load_preview(self.backend.image_path)
 
-    @Slot('QVariantList')
+    @Slot("QVariantList")
     def addImagesFromUrls(self, urls):
         paths = []
         for u in urls:
-            u_str = u.toString() if hasattr(u, 'toString') else str(u)
+            u_str = u.toString() if hasattr(u, "toString") else str(u)
             path = QUrl(u_str).toLocalFile() if u_str.startswith("file:") else u_str
             if path:
                 paths.append(path)
-        
+
         if not paths:
             return
-            
+
         if self.backend.current_job_id:
             # Add to existing batch
             self._batch_queue.extend(paths)
@@ -422,15 +423,16 @@ class LocalSRController(QObject):
         self._batch_current += 1
         path = self._batch_queue.pop(0)
         self.backend.set_image(path)
-        
+
         if self.backend.image_path:
             self._load_preview(self.backend.image_path)
-            
+
         self.stateChanged.emit()
-        
+
         # Start immediately if a preset or settings are ready
         if self.backend.btn_upscale.isEnabled():
             from PySide6.QtCore import QTimer
+
             # Slight delay to let UI breathe and load preview
             QTimer.singleShot(200, self.startUpscale)
 
@@ -453,10 +455,6 @@ class LocalSRController(QObject):
         self.stateChanged.emit()
 
     def _update_preset_estimates(self):
-        from localsr.core.presets import PresetMode, resolve_settings_for_model, select_model_for_preset
-        from localsr.core.estimator import format_duration_range
-        from localsr.core.model_catalog import MODEL_CATALOG, ModelPurpose
-        
         pairs = [
             (PresetMode.QUICK_UPSCALE, "_quick_upscale_estimate"),
             (PresetMode.BEST_UPSCALE, "_best_upscale_estimate"),
@@ -475,10 +473,16 @@ class LocalSRController(QObject):
                 else:
                     scale = 4
                     purpose = ModelPurpose.PHOTO
-                model = select_model_for_preset(MODEL_CATALOG, mode, output_scale=scale, purpose=purpose, installed_model_ids=self._installed_ids())
+                model = select_model_for_preset(
+                    MODEL_CATALOG,
+                    mode,
+                    output_scale=scale,
+                    purpose=purpose,
+                    installed_model_ids=self._installed_ids(),
+                )
                 if not model:
                     continue
-                
+
                 decision = resolve_settings_for_model(
                     model=model,
                     mode=mode,
@@ -486,14 +490,23 @@ class LocalSRController(QObject):
                     image_width=self.backend.image_w,
                     image_height=self.backend.image_h,
                     output_scale=model.native_scale,
-                    available_system_memory=int(self.backend.capability_report.get("system_ram_available", 0)) or None,
+                    available_system_memory=int(
+                        self.backend.capability_report.get("system_ram_available", 0)
+                    )
+                    or None,
                     available_disk=None,
-                    model_half_supported=bool(self.backend.current_model_info.get("half_supported", False)),
+                    model_half_supported=bool(
+                        self.backend.current_model_info.get("half_supported", False)
+                    ),
                     parameter_count=int(self.backend.current_model_info.get("parameter_count", 0)),
-                    model_file_size=int(self.backend.current_model_info.get("model_file_size", model.size_bytes)),
+                    model_file_size=int(
+                        self.backend.current_model_info.get("model_file_size", model.size_bytes)
+                    ),
                     installed_model_ids=self._installed_ids(),
                 )
-                est_str = format_duration_range(decision.estimate.seconds_low, decision.estimate.seconds_high)
+                est_str = format_duration_range(
+                    decision.estimate.seconds_low, decision.estimate.seconds_high
+                )
                 setattr(self, attr, f"({est_str})")
             except Exception:
                 setattr(self, attr, "")
@@ -601,6 +614,7 @@ class LocalSRController(QObject):
                         self.backend.inspect_selected_model()
                     else:
                         from PySide6.QtCore import QTimer
+
                         QTimer.singleShot(0, self._apply_pending_preset)
             else:
                 self.backend.combo_model.setCurrentIndex(index)
@@ -686,7 +700,7 @@ class LocalSRController(QObject):
             if scale_index >= 0:
                 self.backend.combo_output_scale.setCurrentIndex(scale_index)
             self.backend.update_estimate()
-            mode_name = name.replace("_", " ").title()
+            mode_name = self._pending_preset.value.replace("_", " ").title()
             self._preset_message = (
                 f"{mode_name} prepared: {model.name} · {decision.device_id} · "
                 f"{decision.precision.upper()} · {decision.tile_size}px tiles."
@@ -784,8 +798,11 @@ class LocalSRController(QObject):
         self.stateChanged.emit()
 
     def _on_model_info(self, data):
-        import os
-        expected_filename = os.path.basename(self.backend.model_path) if getattr(self.backend, "model_path", None) else ""
+        expected_filename = (
+            os.path.basename(self.backend.model_path)
+            if getattr(self.backend, "model_path", None)
+            else ""
+        )
         if data.get("filename") and expected_filename and data.get("filename") != expected_filename:
             return
         if self._pending_preset is not None:

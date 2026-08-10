@@ -12,8 +12,37 @@ env:
   PYTHONUTF8: "1"
 
 jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Match package version and release tag
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          with Path("pyproject.toml").open("rb") as stream:
+              version = tomllib.load(stream)["project"]["version"]
+          if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+              raise SystemExit(f"project version is not a three-part version: {version}")
+
+          if os.environ.get("GITHUB_REF_TYPE") == "tag":
+              tag = os.environ["GITHUB_REF_NAME"]
+              if tag != f"v{version}" and not tag.startswith(f"v{version}-"):
+                  raise SystemExit(
+                      f"tag {tag!r} does not match project version {version!r}"
+                  )
+          print(f"Validated LocalSR {version}")
+          PY
+
   macos:
     name: macOS Apple Silicon DMG
+    needs: validate
     runs-on: macos-14
     timeout-minutes: 90
     env:
@@ -33,6 +62,8 @@ jobs:
           pyinstaller --clean --noconfirm packaging/localsr.spec
       - name: Smoke-test packaged GUI
         run: dist/LocalSR.app/Contents/MacOS/LocalSR --smoke-test
+      - name: Validate macOS foreground application metadata
+        run: python packaging/smoke_macos_bundle.py dist/LocalSR.app
       - name: Smoke-test packaged worker
         run: python packaging/smoke_worker.py dist/LocalSR.app/Contents/MacOS/LocalSRWorker
       - name: Import Apple signing certificate
@@ -79,6 +110,21 @@ jobs:
             --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple release/LocalSR-macOS-arm64.dmg
+      - name: Mount and smoke-test final DMG
+        shell: bash
+        run: |
+          mount_dir="$RUNNER_TEMP/localsr-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach release/LocalSR-macOS-arm64.dmg \
+            -readonly -nobrowse -mountpoint "$mount_dir"
+          cleanup() { hdiutil detach "$mount_dir" || true; }
+          trap cleanup EXIT
+          test -L "$mount_dir/Applications"
+          "$mount_dir/LocalSR.app/Contents/MacOS/LocalSR" --smoke-test
+          python packaging/smoke_worker.py \
+            "$mount_dir/LocalSR.app/Contents/MacOS/LocalSRWorker"
+          hdiutil detach "$mount_dir"
+          trap - EXIT
       - uses: actions/upload-artifact@v7
         with:
           name: LocalSR-macOS-arm64
@@ -87,6 +133,7 @@ jobs:
 
   windows:
     name: Windows x86-64 installer
+    needs: validate
     runs-on: windows-2022
     timeout-minutes: 90
     env:
@@ -143,6 +190,39 @@ jobs:
           & signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
             /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD `
             release\LocalSR-Windows-x86_64-Setup.exe
+      - name: Install and smoke-test final Windows installer
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "LocalSR-install-test"
+          $installer = Resolve-Path "release\LocalSR-Windows-x86_64-Setup.exe"
+          $install = Start-Process -FilePath $installer -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=$installDir"
+          ) -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+
+          $gui = Join-Path $installDir "LocalSR.exe"
+          $worker = Join-Path $installDir "LocalSRWorker.exe"
+          if (-not (Test-Path $gui)) { throw "Installed GUI executable is missing" }
+          if (-not (Test-Path $worker)) { throw "Installed worker executable is missing" }
+
+          $env:LOCALSR_SMOKE_REPORT = Join-Path $env:RUNNER_TEMP "localsr-installed-smoke.txt"
+          $process = Start-Process -FilePath $gui -ArgumentList "--smoke-test" -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            throw "Installed GUI timed out"
+          }
+          if ($process.ExitCode -ne 0) { throw "Installed GUI exited with $($process.ExitCode)" }
+          if ((Get-Content -Raw $env:LOCALSR_SMOKE_REPORT).Trim() -ne "package-ready") {
+            throw "Installed GUI did not validate its UI bundle"
+          }
+          python packaging/smoke_worker.py $worker
+
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          if (-not (Test-Path $uninstaller)) { throw "Uninstaller is missing" }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+          ) -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
       - uses: actions/upload-artifact@v7
         with:
           name: LocalSR-Windows-x86_64
@@ -151,6 +231,7 @@ jobs:
 
   linux:
     name: Linux x86-64 AppImage
+    needs: validate
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
@@ -160,7 +241,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install Linux GUI runtime libraries
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libegl1 libgl1 libxkbcommon0 libwayland-client0 xvfb
       - name: Install CPU PyTorch
         run: python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
       - name: Install build dependencies
@@ -170,9 +253,7 @@ jobs:
           python packaging/build_icons.py
           pyinstaller --clean --noconfirm packaging/localsr.spec
       - name: Smoke-test packaged GUI
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: timeout 30 dist/LocalSR/LocalSR --smoke-test
+        run: xvfb-run -a timeout 30 dist/LocalSR/LocalSR --smoke-test
       - name: Smoke-test packaged worker
         run: python packaging/smoke_worker.py dist/LocalSR/LocalSRWorker
       - name: Download and verify official appimagetool
@@ -195,6 +276,17 @@ jobs:
         run: |
           packaging/linux/build_appimage.sh dist/LocalSR "$PWD/appimagetool"
           tar -C dist -czf release/LocalSR-Linux-x86_64.tar.gz LocalSR
+      - name: Smoke-test final Linux distributables
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          xvfb-run -a timeout 60 \
+            release/LocalSR-Linux-x86_64.AppImage --smoke-test
+          portable_dir="$RUNNER_TEMP/localsr-portable"
+          mkdir -p "$portable_dir"
+          tar -xzf release/LocalSR-Linux-x86_64.tar.gz -C "$portable_dir"
+          xvfb-run -a timeout 60 "$portable_dir/LocalSR/LocalSR" --smoke-test
+          python packaging/smoke_worker.py "$portable_dir/LocalSR/LocalSRWorker"
       - uses: actions/upload-artifact@v7
         with:
           name: LocalSR-Linux-x86_64
@@ -211,11 +303,33 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: LocalSR-*
           path: release-assets
+      - name: Prepare checksummed release assets
+        shell: bash
+        run: |
+          mkdir upload
+          while IFS= read -r -d '' asset; do
+            cp "$asset" "upload/$(basename "$asset")"
+          done < <(find release-assets -type f -print0)
+          test "$(find upload -maxdepth 1 -type f | wc -l)" -eq 4
+          (cd upload && sha256sum -- * > SHA256SUMS.txt)
       - name: Create release and upload installers
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/*/* --generate-notes --verify-tag
+        run: |
+          version_label="${GITHUB_REF_NAME#v}"
+          release_title="LocalSR ${version_label/-alpha/ Alpha}"
+          release_args=(
+            --notes-file RELEASE_NOTES.md
+            --title "$release_title"
+            --verify-tag
+          )
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" upload/* "${release_args[@]}"
