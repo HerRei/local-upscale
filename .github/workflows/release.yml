@@ -117,13 +117,23 @@ jobs:
           mkdir -p "$mount_dir"
           hdiutil attach release/LocalSR-macOS-arm64.dmg \
             -readonly -nobrowse -mountpoint "$mount_dir"
-          cleanup() { hdiutil detach "$mount_dir" || true; }
+          detach_dmg() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if hdiutil detach "$mount_dir"; then
+                return 0
+              fi
+              sleep $((attempt * 2))
+            done
+            hdiutil detach -force "$mount_dir"
+          }
+          cleanup() { detach_dmg || true; }
           trap cleanup EXIT
           test -L "$mount_dir/Applications"
           "$mount_dir/LocalSR.app/Contents/MacOS/LocalSR" --smoke-test
           python packaging/smoke_worker.py \
             "$mount_dir/LocalSR.app/Contents/MacOS/LocalSRWorker"
-          hdiutil detach "$mount_dir"
+          detach_dmg
           trap - EXIT
       - uses: actions/upload-artifact@v7
         with:
