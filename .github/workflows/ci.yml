@@ -52,7 +52,7 @@ jobs:
         if: runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          libegl1 libgl1 libxkbcommon0 libwayland-client0 xvfb
+          libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 xvfb
       - name: Install CPU PyTorch on Linux and Windows
         if: runner.os != 'macOS'
         shell: bash
