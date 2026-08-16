@@ -88,12 +88,6 @@ def main():
     print("Upgrading pip...")
     subprocess.run([pip_exe, "install", "--upgrade", "pip"], check=True)
     
-    print("Installing core LocalSR dependencies...")
-    subprocess.run([pip_exe, "install", "-e", "."], check=True)
-    
-    print("\nUninstalling any existing PyTorch versions to avoid conflicts...")
-    subprocess.run([pip_exe, "uninstall", "-y", "torch", "torchvision", "torchaudio", "intel-extension-for-pytorch"], check=False)
-    
     print(f"\nInstalling selected PyTorch backend...")
     if choice == "1":
         subprocess.run([pip_exe, "install", "torch", "torchvision"], check=True)
@@ -112,6 +106,9 @@ def main():
     else:
         print("Invalid choice. Exiting.")
         sys.exit(1)
+
+    print("\nInstalling core LocalSR dependencies...")
+    subprocess.run([pip_exe, "install", "-e", "."], check=True)
         
     print("\n=========================================")
     print("Installation complete!")
