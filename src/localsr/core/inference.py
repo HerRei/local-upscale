@@ -4,6 +4,10 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+try:
+    import intel_extension_for_pytorch as ipex
+except ImportError:
+    pass
 import torch.nn.functional as F
 
 from .output_writer import OutputWriter
