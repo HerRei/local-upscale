@@ -103,11 +103,17 @@ Spandrel supports.
 ## Launching LocalSR
 
 1. Create a virtual environment and install dependencies:
-   ```bash
-   python3.11 -m venv .venv
-   source .venv/bin/activate
-   pip install -e .
-   ```
+   - **Linux:** Run the included installation script to auto-detect your GPU and install the matching PyTorch version:
+     ```bash
+     chmod +x install_linux.sh
+     ./install_linux.sh
+     ```
+   - **Other OS / Manual:**
+     ```bash
+     python3.11 -m venv .venv
+     source .venv/bin/activate
+     pip install -e .
+     ```
 2. Run the application:
    ```bash
    localsr
