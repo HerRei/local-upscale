@@ -7,10 +7,6 @@ from pathlib import Path
 
 import torch
 
-try:
-    import intel_extension_for_pytorch as ipex
-except ImportError:
-    pass
 
 def _system_memory() -> tuple[int, int]:
     if sys.platform == "win32":
