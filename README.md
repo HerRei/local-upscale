@@ -102,23 +102,19 @@ Spandrel supports.
 
 ## Launching LocalSR
 
-1. Create a virtual environment and install dependencies:
-   - **Linux:** Run the included installation script to auto-detect your GPU and install the matching PyTorch version:
-     ```bash
-     chmod +x install_linux.sh
-     ./install_linux.sh
-     ```
-   - **Other OS / Manual:**
-     ```bash
-     python3.11 -m venv .venv
-     source .venv/bin/activate
-     pip install -e .
-     ```
+1. Run the interactive installation script (requires Python 3.11):
+   ```bash
+   python3 install.py
+   ```
+   *The script will detect your GPU and ask you to select the correct PyTorch backend (CUDA, ROCm, XPU, or CPU).*
+
 2. Run the application:
    ```bash
-   localsr
+   # On Linux/macOS:
+   .venv/bin/python3 -m localsr
+   # On Windows:
+   .venv\Scripts\python -m localsr
    ```
-   (Alternatively, `python -m localsr`)
 
 The Slint interface is the default. `localsr --legacy` remains temporarily available as an optional
 rollback path for the previous QWidget interface; install `.[legacy]` if you need it.
