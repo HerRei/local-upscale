@@ -40,7 +40,7 @@ export component DesktopComboBox inherits Rectangle {
         width: parent.width - 34px;
         text: root.current-value;
         color: root.enabled ? #e2e7ed : #717b88;
-        font-size: 15px;
+        font-size: 10px;
         overflow: elide;
         vertical-alignment: center;
     }
@@ -50,7 +50,7 @@ export component DesktopComboBox inherits Rectangle {
         width: 16px;
         text: "⌄";
         color: root.enabled ? #aeb7c2 : #626b76;
-        font-size: 18px;
+        font-size: 12px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -148,7 +148,7 @@ export component DesktopComboBox inherits Rectangle {
                                 width: parent.width - 16px;
                                 text: value;
                                 color: #e4e9ef;
-                                font-size: 15px;
+                                font-size: 10px;
                                 overflow: elide;
                                 vertical-alignment: center;
                             }
@@ -196,7 +196,7 @@ export component SectionTitle inherits Rectangle {
         Text {
             text: root.step;
             color: #b8c1cc;
-            font-size: 16px;
+            font-size: 11px;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -208,7 +208,7 @@ export component SectionTitle inherits Rectangle {
         height: 26px;
         text: root.title;
         color: #e4e8ed;
-        font-size: 16px;
+        font-size: 11px;
         font-weight: 600;
         vertical-alignment: center;
     }
@@ -281,7 +281,7 @@ export component SegmentedButton inherits Rectangle {
     Text {
         text: root.text;
         color: root.active ? #eef2f7 : #707984;
-        font-size: 16px;
+        font-size: 11px;
         font-weight: root.selected ? 600 : 500;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -343,7 +343,7 @@ export component TaskChoice inherits Rectangle {
         height: 20px;
         text: root.title;
         color: root.active ? #e5e9ee : #69727d;
-        font-size: 18px;
+        font-size: 12px;
         vertical-alignment: center;
     }
 
@@ -354,7 +354,7 @@ export component TaskChoice inherits Rectangle {
         height: 17px;
         text: root.detail;
         color: root.active ? #7f8a98 : #555e69;
-        font-size: 15px;
+        font-size: 10px;
         vertical-alignment: center;
     }
 
@@ -397,7 +397,7 @@ export component CheckControl inherits Rectangle {
         Text {
             text: root.checked ? "✓" : "";
             color: white;
-            font-size: 16px;
+            font-size: 11px;
             font-weight: 700;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -409,7 +409,7 @@ export component CheckControl inherits Rectangle {
         width: parent.width - 23px;
         text: root.text;
         color: root.active ? #c9d0d9 : #69727d;
-        font-size: 15px;
+        font-size: 10px;
         vertical-alignment: center;
     }
 
@@ -443,7 +443,7 @@ export component FieldLabel inherits Text {
     in property <string> label: "Label";
     text: root.label;
     color: #8d98a6;
-    font-size: 15px;
+    font-size: 10px;
     height: 18px;
     vertical-alignment: center;
 }
@@ -457,7 +457,7 @@ export component ValueLine inherits Rectangle {
     Text {
         text: root.label;
         color: #8d98a6;
-        font-size: 15px;
+        font-size: 10px;
         vertical-alignment: center;
         width: 48%;
     }
@@ -467,7 +467,7 @@ export component ValueLine inherits Rectangle {
         width: 52%;
         text: root.value;
         color: #c8d0da;
-        font-size: 15px;
+        font-size: 10px;
         horizontal-alignment: right;
         vertical-alignment: center;
         overflow: elide;

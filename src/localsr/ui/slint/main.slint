@@ -195,7 +195,7 @@ export component MainWindow inherits Window {
                             text: root.batch-mode ? "Add images to the queue below." :
                                 "Choose one image to work on.";
                             color: #7f8996;
-                            font-size: 13px;
+                            font-size: 9px;
                             height: 18px;
                             vertical-alignment: center;
                         }
@@ -224,7 +224,7 @@ export component MainWindow inherits Window {
                                 text: root.batch-mode ? "Batch queue (" + root.queue-items.length + ")" :
                                     "Selected image";
                                 color: #d7dde5;
-                                font-size: 15px;
+                                font-size: 10px;
                                 font-weight: 600;
                                 vertical-alignment: center;
                             }
@@ -258,7 +258,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: "▧";
                                         color: #c6ced8;
-                                        font-size: 15px;
+                                        font-size: 10px;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
@@ -271,7 +271,7 @@ export component MainWindow inherits Window {
                                     height: 18px;
                                     text: item.name;
                                     color: #dce2e9;
-                                    font-size: 15px;
+                                    font-size: 10px;
                                     overflow: elide;
                                     vertical-alignment: center;
                                 }
@@ -283,7 +283,7 @@ export component MainWindow inherits Window {
                                     height: 14px;
                                     text: item.detail;
                                     color: #76818e;
-                                    font-size: 12px;
+                                    font-size: 8px;
                                     overflow: elide;
                                 }
 
@@ -293,7 +293,7 @@ export component MainWindow inherits Window {
                                     height: parent.height;
                                     text: "×";
                                     color: remove-touch.has-hover ? #ffffff : #9aa4b0;
-                                    font-size: 22px;
+                                    font-size: 15px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -320,7 +320,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: "What should LocalSR do?";
                             color: #7f8996;
-                            font-size: 13px;
+                            font-size: 9px;
                             height: 16px;
                         }
                         TaskChoice {
@@ -352,7 +352,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: "RUN AN AUTOMATIC RECIPE";
                                 color: #aab3bf;
-                                font-size: 13px;
+                                font-size: 9px;
                                 font-weight: 600;
                                 height: 20px;
                                 vertical-alignment: bottom;
@@ -377,7 +377,7 @@ export component MainWindow inherits Window {
                                     "Starts immediately. A required model is downloaded first." :
                                     "Add an image to enable Quick and Best.";
                                 color: #7c8794;
-                                font-size: 12px;
+                                font-size: 8px;
                                 wrap: word-wrap;
                                 height: 25px;
                             }
@@ -395,7 +395,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.model-description;
                                 color: #858f9c;
-                                font-size: 13px;
+                                font-size: 9px;
                                 wrap: word-wrap;
                                 height: 42px;
                             }
@@ -413,7 +413,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.model-status;
                                 color: #7d8895;
-                                font-size: 12px;
+                                font-size: 8px;
                                 wrap: word-wrap;
                                 height: 30px;
                             }
@@ -462,7 +462,7 @@ export component MainWindow inherits Window {
                                         width: parent.width - 14px;
                                         text: root.output-directory;
                                         color: #8e98a5;
-                                        font-size: 12px;
+                                        font-size: 8px;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
@@ -492,7 +492,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: "ADVANCED";
                                     color: #dce2e9;
-                                    font-size: 15px;
+                                    font-size: 10px;
                                     font-weight: 600;
                                     vertical-alignment: center;
                                 }
@@ -501,7 +501,7 @@ export component MainWindow inherits Window {
                                     width: 20px;
                                     text: root.advanced-open ? "⌃" : "⌄";
                                     color: #cbd2db;
-                                    font-size: 21px;
+                                    font-size: 14px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -687,7 +687,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: "‹  ›";
                                     color: #f1f3f6;
-                                    font-size: 18px;
+                                    font-size: 12px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -700,7 +700,7 @@ export component MainWindow inherits Window {
                         height: parent.height;
                         text: "Add an image to begin";
                         color: #4f5966;
-                        font-size: 24px;
+                        font-size: 16px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         visible: !root.image-ready;
@@ -719,7 +719,7 @@ export component MainWindow inherits Window {
                             width: parent.width - 16px;
                             text: root.source-label;
                             color: #e2e6eb;
-                            font-size: 15px;
+                            font-size: 10px;
                             overflow: elide;
                             vertical-alignment: center;
                         }
@@ -738,7 +738,7 @@ export component MainWindow inherits Window {
                             width: parent.width - 16px;
                             text: root.result-label;
                             color: #e2e6eb;
-                            font-size: 15px;
+                            font-size: 10px;
                             horizontal-alignment: right;
                             overflow: elide;
                             vertical-alignment: center;
@@ -859,7 +859,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: "JOB INSPECTOR";
                             color: #e0e5eb;
-                            font-size: 16px;
+                            font-size: 11px;
                             font-weight: 600;
                             height: 26px;
                             vertical-alignment: center;
@@ -869,7 +869,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.input-summary;
                             color: #cbd2db;
-                            font-size: 15px;
+                            font-size: 10px;
                             wrap: word-wrap;
                             height: 38px;
                         }
@@ -879,7 +879,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.model-summary;
                             color: #cbd2db;
-                            font-size: 15px;
+                            font-size: 10px;
                             wrap: word-wrap;
                             height: 34px;
                         }
@@ -893,7 +893,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: "SYSTEM";
                                 color: #e0e5eb;
-                                font-size: 16px;
+                                font-size: 11px;
                                 font-weight: 600;
                                 vertical-alignment: center;
                             }
@@ -918,7 +918,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.hardware-summary;
                             color: #798493;
-                            font-size: 13px;
+                            font-size: 9px;
                             wrap: word-wrap;
                             height: 58px;
                         }
@@ -927,7 +927,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: "ESTIMATE";
                             color: #e0e5eb;
-                            font-size: 16px;
+                            font-size: 11px;
                             font-weight: 600;
                             height: 25px;
                             vertical-alignment: center;
@@ -937,14 +937,14 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.estimate-detail;
                             color: #76818e;
-                            font-size: 13px;
+                            font-size: 9px;
                             wrap: word-wrap;
                             height: 42px;
                         }
                         Text {
                             text: root.estimate-warning;
                             color: #e2a449;
-                            font-size: 13px;
+                            font-size: 9px;
                             wrap: word-wrap;
                             height: root.estimate-warning == "" ? 0px : 58px;
                             visible: root.estimate-warning != "";
@@ -957,7 +957,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: "RESULT";
                                 color: #e0e5eb;
-                                font-size: 16px;
+                                font-size: 11px;
                                 font-weight: 600;
                                 height: 24px;
                                 vertical-alignment: center;
@@ -965,7 +965,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: "The latest completed output is ready.";
                                 color: #7e8996;
-                                font-size: 13px;
+                                font-size: 9px;
                                 height: 20px;
                             }
                         }
@@ -1006,7 +1006,7 @@ export component MainWindow inherits Window {
                 y: 18px;
                 text: root.status-title;
                 color: #e2e7ed;
-                font-size: 18px;
+                font-size: 12px;
                 font-weight: 600;
             }
             Text {
@@ -1017,7 +1017,7 @@ export component MainWindow inherits Window {
                 text: root.batch-progress == "" ? root.status-detail :
                     root.batch-progress + " · " + root.status-detail;
                 color: #818c99;
-                font-size: 13px;
+                font-size: 9px;
                 overflow: elide;
             }
             ProgressTrack {
