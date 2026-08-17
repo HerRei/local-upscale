@@ -65,60 +65,8 @@ class CatalogModel:
 
 MODEL_CATALOG = (
     CatalogModel(
-        model_id="span_x4_official",
-        name="SPAN ×4 — Ultra Fast",
-        filename="4x-spanx4-ch48.pth",
-        description=(
-            "The official lightweight SPAN ×4 checkpoint. Fastest recommended choice for "
-            "clean images and everyday upscaling."
-        ),
-        size_bytes=9_004_922,
-        sha256="c79e716b8eb24182c1d7fcc74fa10ae074bdb34fee7c6e67c73053ff5498c667",
-        download_url=(
-            "https://objectstorage.us-phoenix-1.oraclecloud.com/n/ax6ygfvpvzka/b/"
-            "open-modeldb-files/o/4x-spanx4-ch48.pth"
-        ),
-        architecture="SPAN",
-        native_scale=4,
-        purposes=(ModelPurpose.GENERAL, ModelPurpose.PHOTO, ModelPurpose.ILLUSTRATION),
-        quality_tier=QualityTier.STANDARD,
-        speed_tier=SpeedTier.FAST,
-        recommended_halo=16,
-        source_url="https://github.com/hongyuanyu/SPAN",
-        license_name="Apache-2.0",
-        author="Hongyuan Yu and SPAN contributors",
-        memory_factor=0.18,
-        time_factor=0.12,
-    ),
-    CatalogModel(
-        model_id="nomos_web_photo_realplksr_x4",
-        name="Nomos Web Photo ×4 — Fast Photo",
-        filename="4xNomosWebPhoto_RealPLKSR.pth",
-        description=(
-            "A compact RealPLKSR model trained for photographs with realistic blur, noise, "
-            "JPEG and WebP degradation."
-        ),
-        size_bytes=29_683_482,
-        sha256="a9db66c9b674c6a5025b6ef3bee71a57c33b8605d8a2de0980470f89002efbbe",
-        download_url=(
-            "https://github.com/Phhofm/models/releases/download/"
-            "4xNomosWebPhoto_RealPLKSR/4xNomosWebPhoto_RealPLKSR.pth"
-        ),
-        architecture="RealPLKSR",
-        native_scale=4,
-        purposes=(ModelPurpose.PHOTO, ModelPurpose.DENOISE),
-        quality_tier=QualityTier.HIGH,
-        speed_tier=SpeedTier.FAST,
-        recommended_halo=16,
-        source_url=("https://github.com/Phhofm/models/releases/tag/4xNomosWebPhoto_RealPLKSR"),
-        license_name="CC-BY-4.0",
-        author="Philip Hofmann",
-        memory_factor=0.38,
-        time_factor=0.25,
-    ),
-    CatalogModel(
         model_id="hat_s_x4",
-        name="HAT-S ×4 — Fast",
+        name="HAT-S ×4 — Slim",
         filename="HAT-S_SRx4.pth",
         description="The lightest official HAT variant. Best default for laptops and smaller GPUs.",
         size_bytes=81_089_561,
@@ -135,26 +83,8 @@ MODEL_CATALOG = (
         time_factor=0.65,
     ),
     CatalogModel(
-        model_id="hat_x4_imagenet",
-        name="HAT ×4 ImageNet — Balanced",
-        filename="HAT_SRx4_ImageNet-pretrain.pth",
-        description="The standard ImageNet-pretrained HAT model: strong fidelity at moderate cost.",
-        size_bytes=85_137_601,
-        sha256="4ee053c42461187846dc0e93aa5abd34591c0725a8e044a59000e92ee215e833",
-        download_url=f"{CATALOG_BASE_URL}/HAT_SRx4_ImageNet-pretrain.pth?download=true",
-        architecture="HAT",
-        native_scale=4,
-        purposes=(ModelPurpose.GENERAL, ModelPurpose.PHOTO),
-        quality_tier=QualityTier.HIGH,
-        speed_tier=SpeedTier.SLOW,
-        recommended_halo=16,
-        author="XPixel Group",
-        memory_factor=1.0,
-        time_factor=1.0,
-    ),
-    CatalogModel(
         model_id="hat_l_x4_imagenet",
-        name="HAT-L ×4 ImageNet — Maximum",
+        name="HAT-L ×4 ImageNet — Large",
         filename="HAT-L_SRx4_ImageNet-pretrain.pth",
         description="The largest official HAT variant. Highest cost; intended for capable hardware.",
         size_bytes=165_774_123,
@@ -171,27 +101,28 @@ MODEL_CATALOG = (
         time_factor=1.8,
     ),
     CatalogModel(
-        model_id="scunet_color_real_psnr",
-        name="SCUNet Blind Denoise — General",
-        filename="scunet_color_real_psnr.pth",
-        description=(
-            "The official SCUNet PSNR checkpoint for practical blind denoising. A strong "
-            "general-purpose choice for unknown real-world noise without generative synthesis."
-        ),
-        size_bytes=71_982_841,
-        sha256="fa78899ba2caec9d235a900e91d96c689da71c42029230c2028b00f09f809c2e",
-        download_url="https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth",
-        architecture="SCUNet",
+        model_id="denoise_realplksr_1x",
+        name="RealPLKSR Denoise — Slim",
+        filename="1xDeNoise_realplksr_otf.pth",
+        description="A very fast, lightweight denoising model trained on Nomosv2 to rapidly clean up noisy photos.",
+        size_bytes=29_559_554,
+        sha256="f4774fbe13ceaa9df390343c2baaa980061458ef27292fa6aca6740d87608a8e",
+        download_url="https://github.com/Phhofm/models/releases/download/1xDeNoise_realplksr_otf/1xDeNoise_realplksr_otf.pth",
+        architecture="RealPLKSR",
         native_scale=1,
         purposes=(ModelPurpose.DENOISE, ModelPurpose.PHOTO),
-        quality_tier=QualityTier.MAXIMUM,
-        speed_tier=SpeedTier.SLOW,
-        source_url="https://github.com/cszn/KAIR",
-        time_factor=1.5,
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=8,
+        source_url="https://github.com/Phhofm/models",
+        license_name="CC-BY-4.0",
+        author="Philip Hofmann",
+        memory_factor=0.38,
+        time_factor=0.25,
     ),
     CatalogModel(
         model_id="nafnet_sidd_width64",
-        name="NAFNet SIDD Width64 — Maximum",
+        name="NAFNet SIDD Width64 — Large",
         filename="NAFNet-SIDD-width64.pth",
         description=(
             "The official NAFNet Width64 checkpoint trained for real camera noise in SIDD. "
@@ -215,26 +146,6 @@ MODEL_CATALOG = (
         author="Liangyu Chen, Xiaojie Chu, Xiangyu Zhang, and Jian Sun",
         memory_factor=1.45,
         time_factor=1.25,
-    ),
-    CatalogModel(
-        model_id="denoise_realplksr_1x",
-        name="RealPLKSR Denoise (Fast)",
-        filename="1xDeNoise_realplksr_otf.pth",
-        description="A very fast, lightweight denoising model trained on Nomosv2 to rapidly clean up noisy photos.",
-        size_bytes=29_559_554,
-        sha256="f4774fbe13ceaa9df390343c2baaa980061458ef27292fa6aca6740d87608a8e",
-        download_url="https://github.com/Phhofm/models/releases/download/1xDeNoise_realplksr_otf/1xDeNoise_realplksr_otf.pth",
-        architecture="RealPLKSR",
-        native_scale=1,
-        purposes=(ModelPurpose.DENOISE, ModelPurpose.PHOTO),
-        quality_tier=QualityTier.HIGH,
-        speed_tier=SpeedTier.FAST,
-        recommended_halo=8,
-        source_url="https://github.com/Phhofm/models",
-        license_name="CC-BY-4.0",
-        author="Philip Hofmann",
-        memory_factor=0.38,
-        time_factor=0.25,
     ),
 )
 

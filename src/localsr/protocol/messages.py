@@ -23,6 +23,36 @@ class JobRequest:
 
 
 @dataclass
+class VideoJobRequest:
+    """Placeholder for the upcoming video upscale pipeline.
+
+    The GUI sends this once video support is wired into the worker. The worker
+    will decode frames in-process (PyAV), run a temporal SR model, and encode
+    the result. The fields mirror JobRequest plus the parameters the video
+    pipeline needs that the image pipeline does not.
+    """
+
+    job_id: str
+    video_path: str
+    model_path: str
+    output_video_path: str
+    container: str
+    crf: int
+    fps: float | None
+    device: str
+    tile_size: int
+    halo: int
+    precision: str
+    safe_memory: bool
+    keyframe_interval: int | None = None
+    start_frame: int | None = None
+    end_frame: int | None = None
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_job_request", "data": asdict(self)})
+
+
+@dataclass
 class InspectRequest:
     model_path: str
 
@@ -214,3 +244,39 @@ class JobFailed:
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_failed", "data": asdict(self)})
+
+
+@dataclass
+class VideoFrameStarted:
+    job_id: str
+    frame_index: int
+    total_frames: int
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_frame_started", "data": asdict(self)})
+
+
+@dataclass
+class VideoFrameCompleted:
+    job_id: str
+    frame_index: int
+    total_frames: int
+    frames_processed: int
+    elapsed_seconds: float
+    estimated_remaining_seconds: float
+    jpeg_base64: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_frame_completed", "data": asdict(self)})
+
+
+@dataclass
+class VideoJobCompleted:
+    job_id: str
+    output_path: str
+    frames_processed: int
+    elapsed_seconds: float = 0.0
+    inference_seconds: float = 0.0
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_job_completed", "data": asdict(self)})

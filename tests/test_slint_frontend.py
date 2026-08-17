@@ -207,7 +207,7 @@ def test_visible_configuration_callbacks_round_trip(tmp_path):
         downloads = []
         application._start_model_download = lambda model: downloads.append(model)
         application.ui.model_action()
-        assert downloads and downloads[0].model_id == "span_x4_official"
+        assert downloads and downloads[0].model_id == "hat_s_x4"
 
         application.ui.scale_changed(0)
         assert application.output_scale == 2
@@ -471,7 +471,7 @@ def test_cancelled_recipe_download_resets_recipe_and_status(tmp_path):
         )
         application._start_model_download = lambda model: None
         application.add_images([str(image_path)], replace=True)
-        application.set_task(2)
+        application.set_task(0)
         application.apply_automatic_setup(best=False)
         model = application._selected_catalog_model()
         assert model is not None

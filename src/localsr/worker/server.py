@@ -19,6 +19,7 @@ from localsr.core.hardware import get_capability_report, get_memory_snapshot
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import ModelAdapter
+from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     CapabilitiesInfo,
     JobCancelled,
@@ -31,6 +32,9 @@ from localsr.protocol.messages import (
     PreviewReady,
     ProgressUpdate,
     TileUpdate,
+    VideoFrameCompleted,
+    VideoFrameStarted,
+    VideoJobCompleted,
     WarningMessage,
     WorkerReady,
 )
@@ -235,6 +239,29 @@ class WorkerServer:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
 
+                elif req_type == "video_job_request":
+                    if self.active_job_id is not None:
+                        send_message(
+                            JobFailed(
+                                job_id=data["job_id"], error_message="A job is already running."
+                            )
+                        )
+                        continue
+
+                    job_id = data["job_id"]
+                    self._activate_job(job_id)
+
+                    try:
+                        send_message(JobStarted(job_id=job_id))
+                        self._run_video_job(job_id, data)
+                    except Exception as e:  # noqa: BLE001
+                        traceback.print_exc(file=sys.stderr)
+                        send_message(JobFailed(job_id=job_id, error_message=str(e)))
+                    finally:
+                        self._deactivate_job(job_id)
+                        self.model_adapter.release()
+                        self.engine.release_model()
+
             except queue.Empty:
                 continue
             except KeyboardInterrupt:
@@ -406,6 +433,99 @@ class WorkerServer:
         finally:
             if out_file is not None:
                 out_file.cleanup()
+
+    def _run_video_job(self, job_id, data):
+        send_message(LogMessage(level="info", message="Inspecting model for video job..."))
+        info = self.model_adapter.inspect(data["model_path"])
+
+        config = VideoJobConfig(
+            video_path=data["video_path"],
+            model_path=data["model_path"],
+            output_video_path=data["output_video_path"],
+            model_info=info,
+            device_str=data["device"],
+            precision_str=data["precision"],
+            tile_size=int(data["tile_size"]),
+            halo=int(data["halo"]),
+            safe_memory=bool(data.get("safe_memory", True)),
+            container=str(data.get("container", "mp4")),
+            crf=int(data.get("crf", 18)),
+            start_frame=data.get("start_frame"),
+            end_frame=data.get("end_frame"),
+            fps_override=data.get("fps"),
+        )
+
+        def frame_started(frame_index: int, total_frames: int) -> None:
+            send_message(
+                VideoFrameStarted(
+                    job_id=job_id,
+                    frame_index=int(frame_index),
+                    total_frames=int(total_frames),
+                )
+            )
+
+        def frame_completed(frame_index: int, total_frames: int, jpeg_b64: str) -> None:
+            # The thumbnail carrier. ETA is sent separately by progress_cb to
+            # avoid duplicating the elapsed-time calculation here.
+            send_message(
+                VideoFrameCompleted(
+                    job_id=job_id,
+                    frame_index=int(frame_index),
+                    total_frames=int(total_frames),
+                    frames_processed=0,
+                    elapsed_seconds=0.0,
+                    estimated_remaining_seconds=0.0,
+                    jpeg_base64=jpeg_b64,
+                )
+            )
+
+        def progress_cb(frames_done: int, total_frames: int, elapsed: float) -> None:
+            if total_frames > 0:
+                per_frame = elapsed / max(frames_done, 1)
+                remaining = per_frame * max(0, total_frames - frames_done)
+            else:
+                remaining = 0.0
+            # Re-send with the real progress numbers. frame_completed above is
+            # the per-frame thumbnail carrier; this one carries ETA.
+            send_message(
+                VideoFrameCompleted(
+                    job_id=job_id,
+                    frame_index=0,
+                    total_frames=int(total_frames),
+                    frames_processed=int(frames_done),
+                    elapsed_seconds=float(elapsed),
+                    estimated_remaining_seconds=float(remaining),
+                    jpeg_base64="",
+                )
+            )
+
+        send_message(LogMessage(level="info", message="Starting video inference..."))
+        try:
+            result = run_video_job(
+                config=config,
+                engine=self.engine,
+                cancel_event=self.cancel_event,
+                frame_started_cb=frame_started,
+                frame_completed_cb=frame_completed,
+                progress_cb=progress_cb,
+            )
+        except InterruptedError:
+            send_message(JobCancelled(job_id=job_id))
+            return
+
+        if self.cancel_event.is_set():
+            send_message(JobCancelled(job_id=job_id))
+            return
+
+        send_message(
+            VideoJobCompleted(
+                job_id=job_id,
+                output_path=result.output_path,
+                frames_processed=result.frames_processed,
+                elapsed_seconds=result.elapsed_seconds,
+                inference_seconds=result.inference_seconds,
+            )
+        )
 
 
 def main():

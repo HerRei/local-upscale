@@ -325,7 +325,7 @@ export component MainWindow inherits Window {
                         }
                         TaskChoice {
                             title: "Upscale";
-                            detail: "Increase resolution";
+                            detail: "Increase resolution of a photo";
                             selected: root.task-selected && root.task-index == 0;
                             active: root.model-selection-enabled;
                             clicked => { root.task-changed(0); }
@@ -338,8 +338,8 @@ export component MainWindow inherits Window {
                             clicked => { root.task-changed(1); }
                         }
                         TaskChoice {
-                            title: "Upscale + Denoise";
-                            detail: "Restore a degraded image while enlarging it";
+                            title: "Upscale Video";
+                            detail: "Temporal super-resolution for video (coming soon)";
                             selected: root.task-selected && root.task-index == 2;
                             active: root.model-selection-enabled;
                             clicked => { root.task-changed(2); }

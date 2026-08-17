@@ -25,7 +25,7 @@ def test_quick_and_best_rank_distinct_catalog_models():
         output_scale=4,
     )
 
-    assert quick[0].model_id == "span_x4_official"
+    assert quick[0].model_id == "hat_s_x4"
     assert best[0].model_id == "hat_l_x4_imagenet"
 
 
@@ -49,7 +49,7 @@ def test_denoise_recipes_rank_fast_and_maximum_fidelity_models():
 
 def test_quick_preset_selects_accelerator_fp16_and_fitting_tile():
     gib = 1024**3
-    model = CATALOG_BY_ID["span_x4_official"]
+    model = CATALOG_BY_ID["hat_s_x4"]
     settings = resolve_settings_for_model(
         model=model,
         mode=PresetMode.QUICK_UPSCALE,

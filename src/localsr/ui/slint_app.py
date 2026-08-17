@@ -53,7 +53,9 @@ from localsr.ui.slint_worker import SlintWorkerClient
 
 CUSTOM_MODEL_ID = "__custom__"
 FORMAT_VALUES = ("png", "jpg", "tif")
-TASK_LABELS = ("Upscale", "Denoise", "Upscale + Denoise")
+TASK_LABELS = ("Upscale", "Denoise", "Upscale Video")
+VIDEO_TASK_INDEX = 2
+VIDEO_ENABLED = False
 
 
 @dataclass(frozen=True)
@@ -420,7 +422,9 @@ class SlintApplication:
             )
         if self.task_index == 1:
             return model.native_scale == 1 and ModelPurpose.DENOISE in model.purposes
-        return model.native_scale > 1 and ModelPurpose.DENOISE in model.purposes
+        return model.native_scale > 1 and any(
+            purpose in model.purposes for purpose in (ModelPurpose.PHOTO, ModelPurpose.GENERAL)
+        )
 
     def _rebuild_model_options(self, preferred_id: str = "") -> None:
         if not self.task_selected:
@@ -607,7 +611,13 @@ class SlintApplication:
 
     def apply_automatic_setup(self, *, best: bool) -> None:
         if not self.task_selected:
-            self._show_status("Choose a task", "Select Upscale, Denoise, or both first.")
+            self._show_status("Choose a task", "Select Upscale, Denoise, or Upscale Video first.")
+            return
+        if self.task_index == VIDEO_TASK_INDEX and not VIDEO_ENABLED:
+            self._show_status(
+                "Video coming soon",
+                "Video upscaling is being prepared. Use Upscale on each frame for now.",
+            )
             return
         image = self._selected_image()
         if image is None:
@@ -617,9 +627,7 @@ class SlintApplication:
             return
         purpose = ModelPurpose.PHOTO if self.task_index == 0 else ModelPurpose.DENOISE
         output_scale = 1 if self.task_index == 1 else 4
-        if self.task_index == 2:
-            mode = PresetMode.BEST_UPSCALE if best else PresetMode.QUICK_UPSCALE
-        elif self.task_index == 1:
+        if self.task_index == 1:
             mode = PresetMode.BEST_DENOISE if best else PresetMode.QUICK_DENOISE
         else:
             mode = PresetMode.BEST_UPSCALE if best else PresetMode.QUICK_UPSCALE
@@ -1063,8 +1071,10 @@ class SlintApplication:
     def _update_action_state(self) -> None:
         estimate_blocking = bool(self.current_estimate and self.current_estimate.blocking)
         downloading = self.download_thread is not None and self.download_thread.is_alive()
+        video_task_disabled = self.task_index == VIDEO_TASK_INDEX and not VIDEO_ENABLED
         can_start = bool(
             self.task_selected
+            and not video_task_disabled
             and self.images
             and self.model_path
             and self.current_model_info
@@ -1083,8 +1093,8 @@ class SlintApplication:
         verb = (
             "Denoise"
             if self.task_index == 1
-            else "Restore"
-            if self.task_index == 2
+            else "Upscale Video"
+            if self.task_index == VIDEO_TASK_INDEX
             else "Upscale"
             if self.task_index == 0
             else "Start"
@@ -1097,8 +1107,8 @@ class SlintApplication:
         extension = FORMAT_VALUES[self.format_index]
         if self.task_index == 1:
             suffix = "_denoised"
-        elif self.task_index == 2:
-            suffix = f"_restored_{self.output_scale}x"
+        elif self.task_index == VIDEO_TASK_INDEX:
+            suffix = f"_video_{self.output_scale}x"
         else:
             suffix = f"_upscaled_{self.output_scale}x"
         candidate = Path(self.output_directory) / f"{base}{suffix}.{extension}"

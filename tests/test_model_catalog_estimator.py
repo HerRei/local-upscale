@@ -30,16 +30,12 @@ def _small_model(content=b"verified model"):
 
 def test_catalog_has_pinned_optional_downloads():
     assert [model.model_id for model in MODEL_CATALOG] == [
-        "span_x4_official",
-        "nomos_web_photo_realplksr_x4",
         "hat_s_x4",
-        "hat_x4_imagenet",
         "hat_l_x4_imagenet",
-        "scunet_color_real_psnr",
-        "nafnet_sidd_width64",
         "denoise_realplksr_1x",
+        "nafnet_sidd_width64",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 8
+    assert len({model.filename for model in MODEL_CATALOG}) == 4
     hat_models = [model for model in MODEL_CATALOG if model.architecture == "HAT"]
     assert all(CATALOG_REVISION in model.download_url for model in hat_models)
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)
