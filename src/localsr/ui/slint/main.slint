@@ -2,13 +2,17 @@ import { ListView, ScrollView } from "std-widgets.slint";
 import {
     CheckControl,
     DesktopComboBox,
+    DisclosureRow,
     FieldLabel,
     FlatButton,
+    PanelHeading,
     ProgressTrack,
+    RecipeChoice,
     SectionTitle,
     SegmentedButton,
     TaskChoice,
     ThinSeparator,
+    ToolbarButton,
     ValueLine
 } from "components.slint";
 
@@ -16,15 +20,36 @@ export struct QueueEntry {
     name: string,
     detail: string,
     selected: bool,
+    thumbnail: image,
+    has-thumbnail: bool,
 }
 
 export component MainWindow inherits Window {
-    title: "LocalSR";
-    preferred-width: 1500px;
-    preferred-height: 930px;
-    min-width: 1120px;
-    min-height: 720px;
-    background: #0d1117;
+    title: root.selected-name == "" ? "LocalSR" : root.selected-name + " — LocalSR";
+    preferred-width: 1480px;
+    preferred-height: 900px;
+    min-width: 820px;
+    min-height: 620px;
+    background: #141518;
+
+    // Three content-fit modes, expressed in logical pixels. Slint applies the
+    // native display scale, so these breakpoints work at 1× and HiDPI alike.
+    // The indirection keeps the binding responsive to the live window while
+    // also making breakpoint behavior testable without opening a window.
+    in-out property <length> layout-width: root.width;
+    out property <int> layout-mode:
+        root.layout-width < 920px ? 2 : root.layout-width < 1280px ? 1 : 0;
+    in-out property <int> compact-page: 1; // 0 Media, 1 Preview, 2 Enhance
+    out property <bool> media-pane-visible:
+        root.layout-mode == 0 || root.layout-mode == 1 || root.compact-page == 0;
+    out property <bool> preview-pane-visible:
+        root.layout-mode == 0 ||
+        (root.layout-mode == 1 && root.compact-page != 2) ||
+        (root.layout-mode == 2 && root.compact-page == 1);
+    out property <bool> enhance-pane-visible:
+        root.layout-mode == 0 || root.compact-page == 2;
+    in-out property <bool> comparison-enabled: true;
+    in-out property <bool> video-enabled: false;
 
     in-out property <bool> batch-mode: false;
     in-out property <bool> controls-enabled: true;
@@ -56,7 +81,7 @@ export component MainWindow inherits Window {
     in-out property <string> memory-usage-text: "Memory unavailable";
     in-out property <float> memory-usage-ratio: 0;
     in-out property <string> pressure-text: "Checking pressure";
-    in-out property <brush> pressure-color: #788391;
+    in-out property <brush> pressure-color: #8e8e93;
 
     in-out property <string> estimate-time: "—";
     in-out property <string> estimate-output: "—";
@@ -73,7 +98,11 @@ export component MainWindow inherits Window {
     in-out property <bool> safe-memory: true;
     in-out property <bool> safe-memory-enabled: true;
 
-    // Read-only inspector summaries. Workflow controls deliberately live on the left.
+    // Presentation strings kept separate so filenames and dimensions can use
+    // the correct hierarchy instead of being parsed from a multiline summary.
+    in-out property <string> selected-name: "";
+    in-out property <string> selected-detail: "No image selected";
+    in-out property <string> output-dimensions: "—";
     in-out property <string> input-summary: "No image selected";
     in-out property <string> task-summary: "Choose a task";
     in-out property <string> profile-summary: "—";
@@ -85,9 +114,6 @@ export component MainWindow inherits Window {
     in-out property <image> source-image;
     in-out property <image> result-image;
     in-out property <bool> image-ready: false;
-    // A progressive image exists while inference is running. It is intentionally
-    // distinct from result-ready: the before/after divider is only valid once the
-    // complete output has been saved.
     in-out property <bool> live-result-ready: false;
     in-out property <bool> result-ready: false;
     in-out property <string> source-label: "Original";
@@ -148,35 +174,139 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
+        // Functional command bar. The operating-system title bar remains the
+        // only branded header; these are workspace commands, not fake chrome.
+        Rectangle {
+            height: 54px;
+            background: #1b1d21;
+
+            HorizontalLayout {
+                x: 12px;
+                y: 10px;
+                width: parent.width - 24px;
+                height: 34px;
+                spacing: 8px;
+
+                if root.layout-mode == 2: ToolbarButton {
+                    text: "Media";
+                    width: 94px;
+                    selected: root.compact-page == 0;
+                    badge: root.queue-items.length > 0 ? "" + root.queue-items.length : "";
+                    clicked => { root.compact-page = 0; }
+                }
+
+                if root.layout-mode > 0: ToolbarButton {
+                    text: "Preview";
+                    width: 84px;
+                    selected: root.compact-page == 1;
+                    clicked => { root.compact-page = 1; }
+                }
+
+                if root.layout-mode > 0: ToolbarButton {
+                    text: "Enhance";
+                    width: 88px;
+                    selected: root.compact-page == 2;
+                    clicked => { root.compact-page = 2; }
+                }
+
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                ToolbarButton {
+                    text: "Compare";
+                    width: 86px;
+                    selected: root.result-ready && root.comparison-enabled;
+                    active: root.result-ready;
+                    visible: root.result-ready;
+                    clicked => { root.comparison-enabled = !root.comparison-enabled; }
+                }
+
+                ToolbarButton {
+                    text: "Advanced";
+                    width: 92px;
+                    selected: root.advanced-open;
+                    active: root.controls-enabled;
+                    visible: root.layout-mode == 0;
+                    clicked => {
+                        root.advanced-open = !root.advanced-open;
+                    }
+                }
+
+                ToolbarButton {
+                    text: "+  Add Images";
+                    width: 120px;
+                    prominent: true;
+                    active: root.controls-enabled;
+                    clicked => { root.choose-images(); }
+                }
+            }
+
+            ThinSeparator { y: parent.height - 1px; width: parent.width; }
+        }
+
         HorizontalLayout {
             spacing: 0px;
+            vertical-stretch: 1;
 
-            // Leading workflow pane: source selection and every setting that changes the job.
-            Rectangle {
-                width: 318px;
-                background: #151a21;
+            // Media is persistent on wide/medium windows and becomes a full
+            // workspace page when the available width is compact.
+            if root.media-pane-visible: Rectangle {
+                width: root.layout-mode == 2 ? root.width : 276px;
+                horizontal-stretch: 0;
+                background: #1d1f23;
 
-                ScrollView {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width;
+                VerticalLayout {
+                    x: root.layout-mode == 2 ?
+                        (parent.width - min(420px, parent.width)) / 2 : 0px;
+                    width: root.layout-mode == 2 ? min(420px, parent.width) : parent.width;
                     height: parent.height;
-                    viewport-width: self.width;
-                    enabled: root.task-selected;
-                    vertical-scrollbar-policy: root.task-selected ?
-                        ScrollBarPolicy.as-needed : ScrollBarPolicy.always-off;
+                    spacing: 0px;
 
-                    VerticalLayout {
-                        width: 286px;
-                        x: 16px;
-                        y: 10px;
-                        spacing: 8px;
+                    Rectangle {
+                        height: 62px;
+                        background: transparent;
 
-                        SectionTitle { step: 1; title: "IMPORT"; }
+                        Text {
+                            x: 16px;
+                            y: 11px;
+                            width: parent.width - 32px;
+                            height: 24px;
+                            text: "Media";
+                            color: #f5f5f7;
+                            font-size: 16px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            x: 16px;
+                            y: 35px;
+                            width: parent.width - 32px;
+                            height: 18px;
+                            text: root.queue-items.length == 0 ? "No images" :
+                                root.queue-items.length +
+                                    (root.queue-items.length == 1 ? " image" : " images");
+                            color: #8e8e93;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: 38px;
+                        border-radius: 8px;
+                        background: #282a2f;
+                        border-width: 1px;
+                        border-color: #383a40;
 
                         HorizontalLayout {
-                            height: 30px;
-                            spacing: 0px;
+                            x: 3px;
+                            y: 3px;
+                            width: parent.width - 6px;
+                            height: 32px;
+                            spacing: 2px;
+
                             SegmentedButton {
                                 text: "Single";
                                 selected: !root.batch-mode;
@@ -190,215 +320,777 @@ export component MainWindow inherits Window {
                                 clicked => { root.batch-mode = true; }
                             }
                         }
+                    }
+
+                    Rectangle { height: 12px; background: transparent; }
+
+                    if root.queue-items.length == 0: Rectangle {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: 126px;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #3b3d43;
+                        background: #24262a;
+
+                        Rectangle {
+                            x: (parent.width - 26px) / 2;
+                            y: 20px;
+                            width: 26px;
+                            height: 26px;
+                            border-radius: 13px;
+                            background: #303238;
+
+                            Rectangle {
+                                x: 7px;
+                                y: 12px;
+                                width: 12px;
+                                height: 2px;
+                                border-radius: 1px;
+                                background: #d1d1d6;
+                            }
+                            Rectangle {
+                                x: 12px;
+                                y: 7px;
+                                width: 2px;
+                                height: 12px;
+                                border-radius: 1px;
+                                background: #d1d1d6;
+                            }
+                        }
 
                         Text {
-                            text: root.batch-mode ? "Add images to the queue below." :
-                                "Choose one image to work on.";
-                            color: #7f8996;
-                            font-size: 9px;
-                            height: 18px;
+                            x: 12px;
+                            y: 53px;
+                            width: parent.width - 24px;
+                            height: 23px;
+                            text: "Add images";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
                             vertical-alignment: center;
                         }
 
-                        HorizontalLayout {
-                            height: 29px;
-                            spacing: 6px;
-                            FlatButton {
-                                text: root.batch-mode ? "Add Images…" : "Choose Image…";
-                                compact: true;
-                                active: root.controls-enabled;
-                                clicked => { root.choose-images(); }
-                            }
-                            FlatButton {
-                                text: "Add Folder…";
-                                compact: true;
-                                visible: root.batch-mode;
-                                active: root.controls-enabled;
-                                clicked => { root.choose-folder(); }
-                            }
+                        Text {
+                            x: 12px;
+                            y: 77px;
+                            width: parent.width - 24px;
+                            height: 18px;
+                            text: "JPEG, PNG, TIFF, WebP, or DNG";
+                            color: #8e8e93;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
 
-                        HorizontalLayout {
-                            height: 25px;
+                        FlatButton {
+                            x: (parent.width - 112px) / 2;
+                            y: 94px;
+                            width: 112px;
+                            text: "Choose…";
+                            compact: true;
+                            active: root.controls-enabled;
+                            clicked => { root.choose-images(); }
+                        }
+                    }
+
+                    if root.queue-items.length > 0: ListView {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        vertical-stretch: 1;
+
+                        for item[index] in root.queue-items: Rectangle {
+                            height: 70px;
+                            width: parent.width;
+                            border-radius: 8px;
+                            background: item.selected ? #29384a :
+                                row-touch.has-hover ? #282a2f : transparent;
+
+                            Rectangle {
+                                width: 3px;
+                                height: parent.height - 16px;
+                                y: 8px;
+                                border-radius: 2px;
+                                background: #0a84ff;
+                                visible: item.selected;
+                            }
+
+                            Rectangle {
+                                x: 10px;
+                                y: 10px;
+                                width: 50px;
+                                height: 50px;
+                                border-radius: 7px;
+                                background: item.selected ? #36506d : #303238;
+                                border-width: 1px;
+                                border-color: item.selected ? #4678ad : #414349;
+
+                                Image {
+                                    source: item.thumbnail;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: cover;
+                                    visible: item.has-thumbnail;
+                                }
+
+                                Text {
+                                    text: "IMG";
+                                    color: item.selected ? #bcdcff : #aaaab0;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    visible: !item.has-thumbnail;
+                                }
+                            }
+
                             Text {
-                                text: root.batch-mode ? "Batch queue (" + root.queue-items.length + ")" :
-                                    "Selected image";
-                                color: #d7dde5;
-                                font-size: 10px;
-                                font-weight: 600;
+                                x: 70px;
+                                y: 11px;
+                                width: parent.width - 136px;
+                                height: 24px;
+                                text: item.name;
+                                color: #f2f2f4;
+                                font-size: 13px;
+                                font-weight: item.selected ? 600 : 500;
+                                overflow: elide;
                                 vertical-alignment: center;
                             }
-                            Rectangle { horizontal-stretch: 1; background: transparent; }
-                            FlatButton {
-                                text: "Clear";
-                                compact: true;
-                                width: 52px;
-                                active: root.controls-enabled && root.queue-items.length > 0;
-                                clicked => { root.clear-queue(); }
+
+                            Text {
+                                x: 70px;
+                                y: 36px;
+                                width: parent.width - 136px;
+                                height: 20px;
+                                text: item.detail;
+                                color: #929298;
+                                font-size: 11px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                x: parent.width - 62px;
+                                width: 54px;
+                                height: parent.height;
+                                text: "Remove";
+                                color: remove-touch.has-hover ? #ffffff : #98989e;
+                                font-size: 10px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            row-touch := TouchArea {
+                                width: parent.width - 64px;
+                                enabled: root.controls-enabled;
+                                mouse-cursor: pointer;
+                                clicked => { root.select-queue-item(index); }
+                            }
+
+                            remove-touch := TouchArea {
+                                x: parent.width - 64px;
+                                width: 64px;
+                                enabled: root.controls-enabled;
+                                mouse-cursor: pointer;
+                                clicked => { root.remove-queue-item(index); }
                             }
                         }
+                    }
 
-                        ListView {
-                            height: root.batch-mode ? 128px : 46px;
-                            width: parent.width;
+                    Rectangle { vertical-stretch: root.queue-items.length == 0 ? 1 : 0; background: transparent; }
 
-                            for item[index] in root.queue-items: Rectangle {
-                                height: 38px;
-                                width: parent.width;
-                                background: item.selected ? #293341 : queue-touch.has-hover ? #202731 : #1b212a;
-                                border-radius: 3px;
+                    Rectangle {
+                        height: 52px;
+                        background: #1d1f23;
+                        ThinSeparator { width: parent.width; }
+
+                        FlatButton {
+                            x: 12px;
+                            y: 11px;
+                            width: 104px;
+                            text: root.batch-mode ? "Add More…" : "Replace…";
+                            compact: true;
+                            active: root.controls-enabled;
+                            visible: root.queue-items.length > 0;
+                            clicked => { root.choose-images(); }
+                        }
+
+                        FlatButton {
+                            x: 12px;
+                            y: 11px;
+                            width: 112px;
+                            text: "Add Folder…";
+                            compact: true;
+                            active: root.controls-enabled;
+                            visible: root.batch-mode && root.queue-items.length == 0;
+                            clicked => { root.choose-folder(); }
+                        }
+
+                        FlatButton {
+                            x: parent.width - 76px;
+                            y: 11px;
+                            width: 64px;
+                            text: "Clear";
+                            compact: true;
+                            active: root.controls-enabled && root.queue-items.length > 0;
+                            visible: root.queue-items.length > 0;
+                            clicked => { root.clear-queue(); }
+                        }
+                    }
+                }
+
+                ThinSeparator { x: parent.width - 1px; height: parent.height; vertical: true; }
+            }
+
+            // The document stage remains dominant. Existing aspect-correct fit,
+            // progressive tiles, zoom-at-pointer, panning, and completed-result
+            // comparison behavior are preserved.
+            if root.preview-pane-visible: Rectangle {
+                horizontal-stretch: 1;
+                min-width: 420px;
+                background: #141518;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    Rectangle {
+                        height: 50px;
+                        background: #181a1e;
+
+                        Text {
+                            x: 16px;
+                            width: parent.width * 0.62;
+                            height: parent.height;
+                            text: root.selected-name == "" ? "Preview" : root.selected-name;
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            x: parent.width * 0.62;
+                            width: parent.width * 0.38 - 16px;
+                            height: parent.height;
+                            text: root.image-ready ? root.selected-detail : "";
+                            color: #929298;
+                            font-size: 11px;
+                            horizontal-alignment: right;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        ThinSeparator { y: parent.height - 1px; width: parent.width; }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: #101114;
+
+                        canvas := Rectangle {
+                            x: 14px;
+                            y: 14px;
+                            width: parent.width - 28px;
+                            height: parent.height - 28px;
+                            background: #090a0c;
+                            border-width: 1px;
+                            border-color: #2e3035;
+                            border-radius: 10px;
+                            clip: true;
+
+                            property <length> fit-width: min(
+                                self.width,
+                                self.height * max(0.01, root.preview-aspect)
+                            );
+                            property <length> fit-height:
+                                self.fit-width / max(0.01, root.preview-aspect);
+                            property <length> max-pan-x: max(
+                                0px,
+                                (self.fit-width * root.preview-zoom - self.width) / 2
+                            );
+                            property <length> max-pan-y: max(
+                                0px,
+                                (self.fit-height * root.preview-zoom - self.height) / 2
+                            );
+
+                            preview-content := Rectangle {
+                                x: (parent.width - self.width) / 2 + root.preview-pan-x;
+                                y: (parent.height - self.height) / 2 + root.preview-pan-y;
+                                width: parent.fit-width * root.preview-zoom;
+                                height: parent.fit-height * root.preview-zoom;
+                                background: #090a0c;
+
+                                Image {
+                                    source: root.source-image;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: fill;
+                                    visible: root.image-ready;
+                                }
 
                                 Rectangle {
-                                    x: 7px;
-                                    y: 8px;
-                                    width: 22px;
-                                    height: 22px;
-                                    border-radius: 2px;
-                                    background: item.selected ? #3d73cf : #303943;
-                                    Text {
-                                        text: "▧";
-                                        color: #c6ced8;
-                                        font-size: 10px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                    width: root.result-ready && root.comparison-enabled ?
+                                        parent.width * root.compare-position : parent.width;
+                                    height: parent.height;
+                                    clip: true;
+                                    background: transparent;
+                                    visible: root.live-result-ready;
+
+                                    Image {
+                                        source: root.result-image;
+                                        width: preview-content.width;
+                                        height: preview-content.height;
+                                        image-fit: fill;
+                                    }
+                                }
+
+                                Rectangle {
+                                    x: root.tile-x * parent.width;
+                                    y: root.tile-y * parent.height;
+                                    width: root.tile-width * parent.width;
+                                    height: root.tile-height * parent.height;
+                                    background: #0a84ff1f;
+                                    border-width: 2px / root.preview-zoom;
+                                    border-color: #58a6ff;
+                                    visible: root.tile-active;
+                                }
+
+                                Rectangle {
+                                    x: parent.width * root.compare-position - 1px;
+                                    width: 2px;
+                                    height: parent.height;
+                                    background: #f5f5f7;
+                                    visible: root.result-ready && root.comparison-enabled &&
+                                        !root.tile-active;
+
+                                    Rectangle {
+                                        x: -17px;
+                                        y: parent.height / 2 - 17px;
+                                        width: 36px;
+                                        height: 36px;
+                                        border-radius: 18px;
+                                        border-width: 1px;
+                                        border-color: #9a9ca3;
+                                        background: #24262aee;
+
+                                        Text {
+                                            text: "‹  ›";
+                                            color: #f5f5f7;
+                                            font-size: 12px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !root.image-ready: Rectangle {
+                                x: (parent.width - min(420px, parent.width - 40px)) / 2;
+                                y: (parent.height - 190px) / 2;
+                                width: min(420px, parent.width - 40px);
+                                height: 190px;
+                                background: transparent;
+
+                                Rectangle {
+                                    x: (parent.width - 42px) / 2;
+                                    width: 42px;
+                                    height: 42px;
+                                    border-radius: 21px;
+                                    background: #25272c;
+                                    border-width: 1px;
+                                    border-color: #393b41;
+
+                                    Rectangle {
+                                        x: 12px;
+                                        y: 20px;
+                                        width: 18px;
+                                        height: 2px;
+                                        background: #d1d1d6;
+                                    }
+                                    Rectangle {
+                                        x: 20px;
+                                        y: 12px;
+                                        width: 2px;
+                                        height: 18px;
+                                        background: #d1d1d6;
                                     }
                                 }
 
                                 Text {
-                                    x: 37px;
-                                    y: 4px;
-                                    width: parent.width - 68px;
-                                    height: 18px;
-                                    text: item.name;
-                                    color: #dce2e9;
-                                    font-size: 10px;
-                                    overflow: elide;
-                                    vertical-alignment: center;
-                                }
-
-                                Text {
-                                    x: 37px;
-                                    y: 20px;
-                                    width: parent.width - 68px;
-                                    height: 14px;
-                                    text: item.detail;
-                                    color: #76818e;
-                                    font-size: 8px;
-                                    overflow: elide;
-                                }
-
-                                Text {
-                                    x: parent.width - 26px;
-                                    width: 22px;
-                                    height: parent.height;
-                                    text: "×";
-                                    color: remove-touch.has-hover ? #ffffff : #9aa4b0;
-                                    font-size: 15px;
+                                    y: 55px;
+                                    width: parent.width;
+                                    height: 28px;
+                                    text: "Choose an image to enhance";
+                                    color: #f5f5f7;
+                                    font-size: 17px;
+                                    font-weight: 600;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
 
-                                queue-touch := TouchArea {
-                                    width: parent.width - 30px;
-                                    enabled: root.controls-enabled;
-                                    mouse-cursor: pointer;
-                                    clicked => { root.select-queue-item(index); }
+                                Text {
+                                    y: 86px;
+                                    width: parent.width;
+                                    height: 38px;
+                                    text: "Upscale or remove noise locally.\nNothing leaves this computer.";
+                                    color: #8e8e93;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
                                 }
 
-                                remove-touch := TouchArea {
-                                    x: parent.width - 30px;
-                                    width: 30px;
-                                    enabled: root.controls-enabled;
-                                    mouse-cursor: pointer;
-                                    clicked => { root.remove-queue-item(index); }
+                                FlatButton {
+                                    x: (parent.width - 138px) / 2;
+                                    y: 139px;
+                                    width: 138px;
+                                    text: "Choose Image…";
+                                    primary: true;
+                                    active: root.controls-enabled;
+                                    clicked => { root.choose-images(); }
+                                }
+                            }
+
+                            Rectangle {
+                                x: 12px;
+                                y: parent.height - 36px;
+                                width: min(240px, parent.width / 2 - 20px);
+                                height: 24px;
+                                border-radius: 6px;
+                                background: #17191ddd;
+                                visible: root.image-ready;
+
+                                Text {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    text: root.source-label;
+                                    color: #e7e7ea;
+                                    font-size: 11px;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                x: parent.width - self.width - 12px;
+                                y: parent.height - 36px;
+                                width: min(190px, parent.width / 2 - 20px);
+                                height: 24px;
+                                border-radius: 6px;
+                                background: #17191ddd;
+                                visible: root.result-ready;
+
+                                Text {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    text: root.comparison-enabled ? root.result-label : "Enhanced";
+                                    color: #e7e7ea;
+                                    font-size: 11px;
+                                    horizontal-alignment: right;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            preview-touch := TouchArea {
+                                property <length> pan-start-x: 0px;
+                                property <length> pan-start-y: 0px;
+                                property <bool> dragging-divider: false;
+                                property <float> zoom-anchor-x: 0.5;
+                                property <float> zoom-anchor-y: 0.5;
+                                property <float> next-zoom: 1;
+                                property <length> next-width: 0px;
+                                property <length> next-height: 0px;
+                                property <length> next-max-pan-x: 0px;
+                                property <length> next-max-pan-y: 0px;
+                                enabled: root.image-ready;
+                                mouse-cursor: root.result-ready && root.comparison-enabled &&
+                                    abs(self.mouse-x - (preview-content.x +
+                                        preview-content.width * root.compare-position)) <= 18px ?
+                                    col-resize : root.preview-zoom > 1 ? move : default;
+
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down) {
+                                        self.pan-start-x = root.preview-pan-x;
+                                        self.pan-start-y = root.preview-pan-y;
+                                        self.dragging-divider = root.result-ready &&
+                                            root.comparison-enabled &&
+                                            abs(self.mouse-x - (preview-content.x +
+                                                preview-content.width * root.compare-position)) <= 18px;
+                                    }
+                                    if (event.kind == PointerEventKind.up ||
+                                        event.kind == PointerEventKind.cancel) {
+                                        self.dragging-divider = false;
+                                    }
+                                }
+
+                                moved => {
+                                    if (self.dragging-divider) {
+                                        root.compare-position = max(
+                                            0.03,
+                                            min(0.97, (self.mouse-x - preview-content.x) /
+                                                preview-content.width)
+                                        );
+                                    } else if (root.preview-zoom > 1) {
+                                        root.preview-pan-x = max(
+                                            -canvas.max-pan-x,
+                                            min(canvas.max-pan-x,
+                                                self.pan-start-x + self.mouse-x - self.pressed-x)
+                                        );
+                                        root.preview-pan-y = max(
+                                            -canvas.max-pan-y,
+                                            min(canvas.max-pan-y,
+                                                self.pan-start-y + self.mouse-y - self.pressed-y)
+                                        );
+                                    }
+                                }
+
+                                double-clicked => {
+                                    root.preview-zoom = 1;
+                                    root.preview-pan-x = 0px;
+                                    root.preview-pan-y = 0px;
+                                }
+
+                                scroll-event(event) => {
+                                    self.zoom-anchor-x = max(0, min(1,
+                                        (self.mouse-x - preview-content.x) /
+                                            max(1px, preview-content.width)));
+                                    self.zoom-anchor-y = max(0, min(1,
+                                        (self.mouse-y - preview-content.y) /
+                                            max(1px, preview-content.height)));
+                                    self.next-zoom = event.delta-y < 0px ?
+                                        min(8, root.preview-zoom * 1.12) :
+                                        max(1, root.preview-zoom / 1.12);
+                                    self.next-width = canvas.fit-width * self.next-zoom;
+                                    self.next-height = canvas.fit-height * self.next-zoom;
+                                    self.next-max-pan-x = max(0px,
+                                        (self.next-width - canvas.width) / 2);
+                                    self.next-max-pan-y = max(0px,
+                                        (self.next-height - canvas.height) / 2);
+                                    root.preview-zoom = self.next-zoom;
+                                    root.preview-pan-x = max(
+                                        -self.next-max-pan-x,
+                                        min(self.next-max-pan-x,
+                                            self.mouse-x - self.zoom-anchor-x * self.next-width -
+                                                (canvas.width - self.next-width) / 2)
+                                    );
+                                    root.preview-pan-y = max(
+                                        -self.next-max-pan-y,
+                                        min(self.next-max-pan-y,
+                                            self.mouse-y - self.zoom-anchor-y * self.next-height -
+                                                (canvas.height - self.next-height) / 2)
+                                    );
+                                    if (self.next-zoom <= 1) {
+                                        root.preview-pan-x = 0px;
+                                        root.preview-pan-y = 0px;
+                                    }
+                                    return accept;
                                 }
                             }
                         }
+                    }
 
-                        ThinSeparator { }
-                        SectionTitle { step: 2; title: "TASK"; }
-                        Text {
-                            text: "What should LocalSR do?";
-                            color: #7f8996;
-                            font-size: 9px;
-                            height: 16px;
+                    Rectangle {
+                        height: 50px;
+                        background: #181a1e;
+                        ThinSeparator { width: parent.width; }
+
+                        HorizontalLayout {
+                            x: 12px;
+                            y: 9px;
+                            width: parent.width - 24px;
+                            height: 32px;
+                            spacing: 6px;
+
+                            FlatButton {
+                                text: "−";
+                                compact: true;
+                                width: 34px;
+                                active: root.image-ready && root.preview-zoom > 1;
+                                clicked => {
+                                    root.preview-zoom = max(1, root.preview-zoom / 1.25);
+                                    if (root.preview-zoom <= 1) {
+                                        root.preview-pan-x = 0px;
+                                        root.preview-pan-y = 0px;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: 56px;
+                                background: transparent;
+                                Text {
+                                    text: round(root.preview-zoom * 100) + "%";
+                                    color: root.image-ready ? #d1d1d6 : #696b71;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            FlatButton {
+                                text: "+";
+                                compact: true;
+                                width: 34px;
+                                active: root.image-ready && root.preview-zoom < 8;
+                                clicked => { root.preview-zoom = min(8, root.preview-zoom * 1.25); }
+                            }
+
+                            FlatButton {
+                                text: "Fit";
+                                compact: true;
+                                width: 54px;
+                                active: root.image-ready;
+                                clicked => {
+                                    root.preview-zoom = 1;
+                                    root.preview-pan-x = 0px;
+                                    root.preview-pan-y = 0px;
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                            FlatButton {
+                                text: root.comparison-enabled ? "Compare On" : "Compare Off";
+                                compact: true;
+                                width: 104px;
+                                selected: root.comparison-enabled;
+                                active: root.result-ready;
+                                visible: root.result-ready;
+                                clicked => { root.comparison-enabled = !root.comparison-enabled; }
+                            }
                         }
-                        TaskChoice {
-                            title: "Upscale";
-                            detail: "Increase resolution of a photo";
-                            selected: root.task-selected && root.task-index == 0;
-                            active: root.model-selection-enabled;
-                            clicked => { root.task-changed(0); }
+                    }
+                }
+
+                ThinSeparator { x: parent.width - 1px; height: parent.height; vertical: true; }
+            }
+
+            // One editable inspector: goal first, one-click recipes second, and
+            // a single disclosure for specialist configuration.
+            if root.enhance-pane-visible: Rectangle {
+                width: root.layout-mode == 0 ? 352px :
+                    root.layout-mode == 1 ? root.width - 276px : root.width;
+                horizontal-stretch: 0;
+                background: #1d1f23;
+
+                ScrollView {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height - 94px;
+                    viewport-width: self.width;
+
+                    VerticalLayout {
+                        x: (parent.width - min(320px, parent.width - 32px)) / 2;
+                        y: 14px;
+                        width: min(320px, parent.width - 32px);
+                        spacing: 9px;
+
+                        PanelHeading {
+                            title: "Enhance";
+                            detail: "Choose a goal, then start with a safe setup.";
                         }
-                        TaskChoice {
-                            title: "Denoise";
-                            detail: "Remove photographic noise at the original size";
-                            selected: root.task-selected && root.task-index == 1;
-                            active: root.model-selection-enabled;
-                            clicked => { root.task-changed(1); }
+
+                        SectionTitle { step: 1; title: "What do you want to do?"; }
+
+                        HorizontalLayout {
+                            height: 76px;
+                            spacing: 8px;
+
+                            TaskChoice {
+                                title: "Upscale";
+                                detail: "Increase resolution and recover detail";
+                                selected: root.task-selected && root.task-index == 0;
+                                active: root.model-selection-enabled;
+                                clicked => { root.task-changed(0); }
+                            }
+
+                            TaskChoice {
+                                title: "Denoise";
+                                detail: "Remove photo noise at original size";
+                                selected: root.task-selected && root.task-index == 1;
+                                active: root.model-selection-enabled;
+                                clicked => { root.task-changed(1); }
+                            }
                         }
-                        TaskChoice {
-                            title: "Upscale Video";
-                            detail: "Temporal super-resolution for video (coming soon)";
-                            selected: root.task-selected && root.task-index == 2;
-                            active: root.model-selection-enabled;
+
+                        FlatButton {
+                            text: root.video-enabled ? "Upscale Video" : "Video enhancement · Coming soon";
+                            compact: true;
+                            active: root.video-enabled && root.model-selection-enabled;
+                            visible: true;
                             clicked => { root.task-changed(2); }
                         }
 
-                        VerticalLayout {
-                            visible: root.task-selected;
+                        if root.task-selected: ThinSeparator { }
+
+                        if root.task-selected: SectionTitle {
+                            step: 2;
+                            title: "Choose how to start";
+                        }
+
+                        if root.task-selected: RecipeChoice {
+                            title: "Quick Start";
+                            detail: root.image-ready ?
+                                "Fastest compatible setup · starts now" :
+                                "Add an image to enable this setup";
+                            primary: true;
+                            active: root.model-selection-enabled && root.image-ready &&
+                                root.task-index != 2;
+                            clicked => { root.quick-setup(); }
+                        }
+
+                        if root.task-selected: RecipeChoice {
+                            title: "Best Quality";
+                            detail: root.image-ready ?
+                                "Highest-fidelity setup · starts now" :
+                                "Add an image to enable this setup";
+                            active: root.model-selection-enabled && root.image-ready &&
+                                root.task-index != 2;
+                            clicked => { root.best-setup(); }
+                        }
+
+                        if root.task-selected: Text {
+                            height: 34px;
+                            text: "Quick Start and Best Quality choose safe hardware settings. " +
+                                "A missing model is verified before the job starts.";
+                            color: #85858b;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+
+                        ThinSeparator { }
+
+                        DisclosureRow {
+                            text: "Advanced settings";
+                            summary: "Model, output, hardware";
+                            open: root.advanced-open;
+                            active: root.controls-enabled;
+                            toggled => { root.advanced-open = !root.advanced-open; }
+                        }
+
+                        if root.advanced-open: VerticalLayout {
                             spacing: 7px;
 
-                            Text {
-                                text: "RUN AN AUTOMATIC RECIPE";
-                                color: #aab3bf;
-                                font-size: 9px;
-                                font-weight: 600;
-                                height: 20px;
-                                vertical-alignment: bottom;
-                            }
-                            HorizontalLayout {
-                                height: 34px;
-                                spacing: 6px;
-                                FlatButton {
-                                    text: "Quick";
-                                    primary: true;
-                                    active: root.model-selection-enabled && root.image-ready;
-                                    clicked => { root.quick-setup(); }
-                                }
-                                FlatButton {
-                                    text: "Best";
-                                    active: root.model-selection-enabled && root.image-ready;
-                                    clicked => { root.best-setup(); }
-                                }
-                            }
-                            Text {
-                                text: root.image-ready ?
-                                    "Starts immediately. A required model is downloaded first." :
-                                    "Add an image to enable Quick and Best.";
-                                color: #7c8794;
-                                font-size: 8px;
-                                wrap: word-wrap;
-                                height: 25px;
-                            }
-
-                            ThinSeparator { }
-                            SectionTitle { step: 3; title: "MANUAL CONFIGURATION"; }
+                            SectionTitle { title: "Model & size"; }
                             FieldLabel { label: "Restoration model"; }
                             DesktopComboBox {
-                                height: 32px;
                                 model: root.model-options;
-                                enabled: root.model-selection-enabled;
+                                enabled: root.model-selection-enabled && root.task-selected;
                                 current-index <=> root.model-index;
                                 selected(value) => { root.model-changed(root.model-index); }
                             }
+
                             Text {
                                 text: root.model-description;
-                                color: #858f9c;
-                                font-size: 9px;
+                                color: #929298;
+                                font-size: 11px;
                                 wrap: word-wrap;
-                                height: 42px;
+                                height: 44px;
                             }
+
                             FlatButton {
                                 text: root.model-action-text;
                                 compact: true;
@@ -406,25 +1098,35 @@ export component MainWindow inherits Window {
                                 active: root.controls-enabled && root.model-action-enabled;
                                 clicked => { root.model-action(); }
                             }
+
                             ProgressTrack {
                                 visible: root.download-visible;
                                 value: root.download-progress;
                             }
+
                             Text {
                                 text: root.model-status;
-                                color: #7d8895;
-                                font-size: 8px;
+                                color: #85858b;
+                                font-size: 10px;
                                 wrap: word-wrap;
-                                height: 30px;
+                                height: 32px;
                             }
 
-                            VerticalLayout {
-                                visible: root.task-index != 1;
-                                spacing: 5px;
-                                FieldLabel { label: "Output scale"; }
+                            if root.task-index != 1: FieldLabel { label: "Output scale"; }
+                            if root.task-index != 1: Rectangle {
+                                height: 38px;
+                                border-radius: 8px;
+                                background: #282a2f;
+                                border-width: 1px;
+                                border-color: #383a40;
+
                                 HorizontalLayout {
-                                    height: 31px;
-                                    spacing: 0px;
+                                    x: 3px;
+                                    y: 3px;
+                                    width: parent.width - 6px;
+                                    height: 32px;
+                                    spacing: 2px;
+
                                     for option[index] in root.scale-options: SegmentedButton {
                                         text: option;
                                         selected: root.scale-index == index;
@@ -437,44 +1139,57 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            Text {
+                                text: root.output-dimensions;
+                                color: #929298;
+                                font-size: 11px;
+                                height: 22px;
+                                visible: root.task-selected;
+                                vertical-alignment: center;
+                            }
+
                             ThinSeparator { }
-                            SectionTitle { step: 4; title: "OUTPUT"; }
+                            SectionTitle { title: "Output"; }
                             FieldLabel { label: "Format"; }
                             DesktopComboBox {
-                                height: 30px;
                                 model: root.format-options;
                                 enabled: root.controls-enabled;
                                 current-index <=> root.format-index;
                                 selected(value) => { root.format-changed(root.format-index); }
                             }
-                            FieldLabel { label: "Output folder"; }
+
+                            FieldLabel { label: "Save to"; }
                             HorizontalLayout {
-                                height: 29px;
-                                spacing: 5px;
+                                height: 34px;
+                                spacing: 6px;
+
                                 Rectangle {
                                     horizontal-stretch: 1;
-                                    background: #11161c;
+                                    background: #222428;
                                     border-width: 1px;
-                                    border-color: #303943;
-                                    border-radius: 3px;
+                                    border-color: #383a40;
+                                    border-radius: 7px;
+
                                     Text {
-                                        x: 7px;
-                                        width: parent.width - 14px;
+                                        x: 9px;
+                                        width: parent.width - 18px;
                                         text: root.output-directory;
-                                        color: #8e98a5;
-                                        font-size: 8px;
+                                        color: #a1a1a6;
+                                        font-size: 11px;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
                                 }
+
                                 FlatButton {
                                     text: "Choose…";
                                     compact: true;
-                                    width: 70px;
+                                    width: 78px;
                                     active: root.controls-enabled;
                                     clicked => { root.choose-output-directory(); }
                                 }
                             }
+
                             CheckControl {
                                 text: "Preserve safe metadata";
                                 checked: root.preserve-metadata;
@@ -485,592 +1200,295 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            ThinSeparator { }
-                            Rectangle {
-                                height: 34px;
-                                background: advanced-touch.has-hover ? #1b222b : transparent;
-                                Text {
-                                    text: "ADVANCED";
-                                    color: #dce2e9;
-                                    font-size: 10px;
-                                    font-weight: 600;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    x: parent.width - 24px;
-                                    width: 20px;
-                                    text: root.advanced-open ? "⌃" : "⌄";
-                                    color: #cbd2db;
-                                    font-size: 14px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                                advanced-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.advanced-open = !root.advanced-open; }
-                                }
-                            }
+                            if root.format-index == 1: VerticalLayout {
+                                spacing: 2px;
+                                FieldLabel { label: "JPEG quality"; }
 
-                            VerticalLayout {
-                                visible: root.advanced-open;
-                                spacing: 6px;
-                                FieldLabel { label: "Compute device"; }
-                                DesktopComboBox {
-                                    height: 30px;
-                                    model: root.device-options;
-                                    enabled: root.controls-enabled;
-                                    current-index <=> root.device-index;
-                                    selected(value) => { root.device-changed(root.device-index); }
-                                }
-                                FieldLabel { label: "Tile size"; }
-                                DesktopComboBox {
-                                    height: 30px;
-                                    model: root.tile-options;
-                                    enabled: root.controls-enabled;
-                                    current-index <=> root.tile-index;
-                                    selected(value) => { root.tile-changed(root.tile-index); }
-                                }
-                                FieldLabel { label: "Overlap / halo"; }
-                                DesktopComboBox {
-                                    height: 30px;
-                                    model: root.halo-options;
-                                    enabled: root.controls-enabled;
-                                    current-index <=> root.halo-index;
-                                    selected(value) => { root.halo-changed(root.halo-index); }
-                                }
-                                FieldLabel { label: "Precision"; }
-                                DesktopComboBox {
-                                    height: 30px;
-                                    model: root.precision-options;
-                                    enabled: root.controls-enabled;
-                                    current-index <=> root.precision-index;
-                                    selected(value) => { root.precision-changed(root.precision-index); }
-                                }
-                                CheckControl {
-                                    text: "Safe memory mode";
-                                    checked: root.safe-memory;
-                                    active: root.controls-enabled && root.safe-memory-enabled;
-                                    toggled(value) => {
-                                        root.safe-memory = value;
-                                        root.safe-memory-changed(value);
+                                Rectangle {
+                                    height: 32px;
+                                    background: transparent;
+
+                                    ProgressTrack {
+                                        x: 0px;
+                                        y: 14px;
+                                        width: parent.width - 48px;
+                                        value: (root.jpeg-quality - 70) / 30;
                                     }
-                                }
-                                VerticalLayout {
-                                    visible: root.format-index == 1;
-                                    spacing: 2px;
-                                    FieldLabel { label: "JPEG quality: " + root.jpeg-quality; }
+
                                     Rectangle {
-                                        height: 22px;
-                                        background: transparent;
-                                        ProgressTrack {
-                                            y: 9px;
-                                            width: parent.width;
-                                            value: (root.jpeg-quality - 70) / 30;
+                                        x: (parent.width - 58px) * (root.jpeg-quality - 70) / 30;
+                                        y: 9px;
+                                        width: 14px;
+                                        height: 14px;
+                                        border-radius: 7px;
+                                        background: #f5f5f7;
+                                        border-width: 1px;
+                                        border-color: #8e8e93;
+                                    }
+
+                                    Text {
+                                        x: parent.width - 42px;
+                                        width: 42px;
+                                        text: root.jpeg-quality;
+                                        color: #d1d1d6;
+                                        font-size: 11px;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                    }
+
+                                    quality-touch := TouchArea {
+                                        width: parent.width - 44px;
+                                        enabled: root.controls-enabled;
+                                        mouse-cursor: pointer;
+                                        moved => {
+                                            root.jpeg-quality = max(70, min(100,
+                                                round(70 + self.mouse-x / self.width * 30)));
+                                            root.jpeg-quality-changed(root.jpeg-quality);
                                         }
-                                        Rectangle {
-                                            x: (parent.width - 10px) * (root.jpeg-quality - 70) / 30;
-                                            y: 4px;
-                                            width: 10px;
-                                            height: 10px;
-                                            border-radius: 5px;
-                                            background: #dce2e9;
-                                        }
-                                        quality-touch := TouchArea {
-                                            enabled: root.controls-enabled;
-                                            mouse-cursor: pointer;
-                                            moved => {
-                                                root.jpeg-quality = max(70, min(100, round(70 + self.mouse-x / self.width * 30)));
-                                                root.jpeg-quality-changed(root.jpeg-quality);
-                                            }
-                                            clicked => {
-                                                root.jpeg-quality = max(70, min(100, round(70 + self.mouse-x / self.width * 30)));
-                                                root.jpeg-quality-changed(root.jpeg-quality);
-                                            }
+                                        clicked => {
+                                            root.jpeg-quality = max(70, min(100,
+                                                round(70 + self.mouse-x / self.width * 30)));
+                                            root.jpeg-quality-changed(root.jpeg-quality);
                                         }
                                     }
                                 }
                             }
-                        }
-                    }
-                }
 
-                ThinSeparator { x: parent.width - 1px; height: parent.height; vertical: true; }
-            }
-
-            // Document window: the image remains the dominant visual element.
-            Rectangle {
-                horizontal-stretch: 1;
-                min-width: 480px;
-                background: #0d1117;
-
-                Rectangle {
-                    x: 13px;
-                    y: 13px;
-                    width: parent.width - 26px;
-                    height: parent.height - 26px;
-                    background: #080b10;
-                    border-width: 1px;
-                    border-color: #252d37;
-                    clip: true;
-
-                    property <length> fit-width: min(
-                        self.width,
-                        self.height * max(0.01, root.preview-aspect)
-                    );
-                    property <length> fit-height: self.fit-width / max(0.01, root.preview-aspect);
-                    property <length> max-pan-x: max(
-                        0px,
-                        (self.fit-width * root.preview-zoom - self.width) / 2
-                    );
-                    property <length> max-pan-y: max(
-                        0px,
-                        (self.fit-height * root.preview-zoom - self.height) / 2
-                    );
-
-                    preview-content := Rectangle {
-                        x: (parent.width - self.width) / 2 + root.preview-pan-x;
-                        y: (parent.height - self.height) / 2 + root.preview-pan-y;
-                        width: parent.fit-width * root.preview-zoom;
-                        height: parent.fit-height * root.preview-zoom;
-                        background: #080b10;
-
-                        Image {
-                            source: root.source-image;
-                            width: parent.width;
-                            height: parent.height;
-                            image-fit: fill;
-                            visible: root.image-ready;
-                        }
-
-                        Rectangle {
-                            width: root.result-ready ? parent.width * root.compare-position : parent.width;
-                            height: parent.height;
-                            clip: true;
-                            background: transparent;
-                            visible: root.live-result-ready;
-
-                            Image {
-                                source: root.result-image;
-                                width: preview-content.width;
-                                height: preview-content.height;
-                                image-fit: fill;
+                            ThinSeparator { }
+                            SectionTitle { title: "Hardware & memory"; }
+                            FieldLabel { label: "Compute device"; }
+                            DesktopComboBox {
+                                model: root.device-options;
+                                enabled: root.controls-enabled;
+                                current-index <=> root.device-index;
+                                selected(value) => { root.device-changed(root.device-index); }
                             }
-                        }
 
-                        Rectangle {
-                            x: root.tile-x * parent.width;
-                            y: root.tile-y * parent.height;
-                            width: root.tile-width * parent.width;
-                            height: root.tile-height * parent.height;
-                            background: #3279d118;
-                            border-width: 2px / root.preview-zoom;
-                            border-color: #54a3ff;
-                            visible: root.tile-active;
-                        }
+                            HorizontalLayout {
+                                height: 54px;
+                                spacing: 8px;
 
-                        Rectangle {
-                            x: parent.width * root.compare-position - 1px;
-                            width: 2px;
-                            height: parent.height;
-                            background: #d8dde4;
-                            visible: root.result-ready && !root.tile-active;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    FieldLabel { label: "Tile size"; }
+                                    DesktopComboBox {
+                                        model: root.tile-options;
+                                        enabled: root.controls-enabled;
+                                        current-index <=> root.tile-index;
+                                        selected(value) => { root.tile-changed(root.tile-index); }
+                                    }
+                                }
 
-                            Rectangle {
-                                x: -18px;
-                                y: parent.height / 2 - 18px;
-                                width: 38px;
-                                height: 38px;
-                                border-radius: 19px;
-                                border-width: 1px;
-                                border-color: #b5bec9;
-                                background: #151a21e8;
-                                Text {
-                                    text: "‹  ›";
-                                    color: #f1f3f6;
-                                    font-size: 12px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    FieldLabel { label: "Overlap"; }
+                                    DesktopComboBox {
+                                        model: root.halo-options;
+                                        enabled: root.controls-enabled;
+                                        current-index <=> root.halo-index;
+                                        selected(value) => { root.halo-changed(root.halo-index); }
+                                    }
                                 }
                             }
-                        }
-                    }
 
-                    Text {
-                        width: parent.width;
-                        height: parent.height;
-                        text: "Add an image to begin";
-                        color: #4f5966;
-                        font-size: 16px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        visible: !root.image-ready;
-                    }
-
-                    Rectangle {
-                        x: 12px;
-                        y: parent.height - 36px;
-                        width: min(230px, parent.width / 2 - 20px);
-                        height: 24px;
-                        border-radius: 3px;
-                        background: #0b0f15cc;
-                        visible: root.image-ready;
-                        Text {
-                            x: 8px;
-                            width: parent.width - 16px;
-                            text: root.source-label;
-                            color: #e2e6eb;
-                            font-size: 10px;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    Rectangle {
-                        x: parent.width - self.width - 12px;
-                        y: parent.height - 36px;
-                        width: min(180px, parent.width / 2 - 20px);
-                        height: 24px;
-                        border-radius: 3px;
-                        background: #0b0f15cc;
-                        visible: root.result-ready;
-                        Text {
-                            x: 8px;
-                            width: parent.width - 16px;
-                            text: root.result-label;
-                            color: #e2e6eb;
-                            font-size: 10px;
-                            horizontal-alignment: right;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    preview-touch := TouchArea {
-                        property <length> pan-start-x: 0px;
-                        property <length> pan-start-y: 0px;
-                        property <bool> dragging-divider: false;
-                        property <float> zoom-anchor-x: 0.5;
-                        property <float> zoom-anchor-y: 0.5;
-                        property <float> next-zoom: 1;
-                        property <length> next-width: 0px;
-                        property <length> next-height: 0px;
-                        property <length> next-max-pan-x: 0px;
-                        property <length> next-max-pan-y: 0px;
-                        enabled: root.image-ready;
-                        mouse-cursor: root.result-ready &&
-                            abs(self.mouse-x - (preview-content.x +
-                                preview-content.width * root.compare-position)) <= 18px ?
-                            col-resize : root.preview-zoom > 1 ? move : default;
-                        pointer-event(event) => {
-                            if (event.kind == PointerEventKind.down) {
-                                self.pan-start-x = root.preview-pan-x;
-                                self.pan-start-y = root.preview-pan-y;
-                                self.dragging-divider = root.result-ready &&
-                                    abs(self.mouse-x - (preview-content.x +
-                                        preview-content.width * root.compare-position)) <= 18px;
+                            FieldLabel { label: "Precision"; }
+                            DesktopComboBox {
+                                model: root.precision-options;
+                                enabled: root.controls-enabled;
+                                current-index <=> root.precision-index;
+                                selected(value) => { root.precision-changed(root.precision-index); }
                             }
-                            if (event.kind == PointerEventKind.up ||
-                                event.kind == PointerEventKind.cancel) {
-                                self.dragging-divider = false;
+
+                            CheckControl {
+                                text: "Safe memory mode";
+                                checked: root.safe-memory;
+                                active: root.controls-enabled && root.safe-memory-enabled;
+                                toggled(value) => {
+                                    root.safe-memory = value;
+                                    root.safe-memory-changed(value);
+                                }
                             }
-                        }
-                        moved => {
-                            if (self.dragging-divider) {
-                                root.compare-position = max(
-                                    0.03,
-                                    min(0.97, (self.mouse-x - preview-content.x) /
-                                        preview-content.width)
-                                );
-                            } else if (root.preview-zoom > 1) {
-                                root.preview-pan-x = max(
-                                    -parent.max-pan-x,
-                                    min(parent.max-pan-x,
-                                        self.pan-start-x + self.mouse-x - self.pressed-x)
-                                );
-                                root.preview-pan-y = max(
-                                    -parent.max-pan-y,
-                                    min(parent.max-pan-y,
-                                        self.pan-start-y + self.mouse-y - self.pressed-y)
-                                );
+
+                            ValueLine { label: "Pressure"; value: root.pressure-text; }
+                            ValueLine { label: "Projected"; value: root.memory-usage-text; }
+                            ProgressTrack {
+                                value: root.memory-usage-ratio;
+                                fill-color: root.memory-usage-ratio > 0.85 ? #ff453a :
+                                    root.memory-usage-ratio > 0.65 ? #ff9f0a : #64d2ff;
                             }
-                        }
-                        double-clicked => {
-                            root.preview-zoom = 1;
-                            root.preview-pan-x = 0px;
-                            root.preview-pan-y = 0px;
-                        }
-                        scroll-event(event) => {
-                            self.zoom-anchor-x = max(0, min(1,
-                                (self.mouse-x - preview-content.x) /
-                                    max(1px, preview-content.width)));
-                            self.zoom-anchor-y = max(0, min(1,
-                                (self.mouse-y - preview-content.y) /
-                                    max(1px, preview-content.height)));
-                            self.next-zoom = event.delta-y < 0px ?
-                                min(8, root.preview-zoom * 1.12) :
-                                max(1, root.preview-zoom / 1.12);
-                            self.next-width = parent.fit-width * self.next-zoom;
-                            self.next-height = parent.fit-height * self.next-zoom;
-                            self.next-max-pan-x = max(0px, (self.next-width - parent.width) / 2);
-                            self.next-max-pan-y = max(0px, (self.next-height - parent.height) / 2);
-                            root.preview-zoom = self.next-zoom;
-                            root.preview-pan-x = max(
-                                -self.next-max-pan-x,
-                                min(self.next-max-pan-x,
-                                    self.mouse-x - self.zoom-anchor-x * self.next-width -
-                                        (parent.width - self.next-width) / 2)
-                            );
-                            root.preview-pan-y = max(
-                                -self.next-max-pan-y,
-                                min(self.next-max-pan-y,
-                                    self.mouse-y - self.zoom-anchor-y * self.next-height -
-                                        (parent.height - self.next-height) / 2)
-                            );
-                            if (self.next-zoom <= 1) {
-                                root.preview-pan-x = 0px;
-                                root.preview-pan-y = 0px;
-                            }
-                            return accept;
-                        }
-                    }
-                }
-            }
 
-            // Trailing inspector: contextual facts, estimates, and telemetry only.
-            Rectangle {
-                width: 304px;
-                background: #151a21;
-
-                inspector-scroll := Flickable {
-                    x: 1px;
-                    width: parent.width - 1px;
-                    height: parent.height;
-                    interactive: true;
-                    viewport-width: self.width;
-                    viewport-height: root.can-open-result ? 760px :
-                        root.estimate-warning != "" ? 710px : 640px;
-
-                    VerticalLayout {
-                        width: 270px;
-                        x: 16px;
-                        y: 12px;
-                        spacing: 8px;
-
-                        Text {
-                            text: "JOB INSPECTOR";
-                            color: #e0e5eb;
-                            font-size: 11px;
-                            font-weight: 600;
-                            height: 26px;
-                            vertical-alignment: center;
-                        }
-
-                        FieldLabel { label: "Selected input"; }
-                        Text {
-                            text: root.input-summary;
-                            color: #cbd2db;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                            height: 38px;
-                        }
-                        ValueLine { label: "Task"; value: root.task-summary; }
-                        ValueLine { label: "Recipe"; value: root.profile-summary; }
-                        FieldLabel { label: "Model"; }
-                        Text {
-                            text: root.model-summary;
-                            color: #cbd2db;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                            height: 34px;
-                        }
-                        ValueLine { label: "Scale"; value: root.scale-summary; }
-                        ValueLine { label: "Output"; value: root.output-summary; }
-
-                        ThinSeparator { }
-                        Rectangle {
-                            height: 30px;
-                            background: transparent;
                             Text {
-                                text: "SYSTEM";
-                                color: #e0e5eb;
-                                font-size: 11px;
-                                font-weight: 600;
-                                vertical-alignment: center;
+                                text: root.hardware-summary;
+                                color: #85858b;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                                height: 58px;
                             }
+
                             FlatButton {
-                                x: parent.width - 68px;
-                                y: 2px;
-                                width: 68px;
-                                text: "Refresh";
+                                text: "Refresh Hardware";
                                 compact: true;
                                 active: !root.can-cancel;
                                 clicked => { root.refresh-hardware(); }
                             }
                         }
-                        ValueLine { label: "Pressure"; value: root.pressure-text; }
-                        ValueLine { label: "Device"; value: root.device-summary; }
-                        ValueLine { label: "Memory"; value: root.memory-usage-text; }
-                        ProgressTrack {
-                            value: root.memory-usage-ratio;
-                            fill-color: root.memory-usage-ratio > 0.85 ? #e7665b :
-                                root.memory-usage-ratio > 0.65 ? #e3a947 : #54b9dc;
-                        }
-                        Text {
-                            text: root.hardware-summary;
-                            color: #798493;
-                            font-size: 9px;
-                            wrap: word-wrap;
-                            height: 58px;
-                        }
 
                         ThinSeparator { }
-                        Text {
-                            text: "ESTIMATE";
-                            color: #e0e5eb;
-                            font-size: 11px;
-                            font-weight: 600;
-                            height: 25px;
-                            vertical-alignment: center;
-                        }
+                        SectionTitle { title: "Run summary"; }
+                        ValueLine { label: "Input"; value: root.selected-name == "" ? "—" : root.selected-name; }
+                        ValueLine { label: "Task"; value: root.task-summary; }
+                        ValueLine { label: "Output"; value: root.output-dimensions; }
                         ValueLine { label: "Time"; value: root.estimate-time; }
                         ValueLine { label: "File size"; value: root.estimate-output; }
+                        ValueLine { label: "Save to"; value: root.output-summary; }
+
                         Text {
                             text: root.estimate-detail;
-                            color: #76818e;
-                            font-size: 9px;
+                            color: #85858b;
+                            font-size: 10px;
                             wrap: word-wrap;
-                            height: 42px;
-                        }
-                        Text {
-                            text: root.estimate-warning;
-                            color: #e2a449;
-                            font-size: 9px;
-                            wrap: word-wrap;
-                            height: root.estimate-warning == "" ? 0px : 58px;
-                            visible: root.estimate-warning != "";
+                            height: 34px;
                         }
 
-                        VerticalLayout {
-                            visible: root.can-open-result;
-                            spacing: 7px;
-                            ThinSeparator { }
+                        if root.estimate-warning != "": Rectangle {
+                            height: 58px;
+                            border-radius: 8px;
+                            background: #3a2b16;
+                            border-width: 1px;
+                            border-color: #704b19;
+
                             Text {
-                                text: "RESULT";
-                                color: #e0e5eb;
-                                font-size: 11px;
-                                font-weight: 600;
-                                height: 24px;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                text: "The latest completed output is ready.";
-                                color: #7e8996;
-                                font-size: 9px;
-                                height: 20px;
+                                x: 10px;
+                                y: 7px;
+                                width: parent.width - 20px;
+                                height: parent.height - 14px;
+                                text: root.estimate-warning;
+                                color: #ffd28a;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                                overflow: elide;
                             }
                         }
+
+                        Rectangle { height: 18px; background: transparent; }
                     }
                 }
 
+                // The only persistent primary action. Automatic recipes above
+                // are explicitly labelled as immediate commands.
                 Rectangle {
-                    x: parent.width - 4px;
-                    y: 8px;
-                    width: 2px;
-                    height: parent.height - 16px;
-                    border-radius: 1px;
-                    background: #28313b;
-                    visible: inspector-scroll.viewport-height > inspector-scroll.height;
+                    x: 0px;
+                    y: parent.height - 94px;
+                    width: parent.width;
+                    height: 94px;
+                    background: #202226;
+                    ThinSeparator { width: parent.width; }
 
-                    Rectangle {
-                        width: parent.width;
-                        height: max(28px, parent.height * inspector-scroll.height /
-                            inspector-scroll.viewport-height);
-                        y: (parent.height - self.height) *
-                            (-inspector-scroll.viewport-y /
-                                max(1px, inspector-scroll.viewport-height - inspector-scroll.height));
-                        border-radius: 1px;
-                        background: #626e7c;
+                    FlatButton {
+                        x: (parent.width - min(320px, parent.width - 32px)) / 2;
+                        y: 13px;
+                        width: min(320px, parent.width - 32px);
+                        height: 42px;
+                        text: root.can-cancel ? "Cancel Current Job" : root.action-text;
+                        primary: !root.can-cancel;
+                        active: root.can-cancel || root.can-start;
+                        clicked => {
+                            if (root.can-cancel) {
+                                root.cancel-job();
+                            } else {
+                                root.start-job();
+                            }
+                        }
+                    }
+
+                    Text {
+                        x: (parent.width - min(320px, parent.width - 32px)) / 2;
+                        y: 60px;
+                        width: min(320px, parent.width - 32px);
+                        height: 22px;
+                        text: !root.task-selected ? "Choose Upscale or Denoise to continue." :
+                            !root.image-ready ? "Add an image to continue." :
+                            root.can-cancel ? "Cancellation is safe after the active tile." :
+                            root.can-start ? "Uses the settings shown above." : root.status-detail;
+                        color: #85858b;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                        vertical-alignment: center;
                     }
                 }
             }
         }
 
-        // Persistent activity strip. It is operational, not an application-brand header.
+        // Status is persistent but secondary; job actions stay with Enhance.
         Rectangle {
-            height: 76px;
-            background: #171c24;
+            height: 48px;
+            background: #1b1d21;
             ThinSeparator { width: parent.width; }
 
-            Text {
-                x: 24px;
-                y: 18px;
-                text: root.status-title;
-                color: #e2e7ed;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            Text {
-                x: 24px;
-                y: 40px;
-                width: root.can-open-result && !root.can-cancel ?
-                    parent.width - 672px : parent.width - 352px;
-                text: root.batch-progress == "" ? root.status-detail :
-                    root.batch-progress + " · " + root.status-detail;
-                color: #818c99;
-                font-size: 9px;
-                overflow: elide;
-            }
             ProgressTrack {
-                x: 24px;
-                y: 63px;
-                width: root.can-open-result && !root.can-cancel ?
-                    parent.width - 672px : parent.width - 352px;
+                x: 0px;
+                y: 0px;
+                width: parent.width;
                 value: root.progress;
                 visible: root.can-cancel || root.progress > 0;
             }
 
+            Text {
+                x: 16px;
+                y: 7px;
+                width: 210px;
+                height: 18px;
+                text: root.batch-progress == "" ? root.status-title :
+                    root.batch-progress + " · " + root.status-title;
+                color: #f2f2f4;
+                font-size: 12px;
+                font-weight: 600;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 16px;
+                y: 25px;
+                width: parent.width - 400px;
+                height: 17px;
+                text: root.status-detail;
+                color: #85858b;
+                font-size: 10px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
             HorizontalLayout {
-                x: parent.width - 624px;
-                y: 18px;
-                width: 296px;
-                height: 42px;
-                spacing: 8px;
+                x: parent.width - 360px;
+                y: 8px;
+                width: 344px;
+                height: 32px;
+                spacing: 7px;
+
                 FlatButton {
                     text: "Open Result";
+                    compact: true;
                     active: root.can-open-result;
                     visible: root.can-open-result && !root.can-cancel;
                     clicked => { root.open-result(); }
                 }
+
                 FlatButton {
                     text: "Show in Folder";
+                    compact: true;
                     active: root.can-open-result;
                     visible: root.can-open-result && !root.can-cancel;
                     clicked => { root.reveal-result(); }
                 }
-            }
-
-            // Align the primary action to the center of the 304px inspector above.
-            Rectangle {
-                x: parent.width - 304px;
-                y: 17px;
-                width: 304px;
-                height: 44px;
-                background: transparent;
 
                 FlatButton {
-                    x: (parent.width - self.width) / 2;
-                    width: 236px;
-                    height: parent.height;
-                    text: root.can-cancel ? "Cancel" : root.action-text;
-                    primary: !root.can-cancel;
-                    active: root.can-cancel || root.can-start;
-                    clicked => {
-                        if (root.can-cancel) {
-                            root.cancel-job();
-                        } else {
-                            root.start-job();
-                        }
-                    }
+                    text: "Cancel";
+                    compact: true;
+                    active: root.can-cancel;
+                    visible: root.can-cancel && !root.enhance-pane-visible;
+                    clicked => { root.cancel-job(); }
                 }
             }
         }

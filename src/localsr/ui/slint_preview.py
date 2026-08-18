@@ -7,7 +7,7 @@ import io
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 class SlintPreviewBuffer:
@@ -20,6 +20,7 @@ class SlintPreviewBuffer:
         self._output_width = 0
         self._output_height = 0
         self._revision = 0
+        self._media_thumbnails: dict[str, Path] = {}
 
     def _bounded(self, image: Image.Image) -> Image.Image:
         result = image.convert("RGB")
@@ -53,6 +54,31 @@ class SlintPreviewBuffer:
         self._output_width = 0
         self._output_height = 0
         return self._write(self._source, "source", quality=92)
+
+    def media_thumbnail(self, source_path: str, size: int = 96) -> Path | None:
+        """Create a tiny square queue thumbnail without retaining source pixels.
+
+        Pillow does not decode every camera RAW variant; those inputs simply
+        keep the neutral file placeholder until the worker provides a preview.
+        """
+
+        cached = self._media_thumbnails.get(source_path)
+        if cached is not None and cached.is_file():
+            return cached
+        try:
+            with Image.open(source_path) as source:
+                oriented = ImageOps.exif_transpose(source)
+                thumbnail = ImageOps.fit(
+                    oriented.convert("RGB"),
+                    (size, size),
+                    method=Image.Resampling.LANCZOS,
+                )
+        except (OSError, TypeError, ValueError):
+            return None
+        destination = self._root / f"media-{len(self._media_thumbnails)}.jpg"
+        thumbnail.save(destination, format="JPEG", quality=82, optimize=False)
+        self._media_thumbnails[source_path] = destination
+        return destination
 
     def reset_progressive(self, output_width: int, output_height: int) -> Path:
         self._output_width = max(1, int(output_width))
@@ -122,4 +148,5 @@ class SlintPreviewBuffer:
     def close(self) -> None:
         self._source = None
         self._progressive = None
+        self._media_thumbnails.clear()
         self._temporary.cleanup()

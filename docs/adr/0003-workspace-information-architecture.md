@@ -32,21 +32,31 @@ Primary references:
 
 ## Decision
 
-- Use the operating-system title bar as the only static header.
-- Put import, task, recipe, model, scale, output, device, and Advanced controls in the leading pane.
-- Keep the canvas visually dominant in the center.
-- Use the trailing pane as a read-only inspector for the selected input, effective recipe, model,
-  output, live hardware pressure, estimates, warnings, and result state.
-- Keep the persistent progress/cancel/manual-start strip at the bottom because it represents an active
-  operation, not branding or document metadata.
+- Use the operating-system title bar as the only branded header. A slim in-content command bar holds
+  frequent workspace commands such as Add Images, Compare, and compact-window pane navigation.
+- Use a leading Media pane for Single/Batch selection, import, queue selection, and removal.
+- Keep the image canvas visually dominant in the center and retain aspect-correct preview,
+  zoom/pan, progressive tiles, and completed-result comparison.
+- Use one trailing Enhance pane for the decisions that change a job. Put Upscale/Denoise first,
+  immediate Quick/Best commands second, and model/output/hardware controls behind one Advanced
+  disclosure.
+- Keep contextual facts, uncertainty-aware estimates, warnings, and the single manual Start action
+  in the Enhance pane. Keep the bottom status area informational, with result and cancellation
+  actions only when they are relevant.
 - Reveal Quick and Best only after task selection. Treat them as immediate commands: resolve the
   complete recipe, download and verify a missing model if necessary, then start without another click.
+- Adapt by content fit rather than display DPI: show all three panes at 1280 logical pixels and
+  above, Media plus Preview at medium widths, and mutually exclusive Media/Preview/Enhance pages
+  below 920 logical pixels. Rely on Slint's native logical-pixel scaling instead of forcing a global
+  scale factor.
 
 ## Consequences
 
-- The interface has one clear direction of work from the left pane into the central document.
-- Diagnostics remain visible without looking editable or competing with task configuration.
+- The interface has one clear direction of work: choose media, inspect it, choose the enhancement,
+  then start.
+- The media queue and editable job controls no longer compete inside one scrolling pane.
 - Manual controls remain available for expert use, while the common path requires task selection plus
-  one recipe click.
+  one plainly labelled recipe click.
+- Small and split-screen windows retain the complete workflow without shrinking text or controls.
 - Automatic downloads must retain cancellation, atomic installation, fixed byte counts, pinned URLs,
   and SHA-256 verification before an automatic job can start.

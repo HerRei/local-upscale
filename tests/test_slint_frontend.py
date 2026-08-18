@@ -52,16 +52,67 @@ def test_slint_preview_uses_aspect_correct_zoom_pan_and_completed_comparison():
     assert "self.zoom-anchor-x" in source
     assert "double-clicked" in source
     assert "visible: root.live-result-ready" in source
-    assert "visible: root.result-ready && !root.tile-active" in source
+    assert "root.result-ready && root.comparison-enabled" in source
+    assert "!root.tile-active" in source
 
 
-def test_primary_action_is_centered_under_the_inspector():
+def test_primary_action_stays_with_the_responsive_enhance_inspector():
     source = (ROOT / "src/localsr/ui/slint/main.slint").read_text(encoding="utf-8")
 
-    assert "x: parent.width - 304px;" in source
-    assert "width: 304px;" in source
-    assert "x: (parent.width - self.width) / 2;" in source
-    assert 'text: root.can-cancel ? "Cancel" : root.action-text;' in source
+    assert "out property <int> layout-mode" in source
+    assert "if root.enhance-pane-visible: Rectangle" in source
+    assert "y: parent.height - 94px;" in source
+    assert 'text: root.can-cancel ? "Cancel Current Job" : root.action-text;' in source
+
+
+def test_responsive_layout_exposes_the_expected_workspace_panes(tmp_path):
+    run_slint_script(
+        f"""
+        from pathlib import Path
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        ui = application.ui
+
+        ui.layout_width = 1400
+        assert ui.layout_mode == 0
+        assert ui.media_pane_visible is True
+        assert ui.preview_pane_visible is True
+        assert ui.enhance_pane_visible is True
+
+        ui.layout_width = 1100
+        ui.compact_page = 1
+        assert ui.layout_mode == 1
+        assert ui.media_pane_visible is True
+        assert ui.preview_pane_visible is True
+        assert ui.enhance_pane_visible is False
+        ui.compact_page = 2
+        assert ui.media_pane_visible is True
+        assert ui.preview_pane_visible is False
+        assert ui.enhance_pane_visible is True
+
+        ui.layout_width = 860
+        assert ui.layout_mode == 2
+        ui.compact_page = 0
+        assert ui.media_pane_visible is True
+        assert ui.preview_pane_visible is False
+        assert ui.enhance_pane_visible is False
+        ui.compact_page = 1
+        assert ui.media_pane_visible is False
+        assert ui.preview_pane_visible is True
+        assert ui.enhance_pane_visible is False
+        ui.compact_page = 2
+        assert ui.media_pane_visible is False
+        assert ui.preview_pane_visible is False
+        assert ui.enhance_pane_visible is True
+        application.shutdown()
+        """
+    )
 
 
 def test_progressive_preview_starts_at_normal_source_brightness():
@@ -78,6 +129,27 @@ def test_progressive_preview_starts_at_normal_source_brightness():
         assert blue > 120
     finally:
         preview.close()
+
+
+def test_media_queue_thumbnail_is_small_square_and_cached(tmp_path):
+    source = tmp_path / "wide-source.png"
+    Image.new("RGB", (400, 200), "#315b78").save(source)
+    preview = SlintPreviewBuffer(maximum_dimension=100)
+    try:
+        first = preview.media_thumbnail(str(source), size=96)
+        second = preview.media_thumbnail(str(source), size=96)
+        assert first is not None
+        assert second == first
+        with Image.open(first) as thumbnail:
+            assert thumbnail.size == (96, 96)
+    finally:
+        preview.close()
+
+
+def test_entrypoint_uses_native_display_scaling():
+    source = (ROOT / "src/localsr/__main__.py").read_text(encoding="utf-8")
+
+    assert "SLINT_SCALE_FACTOR" not in source
 
 
 def test_settings_use_wheel_safe_desktop_combos():

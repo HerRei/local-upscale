@@ -181,10 +181,12 @@ preview while editing these files. `slint_app.py` owns presentation state and sp
 the isolated worker through `slint_worker.py`; neither the Slint files nor the UI host imports Torch
 or Spandrel.
 
-The workspace follows a document-tool layout: import, task, model, output, and Advanced controls are
-in the leading pane; the center is reserved for the image; and the trailing inspector is read-only
-context for the selected input, active recipe, device pressure, estimates, and completed result. The
-redundant in-app branding bar was removed so the operating-system title bar is the only static header.
+The workspace follows an adaptive document-tool layout: Media and the batch queue lead, the image
+canvas remains dominant, and Enhance contains the explicit Upscale/Denoise choice, immediate
+Quick/Best commands, the manual Start action, and one disclosure for model, output, and hardware
+settings. Wide windows show all three panes; medium and compact windows expose the same workflow
+through toolbar pane navigation. Slint uses native logical-pixel scaling, and the operating-system
+title bar remains the only branded header.
 
 File selection uses the host operating system's own dialog service, so the normal application does
 not carry a second GUI toolkit. PySide is an optional dependency only for the temporary `--legacy`

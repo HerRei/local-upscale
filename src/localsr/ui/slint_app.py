@@ -63,6 +63,7 @@ class ImageItem:
     path: str
     width: int
     height: int
+    thumbnail_path: str = ""
 
 
 class SettingsStore:
@@ -227,6 +228,7 @@ class SlintApplication:
 
     def _initialize_ui(self) -> None:
         self.ui.batch_mode = bool(self.settings.get("batch_mode", False))
+        self.ui.video_enabled = VIDEO_ENABLED
         self.ui.task_selected = False
         self.ui.task_index = self.task_index
         self._set_list_model("format_options", ["PNG", "JPEG", "TIFF"])
@@ -259,10 +261,17 @@ class SlintApplication:
 
     def _queue_entry(self, item: ImageItem, index: int):
         megapixels = item.width * item.height / 1_000_000
+        thumbnail = (
+            slint.Image.load_from_path(item.thumbnail_path)
+            if item.thumbnail_path and Path(item.thumbnail_path).is_file()
+            else slint.Image()
+        )
         return self.module.QueueEntry(
             name=Path(item.path).name,
             detail=f"{item.width} × {item.height} · {megapixels:.1f} MP",
             selected=index == self.selected_image_index,
+            thumbnail=thumbnail,
+            has_thumbnail=bool(item.thumbnail_path),
         )
 
     def _sync_queue(self) -> None:
@@ -314,7 +323,15 @@ class SlintApplication:
             except (OSError, RuntimeError, ValueError):
                 rejected.append(Path(path).name)
                 continue
-            accepted.append(ImageItem(path=path, width=width, height=height))
+            thumbnail_path = self.preview.media_thumbnail(path)
+            accepted.append(
+                ImageItem(
+                    path=path,
+                    width=width,
+                    height=height,
+                    thumbnail_path=str(thumbnail_path) if thumbnail_path is not None else "",
+                )
+            )
             existing.add(path)
             if replace:
                 break
@@ -330,6 +347,9 @@ class SlintApplication:
 
         if accepted:
             self._load_selected_preview()
+            # On compact windows, importing from the Media page should reveal
+            # the selected document instead of leaving the user in the queue.
+            self.ui.compact_page = 1
             count = len(accepted)
             self._show_status("Image ready", f"Added {count} image{'s' if count != 1 else ''}.")
         if rejected:
@@ -1029,12 +1049,28 @@ class SlintApplication:
     def _sync_inspector(self) -> None:
         image = self._selected_image()
         if image is None:
+            self.ui.selected_name = ""
+            self.ui.selected_detail = "No image selected"
+            self.ui.output_dimensions = "—"
             self.ui.input_summary = "No image selected"
         else:
             megapixels = image.width * image.height / 1_000_000
+            self.ui.selected_name = Path(image.path).name
+            format_name = Path(image.path).suffix.removeprefix(".").upper() or "IMAGE"
+            self.ui.selected_detail = f"{image.width} × {image.height} · {format_name}"
             self.ui.input_summary = (
                 f"{Path(image.path).name}\n{image.width} × {image.height} · {megapixels:.1f} MP"
             )
+            if not self.task_selected:
+                self.ui.output_dimensions = "Choose a task"
+            elif self.task_index == 1:
+                self.ui.output_dimensions = f"{image.width} × {image.height} · original size"
+            else:
+                output_width = image.width * self.output_scale
+                output_height = image.height * self.output_scale
+                self.ui.output_dimensions = (
+                    f"{output_width} × {output_height} · {self.output_scale}×"
+                )
 
         self.ui.task_summary = (
             TASK_LABELS[self.task_index]

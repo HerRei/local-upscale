@@ -1,10 +1,13 @@
 import { ScrollView } from "std-widgets.slint";
 
-// LocalSR's settings live inside a scrolling pane. Slint 1.9's standard
-// ComboBox consumes trackpad/wheel events even when it does not have focus,
-// which silently changes settings while the user is only scrolling the pane.
-// This desktop combo deliberately leaves closed-control wheel events to the
-// parent ScrollView; scrolling is confined to the popup while it is open.
+// A small, deliberately custom desktop control set. The palette follows the
+// restrained contrast and spacing of native macOS tools without imitating
+// platform-owned chrome or symbols. Controls stay at least 28 logical pixels
+// tall and use the platform's default typeface.
+
+// Slint 1.9's stock ComboBox consumes wheel events even when it is closed.
+// That changes settings while the user only intends to scroll the inspector,
+// so this control rejects closed wheel events and lets its parent scroll.
 export component DesktopComboBox inherits Rectangle {
     in property <[string]> model;
     in property <bool> enabled: true;
@@ -14,14 +17,15 @@ export component DesktopComboBox inherits Rectangle {
             root.model[root.current-index] : "";
     callback selected(string);
 
-    height: 30px;
-    min-width: 120px;
+    height: 34px;
+    min-width: 128px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
     border-width: 1px;
-    border-color: !root.enabled ? #2b323c : control-touch.has-hover ? #4a586a : #343e4a;
-    border-radius: 3px;
-    background: !root.enabled ? #1b2027 : control-touch.pressed ? #29323d : #20262f;
+    border-color: !root.enabled ? #303238 : control-focus.has-focus ? #4da3ff :
+        control-touch.has-hover ? #4a4d54 : #3a3c42;
+    border-radius: 7px;
+    background: !root.enabled ? #202226 : control-touch.pressed ? #303238 : #292b30;
     clip: true;
     forward-focus: control-focus;
 
@@ -36,21 +40,21 @@ export component DesktopComboBox inherits Rectangle {
     }
 
     Text {
-        x: 9px;
-        width: parent.width - 34px;
+        x: 11px;
+        width: parent.width - 40px;
         text: root.current-value;
-        color: root.enabled ? #e2e7ed : #717b88;
-        font-size: 10px;
+        color: root.enabled ? #f2f2f4 : #696b71;
+        font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
     }
 
     Text {
-        x: parent.width - 25px;
-        width: 16px;
+        x: parent.width - 29px;
+        width: 18px;
         text: "⌄";
-        color: root.enabled ? #aeb7c2 : #626b76;
-        font-size: 12px;
+        color: root.enabled ? #a7a7ac : #606168;
+        font-size: 13px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -82,7 +86,6 @@ export component DesktopComboBox inherits Rectangle {
             }
             scroll-event(event) => {
                 // Never cycle a closed settings combo with the wheel/trackpad.
-                // Rejecting here lets the containing settings pane scroll.
                 return reject;
             }
         }
@@ -98,9 +101,9 @@ export component DesktopComboBox inherits Rectangle {
 
     popup := PopupWindow {
         x: 0px;
-        y: root.height + 2px;
+        y: root.height + 4px;
         width: root.width;
-        height: max(1, min(6, root.model.length)) * 30px + 8px;
+        height: max(1, min(7, root.model.length)) * 34px + 10px;
         close-policy: close-on-click-outside;
         forward-focus: popup-focus;
 
@@ -120,16 +123,16 @@ export component DesktopComboBox inherits Rectangle {
             }
 
             Rectangle {
-                background: #1b2129;
+                background: #292b30;
                 border-width: 1px;
-                border-color: #465161;
-                border-radius: 3px;
+                border-color: #484b52;
+                border-radius: 8px;
 
                 ScrollView {
-                    x: 4px;
-                    y: 4px;
-                    width: parent.width - 8px;
-                    height: parent.height - 8px;
+                    x: 5px;
+                    y: 5px;
+                    width: parent.width - 10px;
+                    height: parent.height - 10px;
                     viewport-width: self.width;
 
                     VerticalLayout {
@@ -137,18 +140,19 @@ export component DesktopComboBox inherits Rectangle {
                         spacing: 0px;
 
                         for value[index] in root.model: Rectangle {
-                            height: 30px;
+                            height: 34px;
                             width: parent.width;
-                            background: option-touch.pressed ? #345f9f :
-                                index == root.current-index ? #2c4e7e :
-                                option-touch.has-hover ? #293542 : transparent;
+                            border-radius: 5px;
+                            background: option-touch.pressed ? #0878df :
+                                index == root.current-index ? #0a84ff :
+                                option-touch.has-hover ? #3a3c42 : transparent;
 
                             Text {
-                                x: 8px;
-                                width: parent.width - 16px;
+                                x: 10px;
+                                width: parent.width - 20px;
                                 text: value;
-                                color: #e4e9ef;
-                                font-size: 10px;
+                                color: index == root.current-index ? white : #f2f2f4;
+                                font-size: 13px;
                                 overflow: elide;
                                 vertical-alignment: center;
                             }
@@ -170,47 +174,70 @@ export component DesktopComboBox inherits Rectangle {
 
 export component ThinSeparator inherits Rectangle {
     in property <bool> vertical: false;
-    background: #29313b;
+    background: #34363b;
     width: root.vertical ? 1px : 10px;
     height: root.vertical ? 10px : 1px;
     horizontal-stretch: root.vertical ? 0 : 1;
     vertical-stretch: root.vertical ? 1 : 0;
 }
 
-export component SectionTitle inherits Rectangle {
-    in property <int> step: 1;
-    in property <string> title: "SECTION";
+export component PanelHeading inherits Rectangle {
+    in property <string> title: "Heading";
+    in property <string> detail: "";
     background: transparent;
-    height: 29px;
+    height: root.detail == "" ? 34px : 52px;
 
-    Rectangle {
-        x: 0px;
-        y: 2px;
-        width: 22px;
-        height: 22px;
-        border-width: 1px;
-        border-color: #5e6978;
-        border-radius: 11px;
-        background: #171c23;
-
-        Text {
-            text: root.step;
-            color: #b8c1cc;
-            font-size: 11px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
+    Text {
+        y: 1px;
+        width: parent.width;
+        height: 25px;
+        text: root.title;
+        color: #f5f5f7;
+        font-size: 16px;
+        font-weight: 600;
+        vertical-alignment: center;
     }
 
     Text {
-        x: 34px;
-        width: parent.width - 34px;
-        height: 26px;
-        text: root.title;
-        color: #e4e8ed;
+        y: 27px;
+        width: parent.width;
+        height: 20px;
+        text: root.detail;
+        visible: root.detail != "";
+        color: #929298;
         font-size: 11px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+export component SectionTitle inherits Rectangle {
+    in property <int> step: 0;
+    in property <string> title: "SECTION";
+    in property <string> trailing: "";
+    background: transparent;
+    height: 27px;
+
+    Text {
+        width: parent.width * 0.72;
+        height: parent.height;
+        text: root.step > 0 ? root.step + ".  " + root.title : root.title;
+        color: #d1d1d6;
+        font-size: 12px;
         font-weight: 600;
         vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width * 0.72;
+        width: parent.width * 0.28;
+        height: parent.height;
+        text: root.trailing;
+        color: #85858b;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
     }
 }
 
@@ -219,16 +246,20 @@ export component FlatButton inherits Rectangle {
     in property <bool> active: true;
     in property <bool> primary: false;
     in property <bool> compact: false;
+    in property <bool> selected: false;
     callback clicked();
 
-    height: root.compact ? 28px : 34px;
+    height: root.compact ? 30px : 38px;
     min-width: 72px;
     border-width: root.primary ? 0px : 1px;
-    border-color: root.active ? #3a4554 : #2b323c;
-    border-radius: 4px;
-    background: !root.active ? #242a32 : touch.pressed ?
-        (root.primary ? #3569be : #303945) : touch.has-hover ?
-        (root.primary ? #457ee0 : #29323e) : (root.primary ? #3d73cf : #222933);
+    border-color: !root.active ? #303238 : button-focus.has-focus ? #4da3ff :
+        root.selected ? #5c9fff : #3c3e44;
+    border-radius: 7px;
+    background: !root.active ? #232529 : button-touch.pressed ?
+        (root.primary ? #006edb : #34363c) : button-touch.has-hover ?
+        (root.primary ? #2493ff : #303238) : root.primary ? #0a84ff :
+        root.selected ? #243f5d : #292b30;
+    forward-focus: button-focus;
 
     accessible-role: button;
     accessible-enabled: root.active;
@@ -240,12 +271,95 @@ export component FlatButton inherits Rectangle {
     }
 
     Text {
+        x: 10px;
+        width: parent.width - 20px;
         text: root.text;
-        color: root.active ? #f1f3f6 : #717b88;
-        font-size: root.compact ? 10px : 12px;
+        color: root.active ? #ffffff : #6d6f75;
+        font-size: root.compact ? 12px : 13px;
         font-weight: root.primary ? 600 : 500;
         horizontal-alignment: center;
         vertical-alignment: center;
+        overflow: elide;
+    }
+
+    button-focus := FocusScope {
+        key-pressed(event) => {
+            if (root.active && event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+
+        button-touch := TouchArea {
+            enabled: root.active;
+            mouse-cursor: pointer;
+            clicked => {
+                button-focus.focus();
+                root.clicked();
+            }
+        }
+    }
+}
+
+export component ToolbarButton inherits Rectangle {
+    in property <string> text: "Toolbar";
+    in property <bool> active: true;
+    in property <bool> selected: false;
+    in property <bool> prominent: false;
+    in property <string> badge: "";
+    callback clicked();
+
+    height: 34px;
+    preferred-width: root.badge == "" ? 86px : 96px;
+    min-width: 78px;
+    horizontal-stretch: 0;
+    border-width: root.prominent ? 0px : 1px;
+    border-color: root.selected ? #559fff : #3a3c42;
+    border-radius: 7px;
+    background: !root.active ? #222428 : touch.pressed ?
+        (root.prominent ? #006edb : #34363c) : touch.has-hover ?
+        (root.prominent ? #2493ff : #313338) : root.prominent ? #0a84ff :
+        root.selected ? #24425f : #282a2f;
+
+    accessible-role: button;
+    accessible-enabled: root.active;
+    accessible-label: root.badge == "" ? root.text : root.text + ", " + root.badge;
+    accessible-action-default => {
+        if (root.active) {
+            root.clicked();
+        }
+    }
+
+    Text {
+        x: 10px;
+        width: root.badge == "" ? parent.width - 20px : parent.width - 42px;
+        text: root.text;
+        color: root.active ? #f5f5f7 : #696b71;
+        font-size: 12px;
+        font-weight: root.prominent || root.selected ? 600 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    Rectangle {
+        x: parent.width - 30px;
+        y: 8px;
+        width: 22px;
+        height: 18px;
+        border-radius: 9px;
+        background: root.selected || root.prominent ? #ffffff29 : #3b3d43;
+        visible: root.badge != "";
+
+        Text {
+            text: root.badge;
+            color: #f5f5f7;
+            font-size: 10px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
     touch := TouchArea {
@@ -261,11 +375,10 @@ export component SegmentedButton inherits Rectangle {
     in property <bool> active: true;
     callback clicked();
 
-    height: 31px;
+    height: 32px;
     min-width: 54px;
-    background: root.selected ? #3e72cb : touch.has-hover ? #29323d : #20262f;
-    border-width: 1px;
-    border-color: root.selected ? #4a80dc : #303944;
+    border-radius: 6px;
+    background: root.selected ? #4a4c52 : touch.has-hover ? #35373c : transparent;
 
     accessible-role: button;
     accessible-enabled: root.active;
@@ -280,11 +393,12 @@ export component SegmentedButton inherits Rectangle {
 
     Text {
         text: root.text;
-        color: root.active ? #eef2f7 : #707984;
-        font-size: 11px;
+        color: root.active ? (root.selected ? #ffffff : #c4c4c8) : #65676d;
+        font-size: 12px;
         font-weight: root.selected ? 600 : 500;
         horizontal-alignment: center;
         vertical-alignment: center;
+        overflow: elide;
     }
 
     touch := TouchArea {
@@ -297,12 +411,19 @@ export component SegmentedButton inherits Rectangle {
 export component TaskChoice inherits Rectangle {
     in property <string> title: "Task";
     in property <string> detail: "Description";
+    in property <string> tag: "";
     in property <bool> selected: false;
     in property <bool> active: true;
     callback clicked();
 
-    height: 43px;
-    background: root.active && touch.has-hover ? #1d242d : transparent;
+    height: 76px;
+    min-width: 108px;
+    border-width: 1px;
+    border-color: !root.active ? #33353a : root.selected ? #479aff :
+        touch.has-hover ? #50535a : #3b3d43;
+    border-radius: 9px;
+    background: !root.active ? #222428 : root.selected ? #203b56 :
+        touch.pressed ? #303238 : #292b30;
 
     accessible-role: button;
     accessible-enabled: root.active;
@@ -316,46 +437,68 @@ export component TaskChoice inherits Rectangle {
     }
 
     Rectangle {
-        x: 2px;
-        y: 10px;
-        width: 15px;
-        height: 15px;
+        x: 12px;
+        y: 13px;
+        width: 16px;
+        height: 16px;
         border-radius: 8px;
         border-width: 1px;
-        border-color: !root.active ? #343c47 : root.selected ? #4e87ec : #586473;
-        background: transparent;
+        border-color: root.selected ? #62a8ff : #777980;
+        background: root.selected ? #0a84ff : transparent;
 
         Rectangle {
-            width: 7px;
-            height: 7px;
-            x: 3px;
-            y: 3px;
-            border-radius: 4px;
-            background: #4e87ec;
+            x: 5px;
+            y: 5px;
+            width: 4px;
+            height: 4px;
+            border-radius: 2px;
+            background: white;
             visible: root.selected;
         }
     }
 
     Text {
-        x: 26px;
-        y: 3px;
-        width: parent.width - 28px;
-        height: 20px;
+        x: 36px;
+        y: 9px;
+        width: parent.width - 48px;
+        height: 24px;
         text: root.title;
-        color: root.active ? #e5e9ee : #69727d;
-        font-size: 12px;
+        color: root.active ? #f5f5f7 : #777980;
+        font-size: 13px;
+        font-weight: 600;
         vertical-alignment: center;
+        overflow: elide;
     }
 
     Text {
-        x: 26px;
-        y: 22px;
-        width: parent.width - 28px;
-        height: 17px;
+        x: 12px;
+        y: 37px;
+        width: parent.width - 24px;
+        height: 29px;
         text: root.detail;
-        color: root.active ? #7f8a98 : #555e69;
-        font-size: 10px;
-        vertical-alignment: center;
+        color: root.active ? #a1a1a6 : #62646a;
+        font-size: 11px;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+
+    Rectangle {
+        x: parent.width - 49px;
+        y: 10px;
+        width: 37px;
+        height: 18px;
+        border-radius: 9px;
+        background: #36383e;
+        visible: root.tag != "";
+
+        Text {
+            text: root.tag;
+            color: #aaaab0;
+            font-size: 9px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
     touch := TouchArea {
@@ -365,13 +508,126 @@ export component TaskChoice inherits Rectangle {
     }
 }
 
+export component RecipeChoice inherits Rectangle {
+    in property <string> title: "Quick Start";
+    in property <string> detail: "Balanced result";
+    in property <bool> active: true;
+    in property <bool> primary: false;
+    callback clicked();
+
+    height: 60px;
+    border-width: root.primary ? 0px : 1px;
+    border-color: #3c3e44;
+    border-radius: 9px;
+    background: !root.active ? #232529 : touch.pressed ?
+        (root.primary ? #006edb : #34363c) : touch.has-hover ?
+        (root.primary ? #2493ff : #303238) : root.primary ? #0a84ff : #292b30;
+
+    accessible-role: button;
+    accessible-enabled: root.active;
+    accessible-label: root.title + ". " + root.detail;
+    accessible-action-default => {
+        if (root.active) {
+            root.clicked();
+        }
+    }
+
+    Text {
+        x: 13px;
+        y: 8px;
+        width: parent.width - 26px;
+        height: 22px;
+        text: root.title;
+        color: root.active ? #ffffff : #6d6f75;
+        font-size: 13px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 13px;
+        y: 30px;
+        width: parent.width - 26px;
+        height: 20px;
+        text: root.detail;
+        color: root.active ? (root.primary ? #e5f2ff : #a1a1a6) : #62646a;
+        font-size: 11px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component DisclosureRow inherits Rectangle {
+    in property <string> text: "Advanced";
+    in property <string> summary: "";
+    in property <bool> open: false;
+    in property <bool> active: true;
+    callback toggled();
+
+    height: 38px;
+    border-radius: 7px;
+    background: touch.has-hover && root.active ? #292b30 : transparent;
+
+    accessible-role: button;
+    accessible-enabled: root.active;
+    accessible-label: root.text;
+    accessible-action-default => {
+        if (root.active) {
+            root.toggled();
+        }
+    }
+
+    Text {
+        x: 2px;
+        width: parent.width * 0.58;
+        text: root.text;
+        color: root.active ? #e7e7ea : #696b71;
+        font-size: 13px;
+        font-weight: 500;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width * 0.58;
+        width: parent.width * 0.32;
+        text: root.summary;
+        color: #89898f;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    Text {
+        x: parent.width - 24px;
+        width: 20px;
+        text: root.open ? "⌃" : "⌄";
+        color: #a7a7ac;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
 export component CheckControl inherits Rectangle {
     in property <string> text: "Option";
     in property <bool> checked: false;
     in property <bool> active: true;
     callback toggled(bool);
 
-    height: 24px;
+    height: 30px;
     background: transparent;
 
     accessible-role: checkbox;
@@ -385,14 +641,14 @@ export component CheckControl inherits Rectangle {
     }
 
     Rectangle {
-        x: 0px;
-        y: 4px;
-        width: 15px;
-        height: 15px;
-        border-radius: 3px;
+        x: 1px;
+        y: 7px;
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
         border-width: 1px;
-        border-color: root.checked ? #4f83dd : #56616e;
-        background: root.checked ? #3d73cf : #151a21;
+        border-color: root.checked ? #5aa4ff : #606269;
+        background: root.checked ? #0a84ff : #1d1f23;
 
         Text {
             text: root.checked ? "✓" : "";
@@ -405,12 +661,13 @@ export component CheckControl inherits Rectangle {
     }
 
     Text {
-        x: 23px;
-        width: parent.width - 23px;
+        x: 26px;
+        width: parent.width - 26px;
         text: root.text;
-        color: root.active ? #c9d0d9 : #69727d;
-        font-size: 10px;
+        color: root.active ? #d1d1d6 : #696b71;
+        font-size: 12px;
         vertical-alignment: center;
+        overflow: elide;
     }
 
     touch := TouchArea {
@@ -422,11 +679,11 @@ export component CheckControl inherits Rectangle {
 
 export component ProgressTrack inherits Rectangle {
     in property <float> value: 0;
-    in property <brush> fill-color: #4c83e2;
+    in property <brush> fill-color: #0a84ff;
     horizontal-stretch: 1;
     height: 4px;
     border-radius: 2px;
-    background: #323a45;
+    background: #3a3c42;
     clip: true;
 
     Rectangle {
@@ -442,9 +699,9 @@ export component ProgressTrack inherits Rectangle {
 export component FieldLabel inherits Text {
     in property <string> label: "Label";
     text: root.label;
-    color: #8d98a6;
-    font-size: 10px;
-    height: 18px;
+    color: #a1a1a6;
+    font-size: 11px;
+    height: 20px;
     vertical-alignment: center;
 }
 
@@ -452,22 +709,22 @@ export component ValueLine inherits Rectangle {
     in property <string> label: "Label";
     in property <string> value: "—";
     background: transparent;
-    height: 26px;
+    height: 28px;
 
     Text {
         text: root.label;
-        color: #8d98a6;
-        font-size: 10px;
+        color: #929298;
+        font-size: 12px;
         vertical-alignment: center;
-        width: 48%;
+        width: 45%;
     }
 
     Text {
-        x: parent.width * 0.48;
-        width: 52%;
+        x: parent.width * 0.45;
+        width: 55%;
         text: root.value;
-        color: #c8d0da;
-        font-size: 10px;
+        color: #d1d1d6;
+        font-size: 12px;
         horizontal-alignment: right;
         vertical-alignment: center;
         overflow: elide;

@@ -11,7 +11,6 @@ def _record_smoke_stage(stage: str) -> None:
 
 
 def main():
-    os.environ.setdefault("SLINT_SCALE_FACTOR", "1.5")
     if "--worker" in sys.argv:
         from localsr.worker.server import main as worker_main
 
