@@ -40,19 +40,36 @@ def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | 
 class InferenceEngine:
     def __init__(self, model_adapter):
         self.model_adapter = model_adapter
+        # Multi-model cache: path -> (model, device, precision).
+        # The active model is the one used by process_frame / process_image.
+        # Switching between cached models is instant (no torch reload).
+        self._loaded_models: dict[str, tuple[object, torch.device, torch.dtype]] = {}
+        self._active_path: str | None = None
+        # Legacy single-model fields kept for backward compat with
+        # process_image and any external callers.
         self._loaded_model = None
         self._loaded_model_path: str | None = None
         self._loaded_device: torch.device | None = None
         self._loaded_precision: torch.dtype | None = None
 
+    @property
+    def active_model(self):
+        """The currently active model, or None if nothing is loaded."""
+        if self._active_path is None:
+            return None
+        entry = self._loaded_models.get(self._active_path)
+        return entry[0] if entry is not None else None
+
     def load_model(
         self, model_path: str, device_str: str, precision_str: str, model_info
     ) -> tuple[torch.device, torch.dtype]:
-        """Load a model once and cache it for repeated inference calls.
+        """Load a model and cache it. Switching to an already-cached model
+        is instant — no torch reload, no VRAM spike.
 
-        Video pipelines call this once before the frame loop and then call
-        process_frame() per frame. Image pipelines still use process_image(),
-        which calls this internally.
+        Video pipelines call this once per model before the frame loop
+        and then switch between them by calling load_model with the
+        desired path. Image pipelines still use process_image(), which
+        calls this internally.
         """
         device = torch.device(device_str)
         precision = (
@@ -60,33 +77,165 @@ class InferenceEngine:
             if precision_str == "fp16" and model_info.half_supported
             else torch.float32
         )
-        if (
-            self._loaded_model is not None
-            and self._loaded_model_path == model_path
-            and self._loaded_device == device
-            and self._loaded_precision == precision
-        ):
-            return device, precision
 
-        # Release any previously loaded model before loading a new one.
-        self.release_model()
+        # Already cached? Just switch active.
+        if model_path in self._loaded_models:
+            cached_model, cached_device, cached_precision = self._loaded_models[model_path]
+            if cached_device == device and cached_precision == precision:
+                self._active_path = model_path
+                self._sync_legacy_fields()
+                return device, precision
+            # Precision/device changed — drop the stale cache entry and reload.
+            del self._loaded_models[model_path]
+            gc.collect()
 
-        _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
+        # Load the new model. The GPU memory limit is applied once per
+        # device; subsequent loads on the same device keep the existing cap.
+        if not any(d == device for _, d, _ in self._loaded_models.values()):
+            _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
+
         model, _ = self.model_adapter.load(model_path, device, precision)
-        self._loaded_model = model
-        self._loaded_model_path = model_path
-        self._loaded_device = device
-        self._loaded_precision = precision
+        self._loaded_models[model_path] = (model, device, precision)
+        self._active_path = model_path
+        self._sync_legacy_fields()
         return device, precision
 
-    def release_model(self) -> None:
-        if self._loaded_model is not None:
-            del self._loaded_model
+    def _sync_legacy_fields(self) -> None:
+        """Keep _loaded_model / _loaded_model_path etc. in sync with the
+        multi-model cache so process_image and external code that reads
+        those fields continues to work.
+        """
+        if self._active_path is not None:
+            entry = self._loaded_models.get(self._active_path)
+            if entry is not None:
+                self._loaded_model = entry[0]
+                self._loaded_model_path = self._active_path
+                self._loaded_device = entry[1]
+                self._loaded_precision = entry[2]
+        else:
             self._loaded_model = None
             self._loaded_model_path = None
             self._loaded_device = None
             self._loaded_precision = None
+
+    def release_model(self, path: str | None = None) -> None:
+        """Release one cached model, or all of them when path is None."""
+        if path is not None:
+            entry = self._loaded_models.pop(path, None)
+            # entry is a (model, device, precision) tuple. The model
+            # reference is dropped by letting it go out of scope; we
+            # don't need to del entry[0] (tuples are immutable).
+            del entry
+            if self._active_path == path:
+                self._active_path = next(iter(self._loaded_models), None)
+            self._sync_legacy_fields()
             gc.collect()
+        else:
+            for _, (model, _, _) in self._loaded_models.items():
+                del model
+            self._loaded_models.clear()
+            self._active_path = None
+            self._sync_legacy_fields()
+            gc.collect()
+
+    def release_all(self) -> None:
+        """Release every cached model. Alias for release_model(path=None)."""
+        self.release_model(path=None)
+
+    def switch_model(self, path: str) -> None:
+        """Switch the active model to an already-cached one. No reload.
+
+        This is the fast path for per-tile model selection in the
+        face-aware pipeline: call load_model once per model at start,
+        then switch_model per tile.
+        """
+        if path not in self._loaded_models:
+            raise RuntimeError(f"Model {path} is not cached. Call load_model first.")
+        self._active_path = path
+        self._sync_legacy_fields()
+
+    def run_tile(
+        self,
+        tile,
+        img_tensor: torch.Tensor,
+        model_info,
+        device: torch.device,
+        precision: torch.dtype,
+        halo: int,
+        model,
+    ) -> np.ndarray:
+        """Run inference on a single tile and return the core output as uint8 (C, H, W).
+
+        This is the shared per-tile logic used by process_frame, process_image,
+        and the face-aware pipeline. It handles halo extraction, padding,
+        divisibility, inference, and halo/padding stripping.
+        """
+        tile_input = img_tensor[
+            :, tile.halo_y : tile.halo_y + tile.halo_h, tile.halo_x : tile.halo_x + tile.halo_w
+        ]
+
+        if tile.pad_left > 0 or tile.pad_right > 0 or tile.pad_top > 0 or tile.pad_bottom > 0:
+            if (
+                tile.pad_left >= tile_input.shape[2]
+                or tile.pad_right >= tile_input.shape[2]
+                or tile.pad_top >= tile_input.shape[1]
+                or tile.pad_bottom >= tile_input.shape[1]
+            ):
+                tile_input = F.pad(
+                    tile_input,
+                    (tile.pad_left, tile.pad_right, tile.pad_top, tile.pad_bottom),
+                    mode="replicate",
+                )
+            else:
+                tile_input = F.pad(
+                    tile_input,
+                    (tile.pad_left, tile.pad_right, tile.pad_top, tile.pad_bottom),
+                    mode="reflect",
+                )
+
+        mult = model_info.size_requirements_mult
+        min_size = model_info.size_requirements_min
+        square = getattr(model_info, "size_requirements_square", False)
+
+        th, tw = tile_input.shape[1], tile_input.shape[2]
+        target_w = max(tw, min_size)
+        target_h = max(th, min_size)
+        target_w = ((target_w + mult - 1) // mult) * mult
+        target_h = ((target_h + mult - 1) // mult) * mult
+        if square:
+            target_w = target_h = max(target_w, target_h)
+        pad_w = target_w - tw
+        pad_h = target_h - th
+
+        if pad_w > 0 or pad_h > 0:
+            tile_input = F.pad(tile_input, (0, pad_w, 0, pad_h), mode="replicate")
+
+        tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
+
+        with torch.no_grad():
+            out_device = model(tile_input_device)
+
+        if torch.isnan(out_device).any() or torch.isinf(out_device).any():
+            raise ValueError("Model produced NaN or Infinity. Precision might be unsupported.")
+
+        out_cpu = out_device.squeeze(0).to(torch.float32).cpu()
+
+        scale = model_info.scale
+        if pad_w > 0 or pad_h > 0:
+            out_cpu = out_cpu[
+                :,
+                : out_cpu.shape[1] - (pad_h * scale),
+                : out_cpu.shape[2] - (pad_w * scale),
+            ]
+
+        out_core = out_cpu[
+            :,
+            halo * scale : out_cpu.shape[1] - halo * scale,
+            halo * scale : out_cpu.shape[2] - halo * scale,
+        ]
+
+        out_core = torch.clamp(out_core, 0, 1) * 255.0
+        return out_core.byte().numpy()
 
     def process_frame(
         self,
@@ -111,9 +260,9 @@ class InferenceEngine:
             device = self._loaded_device
         if precision is None:
             precision = self._loaded_precision
-        if device is None or precision is None or self._loaded_model is None:
+        model = self.active_model
+        if device is None or precision is None or model is None:
             raise RuntimeError("Model is not loaded. Call load_model() first.")
-        model = self._loaded_model
 
         _, h, w = img_tensor.shape
         scale = model_info.scale
@@ -145,73 +294,9 @@ class InferenceEngine:
                             current_tile_size,
                         )
 
-                    tile_input = img_tensor[
-                        :, t.halo_y : t.halo_y + t.halo_h, t.halo_x : t.halo_x + t.halo_w
-                    ]
-
-                    if t.pad_left > 0 or t.pad_right > 0 or t.pad_top > 0 or t.pad_bottom > 0:
-                        if (
-                            t.pad_left >= tile_input.shape[2]
-                            or t.pad_right >= tile_input.shape[2]
-                            or t.pad_top >= tile_input.shape[1]
-                            or t.pad_bottom >= tile_input.shape[1]
-                        ):
-                            tile_input = F.pad(
-                                tile_input,
-                                (t.pad_left, t.pad_right, t.pad_top, t.pad_bottom),
-                                mode="replicate",
-                            )
-                        else:
-                            tile_input = F.pad(
-                                tile_input,
-                                (t.pad_left, t.pad_right, t.pad_top, t.pad_bottom),
-                                mode="reflect",
-                            )
-
-                    mult = model_info.size_requirements_mult
-                    min_size = model_info.size_requirements_min
-                    square = getattr(model_info, "size_requirements_square", False)
-
-                    th, tw = tile_input.shape[1], tile_input.shape[2]
-                    target_w = max(tw, min_size)
-                    target_h = max(th, min_size)
-                    target_w = ((target_w + mult - 1) // mult) * mult
-                    target_h = ((target_h + mult - 1) // mult) * mult
-                    if square:
-                        target_w = target_h = max(target_w, target_h)
-                    pad_w = target_w - tw
-                    pad_h = target_h - th
-
-                    if pad_w > 0 or pad_h > 0:
-                        tile_input = F.pad(tile_input, (0, pad_w, 0, pad_h), mode="replicate")
-
-                    tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
-
-                    with torch.no_grad():
-                        out_device = model(tile_input_device)
-
-                    if torch.isnan(out_device).any() or torch.isinf(out_device).any():
-                        raise ValueError(
-                            "Model produced NaN or Infinity. Precision might be unsupported."
-                        )
-
-                    out_cpu = out_device.squeeze(0).to(torch.float32).cpu()
-
-                    if pad_w > 0 or pad_h > 0:
-                        out_cpu = out_cpu[
-                            :,
-                            : out_cpu.shape[1] - (pad_h * scale),
-                            : out_cpu.shape[2] - (pad_w * scale),
-                        ]
-
-                    out_core = out_cpu[
-                        :,
-                        halo * scale : out_cpu.shape[1] - halo * scale,
-                        halo * scale : out_cpu.shape[2] - halo * scale,
-                    ]
-
-                    out_core = torch.clamp(out_core, 0, 1) * 255.0
-                    out_core_np = out_core.byte().numpy()
+                    out_core_np = self.run_tile(
+                        t, img_tensor, model_info, device, precision, halo, model
+                    )
 
                     out_array[:, t.out_y : t.out_y + t.out_h, t.out_x : t.out_x + t.out_w] = (
                         out_core_np
@@ -298,7 +383,7 @@ class InferenceEngine:
 
         # load_model applies GPU memory limits and loads the model onto device.
         device, precision = self.load_model(model_path, device_str, precision_str, model_info)
-        model = self._loaded_model
+        model = self.active_model
 
         img_tensor = img_data["tensor"]
         _, h, w = img_tensor.shape
@@ -332,79 +417,9 @@ class InferenceEngine:
                                 current_tile_size,
                             )
 
-                        # Extract halo region (clamped to image bounds internally, but tiling.py gives exact coords)
-                        tile_input = img_tensor[
-                            :, t.halo_y : t.halo_y + t.halo_h, t.halo_x : t.halo_x + t.halo_w
-                        ]
-
-                        # Reflection padding for edges
-                        if t.pad_left > 0 or t.pad_right > 0 or t.pad_top > 0 or t.pad_bottom > 0:
-                            # PyTorch reflect pad has limits: pad size must be < dimension size
-                            # If image is smaller than halo, reflect will fail. We use replicate or constant in that case.
-                            if (
-                                t.pad_left >= tile_input.shape[2]
-                                or t.pad_right >= tile_input.shape[2]
-                                or t.pad_top >= tile_input.shape[1]
-                                or t.pad_bottom >= tile_input.shape[1]
-                            ):
-                                tile_input = F.pad(
-                                    tile_input,
-                                    (t.pad_left, t.pad_right, t.pad_top, t.pad_bottom),
-                                    mode="replicate",
-                                )
-                            else:
-                                tile_input = F.pad(
-                                    tile_input,
-                                    (t.pad_left, t.pad_right, t.pad_top, t.pad_bottom),
-                                    mode="reflect",
-                                )
-
-                        # Divisibility padding
-                        mult = model_info.size_requirements_mult
-                        min_size = model_info.size_requirements_min
-                        square = getattr(model_info, "size_requirements_square", False)
-
-                        th, tw = tile_input.shape[1], tile_input.shape[2]
-                        target_w = max(tw, min_size)
-                        target_h = max(th, min_size)
-                        target_w = ((target_w + mult - 1) // mult) * mult
-                        target_h = ((target_h + mult - 1) // mult) * mult
-                        if square:
-                            target_w = target_h = max(target_w, target_h)
-                        pad_w = target_w - tw
-                        pad_h = target_h - th
-
-                        if pad_w > 0 or pad_h > 0:
-                            tile_input = F.pad(tile_input, (0, pad_w, 0, pad_h), mode="replicate")
-
-                        tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
-
-                        with torch.no_grad():
-                            out_device = model(tile_input_device)
-
-                        if torch.isnan(out_device).any() or torch.isinf(out_device).any():
-                            raise ValueError(
-                                "Model produced NaN or Infinity. Precision might be unsupported."
-                            )
-
-                        out_cpu = out_device.squeeze(0).to(torch.float32).cpu()
-
-                        if pad_w > 0 or pad_h > 0:
-                            out_cpu = out_cpu[
-                                :,
-                                : out_cpu.shape[1] - (pad_h * scale),
-                                : out_cpu.shape[2] - (pad_w * scale),
-                            ]
-
-                        out_core = out_cpu[
-                            :,
-                            halo * scale : out_cpu.shape[1] - halo * scale,
-                            halo * scale : out_cpu.shape[2] - halo * scale,
-                        ]
-
-                        # Quantize
-                        out_core = torch.clamp(out_core, 0, 1) * 255.0
-                        out_core_np = out_core.byte().numpy()
+                        out_core_np = self.run_tile(
+                            t, img_tensor, model_info, device, precision, halo, model
+                        )
 
                         writer.write_tile(out_core_np, t.out_x, t.out_y)
 

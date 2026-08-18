@@ -23,6 +23,7 @@ class ModelPurpose(StrEnum):
     PHOTO = "photo"
     ILLUSTRATION = "illustration"
     DENOISE = "denoise"
+    FACE = "face"
 
 
 class QualityTier(IntEnum):
@@ -57,6 +58,9 @@ class CatalogModel:
     author: str = ""
     memory_factor: float = 1.0
     time_factor: float = 1.0
+    # For face fine-tunes: the model_id of the general model this face
+    # model pairs with. Empty string for non-face models.
+    pair_with: str = ""
 
     @property
     def size_megabytes(self) -> float:

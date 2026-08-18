@@ -17,6 +17,7 @@ class JobRequest:
     preserve_metadata: bool
     safe_memory: bool
     output_scale: int | None = None
+    face_model_path: str | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})
@@ -47,6 +48,7 @@ class VideoJobRequest:
     keyframe_interval: int | None = None
     start_frame: int | None = None
     end_frame: int | None = None
+    face_model_path: str | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})
@@ -280,3 +282,29 @@ class VideoJobCompleted:
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
+
+
+@dataclass
+class DetectFacesRequest:
+    image_path: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "detect_faces_request", "data": asdict(self)})
+
+
+@dataclass
+class FacesDetected:
+    image_path: str
+    boxes: list[dict]  # [{"x": int, "y": int, "w": int, "h": int, "confidence": float}, ...]
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "faces_detected", "data": asdict(self)})
+
+
+@dataclass
+class FaceDetectionUnavailable:
+    image_path: str
+    message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "face_detection_unavailable", "data": asdict(self)})

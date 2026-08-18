@@ -18,7 +18,10 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from .face_compositing import blend_tile_outputs, classify_tile
+from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
 from .inference import InferenceEngine
+from .tiling import generate_tiles
 from .video_io import (
     decode_frames,
     encode_video,
@@ -50,6 +53,9 @@ class VideoJobConfig:
     start_frame: int | None = None
     end_frame: int | None = None
     fps_override: float | None = None
+    face_model_path: str | None = None
+    face_model_info: object | None = None
+    face_detection_interval: int = 5
 
 
 @dataclass
@@ -109,12 +115,25 @@ def run_video_job(
         # safe_memory is enforced at the engine level via model_info.
         _SafeModelInfo(model_info, config.safe_memory),
     )
+    # If face-aware mode is enabled, also pre-load the face model.
+    use_face_aware = config.face_model_path is not None and config.face_model_info is not None
+    if use_face_aware:
+        engine.load_model(
+            config.face_model_path,
+            config.device_str,
+            config.precision_str,
+            _SafeModelInfo(config.face_model_info, config.safe_memory),
+        )
 
     frames_processed = 0
+    cached_face_mask: FaceMask | None = None
+    frames_since_detection = 0
 
     def frame_generator() -> Iterator[np.ndarray]:
         nonlocal inference_started_at
         nonlocal frames_processed
+        nonlocal cached_face_mask
+        nonlocal frames_since_detection
 
         for frame_index, rgb in decode_frames(
             config.video_path,
@@ -131,22 +150,59 @@ def run_video_job(
             tensor = rgb_to_tensor(rgb)
 
             def tile_progress(completed: int, total: int, active_tile: int) -> None:
-                # Per-tile progress is intentionally not forwarded to the GUI
-                # for video jobs — frame-level progress is enough and avoids
-                # flooding the IPC channel.
                 pass
 
             try:
-                out_chw = engine.process_frame(
-                    img_tensor=tensor,
-                    model_info=model_info,
-                    tile_size=config.tile_size,
-                    halo=config.halo,
-                    cancel_event=cancel_event,
-                    progress_callback=tile_progress,
-                    safe_memory=config.safe_memory,
-                    tile_callback=tile_callback,
-                )
+                if use_face_aware:
+                    # Run face detection every N frames and cache the mask.
+                    if (
+                        cached_face_mask is None
+                        or frames_since_detection >= config.face_detection_interval
+                    ):
+                        cached_face_mask = detect_faces(rgb)
+                        frames_since_detection = 0
+                    else:
+                        frames_since_detection += 1
+
+                    if cached_face_mask.has_faces:
+                        out_chw = process_frame_face_aware(
+                            engine=engine,
+                            img_tensor=tensor,
+                            face_mask=cached_face_mask,
+                            general_model_path=config.model_path,
+                            face_model_path=config.face_model_path,
+                            general_model_info=model_info,
+                            face_model_info=config.face_model_info,
+                            device_str=config.device_str,
+                            precision_str=config.precision_str,
+                            tile_size=config.tile_size,
+                            halo=config.halo,
+                            cancel_event=cancel_event,
+                            safe_memory=config.safe_memory,
+                        )
+                    else:
+                        # No faces detected — use the general model.
+                        out_chw = engine.process_frame(
+                            img_tensor=tensor,
+                            model_info=model_info,
+                            tile_size=config.tile_size,
+                            halo=config.halo,
+                            cancel_event=cancel_event,
+                            progress_callback=tile_progress,
+                            safe_memory=config.safe_memory,
+                            tile_callback=tile_callback,
+                        )
+                else:
+                    out_chw = engine.process_frame(
+                        img_tensor=tensor,
+                        model_info=model_info,
+                        tile_size=config.tile_size,
+                        halo=config.halo,
+                        cancel_event=cancel_event,
+                        progress_callback=tile_progress,
+                        safe_memory=config.safe_memory,
+                        tile_callback=tile_callback,
+                    )
             except InterruptedError:
                 return
 
@@ -187,6 +243,120 @@ def run_video_job(
         elapsed_seconds=completed_at - job_started_at,
         inference_seconds=(completed_at - (inference_started_at or completed_at)),
     )
+
+
+def process_frame_face_aware(
+    engine: InferenceEngine,
+    img_tensor: torch.Tensor,
+    face_mask: FaceMask,
+    general_model_path: str,
+    face_model_path: str,
+    general_model_info,
+    face_model_info,
+    device_str: str,
+    precision_str: str,
+    tile_size: int,
+    halo: int,
+    cancel_event: threading.Event,
+    safe_memory: bool = True,
+    face_threshold_high: float = 0.85,
+    face_threshold_low: float = 0.15,
+    progress_callback: Callable[[int, int, int], None] | None = None,
+    tile_callback: Callable[..., None] | None = None,
+) -> np.ndarray:
+    """Process a single frame with per-tile model selection.
+
+    Tiles whose core overlaps a face box >= face_threshold_high are run
+    through the face model. Tiles with overlap <= face_threshold_low use
+    the general model. Boundary tiles run both and are alpha-blended.
+
+    Both models must share the same scale and output channels.
+
+    progress_callback and tile_callback are optional — when provided,
+    they receive the same per-tile notifications as the standard
+    process_frame path so the GUI's progress bar and progressive
+    preview work during face-aware restoration.
+    """
+    import gc
+
+    _, h, w = img_tensor.shape
+    scale = general_model_info.scale
+    out_channels = general_model_info.out_channels
+    out_shape = (out_channels, h * scale, w * scale)
+    out_array = np.zeros(out_shape, dtype=np.uint8)
+
+    # Load both models once. Subsequent switching via switch_model is
+    # instant — no torch reload, no VRAM spike.
+    general_safe = _SafeModelInfo(general_model_info, safe_memory)
+    face_safe = _SafeModelInfo(face_model_info, safe_memory)
+    engine.load_model(general_model_path, device_str, precision_str, general_safe)
+    engine.load_model(face_model_path, device_str, precision_str, face_safe)
+
+    device = engine._loaded_device
+    precision = engine._loaded_precision
+
+    tiles = list(generate_tiles(w, h, tile_size, halo, scale))
+    total_tiles = len(tiles)
+
+    for i, tile in enumerate(tiles):
+        if cancel_event.is_set():
+            raise InterruptedError("Cancelled")
+
+        # Compute face overlap for this tile's core.
+        alpha = face_mask_for_tile_core(
+            face_mask.mask, tile.core_x, tile.core_y, tile.core_w, tile.core_h
+        )
+        tile_class = classify_tile(alpha, face_threshold_high, face_threshold_low)
+
+        if tile_callback is not None:
+            tile_callback("started", tile, None, i, total_tiles, w * scale, h * scale, tile_size)
+
+        if tile_class == "face":
+            engine.switch_model(face_model_path)
+            core_output = engine.run_tile(
+                tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
+            )
+        elif tile_class == "general":
+            engine.switch_model(general_model_path)
+            core_output = engine.run_tile(
+                tile, img_tensor, general_model_info, device, precision, halo, engine.active_model
+            )
+        else:  # boundary
+            engine.switch_model(general_model_path)
+            general_core = engine.run_tile(
+                tile, img_tensor, general_model_info, device, precision, halo, engine.active_model
+            )
+            engine.switch_model(face_model_path)
+            face_core = engine.run_tile(
+                tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
+            )
+            core_output = blend_tile_outputs(face_core, general_core, alpha)
+
+        out_array[:, tile.out_y : tile.out_y + tile.out_h, tile.out_x : tile.out_x + tile.out_w] = (
+            core_output
+        )
+
+        if tile_callback is not None:
+            tile_callback(
+                "completed", tile, core_output, i + 1, total_tiles, w * scale, h * scale, tile_size
+            )
+
+        if progress_callback is not None:
+            progress_callback(i + 1, total_tiles, tile_size)
+
+        if safe_memory:
+            import torch as _torch
+
+            if device is not None:
+                if device.type == "mps":
+                    _torch.mps.empty_cache()
+                elif device.type == "cuda":
+                    _torch.cuda.empty_cache()
+                elif device.type == "xpu":
+                    _torch.xpu.empty_cache()
+            gc.collect()
+
+    return out_array
 
 
 @dataclass

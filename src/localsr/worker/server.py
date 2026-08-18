@@ -9,7 +9,8 @@ import threading
 import time
 import traceback
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageOps
 
 # Set MPS memory limits before torch is imported
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
@@ -22,6 +23,8 @@ from localsr.core.model_adapter import ModelAdapter
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     CapabilitiesInfo,
+    FaceDetectionUnavailable,
+    FacesDetected,
     JobCancelled,
     JobCompleted,
     JobFailed,
@@ -214,6 +217,41 @@ class WorkerServer:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
 
+                elif req_type == "detect_faces_request":
+                    image_path = str(data.get("image_path", ""))
+                    try:
+                        from localsr.core.face_detection import detect_faces
+
+                        img = Image.open(image_path)
+                        img = ImageOps.exif_transpose(img)
+                        rgb = np.array(img.convert("RGB"))
+                        result = detect_faces(rgb)
+                        boxes = [
+                            {
+                                "x": int(box.x),
+                                "y": int(box.y),
+                                "w": int(box.w),
+                                "h": int(box.h),
+                                "confidence": float(box.confidence),
+                            }
+                            for box in result.boxes
+                        ]
+                        send_message(FacesDetected(image_path=image_path, boxes=boxes))
+                    except ImportError:
+                        send_message(
+                            FaceDetectionUnavailable(
+                                image_path=image_path,
+                                message="MediaPipe is not installed. Face detection is unavailable.",
+                            )
+                        )
+                    except Exception as error:  # noqa: BLE001
+                        send_message(
+                            FaceDetectionUnavailable(
+                                image_path=image_path,
+                                message=f"Face detection failed: {error}",
+                            )
+                        )
+
                 elif req_type == "job_request":
                     if self.active_job_id is not None:
                         send_message(
@@ -238,6 +276,12 @@ class WorkerServer:
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
+                        # Release the face model from the engine cache if it
+                        # was loaded for this job. The general model stays
+                        # cached for the next image.
+                        face_path = data.get("face_model_path")
+                        if face_path:
+                            self.engine.release_model(face_path)
 
                 elif req_type == "video_job_request":
                     if self.active_job_id is not None:
@@ -373,6 +417,15 @@ class WorkerServer:
         send_message(LogMessage(level="info", message="Loading model..."))
         info = self.model_adapter.inspect(data["model_path"])
 
+        face_model_path = data.get("face_model_path")
+        face_info = None
+        if face_model_path:
+            try:
+                face_info = self.model_adapter.inspect(face_model_path)
+            except Exception as error:  # noqa: BLE001
+                send_message(WarningMessage(message=f"Could not inspect face model: {error}"))
+                face_model_path = None
+
         # Load image (this separates RGB and Alpha)
         send_message(LogMessage(level="info", message="Loading image..."))
         im_manager = ImageManager()
@@ -382,19 +435,84 @@ class WorkerServer:
         try:
             send_message(LogMessage(level="info", message="Starting inference..."))
             processing_call_started_at = time.monotonic()
-            out_file = self.engine.process_image(
-                img_data=img_data,
-                model_info=info,
-                model_path=data["model_path"],
-                device_str=data["device"],
-                precision_str=data["precision"],
-                tile_size=data["tile_size"],
-                halo=data["halo"],
-                cancel_event=self.cancel_event,
-                progress_callback=progress_cb,
-                safe_memory=data["safe_memory"],
-                tile_callback=tile_cb,
-            )
+
+            if face_model_path and face_info:
+                # Face-aware image processing: detect faces, then use
+                # per-tile model selection with boundary blending.
+                from localsr.core.face_detection import detect_faces
+                from localsr.core.video_pipeline import process_frame_face_aware
+
+                # Convert the loaded image tensor to an RGB array for detection.
+                tensor = img_data["tensor"]
+                _, img_h, img_w = tensor.shape
+                rgb_for_detection = tensor.permute(1, 2, 0).clamp(0, 1).mul(255).byte().numpy()
+                face_mask = detect_faces(rgb_for_detection)
+
+                if face_mask.has_faces:
+                    send_message(
+                        LogMessage(
+                            level="info",
+                            message=f"Detected {len(face_mask.boxes)} face(s). Using face-aware restoration.",
+                        )
+                    )
+                    # process_frame_face_aware returns an (C, H*scale, W*scale) numpy array.
+                    # We wrap it in a temporary OutputWriter-like object so the save path works.
+                    from localsr.core.output_writer import OutputWriter
+
+                    face_aware_result = process_frame_face_aware(
+                        engine=self.engine,
+                        img_tensor=tensor,
+                        face_mask=face_mask,
+                        general_model_path=data["model_path"],
+                        face_model_path=face_model_path,
+                        general_model_info=info,
+                        face_model_info=face_info,
+                        device_str=data["device"],
+                        precision_str=data["precision"],
+                        tile_size=data["tile_size"],
+                        halo=data["halo"],
+                        cancel_event=self.cancel_event,
+                        safe_memory=data["safe_memory"],
+                        progress_callback=progress_cb,
+                        tile_callback=tile_cb,
+                    )
+                    # Write the result into an OutputWriter so the existing
+                    # save logic can handle it.
+                    writer = OutputWriter(face_aware_result.shape, dtype=np.uint8)
+                    writer.mmap[:] = face_aware_result
+                    writer.mmap.flush()
+                    out_file = writer
+                else:
+                    send_message(
+                        LogMessage(level="info", message="No faces detected. Using general model.")
+                    )
+                    out_file = self.engine.process_image(
+                        img_data=img_data,
+                        model_info=info,
+                        model_path=data["model_path"],
+                        device_str=data["device"],
+                        precision_str=data["precision"],
+                        tile_size=data["tile_size"],
+                        halo=data["halo"],
+                        cancel_event=self.cancel_event,
+                        progress_callback=progress_cb,
+                        safe_memory=data["safe_memory"],
+                        tile_callback=tile_cb,
+                    )
+            else:
+                out_file = self.engine.process_image(
+                    img_data=img_data,
+                    model_info=info,
+                    model_path=data["model_path"],
+                    device_str=data["device"],
+                    precision_str=data["precision"],
+                    tile_size=data["tile_size"],
+                    halo=data["halo"],
+                    cancel_event=self.cancel_event,
+                    progress_callback=progress_cb,
+                    safe_memory=data["safe_memory"],
+                    tile_callback=tile_cb,
+                )
 
             if self.cancel_event.is_set():
                 send_message(JobCancelled(job_id=job_id))
@@ -438,6 +556,19 @@ class WorkerServer:
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
 
+        face_info = None
+        face_model_path = data.get("face_model_path")
+        if face_model_path:
+            try:
+                face_info = self.model_adapter.inspect(face_model_path)
+            except Exception as error:  # noqa: BLE001
+                send_message(
+                    WarningMessage(
+                        message=f"Could not inspect face model, falling back to general only: {error}"
+                    )
+                )
+                face_model_path = None
+
         config = VideoJobConfig(
             video_path=data["video_path"],
             model_path=data["model_path"],
@@ -453,6 +584,8 @@ class WorkerServer:
             start_frame=data.get("start_frame"),
             end_frame=data.get("end_frame"),
             fps_override=data.get("fps"),
+            face_model_path=face_model_path,
+            face_model_info=face_info,
         )
 
         def frame_started(frame_index: int, total_frames: int) -> None:
