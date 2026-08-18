@@ -5,6 +5,29 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.2-alpha] - 2026-08-18
+
+### Added
+
+- A cross-platform interactive installer that selects a CPU, CUDA, ROCm, or Intel XPU PyTorch
+  backend before installing LocalSR.
+
+### Changed
+
+- Redesigned the Slint workspace around a clear Media, Preview, and Enhance workflow, with the
+  Upscale/Denoise choice and Quick/Best actions visible before expert settings.
+- Added wide, medium, and compact layouts so the preview remains usable across desktop window sizes
+  while side panes become focused in-window views on smaller screens.
+- Restored operating-system-native logical-pixel scaling instead of forcing a global scale factor.
+- Reduced the curated catalog to four clearly differentiated models: HAT-S and HAT-L for upscaling,
+  and RealPLKSR and NAFNet for denoising. Compatible custom Spandrel checkpoints remain supported.
+
+### Fixed
+
+- Declared the source package layout explicitly for reliable editable installs and release builds.
+- Preserved the existing wheel-safe selectors, accessibility semantics, progressive preview,
+  synchronized pan/zoom, cancellation, and sequential one-accelerator batch behavior in the new UI.
+
 ## [0.0.1-alpha] - 2026-08-10
 
 ### Added

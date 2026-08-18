@@ -214,7 +214,7 @@ def download_model(
     success = False
     request = urllib.request.Request(
         model.download_url,
-        headers={"User-Agent": f"LocalSR/0.3 (+{PROJECT_URL})"},
+        headers={"User-Agent": f"LocalSR/0.0.2 (+{PROJECT_URL})"},
     )
     open_request = opener or _open_download
 

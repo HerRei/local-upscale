@@ -1,22 +1,27 @@
-# LocalSR 0.0.1 Alpha
+# LocalSR 0.0.2 Alpha
 
-This is the first public testing release of LocalSR: a focused desktop application for running
-image upscaling and denoising locally. Processing stays on the computer, model files are downloaded
-only when selected, and compatible Spandrel checkpoints can also be supplied manually.
+LocalSR 0.0.2 Alpha refreshes the private testing release with a clearer adaptive Slint workspace.
+Processing stays on the computer, model files are downloaded only when selected, and compatible
+Spandrel checkpoints can also be supplied manually.
 
 ## Highlights
 
-- A compact native Slint interface for macOS, Windows, and Linux.
-- Single-image and sequential batch workflows.
-- Upscale, Denoise, and Upscale + Denoise tasks with Quick and Best automatic recipes.
+- A custom native Slint interface that adapts between wide, medium, and compact desktop windows.
+- A focused Media, Preview, and Enhance workflow that makes Upscale or Denoise an explicit first
+  choice and keeps advanced hardware settings behind one disclosure.
+- Quick and Best commands that choose compatible settings and start immediately after any required
+  model download is verified.
+- Single-image and sequential batch workflows that keep accelerator work isolated to one job.
 - Before/after comparison with synchronized zoom and pan, progressive tile previews, progress,
   cancellation, ETA, and resource telemetry.
 - On-demand, hash-verified model downloads instead of bundling large checkpoints in the installer.
-- HAT, HAT-L, HAT-S, SPAN, RealPLKSR, SCUNet, and NAFNet catalog options, plus compatible custom
-  Spandrel models.
+- A deliberately small catalog: HAT-S and HAT-L for upscaling, RealPLKSR and NAFNet for denoising,
+  plus compatible custom Spandrel models.
 - DNG camera RAW input through isolated LibRaw development.
 - A separate inference worker process, tiled inference, automatic tile-size recovery, and atomic
   output saving.
+- Native logical-pixel scaling and a cross-platform installer that can select CPU, CUDA, ROCm, or
+  Intel XPU dependencies for source installations.
 
 ## Downloads
 

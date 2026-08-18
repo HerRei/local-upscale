@@ -19,8 +19,8 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 - Correctly handles color profiles (ICC), preserving image colors faithfully.
 - Converts everything safely to sRGB during processing and re-embeds the profile on output.
 - Develops `.dng` camera RAW files through LibRaw using camera white balance and sRGB output.
-- Offers lightweight SPAN and RealPLKSR photo models plus three HAT sizes as optional, on-demand
-  downloads while still accepting your own Spandrel-compatible checkpoints.
+- Offers slim and large HAT upscale models plus RealPLKSR and NAFNet denoisers as optional,
+  on-demand downloads while still accepting your own Spandrel-compatible checkpoints.
 - Detects available Apple, NVIDIA, AMD, and Intel devices and memory in the isolated worker, then
   limits tile and precision choices to settings supported by the selected hardware and model.
 - Provides conservative first-run estimates for time, device memory, RAM, disk, and tile count.
@@ -38,7 +38,7 @@ Intel XPU, and CPU support when the installed PyTorch build exposes those backen
 
 ## Current Platform Support
 
-The 0.0.1 alpha packages support Apple Silicon MPS or CPU on macOS and CPU processing on Windows
+The 0.0.2 alpha packages support Apple Silicon MPS or CPU on macOS and CPU processing on Windows
 and Linux. Source installations can additionally use Windows NVIDIA CUDA or supported Intel XPU
 GPUs/iGPUs, and Linux NVIDIA CUDA, AMD ROCm, or supported Intel XPU GPUs/iGPUs when their installed
 PyTorch build exposes that backend.
@@ -63,13 +63,9 @@ The model menu is a generic catalog rather than a HAT-only selector:
 
 | Model | Intended use | Download | License |
 |---|---|---:|---|
-| SPAN ×4 official | Fast everyday upscaling | 9 MB | Apache-2.0 |
-| Nomos Web Photo RealPLKSR ×4 | Fast photographic restoration | 30 MB | CC-BY-4.0 |
 | HAT-S ×4 | High-quality laptop/default model | 81 MB | Apache-2.0 |
-| HAT ×4 ImageNet | High-quality balanced model | 85 MB | Apache-2.0 |
 | HAT-L ×4 ImageNet | Maximum-quality, high-cost model | 166 MB | Apache-2.0 |
 | RealPLKSR Denoise ×1 | Fast photographic denoising | 30 MB | CC-BY-4.0 |
-| SCUNet Blind Denoise ×1 | Strong general-purpose blind denoising | 72 MB | Apache-2.0 |
 | NAFNet SIDD Width64 ×1 | Maximum-fidelity real camera denoising | 464 MB | MIT |
 
 The speed and quality labels are relative to this curated LocalSR catalog and to each model's
@@ -78,10 +74,10 @@ benchmark or source image.
 
 **Quick** prioritizes the fastest suitable catalog model and a safe accelerated FP16 configuration
 when both the model and device support it. **Best** prioritizes the highest-fidelity compatible
-checkpoint and FP32. For denoising, Quick chooses the lightweight RealPLKSR checkpoint; Best chooses
-the official NAFNet SIDD Width64 checkpoint. SCUNet remains available as the stronger general blind
-denoiser when the source noise is not specifically camera/sensor noise. These are conventional
-image-to-image restoration networks, not generative synthesis.
+checkpoint and FP32. For upscaling, Quick chooses HAT-S and Best chooses HAT-L. For denoising,
+Quick chooses the lightweight RealPLKSR checkpoint and Best chooses the official NAFNet SIDD
+Width64 checkpoint. These are conventional image-to-image restoration networks, not generative
+synthesis.
 
 Quick and Best are immediate commands, not configuration toggles. Their derived settings remain
 visible and editable under Manual Configuration and Advanced for subsequent runs.
@@ -90,12 +86,11 @@ Each download is pinned to a specific remote revision and verified against an em
 digest before the temporary file is atomically installed. A failed or cancelled download removes
 its partial file. Models live in the platform application-data directory and are never included in
 the LocalSR installer. Every entry records its source, author, architecture, intended content, and
-license. SPAN comes from the [official SPAN project](https://github.com/hongyuanyu/SPAN), Nomos Web
-Photo comes from [Philip Hofmann's model release](https://github.com/Phhofm/models/releases/tag/4xNomosWebPhoto_RealPLKSR),
-HAT comes from the [official HAT project](https://github.com/XPixelGroup/HAT), SCUNet comes from
-the [official SCUNet project](https://github.com/cszn/SCUNet), and NAFNet comes from the
-[official NAFNet project](https://github.com/megvii-research/NAFNet). The NAFNet download points to
-a pinned checkpoint uploaded by the project's coauthor and is verified before installation.
+license. HAT comes from the [official HAT project](https://github.com/XPixelGroup/HAT), RealPLKSR
+comes from [Philip Hofmann's model releases](https://github.com/Phhofm/models), and NAFNet comes
+from the [official NAFNet project](https://github.com/megvii-research/NAFNet). The NAFNet download
+points to a pinned checkpoint uploaded by the project's coauthor and is verified before
+installation.
 
 Choose **Use my own checkpoint…** to load any local `.pth`, `.pt`, or `.safetensors` model that
 Spandrel supports.

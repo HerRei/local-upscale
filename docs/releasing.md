@@ -69,7 +69,7 @@ cloud signing requires replacing this step with the certificate provider's suppo
 1. Ensure CI is green on `main`.
 2. Update `pyproject.toml` and this document if artifact support changes.
 3. Create and push an annotated version tag, for example
-   `git tag -a v0.0.1-alpha -m "LocalSR 0.0.1 Alpha"`.
+   `git tag -a v0.0.2-alpha -m "LocalSR 0.0.2 Alpha"`.
 4. Watch all three native jobs. A release is created only after every platform succeeds.
 5. Test installation on physical Windows, macOS, and Linux hardware before describing a build as
    stable. CI proves packaging and startup; it cannot prove each GPU driver/backend combination.
