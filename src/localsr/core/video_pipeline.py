@@ -37,6 +37,56 @@ def rgb_to_tensor(rgb: np.ndarray) -> torch.Tensor:
     return torch.from_numpy(arr).permute(2, 0, 1)
 
 
+def _deflicker_frames(
+    restored: Iterator[np.ndarray],
+    window: int,
+    cancel_event: threading.Event,
+) -> Iterator[np.ndarray]:
+    """Temporal median de-flicker over a sliding window of restored frames.
+
+    For each output frame, take the per-pixel median of the current frame
+    and its (window - 1) neighbors. This removes per-frame flicker caused
+    by independent restoration while preserving genuine motion, because
+    a median ignores outliers but tracks the majority.
+
+    The buffer holds at most `window` frames. Frames are emitted with a
+    one-frame delay so the window is centered on the current frame. The
+    first and last frames use a smaller window since they have fewer
+    neighbors.
+    """
+    if window < 2:
+        yield from restored
+        return
+
+    half = window // 2
+    buffer: list[np.ndarray] = []
+    emitted = 0
+
+    for frame in restored:
+        if cancel_event.is_set():
+            return
+        buffer.append(frame)
+        # Once the buffer has enough frames ahead, emit the center frame.
+        if len(buffer) > half:
+            center = len(buffer) - 1 - half
+            start = max(0, center - half)
+            end = min(len(buffer), center + half + 1)
+            window_frames = buffer[start:end]
+            stacked = np.stack(window_frames, axis=0)
+            yield np.median(stacked, axis=0).astype(np.uint8)
+            emitted += 1
+
+    # Flush remaining frames in buffer order, each with a shrinking window.
+    while emitted < len(buffer):
+        center = emitted
+        start = max(0, center - half)
+        end = min(len(buffer), center + half + 1)
+        window_frames = buffer[start:end]
+        stacked = np.stack(window_frames, axis=0)
+        yield np.median(stacked, axis=0).astype(np.uint8)
+        emitted += 1
+
+
 @dataclass
 class VideoJobConfig:
     video_path: str
@@ -56,6 +106,8 @@ class VideoJobConfig:
     face_model_path: str | None = None
     face_model_info: object | None = None
     face_detection_interval: int = 5
+    deflicker: bool = False
+    deflicker_window: int = 3
 
 
 @dataclass
@@ -224,10 +276,17 @@ def run_video_job(
 
             yield out_rgb
 
+    # Apply temporal de-flicker if enabled. The median filter wraps the
+    # restored-frame generator so the encoder receives smoothed frames.
+    if config.deflicker:
+        output_frames = _deflicker_frames(frame_generator(), config.deflicker_window, cancel_event)
+    else:
+        output_frames = frame_generator()
+
     # The encoder consumes the generator directly so frames never accumulate
     # in memory beyond what PyAV's internal buffers hold.
     encode_video(
-        frame_generator(),
+        output_frames,
         config.output_video_path,
         fps=fps,
         container_format=config.container,

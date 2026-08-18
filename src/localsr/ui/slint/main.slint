@@ -24,6 +24,14 @@ export struct QueueEntry {
     has-thumbnail: bool,
 }
 
+export struct FaceBox {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    confidence: float,
+}
+
 export component MainWindow inherits Window {
     title: root.selected-name == "" ? "LocalSR" : root.selected-name + " — LocalSR";
     preferred-width: 1480px;
@@ -164,6 +172,15 @@ export component MainWindow inherits Window {
     callback cancel-job();
     callback open-result();
     callback reveal-result();
+    callback detect-faces();
+    callback clear-faces();
+
+    in-out property <bool> face-detection-available: true;
+    in-out property <bool> face-detecting: false;
+    in-out property <[FaceBox]> face-boxes;
+    in-out property <int> face-count: 0;
+    in-out property <bool> deflicker: false;
+    in-out property <string> face-status: "";
 
     Timer {
         interval: 50ms;
@@ -1307,6 +1324,32 @@ export component MainWindow inherits Window {
                                     root.safe-memory = value;
                                     root.safe-memory-changed(value);
                                 }
+                            }
+
+                            // Video-only: temporal de-flicker toggle.
+                            CheckControl {
+                                text: "De-flicker (temporal median)";
+                                checked: root.deflicker;
+                                active: root.controls-enabled && root.task-index == 2;
+                                toggled(value) => {
+                                    root.deflicker = value;
+                                }
+                            }
+
+                            // Detect Faces button — works for images and video.
+                            FlatButton {
+                                text: root.face-detecting ? "Detecting…" : "Detect Faces";
+                                compact: true;
+                                active: root.controls-enabled && root.face-detection-available && !root.face-detecting;
+                                clicked => { root.detect-faces(); }
+                            }
+                            Text {
+                                text: root.face-status;
+                                color: #85858b;
+                                font-size: 9px;
+                                wrap: word-wrap;
+                                height: 18px;
+                                visible: root.face-status != "";
                             }
 
                             ValueLine { label: "Pressure"; value: root.pressure-text; }

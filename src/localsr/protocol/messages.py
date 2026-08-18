@@ -49,6 +49,8 @@ class VideoJobRequest:
     start_frame: int | None = None
     end_frame: int | None = None
     face_model_path: str | None = None
+    deflicker: bool = False
+    deflicker_window: int = 3
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})

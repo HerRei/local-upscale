@@ -284,3 +284,85 @@ def test_video_job_protocol_messages_include_video_specific_types():
     assert json.loads(started.to_json())["type"] == "video_frame_started"
     assert json.loads(completed.to_json())["type"] == "video_frame_completed"
     assert json.loads(job_done.to_json())["type"] == "video_job_completed"
+
+
+def test_deflicker_median_removes_per_frame_flicker():
+    """The 3-frame median should smooth out a frame that's an outlier."""
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    # Five frames where the middle one is a bright outlier.
+    frame_base = np.full((4, 4, 3), 50, dtype=np.uint8)
+    frame_outlier = np.full((4, 4, 3), 200, dtype=np.uint8)
+    frames = [
+        frame_base.copy(),
+        frame_base.copy(),
+        frame_outlier,
+        frame_base.copy(),
+        frame_base.copy(),
+    ]
+    cancel = threading.Event()
+    result = list(_deflicker_frames(iter(frames), window=3, cancel_event=cancel))
+    assert len(result) == 5
+    # The center frame (index 2) gets the full 3-frame window [50, 200, 50]
+    # so its median is 50 — the outlier is removed.
+    assert result[2].mean() < 80
+    # The outlier frame at index 2 is gone in the output. Edge frames
+    # use a 2-frame window so they blend, but that's expected behavior.
+
+
+def test_deflicker_preserves_genuine_motion():
+    """When a value changes and stays changed, the median should track it."""
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    frames = [
+        np.full((4, 4, 3), 10, dtype=np.uint8),
+        np.full((4, 4, 3), 10, dtype=np.uint8),
+        np.full((4, 4, 3), 100, dtype=np.uint8),
+        np.full((4, 4, 3), 100, dtype=np.uint8),
+        np.full((4, 4, 3), 100, dtype=np.uint8),
+    ]
+    cancel = threading.Event()
+    result = list(_deflicker_frames(iter(frames), window=3, cancel_event=cancel))
+    assert len(result) == 5
+    # The first frames should be dark, the last frames should be bright.
+    assert result[0].mean() < 30
+    assert result[-1].mean() > 80
+
+
+def test_deflicker_window_one_is_passthrough():
+    """A window of 1 means no de-flicker — frames pass through unchanged."""
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    frames = [np.full((4, 4, 3), v, dtype=np.uint8) for v in (10, 50, 200)]
+    cancel = threading.Event()
+    result = list(_deflicker_frames(iter(frames), window=1, cancel_event=cancel))
+    assert len(result) == 3
+    assert result[0].mean() == 10
+    assert result[1].mean() == 50
+    assert result[2].mean() == 200
+
+
+def test_video_job_request_includes_deflicker_fields():
+    import json
+
+    from localsr.protocol.messages import VideoJobRequest
+
+    req = VideoJobRequest(
+        job_id="j1",
+        video_path="/tmp/test.mp4",
+        model_path="/tmp/general.pth",
+        output_video_path="/tmp/out.mp4",
+        container="mp4",
+        crf=18,
+        fps=None,
+        device="cpu",
+        tile_size=128,
+        halo=16,
+        precision="fp32",
+        safe_memory=True,
+        deflicker=True,
+        deflicker_window=3,
+    )
+    data = json.loads(req.to_json())["data"]
+    assert data["deflicker"] is True
+    assert data["deflicker_window"] == 3

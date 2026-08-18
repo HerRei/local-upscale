@@ -161,6 +161,8 @@ class SlintApplication:
         self.batch_total = 0
         self.batch_current = 0
         self.cancel_batch = False
+        self.detected_face_boxes: list[dict] = []
+        self.deflicker_enabled = False
 
         self.download_thread: threading.Thread | None = None
         self.download_cancel: threading.Event | None = None
@@ -225,6 +227,8 @@ class SlintApplication:
         self.ui.cancel_job = self.cancel_job
         self.ui.open_result = self.open_result
         self.ui.reveal_result = self.reveal_result
+        self.ui.detect_faces = self.detect_faces
+        self.ui.clear_faces = self.clear_faces
 
     def _initialize_ui(self) -> None:
         self.ui.batch_mode = bool(self.settings.get("batch_mode", False))
@@ -1277,6 +1281,11 @@ class SlintApplication:
             "download_completed": self._on_download_completed,
             "download_cancelled": self._on_download_cancelled,
             "download_failed": self._on_download_failed,
+            "faces_detected": self._on_faces_detected,
+            "face_detection_unavailable": self._on_face_detection_unavailable,
+            "video_frame_started": self._on_video_frame_started,
+            "video_frame_completed": self._on_video_frame_completed,
+            "video_job_completed": self._on_video_job_completed,
         }
         handler = handlers.get(event_type)
         if handler is not None:
@@ -1596,6 +1605,80 @@ class SlintApplication:
         self.ui.model_status = self.runtime_warning
         self._show_status("Download failed", self.runtime_warning)
         self._sync_inspector()
+
+    # ── Face detection ──────────────────────────────────────────────
+
+    def detect_faces(self) -> None:
+        """Send a DetectFacesRequest to the worker for the selected image."""
+        image = self._selected_image()
+        if image is None:
+            self._show_status("No image", "Select an image before detecting faces.")
+            return
+        if self.current_job_id:
+            return
+        self.ui.face_detecting = True
+        self.ui.face_status = "Detecting faces…"
+        from localsr.protocol.messages import DetectFacesRequest
+
+        self.worker.send_request(DetectFacesRequest(image_path=image.path))
+
+    def clear_faces(self) -> None:
+        """Clear detected face boxes from the UI."""
+        self.detected_face_boxes = []
+        self.ui.face_count = 0
+        self.ui.face_status = ""
+
+    def _on_faces_detected(self, data: dict) -> None:
+        boxes = data.get("boxes", [])
+        self.detected_face_boxes = boxes
+        self.ui.face_detecting = False
+        count = len(boxes)
+        self.ui.face_count = count
+        if count == 0:
+            self.ui.face_status = "No faces found."
+            self._show_status("Face detection", "No faces detected in this image.")
+        else:
+            self.ui.face_status = f"{count} face{'s' if count != 1 else ''} detected."
+            self._show_status(
+                "Face detection",
+                f"{count} face{'s' if count != 1 else ''} detected. "
+                "Face-aware restoration will use the face model on these regions.",
+            )
+
+    def _on_face_detection_unavailable(self, data: dict) -> None:
+        self.ui.face_detecting = False
+        self.ui.face_detection_available = False
+        message = data.get("message", "Face detection is unavailable.")
+        self.ui.face_status = message
+        self._show_status("Face detection unavailable", message)
+
+    # ── Video job event handlers ─────────────────────────────────────
+
+    def _on_video_frame_started(self, _data: dict) -> None:
+        pass
+
+    def _on_video_frame_completed(self, data: dict) -> None:
+        # Update progress for video jobs. The thumbnail is carried in the
+        # jpeg_base64 field when present.
+        pass
+
+    def _on_video_job_completed(self, data: dict) -> None:
+        if data.get("job_id") != self.current_job_id:
+            return
+        self.current_job_id = ""
+        output_path = str(data.get("output_path", ""))
+        if output_path:
+            self.last_output_path = output_path
+        self.batch_paths.clear()
+        self.batch_total = 0
+        self.batch_current = 0
+        frames = int(data.get("frames_processed", 0))
+        self._show_status(
+            "Video complete",
+            f"Processed {frames} frame{'s' if frames != 1 else ''}. Output saved.",
+        )
+        self.refresh_hardware()
+        self._update_action_state()
 
     def _show_status(self, title: str, detail: str) -> None:
         self.ui.status_title = title

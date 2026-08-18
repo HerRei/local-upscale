@@ -586,6 +586,8 @@ class WorkerServer:
             fps_override=data.get("fps"),
             face_model_path=face_model_path,
             face_model_info=face_info,
+            deflicker=bool(data.get("deflicker", False)),
+            deflicker_window=int(data.get("deflicker_window", 3)),
         )
 
         def frame_started(frame_index: int, total_frames: int) -> None:
