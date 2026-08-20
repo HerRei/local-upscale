@@ -640,6 +640,8 @@ export component MainWindow inherits Window {
                                 background: #090a0c;
 
                                 Image {
+                                    x: 0px;
+                                    y: 0px;
                                     source: root.source-image;
                                     width: parent.width;
                                     height: parent.height;
@@ -648,14 +650,20 @@ export component MainWindow inherits Window {
                                 }
 
                                 Rectangle {
+                                    x: root.result-ready && root.comparison-enabled ?
+                                        parent.width * root.compare-position : 0px;
+                                    y: 0px;
                                     width: root.result-ready && root.comparison-enabled ?
-                                        parent.width * root.compare-position : parent.width;
+                                        parent.width * (1.0 - root.compare-position) : parent.width;
                                     height: parent.height;
                                     clip: true;
                                     background: transparent;
                                     visible: root.live-result-ready;
 
                                     Image {
+                                        x: -(root.result-ready && root.comparison-enabled ?
+                                            parent.width * root.compare-position : 0px);
+                                        y: 0px;
                                         source: root.result-image;
                                         width: preview-content.width;
                                         height: preview-content.height;
