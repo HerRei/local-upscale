@@ -831,7 +831,7 @@ export component MainWindow inherits Window {
                                 enabled: root.image-ready;
                                 mouse-cursor: root.result-ready && root.comparison-enabled &&
                                     abs(self.mouse-x - (preview-content.x +
-                                        preview-content.width * root.compare-position)) <= 18px ?
+                                        preview-content.width * root.compare-position)) <= 24px ?
                                     col-resize : root.preview-zoom > 1 ? move : default;
 
                                 pointer-event(event) => {
@@ -841,7 +841,7 @@ export component MainWindow inherits Window {
                                         self.dragging-divider = root.result-ready &&
                                             root.comparison-enabled &&
                                             abs(self.mouse-x - (preview-content.x +
-                                                preview-content.width * root.compare-position)) <= 18px;
+                                                preview-content.width * root.compare-position)) <= 24px;
                                     }
                                     if (event.kind == PointerEventKind.up ||
                                         event.kind == PointerEventKind.cancel) {
@@ -852,8 +852,8 @@ export component MainWindow inherits Window {
                                 moved => {
                                     if (self.dragging-divider) {
                                         root.compare-position = max(
-                                            0.03,
-                                            min(0.97, (self.mouse-x - preview-content.x) /
+                                            0.0,
+                                            min(1.0, (self.mouse-x - preview-content.x) /
                                                 preview-content.width)
                                         );
                                     } else if (root.preview-zoom > 1) {
