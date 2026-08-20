@@ -650,19 +650,17 @@ export component MainWindow inherits Window {
                                 }
 
                                 Rectangle {
-                                    x: root.result-ready && root.comparison-enabled ?
-                                        parent.width * root.compare-position : 0px;
+                                    x: 0px;
                                     y: 0px;
                                     width: root.result-ready && root.comparison-enabled ?
-                                        parent.width * (1.0 - root.compare-position) : parent.width;
+                                        parent.width * root.compare-position : parent.width;
                                     height: parent.height;
                                     clip: true;
                                     background: transparent;
                                     visible: root.live-result-ready;
 
                                     Image {
-                                        x: -(root.result-ready && root.comparison-enabled ?
-                                            parent.width * root.compare-position : 0px);
+                                        x: 0px;
                                         y: 0px;
                                         source: root.result-image;
                                         width: preview-content.width;
@@ -789,7 +787,8 @@ export component MainWindow inherits Window {
                                 Text {
                                     x: 8px;
                                     width: parent.width - 16px;
-                                    text: root.source-label;
+                                    text: root.result-ready && root.comparison-enabled ?
+                                        root.result-label : root.source-label;
                                     color: #e7e7ea;
                                     font-size: 11px;
                                     overflow: elide;
@@ -809,7 +808,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     x: 8px;
                                     width: parent.width - 16px;
-                                    text: root.comparison-enabled ? root.result-label : "Enhanced";
+                                    text: root.comparison-enabled ? root.source-label : root.result-label;
                                     color: #e7e7ea;
                                     font-size: 11px;
                                     horizontal-alignment: right;
