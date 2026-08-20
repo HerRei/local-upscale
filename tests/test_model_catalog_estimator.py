@@ -45,6 +45,7 @@ def test_catalog_has_pinned_optional_downloads():
     assert {model.license_name for model in MODEL_CATALOG} == {
         "Apache-2.0",
         "CC-BY-4.0",
+        "CC BY-NC-SA 4.0",
         "MIT",
     }
     assert all(len(model.sha256) == 64 for model in MODEL_CATALOG)
