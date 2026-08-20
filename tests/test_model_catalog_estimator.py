@@ -31,13 +31,16 @@ def _small_model(content=b"verified model"):
 def test_catalog_has_pinned_optional_downloads():
     assert [model.model_id for model in MODEL_CATALOG] == [
         "hat_s_x4",
+        "hat_s_x4_face",
         "hat_l_x4_imagenet",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 4
-    hat_models = [model for model in MODEL_CATALOG if model.architecture == "HAT"]
-    assert all(CATALOG_REVISION in model.download_url for model in hat_models)
+    assert len({model.filename for model in MODEL_CATALOG}) == 5
+    upstream_hat = [
+        model for model in MODEL_CATALOG if model.architecture == "HAT" and model.model_id != "hat_s_x4_face"
+    ]
+    assert all(CATALOG_REVISION in model.download_url for model in upstream_hat)
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)
     assert {model.license_name for model in MODEL_CATALOG} == {
         "Apache-2.0",

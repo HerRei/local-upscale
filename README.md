@@ -64,6 +64,7 @@ The model menu is a generic catalog rather than a HAT-only selector:
 | Model | Intended use | Download | License |
 |---|---|---:|---|
 | HAT-S ×4 | High-quality laptop/default model | 81 MB | Apache-2.0 |
+| HAT-S ×4 Face | Face-specialized restoration model | 40 MB | Apache-2.0 |
 | HAT-L ×4 ImageNet | Maximum-quality, high-cost model | 166 MB | Apache-2.0 |
 | RealPLKSR Denoise ×1 | Fast photographic denoising | 30 MB | CC-BY-4.0 |
 | NAFNet SIDD Width64 ×1 | Maximum-fidelity real camera denoising | 464 MB | MIT |

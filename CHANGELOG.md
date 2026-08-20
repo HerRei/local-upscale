@@ -5,6 +5,11 @@ stable release is published.
 
 ## [Unreleased]
 
+### Added
+
+- Added `HAT-S ×4 Face — Restoration` model (`hat_s_x4_face`) to the curated catalog, fine-tuned and blended ($\alpha=0.10$) for enhanced portrait restoration and clean fidelity retention.
+- Implemented face-model pairing between `hat_s_x4` and `hat_s_x4_face` for face-aware pipelines (ADR 0004).
+
 ## [0.0.2-alpha] - 2026-08-18
 
 ### Added

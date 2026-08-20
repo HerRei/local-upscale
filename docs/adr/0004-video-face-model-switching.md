@@ -2,14 +2,14 @@
 
 ## Status
 
-Proposed. Pending the completion of the HAT-S face fine-tune.
+Accepted and Implemented. Integrated with `hat_s_x4_face` (blended $\alpha=0.10$ checkpoint `base_95k_interp_a0p1.pth`).
 
 ## Context
 
 The frame-by-frame video pipeline (`src/localsr/core/video_pipeline.py`)
 restores every frame with a single model. A HAT-S checkpoint fine-tuned on
-faces is being trained separately. When it is ready, the video pipeline
-should use it for frames containing faces and fall back to the general
+faces is available in the model catalog (`hat_s_x4_face`). The video pipeline
+uses it for frames containing faces and falls back to the general
 HAT-S model for frames without faces.
 
 This is not the same as a temporal SR model (RealBasicVSR / RVRT). Both
