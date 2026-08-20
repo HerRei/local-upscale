@@ -5,6 +5,22 @@ stable release is published.
 
 ## [Unreleased]
 
+### Changed
+
+- Cleaned up the toolbar to a single macOS-style command strip: the redundant Advanced and Compare
+  toolbar buttons are gone. Advanced settings stay in the Enhance inspector's disclosure row and
+  Compare stays with the preview's own control bar.
+- Detect Faces now toggles: once faces are found the same button becomes "Clear Faces (n)" so
+  face-aware restoration can be deselected again.
+- The Output scale control only appears after a task is chosen instead of rendering an empty box.
+
+### Fixed
+
+- Fixed overlapping text in the empty preview state (the plus icon rendered on top of the caption)
+  and several controls that were centered instead of anchored: the queue selection bar, section
+  titles, value-line labels, and the top separators of the preview, action, and status bars.
+- The "Advanced settings" disclosure summary no longer truncates to "Model, output, har…".
+
 ### Added
 
 - Added `HAT-S ×4 Face — Restoration` model (`hat_s_x4_face`) to the curated catalog, fine-tuned and blended ($\alpha=0.10$) for enhanced portrait restoration and clean fidelity retention.

@@ -228,26 +228,9 @@ export component MainWindow inherits Window {
 
                 Rectangle { horizontal-stretch: 1; background: transparent; }
 
-                ToolbarButton {
-                    text: "Compare";
-                    width: 86px;
-                    selected: root.result-ready && root.comparison-enabled;
-                    active: root.result-ready;
-                    visible: root.result-ready;
-                    clicked => { root.comparison-enabled = !root.comparison-enabled; }
-                }
-
-                ToolbarButton {
-                    text: "Advanced";
-                    width: 92px;
-                    selected: root.advanced-open;
-                    active: root.controls-enabled;
-                    visible: root.layout-mode == 0;
-                    clicked => {
-                        root.advanced-open = !root.advanced-open;
-                    }
-                }
-
+                // Compare lives with the preview's own control bar and Advanced
+                // settings live in the Enhance inspector's disclosure row, so
+                // the toolbar stays a clean, macOS-style command strip.
                 ToolbarButton {
                     text: "+  Add Images";
                     width: 120px;
@@ -425,9 +408,10 @@ export component MainWindow inherits Window {
                                 row-touch.has-hover ? #282a2f : transparent;
 
                             Rectangle {
+                                x: 0px;
+                                y: 8px;
                                 width: 3px;
                                 height: parent.height - 16px;
-                                y: 8px;
                                 border-radius: 2px;
                                 background: #0a84ff;
                                 visible: item.selected;
@@ -520,7 +504,7 @@ export component MainWindow inherits Window {
                     Rectangle {
                         height: 52px;
                         background: #1d1f23;
-                        ThinSeparator { width: parent.width; }
+                        ThinSeparator { x: 0px; y: 0px; width: parent.width; }
 
                         FlatButton {
                             x: 12px;
@@ -718,6 +702,7 @@ export component MainWindow inherits Window {
 
                                 Rectangle {
                                     x: (parent.width - 42px) / 2;
+                                    y: 0px;
                                     width: 42px;
                                     height: 42px;
                                     border-radius: 21px;
@@ -918,7 +903,7 @@ export component MainWindow inherits Window {
                     Rectangle {
                         height: 50px;
                         background: #181a1e;
-                        ThinSeparator { width: parent.width; }
+                        ThinSeparator { x: 0px; y: 0px; width: parent.width; }
 
                         HorizontalLayout {
                             x: 12px;
@@ -1136,8 +1121,8 @@ export component MainWindow inherits Window {
                                 height: 32px;
                             }
 
-                            if root.task-index != 1: FieldLabel { label: "Output scale"; }
-                            if root.task-index != 1: Rectangle {
+                            if root.task-selected && root.task-index != 1: FieldLabel { label: "Output scale"; }
+                            if root.task-selected && root.task-index != 1: Rectangle {
                                 height: 38px;
                                 border-radius: 8px;
                                 background: #282a2f;
@@ -1343,12 +1328,24 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // Detect Faces button — works for images and video.
+                            // Detect Faces toggles: once faces are found the same
+                            // button clears them again, so face-aware restoration
+                            // can always be deselected.
                             FlatButton {
-                                text: root.face-detecting ? "Detecting…" : "Detect Faces";
+                                text: root.face-detecting ? "Detecting…" :
+                                    root.face-count > 0 ?
+                                        "Clear Faces (" + root.face-count + ")" :
+                                        "Detect Faces";
                                 compact: true;
+                                selected: root.face-count > 0;
                                 active: root.controls-enabled && root.face-detection-available && !root.face-detecting;
-                                clicked => { root.detect-faces(); }
+                                clicked => {
+                                    if (root.face-count > 0) {
+                                        root.clear-faces();
+                                    } else {
+                                        root.detect-faces();
+                                    }
+                                }
                             }
                             Text {
                                 text: root.face-status;
@@ -1432,7 +1429,7 @@ export component MainWindow inherits Window {
                     width: parent.width;
                     height: 94px;
                     background: #202226;
-                    ThinSeparator { width: parent.width; }
+                    ThinSeparator { x: 0px; y: 0px; width: parent.width; }
 
                     FlatButton {
                         x: (parent.width - min(320px, parent.width - 32px)) / 2;
@@ -1474,7 +1471,7 @@ export component MainWindow inherits Window {
         Rectangle {
             height: 48px;
             background: #1b1d21;
-            ThinSeparator { width: parent.width; }
+            ThinSeparator { x: 0px; y: 0px; width: parent.width; }
 
             ProgressTrack {
                 x: 0px;

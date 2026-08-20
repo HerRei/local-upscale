@@ -219,6 +219,7 @@ export component SectionTitle inherits Rectangle {
     height: 27px;
 
     Text {
+        x: 0px;
         width: parent.width * 0.72;
         height: parent.height;
         text: root.step > 0 ? root.step + ".  " + root.title : root.title;
@@ -585,17 +586,18 @@ export component DisclosureRow inherits Rectangle {
 
     Text {
         x: 2px;
-        width: parent.width * 0.58;
+        width: parent.width * 0.44;
         text: root.text;
         color: root.active ? #e7e7ea : #696b71;
         font-size: 13px;
         font-weight: 500;
         vertical-alignment: center;
+        overflow: elide;
     }
 
     Text {
-        x: parent.width * 0.58;
-        width: parent.width * 0.32;
+        x: parent.width * 0.44;
+        width: parent.width * 0.56 - 30px;
         text: root.summary;
         color: #89898f;
         font-size: 11px;
@@ -712,11 +714,12 @@ export component ValueLine inherits Rectangle {
     height: 28px;
 
     Text {
+        x: 0px;
+        width: 45%;
         text: root.label;
         color: #929298;
         font-size: 12px;
         vertical-alignment: center;
-        width: 45%;
     }
 
     Text {
