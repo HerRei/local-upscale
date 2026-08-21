@@ -298,20 +298,27 @@ def test_recipe_with_auto_start_triggers_job_start(tmp_path):
         img = root / "photo.png"
         Image.new("RGB", (64, 64), "cyan").save(img)
 
+        model_dir = root / "models"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        with (model_dir / "base_95k_interp_a0p1.pth").open("wb") as f:
+            f.truncate(40_484_805)
+
         app = create_slint_application(
             start_worker=False,
             settings_path=settings_file,
+            model_root=model_dir,
             initial_files=[str(img)],
             initial_recipe="FastEnhance",
             auto_start=True,
         )
 
+        app.ui.image_ready = True
         assert app.pending_auto_start is True
         assert app.profile_label == "FastEnhance"
 
         with patch.object(app, "start_jobs") as mock_start:
             app._on_model_info({{
-                "filename": Path(app.model_path).name,
+                "filename": "base_95k_interp_a0p1.pth",
                 "architecture": "HAT",
                 "scale": 4,
                 "parameter_count": 1000000,

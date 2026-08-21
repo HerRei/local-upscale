@@ -1815,6 +1815,7 @@ class SlintApplication:
         self._apply_hardware_constraints()
         self._apply_pending_preset()
         self._update_estimate()
+        self._update_action_state()
         if self.pending_auto_start and self.ui.can_start:
             self.pending_auto_start = False
             self.start_jobs()
@@ -2261,6 +2262,7 @@ class SlintApplication:
         if sys.platform == "darwin":
             try:
                 from datetime import timedelta
+
                 from localsr.platform.macos_menu import setup_macos_native_menu
 
                 setup_macos_native_menu(self)

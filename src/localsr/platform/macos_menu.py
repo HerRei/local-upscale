@@ -15,6 +15,7 @@ if sys.platform == "darwin":
         try:
             _MenuHandlerClass = objc.lookUpClass("LocalSRMenuHandler")
         except objc.nosuchclass_error:
+
             class LocalSRMenuHandler(AppKit.NSObject):
                 _app = None
                 _callbacks = {}
@@ -53,9 +54,7 @@ def setup_macos_native_menu(app: Any) -> bool:
         main_menu = AppKit.NSMenu.alloc().initWithTitle_("MainMenu")
 
         def add_top_menu(title: str) -> Any:
-            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                title, None, ""
-            )
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
             menu = AppKit.NSMenu.alloc().initWithTitle_(title)
             item.setSubmenu_(menu)
             main_menu.addItem_(item)
