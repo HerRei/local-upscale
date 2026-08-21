@@ -285,6 +285,9 @@ def run_video_job(
 
     # The encoder consumes the generator directly so frames never accumulate
     # in memory beyond what PyAV's internal buffers hold.
+    # Trimmed jobs skip audio: remuxed packets would cover the full
+    # timeline and drift out of sync with the trimmed picture.
+    untrimmed = config.start_frame is None and config.end_frame is None
     encode_video(
         output_frames,
         config.output_video_path,
@@ -293,6 +296,7 @@ def run_video_job(
         crf=config.crf,
         width=output_width,
         height=output_height,
+        audio_source=config.video_path if untrimmed else None,
     )
 
     completed_at = time.monotonic()

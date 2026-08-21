@@ -38,7 +38,9 @@ def test_catalog_has_pinned_optional_downloads():
     ]
     assert len({model.filename for model in MODEL_CATALOG}) == 5
     upstream_hat = [
-        model for model in MODEL_CATALOG if model.architecture == "HAT" and model.model_id != "hat_s_x4_face"
+        model
+        for model in MODEL_CATALOG
+        if model.architecture == "HAT" and model.model_id != "hat_s_x4_face"
     ]
     assert all(CATALOG_REVISION in model.download_url for model in upstream_hat)
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)

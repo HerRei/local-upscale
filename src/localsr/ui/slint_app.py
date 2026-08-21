@@ -496,9 +496,7 @@ class SlintApplication:
             self.runtime_warning = f"Preview unavailable: {error}"
             self._sync_inspector()
             return
-        path = self.preview.set_source_base64(
-            base64.b64encode(buffer.getvalue()).decode("ascii")
-        )
+        path = self.preview.set_source_base64(base64.b64encode(buffer.getvalue()).decode("ascii"))
         if path is not None:
             self.ui.source_image = slint.Image.load_from_path(str(path))
             self.ui.image_ready = True
@@ -1353,9 +1351,7 @@ class SlintApplication:
         self._sync_recipes()
         self.ui.recipe_editor_open = False
         self.ui.recipe_name_draft = ""
-        self._show_status(
-            "Recipe saved", f"“{cleaned}” now applies these settings in one click."
-        )
+        self._show_status("Recipe saved", f"“{cleaned}” now applies these settings in one click.")
 
     def apply_recipe(self, index: int) -> None:
         index = int(index)
@@ -1410,9 +1406,7 @@ class SlintApplication:
         model = self._selected_catalog_model()
         if model is None or not model.pair_with:
             return None
-        companion = next(
-            (m for m in MODEL_CATALOG if m.model_id == model.pair_with), None
-        )
+        companion = next((m for m in MODEL_CATALOG if m.model_id == model.pair_with), None)
         if (
             companion is None
             or ModelPurpose.FACE not in companion.purposes
@@ -1427,9 +1421,7 @@ class SlintApplication:
             return
         if self.ui.batch_mode:
             wanted_video = self.task_index == VIDEO_TASK_INDEX
-            self.batch_paths = [
-                item.path for item in self.images if item.is_video == wanted_video
-            ]
+            self.batch_paths = [item.path for item in self.images if item.is_video == wanted_video]
         else:
             selected = self._selected_image()
             self.batch_paths = [selected.path] if selected is not None else []
@@ -1916,11 +1908,7 @@ class SlintApplication:
         if remaining > 0:
             minutes, seconds = divmod(int(remaining), 60)
             eta = f"{minutes}:{seconds:02d}" if minutes else f"{seconds}s"
-            detail = (
-                f"Frame {done} of {total} · about {eta} left"
-                if total > 0
-                else f"Frame {done}"
-            )
+            detail = f"Frame {done} of {total} · about {eta} left" if total > 0 else f"Frame {done}"
             self._show_status("Upscaling video", detail)
 
     def _on_video_job_completed(self, data: dict) -> None:

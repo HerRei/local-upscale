@@ -92,12 +92,15 @@ def encode_video(
     width: int,
     height: int,
     pixel_format: str = "yuv420p",
+    audio_source: str | None = None,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
     Writes to destination_path + ".tmp" and atomically renames on success.
     On any exception the temp file is removed and the destination is never
-    created.
+    created. When audio_source names a container with an audio stream, its
+    packets are remuxed unchanged into the output; incompatible or absent
+    audio falls back to a silent video rather than failing the job.
     """
     tmp_path = destination_path + ".tmp"
     output_container = av.open(tmp_path, mode="w", format=container_format)
@@ -108,6 +111,22 @@ def encode_video(
     stream.pix_fmt = pixel_format
     stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium"}
 
+    # Every stream must exist before the first mux writes the container
+    # header, so the audio template is claimed up front; the packets are
+    # copied after the picture is done.
+    audio_container = None
+    audio_in = None
+    audio_out = None
+    if audio_source is not None:
+        try:
+            audio_container = av.open(audio_source)
+            audio_in = next((s for s in audio_container.streams if s.type == "audio"), None)
+            if audio_in is not None:
+                audio_out = output_container.add_stream_from_template(audio_in)
+        except (av.FFmpegError, ValueError, OSError):
+            audio_in = None
+            audio_out = None
+
     try:
         for rgb in frames:
             if rgb.dtype != np.uint8:
@@ -117,6 +136,15 @@ def encode_video(
                 output_container.mux(packet)
         for packet in stream.encode():
             output_container.mux(packet)
+        if audio_container is not None and audio_in is not None and audio_out is not None:
+            try:
+                for packet in audio_container.demux(audio_in):
+                    if packet.dts is None:
+                        continue
+                    packet.stream = audio_out
+                    output_container.mux(packet)
+            except (av.FFmpegError, ValueError, OSError):
+                pass
         output_container.close()
         os.replace(tmp_path, destination_path)
         return destination_path
@@ -130,6 +158,12 @@ def encode_video(
         except FileNotFoundError:
             pass
         raise
+    finally:
+        if audio_container is not None:
+            try:
+                audio_container.close()
+            except Exception:
+                pass
 
 
 def uint8_chw_to_rgb_hwc(array_chw: np.ndarray) -> np.ndarray:

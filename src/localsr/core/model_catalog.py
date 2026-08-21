@@ -24,6 +24,7 @@ class ModelPurpose(StrEnum):
     ILLUSTRATION = "illustration"
     DENOISE = "denoise"
     FACE = "face"
+    VIDEO = "video"
 
 
 class QualityTier(IntEnum):
@@ -188,6 +189,56 @@ def default_model_directory() -> Path:
     return base / "LocalSR" / "models"
 
 
+@dataclass(frozen=True)
+class ModelFile:
+    """One file of a multi-file video model bundle.
+
+    Field names deliberately match what download_model reads, so a bundle
+    file rides the existing pinned-download machinery unchanged.
+    """
+
+    role: str
+    filename: str
+    size_bytes: int
+    sha256: str
+    download_url: str
+
+
+@dataclass(frozen=True)
+class CatalogVideoModel:
+    """A temporal video restoration model: several files, one engine.
+
+    Unlike single-image checkpoints these are not Spandrel-loadable; each
+    family names vendored engine code (engine_kind) that knows how to load
+    and run its bundle. Bundles install into their own directory and are
+    downloaded on demand, so the application package never carries them.
+    """
+
+    model_id: str
+    name: str
+    description: str
+    family: str
+    engine_kind: str
+    files: tuple[ModelFile, ...]
+    license_name: str
+    author: str
+    source_url: str
+    min_unified_memory_gb: int
+    min_vram_gb: int
+    temporal_window: int
+    temporal_overlap: int
+
+    @property
+    def total_size_bytes(self) -> int:
+        return sum(file.size_bytes for file in self.files)
+
+
+# Populated when a vendored temporal engine lands; the infrastructure is
+# exercised by tests against fixture bundles until then.
+VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = ()
+VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}
+
+
 class ModelStore:
     def __init__(self, root: str | Path | None = None):
         self.root = Path(root) if root is not None else default_model_directory()
@@ -201,6 +252,22 @@ class ModelStore:
             return path.is_file() and path.stat().st_size == model.size_bytes
         except OSError:
             return False
+
+    def bundle_dir_for(self, model: CatalogVideoModel) -> Path:
+        return self.root / model.family
+
+    def bundle_file_path(self, model: CatalogVideoModel, file: ModelFile) -> Path:
+        return self.bundle_dir_for(model) / file.filename
+
+    def is_bundle_installed(self, model: CatalogVideoModel) -> bool:
+        for file in model.files:
+            path = self.bundle_file_path(model, file)
+            try:
+                if not (path.is_file() and path.stat().st_size == file.size_bytes):
+                    return False
+            except OSError:
+                return False
+        return True
 
 
 class ModelDownloadError(RuntimeError):
@@ -281,3 +348,48 @@ def download_model(
                 partial_path.unlink()
             except FileNotFoundError:
                 pass
+
+
+def download_bundle(
+    model: CatalogVideoModel,
+    store: ModelStore,
+    progress_callback=None,
+    cancel_event: threading.Event | None = None,
+    opener=None,
+) -> Path:
+    """Download every file of a video model bundle with pinned verification.
+
+    Each file goes through download_model's preflight, partial-file, and
+    SHA-256 machinery. progress_callback receives (downloaded, total) in
+    bytes across the whole bundle. Returns the bundle directory.
+    """
+    bundle_dir = store.bundle_dir_for(model)
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    total = model.total_size_bytes
+    completed = 0
+    for file in model.files:
+        destination = store.bundle_file_path(model, file)
+        try:
+            if destination.is_file() and destination.stat().st_size == file.size_bytes:
+                completed += file.size_bytes
+                if progress_callback is not None:
+                    progress_callback(completed, total)
+                continue
+        except OSError:
+            pass
+
+        def file_progress(downloaded: int, _file_total: int, _completed: int = completed) -> None:
+            if progress_callback is not None:
+                progress_callback(_completed + downloaded, total)
+
+        download_model(
+            file,
+            destination,
+            progress_callback=file_progress,
+            cancel_event=cancel_event,
+            opener=opener,
+        )
+        completed += file.size_bytes
+        if progress_callback is not None:
+            progress_callback(completed, total)
+    return bundle_dir

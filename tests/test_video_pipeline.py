@@ -366,3 +366,58 @@ def test_video_job_request_includes_deflicker_fields():
     data = json.loads(req.to_json())["data"]
     assert data["deflicker"] is True
     assert data["deflicker_window"] == 3
+
+
+def test_encode_video_remuxes_source_audio(tmp_path):
+    import av
+    import numpy as np
+
+    from localsr.core.video_io import encode_video, probe_video
+
+    source = tmp_path / "with-audio.mp4"
+    container = av.open(str(source), mode="w")
+    video = container.add_stream("libx264", rate=8)
+    video.width, video.height, video.pix_fmt = 64, 48, "yuv420p"
+    audio = container.add_stream("aac", rate=44100)
+    for index in range(8):
+        rgb = np.full((48, 64, 3), index * 20, dtype=np.uint8)
+        for packet in video.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
+            container.mux(packet)
+        samples = (np.sin(np.linspace(0, 3.14, 5512)) * 8000).astype(np.int16)
+        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16", layout="mono")
+        frame.sample_rate = 44100
+        for packet in audio.encode(frame):
+            container.mux(packet)
+    for stream in (video, audio):
+        for packet in stream.encode():
+            container.mux(packet)
+    container.close()
+
+    frames = (np.full((96, 128, 3), i * 20, dtype=np.uint8) for i in range(8))
+    destination = tmp_path / "out.mp4"
+    encode_video(
+        frames,
+        str(destination),
+        fps=8,
+        width=128,
+        height=96,
+        audio_source=str(source),
+    )
+    assert destination.is_file()
+    assert probe_video(str(destination)).frame_count == 8
+    with av.open(str(destination)) as result:
+        kinds = {stream.type for stream in result.streams}
+    assert "audio" in kinds
+
+    # A source without audio still encodes a valid silent video.
+    silent = tmp_path / "silent.mp4"
+    frames = (np.full((96, 128, 3), 40, dtype=np.uint8) for _ in range(4))
+    encode_video(
+        frames,
+        str(silent),
+        fps=8,
+        width=128,
+        height=96,
+        audio_source=str(destination.with_name("missing.mp4")),
+    )
+    assert silent.is_file()

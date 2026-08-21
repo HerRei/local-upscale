@@ -51,6 +51,12 @@ class VideoJobRequest:
     face_model_path: str | None = None
     deflicker: bool = False
     deflicker_window: int = 3
+    # Temporal-engine routing. "spandrel_image" is the frame-by-frame path;
+    # any other kind names vendored engine code and carries its bundle.
+    model_kind: str = "spandrel_image"
+    bundle_dir: str | None = None
+    temporal_window: int = 0
+    temporal_overlap: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})

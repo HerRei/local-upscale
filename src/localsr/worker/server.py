@@ -552,7 +552,32 @@ class WorkerServer:
             if out_file is not None:
                 out_file.cleanup()
 
+    def _run_temporal_video_job(self, job_id, data, engine_factory):
+        """Run a clip-based temporal engine over the video.
+
+        The engine contract: construct with (bundle_dir, device, precision),
+        then process_clip(list[HxWx3 uint8]) -> list[HxWx3 uint8]. Clip
+        windowing and overlap stitching live in localsr.core.temporal so
+        every temporal family shares one boundary behavior.
+        """
+        raise NotImplementedError(
+            "Temporal video engines are wired end-to-end but no engine is "
+            "vendored in this build yet."
+        )
+
     def _run_video_job(self, job_id, data):
+        # Temporal engines route before the Spandrel inspect: their bundles
+        # are not single-image checkpoints. An engine this build cannot
+        # serve fails the job with a status-bar-ready message instead of a
+        # stack trace, and frame-by-frame stays available.
+        from localsr.core.video_engines import resolve_video_engine
+
+        model_kind = str(data.get("model_kind", "spandrel_image"))
+        engine_factory = resolve_video_engine(model_kind)
+        if engine_factory is not None:
+            self._run_temporal_video_job(job_id, data, engine_factory)
+            return
+
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
 
