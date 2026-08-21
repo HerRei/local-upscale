@@ -4,37 +4,62 @@ import subprocess
 import sys
 from typing import Any
 
+_HANDLER_INSTANCE = None
+_MenuHandlerClass = None
 
-def setup_macos_native_menu(app: Any) -> bool:
-    """Build and install native macOS top menu bar connected to SlintApplication callbacks."""
-    if sys.platform != "darwin":
-        return False
-
+if sys.platform == "darwin":
     try:
         import AppKit
         import objc
 
-        class LocalSRMenuHandler(AppKit.NSObject):
-            _app = None
-            _callbacks = {}
+        try:
+            _MenuHandlerClass = objc.lookUpClass("LocalSRMenuHandler")
+        except objc.nosuchclass_error:
+            class LocalSRMenuHandler(AppKit.NSObject):
+                _app = None
+                _callbacks = {}
 
-            @objc.IBAction
-            def onMenuAction_(self, sender):
-                tag = int(sender.tag())
-                cb = self._callbacks.get(tag)
-                if cb:
-                    try:
-                        cb()
-                    except Exception:
-                        pass
+                @objc.IBAction
+                def onMenuAction_(self, sender):
+                    tag = int(sender.tag())
+                    cb = self._callbacks.get(tag)
+                    if cb:
+                        try:
+                            cb()
+                        except Exception as e:
+                            print(f"[MenuAction Error] {e}", flush=True)
 
-        handler = LocalSRMenuHandler.alloc().init()
+            _MenuHandlerClass = LocalSRMenuHandler
+    except Exception:
+        pass
+
+
+def setup_macos_native_menu(app: Any) -> bool:
+    """Build and install native macOS top menu bar connected to SlintApplication callbacks."""
+    global _HANDLER_INSTANCE
+    if sys.platform != "darwin" or _MenuHandlerClass is None:
+        return False
+
+    try:
+        import AppKit
+
+        handler = _MenuHandlerClass.alloc().init()
         handler._app = app
         handler._callbacks = {}
+        _HANDLER_INSTANCE = handler
         tag_counter = 100
 
         ns_app = AppKit.NSApplication.sharedApplication()
-        main_menu = AppKit.NSMenu.alloc().init()
+        main_menu = AppKit.NSMenu.alloc().initWithTitle_("MainMenu")
+
+        def add_top_menu(title: str) -> Any:
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, None, ""
+            )
+            menu = AppKit.NSMenu.alloc().initWithTitle_(title)
+            item.setSubmenu_(menu)
+            main_menu.addItem_(item)
+            return menu
 
         def add_item(
             menu: Any,
@@ -65,10 +90,7 @@ def setup_macos_native_menu(app: Any) -> bool:
             return item
 
         # 1. LocalSR App Menu
-        app_menu_item = AppKit.NSMenuItem.alloc().init()
-        app_menu = AppKit.NSMenu.alloc().initWithTitle_("LocalSR")
-        app_menu_item.setSubmenu_(app_menu)
-        main_menu.addItem_(app_menu_item)
+        app_menu = add_top_menu("LocalSR")
 
         add_item(
             app_menu,
@@ -90,10 +112,7 @@ def setup_macos_native_menu(app: Any) -> bool:
         add_item(app_menu, "Quit LocalSR", "q", action="terminate:")
 
         # 2. File Menu
-        file_menu_item = AppKit.NSMenuItem.alloc().init()
-        file_menu = AppKit.NSMenu.alloc().initWithTitle_("File")
-        file_menu_item.setSubmenu_(file_menu)
-        main_menu.addItem_(file_menu_item)
+        file_menu = add_top_menu("File")
 
         add_item(file_menu, "Add Media…", "o", cb=getattr(app, "choose_images", None))
         add_item(file_menu, "Add Folder…", "o", shift=True, cb=getattr(app, "choose_folder", None))
@@ -105,10 +124,7 @@ def setup_macos_native_menu(app: Any) -> bool:
         add_item(file_menu, "Cancel Job", ".", cb=getattr(app, "cancel_job", None))
 
         # 3. Presets Menu
-        presets_menu_item = AppKit.NSMenuItem.alloc().init()
-        presets_menu = AppKit.NSMenu.alloc().initWithTitle_("Presets")
-        presets_menu_item.setSubmenu_(presets_menu)
-        main_menu.addItem_(presets_menu_item)
+        presets_menu = add_top_menu("Presets")
 
         add_item(
             presets_menu,
@@ -136,18 +152,12 @@ def setup_macos_native_menu(app: Any) -> bool:
                 add_item(presets_menu, recipe_name, key, cb=_make_recipe_cb(idx))
 
         # 4. View Menu
-        view_menu_item = AppKit.NSMenuItem.alloc().init()
-        view_menu = AppKit.NSMenu.alloc().initWithTitle_("View")
-        view_menu_item.setSubmenu_(view_menu)
-        main_menu.addItem_(view_menu_item)
+        view_menu = add_top_menu("View")
 
         add_item(view_menu, "Refresh Hardware Status", cb=getattr(app, "refresh_hardware", None))
 
         # 5. Window Menu
-        window_menu_item = AppKit.NSMenuItem.alloc().init()
-        window_menu = AppKit.NSMenu.alloc().initWithTitle_("Window")
-        window_menu_item.setSubmenu_(window_menu)
-        main_menu.addItem_(window_menu_item)
+        window_menu = add_top_menu("Window")
 
         add_item(window_menu, "Minimize", "m", action="performMiniaturize:")
         add_item(window_menu, "Zoom", action="performZoom:")
@@ -156,10 +166,7 @@ def setup_macos_native_menu(app: Any) -> bool:
         ns_app.setWindowsMenu_(window_menu)
 
         # 6. Help Menu
-        help_menu_item = AppKit.NSMenuItem.alloc().init()
-        help_menu = AppKit.NSMenu.alloc().initWithTitle_("Help")
-        help_menu_item.setSubmenu_(help_menu)
-        main_menu.addItem_(help_menu_item)
+        help_menu = add_top_menu("Help")
 
         def open_github():
             subprocess.Popen(["open", "https://github.com/HerRei/local-upscale"])
@@ -171,5 +178,6 @@ def setup_macos_native_menu(app: Any) -> bool:
         ns_app.setMainMenu_(main_menu)
         app._macos_menu_handler = handler
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[setup_macos_native_menu error] {e}", flush=True)
         return False

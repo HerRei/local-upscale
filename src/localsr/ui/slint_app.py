@@ -2258,6 +2258,20 @@ class SlintApplication:
             self._show_status("Settings warning", f"Could not save settings: {error}")
 
     def run(self) -> None:
+        if sys.platform == "darwin":
+            try:
+                from datetime import timedelta
+                from localsr.platform.macos_menu import setup_macos_native_menu
+
+                setup_macos_native_menu(self)
+                self._menu_timer = slint.Timer()
+                self._menu_timer.start(
+                    slint.TimerMode.SingleShot,
+                    timedelta(milliseconds=50),
+                    lambda: setup_macos_native_menu(self),
+                )
+            except Exception:
+                pass
         try:
             self.ui.run()
         finally:
