@@ -5,6 +5,8 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.3-alpha] - 2026-08-21
+
 ### Added
 
 - Custom recipes: "Save Current Settings as Recipe" snapshots the task, model, scale,
@@ -17,6 +19,10 @@ stable release is published.
 - GPU-detection test coverage now spans the full vendor matrix: NVIDIA CUDA (multi-GPU,
   fp16 gated by compute capability), AMD ROCm, Intel XPU (integrated and discrete), and
   Apple Metal, with the CPU fallback always enumerated last.
+- Added `HAT-S ×4 Face — Restoration` model (`hat_s_x4_face`) to the curated catalog,
+  fine-tuned and blended ($\alpha=0.10$) for enhanced portrait restoration and clean
+  fidelity retention, with face-model pairing between `hat_s_x4` and `hat_s_x4_face`
+  for face-aware pipelines (ADR 0004).
 
 ### Changed
 
@@ -29,12 +35,6 @@ stable release is published.
   the exclusive color of interaction.
 - Safe memory mode is no longer the default. It still switches itself on automatically
   when free memory is very low.
-
-### Fixed
-
-- Removing (or replacing) the image that produced the last finished result now retires the
-  Open Result and Show in Folder buttons instead of leaving them pointing at an output
-  whose source is gone.
 
 - Redesigned the entire interface as "Machined Graphite", a bespoke dark design language for
   the Slint workspace: four tonal planes (chrome, panels, stage, canvas well) joined by
@@ -53,7 +53,6 @@ stable release is published.
   combo boxes, checkboxes, and buttons were all restyled with full hover/pressed/disabled/
   focus states and 120–180ms motion. All existing callbacks, shortcuts, accessibility
   labels, and the responsive three-mode layout are preserved unchanged.
-
 - Cleaned up the toolbar to a single macOS-style command strip: the redundant Advanced and Compare
   toolbar buttons are gone. Advanced settings stay in the Enhance inspector's disclosure row and
   Compare stays with the preview's own control bar.
@@ -63,15 +62,13 @@ stable release is published.
 
 ### Fixed
 
+- Removing (or replacing) the image that produced the last finished result now retires the
+  Open Result and Show in Folder buttons instead of leaving them pointing at an output
+  whose source is gone.
 - Fixed overlapping text in the empty preview state (the plus icon rendered on top of the caption)
   and several controls that were centered instead of anchored: the queue selection bar, section
   titles, value-line labels, and the top separators of the preview, action, and status bars.
 - The "Advanced settings" disclosure summary no longer truncates to "Model, output, har…".
-
-### Added
-
-- Added `HAT-S ×4 Face — Restoration` model (`hat_s_x4_face`) to the curated catalog, fine-tuned and blended ($\alpha=0.10$) for enhanced portrait restoration and clean fidelity retention.
-- Implemented face-model pairing between `hat_s_x4` and `hat_s_x4_face` for face-aware pipelines (ADR 0004).
 
 ## [0.0.2-alpha] - 2026-08-18
 
