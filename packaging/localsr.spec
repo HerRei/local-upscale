@@ -41,8 +41,8 @@ datas = spandrel_datas + slint_datas + [
     # SeedVR2 vendored configs, text embeddings, and license travel as data
     # so the temporal engine finds them next to its modules.
     (
-        str(SOURCE / "localsr" / "video_models" / "seedvr2" / "vendor"),
-        "localsr/video_models/seedvr2/vendor",
+        str(SOURCE / "localsr" / "video_models" / "seedvr2"),
+        "localsr/video_models/seedvr2",
     ),
 ]
 hiddenimports = sorted(

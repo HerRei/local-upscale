@@ -29,7 +29,10 @@ from .vendor.core.generation_utils import (
 )
 from .vendor.utils.debug import Debug
 
-VENDOR_DIR = str(Path(__file__).with_name("vendor"))
+# The vendored tree computes its "repo root" three directory levels above
+# vendor/utils/constants.py, which is this package directory: configs_3b/,
+# configs_7b/, and the text embeddings live here, beside vendor/.
+PACKAGE_DIR = str(Path(__file__).parent)
 VAE_FILENAME = "ema_vae_fp16.safetensors"
 # Preference order among DiT weights that may be present in a bundle.
 DIT_PREFERENCE = (
@@ -103,7 +106,7 @@ class SeedVR2Engine:
         self.runner = runner
         self.ctx["cache_context"] = cache_context
         self.ctx["text_embeds"] = load_text_embeddings(
-            VENDOR_DIR, self.ctx["dit_device"], self.ctx["compute_dtype"], self.debug
+            PACKAGE_DIR, self.ctx["dit_device"], self.ctx["compute_dtype"], self.debug
         )
 
     def process_frames(
