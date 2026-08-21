@@ -3,6 +3,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -358,7 +359,17 @@ def download_model(
     cancel_event: threading.Event | None = None,
     opener=None,
     chunk_size: int = 1024 * 1024,
+    max_attempts: int = 4,
+    retry_wait_seconds: float = 2.0,
 ) -> Path:
+    """Download with pinned SHA-256 verification, resume, and retries.
+
+    A transient network failure (read timeout, dropped connection) keeps the
+    partial file and retries with an HTTP Range request, so a multi-gigabyte
+    download survives an unreliable connection. Cancellation also keeps the
+    partial, letting a later attempt resume. Only a verification failure
+    removes the partial; the final file appears atomically via os.replace.
+    """
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -371,52 +382,114 @@ def download_model(
         )
 
     partial_path = destination.with_name(f"{destination.name}.part")
-    hasher = hashlib.sha256()
-    downloaded = 0
-    success = False
-    request = urllib.request.Request(
-        model.download_url,
-        headers={"User-Agent": f"LocalSR/0.0.2 (+{PROJECT_URL})"},
-    )
     open_request = opener or _open_download
 
-    try:
-        with open_request(request, timeout=15.0) as response, partial_path.open("wb") as output:
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise ModelDownloadCancelled("Model download cancelled.")
-                chunk = response.read(chunk_size)
-                if not chunk:
-                    break
-                output.write(chunk)
-                hasher.update(chunk)
-                downloaded += len(chunk)
+    def check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ModelDownloadCancelled("Model download cancelled.")
+
+    attempts = 0
+    last_error: Exception | None = None
+    while attempts < max_attempts:
+        attempts += 1
+        check_cancel()
+
+        try:
+            offset = partial_path.stat().st_size if partial_path.is_file() else 0
+        except OSError:
+            offset = 0
+        if offset > model.size_bytes:
+            try:
+                partial_path.unlink()
+            except FileNotFoundError:
+                pass
+            offset = 0
+
+        headers = {"User-Agent": f"LocalSR/0.0.2 (+{PROJECT_URL})"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        request = urllib.request.Request(model.download_url, headers=headers)
+
+        try:
+            with (
+                open_request(request, timeout=15.0) as response,
+                partial_path.open("ab" if offset else "wb") as output,
+            ):
+                status = getattr(response, "status", 206 if offset else 200)
+                if offset and status != 206:
+                    # The server ignored the Range request; start over.
+                    output.seek(0)
+                    output.truncate()
+                    offset = 0
+                downloaded = offset
                 if progress_callback is not None:
                     progress_callback(downloaded, model.size_bytes)
+                while True:
+                    check_cancel()
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback is not None:
+                        progress_callback(downloaded, model.size_bytes)
+        except ModelDownloadCancelled:
+            raise
+        except (OSError, urllib.error.URLError) as error:
+            last_error = error
+            if attempts >= max_attempts:
+                break
+            waited = 0.0
+            while waited < retry_wait_seconds * attempts:
+                check_cancel()
+                time.sleep(min(0.2, retry_wait_seconds))
+                waited += 0.2
+            continue
 
-        if downloaded != model.size_bytes:
-            raise ModelDownloadError(
+        if downloaded < model.size_bytes:
+            # The connection ended early without an exception; resume.
+            last_error = ModelDownloadError(
                 f"Incomplete model download: received {downloaded:,} of {model.size_bytes:,} bytes."
             )
-        digest = hasher.hexdigest()
-        if digest != model.sha256:
+            if attempts >= max_attempts:
+                break
+            continue
+        if downloaded > model.size_bytes:
+            try:
+                partial_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise ModelDownloadError(
+                f"Download produced {downloaded:,} bytes but expected "
+                f"{model.size_bytes:,}. The file was removed."
+            )
+
+        hasher = hashlib.sha256()
+        with partial_path.open("rb") as completed:
+            while True:
+                check_cancel()
+                block = completed.read(chunk_size)
+                if not block:
+                    break
+                hasher.update(block)
+        if hasher.hexdigest() != model.sha256:
+            try:
+                partial_path.unlink()
+            except FileNotFoundError:
+                pass
             raise ModelDownloadError(
                 "Downloaded model failed SHA-256 verification. The untrusted file was removed."
             )
 
         os.replace(partial_path, destination)
-        success = True
         return destination
-    except ModelDownloadError:
-        raise
-    except (OSError, urllib.error.URLError) as error:
-        raise ModelDownloadError(f"Could not download model: {error}") from error
-    finally:
-        if not success:
-            try:
-                partial_path.unlink()
-            except FileNotFoundError:
-                pass
+
+    message = (
+        f"Could not download model: {last_error}" if last_error else "Could not download model."
+    )
+    if isinstance(last_error, ModelDownloadError):
+        raise last_error
+    raise ModelDownloadError(message) from last_error
 
 
 def download_bundle(

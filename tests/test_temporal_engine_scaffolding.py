@@ -226,3 +226,96 @@ def test_video_job_request_defaults_stay_frame_by_frame_compatible():
     assert data["model_kind"] == "spandrel_image"
     assert data["bundle_dir"] is None
     assert data["temporal_window"] == 0
+
+
+class _FlakyRangeOpener:
+    """First attempt dies mid-stream; later attempts honor Range requests."""
+
+    def __init__(self, payload: bytes, fail_after: int):
+        self.payload = payload
+        self.fail_after = fail_after
+        self.attempts = 0
+        self.range_offsets: list[int] = []
+
+    def __call__(self, request, timeout):
+        self.attempts += 1
+        header = request.headers.get("Range", "")
+        offset = int(header.split("=")[1].rstrip("-")) if header else 0
+        self.range_offsets.append(offset)
+        remaining = self.payload[offset:]
+
+        class Response:
+            status = 206 if offset else 200
+
+            def __init__(self, data: bytes, fail_after: int | None):
+                self._data = data
+                self._offset = 0
+                self._fail_after = fail_after
+
+            def read(self, size: int) -> bytes:
+                if self._fail_after is not None and self._offset >= self._fail_after:
+                    raise TimeoutError("The read operation timed out")
+                chunk = self._data[self._offset : self._offset + size]
+                self._offset += size
+                return chunk
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        fail_after = self.fail_after if self.attempts == 1 else None
+        return Response(remaining, fail_after)
+
+
+def test_download_resumes_after_a_mid_stream_timeout(tmp_path):
+    from localsr.core.model_catalog import download_model
+
+    payloads = {"dit": b"x" * 4096}
+    model, _store = _bundle_fixture(tmp_path, payloads)
+    file = model.files[0]
+    opener = _FlakyRangeOpener(payloads["dit"], fail_after=1024)
+
+    destination = tmp_path / file.filename
+    progress = []
+    result = download_model(
+        file,
+        destination,
+        opener=opener,
+        chunk_size=512,
+        retry_wait_seconds=0.01,
+        progress_callback=lambda done, total: progress.append(done),
+    )
+    assert result == destination
+    assert destination.read_bytes() == payloads["dit"]
+    # Attempt 2 resumed from the surviving partial rather than restarting.
+    assert opener.attempts == 2
+    assert opener.range_offsets == [0, 1024]
+    assert not destination.with_name(f"{destination.name}.part").exists()
+
+
+def test_cancelled_download_keeps_the_partial_for_resume(tmp_path):
+    from localsr.core.model_catalog import ModelDownloadCancelled, download_model
+
+    payloads = {"dit": b"y" * 2048}
+    model, _store = _bundle_fixture(tmp_path, payloads)
+    file = model.files[0]
+    destination = tmp_path / file.filename
+    cancel = threading.Event()
+
+    def cancelling_progress(done, _total):
+        if done >= 512:
+            cancel.set()
+
+    with pytest.raises(ModelDownloadCancelled):
+        download_model(
+            file,
+            destination,
+            opener=_FlakyRangeOpener(payloads["dit"], fail_after=10**9),
+            chunk_size=512,
+            cancel_event=cancel,
+            progress_callback=cancelling_progress,
+        )
+    partial = destination.with_name(f"{destination.name}.part")
+    assert partial.exists() and partial.stat().st_size >= 512
