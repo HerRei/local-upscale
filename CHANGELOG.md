@@ -5,6 +5,17 @@ stable release is published.
 
 ## [Unreleased]
 
+### Changed
+
+- Face-aware restoration no longer has a manual Detect Faces button — it never influenced
+  jobs. It is now automatic: when the selected model has an installed face-specialized
+  companion (`pair_with` in the catalog), jobs carry it and the worker detects faces and
+  composites the face model over face regions on its own.
+- Removed the abandoned Qt Quick/QML interface (`ui/qml_app.py`, `ui/controller.py`, the
+  `ui/qml/` tree) — dead outside one offscreen test. The preset and preview tests it hosted
+  moved to `tests/test_presets_preview.py`. The Qt Widgets `--legacy` window remains for now
+  because several protocol/integration test suites still drive core behavior through it.
+
 ## [0.0.3-alpha] - 2026-08-21
 
 ### Added

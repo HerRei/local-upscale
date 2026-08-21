@@ -2,13 +2,12 @@ import base64
 import io
 
 from PIL import Image
-from PySide6.QtCore import QSettings, QSize
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QImage
 
 from localsr.core.model_catalog import CATALOG_BY_ID, MODEL_CATALOG, ModelPurpose
 from localsr.core.presets import PresetMode, rank_models_for_preset, resolve_settings_for_model
 from localsr.ui.preview_provider import PreviewImageProvider
-from localsr.ui.qml_app import create_qml_application
 
 
 def test_quick_and_best_rank_distinct_catalog_models():
@@ -152,18 +151,3 @@ def test_progressive_preview_composites_a_completed_tile():
     left = result.pixelColor(10, 25)
     right = result.pixelColor(75, 25)
     assert right.red() > left.red()
-
-
-def test_qml_interface_loads_offscreen(qapp, tmp_path):
-    settings = QSettings(str(tmp_path / "qml-settings.ini"), QSettings.IniFormat)
-    engine, controller = create_qml_application(start_worker=False, settings=settings)
-    try:
-        roots = engine.rootObjects()
-        assert len(roots) == 1
-        assert roots[0].property("title") == "LocalSR"
-        assert roots[0].width() >= 1180
-        assert roots[0].height() >= 760
-        assert roots[0].property("localSR") == controller
-        assert len(controller.modelRows) == len(MODEL_CATALOG) + 1
-    finally:
-        controller.shutdown()

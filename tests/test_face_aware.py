@@ -7,7 +7,9 @@ constructed manually for deterministic testing.
 
 from __future__ import annotations
 
+import os
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -464,3 +466,70 @@ def test_video_job_request_includes_face_model_path():
 
     data = json.loads(req.to_json())["data"]
     assert data["face_model_path"] == "/tmp/face.pth"
+
+
+def test_jobs_auto_pair_installed_face_companion(tmp_path):
+    """Face-aware restoration follows the model choice, not a button."""
+    import subprocess
+    import sys
+    import textwrap
+
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root / "src")
+    script = textwrap.dedent(
+        f"""
+        from pathlib import Path
+        from localsr.core.model_catalog import MODEL_CATALOG
+        from localsr.ui.slint_app import CUSTOM_MODEL_ID, create_slint_application
+
+        base = Path({str(tmp_path)!r})
+        models = base / "models"
+        models.mkdir(parents=True, exist_ok=True)
+        catalog = {{m.model_id: m for m in MODEL_CATALOG}}
+        for model_id in ("hat_s_x4", "hat_s_x4_face"):
+            model = catalog[model_id]
+            with open(models / model.filename, "wb") as handle:
+                handle.truncate(model.size_bytes)
+
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=base / "settings.json",
+            model_root=models,
+        )
+        application.set_task(0)
+
+        def select(model_id):
+            index = next(
+                i for i, m in enumerate(application.filtered_models)
+                if (m.model_id if m is not None else CUSTOM_MODEL_ID) == model_id
+            )
+            application.set_model_index(index)
+
+        # General model with an installed FACE companion: jobs carry it.
+        select("hat_s_x4")
+        companion = application._face_companion_path()
+        assert companion is not None
+        assert companion.endswith(catalog["hat_s_x4_face"].filename)
+
+        # The face model itself pairs back to a GENERAL model: no companion.
+        select("hat_s_x4_face")
+        assert application._face_companion_path() is None
+
+        # Companion not installed: no pairing.
+        (models / catalog["hat_s_x4_face"].filename).unlink()
+        select("hat_s_x4")
+        assert application._face_companion_path() is None
+        application.shutdown()
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

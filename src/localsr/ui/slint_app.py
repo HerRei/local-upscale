@@ -167,7 +167,6 @@ class SlintApplication:
         self.batch_total = 0
         self.batch_current = 0
         self.cancel_batch = False
-        self.detected_face_boxes: list[dict] = []
         self.deflicker_enabled = False
 
         self.download_thread: threading.Thread | None = None
@@ -233,8 +232,6 @@ class SlintApplication:
         self.ui.cancel_job = self.cancel_job
         self.ui.open_result = self.open_result
         self.ui.reveal_result = self.reveal_result
-        self.ui.detect_faces = self.detect_faces
-        self.ui.clear_faces = self.clear_faces
         self.ui.save_recipe = self.save_recipe
         self.ui.apply_recipe = self.apply_recipe
         self.ui.delete_recipe = self.delete_recipe
@@ -1309,6 +1306,28 @@ class SlintApplication:
         self._sync_recipes()
         self._show_status("Recipe removed", f"“{removed.get('name', 'Recipe')}” deleted.")
 
+    def _face_companion_path(self) -> str | None:
+        """Installed FACE-purposed companion of the selected model, if any.
+
+        Face-aware restoration is a property of the model choice, not a
+        button: when the selected general model has an installed
+        face-specialized partner, jobs carry it and the worker composites
+        faces automatically.
+        """
+        model = self._selected_catalog_model()
+        if model is None or not model.pair_with:
+            return None
+        companion = next(
+            (m for m in MODEL_CATALOG if m.model_id == model.pair_with), None
+        )
+        if (
+            companion is None
+            or ModelPurpose.FACE not in companion.purposes
+            or not self.model_store.is_installed(companion)
+        ):
+            return None
+        return str(self.model_store.path_for(companion))
+
     def start_jobs(self) -> None:
         self._update_estimate()
         if not self.ui.can_start:
@@ -1375,6 +1394,7 @@ class SlintApplication:
             preserve_metadata=self.preserve_metadata,
             safe_memory=self.safe_memory,
             output_scale=self.output_scale,
+            face_model_path=self._face_companion_path(),
         )
         self.ui.progress = 0.0
         self.ui.live_result_ready = False
@@ -1434,8 +1454,6 @@ class SlintApplication:
             "download_completed": self._on_download_completed,
             "download_cancelled": self._on_download_cancelled,
             "download_failed": self._on_download_failed,
-            "faces_detected": self._on_faces_detected,
-            "face_detection_unavailable": self._on_face_detection_unavailable,
             "video_frame_started": self._on_video_frame_started,
             "video_frame_completed": self._on_video_frame_completed,
             "video_job_completed": self._on_video_job_completed,
@@ -1758,52 +1776,6 @@ class SlintApplication:
         self.ui.model_status = self.runtime_warning
         self._show_status("Download failed", self.runtime_warning)
         self._sync_inspector()
-
-    # ── Face detection ──────────────────────────────────────────────
-
-    def detect_faces(self) -> None:
-        """Send a DetectFacesRequest to the worker for the selected image."""
-        image = self._selected_image()
-        if image is None:
-            self._show_status("No image", "Select an image before detecting faces.")
-            return
-        if self.current_job_id:
-            return
-        self.ui.face_detecting = True
-        self.ui.face_status = "Detecting faces…"
-        from localsr.protocol.messages import DetectFacesRequest
-
-        self.worker.send_request(DetectFacesRequest(image_path=image.path))
-
-    def clear_faces(self) -> None:
-        """Clear detected face boxes from the UI."""
-        self.detected_face_boxes = []
-        self.ui.face_count = 0
-        self.ui.face_status = ""
-
-    def _on_faces_detected(self, data: dict) -> None:
-        boxes = data.get("boxes", [])
-        self.detected_face_boxes = boxes
-        self.ui.face_detecting = False
-        count = len(boxes)
-        self.ui.face_count = count
-        if count == 0:
-            self.ui.face_status = "No faces found."
-            self._show_status("Face detection", "No faces detected in this image.")
-        else:
-            self.ui.face_status = f"{count} face{'s' if count != 1 else ''} detected."
-            self._show_status(
-                "Face detection",
-                f"{count} face{'s' if count != 1 else ''} detected. "
-                "Face-aware restoration will use the face model on these regions.",
-            )
-
-    def _on_face_detection_unavailable(self, data: dict) -> None:
-        self.ui.face_detecting = False
-        self.ui.face_detection_available = False
-        message = data.get("message", "Face detection is unavailable.")
-        self.ui.face_status = message
-        self._show_status("Face detection unavailable", message)
 
     # ── Video job event handlers ─────────────────────────────────────
 

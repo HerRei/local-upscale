@@ -34,14 +34,6 @@ export struct RecipeEntry {
     detail: string,
 }
 
-export struct FaceBox {
-    x: float,
-    y: float,
-    w: float,
-    h: float,
-    confidence: float,
-}
-
 // "Machined Graphite": four tonal planes joined by shadow + catch-light
 // seams under one top-left light. Chrome (toolbar, dock, status) is nearest,
 // panels sit below it, the preview stage below that, and the canvas well is
@@ -191,18 +183,11 @@ export component MainWindow inherits Window {
     callback cancel-job();
     callback open-result();
     callback reveal-result();
-    callback detect-faces();
-    callback clear-faces();
     callback save-recipe(string);
     callback apply-recipe(int);
     callback delete-recipe(int);
 
-    in-out property <bool> face-detection-available: true;
-    in-out property <bool> face-detecting: false;
-    in-out property <[FaceBox]> face-boxes;
-    in-out property <int> face-count: 0;
     in-out property <bool> deflicker: false;
-    in-out property <string> face-status: "";
 
     Timer {
         interval: 50ms;
@@ -1695,32 +1680,6 @@ export component MainWindow inherits Window {
                                 toggled(value) => {
                                     root.deflicker = value;
                                 }
-                            }
-
-                            // Detect Faces toggles: once faces are found the same
-                            // button clears them again, so face-aware restoration
-                            // can always be deselected.
-                            FlatButton {
-                                text: root.face-detecting ? "Detecting…" :
-                                    root.face-count > 0 ?
-                                        "Clear Faces (" + root.face-count + ")" :
-                                        "Detect Faces";
-                                compact: true;
-                                selected: root.face-count > 0;
-                                active: root.controls-enabled && root.face-detection-available && !root.face-detecting;
-                                clicked => {
-                                    if (root.face-count > 0) {
-                                        root.clear-faces();
-                                    } else {
-                                        root.detect-faces();
-                                    }
-                                }
-                            }
-                            if root.face-status != "": Text {
-                                text: root.face-status;
-                                color: Theme.text-tertiary;
-                                font-size: 11px;
-                                wrap: word-wrap;
                             }
 
                             ValueLine { label: "Pressure"; value: root.pressure-text; }
