@@ -38,6 +38,12 @@ spandrel_datas, spandrel_binaries, spandrel_hidden = collect_all("spandrel")
 slint_datas, slint_binaries, slint_hidden = collect_all("slint")
 datas = spandrel_datas + slint_datas + [
     (str(SOURCE / "localsr" / "ui" / "slint"), "localsr/ui/slint"),
+    # SeedVR2 vendored configs, text embeddings, and license travel as data
+    # so the temporal engine finds them next to its modules.
+    (
+        str(SOURCE / "localsr" / "video_models" / "seedvr2" / "vendor"),
+        "localsr/video_models/seedvr2/vendor",
+    ),
 ]
 hiddenimports = sorted(
     set(

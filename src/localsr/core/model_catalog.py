@@ -233,9 +233,78 @@ class CatalogVideoModel:
         return sum(file.size_bytes for file in self.files)
 
 
-# Populated when a vendored temporal engine lands; the infrastructure is
-# exercised by tests against fixture bundles until then.
-VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = ()
+# Immutable revision-pinned URLs: numz/SeedVR2_comfyUI at commit
+# 09ced71023636e9bc8cdf9cdecfb2625d1e691e8. Sizes and SHA-256 digests match
+# the upstream model registry and the HuggingFace LFS metadata.
+_SEEDVR2_BASE = (
+    "https://huggingface.co/numz/SeedVR2_comfyUI/resolve/09ced71023636e9bc8cdf9cdecfb2625d1e691e8"
+)
+_SEEDVR2_VAE = ModelFile(
+    role="vae",
+    filename="ema_vae_fp16.safetensors",
+    size_bytes=501_324_814,
+    sha256="20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1",
+    download_url=f"{_SEEDVR2_BASE}/ema_vae_fp16.safetensors?download=true",
+)
+
+VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
+    CatalogVideoModel(
+        model_id="seedvr2_3b",
+        name="SeedVR2-3B — Temporal",
+        description=(
+            "One-step diffusion video restorer with true temporal consistency "
+            "inside each clip window. Slow but strong; needs 16 GB of memory."
+        ),
+        family="seedvr2_3b",
+        engine_kind="seedvr2",
+        files=(
+            ModelFile(
+                role="dit",
+                filename="seedvr2_ema_3b_fp16.safetensors",
+                size_bytes=6_783_018_808,
+                sha256=("2fd0e03a3dad24e07086750360727ca437de4ecd456f769856e960ae93e2b304"),
+                download_url=(f"{_SEEDVR2_BASE}/seedvr2_ema_3b_fp16.safetensors?download=true"),
+            ),
+            _SEEDVR2_VAE,
+        ),
+        license_name="Apache-2.0",
+        author="ByteDance Seed · numz",
+        source_url="https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+        min_unified_memory_gb=16,
+        min_vram_gb=16,
+        temporal_window=9,
+        temporal_overlap=2,
+    ),
+    CatalogVideoModel(
+        model_id="seedvr2_3b_fp8",
+        name="SeedVR2-3B FP8 — Temporal",
+        description=(
+            "FP8 quantization of SeedVR2-3B for NVIDIA GPUs: half the download "
+            "and memory of FP16 at nearly the same quality."
+        ),
+        family="seedvr2_3b",
+        engine_kind="seedvr2",
+        files=(
+            ModelFile(
+                role="dit",
+                filename="seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+                size_bytes=3_391_544_696,
+                sha256=("3bf1e43ebedd570e7e7a0b1b60d6a02e105978f505c8128a241cde99a8240cff"),
+                download_url=(
+                    f"{_SEEDVR2_BASE}/seedvr2_ema_3b_fp8_e4m3fn.safetensors?download=true"
+                ),
+            ),
+            _SEEDVR2_VAE,
+        ),
+        license_name="Apache-2.0",
+        author="ByteDance Seed · numz",
+        source_url="https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+        min_unified_memory_gb=24,
+        min_vram_gb=12,
+        temporal_window=9,
+        temporal_overlap=2,
+    ),
+)
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}
 
 

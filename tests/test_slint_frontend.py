@@ -183,7 +183,13 @@ def test_slint_task_filters_catalog_models(tmp_path):
         application.set_task(1)
         assert all(model is None or model.native_scale == 1 for model in application.filtered_models)
         application.set_task(2)
-        assert all(model is None or model.native_scale > 1 for model in application.filtered_models)
+        from localsr.core.model_catalog import CatalogVideoModel
+        temporal = [m for m in application.filtered_models if isinstance(m, CatalogVideoModel)]
+        assert [m.model_id for m in temporal] == ["seedvr2_3b", "seedvr2_3b_fp8"]
+        assert all(
+            model is None or isinstance(model, CatalogVideoModel) or model.native_scale > 1
+            for model in application.filtered_models
+        )
         application.shutdown()
         """
     )

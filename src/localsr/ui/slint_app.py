@@ -36,11 +36,14 @@ from localsr.core.image_formats import (
 )
 from localsr.core.model_catalog import (
     MODEL_CATALOG,
+    VIDEO_MODEL_CATALOG,
     CatalogModel,
+    CatalogVideoModel,
     ModelDownloadCancelled,
     ModelPurpose,
     ModelStore,
     default_model_directory,
+    download_bundle,
     download_model,
 )
 from localsr.core.presets import PresetMode, rank_models_for_preset, resolve_settings_for_model
@@ -547,7 +550,10 @@ class SlintApplication:
             self._sync_inspector()
             return
         compatible = [model for model in MODEL_CATALOG if self._model_is_compatible(model)]
-        self.filtered_models = [*compatible, None]
+        if self.task_index == VIDEO_TASK_INDEX:
+            self.filtered_models = [*VIDEO_MODEL_CATALOG, *compatible, None]
+        else:
+            self.filtered_models = [*compatible, None]
         self._refresh_model_option_labels()
         self._update_model_info()
         desired = preferred_id or self.model_id
@@ -572,6 +578,12 @@ class SlintApplication:
         for model in self.filtered_models:
             if model is None:
                 labels.append("Use My Own Checkpoint…")
+            elif isinstance(model, CatalogVideoModel):
+                if self.model_store.is_bundle_installed(model):
+                    labels.append(f"{model.name} · Installed")
+                else:
+                    gigabytes = model.total_size_bytes / 1_000_000_000
+                    labels.append(f"{model.name} · Download {gigabytes:.1f} GB")
             elif self.model_store.is_installed(model):
                 labels.append(f"{model.name} · Installed")
             else:
@@ -595,10 +607,38 @@ class SlintApplication:
         self.model_id = model.model_id if model is not None else CUSTOM_MODEL_ID
         self.model_path = ""
         self.current_model_info = {}
-        self.model_scale = model.native_scale if model is not None else 1
+        if isinstance(model, CatalogVideoModel):
+            self.model_scale = 4
+        else:
+            self.model_scale = model.native_scale if model is not None else 1
         self._configure_scales()
 
-        if model is None:
+        if isinstance(model, CatalogVideoModel):
+            self.ui.model_description = model.description
+            gigabytes = model.total_size_bytes / 1_000_000_000
+            if self.model_store.is_bundle_installed(model):
+                # The bundle directory stands in for a model path so the
+                # existing can-start gating applies unchanged.
+                self.model_path = str(self.model_store.bundle_dir_for(model))
+                self.current_model_info = {
+                    "kind": model.engine_kind,
+                    "temporal_window": model.temporal_window,
+                }
+                self.ui.model_status = (
+                    f"Installed · temporal · {model.license_name} · {gigabytes:.1f} GB"
+                )
+                self.ui.model_action_text = "Model Installed"
+                self.ui.model_action_visible = True
+                self.ui.model_action_enabled = False
+            else:
+                self.ui.model_status = (
+                    f"Not installed · {model.license_name} · needs about "
+                    f"{model.min_unified_memory_gb} GB of memory to run"
+                )
+                self.ui.model_action_text = f"Download {gigabytes:.1f} GB"
+                self.ui.model_action_visible = True
+                self.ui.model_action_enabled = True
+        elif model is None:
             self.ui.model_description = (
                 "Load a local Spandrel-compatible checkpoint. Only use trusted .pth or .pt files."
             )
@@ -669,6 +709,10 @@ class SlintApplication:
                 self._inspect_model()
                 self._update_estimate()
             return
+        if isinstance(model, CatalogVideoModel):
+            if not self.model_store.is_bundle_installed(model):
+                self._start_bundle_download(model)
+            return
         if not self.model_store.is_installed(model):
             self._start_model_download(model)
 
@@ -714,6 +758,52 @@ class SlintApplication:
             target=run,
             daemon=True,
             name="localsr-model-download",
+        )
+        self.download_thread.start()
+        self._update_action_state()
+
+    def _start_bundle_download(self, model: CatalogVideoModel) -> None:
+        if self.download_thread is not None and self.download_thread.is_alive():
+            return
+        cancel_event = threading.Event()
+        self.download_cancel = cancel_event
+        self.ui.download_visible = True
+        self.ui.download_progress = 0.0
+        self.ui.model_action_text = "Cancel Download"
+        self.ui.model_action_enabled = True
+        self.ui.model_status = f"Downloading {model.name}; SHA-256 verification follows…"
+
+        def progress(downloaded: int, total: int) -> None:
+            self.events.put(
+                (
+                    "download_progress",
+                    {"downloaded": downloaded, "total": total, "model_id": model.model_id},
+                )
+            )
+
+        def run() -> None:
+            try:
+                path = download_bundle(
+                    model,
+                    self.model_store,
+                    progress_callback=progress,
+                    cancel_event=cancel_event,
+                )
+            except ModelDownloadCancelled:
+                self.events.put(("download_cancelled", {"model_id": model.model_id}))
+            except Exception as error:  # noqa: BLE001 - cross-thread user-facing error
+                self.events.put(
+                    ("download_failed", {"model_id": model.model_id, "message": str(error)})
+                )
+            else:
+                self.events.put(
+                    ("download_completed", {"model_id": model.model_id, "path": str(path)})
+                )
+
+        self.download_thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="localsr-bundle-download",
         )
         self.download_thread.start()
         self._update_action_state()
@@ -1009,6 +1099,18 @@ class SlintApplication:
     def _update_estimate(self) -> None:
         image = self._selected_image()
         model = self._selected_catalog_model()
+        if isinstance(model, CatalogVideoModel):
+            self.current_estimate = None
+            self.ui.estimate_time = "—"
+            self.ui.estimate_output = "—"
+            self.ui.estimate_detail = (
+                "Temporal engine: expect minutes of compute per second of "
+                "video on Apple Silicon; NVIDIA GPUs are much faster."
+            )
+            self.ui.estimate_warning = self.runtime_warning
+            self._update_hardware_display()
+            self._update_action_state()
+            return
         if image is None or not self.model_path or not self.current_model_info:
             self.current_estimate = None
             self.ui.estimate_time = "—"
@@ -1182,7 +1284,11 @@ class SlintApplication:
         self.ui.profile_summary = self.profile_label if self.task_selected else "—"
 
         model = self._selected_catalog_model()
-        if model is not None:
+        if isinstance(model, CatalogVideoModel):
+            availability = (
+                "Installed" if self.model_store.is_bundle_installed(model) else "Download required"
+            )
+        elif model is not None:
             availability = (
                 "Installed" if self.model_store.is_installed(model) else "Download required"
             )
@@ -1404,7 +1510,7 @@ class SlintApplication:
         faces automatically.
         """
         model = self._selected_catalog_model()
-        if model is None or not model.pair_with:
+        if not isinstance(model, CatalogModel) or not model.pair_with:
             return None
         companion = next((m for m in MODEL_CATALOG if m.model_id == model.pair_with), None)
         if (
@@ -1469,22 +1575,47 @@ class SlintApplication:
             else self.images[index].width * self.images[index].height / 1_000_000
         )
         if self.images[index].is_video:
-            request: JobRequest | VideoJobRequest = VideoJobRequest(
-                job_id=self.current_job_id,
-                video_path=path,
-                model_path=self.model_path,
-                output_video_path=output_path,
-                container="mp4",
-                crf=18,
-                fps=None,
-                device=self.device_id,
-                tile_size=self.tile_size,
-                halo=self.halo,
-                precision=self.precision,
-                safe_memory=self.safe_memory,
-                face_model_path=self._face_companion_path(),
-                deflicker=bool(self.ui.deflicker),
-            )
+            item = self.images[index]
+            selected_model = self._selected_catalog_model()
+            if isinstance(selected_model, CatalogVideoModel):
+                # Temporal engine: resolution-based, no per-frame model file.
+                request: JobRequest | VideoJobRequest = VideoJobRequest(
+                    job_id=self.current_job_id,
+                    video_path=path,
+                    model_path="",
+                    output_video_path=output_path,
+                    container="mp4",
+                    crf=18,
+                    fps=None,
+                    device=self.device_id,
+                    tile_size=self.tile_size,
+                    halo=self.halo,
+                    precision=self.precision,
+                    safe_memory=self.safe_memory,
+                    deflicker=False,
+                    model_kind=selected_model.engine_kind,
+                    bundle_dir=str(self.model_store.bundle_dir_for(selected_model)),
+                    temporal_window=selected_model.temporal_window,
+                    temporal_overlap=selected_model.temporal_overlap,
+                    target_resolution=min(item.width, item.height) * self.output_scale,
+                )
+            else:
+                request = VideoJobRequest(
+                    job_id=self.current_job_id,
+                    video_path=path,
+                    model_path=self.model_path,
+                    output_video_path=output_path,
+                    container="mp4",
+                    crf=18,
+                    fps=None,
+                    device=self.device_id,
+                    tile_size=self.tile_size,
+                    halo=self.halo,
+                    precision=self.precision,
+                    safe_memory=self.safe_memory,
+                    face_model_path=self._face_companion_path(),
+                    deflicker=bool(self.ui.deflicker),
+                )
         else:
             request = JobRequest(
                 job_id=self.current_job_id,
@@ -1807,6 +1938,14 @@ class SlintApplication:
         if not self._shutdown:
             self.worker.start()
 
+    @staticmethod
+    def _model_download_label(model) -> str:
+        if isinstance(model, CatalogVideoModel):
+            return f"Download {model.total_size_bytes / 1_000_000_000:.1f} GB"
+        if isinstance(model, CatalogModel):
+            return f"Download {model.size_megabytes:.0f} MB"
+        return "Download"
+
     def _download_matches(self, data: dict) -> bool:
         model = self._selected_catalog_model()
         return model is not None and data.get("model_id") == model.model_id
@@ -1836,10 +1975,20 @@ class SlintApplication:
         self._finish_download_ui()
         if not matches:
             return
+        model = self._selected_catalog_model()
         self.model_path = str(data.get("path", ""))
         self._refresh_model_option_labels()
         self.ui.model_action_text = "Model Installed"
         self.ui.model_action_enabled = False
+        if isinstance(model, CatalogVideoModel):
+            self.current_model_info = {
+                "kind": model.engine_kind,
+                "temporal_window": model.temporal_window,
+            }
+            self.ui.model_status = "Download complete and SHA-256 verified. Ready."
+            self._sync_inspector()
+            self._update_estimate()
+            return
         self.ui.model_status = "Download complete and SHA-256 verified. Inspecting model…"
         self._inspect_model()
 
@@ -1853,9 +2002,7 @@ class SlintApplication:
         self.pending_auto_start = False
         self.profile_label = "Manual"
         model = self._selected_catalog_model()
-        self.ui.model_action_text = (
-            f"Download {model.size_megabytes:.0f} MB" if model else "Download"
-        )
+        self.ui.model_action_text = self._model_download_label(model)
         self.ui.model_action_enabled = True
         self.ui.model_status = "Download cancelled; the partial file was removed."
         self._show_status(
@@ -1874,9 +2021,7 @@ class SlintApplication:
         self.pending_auto_start = False
         self.profile_label = "Manual"
         model = self._selected_catalog_model()
-        self.ui.model_action_text = (
-            f"Download {model.size_megabytes:.0f} MB" if model else "Download"
-        )
+        self.ui.model_action_text = self._model_download_label(model)
         self.ui.model_action_enabled = True
         self.runtime_warning = f"Model download failed: {data.get('message', 'unknown error')}"
         self.ui.model_status = self.runtime_warning

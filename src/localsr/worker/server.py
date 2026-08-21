@@ -553,16 +553,143 @@ class WorkerServer:
                 out_file.cleanup()
 
     def _run_temporal_video_job(self, job_id, data, engine_factory):
-        """Run a clip-based temporal engine over the video.
+        """Stream a video through a clip-based temporal engine.
 
-        The engine contract: construct with (bundle_dir, device, precision),
-        then process_clip(list[HxWx3 uint8]) -> list[HxWx3 uint8]. Clip
-        windowing and overlap stitching live in localsr.core.temporal so
-        every temporal family shares one boundary behavior.
+        Frames are read in 4n+1 chunks; each chunk is conditioned on the
+        previous chunk's tail frames (context in, dropped from the output,
+        mirroring the upstream streaming CLI). The first chunk is processed
+        eagerly to learn the output dimensions before the encoder opens.
         """
-        raise NotImplementedError(
-            "Temporal video engines are wired end-to-end but no engine is "
-            "vendored in this build yet."
+        import time as _time
+
+        from localsr.core.video_io import decode_frames, encode_video, probe_video
+
+        video_path = data["video_path"]
+        output_path = data["output_video_path"]
+        probe = probe_video(video_path)
+        fps = data.get("fps") or probe.fps or 25.0
+        total_frames = probe.frame_count
+        window = int(data.get("temporal_window") or 9)
+        overlap = max(0, min(int(data.get("temporal_overlap") or 2), window - 1))
+        resolution = int(data.get("target_resolution") or 0)
+        if resolution <= 0:
+            resolution = min(probe.width, probe.height)
+        bundle_dir = data.get("bundle_dir") or ""
+
+        send_message(LogMessage(level="info", message="Loading the temporal video engine..."))
+        engine = engine_factory(
+            bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
+        )
+
+        started_at = _time.monotonic()
+        chunk_new = 33  # 4n+1: fresh frames per streamed chunk
+        decode_iter = decode_frames(video_path)
+        state = {"done": 0}
+
+        def read_chunk() -> list:
+            frames = []
+            for _ in range(chunk_new):
+                try:
+                    _, rgb = next(decode_iter)
+                except StopIteration:
+                    break
+                frames.append(rgb)
+            return frames
+
+        def process_chunk(chunk: list, context: list) -> list:
+            send_message(
+                VideoFrameStarted(
+                    job_id=job_id,
+                    frame_index=state["done"],
+                    total_frames=int(total_frames),
+                )
+            )
+            result = engine.process_frames(
+                context + chunk,
+                resolution=resolution,
+                batch_size=window,
+                temporal_overlap=overlap,
+                seed=42,
+                cancel_event=self.cancel_event,
+            )
+            result = result[len(context) :]
+            state["done"] += len(chunk)
+            elapsed = _time.monotonic() - started_at
+            per_frame = elapsed / max(1, state["done"])
+            remaining = per_frame * max(0, int(total_frames) - state["done"])
+            send_message(
+                VideoFrameCompleted(
+                    job_id=job_id,
+                    frame_index=state["done"] - 1,
+                    total_frames=int(total_frames),
+                    frames_processed=state["done"],
+                    elapsed_seconds=float(elapsed),
+                    estimated_remaining_seconds=float(remaining),
+                    jpeg_base64="",
+                )
+            )
+            return result
+
+        try:
+            first_chunk = read_chunk()
+            if not first_chunk:
+                raise ValueError("No frames could be decoded from the video.")
+            first_out = process_chunk(first_chunk, [])
+            out_height, out_width = first_out[0].shape[:2]
+
+            def all_frames():
+                yield from first_out
+                previous_tail = first_chunk[-overlap:] if overlap > 0 else []
+                while True:
+                    if self.cancel_event.is_set():
+                        raise InterruptedError()
+                    chunk = read_chunk()
+                    if not chunk:
+                        return
+                    output = process_chunk(chunk, list(previous_tail))
+                    previous_tail = chunk[-overlap:] if overlap > 0 else []
+                    yield from output
+
+            encode_video(
+                all_frames(),
+                output_path,
+                fps=float(fps),
+                container_format=str(data.get("container", "mp4")),
+                crf=int(data.get("crf", 18)),
+                width=int(out_width),
+                height=int(out_height),
+                audio_source=video_path
+                if data.get("start_frame") is None and data.get("end_frame") is None
+                else None,
+            )
+        except InterruptedError:
+            send_message(JobCancelled(job_id=job_id))
+            return
+        finally:
+            engine = None  # noqa: F841 — releases the models
+            try:
+                import torch
+
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                elif torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:  # noqa: BLE001
+                pass
+
+        if self.cancel_event.is_set():
+            send_message(JobCancelled(job_id=job_id))
+            return
+
+        elapsed = _time.monotonic() - started_at
+        send_message(
+            VideoJobCompleted(
+                job_id=job_id,
+                output_path=output_path,
+                frames_processed=state["done"],
+                elapsed_seconds=float(elapsed),
+                inference_seconds=float(elapsed),
+            )
         )
 
     def _run_video_job(self, job_id, data):

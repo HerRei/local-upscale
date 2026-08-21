@@ -57,6 +57,9 @@ class VideoJobRequest:
     bundle_dir: str | None = None
     temporal_window: int = 0
     temporal_overlap: int = 0
+    # Target shortest-edge in pixels for resolution-based engines (SeedVR2
+    # has no fixed scale factor). 0 lets the engine keep the input size.
+    target_resolution: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})

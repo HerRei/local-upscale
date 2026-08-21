@@ -186,10 +186,25 @@ def test_video_engine_registry_routes_and_degrades():
     with pytest.raises(TemporalEngineUnavailable) as unknown:
         resolve_video_engine("not_a_real_engine")
     assert "Frame-by-frame" in str(unknown.value)
-    # SeedVR2 is registered but not vendored yet: unavailable, not unknown.
-    with pytest.raises(TemporalEngineUnavailable) as seedvr2:
-        resolve_video_engine("seedvr2")
-    assert "SeedVR2" in str(seedvr2.value)
+
+
+def test_seedvr2_engine_resolves_from_the_vendored_tree():
+    engine_factory = resolve_video_engine("seedvr2")
+    assert hasattr(engine_factory, "process_frames")
+
+
+def test_seedvr2_catalog_bundles_are_pinned_and_complete():
+    from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID
+
+    for model_id in ("seedvr2_3b", "seedvr2_3b_fp8"):
+        model = VIDEO_CATALOG_BY_ID[model_id]
+        roles = {file.role for file in model.files}
+        assert roles == {"dit", "vae"}
+        for file in model.files:
+            assert len(file.sha256) == 64
+            assert "/resolve/09ced71023636e9bc8cdf9cdecfb2625d1e691e8/" in file.download_url
+        assert model.engine_kind == "seedvr2"
+        assert model.temporal_window % 4 == 1  # SeedVR2's 4n+1 clip rule
 
 
 def test_video_job_request_defaults_stay_frame_by_frame_compatible():
