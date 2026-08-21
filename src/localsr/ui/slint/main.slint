@@ -186,7 +186,6 @@ export component MainWindow inherits Window {
     callback save-recipe(string);
     callback apply-recipe(int);
     callback delete-recipe(int);
-    callback open-output-folder();
 
     in-out property <bool> deflicker: false;
 
@@ -199,96 +198,12 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // Chassis rim: Sensible, high-utility top toolbar
+        // Chassis rim: a quiet command strip. The OS title bar remains the
+        // only branded header. Compact layouts get a centered page switcher.
         Rectangle {
             height: 46px;
             background: Theme.bg-chrome;
 
-            // Left: Quick Media Actions & Preset/Recipe Shortcuts
-            HorizontalLayout {
-                x: 12px;
-                y: 8px;
-                height: 30px;
-                spacing: 6px;
-
-                FlatButton {
-                    text: "+ Files";
-                    primary: true;
-                    compact: true;
-                    min-width: 72px;
-                    active: root.controls-enabled;
-                    clicked => { root.choose-images(); }
-                }
-
-                FlatButton {
-                    text: "+ Folder";
-                    compact: true;
-                    min-width: 72px;
-                    active: root.controls-enabled;
-                    clicked => { root.choose-folder(); }
-                }
-
-                if root.queue-items.length > 0: FlatButton {
-                    text: "Clear";
-                    compact: true;
-                    min-width: 52px;
-                    active: root.controls-enabled;
-                    clicked => { root.clear-queue(); }
-                }
-
-                if root.layout-mode < 2: Rectangle {
-                    width: 1px;
-                    height: 20px;
-                    y: 5px;
-                    background: Theme.sep-light;
-                }
-
-                if root.layout-mode < 2: FlatButton {
-                    text: "⚡ Quick";
-                    compact: true;
-                    min-width: 68px;
-                    selected: root.profile-summary == "Quick" || root.profile-summary == "Quick Preset (Fast)";
-                    active: root.controls-enabled;
-                    clicked => { root.quick-setup(); }
-                }
-
-                if root.layout-mode < 2: FlatButton {
-                    text: "★ Best Quality";
-                    compact: true;
-                    min-width: 96px;
-                    selected: root.profile-summary == "Best" || root.profile-summary == "Best Quality Preset";
-                    active: root.controls-enabled;
-                    clicked => { root.best-setup(); }
-                }
-
-                if root.layout-mode == 0 && root.profile-summary != "—" && root.profile-summary != "Quick" && root.profile-summary != "Best": Rectangle {
-                    height: 30px;
-                    border-radius: 6px;
-                    background: Theme.bg-raised;
-                    border-width: 1px;
-                    border-color: Theme.border-control;
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 4px;
-                        Text {
-                            text: "Recipe:";
-                            color: Theme.text-tertiary;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: root.profile-summary;
-                            color: Theme.text-primary;
-                            font-size: 11px;
-                            font-weight: 600;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-
-            // Center page switcher for compact & medium layouts
             if root.layout-mode > 0: SegmentedHousing {
                 x: (parent.width - self.width) / 2;
                 y: 8px;
@@ -326,70 +241,16 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Right side: Output folder & Hardware status badge
-            HorizontalLayout {
-                x: parent.width - self.width - 12px;
+            FlatButton {
+                x: parent.width - 16px - self.width;
                 y: 8px;
+                width: 126px;
                 height: 30px;
-                spacing: 8px;
-
-                FlatButton {
-                    text: "📂 Output";
-                    compact: true;
-                    min-width: 76px;
-                    active: true;
-                    clicked => { root.open-output-folder(); }
-                }
-
-                Rectangle {
-                    width: 1px;
-                    height: 20px;
-                    y: 5px;
-                    background: Theme.sep-light;
-                }
-
-                Rectangle {
-                    height: 30px;
-                    border-radius: 6px;
-                    background: Theme.bg-raised;
-                    border-width: 1px;
-                    border-color: Theme.border-control;
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 6px;
-                        alignment: center;
-
-                        Rectangle {
-                            width: 7px;
-                            height: 7px;
-                            y: 11px;
-                            border-radius: 3.5px;
-                            background: root.pressure-color;
-                        }
-
-                        Text {
-                            text: root.device-summary;
-                            color: Theme.text-primary;
-                            font-size: 11px;
-                            font-weight: 500;
-                            vertical-alignment: center;
-                        }
-
-                        if root.layout-mode == 0 && root.memory-usage-text != "Memory unavailable": Text {
-                            text: "· " + root.memory-usage-text;
-                            color: Theme.text-tertiary;
-                            font-size: 10px;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.refresh-hardware(); }
-                    }
-                }
+                text: "+  Add Media";
+                primary: true;
+                compact: true;
+                active: root.controls-enabled;
+                clicked => { root.choose-images(); }
             }
 
             Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.sep-light; }

@@ -283,7 +283,6 @@ class SlintApplication:
         self.ui.save_recipe = self.save_recipe
         self.ui.apply_recipe = self.apply_recipe
         self.ui.delete_recipe = self.delete_recipe
-        self.ui.open_output_folder = self.open_output_folder
 
     def _initialize_ui(self) -> None:
         self.ui.batch_mode = bool(self.settings.get("batch_mode", False))

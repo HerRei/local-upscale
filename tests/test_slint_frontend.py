@@ -978,7 +978,7 @@ def test_top_toolbar_buttons_and_preset_shortcuts(tmp_path):
 
         # Test toolbar open output folder callback bound
         with patch("subprocess.Popen") as mock_popen, patch("os.startfile", create=True) as mock_start:
-            app.ui.open_output_folder()
+            app.open_output_folder()
             assert mock_popen.called or mock_start.called
 
         # Test responsive layout modes
@@ -990,7 +990,7 @@ def test_top_toolbar_buttons_and_preset_shortcuts(tmp_path):
         assert app.ui.layout_mode == 2
 
         # Test toolbar clear queue callback
-        app.ui.clear_queue()
+        app.clear_queue()
         assert len(app.images) == 0
 
         app.shutdown()
