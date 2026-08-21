@@ -104,7 +104,7 @@ export component MainWindow inherits Window {
     in-out property <string> memory-usage-text: "Memory unavailable";
     in-out property <float> memory-usage-ratio: 0;
     in-out property <string> pressure-text: "Checking pressure";
-    in-out property <brush> pressure-color: #7D828C;
+    in-out property <brush> pressure-color: #8B8E94;
 
     in-out property <string> estimate-time: "—";
     in-out property <string> estimate-output: "—";
@@ -375,7 +375,7 @@ export component MainWindow inherits Window {
                                 width: 12px;
                                 height: 2px;
                                 border-radius: 1px;
-                                background: #C7C9CE;
+                                background: #C8CBD1;
                             }
                             Rectangle {
                                 x: 13px;
@@ -383,7 +383,7 @@ export component MainWindow inherits Window {
                                 width: 2px;
                                 height: 12px;
                                 border-radius: 1px;
-                                background: #C7C9CE;
+                                background: #C8CBD1;
                             }
                         }
 
@@ -433,7 +433,7 @@ export component MainWindow inherits Window {
                             width: parent.width;
                             border-radius: 8px;
                             background: item.selected ?
-                                (row-touch.has-hover ? #4D8AFB3D : Theme.accent-tint18) :
+                                (row-touch.has-hover ? #4E8CFF3D : Theme.accent-tint18) :
                                 row-touch.has-hover ? Theme.bg-row-hover : transparent;
                             animate background { duration: 150ms; easing: ease-out; }
 
@@ -443,7 +443,7 @@ export component MainWindow inherits Window {
                                 width: 3px;
                                 height: item.selected ? 48px : 12px;
                                 border-radius: 1.5px;
-                                background: @linear-gradient(180deg, #689CFC 0%, #4D8AFB 100%);
+                                background: @linear-gradient(180deg, #6A9EFE 0%, #4E8CFF 100%);
                                 opacity: item.selected ? 1 : 0;
                                 animate height { duration: 140ms; easing: ease-out; }
                                 animate opacity { duration: 140ms; easing: ease-out; }
@@ -457,7 +457,7 @@ export component MainWindow inherits Window {
                                 border-radius: 6px;
                                 background: Theme.bg-raised;
                                 border-width: 1px;
-                                border-color: item.selected ? #4D8AFB66 : Theme.border-control;
+                                border-color: item.selected ? #4E8CFF66 : Theme.border-control;
                                 clip: true;
 
                                 Image {
@@ -470,7 +470,7 @@ export component MainWindow inherits Window {
 
                                 Text {
                                     text: "IMG";
-                                    color: item.selected ? #B5CFFC : Theme.text-tertiary;
+                                    color: item.selected ? #B9CDF1 : Theme.text-tertiary;
                                     font-size: 9px;
                                     font-weight: 600;
                                     letter-spacing: 0.5px;
@@ -511,8 +511,8 @@ export component MainWindow inherits Window {
                                 width: 22px;
                                 height: 22px;
                                 border-radius: 11px;
-                                background: remove-touch.pressed ? #E5484D52 :
-                                    remove-touch.has-hover ? #E5484D38 : #FFFFFF10;
+                                background: remove-touch.pressed ? #E5484D4D :
+                                    remove-touch.has-hover ? #E5484D33 : #FFFFFF10;
                                 opacity: row-touch.has-hover || remove-touch.has-hover ||
                                     item.selected || root.layout-mode == 2 ? 1 : 0;
                                 animate opacity { duration: 120ms; easing: ease; }
@@ -738,9 +738,9 @@ export component MainWindow inherits Window {
                                         y: root.tile-y * parent.height;
                                         width: root.tile-width * parent.width;
                                         height: root.tile-height * parent.height;
-                                        background: #4D8AFB1A;
+                                        background: #4E8CFF1A;
                                         border-width: 2px / root.preview-zoom;
-                                        border-color: #689CFC;
+                                        border-color: #6A9EFE;
                                         visible: root.tile-active;
                                     }
 
@@ -765,10 +765,10 @@ export component MainWindow inherits Window {
                                             border-width: 1px;
                                             border-color: preview-touch.dragging-divider ?
                                                 Theme.focus : #FFFFFF29;
-                                            background: #1C1F24F2;
+                                            background: #1B1D22F2;
                                             drop-shadow-blur: preview-touch.dragging-divider ? 10px : 12px;
                                             drop-shadow-color: preview-touch.dragging-divider ?
-                                                #4D8AFB59 : #00000080;
+                                                #4E8CFF59 : #00000080;
                                             drop-shadow-offset-y: 2px;
 
                                             Text {
@@ -826,7 +826,7 @@ export component MainWindow inherits Window {
                                             width: 18px;
                                             height: 2px;
                                             border-radius: 1px;
-                                            background: #C7C9CE;
+                                            background: #C8CBD1;
                                         }
                                         Rectangle {
                                             x: 21px;
@@ -834,7 +834,7 @@ export component MainWindow inherits Window {
                                             width: 2px;
                                             height: 18px;
                                             border-radius: 1px;
-                                            background: #C7C9CE;
+                                            background: #C8CBD1;
                                         }
                                     }
 
@@ -908,7 +908,7 @@ export component MainWindow inherits Window {
                                         width: parent.width - 20px;
                                         text: root.result-ready && root.comparison-enabled ?
                                             root.result-label : root.source-label;
-                                        color: #E7E9EE;
+                                        color: #E7E9ED;
                                         font-size: 11px;
                                         font-weight: 500;
                                         letter-spacing: 0.2px;
@@ -935,7 +935,7 @@ export component MainWindow inherits Window {
                                         x: 10px;
                                         width: parent.width - 20px;
                                         text: root.comparison-enabled ? root.source-label : root.result-label;
-                                        color: #E7E9EE;
+                                        color: #E7E9ED;
                                         font-size: 11px;
                                         font-weight: 500;
                                         letter-spacing: 0.2px;
@@ -1089,7 +1089,7 @@ export component MainWindow inherits Window {
                                             background: transparent;
                                             Text {
                                                 text: round(root.preview-zoom * 100) + "%";
-                                                color: #E7E9EE;
+                                                color: #E7E9ED;
                                                 font-size: 11px;
                                                 font-weight: 500;
                                                 letter-spacing: 0.3px;
@@ -1134,7 +1134,7 @@ export component MainWindow inherits Window {
                                             width: 92px;
                                             height: 26px;
                                             border-radius: 6px;
-                                            background: root.comparison-enabled ? #4D8AFB1F :
+                                            background: root.comparison-enabled ? #4E8CFF1F :
                                                 compare-touch.has-hover ? #FFFFFF12 : transparent;
                                             animate background { duration: 120ms; easing: ease; }
 
@@ -1152,7 +1152,7 @@ export component MainWindow inherits Window {
                                                 width: 7px;
                                                 height: 7px;
                                                 border-radius: 3.5px;
-                                                background: root.comparison-enabled ? Theme.accent : #55585F;
+                                                background: root.comparison-enabled ? Theme.accent : #575C64;
                                                 animate background { duration: 120ms; easing: ease; }
                                             }
 
@@ -1573,7 +1573,7 @@ export component MainWindow inherits Window {
                                         width: 14px;
                                         height: 14px;
                                         border-radius: 7px;
-                                        background: #ECEDF1;
+                                        background: #EBEDF1;
                                         border-width: 1px;
                                         border-color: #00000066;
                                         drop-shadow-blur: 6px;
@@ -1825,7 +1825,7 @@ export component MainWindow inherits Window {
                     y: parent.height - 102px;
                     width: parent.width;
                     height: 14px;
-                    background: @linear-gradient(180deg, #1C1F2400 0%, #1C1F24 100%);
+                    background: @linear-gradient(180deg, #1B1D2200 0%, #1B1D22 100%);
                 }
 
                 // The only persistent primary action. Automatic recipes above
@@ -1901,9 +1901,9 @@ export component MainWindow inherits Window {
                 y: 0px;
                 width: parent.width * root.progress;
                 height: 2px;
-                background: @linear-gradient(90deg, #4D8AFB 0%, #689CFC 100%);
+                background: @linear-gradient(90deg, #4E8CFF 0%, #6A9EFE 100%);
                 drop-shadow-blur: 6px;
-                drop-shadow-color: #4D8AFB66;
+                drop-shadow-color: #4E8CFF66;
                 visible: root.can-cancel || root.progress > 0;
                 animate width { duration: 140ms; easing: linear; }
             }

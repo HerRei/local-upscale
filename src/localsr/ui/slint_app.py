@@ -1063,11 +1063,11 @@ class SlintApplication:
             else "Pressure unavailable"
         )
         pressure_colors = {
-            "low": "#53B68A",
-            "moderate": "#F0A23C",
+            "low": "#6DB07F",
+            "moderate": "#DE9935",
             "high": "#E5484D",
         }
-        self.ui.pressure_color = slint.Color(pressure_colors.get(level, "#7D828C"))
+        self.ui.pressure_color = slint.Color(pressure_colors.get(level, "#8B8E94"))
         self._sync_inspector()
 
     def _sync_inspector(self) -> None:

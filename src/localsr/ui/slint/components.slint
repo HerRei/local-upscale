@@ -9,57 +9,57 @@ import { ScrollView } from "std-widgets.slint";
 export global Theme {
     // Planes.
     out property <color> bg-stage: #0C0D10;
-    out property <color> bg-base: #15171C;
-    out property <color> bg-panel: #1C1F24;
-    out property <color> bg-chrome: #24272D;
-    out property <color> bg-raised: #2B2F36;
-    out property <color> bg-hover: #333740;
-    out property <color> bg-pressed: #282B32;
-    out property <color> bg-recess: #131519;
-    out property <color> bg-disabled: #222326;
-    out property <color> bg-overlay: #131519EB;
-    out property <color> bg-row-hover: #FFFFFF08;
+    out property <color> bg-base: #14171B;
+    out property <color> bg-panel: #1B1D22;
+    out property <color> bg-chrome: #21242A;
+    out property <color> bg-raised: #282B32;
+    out property <color> bg-hover: #2E333B;
+    out property <color> bg-pressed: #24282E;
+    out property <color> bg-recess: #16181C;
+    out property <color> bg-disabled: #232427;
+    out property <color> bg-overlay: #16181CEB;
+    out property <color> bg-row-hover: #FFFFFF07;
 
     // Text tiers.
     out property <color> text-primary: #F0F1F4;
-    out property <color> text-secondary: #9EA2AB;
-    out property <color> text-tertiary: #7D828C;
-    out property <color> text-disabled: #61646B;
-    out property <color> text-on-accent-secondary: #E3EDFF;
-    out property <color> text-accent: #9ABEFF;
+    out property <color> text-secondary: #9DA1A8;
+    out property <color> text-tertiary: #7A8089;
+    out property <color> text-disabled: #575C64;
+    out property <color> text-on-accent-secondary: #DCE9FF;
+    out property <color> text-accent: #9DC0FD;
 
     // Seams and borders.
-    out property <color> sep-shadow: #07080A;
-    out property <color> sep-light: #FFFFFF0A;
-    out property <color> sep-inset: #FFFFFF0D;
-    out property <color> border-control: #FFFFFF14;
-    out property <color> border-control-hover: #FFFFFF24;
-    out property <color> border-recess: #FFFFFF1A;
-    out property <color> focus: #4D8AFB;
-    out property <color> focus-glow: #4D8AFB40;
+    out property <color> sep-shadow: #08090B;
+    out property <color> sep-light: #FFFFFF09;
+    out property <color> sep-inset: #FFFFFF09;
+    out property <color> border-control: #FFFFFF12;
+    out property <color> border-control-hover: #FFFFFF1C;
+    out property <color> border-recess: #FFFFFF0F;
+    out property <color> focus: #4E8CFF;
+    out property <color> focus-glow: #4E8CFF40;
 
     // Accent material.
-    out property <color> accent: #4D8AFB;
-    out property <color> accent-hover: #689CFC;
-    out property <color> accent-pressed: #3E76E0;
-    out property <brush> accent-gradient: @linear-gradient(180deg, #4982EB 0%, #356FDD 100%);
-    out property <brush> accent-gradient-hover: @linear-gradient(180deg, #528AF2 0%, #3E78E4 100%);
-    out property <brush> accent-gradient-pressed: @linear-gradient(180deg, #3D71D4 0%, #2A60C5 100%);
-    out property <color> accent-tint12: #4D8AFB1F;
-    out property <color> accent-tint18: #4D8AFB2E;
-    out property <color> accent-border-sel: #4D8AFB66;
+    out property <color> accent: #4E8CFF;
+    out property <color> accent-hover: #6A9EFE;
+    out property <color> accent-pressed: #407BE9;
+    out property <brush> accent-gradient: @linear-gradient(180deg, #447EEA 0%, #346DD7 100%);
+    out property <brush> accent-gradient-hover: @linear-gradient(180deg, #4583F5 0%, #3571E2 100%);
+    out property <brush> accent-gradient-pressed: @linear-gradient(180deg, #3A6FD4 0%, #2A5EC1 100%);
+    out property <color> accent-tint12: #4E8CFF1F;
+    out property <color> accent-tint18: #4E8CFF2E;
+    out property <color> accent-border-sel: #4E8CFF80;
 
     // Semantic.
-    out property <color> warn: #F0A23C;
-    out property <color> warn-text: #EDC277;
-    out property <color> warn-bg: #2B2112;
-    out property <color> warn-border: #F0A23C33;
+    out property <color> warn: #DE9935;
+    out property <color> warn-text: #E7BC72;
+    out property <color> warn-bg: #2A2011;
+    out property <color> warn-border: #DE993533;
     out property <color> error: #E5484D;
-    out property <color> error-text: #FFAFB0;
-    out property <color> error-bg: #301D1E;
-    out property <color> error-border: #E5484D52;
-    out property <color> gauge-ok: #53B68A;
-    out property <color> gauge-warn: #F0A23C;
+    out property <color> error-text: #FFACAE;
+    out property <color> error-bg: #2F1C1C;
+    out property <color> error-border: #E5484D4D;
+    out property <color> gauge-ok: #6DB07F;
+    out property <color> gauge-warn: #DE9935;
     out property <color> gauge-crit: #E5484D;
 }
 
@@ -81,10 +81,10 @@ export component DesktopComboBox inherits Rectangle {
     vertical-stretch: 0;
     border-width: 1px;
     border-color: !root.enabled ? #FFFFFF0A : control-focus.has-focus ? Theme.focus :
-        control-touch.has-hover ? #FFFFFF20 : Theme.border-recess;
+        control-touch.has-hover ? #FFFFFF17 : Theme.border-recess;
     border-radius: 6px;
-    background: !root.enabled ? Theme.bg-disabled : control-touch.pressed ? #101215 :
-        control-touch.has-hover ? #17191D : Theme.bg-recess;
+    background: !root.enabled ? Theme.bg-disabled : control-touch.pressed ? #13161A :
+        control-touch.has-hover ? #191B20 : Theme.bg-recess;
     drop-shadow-blur: control-focus.has-focus ? 4px : 0px;
     drop-shadow-color: Theme.focus-glow;
     clip: true;
@@ -191,7 +191,7 @@ export component DesktopComboBox inherits Rectangle {
             Rectangle {
                 background: Theme.bg-raised;
                 border-width: 1px;
-                border-color: #FFFFFF1F;
+                border-color: #FFFFFF15;
                 border-radius: 8px;
                 drop-shadow-blur: 24px;
                 drop-shadow-color: #000000A6;
@@ -346,7 +346,7 @@ export component FlatButton inherits Rectangle {
         button-touch.has-hover ? Theme.border-control-hover : Theme.border-control;
     border-radius: 6px;
     background: !root.active ? Theme.bg-disabled :
-        root.destructive ? (button-touch.has-hover ? #372123 : Theme.error-bg) :
+        root.destructive ? (button-touch.has-hover ? #361F20 : Theme.error-bg) :
         root.primary ? (button-touch.pressed ? Theme.accent-gradient-pressed :
             button-touch.has-hover ? Theme.accent-gradient-hover : Theme.accent-gradient) :
         root.selected ? Theme.accent-tint12 :
@@ -372,7 +372,7 @@ export component FlatButton inherits Rectangle {
         y: 1px;
         width: parent.width - 2px;
         height: 1px;
-        background: #FFFFFF26;
+        background: #FFFFFF1A;
     }
 
     Text {
@@ -424,8 +424,8 @@ export component ToolbarButton inherits Rectangle {
     horizontal-stretch: 0;
     border-radius: 5px;
     background: !root.active ? transparent :
-        root.selected ? #373B44 :
-        touch.pressed ? #2F333B :
+        root.selected ? #393E47 :
+        touch.pressed ? #32363F :
         touch.has-hover ? #FFFFFF0A : transparent;
     clip: true;
     animate background { duration: 120ms; easing: ease; }
@@ -444,7 +444,7 @@ export component ToolbarButton inherits Rectangle {
         y: 1px;
         width: parent.width - 2px;
         height: 1px;
-        background: #FFFFFF14;
+        background: #FFFFFF12;
     }
 
     Text {
@@ -496,8 +496,8 @@ export component SegmentedButton inherits Rectangle {
     height: 24px;
     min-width: 54px;
     border-radius: 5px;
-    background: root.selected ? #373B44 :
-        touch.pressed && root.active ? #2F333B :
+    background: root.selected ? #393E47 :
+        touch.pressed && root.active ? #32363F :
         touch.has-hover && root.active ? #FFFFFF0A : transparent;
     clip: true;
     animate background { duration: 120ms; easing: ease; }
@@ -518,7 +518,7 @@ export component SegmentedButton inherits Rectangle {
         y: 1px;
         width: parent.width - 2px;
         height: 1px;
-        background: #FFFFFF14;
+        background: #FFFFFF12;
     }
 
     Text {
@@ -587,7 +587,7 @@ export component TaskChoice inherits Rectangle {
         height: 14px;
         border-radius: 7px;
         border-width: 1px;
-        border-color: root.selected ? #689CFC : #FFFFFF2E;
+        border-color: root.selected ? #6A9EFE : #FFFFFF1C;
         background: root.selected ? Theme.accent-gradient : Theme.bg-recess;
 
         Rectangle {
@@ -621,7 +621,7 @@ export component TaskChoice inherits Rectangle {
         height: 34px;
         text: root.detail;
         color: !root.active ? Theme.text-disabled :
-            root.selected ? #BECDE7 : Theme.text-secondary;
+            root.selected ? #B9CDF1 : Theme.text-secondary;
         font-size: 11px;
         wrap: word-wrap;
     }
@@ -688,7 +688,7 @@ export component RecipeChoice inherits Rectangle {
         y: 1px;
         width: parent.width - 2px;
         height: 1px;
-        background: #FFFFFF26;
+        background: #FFFFFF1A;
     }
 
     Text {
@@ -724,7 +724,7 @@ export component RecipeChoice inherits Rectangle {
         height: parent.height;
         text: "›";
         visible: root.active;
-        color: root.primary ? #E3EDFF : Theme.text-tertiary;
+        color: root.primary ? #DCE9FF : Theme.text-tertiary;
         font-size: 14px;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -843,8 +843,8 @@ export component CheckControl inherits Rectangle {
         border-radius: 4px;
         border-width: 1px;
         border-color: !root.active ? Theme.border-control :
-            root.checked ? #689CFC :
-            touch.has-hover ? #FFFFFF2E : #FFFFFF29;
+            root.checked ? #6A9EFE :
+            touch.has-hover ? #FFFFFF24 : #FFFFFF1C;
         background: !root.active ? Theme.bg-disabled :
             root.checked ? Theme.accent-gradient : Theme.bg-recess;
         animate background, border-color { duration: 120ms; easing: ease; }
@@ -879,7 +879,7 @@ export component CheckControl inherits Rectangle {
 export component ProgressTrack inherits Rectangle {
     in property <float> value: 0;
     in property <brush> fill-color: Theme.accent;
-    in property <color> track-color: #FFFFFF12;
+    in property <color> track-color: #FFFFFF0B;
     horizontal-stretch: 1;
     height: 4px;
     border-radius: 2px;
@@ -996,8 +996,8 @@ export component CustomRecipeRow inherits Rectangle {
         width: 22px;
         height: 22px;
         border-radius: 11px;
-        background: remove-touch.pressed ? #E5484D52 :
-            remove-touch.has-hover ? #E5484D38 : #FFFFFF10;
+        background: remove-touch.pressed ? #E5484D4D :
+            remove-touch.has-hover ? #E5484D33 : #FFFFFF10;
         opacity: row-touch.has-hover || remove-touch.has-hover ? 1 : 0;
         animate opacity { duration: 120ms; easing: ease; }
 
@@ -1071,7 +1071,7 @@ export component InfoDot inherits Rectangle {
         Rectangle {
             background: Theme.bg-raised;
             border-width: 1px;
-            border-color: #FFFFFF1F;
+            border-color: #FFFFFF15;
             border-radius: 8px;
             drop-shadow-blur: 24px;
             drop-shadow-color: #000000A6;
@@ -1127,7 +1127,7 @@ export component HudButton inherits Rectangle {
     Text {
         text: root.glyph;
         color: !root.active ? Theme.text-disabled :
-            touch.has-hover ? Theme.text-primary : #C7C9CE;
+            touch.has-hover ? Theme.text-primary : #C8CBD1;
         font-size: root.glyph-size;
         font-weight: 500;
         horizontal-alignment: center;
