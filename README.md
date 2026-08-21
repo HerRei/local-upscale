@@ -57,6 +57,61 @@ that backend because NCNN models are not interchangeable with arbitrary Spandrel
 checkpoints. DirectML is also not exposed because this version requires an enforceable per-process
 GPU-memory ceiling; unsupported GPUs fall back to CPU instead of being advertised optimistically.
 
+## Native Desktop Integrations
+
+LocalSR integrates directly into your operating system's desktop environment:
+
+### 🍏 macOS Integrations
+
+* **Finder Quick Actions & Services**:
+  * Right-click any image or video in Finder.
+  * Hover over **`Quick Actions >`** (or **`Services >`**) and select **`Upscale with LocalSR`**.
+  * An interactive recipe selector popup will appear asking which preset you'd like to use:
+    * **⚡ Quick Preset** (Fast)
+    * **✨ Best Quality Preset**
+    * Any of your **Custom Saved Recipes**
+  * LocalSR opens automatically with your selected files and immediately starts processing.
+* **Native Cocoa Top Menu Bar**:
+  * Standard macOS system menu bar (` LocalSR`, `File`, `Presets`, `View`, `Window`, `Help`).
+  * Full keyboard shortcut support:
+    * `⌘O` — Add Media (Native open panel)
+    * `⇧⌘O` — Add Folder
+    * `⌘E` — Open Output Folder in Finder
+    * `⌘R` — Start Upscaling
+    * `⌘.` — Cancel Job
+    * `⌘1` — ⚡ Quick Preset
+    * `⌘2` — ✨ Best Quality Preset
+    * `⌘3...` — Dynamic Custom Recipes
+* **Dock Drag-and-Drop**: Drag any images, folders, or video files straight onto the `LocalSR` Dock icon to queue them instantly.
+* **Native System Notifications**: Delivers system banner alerts with audio when single jobs, batches, or video jobs complete.
+
+### 🪟 Windows Integrations
+
+* **Explorer Context Menu**: Right-click on supported image or video files in Windows Explorer to trigger recipe selection and immediate processing.
+* **WinRT Toast Notifications**: Delivers rich Windows Action Center toast notifications with direct action buttons ("Open Result", "Reveal in Explorer").
+* **Installer Registration**: Inno Setup installer automatically configures `HKCU\Software\Classes` shell verbs and file type associations.
+
+### 🐧 Linux Integrations
+
+* **File Manager Actions**: Preconfigured context menu actions for GNOME Nautilus (`~/.local/share/nautilus/scripts`) and KDE Dolphin ServiceMenus (`kservices5/ServiceMenus`).
+* **Interactive Recipe Dialogs**: Seamless recipe picker via native Zenity or KDialog.
+* **FreeDesktop `.desktop`**: Compliant application manifest and MIME-type associations.
+* **D-Bus Desktop Notifications**: Uses `/org/freedesktop/Notifications` protocol with `notify-send` fallback.
+
+### 💻 Global CLI & Integration Commands
+
+```bash
+# Ingest and auto-start processing with a preset
+localsr photo.png --preset quick --auto-start
+
+# Ingest with a custom recipe
+localsr video.mp4 --recipe "My 4K Preset" --auto-start
+
+# Re-register or remove OS desktop integrations
+localsr --install-integrations
+localsr --uninstall-integrations
+```
+
 ## Models and automatic modes
 
 The model menu is a generic catalog rather than a HAT-only selector:
