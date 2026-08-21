@@ -7,6 +7,18 @@ stable release is published.
 
 ### Added
 
+- SeedVR2-3B temporal video upscaling (experimental): the Upscale Video task now offers
+  "SeedVR2-3B — Temporal" and its FP8 variant — one-step diffusion video restoration with
+  true temporal consistency inside each clip window, running fully locally on Apple Silicon
+  (MPS) and NVIDIA GPUs. Model bundles (3.9–7.3 GB) download on demand with revision-pinned
+  URLs and SHA-256 verification, so the application package stays small. The engine streams
+  clips with context-frame conditioning, supports cancellation between pipeline batches, and
+  the vendored Apache-2.0 implementation (ByteDance SeedVR2 via the numz ComfyUI project,
+  pinned commit, NOTICE and license included) is kept byte-faithful to upstream.
+  Frame-by-frame remains the default and the fast path on Macs.
+- Video outputs now keep their audio: the source's audio stream is remuxed untranscoded
+  into the upscaled MP4 (best-effort — incompatible or absent audio yields a silent video,
+  and trimmed jobs skip audio to avoid desync).
 - Video upscaling (beta): MP4, MOV, M4V, MKV, WebM, and AVI clips can be added to the queue
   alongside images. The Upscale Video task runs the selected restoration model frame by
   frame with optional temporal-median de-flicker, encodes to MP4 with atomic writes, and
