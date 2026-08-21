@@ -51,6 +51,8 @@ hiddenimports = sorted(
         + slint_hidden
         + collect_submodules("spandrel")
         + [
+            "AppKit",
+            "objc",
             "PIL._tkinter_finder",
             "rawpy",
             "tifffile",

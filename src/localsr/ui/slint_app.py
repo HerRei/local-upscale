@@ -210,6 +210,14 @@ class SlintApplication:
         if start_worker:
             self.worker.start()
 
+        if sys.platform == "darwin":
+            try:
+                from localsr.platform.macos_menu import setup_macos_native_menu
+
+                setup_macos_native_menu(self)
+            except Exception:
+                pass
+
         if initial_files:
             self.add_images(initial_files, replace=False)
             if len(self.images) > 1:

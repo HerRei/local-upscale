@@ -398,6 +398,7 @@ def test_static_ast_no_top_level_foreign_imports():
     # Platform-specific isolation rules within platform modules
     platform_forbidden = {
         "macos.py": {"winreg", "msvcrt", "pydbus", "gi", "win32api", "win32con", "win32gui"},
+        "macos_menu.py": {"winreg", "msvcrt", "pydbus", "gi", "win32api", "win32con", "win32gui"},
         "windows.py": {"osascript", "AppKit", "Foundation", "pydbus", "gi"},
         "linux.py": {
             "winreg",
@@ -533,3 +534,13 @@ def test_linux_desktop_entry_and_script_generation(tmp_path):
         uninstalled = service.uninstall_system_integrations()
         assert uninstalled is True
         assert not app_desktop.exists()
+
+
+def test_macos_native_menu_setup():
+    if sys.platform == "darwin":
+        from localsr.platform.macos_menu import setup_macos_native_menu
+
+        mock_app = MagicMock()
+        mock_app.custom_recipes = [{"name": "Test Recipe"}]
+        res = setup_macos_native_menu(mock_app)
+        assert res is True
