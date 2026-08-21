@@ -18,7 +18,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import slint
 
@@ -42,11 +42,11 @@ from localsr.core.model_catalog import (
     ModelDownloadCancelled,
     ModelPurpose,
     ModelStore,
-    default_model_directory,
     download_bundle,
     download_model,
 )
 from localsr.core.presets import PresetMode, rank_models_for_preset, resolve_settings_for_model
+from localsr.platform import send_notification
 from localsr.protocol.messages import (
     CancelRequest,
     CapabilitiesRequest,
@@ -71,21 +71,33 @@ class ImageItem:
     path: str
     width: int
     height: int
-    thumbnail_path: str = ""
     is_video: bool = False
     frame_count: int = 0
     fps: float = 0.0
     duration_seconds: float = 0.0
+    thumbnail_path: str | None = None
 
 
 class SettingsStore:
-    """Small atomic JSON settings store independent of any GUI framework."""
-
     def __init__(self, path: str | Path | None = None):
-        self.path = (
-            Path(path) if path is not None else default_model_directory().parent / "settings.json"
-        )
-        self.values: dict[str, object] = {}
+        if path is not None:
+            self.path = Path(path)
+        elif sys.platform == "darwin":
+            self.path = (
+                Path.home() / "Library" / "Application Support" / "LocalSR" / "settings.json"
+            )
+        elif sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+            self.path = base / "LocalSR" / "settings.json"
+        else:
+            base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+            self.path = base / "LocalSR" / "settings.json"
+        self.values: dict = {}
+        self.load()
+
+    def load(self) -> None:
+        if not self.path.is_file():
+            return
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
@@ -116,6 +128,10 @@ class SlintApplication:
         start_worker: bool = True,
         settings_path: str | Path | None = None,
         model_root: str | Path | None = None,
+        initial_files: Sequence[str] | None = None,
+        initial_recipe: str | None = None,
+        initial_preset: str | None = None,
+        auto_start: bool = False,
     ):
         ui_path = Path(__file__).with_name("slint") / "main.slint"
         self.module = slint.load_file(str(ui_path), style="fluent-dark")
@@ -194,6 +210,26 @@ class SlintApplication:
         if start_worker:
             self.worker.start()
 
+        if initial_files:
+            self.add_images(initial_files, replace=False)
+            if len(self.images) > 1:
+                self.ui.batch_mode = True
+        if initial_recipe:
+            self.apply_recipe_by_name(initial_recipe)
+        elif initial_preset:
+            if initial_preset.lower() == "quick":
+                self.apply_automatic_setup(best=False)
+            elif initial_preset.lower() == "best":
+                self.apply_automatic_setup(best=True)
+
+        if auto_start:
+            self.pending_auto_start = True
+            if not self.task_selected:
+                self.apply_automatic_setup(best=False)
+            elif self.ui.can_start:
+                self.pending_auto_start = False
+                self.start_jobs()
+
     @staticmethod
     def _fallback_capabilities() -> dict:
         return {
@@ -247,6 +283,7 @@ class SlintApplication:
         self.ui.save_recipe = self.save_recipe
         self.ui.apply_recipe = self.apply_recipe
         self.ui.delete_recipe = self.delete_recipe
+        self.ui.open_output_folder = self.open_output_folder
 
     def _initialize_ui(self) -> None:
         self.ui.batch_mode = bool(self.settings.get("batch_mode", False))
@@ -327,11 +364,14 @@ class SlintApplication:
         if not selected:
             return
         folder = Path(selected[0])
-        paths = sorted(
-            str(path)
-            for path in folder.iterdir()
-            if path.is_file() and path.suffix.lower() in SUPPORTED_INPUT_EXTENSIONS
-        )
+        try:
+            paths = sorted(
+                str(path)
+                for path in folder.iterdir()
+                if path.is_file() and path.suffix.lower() in SUPPORTED_INPUT_EXTENSIONS
+            )
+        except OSError:
+            paths = []
         if not paths:
             self._show_status("No supported images", f"{folder} contains no supported image files.")
             return
@@ -343,7 +383,21 @@ class SlintApplication:
         accepted: list[ImageItem] = []
         rejected: list[str] = []
         existing = {item.path for item in self.images}
-        for raw_path in paths:
+
+        flattened: list[str] = []
+        for raw in paths:
+            p = Path(raw).expanduser()
+            if p.is_dir():
+                try:
+                    for child in sorted(p.iterdir()):
+                        if child.is_file() and child.suffix.lower() in SUPPORTED_INPUT_EXTENSIONS:
+                            flattened.append(str(child))
+                except OSError:
+                    pass
+            else:
+                flattened.append(str(p))
+
+        for raw_path in flattened:
             path = str(Path(raw_path).expanduser().resolve())
             if path in existing:
                 continue
@@ -809,16 +863,18 @@ class SlintApplication:
         self._update_action_state()
 
     def apply_automatic_setup(self, *, best: bool) -> None:
+        image = self._selected_image()
         if not self.task_selected:
-            self._show_status("Choose a task", "Select Upscale, Denoise, or Upscale Video first.")
-            return
+            if VIDEO_ENABLED and image is not None and image.is_video:
+                self.set_task(VIDEO_TASK_INDEX)
+            else:
+                self.set_task(0)
         if self.task_index == VIDEO_TASK_INDEX and not VIDEO_ENABLED:
             self._show_status(
                 "Video coming soon",
                 "Video upscaling is being prepared. Use Upscale on each frame for now.",
             )
             return
-        image = self._selected_image()
         if image is None:
             self._show_status(
                 "Image required", "Choose an image before applying automatic settings."
@@ -1491,6 +1547,38 @@ class SlintApplication:
             "Recipe applied",
             f"“{recipe.get('name', 'Recipe')}” configured. Review the settings, then start.",
         )
+        chosen = self._selected_catalog_model()
+        if chosen is not None:
+            if isinstance(chosen, CatalogVideoModel) and not self.model_store.is_bundle_installed(
+                chosen
+            ):
+                self._start_bundle_download(chosen)
+            elif not isinstance(chosen, CatalogVideoModel) and not self.model_store.is_installed(
+                chosen
+            ):
+                self._start_model_download(chosen)
+
+    def apply_recipe_by_name(self, name: str) -> bool:
+        cleaned = str(name).strip()
+        if not cleaned:
+            return False
+        if cleaned.lower() in {"quick", "quick preset", "quick setup", "quick preset (fast)"}:
+            self.apply_automatic_setup(best=False)
+            return True
+        if cleaned.lower() in {
+            "best",
+            "best quality",
+            "best preset",
+            "best setup",
+            "best quality preset",
+        }:
+            self.apply_automatic_setup(best=True)
+            return True
+        for index, recipe in enumerate(self.custom_recipes):
+            if str(recipe.get("name", "")).strip().lower() == cleaned.lower():
+                self.apply_recipe(index)
+                return True
+        return False
 
     def delete_recipe(self, index: int) -> None:
         index = int(index)
@@ -1720,6 +1808,9 @@ class SlintApplication:
         self._apply_hardware_constraints()
         self._apply_pending_preset()
         self._update_estimate()
+        if self.pending_auto_start and self.ui.can_start:
+            self.pending_auto_start = False
+            self.start_jobs()
 
     def _on_capabilities(self, data: dict) -> None:
         devices = data.get("devices")
@@ -1841,6 +1932,10 @@ class SlintApplication:
         self.ui.batch_progress = ""
         self._show_status(
             "Complete",
+            f"Finished {completed} image{'s' if completed != 1 else ''}. Output saved successfully.",
+        )
+        send_notification(
+            "LocalSR",
             f"Finished {completed} image{'s' if completed != 1 else ''}. Output saved successfully.",
         )
         self.refresh_hardware()
@@ -1988,6 +2083,9 @@ class SlintApplication:
             self.ui.model_status = "Download complete and SHA-256 verified. Ready."
             self._sync_inspector()
             self._update_estimate()
+            if self.pending_auto_start and self.ui.can_start:
+                self.pending_auto_start = False
+                self.start_jobs()
             return
         self.ui.model_status = "Download complete and SHA-256 verified. Inspecting model…"
         self._inspect_model()
@@ -2073,6 +2171,10 @@ class SlintApplication:
             "Video complete",
             f"Processed {frames} frame{'s' if frames != 1 else ''}. Output saved.",
         )
+        send_notification(
+            "LocalSR",
+            f"Finished video upscaling ({frames} frames). Output saved.",
+        )
         self.refresh_hardware()
         self._update_action_state()
 
@@ -2084,23 +2186,49 @@ class SlintApplication:
         path = self.last_output_path
         if not path or not Path(path).is_file():
             return
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", path])
-        elif sys.platform == "win32":
-            os.startfile(path)  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", path])
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            elif sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except OSError:
+            pass
 
     def reveal_result(self) -> None:
         path = self.last_output_path
         if not path or not Path(path).is_file():
             return
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", path])
-        elif sys.platform == "win32":
-            subprocess.Popen(["explorer", "/select,", path])
-        else:
-            subprocess.Popen(["xdg-open", str(Path(path).parent)])
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                subprocess.Popen(["xdg-open", str(Path(path).parent)])
+        except OSError:
+            pass
+
+    def open_output_folder(self) -> None:
+        target_str = self.output_directory.strip() if self.output_directory else ""
+        target = (
+            Path(target_str).expanduser() if target_str else Path.home() / "Pictures" / "LocalSR"
+        )
+        if not target.exists():
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                target = Path.home()
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)])
+            elif sys.platform == "win32":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
+        except OSError:
+            pass
 
     def _save_settings(self) -> None:
         self.settings.set("batch_mode", bool(self.ui.batch_mode))
@@ -2146,9 +2274,17 @@ def create_slint_application(
     start_worker: bool = True,
     settings_path: str | Path | None = None,
     model_root: str | Path | None = None,
+    initial_files: Sequence[str] | None = None,
+    initial_recipe: str | None = None,
+    initial_preset: str | None = None,
+    auto_start: bool = False,
 ) -> SlintApplication:
     return SlintApplication(
         start_worker=start_worker,
         settings_path=settings_path,
         model_root=model_root,
+        initial_files=initial_files,
+        initial_recipe=initial_recipe,
+        initial_preset=initial_preset,
+        auto_start=auto_start,
     )

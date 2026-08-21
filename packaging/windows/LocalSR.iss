@@ -1,42 +1,42 @@
-#define AppName "LocalSR"
-#define AppPublisher "LocalSR contributors"
-#define AppURL "https://github.com/HerRei/local-upscale"
-#define AppExeName "LocalSR.exe"
-#define AppVersion GetEnv("LOCALSR_VERSION")
+; Inno Setup Script for LocalSR
+#define MyAppName "LocalSR"
+#define MyAppVersion "0.0.3"
+#define MyAppPublisher "LocalSR Team"
+#define MyAppURL "https://github.com/HerRei/local-upscale"
+#define MyAppExeName "LocalSR.exe"
 
 [Setup]
-AppId={{AD28BB74-EBDC-4B94-86EF-C6390D878D92}
-AppName={#AppName}
-AppVersion={#AppVersion}
-AppPublisher={#AppPublisher}
-AppPublisherURL={#AppURL}
-AppSupportURL={#AppURL}/issues
-DefaultDirName={autopf}\{#AppName}
-DefaultGroupName={#AppName}
+AppId={{D3F19A2B-8C4E-45A1-9E32-4751A7F390E2}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}
+AppUpdatesURL={#MyAppURL}
+DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=..\..\release
-OutputBaseFilename=LocalSR-Windows-x86_64-Setup
-SetupIconFile=..\icons\LocalSR.ico
-Compression=lzma2/max
+OutputBaseFilename=LocalSR-Setup-{#MyAppVersion}
+Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=lowest
-UninstallDisplayIcon={app}\{#AppExeName}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
+Source: "..\..\dist\LocalSR\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\LocalSR\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-integrations"; Flags: runhidden
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-integrations"; Flags: runhidden

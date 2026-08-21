@@ -941,3 +941,58 @@ def test_video_input_extensions_are_supported():
     assert VIDEO_INPUT_EXTENSIONS <= SUPPORTED_INPUT_EXTENSIONS
     assert is_video_input("/tmp/movie.MOV")
     assert not is_video_input("/tmp/photo.png")
+
+
+def test_top_toolbar_buttons_and_preset_shortcuts(tmp_path):
+    run_slint_script(
+        f"""
+        from pathlib import Path
+        from PIL import Image
+        from unittest.mock import MagicMock, patch
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        img = root / "sample.png"
+        Image.new("RGB", (64, 64), "magenta").save(img)
+
+        app = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+            initial_files=[str(img)],
+        )
+
+        assert len(app.images) == 1
+        assert app.ui.queue_items.row_count() == 1
+
+        # Test toolbar quick setup
+        app.ui.quick_setup()
+        assert app.task_selected is True
+        assert app.profile_label == "Quick"
+        assert "Quick" in app.ui.profile_summary
+
+        # Test toolbar best quality setup
+        app.ui.best_setup()
+        assert app.profile_label == "Best"
+        assert "Best" in app.ui.profile_summary
+
+        # Test toolbar open output folder callback bound
+        with patch("subprocess.Popen") as mock_popen, patch("os.startfile", create=True) as mock_start:
+            app.ui.open_output_folder()
+            assert mock_popen.called or mock_start.called
+
+        # Test responsive layout modes
+        app.ui.layout_width = 1480
+        assert app.ui.layout_mode == 0
+        app.ui.layout_width = 1000
+        assert app.ui.layout_mode == 1
+        app.ui.layout_width = 820
+        assert app.ui.layout_mode == 2
+
+        # Test toolbar clear queue callback
+        app.ui.clear_queue()
+        assert len(app.images) == 0
+
+        app.shutdown()
+        """
+    )

@@ -147,5 +147,42 @@ if sys.platform == "darwin":
             # still a normal foreground macOS application.
             "LSBackgroundOnly": False,
             "NSHighResolutionCapable": True,
+            "CFBundleDocumentTypes": [
+                {
+                    "CFBundleTypeName": "Images and Videos",
+                    "CFBundleTypeRole": "Viewer",
+                    "LSHandlerRank": "Alternate",
+                    "LSItemContentTypes": [
+                        "public.image",
+                        "public.jpeg",
+                        "public.png",
+                        "public.tiff",
+                        "public.movie",
+                        "public.video",
+                        "com.compuserve.gif",
+                        "org.webmproject.webp",
+                        "com.adobe.raw-image",
+                        "public.content",
+                        "public.item",
+                        "public.data",
+                    ],
+                    "CFBundleTypeExtensions": [
+                        "png",
+                        "jpg",
+                        "jpeg",
+                        "webp",
+                        "dng",
+                        "tif",
+                        "tiff",
+                        "mp4",
+                        "mov",
+                        "m4v",
+                        "avi",
+                        "mkv",
+                        "webm",
+                    ],
+                }
+            ],
         },
     )
+
