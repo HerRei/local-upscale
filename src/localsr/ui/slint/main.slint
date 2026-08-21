@@ -1,11 +1,13 @@
 import { ListView, ScrollView } from "std-widgets.slint";
 import {
     CheckControl,
+    CustomRecipeRow,
     DesktopComboBox,
     DisclosureRow,
     FieldLabel,
     FlatButton,
     HudButton,
+    InfoDot,
     PanelHeading,
     ProgressTrack,
     RecipeChoice,
@@ -25,6 +27,11 @@ export struct QueueEntry {
     selected: bool,
     thumbnail: image,
     has-thumbnail: bool,
+}
+
+export struct RecipeEntry {
+    name: string,
+    detail: string,
 }
 
 export struct FaceBox {
@@ -97,7 +104,7 @@ export component MainWindow inherits Window {
     in-out property <string> memory-usage-text: "Memory unavailable";
     in-out property <float> memory-usage-ratio: 0;
     in-out property <string> pressure-text: "Checking pressure";
-    in-out property <brush> pressure-color: #8e8e93;
+    in-out property <brush> pressure-color: #7D828C;
 
     in-out property <string> estimate-time: "—";
     in-out property <string> estimate-output: "—";
@@ -111,8 +118,12 @@ export component MainWindow inherits Window {
     in-out property <int> halo-index: 0;
     in-out property <[string]> precision-options;
     in-out property <int> precision-index: 0;
-    in-out property <bool> safe-memory: true;
+    in-out property <bool> safe-memory: false;
     in-out property <bool> safe-memory-enabled: true;
+    in-out property <[RecipeEntry]> custom-recipes;
+    in-out property <bool> recipe-editor-open: false;
+    in-out property <string> recipe-name-draft: "";
+    in-out property <string> model-info-text: "";
 
     // Presentation strings kept separate so filenames and dimensions can use
     // the correct hierarchy instead of being parsed from a multiline summary.
@@ -182,6 +193,9 @@ export component MainWindow inherits Window {
     callback reveal-result();
     callback detect-faces();
     callback clear-faces();
+    callback save-recipe(string);
+    callback apply-recipe(int);
+    callback delete-recipe(int);
 
     in-out property <bool> face-detection-available: true;
     in-out property <bool> face-detecting: false;
@@ -361,7 +375,7 @@ export component MainWindow inherits Window {
                                 width: 12px;
                                 height: 2px;
                                 border-radius: 1px;
-                                background: #C9CBD2;
+                                background: #C7C9CE;
                             }
                             Rectangle {
                                 x: 13px;
@@ -369,7 +383,7 @@ export component MainWindow inherits Window {
                                 width: 2px;
                                 height: 12px;
                                 border-radius: 1px;
-                                background: #C9CBD2;
+                                background: #C7C9CE;
                             }
                         }
 
@@ -419,7 +433,7 @@ export component MainWindow inherits Window {
                             width: parent.width;
                             border-radius: 8px;
                             background: item.selected ?
-                                (row-touch.has-hover ? #4E8CFF3D : Theme.accent-tint18) :
+                                (row-touch.has-hover ? #4D8AFB3D : Theme.accent-tint18) :
                                 row-touch.has-hover ? Theme.bg-row-hover : transparent;
                             animate background { duration: 150ms; easing: ease-out; }
 
@@ -429,7 +443,7 @@ export component MainWindow inherits Window {
                                 width: 3px;
                                 height: item.selected ? 48px : 12px;
                                 border-radius: 1.5px;
-                                background: @linear-gradient(180deg, #6FA4FF 0%, #4E8CFF 100%);
+                                background: @linear-gradient(180deg, #689CFC 0%, #4D8AFB 100%);
                                 opacity: item.selected ? 1 : 0;
                                 animate height { duration: 140ms; easing: ease-out; }
                                 animate opacity { duration: 140ms; easing: ease-out; }
@@ -443,7 +457,7 @@ export component MainWindow inherits Window {
                                 border-radius: 6px;
                                 background: Theme.bg-raised;
                                 border-width: 1px;
-                                border-color: item.selected ? #4E8CFF66 : Theme.border-control;
+                                border-color: item.selected ? #4D8AFB66 : Theme.border-control;
                                 clip: true;
 
                                 Image {
@@ -456,7 +470,7 @@ export component MainWindow inherits Window {
 
                                 Text {
                                     text: "IMG";
-                                    color: item.selected ? #BCD5FF : Theme.text-tertiary;
+                                    color: item.selected ? #B5CFFC : Theme.text-tertiary;
                                     font-size: 9px;
                                     font-weight: 600;
                                     letter-spacing: 0.5px;
@@ -497,8 +511,8 @@ export component MainWindow inherits Window {
                                 width: 22px;
                                 height: 22px;
                                 border-radius: 11px;
-                                background: remove-touch.pressed ? #E5484D4D :
-                                    remove-touch.has-hover ? #E5484D33 : #FFFFFF10;
+                                background: remove-touch.pressed ? #E5484D52 :
+                                    remove-touch.has-hover ? #E5484D38 : #FFFFFF10;
                                 opacity: row-touch.has-hover || remove-touch.has-hover ||
                                     item.selected || root.layout-mode == 2 ? 1 : 0;
                                 animate opacity { duration: 120ms; easing: ease; }
@@ -724,9 +738,9 @@ export component MainWindow inherits Window {
                                         y: root.tile-y * parent.height;
                                         width: root.tile-width * parent.width;
                                         height: root.tile-height * parent.height;
-                                        background: #4E8CFF1A;
+                                        background: #4D8AFB1A;
                                         border-width: 2px / root.preview-zoom;
-                                        border-color: #66A0FF;
+                                        border-color: #689CFC;
                                         visible: root.tile-active;
                                     }
 
@@ -751,10 +765,10 @@ export component MainWindow inherits Window {
                                             border-width: 1px;
                                             border-color: preview-touch.dragging-divider ?
                                                 Theme.focus : #FFFFFF29;
-                                            background: #1B1D22F2;
+                                            background: #1C1F24F2;
                                             drop-shadow-blur: preview-touch.dragging-divider ? 10px : 12px;
                                             drop-shadow-color: preview-touch.dragging-divider ?
-                                                #4E8CFF59 : #00000080;
+                                                #4D8AFB59 : #00000080;
                                             drop-shadow-offset-y: 2px;
 
                                             Text {
@@ -812,7 +826,7 @@ export component MainWindow inherits Window {
                                             width: 18px;
                                             height: 2px;
                                             border-radius: 1px;
-                                            background: #C9CBD2;
+                                            background: #C7C9CE;
                                         }
                                         Rectangle {
                                             x: 21px;
@@ -820,7 +834,7 @@ export component MainWindow inherits Window {
                                             width: 2px;
                                             height: 18px;
                                             border-radius: 1px;
-                                            background: #C9CBD2;
+                                            background: #C7C9CE;
                                         }
                                     }
 
@@ -1120,7 +1134,7 @@ export component MainWindow inherits Window {
                                             width: 92px;
                                             height: 26px;
                                             border-radius: 6px;
-                                            background: root.comparison-enabled ? #4E8CFF1F :
+                                            background: root.comparison-enabled ? #4D8AFB1F :
                                                 compare-touch.has-hover ? #FFFFFF12 : transparent;
                                             animate background { duration: 120ms; easing: ease; }
 
@@ -1138,7 +1152,7 @@ export component MainWindow inherits Window {
                                                 width: 7px;
                                                 height: 7px;
                                                 border-radius: 3.5px;
-                                                background: root.comparison-enabled ? Theme.accent : #565962;
+                                                background: root.comparison-enabled ? Theme.accent : #55585F;
                                                 animate background { duration: 120ms; easing: ease; }
                                             }
 
@@ -1249,9 +1263,9 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.task-selected: ThinSeparator { }
+                        if root.task-selected || root.custom-recipes.length > 0: ThinSeparator { }
 
-                        if root.task-selected: SectionTitle {
+                        if root.task-selected || root.custom-recipes.length > 0: SectionTitle {
                             step: 2;
                             title: "RECIPES";
                         }
@@ -1285,6 +1299,102 @@ export component MainWindow inherits Window {
                             wrap: word-wrap;
                         }
 
+                        for recipe[index] in root.custom-recipes: CustomRecipeRow {
+                            title: recipe.name;
+                            detail: recipe.detail;
+                            active: root.controls-enabled && root.model-selection-enabled;
+                            clicked => { root.apply-recipe(index); }
+                            removed => { root.delete-recipe(index); }
+                        }
+
+                        if root.task-selected && !root.recipe-editor-open: Rectangle {
+                            height: 28px;
+                            border-radius: 6px;
+                            background: save-recipe-touch.has-hover ?
+                                Theme.bg-row-hover : transparent;
+                            animate background { duration: 120ms; easing: ease; }
+
+                            accessible-role: button;
+                            accessible-enabled: root.controls-enabled;
+                            accessible-label: "Save current settings as recipe";
+
+                            Text {
+                                width: parent.width;
+                                height: parent.height;
+                                text: "＋ Save Current Settings as Recipe";
+                                color: save-recipe-touch.has-hover ?
+                                    Theme.text-primary : Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 500;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            save-recipe-touch := TouchArea {
+                                enabled: root.controls-enabled;
+                                mouse-cursor: pointer;
+                                clicked => { root.recipe-editor-open = true; }
+                            }
+                        }
+
+                        if root.recipe-editor-open: HorizontalLayout {
+                            height: 30px;
+                            spacing: 6px;
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-recess;
+                                border-width: 1px;
+                                border-color: recipe-name-input.has-focus ?
+                                    Theme.focus : Theme.border-recess;
+                                border-radius: 6px;
+                                clip: true;
+
+                                recipe-name-input := TextInput {
+                                    x: 10px;
+                                    y: 7px;
+                                    width: parent.width - 20px;
+                                    height: 16px;
+                                    text <=> root.recipe-name-draft;
+                                    color: Theme.text-primary;
+                                    font-size: 12px;
+                                    single-line: true;
+                                    accepted => { root.save-recipe(root.recipe-name-draft); }
+                                }
+
+                                Text {
+                                    x: 10px;
+                                    width: parent.width - 20px;
+                                    text: "Recipe name";
+                                    color: Theme.text-tertiary;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    visible: root.recipe-name-draft == "";
+                                }
+                            }
+
+                            FlatButton {
+                                text: "Save";
+                                compact: true;
+                                primary: true;
+                                width: 58px;
+                                height: 30px;
+                                active: root.controls-enabled;
+                                clicked => { root.save-recipe(root.recipe-name-draft); }
+                            }
+
+                            FlatButton {
+                                text: "Cancel";
+                                compact: true;
+                                width: 64px;
+                                height: 30px;
+                                clicked => {
+                                    root.recipe-editor-open = false;
+                                    root.recipe-name-draft = "";
+                                }
+                            }
+                        }
+
                         ThinSeparator { }
 
                         DisclosureRow {
@@ -1303,7 +1413,17 @@ export component MainWindow inherits Window {
                             SectionTitle { title: "MODEL & SIZE"; }
                             VerticalLayout {
                                 spacing: 4px;
-                                FieldLabel { label: "Restoration model"; }
+                                HorizontalLayout {
+                                    height: 18px;
+                                    spacing: 6px;
+                                    FieldLabel { label: "Restoration model"; }
+                                    InfoDot {
+                                        y: 1px;
+                                        tip: root.model-info-text;
+                                        tip-height: 208px;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                }
                                 DesktopComboBox {
                                     model: root.model-options;
                                     enabled: root.model-selection-enabled && root.task-selected;
@@ -1542,13 +1662,28 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            CheckControl {
-                                text: "Safe memory mode";
-                                checked: root.safe-memory;
-                                active: root.controls-enabled && root.safe-memory-enabled;
-                                toggled(value) => {
-                                    root.safe-memory = value;
-                                    root.safe-memory-changed(value);
+                            HorizontalLayout {
+                                height: 30px;
+                                spacing: 6px;
+
+                                CheckControl {
+                                    horizontal-stretch: 1;
+                                    text: "Safe memory mode";
+                                    checked: root.safe-memory;
+                                    active: root.controls-enabled && root.safe-memory-enabled;
+                                    toggled(value) => {
+                                        root.safe-memory = value;
+                                        root.safe-memory-changed(value);
+                                    }
+                                }
+
+                                InfoDot {
+                                    y: 7px;
+                                    tip: "Processes the image in smaller, disk-backed steps so a "
+                                        + "large job cannot exhaust memory. Slower, but it "
+                                        + "prevents out-of-memory failures. Off by default; it "
+                                        + "turns itself on when free memory is very low.";
+                                    tip-height: 118px;
                                 }
                             }
 
@@ -1690,7 +1825,7 @@ export component MainWindow inherits Window {
                     y: parent.height - 102px;
                     width: parent.width;
                     height: 14px;
-                    background: @linear-gradient(180deg, #1B1D2200 0%, #1B1D22 100%);
+                    background: @linear-gradient(180deg, #1C1F2400 0%, #1C1F24 100%);
                 }
 
                 // The only persistent primary action. Automatic recipes above
@@ -1766,9 +1901,9 @@ export component MainWindow inherits Window {
                 y: 0px;
                 width: parent.width * root.progress;
                 height: 2px;
-                background: @linear-gradient(90deg, #4E8CFF 0%, #66A0FF 100%);
+                background: @linear-gradient(90deg, #4D8AFB 0%, #689CFC 100%);
                 drop-shadow-blur: 6px;
-                drop-shadow-color: #4E8CFF66;
+                drop-shadow-color: #4D8AFB66;
                 visible: root.can-cancel || root.progress > 0;
                 animate width { duration: 140ms; easing: linear; }
             }

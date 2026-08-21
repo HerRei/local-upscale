@@ -147,14 +147,20 @@ class SlintApplication:
         self.halo = int(self.settings.get("halo", 32))
         self.precision_values = ["fp32"]
         self.precision = str(self.settings.get("precision", "fp32"))
-        self.safe_memory = bool(self.settings.get("safe_memory", True))
+        self.safe_memory = bool(self.settings.get("safe_memory", False))
         self.safe_memory_enabled = True
         self.current_estimate: ResourceEstimate | None = None
         self.runtime_warning = ""
         self.memory_snapshot: dict = {}
 
+        self.custom_recipes: list[dict] = [
+            dict(entry)
+            for entry in self.settings.get("custom_recipes", [])
+            if isinstance(entry, dict)
+        ]
         self.current_job_id = ""
         self.last_output_path = ""
+        self.last_output_source = ""
         self.job_started_at: float | None = None
         self.job_effective_megapixels = 0.0
         self.batch_paths: list[str] = []
@@ -229,6 +235,9 @@ class SlintApplication:
         self.ui.reveal_result = self.reveal_result
         self.ui.detect_faces = self.detect_faces
         self.ui.clear_faces = self.clear_faces
+        self.ui.save_recipe = self.save_recipe
+        self.ui.apply_recipe = self.apply_recipe
+        self.ui.delete_recipe = self.delete_recipe
 
     def _initialize_ui(self) -> None:
         self.ui.batch_mode = bool(self.settings.get("batch_mode", False))
@@ -254,6 +263,7 @@ class SlintApplication:
         self.ui.preview_pan_x = 0.0
         self.ui.preview_pan_y = 0.0
         self._rebuild_model_options(preferred_id=self.model_id)
+        self._sync_recipes()
         self._sync_queue()
         self._apply_hardware_constraints()
         self._update_estimate()
@@ -343,6 +353,10 @@ class SlintApplication:
         if replace:
             self.images = accepted[:1]
             self.selected_image_index = 0 if self.images else -1
+            if self.last_output_source and self.last_output_source not in {
+                item.path for item in self.images
+            }:
+                self._forget_last_output()
         elif accepted:
             first_new = len(self.images)
             self.images.extend(accepted)
@@ -366,6 +380,7 @@ class SlintApplication:
             return
         self.images.clear()
         self.selected_image_index = -1
+        self._forget_last_output()
         self.ui.image_ready = False
         self.ui.live_result_ready = False
         self.ui.result_ready = False
@@ -383,7 +398,10 @@ class SlintApplication:
         index = int(index)
         if self.current_job_id or index < 0 or index >= len(self.images):
             return
+        removed_path = self.images[index].path
         del self.images[index]
+        if removed_path == self.last_output_source:
+            self._forget_last_output()
         if not self.images:
             self.clear_queue()
             return
@@ -453,6 +471,7 @@ class SlintApplication:
     def _rebuild_model_options(self, preferred_id: str = "") -> None:
         if not self.task_selected:
             self.filtered_models = []
+            self._update_model_info()
             self._set_list_model("model_options", ["Choose a task first"])
             self.ui.model_index = 0
             self.ui.model_description = "Choose Upscale, Denoise, or both to see compatible models."
@@ -465,6 +484,7 @@ class SlintApplication:
         compatible = [model for model in MODEL_CATALOG if self._model_is_compatible(model)]
         self.filtered_models = [*compatible, None]
         self._refresh_model_option_labels()
+        self._update_model_info()
         desired = preferred_id or self.model_id
         if desired == CUSTOM_MODEL_ID and not (
             self.custom_model_path and Path(self.custom_model_path).is_file()
@@ -1043,11 +1063,11 @@ class SlintApplication:
             else "Pressure unavailable"
         )
         pressure_colors = {
-            "low": "#48d597",
-            "moderate": "#f5b942",
-            "high": "#ff667a",
+            "low": "#53B68A",
+            "moderate": "#F0A23C",
+            "high": "#E5484D",
         }
-        self.ui.pressure_color = slint.Color(pressure_colors.get(level, "#788391"))
+        self.ui.pressure_color = slint.Color(pressure_colors.get(level, "#7D828C"))
         self._sync_inspector()
 
     def _sync_inspector(self) -> None:
@@ -1158,6 +1178,137 @@ class SlintApplication:
             counter += 1
         return str(candidate)
 
+    def _forget_last_output(self) -> None:
+        """Retire the finished-result actions once their source image is gone."""
+        self.last_output_path = ""
+        self.last_output_source = ""
+        self._update_action_state()
+
+    def _update_model_info(self) -> None:
+        lines = []
+        for model in self.filtered_models:
+            if model is None:
+                lines.append(
+                    "Use My Own Checkpoint — load a trusted Spandrel-compatible "
+                    ".pth or .pt file from disk."
+                )
+            else:
+                lines.append(f"{model.name} — {model.description}")
+        self.ui.model_info_text = (
+            "\n\n".join(lines)
+            if lines
+            else "Choose Upscale or Denoise to see the compatible models."
+        )
+
+    def _recipe_summary(self, recipe: dict) -> str:
+        task_labels = {0: "Upscale", 1: "Denoise", 2: "Video"}
+        parts = [task_labels.get(int(recipe.get("task_index", 0)), "Task")]
+        model_id = str(recipe.get("model_id", ""))
+        if model_id == CUSTOM_MODEL_ID:
+            parts.append("Custom checkpoint")
+        else:
+            model = next((m for m in MODEL_CATALOG if m.model_id == model_id), None)
+            if model is not None:
+                parts.append(model.name)
+        scale = int(recipe.get("output_scale", 0))
+        if int(recipe.get("task_index", 0)) != 1 and scale > 1:
+            parts.append(f"{scale}×")
+        format_index = int(recipe.get("format_index", 0))
+        if 0 <= format_index < len(FORMAT_VALUES):
+            parts.append(FORMAT_VALUES[format_index].upper())
+        return " · ".join(parts)
+
+    def _sync_recipes(self) -> None:
+        self._set_list_model(
+            "custom_recipes",
+            [
+                self.module.RecipeEntry(
+                    name=str(recipe.get("name", "Recipe")),
+                    detail=self._recipe_summary(recipe),
+                )
+                for recipe in self.custom_recipes
+            ],
+        )
+
+    def _persist_recipes(self) -> None:
+        self.settings.set("custom_recipes", self.custom_recipes)
+        try:
+            self.settings.save()
+        except OSError as error:
+            self._show_status("Settings warning", f"Could not save recipes: {error}")
+
+    def save_recipe(self, name: str) -> None:
+        if self.current_job_id or not self.task_selected:
+            return
+        cleaned = str(name).strip()[:60]
+        if not cleaned:
+            cleaned = f"My Recipe {len(self.custom_recipes) + 1}"
+        self.custom_recipes.append(
+            {
+                "name": cleaned,
+                "task_index": self.task_index,
+                "model_id": self.model_id,
+                "output_scale": self.output_scale,
+                "format_index": self.format_index,
+                "preserve_metadata": self.preserve_metadata,
+                "jpeg_quality": self.jpeg_quality,
+                "device_id": self.device_id,
+                "tile_size": self.tile_size,
+                "halo": self.halo,
+                "precision": self.precision,
+                "safe_memory": self.safe_memory,
+            }
+        )
+        self._persist_recipes()
+        self._sync_recipes()
+        self.ui.recipe_editor_open = False
+        self.ui.recipe_name_draft = ""
+        self._show_status(
+            "Recipe saved", f"“{cleaned}” now applies these settings in one click."
+        )
+
+    def apply_recipe(self, index: int) -> None:
+        index = int(index)
+        if self.current_job_id or not 0 <= index < len(self.custom_recipes):
+            return
+        recipe = self.custom_recipes[index]
+        task = int(recipe.get("task_index", 0))
+        if task not in {0, 1} and not (task == 2 and VIDEO_ENABLED):
+            task = 0
+        # The model preference and scale must be in place before set_task
+        # rebuilds the model options; every value passes through the same
+        # clamping paths the settings restore uses.
+        self.model_id = str(recipe.get("model_id", self.model_id))
+        self.output_scale = int(recipe.get("output_scale", self.output_scale))
+        self.set_task(task)
+        self.format_index = max(0, min(2, int(recipe.get("format_index", self.format_index))))
+        self.ui.format_index = self.format_index
+        self.preserve_metadata = bool(recipe.get("preserve_metadata", self.preserve_metadata))
+        self.ui.preserve_metadata = self.preserve_metadata
+        self.jpeg_quality = max(70, min(100, int(recipe.get("jpeg_quality", self.jpeg_quality))))
+        self.ui.jpeg_quality = self.jpeg_quality
+        self.device_id = str(recipe.get("device_id", self.device_id))
+        self.tile_size = int(recipe.get("tile_size", self.tile_size))
+        self.halo = int(recipe.get("halo", self.halo))
+        self.precision = str(recipe.get("precision", self.precision))
+        self.safe_memory = bool(recipe.get("safe_memory", self.safe_memory))
+        self._apply_hardware_constraints()
+        self.profile_label = str(recipe.get("name", "Recipe"))
+        self._update_estimate()
+        self._show_status(
+            "Recipe applied",
+            f"“{recipe.get('name', 'Recipe')}” configured. Review the settings, then start.",
+        )
+
+    def delete_recipe(self, index: int) -> None:
+        index = int(index)
+        if not 0 <= index < len(self.custom_recipes):
+            return
+        removed = self.custom_recipes.pop(index)
+        self._persist_recipes()
+        self._sync_recipes()
+        self._show_status("Recipe removed", f"“{removed.get('name', 'Recipe')}” deleted.")
+
     def start_jobs(self) -> None:
         self._update_estimate()
         if not self.ui.can_start:
@@ -1173,6 +1324,7 @@ class SlintApplication:
         self.batch_current = 0
         self.cancel_batch = False
         self.last_output_path = ""
+        self.last_output_source = ""
         self._save_settings()
         self._start_next_job()
 
@@ -1202,6 +1354,7 @@ class SlintApplication:
         self.current_job_id = str(uuid.uuid4())
         output_path = self._output_path_for(path)
         self.last_output_path = output_path
+        self.last_output_source = path
         self.job_started_at = time.monotonic()
         self.job_effective_megapixels = (
             self.current_estimate.effective_megapixels

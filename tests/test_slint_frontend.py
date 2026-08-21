@@ -757,3 +757,108 @@ def test_slint_settings_are_saved_atomically(tmp_path):
         assert not path.with_suffix(".json.tmp").exists()
         """
     )
+
+
+def test_custom_recipes_save_apply_delete_and_persist(tmp_path):
+    run_slint_script(
+        f"""
+        import json
+        from pathlib import Path
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        application.set_task(0)
+        application.format_index = 1
+        application.jpeg_quality = 91
+        application.save_recipe("  Night Photos  ")
+        assert [r["name"] for r in application.custom_recipes] == ["Night Photos"]
+        stored = json.loads((root / "settings.json").read_text(encoding="utf-8"))
+        assert stored["custom_recipes"][0]["task_index"] == 0
+        assert stored["custom_recipes"][0]["jpeg_quality"] == 91
+        assert stored["custom_recipes"][0]["format_index"] == 1
+
+        application.set_task(1)
+        application.format_index = 0
+        application.jpeg_quality = 70
+        application.apply_recipe(0)
+        assert application.task_index == 0
+        assert application.ui.task_selected is True
+        assert application.jpeg_quality == 91
+        assert application.format_index == 1
+        assert application.profile_label == "Night Photos"
+
+        application.save_recipe("")
+        assert application.custom_recipes[1]["name"] == "My Recipe 2"
+        application.delete_recipe(0)
+        assert [r["name"] for r in application.custom_recipes] == ["My Recipe 2"]
+        stored = json.loads((root / "settings.json").read_text(encoding="utf-8"))
+        assert len(stored["custom_recipes"]) == 1
+
+        # A fresh session restores the persisted recipes.
+        application.shutdown()
+        second = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        assert [r["name"] for r in second.custom_recipes] == ["My Recipe 2"]
+        second.shutdown()
+        """
+    )
+
+
+def test_removing_the_result_source_retires_result_actions(tmp_path):
+    run_slint_script(
+        f"""
+        from pathlib import Path
+        from PIL import Image
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        source = root / "input.png"
+        Image.new("RGB", (32, 24), (10, 20, 30)).save(source)
+        output = root / "input_upscaled.png"
+        output.write_bytes(source.read_bytes())
+
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        application.add_images([str(source)])
+        assert len(application.images) == 1
+        application.last_output_path = str(output)
+        application.last_output_source = application.images[0].path
+        application._update_action_state()
+        assert application.ui.can_open_result is True
+
+        application.remove_queue_item(0)
+        assert application.ui.can_open_result is False
+        assert application.last_output_path == ""
+        application.shutdown()
+        """
+    )
+
+
+def test_safe_memory_defaults_off_for_fresh_settings(tmp_path):
+    run_slint_script(
+        f"""
+        from pathlib import Path
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        assert application.safe_memory is False
+        assert application.ui.safe_memory is False
+        application.shutdown()
+        """
+    )

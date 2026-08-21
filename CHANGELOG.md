@@ -5,7 +5,36 @@ stable release is published.
 
 ## [Unreleased]
 
+### Added
+
+- Custom recipes: "Save Current Settings as Recipe" snapshots the task, model, scale,
+  format, quality, and hardware configuration under a chosen name. Saved recipes appear in
+  the Recipes section, apply with one click (settings are re-clamped through the same
+  validation as a normal restore), delete via a hover disc, and persist in settings.json
+  across sessions.
+- Info popovers: an ⓘ next to "Restoration model" lists every compatible model and what it
+  is for, and an ⓘ next to "Safe memory mode" explains what the mode trades for safety.
+- GPU-detection test coverage now spans the full vendor matrix: NVIDIA CUDA (multi-GPU,
+  fp16 gated by compute capability), AMD ROCm, Intel XPU (integrated and discrete), and
+  Apple Metal, with the CPU fallback always enumerated last.
+
 ### Changed
+
+- Rebalanced the entire palette on an engineered OKLCH ramp: one hue (266°), chroma
+  proportional to lightness, and a uniform lightness staircase. Chrome bars gained a full
+  step over panels, recessed fields now genuinely sink below the base plane, the accent
+  family was re-derived from a single anchor with computed white-text contrast on every
+  gradient stop, loudness was re-ranked (quieter catch-lights and selection borders,
+  legible disabled text), and the memory gauge's healthy state became green so blue stays
+  the exclusive color of interaction.
+- Safe memory mode is no longer the default. It still switches itself on automatically
+  when free memory is very low.
+
+### Fixed
+
+- Removing (or replacing) the image that produced the last finished result now retires the
+  Open Result and Show in Folder buttons instead of leaving them pointing at an output
+  whose source is gone.
 
 - Redesigned the entire interface as "Machined Graphite", a bespoke dark design language for
   the Slint workspace: four tonal planes (chrome, panels, stage, canvas well) joined by

@@ -100,3 +100,60 @@ def test_mps_snapshot_exposes_allocator_and_pressure(monkeypatch):
     assert snapshot["mps_recommended_max_memory"] == 10 * gib
     assert snapshot["system_memory_pressure_level"] == "moderate"
     assert snapshot["system_compressed_memory"] == 3 * gib
+
+
+def test_discovers_nvidia_cuda_and_intel_discrete_xpu(monkeypatch):
+    gib = 1024**3
+    monkeypatch.setattr(hardware, "_system_memory", lambda: (32 * gib, 20 * gib))
+    monkeypatch.setattr(
+        hardware,
+        "_system_pressure_snapshot",
+        lambda _total, _available: {
+            "system_memory_pressure_percent": 30.0,
+            "system_memory_pressure_level": "low",
+            "system_compressed_memory": 0,
+            "system_swap_total": 0,
+            "system_swap_used": 0,
+        },
+    )
+    monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(hardware.torch.version, "hip", None)
+
+    fake_cuda = SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 2,
+        device=lambda _index: nullcontext(),
+        mem_get_info=lambda index: ((10 - index) * gib, 12 * gib),
+        get_device_properties=lambda index: SimpleNamespace(
+            name=f"Test GeForce {index}",
+            major=8 if index == 0 else 5,
+            minor=9 if index == 0 else 0,
+        ),
+    )
+    fake_xpu = SimpleNamespace(
+        is_available=lambda: True,
+        device_count=lambda: 1,
+        mem_get_info=lambda _index: (14 * gib, 16 * gib),
+        get_device_properties=lambda _index: SimpleNamespace(
+            name="Test Arc A770",
+            has_fp16=True,
+            is_integrated_gpu=False,
+        ),
+    )
+    monkeypatch.setattr(hardware.torch, "cuda", fake_cuda)
+    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu)
+
+    report = hardware.get_capability_report()
+    cuda_devices = [device for device in report["devices"] if device["type"] == "cuda"]
+    xpu = next(device for device in report["devices"] if device["type"] == "xpu")
+
+    assert [device["id"] for device in cuda_devices] == ["cuda:0", "cuda:1"]
+    assert all("CUDA" in device["name"] for device in cuda_devices)
+    # Compute capability 8.9 supports fp16; 5.0 predates fp16 support.
+    assert cuda_devices[0]["supports_fp16"] is True
+    assert cuda_devices[1]["supports_fp16"] is False
+    assert cuda_devices[0]["free_memory"] == 10 * gib
+    assert xpu["name"] == "Test Arc A770 (Intel XPU, discrete)"
+    assert xpu["is_integrated"] is False
+    # The CPU fallback is always enumerated last.
+    assert report["devices"][-1]["id"] == "cpu"
