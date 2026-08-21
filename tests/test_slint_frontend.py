@@ -61,7 +61,7 @@ def test_primary_action_stays_with_the_responsive_enhance_inspector():
 
     assert "out property <int> layout-mode" in source
     assert "if root.enhance-pane-visible: Rectangle" in source
-    assert "y: parent.height - 94px;" in source
+    assert "y: parent.height - 88px;" in source
     assert 'text: root.can-cancel ? "Cancel Current Job" : root.action-text;' in source
 
 

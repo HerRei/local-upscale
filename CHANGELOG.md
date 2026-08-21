@@ -7,6 +7,24 @@ stable release is published.
 
 ### Changed
 
+- Redesigned the entire interface as "Machined Graphite", a bespoke dark design language for
+  the Slint workspace: four tonal planes (chrome, panels, stage, canvas well) joined by
+  shadow-and-catch-light seams, a shared token system (`Theme` global) for color, type,
+  radius, spacing, and motion, and accent controls built from one anodized gradient material.
+- The preview canvas is now a carved well with a rim reveal and edge vignette; its zoom,
+  fit, and compare controls moved into a floating glass HUD that fades while the image is
+  being dragged, and the Original/Preview labels became floating chips in the top corners —
+  reclaiming the old 50px bottom control bar for the image.
+- The toolbar became a 46px command strip with a centered, recessed page switcher in the
+  medium and compact layouts; the inspector gained uppercase micro-cap section headers, a
+  uniform 4px label-to-control rhythm, a recessed "receipt card" for the run summary, and
+  content-sized captions and warning callouts that grow with their text.
+- Media queue rows were rebuilt: 44px thumbnails, an animated selection spine, and a
+  hover-revealed remove disc in place of the "Remove" text label; segmented controls,
+  combo boxes, checkboxes, and buttons were all restyled with full hover/pressed/disabled/
+  focus states and 120–180ms motion. All existing callbacks, shortcuts, accessibility
+  labels, and the responsive three-mode layout are preserved unchanged.
+
 - Cleaned up the toolbar to a single macOS-style command strip: the redundant Advanced and Compare
   toolbar buttons are gone. Advanced settings stay in the Enhance inspector's disclosure row and
   Compare stays with the preview's own control bar.
