@@ -195,12 +195,12 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
             },
             {
                 "key": r"Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\LocalSR.Quick",
-                "values": {"": "⚡ Quick Preset (Fast)", "Icon": f'"{clean_exe}",0'},
+                "values": {"": "Quick Preset (Fast)", "Icon": f'"{clean_exe}",0'},
                 "command": f'"{clean_exe}" --preset quick --auto-start "%1"',
             },
             {
                 "key": r"Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\LocalSR.Best",
-                "values": {"": "✨ Best Quality Preset", "Icon": f'"{clean_exe}",0'},
+                "values": {"": "Best Quality Preset", "Icon": f'"{clean_exe}",0'},
                 "command": f'"{clean_exe}" --preset best --auto-start "%1"',
             },
             {

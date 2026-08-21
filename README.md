@@ -67,8 +67,8 @@ LocalSR integrates directly into your operating system's desktop environment:
   * Right-click any image or video in Finder.
   * Hover over **`Quick Actions >`** (or **`Services >`**) and select **`Upscale with LocalSR`**.
   * An interactive recipe selector popup will appear asking which preset you'd like to use:
-    * **⚡ Quick Preset** (Fast)
-    * **✨ Best Quality Preset**
+    * **Quick Preset** (Fast)
+    * **Best Quality Preset**
     * Any of your **Custom Saved Recipes**
   * LocalSR opens automatically with your selected files and immediately starts processing.
 * **Native Cocoa Top Menu Bar**:
@@ -79,8 +79,8 @@ LocalSR integrates directly into your operating system's desktop environment:
     * `⌘E` — Open Output Folder in Finder
     * `⌘R` — Start Upscaling
     * `⌘.` — Cancel Job
-    * `⌘1` — ⚡ Quick Preset
-    * `⌘2` — ✨ Best Quality Preset
+    * `⌘1` — Quick Preset
+    * `⌘2` — Best Quality Preset
     * `⌘3...` — Dynamic Custom Recipes
 * **Dock Drag-and-Drop**: Drag any images, folders, or video files straight onto the `LocalSR` Dock icon to queue them instantly.
 * **Native System Notifications**: Delivers system banner alerts with audio when single jobs, batches, or video jobs complete.

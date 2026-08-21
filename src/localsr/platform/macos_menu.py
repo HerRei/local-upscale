@@ -127,13 +127,13 @@ def setup_macos_native_menu(app: Any) -> bool:
 
         add_item(
             presets_menu,
-            "⚡ Quick Preset (Fast)",
+            "Quick Preset (Fast)",
             "1",
             cb=lambda: getattr(app, "apply_automatic_setup", lambda **kw: None)(best=False),
         )
         add_item(
             presets_menu,
-            "✨ Best Quality Preset",
+            "Best Quality Preset",
             "2",
             cb=lambda: getattr(app, "apply_automatic_setup", lambda **kw: None)(best=True),
         )

@@ -147,11 +147,11 @@ StartupWMClass=LocalSR
 Actions=QuickUpscale;BestQuality;
 
 [Desktop Action QuickUpscale]
-Name=⚡ Quick Upscale
+Name=Quick Upscale
 Exec={exec_path} --preset quick --auto-start %U
 
 [Desktop Action BestQuality]
-Name=✨ Best Quality Upscale
+Name=Best Quality Upscale
 Exec={exec_path} --preset best --auto-start %U
 """
 
@@ -170,12 +170,12 @@ Icon=localsr
 Exec={exec_path} --auto-start %U
 
 [Desktop Action LocalSRQuick]
-Name=⚡ Quick Preset (Fast)
+Name=Quick Preset (Fast)
 Icon=localsr
 Exec={exec_path} --preset quick --auto-start %U
 
 [Desktop Action LocalSRBest]
-Name=✨ Best Quality Preset
+Name=Best Quality Preset
 Icon=localsr
 Exec={exec_path} --preset best --auto-start %U
 
