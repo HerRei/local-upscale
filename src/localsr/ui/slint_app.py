@@ -29,7 +29,11 @@ from localsr.core.estimator import (
     format_duration,
     format_duration_range,
 )
-from localsr.core.image_formats import SUPPORTED_INPUT_EXTENSIONS, probe_image_size
+from localsr.core.image_formats import (
+    SUPPORTED_INPUT_EXTENSIONS,
+    is_video_input,
+    probe_image_size,
+)
 from localsr.core.model_catalog import (
     MODEL_CATALOG,
     CatalogModel,
@@ -46,6 +50,7 @@ from localsr.protocol.messages import (
     InspectRequest,
     JobRequest,
     PreviewRequest,
+    VideoJobRequest,
 )
 from localsr.ui.native_dialog import request_dialog
 from localsr.ui.slint_preview import SlintPreviewBuffer
@@ -55,7 +60,7 @@ CUSTOM_MODEL_ID = "__custom__"
 FORMAT_VALUES = ("png", "jpg", "tif")
 TASK_LABELS = ("Upscale", "Denoise", "Upscale Video")
 VIDEO_TASK_INDEX = 2
-VIDEO_ENABLED = False
+VIDEO_ENABLED = True
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,10 @@ class ImageItem:
     width: int
     height: int
     thumbnail_path: str = ""
+    is_video: bool = False
+    frame_count: int = 0
+    fps: float = 0.0
+    duration_seconds: float = 0.0
 
 
 class SettingsStore:
@@ -272,6 +281,12 @@ class SlintApplication:
 
     def _queue_entry(self, item: ImageItem, index: int):
         megapixels = item.width * item.height / 1_000_000
+        if item.is_video:
+            minutes, seconds = divmod(int(round(item.duration_seconds)), 60)
+            duration = f"{minutes}:{seconds:02d}" if minutes else f"{seconds}s"
+            detail = f"{item.width} × {item.height} · {duration} · {item.frame_count} frames"
+        else:
+            detail = f"{item.width} × {item.height} · {megapixels:.1f} MP"
         thumbnail = (
             slint.Image.load_from_path(item.thumbnail_path)
             if item.thumbnail_path and Path(item.thumbnail_path).is_file()
@@ -279,7 +294,7 @@ class SlintApplication:
         )
         return self.module.QueueEntry(
             name=Path(item.path).name,
-            detail=f"{item.width} × {item.height} · {megapixels:.1f} MP",
+            detail=detail,
             selected=index == self.selected_image_index,
             thumbnail=thumbnail,
             has_thumbnail=bool(item.thumbnail_path),
@@ -329,8 +344,23 @@ class SlintApplication:
             path = str(Path(raw_path).expanduser().resolve())
             if path in existing:
                 continue
+            video = is_video_input(path)
+            frame_count = 0
+            fps = 0.0
+            duration_seconds = 0.0
             try:
-                width, height = probe_image_size(path)
+                if video:
+                    from localsr.core.video_io import probe_video
+
+                    probe = probe_video(path)
+                    width, height = probe.width, probe.height
+                    if width <= 0 or height <= 0:
+                        raise ValueError("Video dimensions must be positive.")
+                    frame_count = max(1, probe.frame_count)
+                    fps = probe.fps
+                    duration_seconds = probe.duration_seconds
+                else:
+                    width, height = probe_image_size(path)
             except (OSError, RuntimeError, ValueError):
                 rejected.append(Path(path).name)
                 continue
@@ -341,6 +371,10 @@ class SlintApplication:
                     width=width,
                     height=height,
                     thumbnail_path=str(thumbnail_path) if thumbnail_path is not None else "",
+                    is_video=video,
+                    frame_count=frame_count,
+                    fps=fps,
+                    duration_seconds=duration_seconds,
                 )
             )
             existing.add(path)
@@ -437,7 +471,43 @@ class SlintApplication:
         self.ui.compare_position = 0.5
         self.ui.result_image = slint.Image()
         self.ui.source_label = "Original"
+        if image.is_video:
+            self._load_video_preview(image)
+            return
         self.worker.send_request(PreviewRequest(image_path=image.path, max_dimension=1600))
+        self._sync_inspector()
+
+    def _load_video_preview(self, item: ImageItem) -> None:
+        """The first decoded frame stands in for the clip on the canvas."""
+        import base64
+        import io
+
+        try:
+            from PIL import Image as PILImage
+
+            from localsr.core.video_io import decode_frames
+
+            _, rgb = next(iter(decode_frames(item.path, 0, 0)))
+            frame = PILImage.fromarray(rgb)
+            frame.thumbnail((1600, 1600), PILImage.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            frame.convert("RGB").save(buffer, format="JPEG", quality=88)
+        except (StopIteration, OSError, ValueError) as error:
+            self.runtime_warning = f"Preview unavailable: {error}"
+            self._sync_inspector()
+            return
+        path = self.preview.set_source_base64(
+            base64.b64encode(buffer.getvalue()).decode("ascii")
+        )
+        if path is not None:
+            self.ui.source_image = slint.Image.load_from_path(str(path))
+            self.ui.image_ready = True
+            source_width = max(1, int(self.ui.source_image.width))
+            source_height = max(1, int(self.ui.source_image.height))
+            self.ui.preview_aspect = source_width / source_height
+            self.ui.source_label = (
+                f"Original · {item.width} × {item.height} · frame 1 of {item.frame_count}"
+            )
         self._sync_inspector()
 
     def set_task(self, index: int) -> None:
@@ -986,16 +1056,29 @@ class SlintApplication:
             device_memory_shared=bool(device.get("is_integrated", False)),
         )
         estimate = self.current_estimate
-        self.ui.estimate_time = format_duration_range(
-            estimate.seconds_low,
-            estimate.seconds_high,
-        )
-        self.ui.estimate_output = format_bytes(estimate.output_bytes)
         calibration = "locally calibrated" if estimate.calibrated else "broad first-run range"
-        self.ui.estimate_detail = (
-            f"{estimate.tile_count} tiles · {calibration} · "
-            f"{format_bytes(estimate.working_disk_bytes)} temporary disk"
-        )
+        if image.is_video and image.frame_count > 1:
+            frames = image.frame_count
+            self.ui.estimate_time = format_duration_range(
+                estimate.seconds_low * frames,
+                estimate.seconds_high * frames,
+            )
+            # Encoded size depends on content and CRF, not on the per-frame
+            # raster estimate; showing the raster number would mislead.
+            self.ui.estimate_output = "—"
+            self.ui.estimate_detail = (
+                f"{frames} frames · {estimate.tile_count} tiles per frame · {calibration}"
+            )
+        else:
+            self.ui.estimate_time = format_duration_range(
+                estimate.seconds_low,
+                estimate.seconds_high,
+            )
+            self.ui.estimate_output = format_bytes(estimate.output_bytes)
+            self.ui.estimate_detail = (
+                f"{estimate.tile_count} tiles · {calibration} · "
+                f"{format_bytes(estimate.working_disk_bytes)} temporary disk"
+            )
         warnings = ([self.runtime_warning] if self.runtime_warning else []) + list(
             estimate.warnings
         )
@@ -1120,7 +1203,10 @@ class SlintApplication:
         else:
             self.ui.scale_summary = f"{self.output_scale}×"
 
-        format_name = ("PNG", "JPEG", "TIFF")[self.format_index]
+        if self.task_index == VIDEO_TASK_INDEX:
+            format_name = "MP4"
+        else:
+            format_name = ("PNG", "JPEG", "TIFF")[self.format_index]
         folder = Path(self.output_directory).expanduser()
         folder_label = folder.name or str(folder)
         self.ui.output_summary = f"{format_name} · {folder_label}"
@@ -1129,9 +1215,14 @@ class SlintApplication:
         estimate_blocking = bool(self.current_estimate and self.current_estimate.blocking)
         downloading = self.download_thread is not None and self.download_thread.is_alive()
         video_task_disabled = self.task_index == VIDEO_TASK_INDEX and not VIDEO_ENABLED
+        selected = self._selected_image()
+        media_matches_task = selected is None or (
+            selected.is_video == (self.task_index == VIDEO_TASK_INDEX)
+        )
         can_start = bool(
             self.task_selected
             and not video_task_disabled
+            and media_matches_task
             and self.images
             and self.model_path
             and self.current_model_info
@@ -1162,6 +1253,8 @@ class SlintApplication:
     def _output_path_for(self, image_path: str) -> str:
         base = Path(image_path).stem
         extension = FORMAT_VALUES[self.format_index]
+        if self.task_index == VIDEO_TASK_INDEX:
+            extension = "mp4"
         if self.task_index == 1:
             suffix = "_denoised"
         elif self.task_index == VIDEO_TASK_INDEX:
@@ -1333,7 +1426,10 @@ class SlintApplication:
         if not self.ui.can_start:
             return
         if self.ui.batch_mode:
-            self.batch_paths = [item.path for item in self.images]
+            wanted_video = self.task_index == VIDEO_TASK_INDEX
+            self.batch_paths = [
+                item.path for item in self.images if item.is_video == wanted_video
+            ]
         else:
             selected = self._selected_image()
             self.batch_paths = [selected.path] if selected is not None else []
@@ -1380,22 +1476,40 @@ class SlintApplication:
             if self.current_estimate is not None
             else self.images[index].width * self.images[index].height / 1_000_000
         )
-        request = JobRequest(
-            job_id=self.current_job_id,
-            image_path=path,
-            model_path=self.model_path,
-            output_path=output_path,
-            output_format=FORMAT_VALUES[self.format_index],
-            device=self.device_id,
-            tile_size=self.tile_size,
-            halo=self.halo,
-            precision=self.precision,
-            jpeg_quality=self.jpeg_quality,
-            preserve_metadata=self.preserve_metadata,
-            safe_memory=self.safe_memory,
-            output_scale=self.output_scale,
-            face_model_path=self._face_companion_path(),
-        )
+        if self.images[index].is_video:
+            request: JobRequest | VideoJobRequest = VideoJobRequest(
+                job_id=self.current_job_id,
+                video_path=path,
+                model_path=self.model_path,
+                output_video_path=output_path,
+                container="mp4",
+                crf=18,
+                fps=None,
+                device=self.device_id,
+                tile_size=self.tile_size,
+                halo=self.halo,
+                precision=self.precision,
+                safe_memory=self.safe_memory,
+                face_model_path=self._face_companion_path(),
+                deflicker=bool(self.ui.deflicker),
+            )
+        else:
+            request = JobRequest(
+                job_id=self.current_job_id,
+                image_path=path,
+                model_path=self.model_path,
+                output_path=output_path,
+                output_format=FORMAT_VALUES[self.format_index],
+                device=self.device_id,
+                tile_size=self.tile_size,
+                halo=self.halo,
+                precision=self.precision,
+                jpeg_quality=self.jpeg_quality,
+                preserve_metadata=self.preserve_metadata,
+                safe_memory=self.safe_memory,
+                output_scale=self.output_scale,
+                face_model_path=self._face_companion_path(),
+            )
         self.ui.progress = 0.0
         self.ui.live_result_ready = False
         self.ui.result_ready = False
@@ -1779,13 +1893,35 @@ class SlintApplication:
 
     # ── Video job event handlers ─────────────────────────────────────
 
-    def _on_video_frame_started(self, _data: dict) -> None:
-        pass
+    def _on_video_frame_started(self, data: dict) -> None:
+        if data.get("job_id") != self.current_job_id:
+            return
+        frame = int(data.get("frame_index", 0)) + 1
+        total = int(data.get("total_frames", 0))
+        detail = f"Frame {frame} of {total}" if total > 0 else f"Frame {frame}"
+        self._show_status("Upscaling video", detail)
 
     def _on_video_frame_completed(self, data: dict) -> None:
-        # Update progress for video jobs. The thumbnail is carried in the
-        # jpeg_base64 field when present.
-        pass
+        # Two carriers share this message: per-frame thumbnails (jpeg_base64)
+        # and the ETA/progress update (frames_processed > 0).
+        if data.get("job_id") != self.current_job_id:
+            return
+        done = int(data.get("frames_processed", 0))
+        if done <= 0:
+            return
+        total = int(data.get("total_frames", 0))
+        if total > 0:
+            self.ui.progress = min(1.0, done / total)
+        remaining = float(data.get("estimated_remaining_seconds", 0.0))
+        if remaining > 0:
+            minutes, seconds = divmod(int(remaining), 60)
+            eta = f"{minutes}:{seconds:02d}" if minutes else f"{seconds}s"
+            detail = (
+                f"Frame {done} of {total} · about {eta} left"
+                if total > 0
+                else f"Frame {done}"
+            )
+            self._show_status("Upscaling video", detail)
 
     def _on_video_job_completed(self, data: dict) -> None:
         if data.get("job_id") != self.current_job_id:
@@ -1797,6 +1933,8 @@ class SlintApplication:
         self.batch_paths.clear()
         self.batch_total = 0
         self.batch_current = 0
+        self.ui.batch_progress = ""
+        self.ui.progress = 1.0
         frames = int(data.get("frames_processed", 0))
         self._show_status(
             "Video complete",

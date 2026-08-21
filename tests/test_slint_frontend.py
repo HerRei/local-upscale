@@ -862,3 +862,76 @@ def test_safe_memory_defaults_off_for_fresh_settings(tmp_path):
         application.shutdown()
         """
     )
+
+
+def _write_test_clip(path, width=64, height=48, frames=8, rate=8):
+    import av
+    import numpy as np
+
+    container = av.open(str(path), mode="w")
+    stream = container.add_stream("libx264", rate=rate)
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = "yuv420p"
+    for index in range(frames):
+        rgb = np.full((height, width, 3), min(255, index * 30), dtype=np.uint8)
+        frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def test_video_clips_ingest_probe_and_route_to_the_video_task(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    _write_test_clip(clip)
+    run_slint_script(
+        f"""
+        from pathlib import Path
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        application.output_directory = str(root)
+        application.add_images([str(root / "clip.mp4")])
+        assert len(application.images) == 1
+        item = application.images[0]
+        assert item.is_video is True
+        assert (item.width, item.height) == (64, 48)
+        assert item.frame_count == 8
+        assert "frames" in application._queue_entry(item, 0).detail
+
+        # The first decoded frame stands in for the clip on the canvas.
+        application._load_video_preview(item)
+        assert application.ui.image_ready is True
+        assert "frame 1 of 8" in application.ui.source_label
+
+        # Video outputs are mp4 regardless of the still-image format choice.
+        application.set_task(2)
+        assert application._output_path_for(item.path).endswith(".mp4")
+
+        # The media/task gate blocks stills tasks on clips and vice versa.
+        application.set_task(0)
+        application._update_action_state()
+        assert application.ui.can_start is False
+        application.shutdown()
+        """
+    )
+
+
+def test_video_input_extensions_are_supported():
+    from localsr.core.image_formats import (
+        SUPPORTED_INPUT_EXTENSIONS,
+        VIDEO_INPUT_EXTENSIONS,
+        is_video_input,
+    )
+
+    assert ".mp4" in VIDEO_INPUT_EXTENSIONS
+    assert VIDEO_INPUT_EXTENSIONS <= SUPPORTED_INPUT_EXTENSIONS
+    assert is_video_input("/tmp/movie.MOV")
+    assert not is_video_input("/tmp/photo.png")

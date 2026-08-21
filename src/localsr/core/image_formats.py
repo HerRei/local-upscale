@@ -5,7 +5,8 @@ from PIL import Image
 
 RAW_INPUT_EXTENSIONS = frozenset({".dng"})
 RASTER_INPUT_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"})
-SUPPORTED_INPUT_EXTENSIONS = RAW_INPUT_EXTENSIONS | RASTER_INPUT_EXTENSIONS
+VIDEO_INPUT_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"})
+SUPPORTED_INPUT_EXTENSIONS = RAW_INPUT_EXTENSIONS | RASTER_INPUT_EXTENSIONS | VIDEO_INPUT_EXTENSIONS
 IMAGE_FILE_DIALOG_FILTER = (
     "Images and camera RAW (*.png *.jpg *.jpeg *.tif *.tiff *.webp *.dng *.DNG)"
 )
@@ -13,6 +14,10 @@ IMAGE_FILE_DIALOG_FILTER = (
 
 def is_raw_input(path: str | Path) -> bool:
     return Path(path).suffix.lower() in RAW_INPUT_EXTENSIONS
+
+
+def is_video_input(path: str | Path) -> bool:
+    return Path(path).suffix.lower() in VIDEO_INPUT_EXTENSIONS
 
 
 def probe_image_size(path: str | Path) -> tuple[int, int]:

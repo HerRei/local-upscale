@@ -65,6 +65,24 @@ class SlintPreviewBuffer:
         cached = self._media_thumbnails.get(source_path)
         if cached is not None and cached.is_file():
             return cached
+        from localsr.core.image_formats import is_video_input
+
+        if is_video_input(source_path):
+            # First decoded frame stands in for the clip.
+            try:
+                from localsr.core.video_io import decode_frames
+
+                _, rgb = next(iter(decode_frames(source_path, 0, 0)))
+                frame = Image.fromarray(rgb)
+            except (StopIteration, OSError, ValueError, ImportError):
+                return None
+            thumbnail = ImageOps.fit(
+                frame.convert("RGB"), (size, size), method=Image.Resampling.LANCZOS
+            )
+            destination = self._root / f"media-{len(self._media_thumbnails)}.jpg"
+            thumbnail.save(destination, format="JPEG", quality=82, optimize=False)
+            self._media_thumbnails[source_path] = destination
+            return destination
         try:
             with Image.open(source_path) as source:
                 oriented = ImageOps.exif_transpose(source)

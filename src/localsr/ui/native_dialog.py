@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-IMAGE_GLOBS = "*.jpg *.jpeg *.png *.tif *.tiff *.webp *.dng"
+IMAGE_GLOBS = "*.jpg *.jpeg *.png *.tif *.tiff *.webp *.dng *.mp4 *.mov *.m4v *.mkv *.webm *.avi"
 MODEL_GLOBS = "*.pth *.pt *.safetensors"
 
 
@@ -132,7 +132,7 @@ def _windows_dialog(mode: str, initial: str) -> list[str]:
         $dialog.Multiselect = ($mode -eq 'images')
         $dialog.Title = if ($mode -eq 'images') { 'Add Images' } else { 'Select Model Checkpoint' }
         $dialog.Filter = if ($mode -eq 'images') {
-            'Images|*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.webp;*.dng|All files|*.*'
+            'Media|*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.webp;*.dng;*.mp4;*.mov;*.m4v;*.mkv;*.webm;*.avi|All files|*.*'
         } else {
             'Models|*.pth;*.pt;*.safetensors|All files|*.*'
         }

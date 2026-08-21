@@ -5,6 +5,16 @@ stable release is published.
 
 ## [Unreleased]
 
+### Added
+
+- Video upscaling (beta): MP4, MOV, M4V, MKV, WebM, and AVI clips can be added to the queue
+  alongside images. The Upscale Video task runs the selected restoration model frame by
+  frame with optional temporal-median de-flicker, encodes to MP4 with atomic writes, and
+  reports per-frame progress with a live ETA. Clips show their first frame on the canvas
+  and duration/frame-count in the queue; batch mode processes the files matching the active
+  task. Face-aware companion pairing applies to video too. Temporal (clip-based) models are
+  the next phase — see docs/video-upscaling-plan.md.
+
 ### Changed
 
 - Face-aware restoration no longer has a manual Detect Faces button — it never influenced

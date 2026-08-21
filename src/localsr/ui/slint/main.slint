@@ -246,7 +246,7 @@ export component MainWindow inherits Window {
                 y: 8px;
                 width: 126px;
                 height: 30px;
-                text: "+  Add Images";
+                text: "+  Add Media";
                 primary: true;
                 compact: true;
                 active: root.controls-enabled;
@@ -377,7 +377,7 @@ export component MainWindow inherits Window {
                             y: 50px;
                             width: parent.width - 24px;
                             height: 20px;
-                            text: "Add images";
+                            text: "Add media";
                             color: Theme.text-primary;
                             font-size: 13px;
                             font-weight: 600;
@@ -390,7 +390,7 @@ export component MainWindow inherits Window {
                             y: 72px;
                             width: parent.width - 24px;
                             height: 16px;
-                            text: "JPEG, PNG, TIFF, WebP, or DNG";
+                            text: "Images, camera RAW, or video clips";
                             color: Theme.text-tertiary;
                             font-size: 11px;
                             horizontal-alignment: center;
@@ -828,7 +828,7 @@ export component MainWindow inherits Window {
                                         y: 60px;
                                         width: parent.width;
                                         height: 24px;
-                                        text: "Choose an image to enhance";
+                                        text: "Choose an image or video to enhance";
                                         color: Theme.text-primary;
                                         font-size: 17px;
                                         font-weight: 600;
@@ -842,7 +842,7 @@ export component MainWindow inherits Window {
                                         y: 92px;
                                         width: parent.width;
                                         height: 36px;
-                                        text: "Upscale photos or remove noise\nwith local AI models.";
+                                        text: "Upscale photos and video, or remove\nnoise — with local AI models.";
                                         color: Theme.text-secondary;
                                         font-size: 12px;
                                         horizontal-alignment: center;
@@ -853,7 +853,7 @@ export component MainWindow inherits Window {
                                         x: (parent.width - 140px) / 2;
                                         y: 144px;
                                         width: 140px;
-                                        text: "Choose Image…";
+                                        text: "Choose Media…";
                                         primary: true;
                                         active: root.controls-enabled;
                                         clicked => { root.choose-images(); }

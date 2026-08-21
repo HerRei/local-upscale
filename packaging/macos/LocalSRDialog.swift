@@ -29,9 +29,10 @@ panel.allowsMultipleSelection = mode == "images"
 
 switch mode {
 case "images":
-    panel.title = "Add Images"
-    panel.message = "Choose one or more images to add to LocalSR."
-    panel.allowedContentTypes = ["jpg", "jpeg", "png", "tif", "tiff", "webp", "dng"]
+    panel.title = "Add Media"
+    panel.message = "Choose one or more images or videos to add to LocalSR."
+    panel.allowedContentTypes = ["jpg", "jpeg", "png", "tif", "tiff", "webp", "dng",
+                                 "mp4", "mov", "m4v", "mkv", "webm", "avi"]
         .compactMap { UTType(filenameExtension: $0) }
 case "model":
     panel.title = "Select Model Checkpoint"
