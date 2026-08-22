@@ -22,16 +22,21 @@ PROJECT_URL = "https://github.com/HerRei/local-upscale"
 class ModelPurpose(StrEnum):
     GENERAL = "general"
     PHOTO = "photo"
+    ANIME = "anime"
     ILLUSTRATION = "illustration"
     DENOISE = "denoise"
+    DEBLUR = "deblur"
+    RESTORATION = "restoration"
     FACE = "face"
     VIDEO = "video"
 
 
 class QualityTier(IntEnum):
+    FAST = 1
     STANDARD = 1
     HIGH = 2
     MAXIMUM = 3
+    ULTRA = 4
 
 
 class SpeedTier(IntEnum):
@@ -60,6 +65,8 @@ class CatalogModel:
     author: str = ""
     memory_factor: float = 1.0
     time_factor: float = 1.0
+    speed_factor: float = 1.0
+    vram_estimate_mb: int = 0
     # For face fine-tunes: the model_id of the general model this face
     # model pairs with. Empty string for non-face models.
     pair_with: str = ""
@@ -67,6 +74,22 @@ class CatalogModel:
     @property
     def size_megabytes(self) -> float:
         return self.size_bytes / 1_000_000
+
+    @property
+    def scale(self) -> int:
+        return self.native_scale
+
+    @property
+    def file_size_bytes(self) -> int:
+        return self.size_bytes
+
+    @property
+    def purpose(self) -> ModelPurpose:
+        return self.purposes[0] if self.purposes else ModelPurpose.GENERAL
+
+
+# Type alias for interface contract compliance
+ModelCatalogEntry = CatalogModel
 
 
 MODEL_CATALOG = (
@@ -87,6 +110,8 @@ MODEL_CATALOG = (
         author="XPixel Group",
         memory_factor=0.65,
         time_factor=0.65,
+        speed_factor=0.65,
+        vram_estimate_mb=2000,
         pair_with="hat_s_x4_face",
     ),
     CatalogModel(
@@ -108,6 +133,8 @@ MODEL_CATALOG = (
         author="HerRei / XPixel Group",
         memory_factor=0.65,
         time_factor=0.65,
+        speed_factor=0.65,
+        vram_estimate_mb=2000,
         pair_with="hat_s_x4",
     ),
     CatalogModel(
@@ -127,6 +154,8 @@ MODEL_CATALOG = (
         author="XPixel Group",
         memory_factor=1.8,
         time_factor=1.8,
+        speed_factor=0.30,
+        vram_estimate_mb=6000,
     ),
     CatalogModel(
         model_id="denoise_realplksr_1x",
@@ -147,6 +176,8 @@ MODEL_CATALOG = (
         author="Philip Hofmann",
         memory_factor=0.38,
         time_factor=0.25,
+        speed_factor=0.85,
+        vram_estimate_mb=1000,
     ),
     CatalogModel(
         model_id="nafnet_sidd_width64",
@@ -174,10 +205,116 @@ MODEL_CATALOG = (
         author="Liangyu Chen, Xiaojie Chu, Xiangyu Zhang, and Jian Sun",
         memory_factor=1.45,
         time_factor=1.25,
+        speed_factor=0.50,
+        vram_estimate_mb=4000,
+    ),
+    CatalogModel(
+        model_id="span_anime_x4",
+        name="SPAN 4x Anime",
+        filename="4x_SPAN_AnimeSharp.pth",
+        description="Lightweight SPAN model for anime and illustrations",
+        size_bytes=10_485_760,
+        sha256="7e268fa176846dddebaefd8721c572a1e359a3c306fa5304b7beebf6b402efcf",
+        download_url="https://github.com/phhofm/models/releases/download/v0.1/4x_SPAN_AnimeSharp.pth",
+        architecture="SPAN",
+        native_scale=4,
+        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME, ModelPurpose.GENERAL),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=16,
+        source_url="https://github.com/phhofm/models",
+        license_name="Apache-2.0",
+        author="Philip Hofmann",
+        memory_factor=0.88,
+        time_factor=0.85,
+        speed_factor=0.85,
+        vram_estimate_mb=800,
+    ),
+    CatalogModel(
+        model_id="span_photo_x4",
+        name="SPAN 4x Photo (Lightning)",
+        filename="4x_SPAN_Photo.pth",
+        description="Ultra-lightweight real-time general photo upscaler",
+        size_bytes=3_984_588,
+        sha256="a34b22c954e76ea0dc7a77d7fa13c69cefe174549d47ec051c96417fae4eb245",
+        download_url="https://github.com/phhofm/models/releases/download/v0.1/4x_SPAN_Photo.pth",
+        architecture="SPAN",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
+        quality_tier=QualityTier.FAST,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=16,
+        source_url="https://github.com/phhofm/models",
+        license_name="Apache-2.0",
+        author="Philip Hofmann",
+        memory_factor=0.92,
+        time_factor=0.96,
+        speed_factor=0.96,
+        vram_estimate_mb=500,
+    ),
+    CatalogModel(
+        model_id="realplksr_nomos8k_x4",
+        name="RealPLKSR 4x (Nomos8k)",
+        filename="4x_RealPLKSR_Nomos8k.pth",
+        description="High-fidelity lightweight photo upscaler with low VRAM footprint",
+        size_bytes=16_148_070,
+        sha256="b83cb220f1295ea7c164a66a1a720ff7bfa7c5ea5317be9e7a9b0c95fe9f42d1",
+        download_url="https://github.com/phhofm/models/releases/download/v0.1/4x_RealPLKSR_Nomos8k.pth",
+        architecture="RealPLKSR",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
+        quality_tier=QualityTier.ULTRA,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/phhofm/models",
+        license_name="CC-BY-4.0",
+        author="Philip Hofmann",
+        memory_factor=0.80,
+        time_factor=0.70,
+        speed_factor=0.70,
+        vram_estimate_mb=1200,
+    ),
+    CatalogModel(
+        model_id="nafnet_gopro_deblur",
+        name="NAFNet GoPro Deblur",
+        filename="NAFNet-GoPro-width64.pth",
+        description="Single-image camera motion deblurring model",
+        size_bytes=70_254_592,
+        sha256="5a74581c3bd2946c1b3f9ff7cb898ec6d8170d10b7f6c3216fa68b75f8224dc6",
+        download_url="https://github.com/phhofm/models/releases/download/v0.1/NAFNet-GoPro-width64.pth",
+        architecture="NAFNet",
+        native_scale=1,
+        purposes=(ModelPurpose.DEBLUR, ModelPurpose.RESTORATION, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=32,
+        source_url="https://github.com/megvii-research/NAFNet",
+        license_name="MIT",
+        author="Liangyu Chen et al. / megvii-research",
+        memory_factor=0.75,
+        time_factor=0.65,
+        speed_factor=0.65,
+        vram_estimate_mb=1500,
     ),
 )
 
 CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}
+
+
+def get_models_for_purpose(purpose: ModelPurpose | str) -> list[CatalogModel]:
+    """Return all single-image catalog models supporting the specified purpose."""
+    target_purpose = ModelPurpose(purpose) if isinstance(purpose, str) else purpose
+    return [model for model in MODEL_CATALOG if target_purpose in model.purposes]
+
+
+def get_model_by_id(model_id: str) -> CatalogModel | None:
+    """Look up a single-image catalog model by its unique ID."""
+    return CATALOG_BY_ID.get(model_id)
+
+
+def get_all_models() -> tuple[CatalogModel, ...]:
+    """Return all single-image models in the catalog."""
+    return MODEL_CATALOG
 
 
 def default_model_directory() -> Path:

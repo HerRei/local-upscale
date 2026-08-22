@@ -280,6 +280,10 @@ def get_capability_report() -> dict:
                 }
             )
 
+    if sys.platform == "win32":
+        _detect_directml(devices, total_ram, available_ram)
+        _detect_qnn(devices, total_ram, available_ram)
+
     cpu_budget = max(512 * 1024 * 1024, int(available_ram * 0.65))
     devices.append(
         {
@@ -300,3 +304,60 @@ def get_capability_report() -> dict:
     }
     report.update(_system_pressure_snapshot(total_ram, available_ram))
     return report
+
+
+def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) -> None:
+    try:
+        import torch_directml
+
+        if torch_directml.is_available():
+            for index in range(torch_directml.device_count()):
+                devices.append(
+                    {
+                        "id": f"directml:{index}",
+                        "type": "directml",
+                        "name": f"DirectML Device {index}",
+                        "total_memory": total_ram,
+                        "free_memory": available_ram,
+                        "supports_fp16": True,
+                        "recommended_tile_sizes": _recommended_tiles(int(available_ram * 0.5)),
+                        "is_integrated": True,
+                    }
+                )
+    except ImportError:
+        pass
+
+
+def _detect_qnn(devices: list[dict], total_ram: int, available_ram: int) -> None:
+    try:
+        import onnxruntime as ort
+
+        available_providers = ort.get_available_providers()
+        if "QNNExecutionProvider" in available_providers:
+            devices.append(
+                {
+                    "id": "qnn-npu",
+                    "type": "qnn",
+                    "name": "Snapdragon NPU (Hexagon QNN)",
+                    "total_memory": total_ram,
+                    "free_memory": available_ram,
+                    "supports_fp16": True,
+                    "recommended_tile_sizes": [64, 128],
+                    "is_integrated": True,
+                }
+            )
+        if "QNNExecutionProvider" in available_providers:
+            devices.append(
+                {
+                    "id": "qnn-gpu",
+                    "type": "qnn-gpu",
+                    "name": "Snapdragon Adreno GPU (QNN)",
+                    "total_memory": total_ram,
+                    "free_memory": available_ram,
+                    "supports_fp16": True,
+                    "recommended_tile_sizes": _recommended_tiles(int(available_ram * 0.5)),
+                    "is_integrated": True,
+                }
+            )
+    except ImportError:
+        pass

@@ -30,18 +30,29 @@ $GpuControllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyCon
 $GpuNames = ($GpuControllers | Select-Object -ExpandProperty Name) -join ", "
 $Flavor = "Windows-CPU"
 
+# Detect Architecture
+$Arch = $env:PROCESSOR_ARCHITECTURE
+if ($Arch -eq "ARM64") {
+    $ArchSuffix = "arm64"
+} else {
+    $ArchSuffix = "x86_64"
+}
+
 if ($GpuNames -match "NVIDIA") {
     Write-Host "   Detected GPU: $GpuNames (NVIDIA CUDA 12.x Acceleration)" -ForegroundColor Green
-    $Flavor = "Windows-CUDA"
+    $Flavor = "Windows-CUDA-$ArchSuffix"
 } elseif ($GpuNames -match "Intel.*(Arc|Iris|Ultra|Xe|Graphics)") {
     Write-Host "   Detected GPU: $GpuNames (Intel DirectML / XPU Acceleration)" -ForegroundColor Green
-    $Flavor = "Windows-DirectML"
+    $Flavor = "Windows-DirectML-$ArchSuffix"
 } elseif ($GpuNames -match "AMD|Radeon") {
     Write-Host "   Detected GPU: $GpuNames (AMD DirectML Acceleration)" -ForegroundColor Green
-    $Flavor = "Windows-DirectML"
+    $Flavor = "Windows-DirectML-$ArchSuffix"
+} elseif ($GpuNames -match "Snapdragon|Qualcomm|Adreno") {
+    Write-Host "   Detected GPU: $GpuNames (Snapdragon DirectML / QNN NPU)" -ForegroundColor Green
+    $Flavor = "Windows-DirectML-$ArchSuffix"
 } else {
     Write-Host "   Hardware Acceleration: Universal CPU (Multi-threaded Intel MKL)" -ForegroundColor DarkYellow
-    $Flavor = "Windows-CPU"
+    $Flavor = "Windows-CPU-$ArchSuffix"
 }
 
 Write-Host "   Selected Backend Flavor: $Flavor" -ForegroundColor Cyan

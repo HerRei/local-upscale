@@ -3,7 +3,24 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .estimator import ResourceEstimate, estimate_resources
-from .model_catalog import CatalogModel, ModelPurpose
+from .model_catalog import (
+    MODEL_CATALOG,
+    CatalogModel,
+    ModelPurpose,
+)
+
+# Alias for external callers adhering to PROJECT.md spec
+try:
+    from .model_catalog import ModelCatalogEntry  # type: ignore
+except ImportError:
+    ModelCatalogEntry = CatalogModel  # type: ignore
+
+
+class Preset(StrEnum):
+    FAST = "fast"
+    BALANCED = "balanced"
+    QUALITY = "quality"
+    ULTRA = "ultra"
 
 
 class PresetMode(StrEnum):
@@ -32,46 +49,113 @@ class PresetSettings:
     rationale: tuple[str, ...]
 
 
-def _purpose_match(model: CatalogModel, purpose: ModelPurpose) -> int:
-    if purpose in model.purposes:
+def _purpose_match(model: CatalogModel, purpose: ModelPurpose | str) -> int:
+    target = str(purpose).lower()
+    model_purposes = [str(p).lower() for p in model.purposes]
+
+    if target in model_purposes:
         return 2
-    if ModelPurpose.GENERAL in model.purposes:
+    if target in ("illustration", "anime") and any(
+        p in ("illustration", "anime") for p in model_purposes
+    ):
+        return 2
+    if target in ("deblur", "restoration") and any(
+        p in ("deblur", "restoration") for p in model_purposes
+    ):
+        return 2
+    if "general" in model_purposes:
         return 1
     return 0
 
 
+def _mode_category(mode: Preset | PresetMode | str) -> str:
+    val = str(mode.value if isinstance(mode, (Preset, PresetMode)) else mode).lower()
+    if val in (Preset.FAST.value, PresetMode.QUICK_UPSCALE.value, PresetMode.QUICK_DENOISE.value):
+        return "fast"
+    if val in (Preset.BALANCED.value,):
+        return "balanced"
+    if val in (Preset.QUALITY.value,):
+        return "quality"
+    if val in (
+        Preset.ULTRA.value,
+        PresetMode.BEST_UPSCALE.value,
+        PresetMode.BEST_DENOISE.value,
+        PresetMode.COMBO.value,
+    ):
+        return "ultra"
+    return "fast"
+
+
+def _balanced_score(model: CatalogModel) -> float:
+    quality_val = float(int(model.quality_tier))
+    speed_val = float(int(model.speed_tier))
+    speed_factor = getattr(model, "speed_factor", 0.5)
+    mem_factor = float(model.memory_factor)
+    return (quality_val * 2.0) + (speed_val * 1.5) + (speed_factor * 1.0) - (mem_factor * 0.8)
+
+
 def rank_models_for_preset(
     models: Sequence[CatalogModel],
-    mode: PresetMode,
+    mode: Preset | PresetMode | str,
     *,
-    purpose: ModelPurpose = ModelPurpose.PHOTO,
-    output_scale: int = 4,
+    purpose: ModelPurpose | str = ModelPurpose.PHOTO,
+    output_scale: int | None = None,
     installed_model_ids: Set[str] = frozenset(),
 ) -> tuple[CatalogModel, ...]:
-    if output_scale < 1:
+    if output_scale is not None and output_scale < 1:
         raise ValueError("Output scale must be at least 1.")
+
+    target_scale = output_scale
+    if target_scale is None:
+        p_lower = str(purpose).lower()
+        target_scale = 1 if p_lower in ("deblur", "denoise", "restoration") else 4
 
     eligible = [
         model
         for model in models
-        if model.native_scale >= output_scale and _purpose_match(model, purpose)
+        if model.native_scale >= target_scale and _purpose_match(model, purpose) > 0
     ]
-    if mode in (PresetMode.QUICK_UPSCALE, PresetMode.QUICK_DENOISE):
+
+    category = _mode_category(mode)
+    if category == "fast":
         eligible.sort(
             key=lambda model: (
                 -_purpose_match(model, purpose),
                 -int(model.speed_tier),
+                -getattr(model, "speed_factor", 0.0),
                 model.memory_factor,
+                model.size_bytes,
                 -(model.model_id in installed_model_ids),
                 -int(model.quality_tier),
                 model.model_id,
             )
         )
-    else:
+    elif category == "balanced":
+        eligible.sort(
+            key=lambda model: (
+                -_purpose_match(model, purpose),
+                -_balanced_score(model),
+                -(model.model_id in installed_model_ids),
+                model.model_id,
+            )
+        )
+    elif category == "quality":
         eligible.sort(
             key=lambda model: (
                 -_purpose_match(model, purpose),
                 -int(model.quality_tier),
+                -getattr(model, "speed_factor", 0.0),
+                -int(model.speed_tier),
+                -(model.model_id in installed_model_ids),
+                model.model_id,
+            )
+        )
+    else:  # ultra / best
+        eligible.sort(
+            key=lambda model: (
+                -_purpose_match(model, purpose),
+                -int(model.quality_tier),
+                -model.size_bytes,
                 -int(model.speed_tier),
                 -(model.model_id in installed_model_ids),
                 model.model_id,
@@ -82,13 +166,23 @@ def rank_models_for_preset(
 
 def select_model_for_preset(
     models: Sequence[CatalogModel],
-    mode: PresetMode,
+    mode: Preset | PresetMode | str,
     **kwargs,
 ) -> CatalogModel:
     ranked = rank_models_for_preset(models, mode, **kwargs)
     if not ranked:
         raise NoCompatibleModelError("No compatible model is available for this preset.")
     return ranked[0]
+
+
+def get_preset_model(
+    preset: Preset | PresetMode | str,
+    purpose: ModelPurpose | str = ModelPurpose.PHOTO,
+    catalog: Sequence[CatalogModel] | None = None,
+) -> CatalogModel:
+    """Return the top-ranked model for a preset and purpose."""
+    models = catalog if catalog is not None else MODEL_CATALOG
+    return select_model_for_preset(models, preset, purpose=purpose)
 
 
 def _device_priority(device: Mapping) -> tuple[int, int]:
@@ -100,7 +194,7 @@ def _device_priority(device: Mapping) -> tuple[int, int]:
 def resolve_settings_for_model(
     *,
     model: CatalogModel,
-    mode: PresetMode,
+    mode: Preset | PresetMode | str,
     devices: Sequence[Mapping],
     image_width: int,
     image_height: int,
@@ -121,6 +215,8 @@ def resolve_settings_for_model(
 
     best_blocked = None
     ordered_devices = sorted(devices, key=_device_priority, reverse=True)
+    category = _mode_category(mode)
+
     for device in ordered_devices:
         device_type = str(device.get("type", "cpu"))
         recommended = sorted(
@@ -134,7 +230,7 @@ def resolve_settings_for_model(
 
         precision_order = ["fp32"]
         if (
-            mode in (PresetMode.QUICK_UPSCALE, PresetMode.QUICK_DENOISE)
+            category == "fast"
             and model_half_supported
             and bool(device.get("supports_fp16", False))
             and device_type != "cpu"
@@ -162,6 +258,7 @@ def resolve_settings_for_model(
                     time_factor=model.time_factor,
                     device_memory_shared=bool(device.get("is_integrated", False)),
                 )
+                mode_label = str(mode.value if isinstance(mode, (Preset, PresetMode)) else mode)
                 decision = PresetSettings(
                     model=model,
                     device_id=str(device.get("id", "cpu")),
@@ -175,7 +272,7 @@ def resolve_settings_for_model(
                     rationale=(
                         f"{device.get('name', device.get('id', 'device'))} selected automatically.",
                         f"{tile_size}px tiles fit the reported device limits.",
-                        f"{precision.upper()} selected for {mode.value} mode.",
+                        f"{precision.upper()} selected for {mode_label} mode.",
                     ),
                 )
                 if not estimate.blocking:

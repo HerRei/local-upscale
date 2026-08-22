@@ -80,39 +80,67 @@ echo -e "   Selected Backend Flavor: ${BOLD}${CYAN}${FLAVOR}${NC}\n"
 # ------------------------------------------------------------------------------
 echo -e "📡 Fetching latest release asset for ${BOLD}${FLAVOR}${NC} from GitHub..."
 
-# Find matching asset download URL
-DOWNLOAD_URL=$(curl -sSL "https://api.github.com/repos/${REPO}/releases" | grep "browser_download_url" | grep -iE "${FLAVOR}" | head -n 1 | cut -d '"' -f 4 || true)
+TMP_DIR=$(mktemp -d /tmp/localsr_install.XXXXXX)
 
-# Fallback if flavor tag was not found in latest release
-if [ -z "${DOWNLOAD_URL}" ]; then
-    if [ "${OS}" = "Darwin" ]; then
-        DOWNLOAD_URL=$(curl -sSL "https://api.github.com/repos/${REPO}/releases" | grep "browser_download_url" | grep -i "macOS" | head -n 1 | cut -d '"' -f 4 || true)
-    else
-        DOWNLOAD_URL=$(curl -sSL "https://api.github.com/repos/${REPO}/releases" | grep "browser_download_url" | grep -i "Linux-CPU" | head -n 1 | cut -d '"' -f 4 || true)
+AUTH_HEADER=()
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+    AUTH_HEADER=(-H "Authorization: token ${GITHUB_TOKEN}")
+fi
+
+# Strategy A: Use GitHub CLI (gh) if authenticated
+DOWNLOADED=false
+if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+    echo -e "   Authenticating via GitHub CLI..."
+    PATTERN="*${FLAVOR}*"
+    if gh release download --repo "${REPO}" -p "${PATTERN}" -D "${TMP_DIR}" --clobber 2>/dev/null; then
+        DOWNLOADED=true
     fi
 fi
 
-if [ -z "${DOWNLOAD_URL}" ]; then
-    echo -e "${RED}❌ Error: Could not resolve a release package for ${FLAVOR}.${NC}"
-    echo -e "Please check: https://github.com/${REPO}/releases"
+# Strategy B: Fallback to GitHub REST API
+if [ "${DOWNLOADED}" = "false" ]; then
+    RELEASES_JSON=$(curl -sSL "${AUTH_HEADER[@]}" "https://api.github.com/repos/${REPO}/releases" 2>/dev/null || true)
+    
+    DOWNLOAD_URL=$(echo "${RELEASES_JSON}" | grep "browser_download_url" | grep -iE "${FLAVOR}" | head -n 1 | cut -d '"' -f 4 || true)
+    
+    if [ -z "${DOWNLOAD_URL}" ]; then
+        if [ "${OS}" = "Darwin" ]; then
+            DOWNLOAD_URL=$(echo "${RELEASES_JSON}" | grep "browser_download_url" | grep -i "macOS" | head -n 1 | cut -d '"' -f 4 || true)
+        else
+            DOWNLOAD_URL=$(echo "${RELEASES_JSON}" | grep "browser_download_url" | grep -i "Linux-CPU" | head -n 1 | cut -d '"' -f 4 || true)
+        fi
+    fi
+    
+    if [ -n "${DOWNLOAD_URL}" ]; then
+        FILE_NAME=$(basename "${DOWNLOAD_URL}")
+        echo -e "⬇️  Downloading ${BOLD}${FILE_NAME}${NC}..."
+        curl -# -L "${AUTH_HEADER[@]}" -o "${TMP_DIR}/${FILE_NAME}" "${DOWNLOAD_URL}"
+        DOWNLOADED=true
+    fi
+fi
+
+ARCHIVE_FILE=$(find "${TMP_DIR}" -type f \( -name "*.zip" -o -name "*.tar.gz" \) | head -n 1)
+
+if [ -z "${ARCHIVE_FILE}" ] || [ "${DOWNLOADED}" = "false" ]; then
+    echo -e "${RED}❌ Error: Could not download release package for ${FLAVOR}.${NC}"
+    echo -e "Please download directly from: https://github.com/${REPO}/releases"
     exit 1
 fi
 
-FILE_NAME=$(basename "${DOWNLOAD_URL}")
-TMP_DIR=$(mktemp -d /tmp/localsr_install.XXXXXX)
-TMP_ARCHIVE="${TMP_DIR}/${FILE_NAME}"
-
-echo -e "⬇️  Downloading ${BOLD}${FILE_NAME}${NC}..."
-curl -# -L -o "${TMP_ARCHIVE}" "${DOWNLOAD_URL}"
+FILE_NAME=$(basename "${ARCHIVE_FILE}")
 
 # ------------------------------------------------------------------------------
 # 3. Extract and Provision Application
 # ------------------------------------------------------------------------------
-echo -e "📦 Installing ${BOLD}LocalSR${NC}..."
+echo -e "📦 Installing ${BOLD}LocalSR${NC} from ${FILE_NAME}..."
 
 if [ "${OS}" = "Darwin" ]; then
     mkdir -p "${TMP_DIR}/unpacked"
-    unzip -q -o "${TMP_ARCHIVE}" -d "${TMP_DIR}/unpacked" 2>/dev/null || tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}/unpacked"
+    if [[ "${FILE_NAME}" == *.zip ]]; then
+        unzip -q -o "${ARCHIVE_FILE}" -d "${TMP_DIR}/unpacked"
+    else
+        tar -xzf "${ARCHIVE_FILE}" -C "${TMP_DIR}/unpacked"
+    fi
     
     TARGET_APP="${INSTALL_DIR_MACOS}/LocalSR.app"
     if [ ! -w "${INSTALL_DIR_MACOS}" ]; then
@@ -127,8 +155,8 @@ if [ "${OS}" = "Darwin" ]; then
     echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${TARGET_APP}${NC}"
 else
     mkdir -p "${INSTALL_DIR_LINUX}" "${BIN_DIR_LINUX}" "${DESKTOP_DIR_LINUX}"
-    rm -rf "${INSTALL_DIR_LINUX}/*"
-    tar -xzf "${TMP_ARCHIVE}" -C "${INSTALL_DIR_LINUX}" --strip-components=1 2>/dev/null || tar -xzf "${TMP_ARCHIVE}" -C "${INSTALL_DIR_LINUX}"
+    rm -rf "${INSTALL_DIR_LINUX:?}"/*
+    tar -xzf "${ARCHIVE_FILE}" -C "${INSTALL_DIR_LINUX}" --strip-components=1 2>/dev/null || tar -xzf "${ARCHIVE_FILE}" -C "${INSTALL_DIR_LINUX}"
     
     chmod +x "${INSTALL_DIR_LINUX}/LocalSR" 2>/dev/null || true
     chmod +x "${INSTALL_DIR_LINUX}/LocalSRWorker" 2>/dev/null || true
@@ -155,4 +183,4 @@ fi
 rm -rf "${TMP_DIR}"
 
 echo -e "\n🎉 ${GREEN}${BOLD}Installation complete!${NC}"
-echo -e "Run ${BOLD}localsr${NC} or launch LocalSR from your applications menu to start upscaling."
+echo -e "Launch LocalSR from your applications menu or terminal to start upscaling."

@@ -62,29 +62,97 @@ jobs:
         run: |
           rm -rf build/ dist/ *.egg-info
 
-  build-windows-flavors:
-    name: Build Windows (${{ matrix.target.name }})
-    runs-on: [self-hosted, Windows]
+  build-macos-flavors:
+    name: Build macOS (${{ matrix.target.name }})
+    runs-on: [self-hosted, macOS]
     strategy:
       fail-fast: false
       matrix:
         target:
-          - name: "CPU"
-            pkg: "LocalSR-Windows-CPU-x86_64.zip"
-          - name: "DirectML"
-            pkg: "LocalSR-Windows-DirectML-x86_64.zip"
-          - name: "CUDA"
-            pkg: "LocalSR-Windows-CUDA-x86_64.zip"
+          - name: "x86_64-CPU"
+            pkg: "LocalSR-macOS-x86_64.tar.gz"
+          - name: "arm64-MPS"
+            pkg: "LocalSR-macOS-arm64.tar.gz"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Python Dependencies
         run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e . pyinstaller pyobjc-framework-Cocoa
+
+      - name: Build macOS Standalone Binary (x86_64)
+        if: matrix.target.name == 'x86_64-CPU'
+        run: |
+          python3 -m PyInstaller --clean --noconfirm packaging/localsr.spec
+
+      - name: Build macOS ARM64 Binary (cross-compile with MPS)
+        if: matrix.target.name == 'arm64-MPS'
+        run: |
+          export ARCHFLAGS="-arch arm64"
+          export CMAKE_OSX_ARCHITECTURES=arm64
+          python3 -m PyInstaller --clean --noconfirm packaging/localsr.spec
+        env:
+          USE_MPS: "1"
+
+      - name: Create macOS Archive
+        run: |
+          cd dist
+          tar -czvf ${{ matrix.target.pkg }} LocalSR/
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.pkg }}
+          path: dist/${{ matrix.target.pkg }}
+
+      - name: Clean Local Build Directory
+        if: always()
+        run: |
+          rm -rf build/ dist/ *.egg-info
+
+  build-windows-flavors:
+    name: Build Windows (${ matrix.target.name }})
+    runs-on: [self-hosted, Windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: "CPU-x86_64"
+            pkg: "LocalSR-Windows-CPU-x86_64.zip"
+          - name: "DirectML-x86_64"
+            pkg: "LocalSR-Windows-DirectML-x86_64.zip"
+          - name: "CUDA-x86_64"
+            pkg: "LocalSR-Windows-CUDA-x86_64.zip"
+          - name: "CPU-ARM64"
+            pkg: "LocalSR-Windows-CPU-arm64.zip"
+          - name: "DirectML-ARM64"
+            pkg: "LocalSR-Windows-DirectML-arm64.zip"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python Dependencies (x86_64)
+        if: contains(matrix.target.name, 'x86_64')
+        run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pyinstaller
 
-      - name: Build Windows Standalone Binary
+      - name: Install Python Dependencies (ARM64 cross-compile)
+        if: contains(matrix.target.name, 'ARM64')
         run: |
+          python -m pip install --upgrade pip
+          python -m pip install --target ./arm64_deps torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e . pyinstaller
+
+      - name: Build Windows Standalone Binary (x86_64)
+        if: contains(matrix.target.name, 'x86_64')
+        run: |
+          pyinstaller --clean --noconfirm packaging/localsr.spec
+
+      - name: Build Windows ARM64 Binary (cross-compile)
+        if: contains(matrix.target.name, 'ARM64')
+        run: |
+          $env:PYTHON_ARCH = "arm64"
           pyinstaller --clean --noconfirm packaging/localsr.spec
 
       - name: Create Windows Zip Archive
@@ -104,7 +172,7 @@ jobs:
 
   publish-release:
     name: Publish Release Assets
-    needs: [build-linux-flavors, build-windows-flavors]
+    needs: [build-linux-flavors, build-windows-flavors, build-macos-flavors]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, Linux]
     steps:
