@@ -24,17 +24,9 @@ jobs:
         run: python3 -m ruff format --check src tests
 
   test:
-    name: Test on ${{ matrix.os-name }}
+    name: Test on Linux x86_64 (Mac Mini)
     needs: lint
-    runs-on: ${{ matrix.runs-on }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os-name: "Linux x86_64 (Mac Mini)"
-            runs-on: [self-hosted, Linux]
-          - os-name: "macOS ARM64 (MacBook)"
-            runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, Linux]
 
     steps:
       - uses: actions/checkout@v4
