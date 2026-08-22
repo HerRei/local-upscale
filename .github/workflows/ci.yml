@@ -9,6 +9,7 @@ on:
 
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
+  QT_QPA_PLATFORM: "offscreen"
 
 jobs:
   lint:
@@ -40,7 +41,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -e .
+          python3 -m pip install -e ".[dev,video]"
           python3 -m pip install pytest pytest-cov
 
       - name: Install macOS Specific Dependencies
