@@ -153,6 +153,25 @@ Spandrel supports.
 
 ## Launching LocalSR
 
+### macOS (Homebrew)
+
+The easiest way to install on macOS:
+
+```bash
+brew tap HerRei/local-upscale
+brew install localsr
+```
+
+Then run:
+```bash
+localsr              # Launch GUI
+open -a LocalSR     # Alternative
+```
+
+Automatically detects Apple Silicon or Intel Mac and uses MPS acceleration.
+
+### Manual Installation
+
 1. Run the interactive installation script (requires Python 3.11):
    ```bash
    python3 install.py
