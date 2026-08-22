@@ -153,13 +153,29 @@ Spandrel supports.
 
 ## Launching LocalSR
 
-### macOS (Homebrew)
+### ⚡ 1-Line Universal Smart Installers
 
-The easiest way to install on macOS:
+The smart installer probes your GPU hardware and automatically downloads the optimal acceleration package (CUDA, ROCm, Intel XPU, DirectML, or MPS):
+
+* **macOS & Linux**:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/HerRei/local-upscale/main/install.sh | bash
+  ```
+
+* **Windows 10 & 11 (PowerShell)**:
+  ```powershell
+  irm https://raw.githubusercontent.com/HerRei/local-upscale/main/install.ps1 | iex
+  ```
+
+### 🍏 macOS (Homebrew)
+
+Install via Homebrew tap:
 
 ```bash
-brew tap HerRei/local-upscale
-brew install localsr
+brew tap HerRei/localsr
+brew install localsr       # As a command-line tool + GUI
+# or:
+brew install --cask localsr # Directly into /Applications
 ```
 
 Then run:
@@ -167,8 +183,6 @@ Then run:
 localsr              # Launch GUI
 open -a LocalSR     # Alternative
 ```
-
-Automatically detects Apple Silicon or Intel Mac and uses MPS acceleration.
 
 ### Manual Installation
 
