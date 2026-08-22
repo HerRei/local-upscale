@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# LocalSR Smart Universal Installer (macOS & Linux)
+# Automatically probes hardware (Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel XPU, CPU)
+# and installs the optimal standalone binary from GitHub Releases.
+# ==============================================================================
+set -euo pipefail
+
+REPO="HerRei/local-upscale"
+APP_NAME="LocalSR"
+INSTALL_DIR_LINUX="${HOME}/.local/share/localsr"
+BIN_DIR_LINUX="${HOME}/.local/bin"
+DESKTOP_DIR_LINUX="${HOME}/.local/share/applications"
+INSTALL_DIR_MACOS="/Applications"
+
+# Colors
+BOLD="\033[1m"
+GREEN="\033[0;32m"
+CYAN="\033[0;36m"
+YELLOW="\033[1;33m"
+RED="\033[0;31m"
+NC="\033[0m"
+
+echo -e "${CYAN}${BOLD}"
+echo "  _                     _  ____  ____  "
+echo " | |    ___   ___ __ _| |/ ___||  _ \ "
+echo " | |   / _ \ / __/ _\` | |\___ \| |_) |"
+echo " | |__| (_) | (_| (_| | | ___) |  _ < "
+echo " |_____\___/ \___\__,_|_||____/|_| \_\\"
+echo -e "${NC}"
+echo -e "${BOLD}LocalSR Smart Hardware Prober & Installer${NC}\n"
+
+# ------------------------------------------------------------------------------
+# 1. Detect Operating System & Hardware Acceleration Flavor
+# ------------------------------------------------------------------------------
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+FLAVOR=""
+
+echo -e "🔍 Probing system hardware..."
+
+if [ "${OS}" = "Darwin" ]; then
+    echo -e "   Platform: ${GREEN}macOS (${ARCH})${NC}"
+    if [ "${ARCH}" = "arm64" ]; then
+        echo -e "   Hardware Acceleration: ${GREEN}Apple Silicon GPU (Metal Performance Shaders)${NC}"
+        FLAVOR="macOS-arm64"
+    else
+        echo -e "   Hardware Acceleration: ${YELLOW}Intel CPU (Multi-threaded Accelerate/vecLib)${NC}"
+        FLAVOR="macOS-x86_64"
+    fi
+elif [ "${OS}" = "Linux" ]; then
+    echo -e "   Platform: ${GREEN}Linux (${ARCH})${NC}"
+    
+    # Check NVIDIA CUDA
+    if command -v nvidia-smi &>/dev/null && [ -e /dev/nvidia0 ]; then
+        GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || echo "NVIDIA GPU")
+        echo -e "   Detected GPU: ${GREEN}${GPU_NAME} (CUDA 12.x Acceleration)${NC}"
+        FLAVOR="Linux-CUDA"
+    # Check AMD ROCm
+    elif [ -e /dev/kfd ] && (lspci 2>/dev/null | grep -qi "AMD.*Radeon" || lsmod 2>/dev/null | grep -qi "amdgpu"); then
+        echo -e "   Detected GPU: ${GREEN}AMD Radeon (ROCm Acceleration)${NC}"
+        FLAVOR="Linux-ROCm"
+    # Check Intel Arc / Xe / iGPU
+    elif (lspci 2>/dev/null | grep -qiE "Intel.*(Arc|Iris|Graphics|Xe)") && [ -d /dev/dri ]; then
+        echo -e "   Detected GPU: ${GREEN}Intel Arc / Iris Xe (XPU & OpenVINO Acceleration)${NC}"
+        FLAVOR="Linux-Intel"
+    else
+        echo -e "   Hardware Acceleration: ${YELLOW}Universal CPU (Optimized SIMD / OpenMP)${NC}"
+        FLAVOR="Linux-CPU"
+    fi
+else
+    echo -e "${RED}❌ Unsupported operating system: ${OS}${NC}"
+    exit 1
+fi
+
+echo -e "   Selected Backend Flavor: ${BOLD}${CYAN}${FLAVOR}${NC}\n"
+
+# ------------------------------------------------------------------------------
+# 2. Fetch Latest Matching Release Asset from GitHub
+# ------------------------------------------------------------------------------
+echo -e "📡 Fetching latest release asset for ${BOLD}${FLAVOR}${NC} from GitHub..."
+
+# Find matching asset download URL
+DOWNLOAD_URL=$(curl -sSL "https://api.github.com/repos/${REPO}/releases" | grep "browser_download_url" | grep -iE "${FLAVOR}" | head -n 1 | cut -d '"' -f 4 || true)
+
+# Fallback if flavor tag was not found in latest release
+if [ -z "${DOWNLOAD_URL}" ]; then
+    if [ "${OS}" = "Darwin" ]; then
+        DOWNLOAD_URL=$(curl -sSL "https://api.github.com/repos/${REPO}/releases" | grep "browser_download_url" | grep -i "macOS" | head -n 1 | cut -d '"' -f 4 || true)
+    else
+        DOWNLOAD_URL=$(curl -sSL "https://api.github.com/repos/${REPO}/releases" | grep "browser_download_url" | grep -i "Linux-CPU" | head -n 1 | cut -d '"' -f 4 || true)
+    fi
+fi
+
+if [ -z "${DOWNLOAD_URL}" ]; then
+    echo -e "${RED}❌ Error: Could not resolve a release package for ${FLAVOR}.${NC}"
+    echo -e "Please check: https://github.com/${REPO}/releases"
+    exit 1
+fi
+
+FILE_NAME=$(basename "${DOWNLOAD_URL}")
+TMP_DIR=$(mktemp -d /tmp/localsr_install.XXXXXX)
+TMP_ARCHIVE="${TMP_DIR}/${FILE_NAME}"
+
+echo -e "⬇️  Downloading ${BOLD}${FILE_NAME}${NC}..."
+curl -# -L -o "${TMP_ARCHIVE}" "${DOWNLOAD_URL}"
+
+# ------------------------------------------------------------------------------
+# 3. Extract and Provision Application
+# ------------------------------------------------------------------------------
+echo -e "📦 Installing ${BOLD}LocalSR${NC}..."
+
+if [ "${OS}" = "Darwin" ]; then
+    mkdir -p "${TMP_DIR}/unpacked"
+    unzip -q -o "${TMP_ARCHIVE}" -d "${TMP_DIR}/unpacked" 2>/dev/null || tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}/unpacked"
+    
+    TARGET_APP="${INSTALL_DIR_MACOS}/LocalSR.app"
+    if [ ! -w "${INSTALL_DIR_MACOS}" ]; then
+        TARGET_APP="${HOME}/Applications/LocalSR.app"
+        mkdir -p "${HOME}/Applications"
+    fi
+    
+    rm -rf "${TARGET_APP}"
+    cp -R "${TMP_DIR}/unpacked/LocalSR.app" "${TARGET_APP}"
+    xattr -rd com.apple.quarantine "${TARGET_APP}" 2>/dev/null || true
+    
+    echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${TARGET_APP}${NC}"
+else
+    mkdir -p "${INSTALL_DIR_LINUX}" "${BIN_DIR_LINUX}" "${DESKTOP_DIR_LINUX}"
+    rm -rf "${INSTALL_DIR_LINUX}/*"
+    tar -xzf "${TMP_ARCHIVE}" -C "${INSTALL_DIR_LINUX}" --strip-components=1 2>/dev/null || tar -xzf "${TMP_ARCHIVE}" -C "${INSTALL_DIR_LINUX}"
+    
+    chmod +x "${INSTALL_DIR_LINUX}/LocalSR" 2>/dev/null || true
+    chmod +x "${INSTALL_DIR_LINUX}/LocalSRWorker" 2>/dev/null || true
+    
+    ln -sf "${INSTALL_DIR_LINUX}/LocalSR" "${BIN_DIR_LINUX}/localsr"
+    
+    cat << DESK_EOF > "${DESKTOP_DIR_LINUX}/localsr.desktop"
+[Desktop Entry]
+Name=LocalSR
+Comment=High Performance Local Image & Video Super-Resolution
+Exec=${INSTALL_DIR_LINUX}/LocalSR %F
+Icon=${INSTALL_DIR_LINUX}/localsr/ui/slint/logo.png
+Terminal=false
+Type=Application
+Categories=Graphics;Photography;Utility;
+StartupNotify=true
+DESK_EOF
+    chmod +x "${DESKTOP_DIR_LINUX}/localsr.desktop"
+    
+    echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${INSTALL_DIR_LINUX}${NC}"
+    echo -e "   Executable linked: ${CYAN}${BIN_DIR_LINUX}/localsr${NC}"
+fi
+
+rm -rf "${TMP_DIR}"
+
+echo -e "\n🎉 ${GREEN}${BOLD}Installation complete!${NC}"
+echo -e "Run ${BOLD}localsr${NC} or launch LocalSR from your applications menu to start upscaling."
