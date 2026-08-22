@@ -7,6 +7,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  PIP_BREAK_SYSTEM_PACKAGES: "1"
+
 jobs:
   lint:
     name: Lint & Format Check
