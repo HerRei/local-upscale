@@ -139,6 +139,8 @@ jobs:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure signed Microsoft VC++ runtime
+        run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Test in an isolated runner-temp environment
         run: |
           $root = Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"
@@ -160,6 +162,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location "$root\source"
           & $python -m pytest tests/ -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Remove only this run workspace
         if: always()
         run: |

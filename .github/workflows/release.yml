@@ -199,6 +199,8 @@ jobs:
             index: "cu126"
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure signed Microsoft VC++ runtime
+        run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Allocate bounded Windows scratch
         run: |
           $base = Join-Path $env:RUNNER_TEMP "LocalSR-CI"
@@ -216,28 +218,36 @@ jobs:
           python -m venv $venv
           $python = Join-Path $venv "Scripts\python.exe"
           & $python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ("${{ matrix.target.backend }}" -eq "DirectML") {
             & $python -m pip install --no-cache-dir "torch-directml==0.2.5.dev240914"
           } else {
             & $python -m pip install --no-cache-dir "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url "https://download.pytorch.org/whl/${{ matrix.target.index }}"
           }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -m pip install --no-cache-dir -e . "pyinstaller==$env:PYINSTALLER_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALSR_RUN_ROOT "staging") | Out-Null
           & $python scripts/backend_probe.py --backend "${{ matrix.target.backend }}" --output (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and archive
         run: |
           $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
           $work = Join-Path $env:LOCALSR_RUN_ROOT "build"
           $dist = Join-Path $env:LOCALSR_RUN_ROOT "dist"
           & $python -m PyInstaller --clean --noconfirm --workpath $work --distpath $dist packaging/localsr.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $archive = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
           & $python -c "import shutil,sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2], 'LocalSR')" $archive $dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify, checksum, and write metadata before transfer
         run: |
           $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
           $artifact = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
           & $python scripts/write_artifact_metadata.py $artifact --commit "${{ github.sha }}" --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows --architecture x86_64 --backend "${{ matrix.target.backend }}" --backend-probe (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python tests/verify_artifacts.py (Join-Path $env:LOCALSR_RUN_ROOT "staging") --only "${{ matrix.target.pkg }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Atomically stage verified files to HDD
         env:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
@@ -245,6 +255,7 @@ jobs:
           $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
           $artifact = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
           & $python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Remove this Windows scratch after artifact handling
         if: always()
         run: |
