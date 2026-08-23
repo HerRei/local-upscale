@@ -132,6 +132,43 @@ def test_worker_client_shutdown_state():
     assert len(error_emitted) == 1
 
 
+def test_worker_client_flushes_each_request_to_the_child_pipe(monkeypatch):
+    """A queued JSON request is fully drained before send_request succeeds."""
+
+    class FakeProcess:
+        def __init__(self):
+            self.payload = b""
+            self.pending = 0
+            self.wait_calls = 0
+
+        def state(self):
+            return client_module.QProcess.Running
+
+        def write(self, payload):
+            self.payload = bytes(payload)
+            self.pending = len(payload)
+            return len(payload)
+
+        def bytesToWrite(self):
+            return self.pending
+
+        def waitForBytesWritten(self, timeout):
+            assert timeout == 5000
+            self.wait_calls += 1
+            self.pending = 0
+            return True
+
+    client = WorkerClient()
+    process = FakeProcess()
+    monkeypatch.setattr(client, "process", process)
+
+    request = client_module.ShutdownRequest()
+    assert client.send_request(request) is True
+    assert process.payload.endswith(b"\n")
+    assert json.loads(process.payload) == {"type": "shutdown_request", "data": {}}
+    assert process.wait_calls == 1
+
+
 def test_packaged_worker_command_prefers_sibling_executable(monkeypatch, tmp_path):
     gui_name = "LocalSR.exe" if sys.platform == "win32" else "LocalSR"
     worker_name = "LocalSRWorker.exe" if sys.platform == "win32" else "LocalSRWorker"

@@ -55,10 +55,29 @@ class WorkerClient(QObject):
         program, arguments = worker_command()
         self.process.start(program, arguments)
 
-    def send_request(self, req):
-        if self.process.state() == QProcess.Running:
-            msg = req.to_json() + "\n"
-            self.process.write(msg.encode("utf-8"))
+    def send_request(self, req) -> bool:
+        if self.process.state() != QProcess.Running:
+            return False
+
+        payload = (req.to_json() + "\n").encode("utf-8")
+        queued = self.process.write(payload)
+        if queued != len(payload):
+            self.worker_error.emit(
+                f"Worker request write was incomplete: queued {queued} of {len(payload)} bytes."
+            )
+            return False
+
+        # QProcess writes are asynchronous.  On Windows in particular, leaving
+        # the command only in Qt's userspace buffer can strand a request even
+        # while stdout from the child remains healthy.  Drain the small JSON
+        # command into the OS pipe before returning to the GUI event loop.
+        while self.process.bytesToWrite() > 0:
+            if not self.process.waitForBytesWritten(5000):
+                self.worker_error.emit(
+                    "Worker request timed out while writing to the process input pipe."
+                )
+                return False
+        return True
 
     def handle_stdout(self):
         data = self.process.readAllStandardOutput().data().decode("utf-8", errors="replace")

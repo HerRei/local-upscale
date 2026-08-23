@@ -12,6 +12,7 @@ import spandrel.architectures.ESRGAN as E
 import torch
 from PIL import Image
 from PySide6.QtCore import QProcess, QSettings
+from pytestqt.exceptions import TimeoutError as QtBotTimeoutError
 
 from localsr.protocol.messages import InspectRequest
 from localsr.ui.main_window import MainWindow
@@ -410,7 +411,12 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
     window = MainWindow(settings=settings)
     qtbot.addWidget(window)
     failures = []
+    protocol_errors = []
+    worker_logs = []
     window.worker.job_failed.connect(lambda _job_id, error: failures.append(error))
+    window.worker.warning.connect(lambda warning: protocol_errors.append(f"warning: {warning}"))
+    window.worker.worker_error.connect(lambda error: protocol_errors.append(f"error: {error}"))
+    window.worker.log_received.connect(lambda record: worker_logs.append(dict(record)))
 
     try:
         qtbot.waitUntil(
@@ -431,12 +437,28 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
         window.combo_precision.setCurrentText("fp32")
         window.check_safe_mem.setChecked(False)
 
-        window.worker.send_request(InspectRequest(model_path=dummy_model))
-        qtbot.waitUntil(
-            lambda: bool(failures) or (window.model_scale == 2 and window.btn_upscale.isEnabled()),
-            timeout=30_000 * timeout_multiplier,
-        )
+        assert window.worker.send_request(InspectRequest(model_path=dummy_model))
+        try:
+            qtbot.waitUntil(
+                lambda: (
+                    bool(failures)
+                    or bool(protocol_errors)
+                    or (window.model_scale == 2 and window.btn_upscale.isEnabled())
+                ),
+                timeout=30_000 * timeout_multiplier,
+            )
+        except QtBotTimeoutError:
+            pytest.fail(
+                "GUI worker model inspection timed out: "
+                f"process_state={window.worker.process.state().name}, "
+                f"bytes_to_write={window.worker.process.bytesToWrite()}, "
+                f"model_scale={window.model_scale}, "
+                f"upscale_enabled={window.btn_upscale.isEnabled()}, "
+                f"progress={window.progress_label.text()!r}, "
+                f"protocol_errors={protocol_errors!r}, worker_logs={worker_logs[-20:]!r}"
+            )
         assert not failures, f"GUI worker model inspection failed: {failures}"
+        assert not protocol_errors, f"GUI worker protocol failed: {protocol_errors}"
 
         output_path = window.get_output_path()
         window.start_upscale()
