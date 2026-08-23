@@ -5,6 +5,8 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from localsr.__main__ import _parse_cli_args
 from localsr.platform import (
     get_platform_service,
@@ -91,6 +93,7 @@ def test_cli_arg_parsing():
     assert parsed_preset.install_integrations is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS symlink semantics require POSIX")
 def test_macos_integration_install_and_uninstall(tmp_path):
     service = MacOSPlatformService()
     with patch.object(Path, "home", return_value=tmp_path):
@@ -499,11 +502,23 @@ def test_windows_registry_and_script_generation(tmp_path):
 
         installed = service.install_system_integrations(exe_dummy)
         assert installed is True
-        assert (tmp_path / "LocalSR" / "scripts" / "recipe_picker.ps1").is_file()
-        assert (tmp_path / "LocalSR" / "scripts" / "LocalSR_ContextMenu.reg").is_file()
+        scripts_dir = tmp_path / "LocalSR" / "scripts"
+        assert (scripts_dir / "recipe_picker.ps1").is_file()
 
-        uninstalled = service.uninstall_system_integrations()
-        assert uninstalled is True
+        try:
+            if sys.platform == "win32":
+                import winreg
+
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Classes\*\shell\LocalSR",
+                ):
+                    pass
+                assert not (scripts_dir / "LocalSR_ContextMenu.reg").exists()
+            else:
+                assert (scripts_dir / "LocalSR_ContextMenu.reg").is_file()
+        finally:
+            assert service.uninstall_system_integrations() is True
 
 
 def test_linux_desktop_entry_and_script_generation(tmp_path):

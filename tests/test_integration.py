@@ -404,6 +404,7 @@ def test_f4_6_worker_shutdown_and_tempfile_cleanup(tmp_path, dummy_model):
 
 def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
     """Run a complete GUI-to-worker upscale with a real Spandrel descriptor."""
+    timeout_multiplier = 4 if sys.platform == "win32" else 1
     input_path = create_test_image(str(tmp_path / "gui_input.png"), 16, 16, color="blue")
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
     window = MainWindow(settings=settings)
@@ -417,7 +418,7 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
                 window.worker.process.state() == QProcess.Running
                 and window.progress_label.text() == "Worker ready."
             ),
-            timeout=30_000,
+            timeout=30_000 * timeout_multiplier,
         )
 
         window.output_dir = str(tmp_path)
@@ -432,9 +433,10 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
 
         window.worker.send_request(InspectRequest(model_path=dummy_model))
         qtbot.waitUntil(
-            lambda: window.model_scale == 2 and window.btn_upscale.isEnabled(),
-            timeout=30_000,
+            lambda: bool(failures) or (window.model_scale == 2 and window.btn_upscale.isEnabled()),
+            timeout=30_000 * timeout_multiplier,
         )
+        assert not failures, f"GUI worker model inspection failed: {failures}"
 
         output_path = window.get_output_path()
         window.start_upscale()
@@ -446,7 +448,7 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
                     and window.progress_label.text() == "Completed successfully!"
                 )
             ),
-            timeout=60_000,
+            timeout=60_000 * timeout_multiplier,
         )
 
         assert not failures, f"GUI worker job failed: {failures}"
