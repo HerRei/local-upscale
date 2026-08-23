@@ -107,16 +107,26 @@ jobs:
           cd dist
           tar -czvf ${{ matrix.target.pkg }} LocalSR/
 
-      - name: Stage Artifact
-        run: |
-          mkdir -p /Volumes/shared/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos
-          cp dist/${{ matrix.target.pkg }} /Volumes/shared/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos/
       - name: Generate Checksum
         run: |
           cd dist
           shasum -a 256 ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
-      - name: Stage Checksum
-        run: cp dist/${{ matrix.target.pkg }}.sha256 /Volumes/shared/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos/
+      - name: Stage Artifact via HTTP
+        run: |
+          curl -X POST http://192.168.9.134:8000/upload \
+            -H "X-Filename: ${{ matrix.target.pkg }}" \
+            -H "X-Run-Id: ${{ github.run_id }}" \
+            -H "X-Attempt: ${{ github.run_attempt }}" \
+            -H "X-OS: macos" \
+            -F "file=@dist/${{ matrix.target.pkg }}"
+      - name: Stage Checksum via HTTP
+        run: |
+          curl -X POST http://192.168.9.134:8000/upload \
+            -H "X-Filename: ${{ matrix.target.pkg }}.sha256" \
+            -H "X-Run-Id: ${{ github.run_id }}" \
+            -H "X-Attempt: ${{ github.run_attempt }}" \
+            -H "X-OS: macos" \
+            -F "file=@dist/${{ matrix.target.pkg }}.sha256" 
 
       - name: Clean Local Build Directory
         if: always()
