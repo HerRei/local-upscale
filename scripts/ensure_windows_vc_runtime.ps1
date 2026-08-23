@@ -33,7 +33,12 @@ if (Test-VcRuntime) {
     exit 0
 }
 
-$downloadRoot = Join-Path $env:RUNNER_TEMP "LocalSR-CI\prerequisites"
+$tempBase = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    [IO.Path]::GetTempPath()
+} else {
+    $env:RUNNER_TEMP
+}
+$downloadRoot = Join-Path $tempBase "LocalSR-CI\prerequisites"
 $installer = Join-Path $downloadRoot "vc_redist.x64.exe"
 New-Item -ItemType Directory -Force -Path $downloadRoot | Out-Null
 
