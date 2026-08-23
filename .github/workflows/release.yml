@@ -86,7 +86,8 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          python3.11 -m ensurepip || true
+          curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+          python3.11 get-pip.py
           python3.11 -m pip install --upgrade pip
           python3.11 -m pip install -e . pyinstaller pyobjc-framework-Cocoa
 
