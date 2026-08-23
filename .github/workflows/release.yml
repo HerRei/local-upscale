@@ -59,11 +59,8 @@ jobs:
         run: |
           cd dist
           sha256sum ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
-      - name: Upload Checksum
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksum-linux-${{ matrix.target.name }}
-          path: dist/${{ matrix.target.pkg }}.sha256
+      - name: Stage Checksum
+        run: cp dist/${{ matrix.target.pkg }}.sha256 /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/linux/
 
       - name: Clean Local Build Directory
         if: always()
@@ -118,11 +115,8 @@ jobs:
         run: |
           cd dist
           shasum -a 256 ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
-      - name: Upload Checksum
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksum-macos-${{ matrix.target.name }}
-          path: dist/${{ matrix.target.pkg }}.sha256
+      - name: Stage Checksum
+        run: cp dist/${{ matrix.target.pkg }}.sha256 /Volumes/shared/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos/
 
       - name: Clean Local Build Directory
         if: always()
@@ -173,11 +167,8 @@ jobs:
       - name: Generate Checksum
         run: |
           powershell -c "(Get-FileHash dist\${{ matrix.target.pkg }} -Algorithm SHA256).Hash | Out-File dist\${{ matrix.target.pkg }}.sha256 -Encoding utf8"
-      - name: Upload Checksum
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksum-windows-${{ matrix.target.name }}
-          path: dist/${{ matrix.target.pkg }}.sha256
+      - name: Stage Checksum
+        run: powershell -c "Copy-Item dist\${{ matrix.target.pkg }}.sha256 -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows\" 
 
       - name: Clean Local Build Directory
         if: always()
@@ -206,6 +197,7 @@ jobs:
           files: |
             /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.tar.gz
             /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.zip
+            /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.sha256
           generate_release_notes: true
       - name: Post-Release Artifact Cleanup
         if: always()
