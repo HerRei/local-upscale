@@ -423,9 +423,18 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
             lambda: (
                 window.worker.process.state() == QProcess.Running
                 and window.progress_label.text() == "Worker ready."
+                and int(window.capability_report.get("system_ram_total", 0)) > 0
             ),
             timeout=30_000 * timeout_multiplier,
         )
+
+        # This test exercises GUI-to-worker IPC and real CPU inference, not the
+        # resource-policy thresholds of a particular CI VM.  Windows can have
+        # less free RAM after the preceding stress tests, which correctly
+        # disables the button even for this synthetic 16x16 image.  Use a
+        # deterministic safe-memory snapshot after the real capability reply
+        # has arrived so the integration path itself remains testable.
+        window.capability_report["system_ram_available"] = 8 * 1024**3
 
         window.output_dir = str(tmp_path)
         window.out_dir_label.setText(str(tmp_path))
@@ -437,14 +446,10 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
         window.combo_precision.setCurrentText("fp32")
         window.check_safe_mem.setChecked(False)
 
-        assert window.worker.send_request(InspectRequest(model_path=dummy_model))
+        window.worker.send_request(InspectRequest(model_path=dummy_model))
         try:
             qtbot.waitUntil(
-                lambda: (
-                    bool(failures)
-                    or bool(protocol_errors)
-                    or (window.model_scale == 2 and window.btn_upscale.isEnabled())
-                ),
+                lambda: bool(failures) or bool(protocol_errors) or window.model_scale == 2,
                 timeout=30_000 * timeout_multiplier,
             )
         except QtBotTimeoutError:
@@ -459,6 +464,9 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
             )
         assert not failures, f"GUI worker model inspection failed: {failures}"
         assert not protocol_errors, f"GUI worker protocol failed: {protocol_errors}"
+        assert window.current_estimate is not None
+        assert not window.current_estimate.blocking, window.current_estimate.warnings
+        assert window.btn_upscale.isEnabled()
 
         output_path = window.get_output_path()
         window.start_upscale()
