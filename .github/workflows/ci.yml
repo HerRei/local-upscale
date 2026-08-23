@@ -43,7 +43,7 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
-          python3 -m venv "$RUN_ROOT/environment/venv"
+          python3.11 -m venv "$RUN_ROOT/environment/venv"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
           cd "$RUN_ROOT/source"
           "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
@@ -95,7 +95,7 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
-          python3 -m venv "$RUN_ROOT/environment/venv"
+          python3.11 -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
           cd "$RUN_ROOT/source"
