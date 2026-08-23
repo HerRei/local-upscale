@@ -1,0 +1,18 @@
+name: Test macOS VM
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  test-macos:
+    runs-on: [self-hosted, macOS]
+    steps:
+      - name: Test
+        run: |
+          ls -ld /Volumes/shared || true
+          ls -ld /Volumes/shared/ci-artifacts || true
+          touch /Volumes/shared/ci-artifacts/test.txt || true
+          sudo touch /Volumes/shared/ci-artifacts/test.txt || true
+          whoami
+          sudo -n whoami || true
