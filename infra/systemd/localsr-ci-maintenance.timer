@@ -1,0 +1,11 @@
+[Unit]
+Description=Run LocalSR CI retention hourly
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -5,267 +5,504 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      native_m1_reference:
+        description: "Also run the optional native-M1 comparison build"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: localsr-release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
+  CI_ARTIFACT_SERVER: "http://192.168.9.134:8000"
+  PYTORCH_VERSION: "2.12.1"
+  TORCHVISION_VERSION: "0.27.1"
+  PYINSTALLER_VERSION: "6.22.2"
 
 jobs:
   storage-preflight:
     name: Storage Preflight Check
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
-      - name: Check SSD and HDD Capacity
-        run: python3 scripts/storage_preflight.py
+      - name: Prune only eligible managed CI storage
+        run: |
+          python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
+          python3 scripts/ci_scratch.py init --root /ci-scratch
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch
+      - name: Enforce SSD and HDD build budget
+        run: |
+          mkdir -p "/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
+          python3 scripts/storage_preflight.py \
+            --ssd-path / \
+            --hdd-path /mnt/hdd \
+            --ssd-peak-gib 20 \
+            --hdd-peak-gib 20 \
+            --metrics "/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/preflight.json"
+      - name: Check artifact receiver
+        run: curl --fail --silent --show-error "$CI_ARTIFACT_SERVER/healthz"
 
   build-linux-flavors:
     name: Build Linux (${{ matrix.target.name }})
     needs: [storage-preflight]
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         target:
           - name: "CPU"
+            backend: "CPU"
             pkg: "LocalSR-Linux-CPU-x86_64.tar.gz"
+            index: "cpu"
           - name: "CUDA"
+            backend: "CUDA"
             pkg: "LocalSR-Linux-CUDA-x86_64.tar.gz"
+            index: "cu126"
           - name: "Intel-XPU"
+            backend: "Intel-XPU"
             pkg: "LocalSR-Linux-Intel-x86_64.tar.gz"
+            index: "xpu"
           - name: "AMD-ROCm"
+            backend: "AMD-ROCm"
             pkg: "LocalSR-Linux-ROCm-x86_64.tar.gz"
-
+            index: "rocm7.2"
+    env:
+      PIP_CACHE_DIR: /ci-scratch/cache/pip
+      PYINSTALLER_CONFIG_DIR: /ci-scratch/cache/pyinstaller
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install System Dependencies
+      - name: Allocate lock-protected SSD scratch
+        id: scratch
         run: |
-          sudo -n apt-get update -qq 2>/dev/null || true
-          sudo -n apt-get install -qq -y libgl1 libglib2.0-0 libdbus-1-3 2>/dev/null || true
-
-      - name: Install Python Dependencies
+          python3 scripts/ci_scratch.py init --root /ci-scratch
+          python3 scripts/ci_scratch.py start \
+            --root /ci-scratch \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --flavor "${{ matrix.target.name }}" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Install system dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e . pyinstaller
-
-      - name: Build Standalone Binary
-        run: |
-          python3 -m PyInstaller --clean --noconfirm packaging/localsr.spec
-
-      - name: Create Tarball
-        run: |
-          cd dist
-          tar -czvf ${{ matrix.target.pkg }} LocalSR/
-
-      - name: Stage Artifact
-        run: |
-          mkdir -p /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/linux
-          cp dist/${{ matrix.target.pkg }} /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/linux/
-      - name: Generate Checksum
-        run: |
-          cd dist
-          sha256sum ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
-      - name: Stage Checksum
-        run: cp dist/${{ matrix.target.pkg }}.sha256 /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/linux/
-
-      - name: Clean Local Build Directory
-        if: always()
-        run: |
-          rm -rf build/ dist/ *.egg-info
-
-  build-macos-flavors:
-    name: Build macOS (${{ matrix.target.name }})
-    needs: [storage-preflight]
-    runs-on: [self-hosted, macOS, "${{ matrix.target.runner_arch }}"]
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - name: "x86_64-CPU"
-            pkg: "LocalSR-macOS-x86_64.tar.gz"
-            runner_arch: "X64"
-          - name: "arm64-MPS-native"
-            pkg: "LocalSR-macOS-arm64-native.tar.gz"
-            runner_arch: "ARM64"
-          - name: "arm64-MPS-cross"
-            pkg: "LocalSR-macOS-arm64.tar.gz"
-            runner_arch: "X64"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Python Dependencies
-        run: |
-          curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-          python3.11 get-pip.py
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install -e . pyinstaller pyobjc-framework-Cocoa
-
-      - name: Build macOS Standalone Binary (x86_64)
-        if: matrix.target.name == 'x86_64-CPU'
-        run: |
-          python3.11 -m PyInstaller --clean --noconfirm packaging/localsr.spec
-
-      - name: Build macOS ARM64 Binary (native)
-        if: matrix.target.name == 'arm64-MPS-native'
-        run: |
-          export ARCHFLAGS="-arch arm64"
-          export CMAKE_OSX_ARCHITECTURES=arm64
-          python3.11 -m PyInstaller --clean --noconfirm packaging/localsr.spec
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -qq -y libgl1 libglib2.0-0 libdbus-1-3
+      - name: Create isolated backend environment
         env:
-          USE_MPS: "1"
-
-      - name: Build macOS ARM64 Binary (cross-compile with MPS on Intel)
-        if: matrix.target.name == 'arm64-MPS-cross'
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          # The active scratch disk is mounted at /Volumes/CISCRATCH
-          export CI_SCRATCH="/Volumes/CISCRATCH/${{ github.run_id }}-${{ github.run_attempt }}"
-          mkdir -p "$CI_SCRATCH"
-          cd "$CI_SCRATCH"
-          
-          # We need universal2 python
-          curl -O https://www.python.org/ftp/python/3.11.9/python-3.11.9-macos11.pkg
-          sudo installer -pkg python-3.11.9-macos11.pkg -target /
-          
-          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv venv
-          source venv/bin/activate
-          
-          python3 -m pip install --upgrade pip
-          
-          # Force download ARM64 dependencies
-          python3 -m pip install slint torch torchvision spandrel Pillow rawpy numpy tifffile av --platform macosx_11_0_arm64 --only-binary=:all: --target ./arm64_deps
-          
-          # Install PyInstaller
-          python3 -m pip install pyinstaller pyobjc-framework-Cocoa
-          
-          # Build LocalSR using the arm64 dependencies
-          export PYTHONPATH="$(pwd)/arm64_deps"
-          export ARCHFLAGS="-arch arm64"
-          
-          cd ${{ github.workspace }}
-          $CI_SCRATCH/venv/bin/python3 -m PyInstaller --clean --noconfirm --target-architecture arm64 --workpath "$CI_SCRATCH/build" --distpath "$CI_SCRATCH/dist" packaging/localsr.spec
+          python3 -m venv "$RUN_ROOT/environment/venv"
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install \
+            "torch==$PYTORCH_VERSION" \
+            "torchvision==$TORCHVISION_VERSION" \
+            --index-url "https://download.pytorch.org/whl/${{ matrix.target.index }}"
+          "$PYTHON" -m pip install -e . "pyinstaller==$PYINSTALLER_VERSION"
+          "$PYTHON" scripts/backend_probe.py \
+            --backend "${{ matrix.target.backend }}" \
+            --output "$RUN_ROOT/staging/backend-probe.json"
+      - name: Build and archive on SSD
         env:
-          USE_MPS: "1"
-
-      - name: Create macOS Archive (cross-compile)
-        if: matrix.target.name == 'arm64-MPS-cross'
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          export CI_SCRATCH="/Volumes/CISCRATCH/${{ github.run_id }}-${{ github.run_attempt }}"
-          cd "$CI_SCRATCH/dist"
-          tar -czvf ${{ matrix.target.pkg }} LocalSR/
-          cp ${{ matrix.target.pkg }} ${{ github.workspace }}/dist/
-
-      - name: Create macOS Archive
-        if: matrix.target.name != 'arm64-MPS-cross'
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m PyInstaller --clean --noconfirm \
+            --workpath "$RUN_ROOT/build" \
+            --distpath "$RUN_ROOT/dist" \
+            packaging/localsr.spec
+          tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR
+      - name: Verify, checksum, and write metadata before transfer
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          cd dist
-          tar -czvf ${{ matrix.target.pkg }} LocalSR/
-
-      - name: Generate Checksum
+          ARTIFACT="$RUN_ROOT/staging/${{ matrix.target.pkg }}"
+          python3 scripts/write_artifact_metadata.py "$ARTIFACT" \
+            --commit "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --architecture x86_64 \
+            --backend "${{ matrix.target.backend }}" \
+            --backend-probe "$RUN_ROOT/staging/backend-probe.json"
+          python3 tests/verify_artifacts.py "$RUN_ROOT/staging" --only "${{ matrix.target.pkg }}"
+      - name: Atomically stage verified files to HDD
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+          CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
-          cd dist
-          shasum -a 256 ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
-      - name: Stage Artifact via HTTP
+          ARTIFACT="$RUN_ROOT/staging/${{ matrix.target.pkg }}"
+          python3 scripts/upload_artifacts.py \
+            --server "$CI_ARTIFACT_SERVER" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            "$ARTIFACT" \
+            "$ARTIFACT.sha256" \
+            "$ARTIFACT.metadata.json" \
+            "$ARTIFACT.architecture.txt"
+      - name: Remove verified completed SSD scratch
+        if: success()
         run: |
-          curl -X POST http://192.168.9.134:8000/upload \
-            -H "X-Filename: ${{ matrix.target.pkg }}" \
-            -H "X-Run-Id: ${{ github.run_id }}" \
-            -H "X-Attempt: ${{ github.run_attempt }}" \
-            -H "X-OS: macos" \
-            -F "file=@dist/${{ matrix.target.pkg }}"
-      - name: Stage Checksum via HTTP
+          python3 scripts/ci_scratch.py finish \
+            --root /ci-scratch \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --flavor "${{ matrix.target.name }}" \
+            --status complete \
+            --cleanup
+      - name: Mark failed scratch for bounded retention
+        if: failure() || cancelled()
         run: |
-          curl -X POST http://192.168.9.134:8000/upload \
-            -H "X-Filename: ${{ matrix.target.pkg }}.sha256" \
-            -H "X-Run-Id: ${{ github.run_id }}" \
-            -H "X-Attempt: ${{ github.run_attempt }}" \
-            -H "X-OS: macos" \
-            -F "file=@dist/${{ matrix.target.pkg }}.sha256" 
-
-      - name: Clean Local Build Directory
-        if: always()
-        run: |
-          rm -rf build/ dist/ *.egg-info
+          if [ -n "${{ steps.scratch.outputs.run_root }}" ]; then
+            python3 scripts/ci_scratch.py finish \
+              --root /ci-scratch \
+              --run-id "${{ github.run_id }}" \
+              --attempt "${{ github.run_attempt }}" \
+              --platform linux \
+              --flavor "${{ matrix.target.name }}" \
+              --status failed || true
+          fi
 
   build-windows-flavors:
     name: Build Windows (${{ matrix.target.name }})
-    needs: [storage-preflight]
-    runs-on: [self-hosted, Windows]
+    needs: [build-linux-flavors]
+    runs-on: [self-hosted, Windows, X64]
     defaults:
       run:
-        shell: cmd
+        shell: pwsh
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         target:
           - name: "CPU-x86_64"
+            backend: "CPU"
             pkg: "LocalSR-Windows-CPU-x86_64.zip"
+            index: "cpu"
           - name: "DirectML-x86_64"
+            backend: "DirectML"
             pkg: "LocalSR-Windows-DirectML-x86_64.zip"
+            index: ""
           - name: "CUDA-x86_64"
+            backend: "CUDA"
             pkg: "LocalSR-Windows-CUDA-x86_64.zip"
+            index: "cu126"
     steps:
       - uses: actions/checkout@v4
+      - name: Allocate bounded Windows scratch
+        run: |
+          $base = Join-Path $env:RUNNER_TEMP "LocalSR-CI"
+          $runRoot = Join-Path $base "${{ github.run_id }}\${{ github.run_attempt }}\windows\${{ matrix.target.name }}"
+          New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
+          $free = (Get-PSDrive -Name ([IO.Path]::GetPathRoot($runRoot).TrimEnd('\').TrimEnd(':'))).Free
+          if ($free -lt 20GB) { throw "Windows scratch has less than 20 GiB free" }
+          "LOCALSR_RUN_ROOT=$runRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Create isolated backend environment
+        run: |
+          $venv = Join-Path $env:LOCALSR_RUN_ROOT "venv"
+          python -m venv $venv
+          $python = Join-Path $venv "Scripts\python.exe"
+          & $python -m pip install --upgrade pip
+          if ("${{ matrix.target.backend }}" -eq "DirectML") {
+            & $python -m pip install "torch-directml==0.2.5.dev240914"
+          } else {
+            & $python -m pip install "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url "https://download.pytorch.org/whl/${{ matrix.target.index }}"
+          }
+          & $python -m pip install -e . "pyinstaller==$env:PYINSTALLER_VERSION"
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALSR_RUN_ROOT "staging") | Out-Null
+          & $python scripts/backend_probe.py --backend "${{ matrix.target.backend }}" --output (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json")
+      - name: Build and archive
+        run: |
+          $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
+          $work = Join-Path $env:LOCALSR_RUN_ROOT "build"
+          $dist = Join-Path $env:LOCALSR_RUN_ROOT "dist"
+          & $python -m PyInstaller --clean --noconfirm --workpath $work --distpath $dist packaging/localsr.spec
+          $archive = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
+          & $python -c "import shutil,sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2], 'LocalSR')" $archive $dist
+      - name: Verify, checksum, and write metadata before transfer
+        run: |
+          $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
+          $artifact = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
+          & $python scripts/write_artifact_metadata.py $artifact --commit "${{ github.sha }}" --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows --architecture x86_64 --backend "${{ matrix.target.backend }}" --backend-probe (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json")
+          & $python tests/verify_artifacts.py (Join-Path $env:LOCALSR_RUN_ROOT "staging") --only "${{ matrix.target.pkg }}"
+      - name: Atomically stage verified files to HDD
+        env:
+          CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
+        run: |
+          $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
+          $artifact = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
+          & $python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.txt"
+      - name: Remove verified completed Windows scratch
+        if: success()
+        run: |
+          $base = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI")) + [IO.Path]::DirectorySeparatorChar
+          $target = [IO.Path]::GetFullPath($env:LOCALSR_RUN_ROOT)
+          if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe cleanup target: $target" }
+          Remove-Item -LiteralPath $target -Recurse -Force
 
-      - name: Install Python Dependencies
+  build-macos-flavors:
+    name: Build macOS (${{ matrix.target.name }})
+    needs: [build-windows-flavors]
+    runs-on: [self-hosted, macOS, X64]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target:
+          - name: "x86_64-CPU"
+            architecture: "x86_64"
+            backend: "CPU"
+            pkg: "LocalSR-macOS-x86_64.tar.gz"
+          - name: "arm64-MPS-cross"
+            architecture: "arm64"
+            backend: "MPS"
+            pkg: "LocalSR-macOS-arm64.tar.gz"
+    env:
+      CI_SCRATCH: /Volumes/CISCRATCH
+      PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
+      PYINSTALLER_CONFIG_DIR: /Volumes/CISCRATCH/cache/pyinstaller
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce guest SSD budget and allocate scratch
+        id: scratch
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e . pyinstaller
+          python3 scripts/ci_scratch.py init --root "$CI_SCRATCH"
+          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH"
+          python3 scripts/storage_preflight.py \
+            --ssd-path "$CI_SCRATCH" \
+            --skip-hdd \
+            --ssd-min-percent 20 \
+            --ssd-min-gib 6 \
+            --ssd-peak-gib 15
+          python3 scripts/ci_scratch.py start \
+            --root "$CI_SCRATCH" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform macos \
+            --flavor "${{ matrix.target.name }}" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Copy working set to local SSD block device
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        run: |
+          mkdir -p "$RUN_ROOT/source"
+          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+      - name: Create isolated x86_64 environment
+        if: matrix.target.architecture == 'x86_64'
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        run: |
+          python3.11 -m venv "$RUN_ROOT/environment/venv"
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install \
+            -r "$RUN_ROOT/source/requirements/macos-cross-build.txt" \
+            -r "$RUN_ROOT/source/requirements/macos-cross-tools.txt"
+          "$PYTHON" -m pip install --no-deps -e "$RUN_ROOT/source"
+          "$PYTHON" "$RUN_ROOT/source/scripts/backend_probe.py" \
+            --backend CPU \
+            --output "$RUN_ROOT/staging/backend-probe.json"
+      - name: Create genuine universal2 analysis environment
+        if: matrix.target.architecture == 'arm64'
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        run: |
+          UNIVERSAL_PYTHON=/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11
+          test -x "$UNIVERSAL_PYTHON"
+          lipo -archs "$UNIVERSAL_PYTHON" | grep -q x86_64
+          lipo -archs "$UNIVERSAL_PYTHON" | grep -q arm64
+          "$UNIVERSAL_PYTHON" -m venv "$RUN_ROOT/environment/venv"
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install -r "$RUN_ROOT/source/requirements/macos-cross-tools.txt"
+          "$PYTHON" "$RUN_ROOT/source/scripts/macos_cross_wheels.py" prepare \
+            --requirements "$RUN_ROOT/source/requirements/macos-cross-build.txt" \
+            --output "$RUN_ROOT/wheels"
+          "$PYTHON" -m pip install \
+            --no-index \
+            --find-links "$RUN_ROOT/wheels/wheelhouse" \
+            -r "$RUN_ROOT/source/requirements/macos-cross-build.txt"
+          "$PYTHON" -m pip install --no-deps -e "$RUN_ROOT/source"
+          SITE_PACKAGES=$("$PYTHON" -c 'import site; print(site.getsitepackages()[0])')
+          "$PYTHON" "$RUN_ROOT/source/scripts/macos_cross_wheels.py" normalize-openmp \
+            --site-packages "$SITE_PACKAGES" \
+            --report "$RUN_ROOT/staging/openmp-normalization.json"
+          "$PYTHON" "$RUN_ROOT/source/scripts/verify_macho_tree.py" "$SITE_PACKAGES" \
+            --require x86_64,arm64 \
+            --report "$RUN_ROOT/staging/universal2-environment.json"
+          "$PYTHON" "$RUN_ROOT/source/scripts/backend_probe.py" \
+            --backend MPS \
+            --output "$RUN_ROOT/staging/backend-probe.json"
+      - name: Build target architecture entirely on SSD
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+          LOCALSR_TARGET_ARCH: ${{ matrix.target.architecture }}
+        run: |
+          export TMPDIR="$RUN_ROOT/tmp"
+          export LOCALSR_NATIVE_BUILD_DIR="$RUN_ROOT/build/native"
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          cd "$RUN_ROOT/source"
+          "$PYTHON" -m PyInstaller --clean --noconfirm \
+            --target-arch "${{ matrix.target.architecture }}" \
+            --workpath "$RUN_ROOT/build/pyinstaller" \
+            --distpath "$RUN_ROOT/dist" \
+            packaging/localsr.spec
+          "$PYTHON" scripts/verify_macho_tree.py "$RUN_ROOT/dist/LocalSR" \
+            --require "${{ matrix.target.architecture }}" \
+            --main "$RUN_ROOT/dist/LocalSR/LocalSR" \
+            --report "$RUN_ROOT/staging/bundle-macho.json"
+          tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR
+      - name: Verify, checksum, and write metadata before transfer
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        run: |
+          ARTIFACT="$RUN_ROOT/staging/${{ matrix.target.pkg }}"
+          WHEEL_ARGUMENTS=()
+          if [ "${{ matrix.target.architecture }}" = arm64 ]; then
+            WHEEL_ARGUMENTS=(
+              --wheel-manifest "$RUN_ROOT/wheels/wheel-manifest.json"
+              --normalization-report "$RUN_ROOT/staging/openmp-normalization.json"
+            )
+          fi
+          "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/scripts/write_artifact_metadata.py" \
+            "$ARTIFACT" \
+            --commit "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform macos \
+            --architecture "${{ matrix.target.architecture }}" \
+            --backend "${{ matrix.target.backend }}" \
+            --backend-probe "$RUN_ROOT/staging/backend-probe.json" \
+            "${WHEEL_ARGUMENTS[@]}"
+          "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/tests/verify_artifacts.py" \
+            "$RUN_ROOT/staging" \
+            --manifest "$RUN_ROOT/source/ci/release-artifacts.json" \
+            --only "${{ matrix.target.pkg }}"
+      - name: Atomically stage verified files to HDD
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+          CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
+        run: |
+          ARTIFACT="$RUN_ROOT/staging/${{ matrix.target.pkg }}"
+          "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/scripts/upload_artifacts.py" \
+            --server "$CI_ARTIFACT_SERVER" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform macos \
+            "$ARTIFACT" \
+            "$ARTIFACT.sha256" \
+            "$ARTIFACT.metadata.json" \
+            "$ARTIFACT.architecture.txt"
+      - name: Remove verified completed SSD scratch
+        if: success()
+        run: |
+          python3 scripts/ci_scratch.py finish \
+            --root "$CI_SCRATCH" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform macos \
+            --flavor "${{ matrix.target.name }}" \
+            --status complete \
+            --cleanup
+      - name: Mark failed scratch for bounded retention
+        if: failure() || cancelled()
+        run: |
+          if [ -n "${{ steps.scratch.outputs.run_root }}" ]; then
+            python3 scripts/ci_scratch.py finish \
+              --root "$CI_SCRATCH" \
+              --run-id "${{ github.run_id }}" \
+              --attempt "${{ github.run_attempt }}" \
+              --platform macos \
+              --flavor "${{ matrix.target.name }}" \
+              --status failed || true
+          fi
 
-      - name: Install DirectML Support
-        if: contains(matrix.target.name, 'DirectML')
+  native-m1-reference:
+    name: Optional native M1 reference (not required)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_m1_reference }}
+    runs-on: [self-hosted, macOS, ARM64]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the opt-in comparison artifact
         run: |
-          python -m pip install torch-directml
-
-      - name: Build Windows Standalone Binary
-        run: |
-          pyinstaller --clean --noconfirm packaging/localsr.spec
-
-      - name: Create Windows Zip Archive
-        run: |
-          powershell -c "Compress-Archive -Path dist/LocalSR -DestinationPath dist/${{ matrix.target.pkg }}"
-
-      - name: Stage Artifact
-        run: |
-          powershell -c "New-Item -ItemType Directory -Force -Path \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows"
-          powershell -c "Copy-Item dist\${{ matrix.target.pkg }} -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows"
-      - name: Generate Checksum
-        run: |
-          powershell -c "(Get-FileHash dist\${{ matrix.target.pkg }} -Algorithm SHA256).Hash | Out-File dist\${{ matrix.target.pkg }}.sha256 -Encoding utf8"
-      - name: Stage Checksum
-        run: powershell -c "Copy-Item dist\${{ matrix.target.pkg }}.sha256 -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows" 
-
-      - name: Clean Local Build Directory
-        if: always()
-        run: |
-          powershell -c "Remove-Item -Path build, dist, *.egg-info -Recurse -Force -ErrorAction SilentlyContinue"
+          python3.11 -m pip install -e . "pyinstaller==$PYINSTALLER_VERSION" pyobjc-framework-Cocoa
+          LOCALSR_TARGET_ARCH=arm64 python3.11 -m PyInstaller --clean --noconfirm \
+            --target-arch arm64 packaging/localsr.spec
+          file dist/LocalSR/LocalSR
+          lipo -archs dist/LocalSR/LocalSR | grep -q arm64
+          tar -C dist -czf LocalSR-macOS-arm64-native-reference.tar.gz LocalSR
 
   verify-artifacts:
-    name: Verify Artifacts Architecture
-    needs: [build-linux-flavors, build-windows-flavors, build-macos-flavors]
-    runs-on: [self-hosted, Linux]
+    name: Verify complete HDD artifact matrix
+    needs: [build-macos-flavors]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
-      - name: Verify Architecture and Formats
-        run: python3 tests/verify_artifacts.py /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}
+      - name: Re-check HDD checksums and all native binaries
+        run: |
+          ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
+          touch "$ROOT/.validating"
+          trap 'rm -f "$ROOT/.validating"' EXIT
+          python3 tests/verify_artifacts.py "$ROOT"
+          python3 -c 'import json,sys; from datetime import datetime,timezone; open(sys.argv[1],"w").write(json.dumps({"timestamp":datetime.now(timezone.utc).isoformat(),"status":"complete"})+"\n")' "$ROOT/.complete"
+      - name: Enforce reserves after transfer
+        run: |
+          python3 scripts/storage_preflight.py \
+            --ssd-path / \
+            --hdd-path /mnt/hdd \
+            --ssd-peak-gib 0 \
+            --hdd-peak-gib 0
 
   publish-release:
-    name: Publish Release Assets
+    name: Publish and confirm GitHub Release assets
     needs: [verify-artifacts]
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.tar.gz
-            /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.zip
-            /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.sha256
-          generate_release_notes: true
-      - name: Post-Release Artifact Cleanup
-        if: always()
-        run: python3 /mnt/hdd/cleanup-artifacts.py ${{ github.run_id }}
+      - name: Prepare assets within GitHub's per-file limit
+        run: |
+          ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
+          touch "$ROOT/.publishing"
+          python3 scripts/prepare_release_assets.py "$ROOT" \
+            --manifest ci/release-artifacts.json \
+            --output "$ROOT/release-assets"
+      - name: Create release and upload all prepared assets
+        run: |
+          ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes --verify-tag
+          while IFS= read -r asset; do
+            gh release upload "$TAG" "$asset" --clobber
+          done < "$ROOT/release-assets/release-files.txt"
+          gh release view "$TAG" --json assets > "$ROOT/release-assets/github-release.json"
+          python3 scripts/confirm_release_assets.py \
+            --index "$ROOT/release-assets/release-index.json" \
+            --release-json "$ROOT/release-assets/github-release.json"
+          python3 -c 'import json,sys; from datetime import datetime,timezone; open(sys.argv[1],"w").write(json.dumps({"timestamp":datetime.now(timezone.utc).isoformat(),"status":"published"})+"\n")' "$ROOT/.published"
+          rm -f "$ROOT/.publishing"
+
+  retention-maintenance:
+    name: Final bounded retention pass
+    needs: [verify-artifacts, publish-release]
+    if: always()
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce HDD and SSD retention limits
+        run: |
+          python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch

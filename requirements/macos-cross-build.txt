@@ -1,0 +1,19 @@
+# The Intel -> Apple Silicon build must use versions that publish matching
+# CPython 3.11 x86_64 and arm64 macOS wheels.  These pairs are merged into
+# universal2 wheels before PyInstaller runs on the Intel Monterey VM.
+#
+# torch 2.2.2 / torchvision 0.17.2 are the final releases with both Intel and
+# Apple Silicon macOS wheels.  NumPy stays on 1.x because torch 2.2.2 was built
+# against the NumPy 1.x C API.  PyAV 14.2 is the final paired release whose
+# arm64 wheel still targets macOS 12 (LocalSR's deployment target).
+torch==2.2.2
+torchvision==0.17.2
+numpy==1.26.4
+slint==1.9.2a1
+spandrel==0.4.2
+Pillow==12.3.0
+rawpy==0.25.1
+tifffile==2026.3.3
+av==14.2.0
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2

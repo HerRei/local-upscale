@@ -2,10 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localsr-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
@@ -13,100 +20,195 @@ env:
 
 jobs:
   lint:
-    name: Lint & Format Check
-    runs-on: [self-hosted, Linux]
+    name: Lint & format (Linux X64)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ruff
-        run: python3 -m pip install ruff
-      - name: Run Ruff Lint
-        run: python3 -m ruff check src tests
-      - name: Run Ruff Format Check
-        run: python3 -m ruff format --check src tests
+      - name: Allocate isolated SSD workspace
+        id: scratch
+        run: |
+          python3 scripts/ci_scratch.py init --root /ci-scratch
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch
+          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 3
+          python3 scripts/ci_scratch.py start \
+            --root /ci-scratch \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --flavor lint \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Lint from the isolated environment
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        run: |
+          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          python3 -m venv "$RUN_ROOT/environment/venv"
+          "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
+          cd "$RUN_ROOT/source"
+          "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
+          "$RUN_ROOT/environment/venv/bin/python" -m ruff format --check src tests scripts
+      - name: Remove successful scratch
+        if: success()
+        run: |
+          python3 scripts/ci_scratch.py finish \
+            --root /ci-scratch \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --flavor lint \
+            --status complete \
+            --cleanup
+      - name: Mark failed scratch for bounded retention
+        if: failure() || cancelled()
+        run: |
+          ROOT="/ci-scratch/runs/${{ github.run_id }}/${{ github.run_attempt }}/linux/lint"
+          if [ -f "$ROOT/.active" ]; then
+            python3 scripts/ci_scratch.py finish \
+              --root /ci-scratch \
+              --run-id "${{ github.run_id }}" \
+              --attempt "${{ github.run_attempt }}" \
+              --platform linux \
+              --flavor lint \
+              --status failed
+          fi
 
   test-linux:
-    name: Test on Linux x86_64 (Mac Mini)
-    needs: lint
-    runs-on: [self-hosted, Linux]
-
+    name: Test Linux X64
+    needs: [lint]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Linux System Dependencies
+      - name: Allocate isolated SSD workspace
+        id: scratch
         run: |
-          sudo -n apt-get update -qq 2>/dev/null || true
-          sudo -n apt-get install -qq -y libgl1 libglib2.0-0 libdbus-1-3 2>/dev/null || true
-
-      - name: Install Python Dependencies
+          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 8
+          python3 scripts/ci_scratch.py start \
+            --root /ci-scratch \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --flavor tests \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Install and test in isolation
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e ".[dev,video]"
-          python3 -m pip install pytest pytest-cov
-
-      - name: Run Platform & Integration Test Suite
-        run: |
-          python3 -m pytest tests/test_platform_integration.py -v
-
-      - name: Run Full Test Suite
-        run: |
-          python3 -m pytest tests/ -v
-
-      - name: Clean Test Cache and Temporary Files
+          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          python3 -m venv "$RUN_ROOT/environment/venv"
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          cd "$RUN_ROOT/source"
+          "$PYTHON" -m pytest tests/test_platform_integration.py -v
+          "$PYTHON" -m pytest tests/ -v
+      - name: Finalize scratch state
         if: always()
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rm -rf build/ dist/ *.egg-info .pytest_cache/ /tmp/pytest*
-
-  test-macos:
-    name: Test on macOS x86_64 (Mac Mini VM)
-    needs: lint
-    runs-on: [self-hosted, macOS]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Python Dependencies
-        run: |
-          curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-          python3.11 get-pip.py
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install -e ".[dev,video]"
-          python3.11 -m pip install pyobjc-framework-Cocoa pytest pytest-cov
-
-      - name: Run Platform & Integration Test Suite
-        run: |
-          python3.11 -m pytest tests/test_platform_integration.py -v
-
-      - name: Run Full Test Suite
-        run: |
-          python3.11 -m pytest tests/ -v
-
-      - name: Clean Test Cache and Temporary Files
-        if: always()
-        run: |
-          rm -rf build/ dist/ *.egg-info .pytest_cache/ /tmp/pytest*
+          if [ -n "$RUN_ROOT" ] && [ -f "$RUN_ROOT/.active" ]; then
+            if [ "${{ job.status }}" = success ]; then
+              STATUS=complete
+              CLEANUP=--cleanup
+            else
+              STATUS=failed
+              CLEANUP=
+            fi
+            python3 scripts/ci_scratch.py finish \
+              --root /ci-scratch \
+              --run-id "${{ github.run_id }}" \
+              --attempt "${{ github.run_attempt }}" \
+              --platform linux \
+              --flavor tests \
+              --status "$STATUS" $CLEANUP
+          fi
 
   test-windows:
-    name: Test on Windows x86_64 (Mac Mini VM)
-    needs: lint
-    runs-on: [self-hosted, Windows]
+    name: Test Windows X64
+    needs: [test-linux]
+    runs-on: [self-hosted, Windows, X64]
     defaults:
       run:
-        shell: cmd
-
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Python Dependencies
+      - name: Test in an isolated runner-temp environment
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,video]"
-          python -m pip install pytest pytest-cov
-
-      - name: Run Full Test Suite
+          $root = Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Copy-Item -LiteralPath $env:GITHUB_WORKSPACE -Destination "$root\source" -Recurse -Force
+          py -3.11 -m venv "$root\venv"
+          $python = "$root\venv\Scripts\python.exe"
+          & $python -m pip install --disable-pip-version-check -e "$root\source[dev,video]"
+          Set-Location "$root\source"
+          & $python -m pytest tests/ -v
+      - name: Remove only this successful run workspace
+        if: success()
         run: |
-          python -m pytest tests/ -v
+          $base = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI")) + [IO.Path]::DirectorySeparatorChar
+          $target = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"))
+          if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Unsafe cleanup target: $target"
+          }
+          Remove-Item -LiteralPath $target -Recurse -Force
 
-      - name: Clean Test Cache and Temporary Files
+  test-macos:
+    name: Test macOS X64 on SSD
+    needs: [test-windows]
+    runs-on: [self-hosted, macOS, X64]
+    env:
+      CI_SCRATCH: /Volumes/CISCRATCH
+      PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
+    steps:
+      - uses: actions/checkout@v4
+      - name: Allocate isolated guest SSD workspace
+        id: scratch
+        run: |
+          python3 scripts/ci_scratch.py init --root "$CI_SCRATCH"
+          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH"
+          python3 scripts/storage_preflight.py \
+            --ssd-path "$CI_SCRATCH" \
+            --skip-hdd \
+            --ssd-min-percent 20 \
+            --ssd-min-gib 6 \
+            --ssd-peak-gib 8
+          python3 scripts/ci_scratch.py start \
+            --root "$CI_SCRATCH" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform macos \
+            --flavor tests \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Install and test entirely on the guest SSD
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        run: |
+          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
+            -m venv "$RUN_ROOT/environment/venv"
+          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          cd "$RUN_ROOT/source"
+          "$PYTHON" -m pytest tests/test_platform_integration.py -v
+          "$PYTHON" -m pytest tests/ -v
+      - name: Finalize guest scratch state
         if: always()
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          Remove-Item -Path build, dist, *.egg-info, .pytest_cache -Recurse -Force -ErrorAction SilentlyContinue
+          if [ -n "$RUN_ROOT" ] && [ -f "$RUN_ROOT/.active" ]; then
+            if [ "${{ job.status }}" = success ]; then
+              STATUS=complete
+              CLEANUP=--cleanup
+            else
+              STATUS=failed
+              CLEANUP=
+            fi
+            python3 scripts/ci_scratch.py finish \
+              --root "$CI_SCRATCH" \
+              --run-id "${{ github.run_id }}" \
+              --attempt "${{ github.run_attempt }}" \
+              --platform macos \
+              --flavor tests \
+              --status "$STATUS" $CLEANUP
+          fi
