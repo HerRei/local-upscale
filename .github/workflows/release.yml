@@ -163,12 +163,12 @@ jobs:
       - name: Stage Artifact
         run: |
           powershell -c "New-Item -ItemType Directory -Force -Path \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows"
-          powershell -c "Copy-Item dist\${{ matrix.target.pkg }} -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows\"
+          powershell -c "Copy-Item dist\${{ matrix.target.pkg }} -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows"
       - name: Generate Checksum
         run: |
           powershell -c "(Get-FileHash dist\${{ matrix.target.pkg }} -Algorithm SHA256).Hash | Out-File dist\${{ matrix.target.pkg }}.sha256 -Encoding utf8"
       - name: Stage Checksum
-        run: powershell -c "Copy-Item dist\${{ matrix.target.pkg }}.sha256 -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows\" 
+        run: powershell -c "Copy-Item dist\${{ matrix.target.pkg }}.sha256 -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows" 
 
       - name: Clean Local Build Directory
         if: always()
