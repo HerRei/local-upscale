@@ -66,17 +66,17 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e ".[dev,video]"
-          python3 -m pip install pyobjc-framework-Cocoa pytest pytest-cov
+          python3.11 -m pip install --upgrade pip
+          python3.11 -m pip install -e ".[dev,video]"
+          python3.11 -m pip install pyobjc-framework-Cocoa pytest pytest-cov
 
       - name: Run Platform & Integration Test Suite
         run: |
-          python3 -m pytest tests/test_platform_integration.py -v
+          python3.11 -m pytest tests/test_platform_integration.py -v
 
       - name: Run Full Test Suite
         run: |
-          python3 -m pytest tests/ -v
+          python3.11 -m pytest tests/ -v
 
       - name: Clean Test Cache and Temporary Files
         if: always()
@@ -87,6 +87,9 @@ jobs:
     name: Test on Windows x86_64 (Mac Mini VM)
     needs: lint
     runs-on: [self-hosted, Windows]
+    defaults:
+      run:
+        shell: cmd
 
     steps:
       - uses: actions/checkout@v4

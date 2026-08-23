@@ -78,20 +78,20 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -e . pyinstaller pyobjc-framework-Cocoa
+          python3.11 -m pip install --upgrade pip
+          python3.11 -m pip install -e . pyinstaller pyobjc-framework-Cocoa
 
       - name: Build macOS Standalone Binary (x86_64)
         if: matrix.target.name == 'x86_64-CPU'
         run: |
-          python3 -m PyInstaller --clean --noconfirm packaging/localsr.spec
+          python3.11 -m PyInstaller --clean --noconfirm packaging/localsr.spec
 
       - name: Build macOS ARM64 Binary (cross-compile with MPS)
         if: matrix.target.name == 'arm64-MPS'
         run: |
           export ARCHFLAGS="-arch arm64"
           export CMAKE_OSX_ARCHITECTURES=arm64
-          python3 -m PyInstaller --clean --noconfirm packaging/localsr.spec
+          python3.11 -m PyInstaller --clean --noconfirm packaging/localsr.spec
         env:
           USE_MPS: "1"
 
@@ -112,8 +112,11 @@ jobs:
           rm -rf build/ dist/ *.egg-info
 
   build-windows-flavors:
-    name: Build Windows (${ matrix.target.name }})
+    name: Build Windows (${{ matrix.target.name }})
     runs-on: [self-hosted, Windows]
+    defaults:
+      run:
+        shell: cmd
     strategy:
       fail-fast: false
       matrix:
@@ -124,40 +127,26 @@ jobs:
             pkg: "LocalSR-Windows-DirectML-x86_64.zip"
           - name: "CUDA-x86_64"
             pkg: "LocalSR-Windows-CUDA-x86_64.zip"
-          - name: "CPU-ARM64"
-            pkg: "LocalSR-Windows-CPU-arm64.zip"
-          - name: "DirectML-ARM64"
-            pkg: "LocalSR-Windows-DirectML-arm64.zip"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python Dependencies (x86_64)
-        if: contains(matrix.target.name, 'x86_64')
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pyinstaller
 
-      - name: Install Python Dependencies (ARM64 cross-compile)
-        if: contains(matrix.target.name, 'ARM64')
+      - name: Install DirectML Support
+        if: contains(matrix.target.name, 'DirectML')
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install --target ./arm64_deps torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install -e . pyinstaller
+          python -m pip install torch-directml
 
-      - name: Build Windows Standalone Binary (x86_64)
-        if: contains(matrix.target.name, 'x86_64')
+      - name: Build Windows Standalone Binary
         run: |
-          pyinstaller --clean --noconfirm packaging/localsr.spec
-
-      - name: Build Windows ARM64 Binary (cross-compile)
-        if: contains(matrix.target.name, 'ARM64')
-        run: |
-          $env:PYTHON_ARCH = "arm64"
           pyinstaller --clean --noconfirm packaging/localsr.spec
 
       - name: Create Windows Zip Archive
         run: |
-          Compress-Archive -Path dist/LocalSR -DestinationPath dist/${{ matrix.target.pkg }}
+          powershell -c "Compress-Archive -Path dist/LocalSR -DestinationPath dist/${{ matrix.target.pkg }}"
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
@@ -168,7 +157,7 @@ jobs:
       - name: Clean Local Build Directory
         if: always()
         run: |
-          Remove-Item -Path build, dist, *.egg-info -Recurse -Force -ErrorAction SilentlyContinue
+          powershell -c "Remove-Item -Path build, dist, *.egg-info -Recurse -Force -ErrorAction SilentlyContinue"
 
   publish-release:
     name: Publish Release Assets
