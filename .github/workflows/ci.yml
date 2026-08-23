@@ -149,7 +149,15 @@ jobs:
           Copy-Item -LiteralPath $env:GITHUB_WORKSPACE -Destination "$root\source" -Recurse -Force
           py -3.11 -m venv "$root\venv"
           $python = "$root\venv\Scripts\python.exe"
+          & $python -m pip install --disable-pip-version-check --no-cache-dir `
+            "torch==2.12.1" `
+            "torchvision==0.27.1" `
+            --index-url https://download.pytorch.org/whl/cpu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -c "import torch, torchvision; print(f'torch={torch.__version__} torchvision={torchvision.__version__}')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location "$root\source"
           & $python -m pytest tests/ -v
       - name: Remove only this run workspace
