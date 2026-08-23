@@ -13,8 +13,17 @@ env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
 
 jobs:
+  storage-preflight:
+    name: Storage Preflight Check
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SSD and HDD Capacity
+        run: python3 scripts/storage_preflight.py
+
   build-linux-flavors:
     name: Build Linux (${{ matrix.target.name }})
+    needs: [storage-preflight]
     runs-on: [self-hosted, Linux]
     strategy:
       fail-fast: false
@@ -69,6 +78,7 @@ jobs:
 
   build-macos-flavors:
     name: Build macOS (${{ matrix.target.name }})
+    needs: [storage-preflight]
     runs-on: [self-hosted, macOS, "${{ matrix.target.runner_arch }}"]
     strategy:
       fail-fast: false
@@ -77,9 +87,12 @@ jobs:
           - name: "x86_64-CPU"
             pkg: "LocalSR-macOS-x86_64.tar.gz"
             runner_arch: "X64"
-          - name: "arm64-MPS"
-            pkg: "LocalSR-macOS-arm64.tar.gz"
+          - name: "arm64-MPS-native"
+            pkg: "LocalSR-macOS-arm64-native.tar.gz"
             runner_arch: "ARM64"
+          - name: "arm64-MPS-cross"
+            pkg: "LocalSR-macOS-arm64.tar.gz"
+            runner_arch: "X64"
     steps:
       - uses: actions/checkout@v4
 
@@ -95,14 +108,54 @@ jobs:
         run: |
           python3.11 -m PyInstaller --clean --noconfirm packaging/localsr.spec
 
-      - name: Build macOS ARM64 Binary (cross-compile with MPS)
-        if: matrix.target.name == 'arm64-MPS'
+      - name: Build macOS ARM64 Binary (native)
+        if: matrix.target.name == 'arm64-MPS-native'
         run: |
           export ARCHFLAGS="-arch arm64"
           export CMAKE_OSX_ARCHITECTURES=arm64
           python3.11 -m PyInstaller --clean --noconfirm packaging/localsr.spec
         env:
           USE_MPS: "1"
+
+      - name: Build macOS ARM64 Binary (cross-compile with MPS on Intel)
+        if: matrix.target.name == 'arm64-MPS-cross'
+        run: |
+          # The active scratch disk is mounted at /Volumes/CISCRATCH
+          export CI_SCRATCH="/Volumes/CISCRATCH/${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$CI_SCRATCH"
+          cd "$CI_SCRATCH"
+          
+          # We need universal2 python
+          curl -O https://www.python.org/ftp/python/3.11.9/python-3.11.9-macos11.pkg
+          sudo installer -pkg python-3.11.9-macos11.pkg -target /
+          
+          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv venv
+          source venv/bin/activate
+          
+          python3 -m pip install --upgrade pip
+          
+          # Force download ARM64 dependencies
+          python3 -m pip install slint torch torchvision spandrel Pillow rawpy numpy tifffile av --platform macosx_11_0_arm64 --only-binary=:all: --target ./arm64_deps
+          
+          # Install PyInstaller
+          python3 -m pip install pyinstaller pyobjc-framework-Cocoa
+          
+          # Build LocalSR using the arm64 dependencies
+          export PYTHONPATH="$(pwd)/arm64_deps"
+          export ARCHFLAGS="-arch arm64"
+          
+          cd ${{ github.workspace }}
+          $CI_SCRATCH/venv/bin/python3 -m PyInstaller --clean --noconfirm --target-architecture arm64 --workpath "$CI_SCRATCH/build" --distpath "$CI_SCRATCH/dist" packaging/localsr.spec
+        env:
+          USE_MPS: "1"
+
+      - name: Create macOS Archive (cross-compile)
+        if: matrix.target.name == 'arm64-MPS-cross'
+        run: |
+          export CI_SCRATCH="/Volumes/CISCRATCH/${{ github.run_id }}-${{ github.run_attempt }}"
+          cd "$CI_SCRATCH/dist"
+          tar -czvf ${{ matrix.target.pkg }} LocalSR/
+          cp ${{ matrix.target.pkg }} ${{ github.workspace }}/dist/
 
       - name: Create macOS Archive
         run: |
@@ -137,6 +190,7 @@ jobs:
 
   build-windows-flavors:
     name: Build Windows (${{ matrix.target.name }})
+    needs: [storage-preflight]
     runs-on: [self-hosted, Windows]
     defaults:
       run:
