@@ -136,7 +136,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     defaults:
       run:
-        shell: powershell
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@v4
       - name: Test in an isolated runner-temp environment
