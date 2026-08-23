@@ -158,6 +158,7 @@ jobs:
           cp ${{ matrix.target.pkg }} ${{ github.workspace }}/dist/
 
       - name: Create macOS Archive
+        if: matrix.target.name != 'arm64-MPS-cross'
         run: |
           cd dist
           tar -czvf ${{ matrix.target.pkg }} LocalSR/
