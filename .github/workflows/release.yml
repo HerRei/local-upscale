@@ -98,7 +98,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          python3.11 -m venv "$RUN_ROOT/environment/venv"
+          "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --upgrade pip
           "$PYTHON" -m pip install \
