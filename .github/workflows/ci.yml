@@ -43,6 +43,8 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          export TMPDIR="$RUN_ROOT/tmp"
+          export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
           cd "$RUN_ROOT/source"
@@ -95,11 +97,16 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          export TMPDIR="$RUN_ROOT/tmp"
+          export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --disable-pip-version-check \
+            "torch==2.12.1" \
+            "torchvision==0.27.1" \
+            --index-url https://download.pytorch.org/whl/cpu
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
           cd "$RUN_ROOT/source"
-          "$PYTHON" -m pytest tests/test_platform_integration.py -v
           "$PYTHON" -m pytest tests/ -v
       - name: Finalize scratch state
         if: always()
@@ -136,21 +143,26 @@ jobs:
         run: |
           $root = Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"
           New-Item -ItemType Directory -Force -Path $root | Out-Null
+          New-Item -ItemType Directory -Force -Path "$root\tmp" | Out-Null
+          $env:TEMP = "$root\tmp"
+          $env:TMP = "$root\tmp"
           Copy-Item -LiteralPath $env:GITHUB_WORKSPACE -Destination "$root\source" -Recurse -Force
           py -3.11 -m venv "$root\venv"
           $python = "$root\venv\Scripts\python.exe"
-          & $python -m pip install --disable-pip-version-check -e "$root\source[dev,video]"
+          & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video]"
           Set-Location "$root\source"
           & $python -m pytest tests/ -v
-      - name: Remove only this successful run workspace
-        if: success()
+      - name: Remove only this run workspace
+        if: always()
         run: |
           $base = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI")) + [IO.Path]::DirectorySeparatorChar
           $target = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"))
           if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Unsafe cleanup target: $target"
           }
-          Remove-Item -LiteralPath $target -Recurse -Force
+          if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force
+          }
 
   test-macos:
     name: Test macOS X64 on SSD

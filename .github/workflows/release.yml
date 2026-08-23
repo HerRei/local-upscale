@@ -98,6 +98,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
+          export TMPDIR="$RUN_ROOT/tmp"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --upgrade pip
@@ -208,16 +209,19 @@ jobs:
           "LOCALSR_RUN_ROOT=$runRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Create isolated backend environment
         run: |
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALSR_RUN_ROOT "tmp") | Out-Null
+          $env:TEMP = Join-Path $env:LOCALSR_RUN_ROOT "tmp"
+          $env:TMP = $env:TEMP
           $venv = Join-Path $env:LOCALSR_RUN_ROOT "venv"
           python -m venv $venv
           $python = Join-Path $venv "Scripts\python.exe"
           & $python -m pip install --upgrade pip
           if ("${{ matrix.target.backend }}" -eq "DirectML") {
-            & $python -m pip install "torch-directml==0.2.5.dev240914"
+            & $python -m pip install --no-cache-dir "torch-directml==0.2.5.dev240914"
           } else {
-            & $python -m pip install "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url "https://download.pytorch.org/whl/${{ matrix.target.index }}"
+            & $python -m pip install --no-cache-dir "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url "https://download.pytorch.org/whl/${{ matrix.target.index }}"
           }
-          & $python -m pip install -e . "pyinstaller==$env:PYINSTALLER_VERSION"
+          & $python -m pip install --no-cache-dir -e . "pyinstaller==$env:PYINSTALLER_VERSION"
           New-Item -ItemType Directory -Force -Path (Join-Path $env:LOCALSR_RUN_ROOT "staging") | Out-Null
           & $python scripts/backend_probe.py --backend "${{ matrix.target.backend }}" --output (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json")
       - name: Build and archive
@@ -241,13 +245,19 @@ jobs:
           $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
           $artifact = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
           & $python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.txt"
-      - name: Remove verified completed Windows scratch
-        if: success()
+      - name: Remove this Windows scratch after artifact handling
+        if: always()
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:LOCALSR_RUN_ROOT)) {
+            Write-Host "No Windows scratch path was allocated"
+            exit 0
+          }
           $base = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI")) + [IO.Path]::DirectorySeparatorChar
           $target = [IO.Path]::GetFullPath($env:LOCALSR_RUN_ROOT)
           if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe cleanup target: $target" }
-          Remove-Item -LiteralPath $target -Recurse -Force
+          if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force
+          }
 
   build-macos-flavors:
     name: Build macOS (${{ matrix.target.name }})
@@ -302,6 +312,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
+          export TMPDIR="$RUN_ROOT/tmp"
           python3.11 -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --upgrade pip
@@ -317,6 +328,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
+          export TMPDIR="$RUN_ROOT/tmp"
           UNIVERSAL_PYTHON=/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11
           test -x "$UNIVERSAL_PYTHON"
           lipo -archs "$UNIVERSAL_PYTHON" | grep -q x86_64

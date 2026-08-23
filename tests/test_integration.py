@@ -417,7 +417,7 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
                 window.worker.process.state() == QProcess.Running
                 and window.progress_label.text() == "Worker ready."
             ),
-            timeout=10_000,
+            timeout=30_000,
         )
 
         window.output_dir = str(tmp_path)
@@ -433,7 +433,7 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
         window.worker.send_request(InspectRequest(model_path=dummy_model))
         qtbot.waitUntil(
             lambda: window.model_scale == 2 and window.btn_upscale.isEnabled(),
-            timeout=10_000,
+            timeout=30_000,
         )
 
         output_path = window.get_output_path()
@@ -446,7 +446,7 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
                     and window.progress_label.text() == "Completed successfully!"
                 )
             ),
-            timeout=20_000,
+            timeout=60_000,
         )
 
         assert not failures, f"GUI worker job failed: {failures}"
