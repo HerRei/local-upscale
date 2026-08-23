@@ -69,15 +69,17 @@ jobs:
 
   build-macos-flavors:
     name: Build macOS (${{ matrix.target.name }})
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, macOS, "${{ matrix.target.runner_arch }}"]
     strategy:
       fail-fast: false
       matrix:
         target:
           - name: "x86_64-CPU"
             pkg: "LocalSR-macOS-x86_64.tar.gz"
+            runner_arch: "X64"
           - name: "arm64-MPS"
             pkg: "LocalSR-macOS-arm64.tar.gz"
+            runner_arch: "ARM64"
     steps:
       - uses: actions/checkout@v4
 
