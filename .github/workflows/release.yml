@@ -51,11 +51,19 @@ jobs:
           cd dist
           tar -czvf ${{ matrix.target.pkg }} LocalSR/
 
-      - name: Upload Artifact
+      - name: Stage Artifact
+        run: |
+          mkdir -p /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/linux
+          cp dist/${{ matrix.target.pkg }} /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/linux/
+      - name: Generate Checksum
+        run: |
+          cd dist
+          sha256sum ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
+      - name: Upload Checksum
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target.pkg }}
-          path: dist/${{ matrix.target.pkg }}
+          name: checksum-linux-${{ matrix.target.name }}
+          path: dist/${{ matrix.target.pkg }}.sha256
 
       - name: Clean Local Build Directory
         if: always()
@@ -101,11 +109,19 @@ jobs:
           cd dist
           tar -czvf ${{ matrix.target.pkg }} LocalSR/
 
-      - name: Upload macOS Artifact
+      - name: Stage Artifact
+        run: |
+          mkdir -p /Volumes/shared/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos
+          cp dist/${{ matrix.target.pkg }} /Volumes/shared/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos/
+      - name: Generate Checksum
+        run: |
+          cd dist
+          shasum -a 256 ${{ matrix.target.pkg }} > ${{ matrix.target.pkg }}.sha256
+      - name: Upload Checksum
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target.pkg }}
-          path: dist/${{ matrix.target.pkg }}
+          name: checksum-macos-${{ matrix.target.name }}
+          path: dist/${{ matrix.target.pkg }}.sha256
 
       - name: Clean Local Build Directory
         if: always()
@@ -149,38 +165,47 @@ jobs:
         run: |
           powershell -c "Compress-Archive -Path dist/LocalSR -DestinationPath dist/${{ matrix.target.pkg }}"
 
-      - name: Upload Windows Artifact
+      - name: Stage Artifact
+        run: |
+          powershell -c "New-Item -ItemType Directory -Force -Path \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows"
+          powershell -c "Copy-Item dist\${{ matrix.target.pkg }} -Destination \\host.lan\Data\ci-artifacts\${{ github.run_id }}\${{ github.run_attempt }}\windows\"
+      - name: Generate Checksum
+        run: |
+          powershell -c "(Get-FileHash dist\${{ matrix.target.pkg }} -Algorithm SHA256).Hash | Out-File dist\${{ matrix.target.pkg }}.sha256 -Encoding utf8"
+      - name: Upload Checksum
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target.pkg }}
-          path: dist/${{ matrix.target.pkg }}
+          name: checksum-windows-${{ matrix.target.name }}
+          path: dist/${{ matrix.target.pkg }}.sha256
 
       - name: Clean Local Build Directory
         if: always()
         run: |
           powershell -c "Remove-Item -Path build, dist, *.egg-info -Recurse -Force -ErrorAction SilentlyContinue"
 
+  verify-artifacts:
+    name: Verify Artifacts Architecture
+    needs: [build-linux-flavors, build-windows-flavors, build-macos-flavors]
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Architecture and Formats
+        run: python3 tests/verify_artifacts.py /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}
+
   publish-release:
     name: Publish Release Assets
-    needs: [build-linux-flavors, build-windows-flavors, build-macos-flavors]
+    needs: [verify-artifacts]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-artifacts/**/*.tar.gz
-            release-artifacts/**/*.zip
+            /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.tar.gz
+            /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.zip
           generate_release_notes: true
-
-      - name: Clean Downloaded Release Artifacts
+      - name: Post-Release Artifact Cleanup
         if: always()
-        run: |
-          rm -rf release-artifacts/
+        run: python3 /mnt/hdd/cleanup-artifacts.py
