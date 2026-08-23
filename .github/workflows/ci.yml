@@ -66,6 +66,7 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
+          python3.11 -m ensurepip || true
           python3.11 -m pip install --upgrade pip
           python3.11 -m pip install -e ".[dev,video]"
           python3.11 -m pip install pyobjc-framework-Cocoa pytest pytest-cov
