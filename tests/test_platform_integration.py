@@ -22,13 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def run_isolated_script(source: str) -> None:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT / "src")
+    timeout = 120 if environment.get("CI") and sys.platform == "darwin" else 30
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(source)],
         cwd=ROOT,
         env=environment,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=timeout,
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
