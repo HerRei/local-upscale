@@ -209,4 +209,4 @@ jobs:
           generate_release_notes: true
       - name: Post-Release Artifact Cleanup
         if: always()
-        run: python3 /mnt/hdd/cleanup-artifacts.py
+        run: python3 /mnt/hdd/cleanup-artifacts.py ${{ github.run_id }}
