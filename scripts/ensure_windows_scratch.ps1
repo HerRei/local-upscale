@@ -10,19 +10,20 @@ function Invoke-ElevatedPartitionResize {
         throw "Partition expansion requires the masked WINDOWS_CI_PASSWORD repository secret"
     }
 
-    $helper = Join-Path $PSScriptRoot "resize_windows_partition_elevated.ps1"
-    $result = Join-Path $env:RUNNER_TEMP "localsr-partition-resize-$env:GITHUB_RUN_ID.txt"
+    $helper = Join-Path $env:WINDIR "Temp\lsr-resize.ps1"
+    $result = Join-Path $env:WINDIR "Temp\lsr-resize-result.txt"
     $taskName = "LocalSR-CI-Partition-Resize-$env:GITHUB_RUN_ID"
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $command = "& '$helper' -ResultPath '$result'"
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $taskCommand = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+    $taskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $helper -ResultPath $result"
     $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
+    $taskCreated = $false
 
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "resize_windows_partition_elevated.ps1") -Destination $helper -Force
     Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
     try {
         & schtasks.exe /Create /TN $taskName /TR $taskCommand /SC ONCE /ST $startTime /RU $identity /RP $env:WINDOWS_CI_PASSWORD /RL HIGHEST /F | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Could not create elevated partition-resize task" }
+        $taskCreated = $true
         & schtasks.exe /Run /TN $taskName | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Could not start elevated partition-resize task" }
 
@@ -35,7 +36,10 @@ function Invoke-ElevatedPartitionResize {
         if ($outcome -ne "PASS") { throw $outcome }
     }
     finally {
-        & schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
+        if ($taskCreated) {
+            & cmd.exe /c "schtasks.exe /Delete /TN $taskName /F >nul 2>&1"
+        }
+        Remove-Item -LiteralPath $helper -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
     }
 }
