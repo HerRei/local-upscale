@@ -5,12 +5,55 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$partition = Get-Partition -DriveLetter C
-$supported = Get-PartitionSupportedSize `
-    -DiskNumber $partition.DiskNumber `
-    -PartitionNumber $partition.PartitionNumber
+function Invoke-ElevatedPartitionResize {
+    if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CI_PASSWORD)) {
+        throw "Partition expansion requires the masked WINDOWS_CI_PASSWORD repository secret"
+    }
 
-if ($supported.SizeMax -gt ($partition.Size + 1GB)) {
+    $helper = Join-Path $PSScriptRoot "resize_windows_partition_elevated.ps1"
+    $result = Join-Path $env:RUNNER_TEMP "localsr-partition-resize-$env:GITHUB_RUN_ID.txt"
+    $taskName = "LocalSR-CI-Partition-Resize-$env:GITHUB_RUN_ID"
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $command = "& '$helper' -ResultPath '$result'"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $taskCommand = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+    $startTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
+
+    Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
+    try {
+        & schtasks.exe /Create /TN $taskName /TR $taskCommand /SC ONCE /ST $startTime /RU $identity /RP $env:WINDOWS_CI_PASSWORD /RL HIGHEST /F | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Could not create elevated partition-resize task" }
+        & schtasks.exe /Run /TN $taskName | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Could not start elevated partition-resize task" }
+
+        $deadline = (Get-Date).AddMinutes(3)
+        while (-not (Test-Path -LiteralPath $result)) {
+            if ((Get-Date) -ge $deadline) { throw "Elevated partition-resize task timed out" }
+            Start-Sleep -Seconds 2
+        }
+        $outcome = (Get-Content -LiteralPath $result -Raw).Trim()
+        if ($outcome -ne "PASS") { throw $outcome }
+    }
+    finally {
+        & schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
+        Remove-Item -LiteralPath $result -Force -ErrorAction SilentlyContinue
+    }
+}
+
+try {
+    $partition = Get-Partition -DriveLetter C
+    $supported = Get-PartitionSupportedSize `
+        -DiskNumber $partition.DiskNumber `
+        -PartitionNumber $partition.PartitionNumber
+}
+catch [Microsoft.Management.Infrastructure.CimException] {
+    Write-Host "The runner token cannot resize partitions directly; using a temporary elevated scheduled task."
+    Invoke-ElevatedPartitionResize
+    $partition = Get-Partition -DriveLetter C
+    $supported = $null
+}
+
+if ($null -ne $supported -and $supported.SizeMax -gt ($partition.Size + 1GB)) {
     Write-Host "Extending C: from $([math]::Round($partition.Size / 1GB, 2)) GiB to $([math]::Round($supported.SizeMax / 1GB, 2)) GiB"
     Resize-Partition `
         -DiskNumber $partition.DiskNumber `
