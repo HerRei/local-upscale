@@ -35,6 +35,13 @@ def thin_macho(cpu: int) -> bytes:
     return b"\xcf\xfa\xed\xfe" + struct.pack("<I", cpu) + bytes(64)
 
 
+def elf(machine: int) -> bytes:
+    payload = bytearray(64)
+    payload[:6] = b"\x7fELF\x02\x01"
+    struct.pack_into("<H", payload, 18, machine)
+    return bytes(payload)
+
+
 def test_native_header_parsers():
     assert verify.macho_arches(thin_macho(0x0100000C)) == {"arm64"}
     fat = (
@@ -44,10 +51,8 @@ def test_native_header_parsers():
         + struct.pack(">IIIII", 0x0100000C, 0, 0, 0, 0)
     )
     assert verify.macho_arches(fat) == {"x86_64", "arm64"}
-    elf = bytearray(64)
-    elf[:6] = b"\x7fELF\x02\x01"
-    struct.pack_into("<H", elf, 18, 62)
-    assert verify.elf_arch(bytes(elf)) == "x86_64"
+    assert verify.elf_arch(elf(62)) == "x86_64"
+    assert verify.elf_arch(elf(224)) == "amdgpu"
     pe = bytearray(256)
     pe[:2] = b"MZ"
     struct.pack_into("<I", pe, 0x3C, 128)
@@ -103,6 +108,33 @@ def test_arm_verifier_rejects_x86_member(tmp_path: Path):
     spec = verify.ArtifactSpec(artifact.name, "macos", "arm64", "MPS", "LocalSR/LocalSR")
     _count, errors = verify.verify_archive(artifact, spec)
     assert any("bad.dylib" in error and "x86_64" in error for error in errors)
+
+
+def test_linux_verifier_distinguishes_rocm_device_code_from_host_libraries(tmp_path: Path):
+    artifact = tmp_path / "rocm.tar.gz"
+    members = {
+        "LocalSR/LocalSR": elf(62),
+        "LocalSR/_internal/torch/lib/rocblas/library/kernel.hsaco": elf(224),
+        "LocalSR/_internal/torch/lib/hipblaslt/library/extop_gfx1100.co": elf(224),
+    }
+    with tarfile.open(artifact, "w:gz") as archive:
+        for name, payload in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    spec = verify.ArtifactSpec(artifact.name, "linux", "x86_64", "AMD-ROCm", "LocalSR/LocalSR")
+    count, errors = verify.verify_archive(artifact, spec)
+    assert count == 1
+    assert errors == []
+
+    members["LocalSR/_internal/bad.so"] = elf(224)
+    with tarfile.open(artifact, "w:gz") as archive:
+        for name, payload in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    _count, errors = verify.verify_archive(artifact, spec)
+    assert any("bad.so" in error and "amdgpu" in error for error in errors)
 
 
 def test_storage_preflight_includes_peak_and_reserve(monkeypatch: pytest.MonkeyPatch):

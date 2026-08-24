@@ -27,9 +27,10 @@ CPU_ARCHES = {
     0x0000000C: "arm",
     0x0100000C: "arm64",
 }
-ELF_ARCHES = {3: "i386", 40: "arm", 62: "x86_64", 183: "arm64"}
+ELF_ARCHES = {3: "i386", 40: "arm", 62: "x86_64", 183: "arm64", 224: "amdgpu"}
 PE_ARCHES = {0x014C: "i386", 0x8664: "x86_64", 0xAA64: "arm64"}
 SHA256_RE = re.compile(r"\b([0-9a-fA-F]{64})\b")
+ROCM_DEVICE_CODE_SUFFIXES = {".co", ".hsaco"}
 
 
 @dataclass(frozen=True)
@@ -233,6 +234,15 @@ def verify_archive(artifact: Path, spec: ArtifactSpec) -> tuple[int, list[str]]:
             elif spec.platform == "linux":
                 architecture = elf_arch(member.header)
                 if architecture is None:
+                    continue
+                # ROCm wheels intentionally ship ELF code objects for AMD GPUs.
+                # They are not host executables and must not be compared with
+                # the bundle's x86_64 CPU architecture. Keep this exception
+                # narrow so an AMDGPU-tagged .so still fails verification.
+                if (
+                    architecture == "amdgpu"
+                    and PurePosixPath(member.name).suffix.lower() in ROCM_DEVICE_CODE_SUFFIXES
+                ):
                     continue
                 native_count += 1
                 if architecture != spec.architecture:
