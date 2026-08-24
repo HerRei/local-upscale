@@ -141,6 +141,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
+      - name: Ensure bounded Windows scratch capacity
+        run: ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
       - name: Test in an isolated runner-temp environment
         run: |
           $root = Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"

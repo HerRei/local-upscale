@@ -203,11 +203,10 @@ jobs:
         run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Allocate bounded Windows scratch
         run: |
+          ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
           $base = Join-Path $env:RUNNER_TEMP "LocalSR-CI"
           $runRoot = Join-Path $base "${{ github.run_id }}\${{ github.run_attempt }}\windows\${{ matrix.target.name }}"
           New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
-          $free = (Get-PSDrive -Name ([IO.Path]::GetPathRoot($runRoot).TrimEnd('\').TrimEnd(':'))).Free
-          if ($free -lt 20GB) { throw "Windows scratch has less than 20 GiB free" }
           "LOCALSR_RUN_ROOT=$runRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Create isolated backend environment
         run: |
