@@ -202,8 +202,6 @@ jobs:
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Allocate bounded Windows scratch
-        env:
-          WINDOWS_CI_PASSWORD: ${{ secrets.WINDOWS_CI_PASSWORD }}
         run: |
           ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
           $base = Join-Path $env:RUNNER_TEMP "LocalSR-CI"
