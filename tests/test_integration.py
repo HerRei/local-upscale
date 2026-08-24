@@ -1,9 +1,11 @@
 import glob
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -44,12 +46,31 @@ class WorkerSubprocessHarness:
             text=True,
         )
         self.pid = self.proc.pid
+        self._stdout_lines: queue.Queue[str | None] = queue.Queue()
+        self._stdout_reader = threading.Thread(target=self._collect_stdout, daemon=True)
+        self._stdout_reader.start()
+
+    def _collect_stdout(self) -> None:
+        """Move worker output into a queue so test timeouts cannot block on readline()."""
+        try:
+            for line in self.proc.stdout:
+                self._stdout_lines.put(line)
+        finally:
+            self._stdout_lines.put(None)
 
     def read_message(self, timeout=10.0) -> dict[str, Any]:
         """Reads a single JSON message line from worker stdout."""
-        line = self.proc.stdout.readline()
-        if not line:
-            raise RuntimeError("Subprocess stdout closed unexpectedly.")
+        try:
+            line = self._stdout_lines.get(timeout=timeout)
+        except queue.Empty as error:
+            raise TimeoutError(
+                f"Worker emitted no IPC message within {timeout:.1f}s "
+                f"(returncode={self.proc.poll()})."
+            ) from error
+        if line is None:
+            stderr = self.proc.stderr.read() if self.proc.poll() is not None else ""
+            detail = f" Worker stderr: {stderr.strip()}" if stderr.strip() else ""
+            raise RuntimeError(f"Subprocess stdout closed unexpectedly.{detail}")
         return json.loads(line.strip())
 
     def send_message(self, msg: dict[str, Any]):
@@ -57,9 +78,33 @@ class WorkerSubprocessHarness:
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
 
+    def wait_for_message(self, predicate, timeout: float) -> dict[str, Any]:
+        """Wait for a matching IPC message without exceeding an absolute deadline."""
+        deadline = time.monotonic() + timeout
+        seen_types: list[str] = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"No matching worker IPC message within {timeout:.1f}s; observed={seen_types}."
+                )
+            try:
+                message = self.read_message(timeout=remaining)
+            except TimeoutError as error:
+                raise TimeoutError(
+                    f"No matching worker IPC message within {timeout:.1f}s; observed={seen_types}."
+                ) from error
+            message_type = str(message.get("type"))
+            seen_types.append(message_type)
+            if message_type == "job_failed":
+                raise AssertionError(f"Worker reported job_failed: {message.get('data')}")
+            if predicate(message):
+                return message
+
     def wait_for_ready(self) -> dict[str, Any]:
         """Waits for and returns the worker_ready message."""
-        msg = self.read_message()
+        startup_timeout = 120.0 if os.environ.get("CI") and sys.platform == "darwin" else 10.0
+        msg = self.read_message(timeout=startup_timeout)
         assert msg.get("type") == "worker_ready", f"Expected worker_ready, got {msg}"
         return msg
 
@@ -120,7 +165,7 @@ def test_f4_2_worker_ready_signal():
     """F4.2: Test worker_ready signal detection on worker startup."""
     harness = WorkerSubprocessHarness()
     try:
-        msg = harness.read_message()
+        msg = harness.wait_for_ready()
         assert msg["type"] == "worker_ready", f"First IPC message must be worker_ready, got: {msg}"
         assert msg.get("data") == {}, (
             f"worker_ready data field must be empty dict {{}}, got: {msg.get('data')}"
@@ -223,23 +268,20 @@ def test_f4_4_job_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req)
 
-        # Wait for job_started, then send cancel_request
-        start_time = time.time()
-        while time.time() - start_time < 5.0:
-            msg = harness.read_message()
-            if msg.get("type") == "job_started":
-                break
+        ipc_timeout = 120.0 if os.environ.get("CI") and sys.platform == "darwin" else 10.0
+
+        # Wait for job_started, then send cancel_request.
+        harness.wait_for_message(lambda message: message.get("type") == "job_started", ipc_timeout)
 
         harness.send_message({"type": "cancel_request", "data": {"job_id": "job_f4_4"}})
 
         # Read IPC responses until job_cancelled
-        cancelled_msg = None
-        start_time = time.time()
-        while time.time() - start_time < 10.0:
-            msg = harness.read_message()
-            if msg.get("type") == "job_cancelled" and msg["data"]["job_id"] == "job_f4_4":
-                cancelled_msg = msg
-                break
+        cancelled_msg = harness.wait_for_message(
+            lambda message: (
+                message.get("type") == "job_cancelled" and message["data"]["job_id"] == "job_f4_4"
+            ),
+            ipc_timeout,
+        )
 
         assert cancelled_msg is not None, "Worker must emit job_cancelled signal."
         assert not os.path.exists(out_img_path), (
@@ -281,18 +323,16 @@ def test_f4_5_subsequent_job_after_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req1)
 
-        # Read job_started
-        while True:
-            msg = harness.read_message()
-            if msg.get("type") == "job_started":
-                break
+        ipc_timeout = 120.0 if os.environ.get("CI") and sys.platform == "darwin" else 10.0
+
+        harness.wait_for_message(lambda message: message.get("type") == "job_started", ipc_timeout)
 
         harness.send_message({"type": "cancel_request", "data": {"job_id": "job_cancel_first"}})
 
-        while True:
-            msg = harness.read_message()
-            if msg.get("type") == "job_cancelled":
-                break
+        harness.wait_for_message(
+            lambda message: message.get("type") == "job_cancelled",
+            ipc_timeout,
+        )
 
         assert not os.path.exists(out_img1), "Cancelled job output file must not exist."
 
@@ -322,18 +362,13 @@ def test_f4_5_subsequent_job_after_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req2)
 
-        completed_msg = None
-        start_time = time.time()
-        while time.time() - start_time < 10.0:
-            msg = harness.read_message()
-            if (
-                msg.get("type") == "job_completed"
-                and msg["data"]["job_id"] == "job_subsequent_second"
-            ):
-                completed_msg = msg
-                break
-            elif msg.get("type") == "job_failed":
-                pytest.fail(f"Subsequent job failed: {msg['data']}")
+        completed_msg = harness.wait_for_message(
+            lambda message: (
+                message.get("type") == "job_completed"
+                and message["data"]["job_id"] == "job_subsequent_second"
+            ),
+            ipc_timeout,
+        )
 
         assert completed_msg is not None, "Subsequent job must complete successfully."
         assert os.path.exists(out_img2), "Subsequent job output file must exist."

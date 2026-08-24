@@ -43,7 +43,7 @@ def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):
         ),
     )
     monkeypatch.setattr(hardware.torch, "cuda", fake_cuda)
-    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu)
+    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu, raising=False)
 
     report = hardware.get_capability_report()
     rocm = next(device for device in report["devices"] if device["type"] == "rocm")
@@ -80,7 +80,9 @@ def test_mps_snapshot_exposes_allocator_and_pressure(monkeypatch):
     monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: True)
     monkeypatch.setattr(hardware.torch.mps, "current_allocated_memory", lambda: 1 * gib)
     monkeypatch.setattr(hardware.torch.mps, "driver_allocated_memory", lambda: 2 * gib)
-    monkeypatch.setattr(hardware.torch.mps, "recommended_max_memory", lambda: 10 * gib)
+    monkeypatch.setattr(
+        hardware.torch.mps, "recommended_max_memory", lambda: 10 * gib, raising=False
+    )
     monkeypatch.setattr(
         hardware,
         "_system_pressure_snapshot",
@@ -141,7 +143,7 @@ def test_discovers_nvidia_cuda_and_intel_discrete_xpu(monkeypatch):
         ),
     )
     monkeypatch.setattr(hardware.torch, "cuda", fake_cuda)
-    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu)
+    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu, raising=False)
 
     report = hardware.get_capability_report()
     cuda_devices = [device for device in report["devices"] if device["type"] == "cuda"]
