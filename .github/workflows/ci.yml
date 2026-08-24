@@ -29,7 +29,7 @@ jobs:
         id: scratch
         run: |
           python3 scripts/ci_scratch.py init --root /ci-scratch
-          python3 scripts/ci_scratch.py cleanup --root /ci-scratch
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2
           python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 3
           python3 scripts/ci_scratch.py start \
             --root /ci-scratch \
@@ -190,7 +190,7 @@ jobs:
         id: scratch
         run: |
           python3 scripts/ci_scratch.py init --root "$CI_SCRATCH"
-          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH"
+          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH" --cache-max-gib 2
           python3 scripts/storage_preflight.py \
             --ssd-path "$CI_SCRATCH" \
             --skip-hdd \

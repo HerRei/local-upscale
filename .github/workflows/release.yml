@@ -36,7 +36,7 @@ jobs:
         run: |
           python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
           python3 scripts/ci_scratch.py init --root /ci-scratch
-          python3 scripts/ci_scratch.py cleanup --root /ci-scratch
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2
       - name: Enforce SSD and HDD build budget
         run: |
           mkdir -p "/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
@@ -297,7 +297,7 @@ jobs:
         id: scratch
         run: |
           python3 scripts/ci_scratch.py init --root "$CI_SCRATCH"
-          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH"
+          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH" --cache-max-gib 2
           python3 scripts/storage_preflight.py \
             --ssd-path "$CI_SCRATCH" \
             --skip-hdd \
@@ -527,4 +527,4 @@ jobs:
       - name: Enforce HDD and SSD retention limits
         run: |
           python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
-          python3 scripts/ci_scratch.py cleanup --root /ci-scratch
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2
