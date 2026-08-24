@@ -34,6 +34,11 @@ def create_test_image(path: str, width: int, height: int, color="red") -> str:
     return path
 
 
+def _ipc_timeout() -> float:
+    """Allow constrained self-hosted CI VMs to import PyTorch before IPC begins."""
+    return 120.0 if os.environ.get("CI") else 10.0
+
+
 class WorkerSubprocessHarness:
     """Helper harness to spawn, interact with, and cleanly shut down a worker subprocess."""
 
@@ -58,8 +63,10 @@ class WorkerSubprocessHarness:
         finally:
             self._stdout_lines.put(None)
 
-    def read_message(self, timeout=10.0) -> dict[str, Any]:
+    def read_message(self, timeout: float | None = None) -> dict[str, Any]:
         """Reads a single JSON message line from worker stdout."""
+        if timeout is None:
+            timeout = _ipc_timeout()
         try:
             line = self._stdout_lines.get(timeout=timeout)
         except queue.Empty as error:
@@ -103,8 +110,7 @@ class WorkerSubprocessHarness:
 
     def wait_for_ready(self) -> dict[str, Any]:
         """Waits for and returns the worker_ready message."""
-        startup_timeout = 120.0 if os.environ.get("CI") and sys.platform == "darwin" else 10.0
-        msg = self.read_message(timeout=startup_timeout)
+        msg = self.read_message(timeout=_ipc_timeout())
         assert msg.get("type") == "worker_ready", f"Expected worker_ready, got {msg}"
         return msg
 
@@ -268,7 +274,7 @@ def test_f4_4_job_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req)
 
-        ipc_timeout = 120.0 if os.environ.get("CI") and sys.platform == "darwin" else 10.0
+        ipc_timeout = _ipc_timeout()
 
         # Wait for job_started, then send cancel_request.
         harness.wait_for_message(lambda message: message.get("type") == "job_started", ipc_timeout)
@@ -323,7 +329,7 @@ def test_f4_5_subsequent_job_after_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req1)
 
-        ipc_timeout = 120.0 if os.environ.get("CI") and sys.platform == "darwin" else 10.0
+        ipc_timeout = _ipc_timeout()
 
         harness.wait_for_message(lambda message: message.get("type") == "job_started", ipc_timeout)
 
