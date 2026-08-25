@@ -29,6 +29,7 @@ preflight = load_script(ROOT / "scripts" / "storage_preflight.py")
 cross_wheels = load_script(ROOT / "scripts" / "macos_cross_wheels.py")
 artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
+macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 
 
 def thin_macho(cpu: int) -> bytes:
@@ -59,6 +60,26 @@ def test_native_header_parsers():
     pe[128:132] = b"PE\0\0"
     struct.pack_into("<H", pe, 132, 0xAA64)
     assert verify.pe_arch(bytes(pe)) == "arm64"
+
+
+def test_macho_tree_excludes_build_tool_fixtures(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    fixture = tmp_path / "delocate" / "tests" / "data"
+    runtime.mkdir()
+    fixture.mkdir(parents=True)
+    (runtime / "extension.so").write_bytes(thin_macho(0x0100000C))
+    (fixture / "single-arch.dylib").write_bytes(thin_macho(0x01000007))
+
+    report = macho_tree.inspect(
+        tmp_path,
+        {"arm64"},
+        None,
+        ("delocate/tests/data/*",),
+    )
+
+    assert report["result"] == "PASS"
+    assert report["native_binary_count"] == 1
+    assert report["excluded_patterns"] == ["delocate/tests/data/*"]
 
 
 def test_stream_verifies_arm64_mps_artifact(tmp_path: Path):

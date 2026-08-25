@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import struct
 from pathlib import Path
@@ -49,22 +50,30 @@ def macho_arches(header: bytes) -> set[str] | None:
     }
 
 
-def inspect(root: Path, required: set[str], main: Path | None) -> dict[str, object]:
+def inspect(
+    root: Path,
+    required: set[str],
+    main: Path | None,
+    excludes: tuple[str, ...] = (),
+) -> dict[str, object]:
     mismatches: list[dict[str, object]] = []
     binaries: list[dict[str, object]] = []
     for path in sorted(
         item for item in root.rglob("*") if item.is_file() and not item.is_symlink()
     ):
+        relative = path.relative_to(root).as_posix()
+        if any(fnmatch.fnmatch(relative, pattern) for pattern in excludes):
+            continue
         with path.open("rb") as stream:
             header = stream.read(4096)
         try:
             arches = macho_arches(header)
         except ValueError as exc:
-            mismatches.append({"path": str(path.relative_to(root)), "error": str(exc)})
+            mismatches.append({"path": relative, "error": str(exc)})
             continue
         if arches is None:
             continue
-        record = {"path": str(path.relative_to(root)), "architectures": sorted(arches)}
+        record = {"path": relative, "architectures": sorted(arches)}
         binaries.append(record)
         missing = required - arches
         if missing:
@@ -82,6 +91,7 @@ def inspect(root: Path, required: set[str], main: Path | None) -> dict[str, obje
         "required_architectures": sorted(required),
         "native_binary_count": len(binaries),
         "main": main_record,
+        "excluded_patterns": list(excludes),
         "mismatches": mismatches,
         "result": "PASS" if binaries and not mismatches else "FAIL",
     }
@@ -93,11 +103,22 @@ def main() -> None:
     parser.add_argument("--require", required=True, help="comma-separated architecture slices")
     parser.add_argument("--main", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="glob relative to root to omit (repeatable; for build-tool fixtures only)",
+    )
     args = parser.parse_args()
     required = {item.strip() for item in args.require.split(",") if item.strip()}
     if not required:
         parser.error("--require cannot be empty")
-    report = inspect(args.root.resolve(), required, args.main.resolve() if args.main else None)
+    report = inspect(
+        args.root.resolve(),
+        required,
+        args.main.resolve() if args.main else None,
+        tuple(args.exclude),
+    )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.report:
         args.report.write_text(rendered, encoding="utf-8")

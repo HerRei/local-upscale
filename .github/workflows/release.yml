@@ -361,6 +361,7 @@ jobs:
             --report "$RUN_ROOT/staging/openmp-normalization.json"
           "$PYTHON" "$RUN_ROOT/source/scripts/verify_macho_tree.py" "$SITE_PACKAGES" \
             --require x86_64,arm64 \
+            --exclude 'delocate/tests/data/*' \
             --report "$RUN_ROOT/staging/universal2-environment.json"
           "$PYTHON" "$RUN_ROOT/source/scripts/backend_probe.py" \
             --backend MPS \
@@ -375,7 +376,6 @@ jobs:
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           cd "$RUN_ROOT/source"
           "$PYTHON" -m PyInstaller --clean --noconfirm \
-            --target-arch "${{ matrix.target.architecture }}" \
             --workpath "$RUN_ROOT/build/pyinstaller" \
             --distpath "$RUN_ROOT/dist" \
             packaging/localsr.spec
@@ -460,7 +460,7 @@ jobs:
         run: |
           python3.11 -m pip install -e . "pyinstaller==$PYINSTALLER_VERSION" pyobjc-framework-Cocoa
           LOCALSR_TARGET_ARCH=arm64 python3.11 -m PyInstaller --clean --noconfirm \
-            --target-arch arm64 packaging/localsr.spec
+            packaging/localsr.spec
           file dist/LocalSR/LocalSR
           lipo -archs dist/LocalSR/LocalSR | grep -q arm64
           tar -C dist -czf LocalSR-macOS-arm64-native-reference.tar.gz LocalSR
