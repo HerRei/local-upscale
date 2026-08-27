@@ -1,7 +1,25 @@
+import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 from localsr.core import hardware
+
+
+def test_directml_probe_can_be_explicitly_skipped_for_hardwareless_packaging_vm(
+    monkeypatch,
+):
+    fake_directml = SimpleNamespace(
+        is_available=lambda: (_ for _ in ()).throw(
+            AssertionError("DirectML hardware probe should have been skipped")
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch_directml", fake_directml)
+    monkeypatch.setenv("LOCALSR_SKIP_DIRECTML_PROBE", "1")
+    devices = []
+
+    hardware._detect_directml(devices, 16 * 1024**3, 8 * 1024**3)
+
+    assert devices == []
 
 
 def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):

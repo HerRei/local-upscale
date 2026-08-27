@@ -234,6 +234,12 @@ jobs:
           & $python -m PyInstaller --clean --noconfirm --workpath $work --distpath $dist packaging/localsr.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $smokeTimeout = if ("${{ matrix.target.backend }}" -eq "CPU") { 180 } else { 600 }
+          if ("${{ matrix.target.backend }}" -eq "DirectML") {
+            # This packaging VM has no passed-through D3D12 adapter. Validate the
+            # packaged module above, then smoke-test worker IPC without allowing
+            # torch-directml's hardware enumeration to block indefinitely.
+            $env:LOCALSR_SKIP_DIRECTML_PROBE = "1"
+          }
           & $python scripts/smoke_frozen_worker.py (Join-Path $dist "LocalSR") --timeout $smokeTimeout --report (Join-Path $env:LOCALSR_RUN_ROOT "staging\package-smoke.json")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $archive = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
