@@ -233,7 +233,15 @@ jobs:
           $dist = Join-Path $env:LOCALSR_RUN_ROOT "dist"
           & $python -m PyInstaller --clean --noconfirm --workpath $work --distpath $dist packaging/localsr.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $smokeTimeout = if ("${{ matrix.target.backend }}" -eq "CPU") { 180 } else { 600 }
+          # The CUDA onedir bundle carries several GiB of DLLs. Its first launch
+          # can spend well over ten minutes in Windows loader/Defender work on
+          # this VM, even though PyInstaller completed successfully. Keep every
+          # backend bounded while allowing that measured cold-start overhead.
+          $smokeTimeout = switch ("${{ matrix.target.backend }}") {
+            "CPU" { 180 }
+            "CUDA" { 1800 }
+            default { 600 }
+          }
           if ("${{ matrix.target.backend }}" -eq "DirectML") {
             # This packaging VM has no passed-through D3D12 adapter. Validate the
             # packaged module above, then smoke-test worker IPC without allowing
