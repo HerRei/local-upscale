@@ -55,6 +55,7 @@ def smoke(bundle: Path, timeout: float = 180.0) -> dict[str, object]:
         errors="replace",
         bufsize=1,
     )
+    print(f"smoke: started {worker.name}; waiting for worker_ready", file=sys.stderr, flush=True)
     assert process.stdout is not None
     assert process.stderr is not None
     threads = [
@@ -99,6 +100,11 @@ def smoke(bundle: Path, timeout: float = 180.0) -> dict[str, object]:
             message_type = message.get("type")
             if message_type == "worker_ready" and not ready:
                 ready = True
+                print(
+                    "smoke: worker_ready received; requesting capabilities",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 _write_json(process, {"type": "capabilities_request", "data": {}})
             elif message_type == "capabilities_info":
                 if not ready:
@@ -107,6 +113,7 @@ def smoke(bundle: Path, timeout: float = 180.0) -> dict[str, object]:
                 if not isinstance(data, dict):
                     raise RuntimeError("capabilities_info data is not an object")
                 capabilities = data
+                print("smoke: capabilities_info received", file=sys.stderr, flush=True)
 
         _write_json(process, {"type": "shutdown_request", "data": {}})
         if process.stdin:
@@ -115,6 +122,7 @@ def smoke(bundle: Path, timeout: float = 180.0) -> dict[str, object]:
         returncode = process.wait(timeout=remaining)
         if returncode != 0:
             raise RuntimeError(f"Worker shutdown exit code was {returncode}")
+        print("smoke: clean worker shutdown", file=sys.stderr, flush=True)
     except Exception:
         if process.poll() is None:
             process.kill()

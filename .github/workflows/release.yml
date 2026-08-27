@@ -5,12 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      native_m1_reference:
-        description: "Also run the optional native-M1 comparison build"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -239,7 +233,8 @@ jobs:
           $dist = Join-Path $env:LOCALSR_RUN_ROOT "dist"
           & $python -m PyInstaller --clean --noconfirm --workpath $work --distpath $dist packaging/localsr.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python scripts/smoke_frozen_worker.py (Join-Path $dist "LocalSR") --report (Join-Path $env:LOCALSR_RUN_ROOT "staging\package-smoke.json")
+          $smokeTimeout = if ("${{ matrix.target.backend }}" -eq "CPU") { 180 } else { 600 }
+          & $python scripts/smoke_frozen_worker.py (Join-Path $dist "LocalSR") --timeout $smokeTimeout --report (Join-Path $env:LOCALSR_RUN_ROOT "staging\package-smoke.json")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $archive = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
           & $python -c "import shutil,sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2], 'LocalSR')" $archive $dist
@@ -461,22 +456,6 @@ jobs:
               --flavor "${{ matrix.target.name }}" \
               --status failed || true
           fi
-
-  native-m1-reference:
-    name: Optional native M1 reference (not required)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_m1_reference }}
-    runs-on: [self-hosted, macOS, ARM64]
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the opt-in comparison artifact
-        run: |
-          python3.11 -m pip install -e . "pyinstaller==$PYINSTALLER_VERSION" pyobjc-framework-Cocoa
-          LOCALSR_TARGET_ARCH=arm64 python3.11 -m PyInstaller --clean --noconfirm \
-            packaging/localsr.spec
-          file dist/LocalSR/LocalSR
-          lipo -archs dist/LocalSR/LocalSR | grep -q arm64
-          tar -C dist -czf LocalSR-macOS-arm64-native-reference.tar.gz LocalSR
 
   verify-artifacts:
     name: Verify complete HDD artifact matrix
