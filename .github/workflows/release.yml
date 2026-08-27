@@ -119,6 +119,8 @@ jobs:
             --workpath "$RUN_ROOT/build" \
             --distpath "$RUN_ROOT/dist" \
             packaging/localsr.spec
+          "$PYTHON" scripts/smoke_frozen_worker.py "$RUN_ROOT/dist/LocalSR" \
+            --report "$RUN_ROOT/staging/package-smoke.json"
           tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR
       - name: Verify, checksum, and write metadata before transfer
         env:
@@ -132,7 +134,8 @@ jobs:
             --platform linux \
             --architecture x86_64 \
             --backend "${{ matrix.target.backend }}" \
-            --backend-probe "$RUN_ROOT/staging/backend-probe.json"
+            --backend-probe "$RUN_ROOT/staging/backend-probe.json" \
+            --smoke-report "$RUN_ROOT/staging/package-smoke.json"
           python3 tests/verify_artifacts.py "$RUN_ROOT/staging" --only "${{ matrix.target.pkg }}"
       - name: Atomically stage verified files to HDD
         env:
@@ -236,6 +239,8 @@ jobs:
           $dist = Join-Path $env:LOCALSR_RUN_ROOT "dist"
           & $python -m PyInstaller --clean --noconfirm --workpath $work --distpath $dist packaging/localsr.spec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python scripts/smoke_frozen_worker.py (Join-Path $dist "LocalSR") --report (Join-Path $env:LOCALSR_RUN_ROOT "staging\package-smoke.json")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $archive = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
           & $python -c "import shutil,sys; shutil.make_archive(sys.argv[1][:-4], 'zip', sys.argv[2], 'LocalSR')" $archive $dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -243,7 +248,7 @@ jobs:
         run: |
           $python = Join-Path $env:LOCALSR_RUN_ROOT "venv\Scripts\python.exe"
           $artifact = Join-Path $env:LOCALSR_RUN_ROOT "staging\${{ matrix.target.pkg }}"
-          & $python scripts/write_artifact_metadata.py $artifact --commit "${{ github.sha }}" --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows --architecture x86_64 --backend "${{ matrix.target.backend }}" --backend-probe (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json")
+          & $python scripts/write_artifact_metadata.py $artifact --commit "${{ github.sha }}" --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" --platform windows --architecture x86_64 --backend "${{ matrix.target.backend }}" --backend-probe (Join-Path $env:LOCALSR_RUN_ROOT "staging\backend-probe.json") --smoke-report (Join-Path $env:LOCALSR_RUN_ROOT "staging\package-smoke.json")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python tests/verify_artifacts.py (Join-Path $env:LOCALSR_RUN_ROOT "staging") --only "${{ matrix.target.pkg }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -383,6 +388,10 @@ jobs:
             --require "${{ matrix.target.architecture }}" \
             --main "$RUN_ROOT/dist/LocalSR/LocalSR" \
             --report "$RUN_ROOT/staging/bundle-macho.json"
+          if [ "${{ matrix.target.architecture }}" = x86_64 ]; then
+            "$PYTHON" scripts/smoke_frozen_worker.py "$RUN_ROOT/dist/LocalSR" \
+              --report "$RUN_ROOT/staging/package-smoke.json"
+          fi
           tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR
       - name: Verify, checksum, and write metadata before transfer
         env:
@@ -390,11 +399,14 @@ jobs:
         run: |
           ARTIFACT="$RUN_ROOT/staging/${{ matrix.target.pkg }}"
           WHEEL_ARGUMENTS=()
+          SMOKE_ARGUMENTS=()
           if [ "${{ matrix.target.architecture }}" = arm64 ]; then
             WHEEL_ARGUMENTS=(
               --wheel-manifest "$RUN_ROOT/wheels/wheel-manifest.json"
               --normalization-report "$RUN_ROOT/staging/openmp-normalization.json"
             )
+          else
+            SMOKE_ARGUMENTS=(--smoke-report "$RUN_ROOT/staging/package-smoke.json")
           fi
           "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/scripts/write_artifact_metadata.py" \
             "$ARTIFACT" \
@@ -405,6 +417,7 @@ jobs:
             --architecture "${{ matrix.target.architecture }}" \
             --backend "${{ matrix.target.backend }}" \
             --backend-probe "$RUN_ROOT/staging/backend-probe.json" \
+            "${SMOKE_ARGUMENTS[@]}" \
             "${WHEEL_ARGUMENTS[@]}"
           "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/tests/verify_artifacts.py" \
             "$RUN_ROOT/staging" \

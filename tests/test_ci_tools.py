@@ -30,6 +30,7 @@ cross_wheels = load_script(ROOT / "scripts" / "macos_cross_wheels.py")
 artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
+frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 
 
 def thin_macho(cpu: int) -> bytes:
@@ -230,3 +231,30 @@ def test_artifact_path_components_and_managed_root(tmp_path: Path):
     assert maintenance.managed_root(root) == root.resolve()
     with pytest.raises(ValueError):
         maintenance.managed_root(tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Test fixture uses a POSIX executable script")
+def test_frozen_worker_smoke_protocol(tmp_path: Path):
+    bundle = tmp_path / "LocalSR"
+    bundle.mkdir()
+    worker = bundle / "LocalSRWorker"
+    worker.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "print(json.dumps({'type': 'worker_ready', 'data': {}}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    message = json.loads(line)\n"
+        "    if message['type'] == 'capabilities_request':\n"
+        "        print(json.dumps({'type': 'capabilities_info', 'data': "
+        "{'devices': [{'id': 'cpu', 'type': 'cpu'}]}}), flush=True)\n"
+        "    elif message['type'] == 'shutdown_request':\n"
+        "        break\n",
+        encoding="utf-8",
+    )
+    worker.chmod(0o755)
+
+    report = frozen_smoke.smoke(bundle, timeout=10)
+
+    assert report["result"] == "PASS"
+    assert report["worker_ready"] is True
+    assert report["capabilities"]["devices"][0]["type"] == "cpu"

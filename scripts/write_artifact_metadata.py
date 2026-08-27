@@ -66,6 +66,7 @@ def main() -> None:
     parser.add_argument("--architecture", required=True)
     parser.add_argument("--backend", required=True)
     parser.add_argument("--backend-probe", type=Path)
+    parser.add_argument("--smoke-report", type=Path)
     parser.add_argument("--wheel-manifest", type=Path)
     parser.add_argument("--normalization-report", type=Path)
     args = parser.parse_args()
@@ -85,6 +86,8 @@ def main() -> None:
     }
     if args.backend_probe:
         metadata["backend_probe"] = json.loads(args.backend_probe.read_text(encoding="utf-8"))
+    if args.smoke_report:
+        metadata["package_smoke"] = json.loads(args.smoke_report.read_text(encoding="utf-8"))
     if args.wheel_manifest:
         metadata["mps"] = mps_provenance(args.wheel_manifest, args.normalization_report)
     output = args.artifact.with_name(args.artifact.name + ".metadata.json")
