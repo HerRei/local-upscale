@@ -259,7 +259,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/**/*.tar.gz
