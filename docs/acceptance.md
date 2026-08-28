@@ -13,6 +13,9 @@
 
 ## Required before public beta
 
+- Eliminate the macOS PyTorch 2.2.2 security debt: build Apple Silicon natively with a supported,
+  current PyTorch release, and either establish a supported Intel runtime or stop advertising the
+  Intel archive. Re-run the dependency/security scan on the resulting app bundles.
 - Install and run on physical macOS ARM and Intel machines and validate Gatekeeper after production
   signing/notarization.
 - Run representative jobs on Windows NVIDIA, AMD/Intel DirectML, and CPU systems.

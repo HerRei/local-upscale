@@ -71,6 +71,19 @@ and requires Gatekeeper acceptance before archiving. A partial credential set fa
 Windows Authenticode credentials are not configured and Windows archives remain unsigned. Add and
 verify an Authenticode signing/timestamping stage before calling a Windows build public-beta ready.
 
+## macOS runtime security limitation
+
+The current universal cross-build pins PyTorch 2.2.2 because it is the last version that publishes
+both Intel and Apple-Silicon macOS wheels. PyTorch 2.2.2 has open advisories, including a critical
+`torch.load` arbitrary-code-execution issue fixed in 2.6.0. Consequently, the unsigned macOS
+archives are private alpha evidence and are not public-beta candidates. Do not load untrusted
+checkpoints.
+
+Before public beta, build the Apple-Silicon artifact natively with a supported/current PyTorch,
+re-scan the frozen bundle, and decide whether the Intel artifact can use a maintained runtime or
+must be removed. The repository currently has only an Intel macOS self-hosted runner; registering a
+native Apple-Silicon runner and changing artifact transfer are operational prerequisites.
+
 ## Publishing v0.0.7-alpha
 
 1. Run the offline suite, lint/format, Slint compile, package-data inspection, and live-model check.

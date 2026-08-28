@@ -24,7 +24,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Allocate isolated SSD workspace
         id: scratch
         run: |
@@ -80,7 +80,7 @@ jobs:
     needs: [lint]
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Allocate isolated SSD workspace
         id: scratch
         run: |
@@ -141,7 +141,7 @@ jobs:
       run:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Ensure bounded Windows scratch capacity
@@ -188,7 +188,7 @@ jobs:
       CI_SCRATCH: /Volumes/CISCRATCH
       PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Allocate isolated guest SSD workspace
         id: scratch
         run: |

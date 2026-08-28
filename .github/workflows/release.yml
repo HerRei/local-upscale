@@ -25,7 +25,7 @@ jobs:
     name: Storage Preflight Check
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate synchronized release metadata
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -79,7 +79,7 @@ jobs:
       PIP_CACHE_DIR: /ci-scratch/cache/pip
       PYINSTALLER_CONFIG_DIR: /ci-scratch/cache/pyinstaller
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Allocate lock-protected SSD scratch
         id: scratch
         run: |
@@ -211,7 +211,7 @@ jobs:
             pkg: "LocalSR-Windows-CUDA-x86_64.zip"
             index: "cu126"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Allocate bounded Windows scratch
@@ -328,7 +328,7 @@ jobs:
       MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
       MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Enforce guest SSD budget and allocate scratch
         id: scratch
         run: |
@@ -504,7 +504,7 @@ jobs:
     needs: [build-macos-flavors]
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Re-check HDD checksums and all native binaries
         run: |
           ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
@@ -528,7 +528,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Prepare assets within GitHub's per-file limit
         run: |
           ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
@@ -566,7 +566,7 @@ jobs:
     if: always()
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Enforce HDD and SSD retention limits
         run: |
           python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
