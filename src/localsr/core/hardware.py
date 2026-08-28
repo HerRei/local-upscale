@@ -307,6 +307,13 @@ def get_capability_report() -> dict:
 
 
 def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) -> None:
+    # Packaging smoke tests can run in a Windows VM with no passed-through D3D12
+    # adapter. Some torch-directml builds block indefinitely while probing that
+    # configuration, so allow the smoke harness to exercise the worker protocol
+    # without pretending that CI has DirectML hardware. Normal application runs
+    # never set this variable and retain full device discovery.
+    if os.environ.get("LOCALSR_SKIP_DIRECTML_PROBE") == "1":
+        return
     try:
         import torch_directml
 

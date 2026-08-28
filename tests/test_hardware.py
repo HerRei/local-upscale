@@ -1,7 +1,25 @@
+import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 from localsr.core import hardware
+
+
+def test_directml_probe_can_be_explicitly_skipped_for_hardwareless_packaging_vm(
+    monkeypatch,
+):
+    fake_directml = SimpleNamespace(
+        is_available=lambda: (_ for _ in ()).throw(
+            AssertionError("DirectML hardware probe should have been skipped")
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch_directml", fake_directml)
+    monkeypatch.setenv("LOCALSR_SKIP_DIRECTML_PROBE", "1")
+    devices = []
+
+    hardware._detect_directml(devices, 16 * 1024**3, 8 * 1024**3)
+
+    assert devices == []
 
 
 def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):
@@ -43,7 +61,7 @@ def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):
         ),
     )
     monkeypatch.setattr(hardware.torch, "cuda", fake_cuda)
-    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu)
+    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu, raising=False)
 
     report = hardware.get_capability_report()
     rocm = next(device for device in report["devices"] if device["type"] == "rocm")
@@ -80,7 +98,9 @@ def test_mps_snapshot_exposes_allocator_and_pressure(monkeypatch):
     monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: True)
     monkeypatch.setattr(hardware.torch.mps, "current_allocated_memory", lambda: 1 * gib)
     monkeypatch.setattr(hardware.torch.mps, "driver_allocated_memory", lambda: 2 * gib)
-    monkeypatch.setattr(hardware.torch.mps, "recommended_max_memory", lambda: 10 * gib)
+    monkeypatch.setattr(
+        hardware.torch.mps, "recommended_max_memory", lambda: 10 * gib, raising=False
+    )
     monkeypatch.setattr(
         hardware,
         "_system_pressure_snapshot",
@@ -141,7 +161,7 @@ def test_discovers_nvidia_cuda_and_intel_discrete_xpu(monkeypatch):
         ),
     )
     monkeypatch.setattr(hardware.torch, "cuda", fake_cuda)
-    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu)
+    monkeypatch.setattr(hardware.torch, "xpu", fake_xpu, raising=False)
 
     report = hardware.get_capability_report()
     cuda_devices = [device for device in report["devices"] if device["type"] == "cuda"]

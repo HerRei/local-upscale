@@ -1,0 +1,15 @@
+[Unit]
+Description=LocalSR bounded CI artifact retention
+RequiresMountsFor=/mnt/hdd/ci-artifacts
+
+[Service]
+Type=oneshot
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/localsr-ci
+ExecStart=/usr/bin/python3 /opt/localsr-ci/scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/mnt/hdd/ci-artifacts

@@ -1,4 +1,5 @@
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -57,11 +58,16 @@ def test_hard_gpu_memory_limits(monkeypatch):
     assert cuda_fraction == pytest.approx(0.45)
     assert calls[-1] == ("cuda", pytest.approx(0.45), "cuda:0")
 
-    monkeypatch.setattr(torch.xpu, "mem_get_info", lambda _device: (6 * gib, 8 * gib))
     monkeypatch.setattr(
-        torch.xpu,
-        "set_per_process_memory_fraction",
-        lambda fraction, device: calls.append(("xpu", fraction, str(device))),
+        torch,
+        "xpu",
+        SimpleNamespace(
+            mem_get_info=lambda _device: (6 * gib, 8 * gib),
+            set_per_process_memory_fraction=lambda fraction, device: calls.append(
+                ("xpu", fraction, str(device))
+            ),
+        ),
+        raising=False,
     )
 
     xpu_fraction = _apply_gpu_memory_limit(torch.device("xpu:0"), safe_memory=True)

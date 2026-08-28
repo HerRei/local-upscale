@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import json
+import struct
+import sys
+import tarfile
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_script(path: Path):
+    module_name = "_ci_test_" + path.stem
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+verify = load_script(ROOT / "tests" / "verify_artifacts.py")
+preflight = load_script(ROOT / "scripts" / "storage_preflight.py")
+cross_wheels = load_script(ROOT / "scripts" / "macos_cross_wheels.py")
+artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
+maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
+macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
+frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
+
+
+def thin_macho(cpu: int) -> bytes:
+    return b"\xcf\xfa\xed\xfe" + struct.pack("<I", cpu) + bytes(64)
+
+
+def elf(machine: int) -> bytes:
+    payload = bytearray(64)
+    payload[:6] = b"\x7fELF\x02\x01"
+    struct.pack_into("<H", payload, 18, machine)
+    return bytes(payload)
+
+
+def test_native_header_parsers():
+    assert verify.macho_arches(thin_macho(0x0100000C)) == {"arm64"}
+    fat = (
+        b"\xca\xfe\xba\xbe"
+        + struct.pack(">I", 2)
+        + struct.pack(">IIIII", 0x01000007, 0, 0, 0, 0)
+        + struct.pack(">IIIII", 0x0100000C, 0, 0, 0, 0)
+    )
+    assert verify.macho_arches(fat) == {"x86_64", "arm64"}
+    assert verify.elf_arch(elf(62)) == "x86_64"
+    assert verify.elf_arch(elf(224)) == "amdgpu"
+    pe = bytearray(256)
+    pe[:2] = b"MZ"
+    struct.pack_into("<I", pe, 0x3C, 128)
+    pe[128:132] = b"PE\0\0"
+    struct.pack_into("<H", pe, 132, 0xAA64)
+    assert verify.pe_arch(bytes(pe)) == "arm64"
+
+
+def test_macho_tree_excludes_build_tool_fixtures(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    fixture = tmp_path / "delocate" / "tests" / "data"
+    runtime.mkdir()
+    fixture.mkdir(parents=True)
+    (runtime / "extension.so").write_bytes(thin_macho(0x0100000C))
+    (fixture / "single-arch.dylib").write_bytes(thin_macho(0x01000007))
+
+    report = macho_tree.inspect(
+        tmp_path,
+        {"arm64"},
+        None,
+        ("delocate/tests/data/*",),
+    )
+
+    assert report["result"] == "PASS"
+    assert report["native_binary_count"] == 1
+    assert report["excluded_patterns"] == ["delocate/tests/data/*"]
+
+
+def test_stream_verifies_arm64_mps_artifact(tmp_path: Path):
+    artifact = tmp_path / "LocalSR-macOS-arm64.tar.gz"
+    with tarfile.open(artifact, "w:gz") as archive:
+        for name in ("LocalSR/LocalSR", "LocalSR/_internal/torch/lib/libtorch_cpu.dylib"):
+            payload = thin_macho(0x0100000C)
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    artifact.with_name(artifact.name + ".sha256").write_text(
+        f"{digest}  {artifact.name}\n", encoding="utf-8"
+    )
+    metadata = {
+        "artifact_filename": artifact.name,
+        "platform": "macos",
+        "architecture": "arm64",
+        "backend": "MPS",
+        "sha256": digest,
+        "repository_commit": "a" * 40,
+        "github_run_id": "1",
+        "run_attempt": "1",
+        "timestamp": "2026-08-23T00:00:00+00:00",
+        "mps": {
+            "torch_arm64_wheel": "torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
+            "torch_arm64_sha256": "b" * 64,
+        },
+    }
+    artifact.with_name(artifact.name + ".metadata.json").write_text(
+        json.dumps(metadata), encoding="utf-8"
+    )
+    spec = verify.ArtifactSpec(artifact.name, "macos", "arm64", "MPS", "LocalSR/LocalSR", True)
+    report = verify.verify_artifact(artifact, spec)
+    assert "Result: PASS" in report
+    assert "Native binaries inspected: 2" in report
+
+
+def test_arm_verifier_rejects_x86_member(tmp_path: Path):
+    artifact = tmp_path / "bad.tar.gz"
+    with tarfile.open(artifact, "w:gz") as archive:
+        for name, cpu in (("LocalSR/LocalSR", 0x0100000C), ("LocalSR/bad.dylib", 0x01000007)):
+            payload = thin_macho(cpu)
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    spec = verify.ArtifactSpec(artifact.name, "macos", "arm64", "MPS", "LocalSR/LocalSR")
+    _count, errors = verify.verify_archive(artifact, spec)
+    assert any("bad.dylib" in error and "x86_64" in error for error in errors)
+
+
+def test_linux_verifier_distinguishes_rocm_device_code_from_host_libraries(tmp_path: Path):
+    artifact = tmp_path / "rocm.tar.gz"
+    members = {
+        "LocalSR/LocalSR": elf(62),
+        "LocalSR/_internal/torch/lib/rocblas/library/kernel.hsaco": elf(224),
+        "LocalSR/_internal/torch/lib/hipblaslt/library/extop_gfx1100.co": elf(224),
+    }
+    with tarfile.open(artifact, "w:gz") as archive:
+        for name, payload in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    spec = verify.ArtifactSpec(artifact.name, "linux", "x86_64", "AMD-ROCm", "LocalSR/LocalSR")
+    count, errors = verify.verify_archive(artifact, spec)
+    assert count == 1
+    assert errors == []
+
+    members["LocalSR/_internal/bad.so"] = elf(224)
+    with tarfile.open(artifact, "w:gz") as archive:
+        for name, payload in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    _count, errors = verify.verify_archive(artifact, spec)
+    assert any("bad.so" in error and "amdgpu" in error for error in errors)
+
+
+def test_storage_preflight_includes_peak_and_reserve(monkeypatch: pytest.MonkeyPatch):
+    shutil_usage = (1000, 400, 600)
+    monkeypatch.setattr(preflight.shutil, "disk_usage", lambda _path: shutil_usage)
+    item = preflight.status_for("SSD", Path("."), 25, 200, 300)
+    assert item.reserve_bytes == 250
+    assert item.required_free_bytes == 550
+    assert item.passed
+    monkeypatch.setattr(
+        preflight.shutil,
+        "disk_usage",
+        lambda _path: (1000, 500, 500),
+    )
+    assert not preflight.status_for("SSD", Path("."), 25, 200, 300).passed
+
+
+def test_cross_wheel_pair_is_merged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    x86 = tmp_path / "x86"
+    arm = tmp_path / "arm"
+    output = tmp_path / "out"
+    x86.mkdir()
+    arm.mkdir()
+    (x86 / "demo-1.0-cp311-cp311-macosx_12_0_x86_64.whl").write_bytes(b"x86")
+    (arm / "demo-1.0-cp311-cp311-macosx_12_0_arm64.whl").write_bytes(b"arm")
+
+    def fake_run(command, check):
+        assert check
+        destination = Path(command[command.index("-w") + 1])
+        merged = destination / ("demo-1.0-cp311-cp311-macosx_10_13_x86_64.macosx_11_0_arm64.whl")
+        merged.write_bytes(b"merged")
+
+    monkeypatch.setattr(cross_wheels.subprocess, "run", fake_run)
+    records = cross_wheels.merge_wheel_sets(x86, arm, output)
+    assert records[0].operation == "delocate-merge"
+    assert cross_wheels.is_dual_arch_wheel(Path(records[0].output))
+
+
+def test_torch_openmp_aliases_become_dual_arch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    site_packages = tmp_path / "site-packages"
+    paths = (
+        site_packages / "torch/lib/libiomp5.dylib",
+        site_packages / "functorch/.dylibs/libiomp5.dylib",
+        site_packages / "functorch/.dylibs/libomp.dylib",
+    )
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"arm" if path.name == "libomp.dylib" else b"x86")
+
+    def fake_arches(path: Path, _lipo: str = "lipo") -> set[str]:
+        payload = path.read_bytes()
+        if payload == b"fat":
+            return {"x86_64", "arm64"}
+        return {"arm64"} if payload == b"arm" else {"x86_64"}
+
+    def fake_fat(_x86: Path, _arm: Path, destination: Path, **_kwargs) -> None:
+        destination.write_bytes(b"fat")
+
+    monkeypatch.setattr(cross_wheels, "lipo_arches", fake_arches)
+    monkeypatch.setattr(cross_wheels, "make_fat_binary", fake_fat)
+    report = cross_wheels.normalize_torch_openmp(site_packages)
+    assert len(report["outputs"]) == 3
+    assert all(path.read_bytes() == b"fat" for path in paths)
+
+
+def test_artifact_path_components_and_managed_root(tmp_path: Path):
+    assert artifact_server.safe_component("LocalSR-macOS-arm64.tar.gz", "name")
+    with pytest.raises(ValueError):
+        artifact_server.safe_component("../../data.img", "name")
+    root = tmp_path / "ci-artifacts"
+    root.mkdir()
+    assert maintenance.managed_root(root) == root.resolve()
+    with pytest.raises(ValueError):
+        maintenance.managed_root(tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Test fixture uses a POSIX executable script")
+def test_frozen_worker_smoke_protocol(tmp_path: Path):
+    bundle = tmp_path / "LocalSR"
+    bundle.mkdir()
+    worker = bundle / "LocalSRWorker"
+    worker.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "print(json.dumps({'type': 'worker_ready', 'data': {}}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    message = json.loads(line)\n"
+        "    if message['type'] == 'capabilities_request':\n"
+        "        print(json.dumps({'type': 'capabilities_info', 'data': "
+        "{'devices': [{'id': 'cpu', 'type': 'cpu'}]}}), flush=True)\n"
+        "    elif message['type'] == 'shutdown_request':\n"
+        "        break\n",
+        encoding="utf-8",
+    )
+    worker.chmod(0o755)
+
+    report = frozen_smoke.smoke(bundle, timeout=10)
+
+    assert report["result"] == "PASS"
+    assert report["worker_ready"] is True
+    assert report["capabilities"]["devices"][0]["type"] == "cpu"

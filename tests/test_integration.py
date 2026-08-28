@@ -1,9 +1,11 @@
 import glob
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -12,6 +14,7 @@ import spandrel.architectures.ESRGAN as E
 import torch
 from PIL import Image
 from PySide6.QtCore import QProcess, QSettings
+from pytestqt.exceptions import TimeoutError as QtBotTimeoutError
 
 from localsr.protocol.messages import InspectRequest
 from localsr.ui.main_window import MainWindow
@@ -31,6 +34,11 @@ def create_test_image(path: str, width: int, height: int, color="red") -> str:
     return path
 
 
+def _ipc_timeout() -> float:
+    """Allow constrained self-hosted CI VMs to import PyTorch before IPC begins."""
+    return 120.0 if os.environ.get("CI") else 10.0
+
+
 class WorkerSubprocessHarness:
     """Helper harness to spawn, interact with, and cleanly shut down a worker subprocess."""
 
@@ -43,12 +51,33 @@ class WorkerSubprocessHarness:
             text=True,
         )
         self.pid = self.proc.pid
+        self._stdout_lines: queue.Queue[str | None] = queue.Queue()
+        self._stdout_reader = threading.Thread(target=self._collect_stdout, daemon=True)
+        self._stdout_reader.start()
 
-    def read_message(self, timeout=10.0) -> dict[str, Any]:
+    def _collect_stdout(self) -> None:
+        """Move worker output into a queue so test timeouts cannot block on readline()."""
+        try:
+            for line in self.proc.stdout:
+                self._stdout_lines.put(line)
+        finally:
+            self._stdout_lines.put(None)
+
+    def read_message(self, timeout: float | None = None) -> dict[str, Any]:
         """Reads a single JSON message line from worker stdout."""
-        line = self.proc.stdout.readline()
-        if not line:
-            raise RuntimeError("Subprocess stdout closed unexpectedly.")
+        if timeout is None:
+            timeout = _ipc_timeout()
+        try:
+            line = self._stdout_lines.get(timeout=timeout)
+        except queue.Empty as error:
+            raise TimeoutError(
+                f"Worker emitted no IPC message within {timeout:.1f}s "
+                f"(returncode={self.proc.poll()})."
+            ) from error
+        if line is None:
+            stderr = self.proc.stderr.read() if self.proc.poll() is not None else ""
+            detail = f" Worker stderr: {stderr.strip()}" if stderr.strip() else ""
+            raise RuntimeError(f"Subprocess stdout closed unexpectedly.{detail}")
         return json.loads(line.strip())
 
     def send_message(self, msg: dict[str, Any]):
@@ -56,9 +85,32 @@ class WorkerSubprocessHarness:
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
 
+    def wait_for_message(self, predicate, timeout: float) -> dict[str, Any]:
+        """Wait for a matching IPC message without exceeding an absolute deadline."""
+        deadline = time.monotonic() + timeout
+        seen_types: list[str] = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"No matching worker IPC message within {timeout:.1f}s; observed={seen_types}."
+                )
+            try:
+                message = self.read_message(timeout=remaining)
+            except TimeoutError as error:
+                raise TimeoutError(
+                    f"No matching worker IPC message within {timeout:.1f}s; observed={seen_types}."
+                ) from error
+            message_type = str(message.get("type"))
+            seen_types.append(message_type)
+            if message_type == "job_failed":
+                raise AssertionError(f"Worker reported job_failed: {message.get('data')}")
+            if predicate(message):
+                return message
+
     def wait_for_ready(self) -> dict[str, Any]:
         """Waits for and returns the worker_ready message."""
-        msg = self.read_message()
+        msg = self.read_message(timeout=_ipc_timeout())
         assert msg.get("type") == "worker_ready", f"Expected worker_ready, got {msg}"
         return msg
 
@@ -119,7 +171,7 @@ def test_f4_2_worker_ready_signal():
     """F4.2: Test worker_ready signal detection on worker startup."""
     harness = WorkerSubprocessHarness()
     try:
-        msg = harness.read_message()
+        msg = harness.wait_for_ready()
         assert msg["type"] == "worker_ready", f"First IPC message must be worker_ready, got: {msg}"
         assert msg.get("data") == {}, (
             f"worker_ready data field must be empty dict {{}}, got: {msg.get('data')}"
@@ -222,23 +274,20 @@ def test_f4_4_job_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req)
 
-        # Wait for job_started, then send cancel_request
-        start_time = time.time()
-        while time.time() - start_time < 5.0:
-            msg = harness.read_message()
-            if msg.get("type") == "job_started":
-                break
+        ipc_timeout = _ipc_timeout()
+
+        # Wait for job_started, then send cancel_request.
+        harness.wait_for_message(lambda message: message.get("type") == "job_started", ipc_timeout)
 
         harness.send_message({"type": "cancel_request", "data": {"job_id": "job_f4_4"}})
 
         # Read IPC responses until job_cancelled
-        cancelled_msg = None
-        start_time = time.time()
-        while time.time() - start_time < 10.0:
-            msg = harness.read_message()
-            if msg.get("type") == "job_cancelled" and msg["data"]["job_id"] == "job_f4_4":
-                cancelled_msg = msg
-                break
+        cancelled_msg = harness.wait_for_message(
+            lambda message: (
+                message.get("type") == "job_cancelled" and message["data"]["job_id"] == "job_f4_4"
+            ),
+            ipc_timeout,
+        )
 
         assert cancelled_msg is not None, "Worker must emit job_cancelled signal."
         assert not os.path.exists(out_img_path), (
@@ -280,18 +329,16 @@ def test_f4_5_subsequent_job_after_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req1)
 
-        # Read job_started
-        while True:
-            msg = harness.read_message()
-            if msg.get("type") == "job_started":
-                break
+        ipc_timeout = _ipc_timeout()
+
+        harness.wait_for_message(lambda message: message.get("type") == "job_started", ipc_timeout)
 
         harness.send_message({"type": "cancel_request", "data": {"job_id": "job_cancel_first"}})
 
-        while True:
-            msg = harness.read_message()
-            if msg.get("type") == "job_cancelled":
-                break
+        harness.wait_for_message(
+            lambda message: message.get("type") == "job_cancelled",
+            ipc_timeout,
+        )
 
         assert not os.path.exists(out_img1), "Cancelled job output file must not exist."
 
@@ -321,18 +368,13 @@ def test_f4_5_subsequent_job_after_cancellation(tmp_path, dummy_model):
 
         harness.send_message(job_req2)
 
-        completed_msg = None
-        start_time = time.time()
-        while time.time() - start_time < 10.0:
-            msg = harness.read_message()
-            if (
-                msg.get("type") == "job_completed"
-                and msg["data"]["job_id"] == "job_subsequent_second"
-            ):
-                completed_msg = msg
-                break
-            elif msg.get("type") == "job_failed":
-                pytest.fail(f"Subsequent job failed: {msg['data']}")
+        completed_msg = harness.wait_for_message(
+            lambda message: (
+                message.get("type") == "job_completed"
+                and message["data"]["job_id"] == "job_subsequent_second"
+            ),
+            ipc_timeout,
+        )
 
         assert completed_msg is not None, "Subsequent job must complete successfully."
         assert os.path.exists(out_img2), "Subsequent job output file must exist."
@@ -404,21 +446,36 @@ def test_f4_6_worker_shutdown_and_tempfile_cleanup(tmp_path, dummy_model):
 
 def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
     """Run a complete GUI-to-worker upscale with a real Spandrel descriptor."""
+    timeout_multiplier = 4 if sys.platform == "win32" else 1
     input_path = create_test_image(str(tmp_path / "gui_input.png"), 16, 16, color="blue")
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
     window = MainWindow(settings=settings)
     qtbot.addWidget(window)
     failures = []
+    protocol_errors = []
+    worker_logs = []
     window.worker.job_failed.connect(lambda _job_id, error: failures.append(error))
+    window.worker.warning.connect(lambda warning: protocol_errors.append(f"warning: {warning}"))
+    window.worker.worker_error.connect(lambda error: protocol_errors.append(f"error: {error}"))
+    window.worker.log_received.connect(lambda record: worker_logs.append(dict(record)))
 
     try:
         qtbot.waitUntil(
             lambda: (
                 window.worker.process.state() == QProcess.Running
                 and window.progress_label.text() == "Worker ready."
+                and int(window.capability_report.get("system_ram_total", 0)) > 0
             ),
-            timeout=10_000,
+            timeout=30_000 * timeout_multiplier,
         )
+
+        # This test exercises GUI-to-worker IPC and real CPU inference, not the
+        # resource-policy thresholds of a particular CI VM.  Windows can have
+        # less free RAM after the preceding stress tests, which correctly
+        # disables the button even for this synthetic 16x16 image.  Use a
+        # deterministic safe-memory snapshot after the real capability reply
+        # has arrived so the integration path itself remains testable.
+        window.capability_report["system_ram_available"] = 8 * 1024**3
 
         window.output_dir = str(tmp_path)
         window.out_dir_label.setText(str(tmp_path))
@@ -431,10 +488,26 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
         window.check_safe_mem.setChecked(False)
 
         window.worker.send_request(InspectRequest(model_path=dummy_model))
-        qtbot.waitUntil(
-            lambda: window.model_scale == 2 and window.btn_upscale.isEnabled(),
-            timeout=10_000,
-        )
+        try:
+            qtbot.waitUntil(
+                lambda: bool(failures) or bool(protocol_errors) or window.model_scale == 2,
+                timeout=30_000 * timeout_multiplier,
+            )
+        except QtBotTimeoutError:
+            pytest.fail(
+                "GUI worker model inspection timed out: "
+                f"process_state={window.worker.process.state().name}, "
+                f"bytes_to_write={window.worker.process.bytesToWrite()}, "
+                f"model_scale={window.model_scale}, "
+                f"upscale_enabled={window.btn_upscale.isEnabled()}, "
+                f"progress={window.progress_label.text()!r}, "
+                f"protocol_errors={protocol_errors!r}, worker_logs={worker_logs[-20:]!r}"
+            )
+        assert not failures, f"GUI worker model inspection failed: {failures}"
+        assert not protocol_errors, f"GUI worker protocol failed: {protocol_errors}"
+        assert window.current_estimate is not None
+        assert not window.current_estimate.blocking, window.current_estimate.warnings
+        assert window.btn_upscale.isEnabled()
 
         output_path = window.get_output_path()
         window.start_upscale()
@@ -446,7 +519,7 @@ def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
                     and window.progress_label.text() == "Completed successfully!"
                 )
             ),
-            timeout=20_000,
+            timeout=60_000 * timeout_multiplier,
         )
 
         assert not failures, f"GUI worker job failed: {failures}"

@@ -1,18 +1,20 @@
-name: Test macOS VM
+name: Diagnose macOS X64 runner
 
 on:
-  push:
-    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  test-macos:
-    runs-on: [self-hosted, macOS]
+  diagnose:
+    runs-on: [self-hosted, macOS, X64]
     steps:
-      - name: Test
+      - name: Report runner and SSD scratch state without modifying it
         run: |
-          ls -ld /Volumes/shared || true
-          ls -ld /Volumes/shared/ci-artifacts || true
-          touch /Volumes/shared/ci-artifacts/test.txt || true
-          sudo touch /Volumes/shared/ci-artifacts/test.txt || true
-          whoami
-          sudo -n whoami || true
+          uname -a
+          uname -m
+          sw_vers
+          df -h / /Volumes/CISCRATCH
+          diskutil info /Volumes/CISCRATCH
+          test -r /Volumes/CISCRATCH

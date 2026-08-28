@@ -1,10 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
+from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
@@ -17,21 +19,25 @@ with (ROOT / "pyproject.toml").open("rb") as stream:
 
 macos_dialog_helper = None
 native_helpers = []
+target_arch = None
 if sys.platform == "darwin":
-    native_build_dir = ROOT / "build" / "native"
+    target_arch = os.environ.get("LOCALSR_TARGET_ARCH") or CONF.get("target_arch")
+    native_build_dir = Path(
+        os.environ.get("LOCALSR_NATIVE_BUILD_DIR", str(ROOT / "build" / "native"))
+    )
     native_build_dir.mkdir(parents=True, exist_ok=True)
     macos_dialog_helper = native_build_dir / "LocalSRDialog"
-    subprocess.run(
+    swift_command = ["xcrun", "swiftc", "-O"]
+    if target_arch in {"x86_64", "arm64"}:
+        swift_command.extend(["-target", f"{target_arch}-apple-macos12.0"])
+    swift_command.extend(
         [
-            "xcrun",
-            "swiftc",
-            "-O",
             str(ROOT / "packaging" / "macos" / "LocalSRDialog.swift"),
             "-o",
             str(macos_dialog_helper),
-        ],
-        check=True,
+        ]
     )
+    subprocess.run(swift_command, check=True)
     native_helpers.append(("LocalSRDialog", str(macos_dialog_helper), "BINARY"))
 
 spandrel_datas, spandrel_binaries, spandrel_hidden = collect_all("spandrel")
@@ -100,6 +106,7 @@ gui_exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    target_arch=target_arch,
     icon=str(ICON_DIR / ("LocalSR.icns" if sys.platform == "darwin" else "LocalSR.ico"))
     if sys.platform in {"darwin", "win32"}
     else None,
@@ -118,6 +125,7 @@ worker_exe = EXE(
     strip=False,
     upx=False,
     console=True,
+    target_arch=target_arch,
 )
 
 collection = COLLECT(
@@ -187,4 +195,3 @@ if sys.platform == "darwin":
             ],
         },
     )
-

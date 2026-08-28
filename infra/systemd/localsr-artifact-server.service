@@ -1,0 +1,22 @@
+[Unit]
+Description=LocalSR atomic CI artifact receiver
+After=network-online.target mnt-hdd.mount
+Wants=network-online.target
+RequiresMountsFor=/mnt/hdd/ci-artifacts
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/localsr-ci
+ExecStart=/usr/bin/python3 /opt/localsr-ci/scripts/ci_artifact_server.py --root /mnt/hdd/ci-artifacts --token-file /etc/localsr-ci/artifact-upload.token --bind 192.168.9.134 --port 8000
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/mnt/hdd/ci-artifacts
+
+[Install]
+WantedBy=multi-user.target
