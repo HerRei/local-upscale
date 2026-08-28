@@ -19,6 +19,8 @@ stable release is published.
 
 - Bounded Windows CI scratch removal and moved it to a short-path `rd` subprocess so multi-gigabyte
   CUDA cleanup cannot occupy the only Windows runner indefinitely.
+- Kept clean-shutdown acceptance bounded while allowing Windows time to unload PyTorch DLLs on the
+  memory-constrained test VM.
 - Synchronized app, bundle, installer, documentation, tag, and release metadata at 0.0.8-alpha.
 
 ## [0.0.7-alpha] - 2026-08-28

@@ -236,11 +236,15 @@ def test_r3_clean_shutdown_no_orphans(tmp_path):
     proc.stdin.write(json.dumps({"type": "shutdown_request"}) + "\n")
     proc.stdin.flush()
 
+    # Windows can spend several seconds unloading the freshly imported PyTorch
+    # runtime on the memory-constrained CI VM. Keep the assertion bounded while
+    # allowing normal interpreter/DLL finalization to finish.
+    shutdown_timeout = 20 if sys.platform == "win32" else 5
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=shutdown_timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        pytest.fail("Worker server failed to shut down cleanly within 5 seconds.")
+        pytest.fail(f"Worker server failed to shut down cleanly within {shutdown_timeout} seconds.")
 
     assert proc.returncode == 0, f"Worker process exit code should be 0, got {proc.returncode}"
 
