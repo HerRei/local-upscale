@@ -202,14 +202,17 @@ jobs:
             backend: "CPU"
             pkg: "LocalSR-Windows-CPU-x86_64.zip"
             index: "cpu"
+            scratch: "cpu"
           - name: "DirectML-x86_64"
             backend: "DirectML"
             pkg: "LocalSR-Windows-DirectML-x86_64.zip"
             index: ""
+            scratch: "dml"
           - name: "CUDA-x86_64"
             backend: "CUDA"
             pkg: "LocalSR-Windows-CUDA-x86_64.zip"
             index: "cu126"
+            scratch: "cuda"
     steps:
       - uses: actions/checkout@v7
       - name: Ensure signed Microsoft VC++ runtime
@@ -217,8 +220,10 @@ jobs:
       - name: Allocate bounded Windows scratch
         run: |
           ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
-          $base = Join-Path $env:RUNNER_TEMP "LocalSR-CI"
-          $runRoot = Join-Path $base "${{ github.run_id }}\${{ github.run_attempt }}\windows\${{ matrix.target.name }}"
+          # Keep this path deliberately short. Python's editable-wheel builder
+          # still creates deeply nested temporary license paths on Windows.
+          $base = "C:\lsr-ci"
+          $runRoot = Join-Path $base "${{ github.run_id }}\${{ github.run_attempt }}\w\${{ matrix.target.scratch }}"
           New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
           "LOCALSR_RUN_ROOT=$runRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Create isolated backend environment
@@ -292,7 +297,7 @@ jobs:
             Write-Host "No Windows scratch path was allocated"
             exit 0
           }
-          $base = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI")) + [IO.Path]::DirectorySeparatorChar
+          $base = [IO.Path]::GetFullPath("C:\lsr-ci") + [IO.Path]::DirectorySeparatorChar
           $target = [IO.Path]::GetFullPath($env:LOCALSR_RUN_ROOT)
           if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe cleanup target: $target" }
           if (Test-Path -LiteralPath $target) {
