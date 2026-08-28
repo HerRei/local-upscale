@@ -200,6 +200,26 @@ def verify_metadata(artifact: Path, spec: ArtifactSpec, digest: str) -> dict[str
     for key in ("repository_commit", "github_run_id", "run_attempt", "timestamp"):
         if not metadata.get(key):
             raise ValueError(f"{path.name}: required field {key!r} is empty")
+    signing = metadata.get("signing")
+    if not isinstance(signing, dict) or not signing.get("status"):
+        raise ValueError(f"{path.name}: signing status is missing")
+    if signing.get("status") == "developer-id-notarized":
+        if not all(
+            signing.get(key)
+            for key in ("developer_id", "notarized", "gatekeeper_accepted", "team_id")
+        ):
+            raise ValueError(f"{path.name}: incomplete Developer ID/notarization evidence")
+    if spec.platform == "linux" and spec.backend == "CPU":
+        live_models = metadata.get("live_models")
+        if not isinstance(live_models, dict) or live_models.get("result") != "PASS":
+            raise ValueError(f"{path.name}: real Quick/Best live-model evidence is missing")
+        presets = {
+            str(model.get("preset"))
+            for model in live_models.get("models", [])
+            if isinstance(model, dict)
+        }
+        if presets != {"Quick", "Best"}:
+            raise ValueError(f"{path.name}: Quick/Best live-model evidence is incomplete")
     if spec.require_mps:
         mps = metadata.get("mps")
         if not isinstance(mps, dict):
@@ -282,7 +302,7 @@ def atomic_write(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
-def verify_artifact(artifact: Path, spec: ArtifactSpec) -> str:
+def verify_artifact(artifact: Path, spec: ArtifactSpec) -> tuple[str, str]:
     digest = verify_checksum(artifact)
     verify_metadata(artifact, spec, digest)
     native_count, errors = verify_archive(artifact, spec)
@@ -303,7 +323,17 @@ def verify_artifact(artifact: Path, spec: ArtifactSpec) -> str:
     lines.append("Result: PASS")
     report = "\n".join(lines) + "\n"
     atomic_write(artifact.with_name(artifact.name + ".architecture.txt"), report)
-    return report
+    return report, digest
+
+
+def verify_unique_digests(verified: list[tuple[str, str]]) -> None:
+    by_digest: dict[str, list[str]] = {}
+    for filename, digest in verified:
+        by_digest.setdefault(digest, []).append(filename)
+    duplicates = [filenames for filenames in by_digest.values() if len(filenames) > 1]
+    if duplicates:
+        groups = "; ".join(", ".join(filenames) for filenames in duplicates)
+        raise ValueError(f"Release archives must have distinct SHA-256 digests: {groups}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -322,19 +352,26 @@ def main(argv: list[str] | None = None) -> int:
         if not specs:
             parser.error(f"artifact is not present in manifest: {args.only}")
     failures: list[str] = []
+    verified: list[tuple[str, str]] = []
     for spec in specs:
         try:
             artifact = locate_exact(args.artifact_root, spec.filename)
-            print(verify_artifact(artifact, spec), end="")
+            report, digest = verify_artifact(artifact, spec)
+            print(report, end="")
+            verified.append((spec.filename, digest))
         except Exception as exc:  # report the complete matrix before failing
             failures.append(f"{spec.filename}: {exc}")
             print(f"Artifact: {spec.filename}\nResult: FAIL\nReason: {exc}", file=sys.stderr)
+    try:
+        verify_unique_digests(verified)
+    except ValueError as exc:
+        failures.append(str(exc))
     if failures:
         print("\nArtifact verification failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print(f"Verified {len(specs)} release artifacts: PASS")
+    print(f"Verified {len(specs)} release artifacts with distinct digests: PASS")
     return 0
 
 

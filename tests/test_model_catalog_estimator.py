@@ -35,9 +35,9 @@ def test_catalog_has_pinned_optional_downloads():
         "hat_l_x4_imagenet",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
-        "span_anime_x4",
+        "realplksr_hfa2k_anime_x4",
         "span_photo_x4",
-        "realplksr_nomos8k_x4",
+        "realplksr_nomoswebphoto_x4",
         "nafnet_gopro_deblur",
     ]
     assert len({model.filename for model in MODEL_CATALOG}) == 9
@@ -51,6 +51,8 @@ def test_catalog_has_pinned_optional_downloads():
     assert {model.license_name for model in MODEL_CATALOG} == {
         "Apache-2.0",
         "CC-BY-4.0",
+        "CC BY 4.0",
+        "CC-BY-0.4 (upstream; clarify)",
         "CC BY-NC-SA 4.0",
         "MIT",
     }

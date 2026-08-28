@@ -5,6 +5,31 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.7-alpha] - 2026-08-28
+
+### Added
+
+- A release-time empty-cache acceptance test downloads and runs the real Quick and Best models.
+- Privacy-filtered Copy Diagnostics support and the official Slint attribution widget.
+- Conditional Developer ID signing, notarization, stapling, and Gatekeeper validation for macOS
+  builds when production credentials are configured.
+- Explicit release limitations, third-party notices, and automated/manual acceptance checklists.
+
+### Changed
+
+- Replaced four dead catalog downloads with verified SPAN NomosUni, RealPLKSR NomosWebPhoto,
+  RealPLKSR HFA2k anime, and pinned NAFNet GoPro checkpoints.
+- Labeled all video/SeedVR2 features Labs / Experimental and fixed sequential multi-video batches.
+- Included SeedVR2 YAML, embeddings, NOTICE, and vendor license in wheels and source distributions.
+- Synchronized app, bundle, installer, documentation, tag, and release metadata at 0.0.7-alpha.
+- macOS archives now contain the actual `LocalSR.app`; Homebrew is no longer advertised.
+
+### Fixed
+
+- Prerelease tags now pass `--prerelease` to GitHub release creation.
+- Full release verification now rejects duplicate archive digests in addition to validating the
+  expected PE, ELF, and Mach-O content.
+
 ### Added
 
 - SeedVR2-3B temporal video upscaling (experimental): the Upscale Video task now offers

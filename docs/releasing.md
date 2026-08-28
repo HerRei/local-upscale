@@ -1,75 +1,83 @@
-# Native releases
+# Native release process
 
-LocalSR's `Native installers` workflow builds on each target operating system because PyInstaller
-does not cross-compile. Model checkpoints are not included in any package.
+`Build & Release` (`.github/workflows/release.yml`) builds nine portable, backend-specific archives.
+Model weights are downloaded on demand and are never included.
 
-## Artifacts
+## v0.0.7-alpha artifact matrix
 
-| Runner | Artifact |
-|---|---|
-| macOS 14 Apple Silicon | `LocalSR-macOS-arm64.dmg` |
-| Windows Server 2022 x86-64 | `LocalSR-Windows-x86_64-Setup.exe` |
-| Ubuntu 22.04 x86-64 | `LocalSR-Linux-x86_64.AppImage` and portable `.tar.gz` |
+| Platform | Backend | Archive |
+|---|---|---|
+| Linux x86-64 | CPU | `LocalSR-Linux-CPU-x86_64.tar.gz` |
+| Linux x86-64 | CUDA | `LocalSR-Linux-CUDA-x86_64.tar.gz` |
+| Linux x86-64 | Intel XPU | `LocalSR-Linux-Intel-x86_64.tar.gz` |
+| Linux x86-64 | AMD ROCm | `LocalSR-Linux-ROCm-x86_64.tar.gz` |
+| Windows x86-64 | CPU | `LocalSR-Windows-CPU-x86_64.zip` |
+| Windows x86-64 | DirectML | `LocalSR-Windows-DirectML-x86_64.zip` |
+| Windows x86-64 | CUDA | `LocalSR-Windows-CUDA-x86_64.zip` |
+| macOS 12+ Intel | CPU | `LocalSR-macOS-x86_64.tar.gz` |
+| macOS 12+ Apple Silicon | MPS | `LocalSR-macOS-arm64.tar.gz` |
 
-Every job builds the PyInstaller directory, runs `LocalSR --smoke-test` to compile and instantiate
-the packaged Slint component without entering an interactive event loop, and
-independently asks the packaged worker for capabilities over JSONL before requesting clean shutdown.
-Keeping these smoke tests separate avoids conflating slow first-time Torch startup with GUI startup.
-Linux source and package smoke tests run under Xvfb because Slint's Winit backend requires a display
-connection even though the smoke never presents a window. Native file pickers delegate to the host
-OS and add no second GUI runtime to the package. Windows records `package-ready` after the
-Slint component and packaged resources load successfully. Normal installed builds use the native
-graphics backend and lifecycle. Linux downloads
-the official AppImage `appimagetool` asset and verifies its publisher-provided SHA-256 digest before
-use. A `v*` tag publishes all successful artifacts as a GitHub Release; manual workflow runs retain
-them as Actions artifacts without creating a release. Installer jobs also mount/install/extract the
-final distributable and repeat the GUI and worker smoke tests from that installed form. Tags with a
-suffix such as `-alpha` are automatically published as GitHub prereleases.
+The macOS archives contain `LocalSR.app`. Other archives contain the `LocalSR` portable directory.
+The workflow does not currently produce a DMG, AppImage, MSI, or Inno Setup executable.
 
-## Local build
+## Release gates
 
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[package]"
-python packaging/build_icons.py
-pyinstaller --clean --noconfirm packaging/localsr.spec
-```
+Before native builds, the CPU job downloads Quick and Best into an empty temporary model cache,
+verifies pinned size and SHA-256 values, loads both through Spandrel, and runs real CPU inference.
 
-On macOS the output is `dist/LocalSR.app`; Windows and Linux use `dist/LocalSR/`. The bundle contains
-both `LocalSR` and `LocalSRWorker`. The PyInstaller spec collects the Slint Python runtime and the
-application's `.slint` source files; model weights remain external on-demand downloads.
+Every archive is accompanied by `.sha256`, `.metadata.json`, and `.architecture.txt`. The final gate:
 
-## Optional signing and notarization
+- locates exactly one of every manifest artifact;
+- re-hashes each archive and checks its sidecar and metadata;
+- parses PE, ELF, or Mach-O headers for every native member;
+- requires the exact architecture for the main executable and all host libraries;
+- records backend-probe and frozen-worker smoke evidence; and
+- rejects any two archives with the same SHA-256 digest.
 
-Unsigned artifacts are still produced when no credentials are configured. To sign releases, add
-these GitHub Actions secrets:
+GitHub assets may be split into chunks to stay below the per-file upload limit. The release index
+records how to reassemble and verify them.
 
-### macOS
+## Version synchronization
 
-- `MACOS_CERTIFICATE`: Developer ID Application certificate exported as `.p12`, base64 encoded.
-- `MACOS_CERTIFICATE_PASSWORD`: password used when exporting the certificate.
-- `MACOS_KEYCHAIN_PASSWORD`: temporary CI keychain password.
-- `MACOS_SIGNING_IDENTITY`: complete Developer ID Application identity.
-- `APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID`: notarytool credentials.
+For v0.0.7-alpha, all of these must agree:
 
-The workflow signs the `.app` with hardened runtime and the entitlements in
-`packaging/macos/entitlements.plist`, builds the DMG, submits it to Apple, and staples the result.
+- tag: `v0.0.7-alpha`;
+- Python project/app version: `0.0.7-alpha`;
+- macOS numeric `CFBundleShortVersionString=0.0.7`, `CFBundleVersion=7`, and exact custom
+  `LocalSRReleaseVersion=0.0.7-alpha` (all derived from `pyproject.toml`);
+- Inno Setup metadata: `0.0.7-alpha`;
+- changelog and README release line; and
+- GitHub release title: `LocalSR v0.0.7-alpha`.
 
-### Windows
+`scripts/check_release_version.py --tag v0.0.7-alpha` enforces this. A hyphenated version tag is
+created with `gh release create --prerelease`; reruns also correct the title/prerelease flag.
 
-- `WINDOWS_CERTIFICATE`: Authenticode `.pfx`, base64 encoded.
-- `WINDOWS_CERTIFICATE_PASSWORD`: certificate password.
+## Signing and notarization
 
-The workflow builds with Inno Setup and timestamps the installer using SHA-256. Hardware-backed or
-cloud signing requires replacing this step with the certificate provider's supported action.
+Without credentials, the alpha workflow records an explicit `ad-hoc` macOS signing report in
+artifact metadata. It does not claim Gatekeeper acceptance. Production signing requires all of:
 
-## Publishing
+- `MACOS_CERTIFICATE_P12_BASE64` — Developer ID Application certificate/key exported as `.p12`;
+- `MACOS_CERTIFICATE_PASSWORD`;
+- `MACOS_SIGNING_IDENTITY` — complete Developer ID Application identity;
+- `MACOS_NOTARY_APPLE_ID`;
+- `MACOS_NOTARY_PASSWORD` — app-specific Apple ID password; and
+- `MACOS_TEAM_ID`.
 
-1. Ensure CI is green on `main`.
-2. Update `pyproject.toml` and this document if artifact support changes.
-3. Create and push an annotated version tag, for example
-   `git tag -a v0.0.2-alpha -m "LocalSR 0.0.2 Alpha"`.
-4. Watch all three native jobs. A release is created only after every platform succeeds.
-5. Test installation on physical Windows, macOS, and Linux hardware before describing a build as
-   stable. CI proves packaging and startup; it cannot prove each GPU driver/backend combination.
+With all values present, `scripts/sign_macos_app.sh` imports the certificate into an ephemeral
+keychain, signs with hardened runtime, submits to Apple notarytool, staples the ticket, validates it,
+and requires Gatekeeper acceptance before archiving. A partial credential set fails the build.
+
+Windows Authenticode credentials are not configured and Windows archives remain unsigned. Add and
+verify an Authenticode signing/timestamping stage before calling a Windows build public-beta ready.
+
+## Publishing v0.0.7-alpha
+
+1. Run the offline suite, lint/format, Slint compile, package-data inspection, and live-model check.
+2. Merge the release commit to `main` and require green CI.
+3. Create the annotated tag: `git tag -a v0.0.7-alpha -m "LocalSR v0.0.7-alpha"`.
+4. Push the tag. The workflow publishes only after all nine archives pass the final gate.
+5. Confirm the GitHub release is titled `LocalSR v0.0.7-alpha`, marked prerelease, and contains the
+   release index/checksums/metadata for all nine logical archives.
+6. Complete the physical-machine items in `docs/acceptance.md` before promoting the build to public
+   beta.

@@ -20,6 +20,8 @@ def main() -> int:
     project_root = Path(__file__).resolve().parent.parent
     with (project_root / "pyproject.toml").open("rb") as stream:
         expected_version = tomllib.load(stream)["project"]["version"]
+    expected_bundle_version = expected_version.split("-", 1)[0]
+    expected_build_number = str(int(expected_bundle_version.rsplit(".", 1)[-1]))
 
     if metadata.get("LSBackgroundOnly") is True:
         raise SystemExit("LocalSR.app is incorrectly marked as a background-only app")
@@ -27,10 +29,12 @@ def main() -> int:
         raise SystemExit("LocalSR.app is missing the APPL bundle type")
     if metadata.get("CFBundleExecutable") != "LocalSR":
         raise SystemExit("LocalSR.app does not point at the GUI executable")
-    if metadata.get("CFBundleShortVersionString") != expected_version:
+    if metadata.get("CFBundleShortVersionString") != expected_bundle_version:
         raise SystemExit("LocalSR.app short version does not match pyproject.toml")
-    if metadata.get("CFBundleVersion") != expected_version:
+    if metadata.get("CFBundleVersion") != expected_build_number:
         raise SystemExit("LocalSR.app bundle version does not match pyproject.toml")
+    if metadata.get("LocalSRReleaseVersion") != expected_version:
+        raise SystemExit("LocalSR.app exact release identity does not match pyproject.toml")
 
     dialog_helper = bundle / "Contents" / "Frameworks" / "LocalSRDialog"
     if not dialog_helper.is_file() or not os.access(dialog_helper, os.X_OK):

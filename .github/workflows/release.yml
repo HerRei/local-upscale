@@ -26,6 +26,13 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
+      - name: Validate synchronized release metadata
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/check_release_version.py --tag "$GITHUB_REF_NAME"
+          else
+            python3 scripts/check_release_version.py
+          fi
       - name: Prune only eligible managed CI storage
         run: |
           python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
@@ -104,6 +111,10 @@ jobs:
           "$PYTHON" scripts/backend_probe.py \
             --backend "${{ matrix.target.backend }}" \
             --output "$RUN_ROOT/staging/backend-probe.json"
+          if [ "${{ matrix.target.backend }}" = CPU ]; then
+            "$PYTHON" scripts/validate_live_models.py \
+              --report "$RUN_ROOT/staging/live-models.json"
+          fi
       - name: Build and archive on SSD
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
@@ -121,6 +132,10 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           ARTIFACT="$RUN_ROOT/staging/${{ matrix.target.pkg }}"
+          LIVE_MODEL_ARGUMENTS=()
+          if [ "${{ matrix.target.backend }}" = CPU ]; then
+            LIVE_MODEL_ARGUMENTS=(--live-model-report "$RUN_ROOT/staging/live-models.json")
+          fi
           python3 scripts/write_artifact_metadata.py "$ARTIFACT" \
             --commit "${{ github.sha }}" \
             --run-id "${{ github.run_id }}" \
@@ -129,7 +144,8 @@ jobs:
             --architecture x86_64 \
             --backend "${{ matrix.target.backend }}" \
             --backend-probe "$RUN_ROOT/staging/backend-probe.json" \
-            --smoke-report "$RUN_ROOT/staging/package-smoke.json"
+            --smoke-report "$RUN_ROOT/staging/package-smoke.json" \
+            "${LIVE_MODEL_ARGUMENTS[@]}"
           python3 tests/verify_artifacts.py "$RUN_ROOT/staging" --only "${{ matrix.target.pkg }}"
       - name: Atomically stage verified files to HDD
         env:
@@ -305,6 +321,12 @@ jobs:
       PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
       PYINSTALLER_CONFIG_DIR: /Volumes/CISCRATCH/cache/pyinstaller
       MACOSX_DEPLOYMENT_TARGET: "12.0"
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
       - name: Enforce guest SSD budget and allocate scratch
@@ -393,15 +415,20 @@ jobs:
             --workpath "$RUN_ROOT/build/pyinstaller" \
             --distpath "$RUN_ROOT/dist" \
             packaging/localsr.spec
-          "$PYTHON" scripts/verify_macho_tree.py "$RUN_ROOT/dist/LocalSR" \
+          "$PYTHON" scripts/verify_macho_tree.py "$RUN_ROOT/dist/LocalSR.app" \
             --require "${{ matrix.target.architecture }}" \
-            --main "$RUN_ROOT/dist/LocalSR/LocalSR" \
+            --main "$RUN_ROOT/dist/LocalSR.app/Contents/MacOS/LocalSR" \
             --report "$RUN_ROOT/staging/bundle-macho.json"
+          "$PYTHON" packaging/smoke_macos_bundle.py "$RUN_ROOT/dist/LocalSR.app"
           if [ "${{ matrix.target.architecture }}" = x86_64 ]; then
-            "$PYTHON" scripts/smoke_frozen_worker.py "$RUN_ROOT/dist/LocalSR" \
+            "$PYTHON" scripts/smoke_frozen_worker.py \
+              "$RUN_ROOT/dist/LocalSR.app/Contents/MacOS" \
               --report "$RUN_ROOT/staging/package-smoke.json"
           fi
-          tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR
+          bash scripts/sign_macos_app.sh \
+            "$RUN_ROOT/dist/LocalSR.app" \
+            "$RUN_ROOT/staging/signing-report.json"
+          tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR.app
       - name: Verify, checksum, and write metadata before transfer
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
@@ -426,6 +453,7 @@ jobs:
             --architecture "${{ matrix.target.architecture }}" \
             --backend "${{ matrix.target.backend }}" \
             --backend-probe "$RUN_ROOT/staging/backend-probe.json" \
+            --signing-report "$RUN_ROOT/staging/signing-report.json" \
             "${SMOKE_ARGUMENTS[@]}" \
             "${WHEEL_ARGUMENTS[@]}"
           "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/tests/verify_artifacts.py" \
@@ -512,7 +540,16 @@ jobs:
         run: |
           ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
           TAG="${GITHUB_REF_NAME}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes --verify-tag
+          TITLE="LocalSR $TAG"
+          if [[ "$TAG" == *-* ]]; then
+            gh release view "$TAG" >/dev/null 2>&1 || \
+              gh release create "$TAG" --title "$TITLE" --generate-notes --verify-tag --prerelease
+            gh release edit "$TAG" --title "$TITLE" --prerelease
+          else
+            gh release view "$TAG" >/dev/null 2>&1 || \
+              gh release create "$TAG" --title "$TITLE" --generate-notes --verify-tag
+            gh release edit "$TAG" --title "$TITLE" --prerelease=false
+          fi
           while IFS= read -r asset; do
             gh release upload "$TAG" "$asset" --clobber
           done < "$ROOT/release-assets/release-files.txt"

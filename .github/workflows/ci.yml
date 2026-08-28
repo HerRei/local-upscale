@@ -106,8 +106,11 @@ jobs:
             "torchvision==0.27.1" \
             --index-url https://download.pytorch.org/whl/cpu
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          "$PYTHON" -m pip install --disable-pip-version-check build
           cd "$RUN_ROOT/source"
           "$PYTHON" -m pytest tests/ -v
+          "$PYTHON" -m build
+          "$PYTHON" scripts/verify_python_package_data.py dist/*.whl dist/*.tar.gz
       - name: Finalize scratch state
         if: always()
         env:

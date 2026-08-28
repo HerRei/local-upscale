@@ -1,4 +1,4 @@
-import { ListView, ScrollView } from "std-widgets.slint";
+import { AboutSlint, ListView, ScrollView } from "std-widgets.slint";
 import {
     CheckControl,
     CustomRecipeRow,
@@ -104,6 +104,7 @@ export component MainWindow inherits Window {
     in-out property <string> estimate-warning: "";
 
     in-out property <bool> advanced-open: false;
+    in-out property <string> app-version: "unknown";
     in-out property <[string]> tile-options;
     in-out property <int> tile-index: 0;
     in-out property <[string]> halo-options;
@@ -186,6 +187,7 @@ export component MainWindow inherits Window {
     callback save-recipe(string);
     callback apply-recipe(int);
     callback delete-recipe(int);
+    callback copy-diagnostics();
 
     in-out property <bool> deflicker: false;
 
@@ -1228,12 +1230,12 @@ export component MainWindow inherits Window {
                             accessible-role: button;
                             accessible-enabled: root.video-enabled && root.model-selection-enabled;
                             accessible-label: root.video-enabled ?
-                                "Upscale Video" : "Video enhancement, coming soon";
+                                "Upscale Video · Labs" : "Video enhancement, coming soon";
 
                             Text {
                                 width: parent.width;
                                 height: parent.height;
-                                text: root.video-enabled ? "Upscale Video" : "Video enhancement · Coming soon";
+                                text: root.video-enabled ? "Upscale Video · Labs / Experimental" : "Video enhancement · Coming soon";
                                 color: root.video-enabled ? Theme.accent : Theme.text-tertiary;
                                 font-size: root.video-enabled ? 12px : 11px;
                                 font-weight: root.video-enabled ? 500 : 400;
@@ -1702,6 +1704,25 @@ export component MainWindow inherits Window {
                                 compact: true;
                                 active: !root.can-cancel;
                                 clicked => { root.refresh-hardware(); }
+                            }
+
+                            ThinSeparator { }
+                            SectionTitle { title: "ABOUT & SUPPORT"; }
+
+                            Text {
+                                text: "LocalSR " + root.app-version + " · Alpha software";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                            }
+
+                            FlatButton {
+                                text: "Copy Diagnostics";
+                                compact: true;
+                                clicked => { root.copy-diagnostics(); }
+                            }
+
+                            AboutSlint {
+                                height: 86px;
                             }
                         }
 

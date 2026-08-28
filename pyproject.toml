@@ -1,10 +1,11 @@
 [project]
 name = "localsr"
-version = "0.0.5-alpha"
+version = "0.0.7-alpha"
 description = "A Slint desktop application for local image super-resolution using PyTorch and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 keywords = ["super-resolution", "upscaling", "Slint", "PyTorch", "Spandrel"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -57,7 +58,7 @@ video = [
 package = ["pyinstaller>=6.21.0,<7", "pillow>=10.0.0"]
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
@@ -87,3 +88,12 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "localsr.ui" = ["slint/*.slint"]
+"localsr.video_models.seedvr2" = [
+    "*.pt",
+    "*.md",
+    "configs_3b/*.yaml",
+    "configs_7b/*.yaml",
+    "src/models/video_vae_v3/*.yaml",
+    "vendor/LICENSE",
+    "vendor/models/video_vae_v3/*.yaml",
+]

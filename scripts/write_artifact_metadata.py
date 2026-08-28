@@ -69,6 +69,8 @@ def main() -> None:
     parser.add_argument("--smoke-report", type=Path)
     parser.add_argument("--wheel-manifest", type=Path)
     parser.add_argument("--normalization-report", type=Path)
+    parser.add_argument("--signing-report", type=Path)
+    parser.add_argument("--live-model-report", type=Path)
     args = parser.parse_args()
     digest = sha256(args.artifact)
     metadata: dict[str, object] = {
@@ -83,6 +85,12 @@ def main() -> None:
         "artifact_filename": args.artifact.name,
         "artifact_size": args.artifact.stat().st_size,
         "sha256": digest,
+        "signing": {
+            "status": "unsigned",
+            "developer_id": False,
+            "notarized": False,
+            "gatekeeper_accepted": False,
+        },
     }
     if args.backend_probe:
         metadata["backend_probe"] = json.loads(args.backend_probe.read_text(encoding="utf-8"))
@@ -90,6 +98,10 @@ def main() -> None:
         metadata["package_smoke"] = json.loads(args.smoke_report.read_text(encoding="utf-8"))
     if args.wheel_manifest:
         metadata["mps"] = mps_provenance(args.wheel_manifest, args.normalization_report)
+    if args.signing_report:
+        metadata["signing"] = json.loads(args.signing_report.read_text(encoding="utf-8"))
+    if args.live_model_report:
+        metadata["live_models"] = json.loads(args.live_model_report.read_text(encoding="utf-8"))
     output = args.artifact.with_name(args.artifact.name + ".metadata.json")
     atomic_json(output, metadata)
     args.artifact.with_name(args.artifact.name + ".sha256").write_text(

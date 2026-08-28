@@ -70,6 +70,7 @@ class CatalogModel:
     # For face fine-tunes: the model_id of the general model this face
     # model pairs with. Empty string for non-face models.
     pair_with: str = ""
+    commercial_use_status: str = "allowed"
 
     @property
     def size_megabytes(self) -> float:
@@ -118,7 +119,10 @@ MODEL_CATALOG = (
         model_id="hat_s_x4_face",
         name="HAT-S ×4 Face — Restoration",
         filename="base_95k_interp_a0p1.pth",
-        description="Face-specialized HAT-S model blended for enhanced facial restoration while preserving clean fidelity.",
+        description=(
+            "Non-commercial face-specialized HAT-S model blended for enhanced facial "
+            "restoration while preserving clean fidelity."
+        ),
         size_bytes=40_484_805,
         sha256="92277daf002214307bea6f1e06b4fa745acdb7690728a0a9a619076e7bc8d7f2",
         download_url="https://github.com/HerRei/HAT/releases/download/v1.0.0-face-interp/base_95k_interp_a0p1.pth",
@@ -136,6 +140,7 @@ MODEL_CATALOG = (
         speed_factor=0.65,
         vram_estimate_mb=2000,
         pair_with="hat_s_x4",
+        commercial_use_status="not-allowed",
     ),
     CatalogModel(
         model_id="hat_l_x4_imagenet",
@@ -209,43 +214,50 @@ MODEL_CATALOG = (
         vram_estimate_mb=4000,
     ),
     CatalogModel(
-        model_id="span_anime_x4",
-        name="SPAN 4x Anime",
-        filename="4x_SPAN_AnimeSharp.pth",
-        description="Lightweight SPAN model for anime and illustrations",
-        size_bytes=10_485_760,
-        sha256="7e268fa176846dddebaefd8721c572a1e359a3c306fa5304b7beebf6b402efcf",
-        download_url="https://github.com/phhofm/models/releases/download/v0.1/4x_SPAN_AnimeSharp.pth",
-        architecture="SPAN",
+        model_id="realplksr_hfa2k_anime_x4",
+        name="RealPLKSR 4x HFA2k — Anime",
+        filename="4xHFA2k_ludvae_realplksr_dysample.pth",
+        description="Fast RealPLKSR model trained for anime, illustrations, and clean line art.",
+        size_bytes=29_715_988,
+        sha256="c6e44af18fd3159787b0dbf81d432a6c1ba12c736fc1184b107ed091e49e327c",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/"
+            "4xHFA2k_ludvae_realplksr_dysample/4xHFA2k_ludvae_realplksr_dysample.pth"
+        ),
+        architecture="RealPLKSR",
         native_scale=4,
         purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME, ModelPurpose.GENERAL),
         quality_tier=QualityTier.HIGH,
         speed_tier=SpeedTier.FAST,
         recommended_halo=16,
-        source_url="https://github.com/phhofm/models",
-        license_name="Apache-2.0",
+        source_url="https://github.com/Phhofm/models",
+        license_name="CC-BY-0.4 (upstream; clarify)",
         author="Philip Hofmann",
         memory_factor=0.88,
         time_factor=0.85,
         speed_factor=0.85,
         vram_estimate_mb=800,
+        commercial_use_status="unclear",
     ),
     CatalogModel(
         model_id="span_photo_x4",
-        name="SPAN 4x Photo (Lightning)",
-        filename="4x_SPAN_Photo.pth",
-        description="Ultra-lightweight real-time general photo upscaler",
-        size_bytes=3_984_588,
-        sha256="a34b22c954e76ea0dc7a77d7fa13c69cefe174549d47ec051c96417fae4eb245",
-        download_url="https://github.com/phhofm/models/releases/download/v0.1/4x_SPAN_Photo.pth",
+        name="SPAN 4x NomosUni — Quick",
+        filename="4xNomosUni_span_multijpg.pth",
+        description="Ultra-lightweight SPAN photo upscaler used by the Quick Start preset.",
+        size_bytes=4_546_346,
+        sha256="3a9037c36de90e7825c030176c8e193dfd7897ef4b5df91b8bdc59ffb6ab65ca",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/"
+            "4xNomosUni_span_multijpg/4xNomosUni_span_multijpg.pth"
+        ),
         architecture="SPAN",
         native_scale=4,
         purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
         quality_tier=QualityTier.FAST,
         speed_tier=SpeedTier.FAST,
         recommended_halo=16,
-        source_url="https://github.com/phhofm/models",
-        license_name="Apache-2.0",
+        source_url="https://github.com/Phhofm/models",
+        license_name="CC BY 4.0",
         author="Philip Hofmann",
         memory_factor=0.92,
         time_factor=0.96,
@@ -253,35 +265,43 @@ MODEL_CATALOG = (
         vram_estimate_mb=500,
     ),
     CatalogModel(
-        model_id="realplksr_nomos8k_x4",
-        name="RealPLKSR 4x (Nomos8k)",
-        filename="4x_RealPLKSR_Nomos8k.pth",
-        description="High-fidelity lightweight photo upscaler with low VRAM footprint",
-        size_bytes=16_148_070,
-        sha256="b83cb220f1295ea7c164a66a1a720ff7bfa7c5ea5317be9e7a9b0c95fe9f42d1",
-        download_url="https://github.com/phhofm/models/releases/download/v0.1/4x_RealPLKSR_Nomos8k.pth",
+        model_id="realplksr_nomoswebphoto_x4",
+        name="RealPLKSR 4x NomosWebPhoto — Best",
+        filename="4xNomosWebPhoto_RealPLKSR.pth",
+        description="High-fidelity RealPLKSR photo upscaler used by the Best Quality preset.",
+        size_bytes=29_683_482,
+        sha256="a9db66c9b674c6a5025b6ef3bee71a57c33b8605d8a2de0980470f89002efbbe",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/"
+            "4xNomosWebPhoto_RealPLKSR/4xNomosWebPhoto_RealPLKSR.pth"
+        ),
         architecture="RealPLKSR",
         native_scale=4,
         purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
         quality_tier=QualityTier.ULTRA,
         speed_tier=SpeedTier.MEDIUM,
         recommended_halo=16,
-        source_url="https://github.com/phhofm/models",
-        license_name="CC-BY-4.0",
+        source_url="https://github.com/Phhofm/models",
+        license_name="CC-BY-0.4 (upstream; clarify)",
         author="Philip Hofmann",
         memory_factor=0.80,
         time_factor=0.70,
         speed_factor=0.70,
         vram_estimate_mb=1200,
+        commercial_use_status="unclear",
     ),
     CatalogModel(
         model_id="nafnet_gopro_deblur",
         name="NAFNet GoPro Deblur",
         filename="NAFNet-GoPro-width64.pth",
         description="Single-image camera motion deblurring model",
-        size_bytes=70_254_592,
-        sha256="5a74581c3bd2946c1b3f9ff7cb898ec6d8170d10b7f6c3216fa68b75f8224dc6",
-        download_url="https://github.com/phhofm/models/releases/download/v0.1/NAFNet-GoPro-width64.pth",
+        size_bytes=271_778_961,
+        sha256="329d3ab4077b8d6b7ff61de376e483714667960bf85be027bf4335cda701196f",
+        download_url=(
+            "https://huggingface.co/mikestealth/nafnet-models/resolve/"
+            "9526c38b626f6e8ca0c02e4a282859ac84d240a2/"
+            "NAFNet-GoPro-width64.pth?download=true"
+        ),
         architecture="NAFNet",
         native_scale=1,
         purposes=(ModelPurpose.DEBLUR, ModelPurpose.RESTORATION, ModelPurpose.PHOTO),
@@ -388,9 +408,9 @@ _SEEDVR2_VAE = ModelFile(
 VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     CatalogVideoModel(
         model_id="seedvr2_3b",
-        name="SeedVR2-3B — Temporal",
+        name="SeedVR2-3B — Labs",
         description=(
-            "One-step diffusion video restorer with true temporal consistency "
+            "Experimental one-step diffusion video restorer with temporal consistency "
             "inside each clip window. Slow but strong; needs 16 GB of memory."
         ),
         family="seedvr2_3b",
@@ -415,9 +435,9 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     ),
     CatalogVideoModel(
         model_id="seedvr2_3b_fp8",
-        name="SeedVR2-3B FP8 — Temporal",
+        name="SeedVR2-3B FP8 — Labs",
         description=(
-            "FP8 quantization of SeedVR2-3B for NVIDIA GPUs: half the download "
+            "Experimental FP8 SeedVR2 build for NVIDIA GPUs: half the download "
             "and memory of FP16 at nearly the same quality."
         ),
         family="seedvr2_3b",
@@ -542,7 +562,7 @@ def download_model(
                 pass
             offset = 0
 
-        headers = {"User-Agent": f"LocalSR/0.0.2 (+{PROJECT_URL})"}
+        headers = {"User-Agent": f"LocalSR (+{PROJECT_URL})"}
         if offset:
             headers["Range"] = f"bytes={offset}-"
         request = urllib.request.Request(model.download_url, headers=headers)

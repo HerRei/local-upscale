@@ -81,6 +81,7 @@ echo -e "   Selected Backend Flavor: ${BOLD}${CYAN}${FLAVOR}${NC}\n"
 echo -e "📡 Fetching latest release asset for ${BOLD}${FLAVOR}${NC} from GitHub..."
 
 TMP_DIR=$(mktemp -d /tmp/localsr_install.XXXXXX)
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 AUTH_HEADER=()
 if [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -129,6 +130,24 @@ fi
 
 FILE_NAME=$(basename "${ARCHIVE_FILE}")
 
+CHECKSUM_FILE="${ARCHIVE_FILE}.sha256"
+if [ ! -f "${CHECKSUM_FILE}" ] && [ -n "${DOWNLOAD_URL:-}" ]; then
+    curl -fsSL "${AUTH_HEADER[@]}" -o "${CHECKSUM_FILE}" "${DOWNLOAD_URL}.sha256"
+fi
+if [ ! -f "${CHECKSUM_FILE}" ]; then
+    echo -e "${RED}❌ Error: Release checksum is missing; refusing to install.${NC}"
+    exit 1
+fi
+echo -e "🔐 Verifying SHA-256 checksum..."
+if command -v shasum &>/dev/null; then
+    (cd "${TMP_DIR}" && shasum -a 256 -c "$(basename "${CHECKSUM_FILE}")")
+elif command -v sha256sum &>/dev/null; then
+    (cd "${TMP_DIR}" && sha256sum -c "$(basename "${CHECKSUM_FILE}")")
+else
+    echo -e "${RED}❌ Error: No SHA-256 verification tool is available.${NC}"
+    exit 1
+fi
+
 # ------------------------------------------------------------------------------
 # 3. Extract and Provision Application
 # ------------------------------------------------------------------------------
@@ -150,7 +169,6 @@ if [ "${OS}" = "Darwin" ]; then
     
     rm -rf "${TARGET_APP}"
     cp -R "${TMP_DIR}/unpacked/LocalSR.app" "${TARGET_APP}"
-    xattr -rd com.apple.quarantine "${TARGET_APP}" 2>/dev/null || true
     
     echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${TARGET_APP}${NC}"
 else
@@ -179,8 +197,6 @@ DESK_EOF
     echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${INSTALL_DIR_LINUX}${NC}"
     echo -e "   Executable linked: ${CYAN}${BIN_DIR_LINUX}/localsr${NC}"
 fi
-
-rm -rf "${TMP_DIR}"
 
 echo -e "\n🎉 ${GREEN}${BOLD}Installation complete!${NC}"
 echo -e "Launch LocalSR from your applications menu or terminal to start upscaling."

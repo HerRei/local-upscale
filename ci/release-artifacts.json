@@ -55,14 +55,14 @@
       "platform": "macos",
       "architecture": "x86_64",
       "backend": "CPU",
-      "main": "LocalSR/LocalSR"
+      "main": "LocalSR.app/Contents/MacOS/LocalSR"
     },
     {
       "filename": "LocalSR-macOS-arm64.tar.gz",
       "platform": "macos",
       "architecture": "arm64",
       "backend": "MPS",
-      "main": "LocalSR/LocalSR",
+      "main": "LocalSR.app/Contents/MacOS/LocalSR",
       "require_mps": true
     }
   ]

@@ -31,6 +31,7 @@ artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
+release_version = load_script(ROOT / "scripts" / "check_release_version.py")
 
 
 def thin_macho(cpu: int) -> bytes:
@@ -86,7 +87,10 @@ def test_macho_tree_excludes_build_tool_fixtures(tmp_path: Path):
 def test_stream_verifies_arm64_mps_artifact(tmp_path: Path):
     artifact = tmp_path / "LocalSR-macOS-arm64.tar.gz"
     with tarfile.open(artifact, "w:gz") as archive:
-        for name in ("LocalSR/LocalSR", "LocalSR/_internal/torch/lib/libtorch_cpu.dylib"):
+        for name in (
+            "LocalSR.app/Contents/MacOS/LocalSR",
+            "LocalSR.app/Contents/Frameworks/torch/lib/libtorch_cpu.dylib",
+        ):
             payload = thin_macho(0x0100000C)
             member = tarfile.TarInfo(name)
             member.size = len(payload)
@@ -105,6 +109,12 @@ def test_stream_verifies_arm64_mps_artifact(tmp_path: Path):
         "github_run_id": "1",
         "run_attempt": "1",
         "timestamp": "2026-08-23T00:00:00+00:00",
+        "signing": {
+            "status": "ad-hoc",
+            "developer_id": False,
+            "notarized": False,
+            "gatekeeper_accepted": False,
+        },
         "mps": {
             "torch_arm64_wheel": "torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
             "torch_arm64_sha256": "b" * 64,
@@ -113,10 +123,32 @@ def test_stream_verifies_arm64_mps_artifact(tmp_path: Path):
     artifact.with_name(artifact.name + ".metadata.json").write_text(
         json.dumps(metadata), encoding="utf-8"
     )
-    spec = verify.ArtifactSpec(artifact.name, "macos", "arm64", "MPS", "LocalSR/LocalSR", True)
-    report = verify.verify_artifact(artifact, spec)
+    spec = verify.ArtifactSpec(
+        artifact.name,
+        "macos",
+        "arm64",
+        "MPS",
+        "LocalSR.app/Contents/MacOS/LocalSR",
+        True,
+    )
+    report, verified_digest = verify.verify_artifact(artifact, spec)
     assert "Result: PASS" in report
     assert "Native binaries inspected: 2" in report
+    assert verified_digest == digest
+
+
+def test_release_verifier_rejects_duplicate_archive_digests():
+    with pytest.raises(ValueError, match="distinct SHA-256"):
+        verify.verify_unique_digests(
+            [
+                ("LocalSR-Linux-CPU-x86_64.tar.gz", "a" * 64),
+                ("LocalSR-Linux-CUDA-x86_64.tar.gz", "a" * 64),
+            ]
+        )
+
+
+def test_release_metadata_is_synchronized():
+    assert release_version.check("v0.0.7-alpha", ROOT) == "0.0.7-alpha"
 
 
 def test_arm_verifier_rejects_x86_member(tmp_path: Path):

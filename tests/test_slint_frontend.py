@@ -42,6 +42,14 @@ def test_slint_interface_compiles():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_about_area_uses_official_slint_attribution_and_diagnostics_callback():
+    source = (ROOT / "src/localsr/ui/slint/main.slint").read_text(encoding="utf-8")
+    assert "import { AboutSlint," in source
+    assert "AboutSlint {" in source
+    assert "callback copy-diagnostics();" in source
+    assert 'text: "Copy Diagnostics";' in source
+
+
 def test_slint_preview_uses_aspect_correct_zoom_pan_and_completed_comparison():
     source = (ROOT / "src/localsr/ui/slint/main.slint").read_text(encoding="utf-8")
 
@@ -925,6 +933,61 @@ def test_video_clips_ingest_probe_and_route_to_the_video_task(tmp_path):
         application.set_task(0)
         application._update_action_state()
         assert application.ui.can_start is False
+        application.shutdown()
+        """
+    )
+
+
+def test_video_batch_dispatches_every_clip_in_order(tmp_path):
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    _write_test_clip(first, frames=2)
+    _write_test_clip(second, frames=3)
+    run_slint_script(
+        f"""
+        from pathlib import Path
+        from localsr.protocol.messages import VideoJobRequest
+        from localsr.ui.slint_app import create_slint_application
+
+        root = Path({str(tmp_path)!r})
+        application = create_slint_application(
+            start_worker=False,
+            settings_path=root / "settings.json",
+            model_root=root / "models",
+        )
+        application.output_directory = str(root / "output")
+        application.add_images([str(root / "first.mp4"), str(root / "second.mp4")])
+        application.set_task(2)
+        application.ui.batch_mode = True
+        application.model_path = str(root / "models" / "seedvr2_3b")
+        application.current_model_info = {{"kind": "seedvr2", "temporal_window": 9}}
+        application._update_estimate = lambda: None
+        application.ui.can_start = True
+        sent = []
+        application.worker.send_request = lambda request: sent.append(request) or True
+
+        application.start_jobs()
+        first_job_id = application.current_job_id
+        assert isinstance(sent[-1], VideoJobRequest)
+        assert sent[-1].video_path == str((root / "first.mp4").resolve())
+        application._on_video_job_completed({{
+            "job_id": first_job_id,
+            "output_path": str(root / "output" / "first.mp4"),
+            "frames_processed": 2,
+        }})
+        second_job_id = application.current_job_id
+        assert second_job_id and second_job_id != first_job_id
+        assert sent[-1].video_path == str((root / "second.mp4").resolve())
+        assert application.batch_current == 2
+
+        application._on_video_job_completed({{
+            "job_id": second_job_id,
+            "output_path": str(root / "output" / "second.mp4"),
+            "frames_processed": 3,
+        }})
+        assert application.current_job_id == ""
+        assert application.batch_total == 0
+        assert application.ui.status_title == "Video batch complete"
         application.shutdown()
         """
     )

@@ -61,9 +61,9 @@ def test_catalog_has_all_curated_models():
         "hat_l_x4_imagenet",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
-        "span_anime_x4",
+        "realplksr_hfa2k_anime_x4",
         "span_photo_x4",
-        "realplksr_nomos8k_x4",
+        "realplksr_nomoswebphoto_x4",
         "nafnet_gopro_deblur",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
@@ -89,55 +89,72 @@ def test_catalog_attributes_and_integrity():
         assert model.native_scale in (1, 4)
         assert len(model.purposes) >= 1
         assert all(isinstance(p, ModelPurpose) for p in model.purposes)
-        assert model.license_name in {"Apache-2.0", "CC-BY-4.0", "CC BY-NC-SA 4.0", "MIT"}
+        assert model.license_name in {
+            "Apache-2.0",
+            "CC-BY-4.0",
+            "CC BY 4.0",
+            "CC-BY-0.4 (upstream; clarify)",
+            "CC BY-NC-SA 4.0",
+            "MIT",
+        }
         assert len(model.author) > 0
         assert 0.0 < model.memory_factor <= 2.0
         assert 0.0 < model.time_factor <= 2.0
         assert 0.0 < model.speed_factor <= 1.0
         assert model.vram_estimate_mb >= 0
+        assert model.commercial_use_status in {"allowed", "not-allowed", "unclear"}
+
+    face_model = get_model_by_id("hat_s_x4_face")
+    assert face_model is not None
+    assert face_model.commercial_use_status == "not-allowed"
+    assert "Non-commercial" in face_model.description
+
+    for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
+        model = get_model_by_id(model_id)
+        assert model is not None
+        assert model.commercial_use_status == "unclear"
+        assert "clarify" in model.license_name
 
 
 def test_spandrel_compatible_models_metadata():
-    # 1. SPAN Anime
-    span_anime = get_model_by_id("span_anime_x4")
-    assert span_anime is not None
-    assert span_anime.name == "SPAN 4x Anime"
-    assert span_anime.architecture == "SPAN"
-    assert span_anime.scale == 4
-    assert ModelPurpose.ILLUSTRATION in span_anime.purposes
-    assert "4x_SPAN_AnimeSharp.pth" in span_anime.download_url
-    assert span_anime.speed_factor == 0.85
-    assert span_anime.memory_factor == 0.88
-    assert span_anime.quality_tier == QualityTier.HIGH
-    assert "Lightweight SPAN model for anime and illustrations" in span_anime.description
+    # 1. RealPLKSR Anime
+    anime = get_model_by_id("realplksr_hfa2k_anime_x4")
+    assert anime is not None
+    assert anime.name == "RealPLKSR 4x HFA2k — Anime"
+    assert anime.architecture == "RealPLKSR"
+    assert anime.scale == 4
+    assert ModelPurpose.ILLUSTRATION in anime.purposes
+    assert "4xHFA2k_ludvae_realplksr_dysample.pth" in anime.download_url
+    assert anime.speed_factor == 0.85
+    assert anime.memory_factor == 0.88
+    assert anime.quality_tier == QualityTier.HIGH
+    assert "anime, illustrations, and clean line art" in anime.description
 
     # 2. SPAN Photo
     span_photo = get_model_by_id("span_photo_x4")
     assert span_photo is not None
-    assert span_photo.name == "SPAN 4x Photo (Lightning)"
+    assert span_photo.name == "SPAN 4x NomosUni — Quick"
     assert span_photo.architecture == "SPAN"
     assert span_photo.scale == 4
     assert ModelPurpose.PHOTO in span_photo.purposes
-    assert "4x_SPAN_Photo.pth" in span_photo.download_url
+    assert "4xNomosUni_span_multijpg.pth" in span_photo.download_url
     assert span_photo.speed_factor == 0.96
     assert span_photo.memory_factor == 0.92
     assert span_photo.speed_tier == SpeedTier.FAST
-    assert "Ultra-lightweight real-time general photo upscaler" in span_photo.description
+    assert "Quick Start preset" in span_photo.description
 
-    # 3. RealPLKSR Nomos8k
-    realplksr = get_model_by_id("realplksr_nomos8k_x4")
+    # 3. RealPLKSR NomosWebPhoto
+    realplksr = get_model_by_id("realplksr_nomoswebphoto_x4")
     assert realplksr is not None
-    assert realplksr.name == "RealPLKSR 4x (Nomos8k)"
+    assert realplksr.name == "RealPLKSR 4x NomosWebPhoto — Best"
     assert realplksr.architecture == "RealPLKSR"
     assert realplksr.scale == 4
     assert ModelPurpose.PHOTO in realplksr.purposes
-    assert "4x_RealPLKSR_Nomos8k.pth" in realplksr.download_url
+    assert "4xNomosWebPhoto_RealPLKSR.pth" in realplksr.download_url
     assert realplksr.speed_factor == 0.70
     assert realplksr.memory_factor == 0.80
     assert realplksr.vram_estimate_mb == 1200
-    assert (
-        "High-fidelity lightweight photo upscaler with low VRAM footprint" in realplksr.description
-    )
+    assert "Best Quality preset" in realplksr.description
 
     # 4. NAFNet Deblur
     nafnet_deblur = get_model_by_id("nafnet_gopro_deblur")
@@ -169,7 +186,7 @@ def test_model_purpose_enum():
 def test_get_models_for_purpose():
     # Illustration
     illustration_models = get_models_for_purpose(ModelPurpose.ILLUSTRATION)
-    assert any(m.model_id == "span_anime_x4" for m in illustration_models)
+    assert any(m.model_id == "realplksr_hfa2k_anime_x4" for m in illustration_models)
 
     # String input compatibility
     illustration_by_str = get_models_for_purpose("illustration")
@@ -185,7 +202,7 @@ def test_get_models_for_purpose():
     photo_ids = {m.model_id for m in photo_models}
     assert "hat_s_x4" in photo_ids
     assert "span_photo_x4" in photo_ids
-    assert "realplksr_nomos8k_x4" in photo_ids
+    assert "realplksr_nomoswebphoto_x4" in photo_ids
 
     # Denoise
     denoise_models = get_models_for_purpose(ModelPurpose.DENOISE)
@@ -195,8 +212,8 @@ def test_get_models_for_purpose():
 
 
 def test_get_model_by_id():
-    assert get_model_by_id("span_anime_x4") is not None
-    assert get_model_by_id("span_anime_x4").model_id == "span_anime_x4"
+    assert get_model_by_id("realplksr_hfa2k_anime_x4") is not None
+    assert get_model_by_id("realplksr_hfa2k_anime_x4").model_id == "realplksr_hfa2k_anime_x4"
     assert get_model_by_id("non_existent_id") is None
 
 
@@ -206,7 +223,7 @@ def test_get_all_models():
 
 
 def test_catalog_model_properties_and_immutability():
-    model = get_model_by_id("span_anime_x4")
+    model = get_model_by_id("realplksr_hfa2k_anime_x4")
     assert model is not None
     assert model.scale == 4
     assert model.file_size_bytes == model.size_bytes

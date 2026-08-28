@@ -22,6 +22,7 @@ from typing import Iterable, Sequence
 
 import slint
 
+from localsr import __version__
 from localsr.core.estimator import (
     ResourceEstimate,
     estimate_resources,
@@ -47,6 +48,7 @@ from localsr.core.model_catalog import (
 )
 from localsr.core.presets import PresetMode, rank_models_for_preset, resolve_settings_for_model
 from localsr.platform import send_notification
+from localsr.platform.diagnostics import build_diagnostic_summary, copy_to_clipboard
 from localsr.protocol.messages import (
     CancelRequest,
     CapabilitiesRequest,
@@ -61,7 +63,7 @@ from localsr.ui.slint_worker import SlintWorkerClient
 
 CUSTOM_MODEL_ID = "__custom__"
 FORMAT_VALUES = ("png", "jpg", "tif")
-TASK_LABELS = ("Upscale", "Denoise", "Upscale Video")
+TASK_LABELS = ("Upscale", "Denoise", "Upscale Video · Labs")
 VIDEO_TASK_INDEX = 2
 VIDEO_ENABLED = True
 
@@ -291,10 +293,12 @@ class SlintApplication:
         self.ui.save_recipe = self.save_recipe
         self.ui.apply_recipe = self.apply_recipe
         self.ui.delete_recipe = self.delete_recipe
+        self.ui.copy_diagnostics = self.copy_diagnostics
 
     def _initialize_ui(self) -> None:
         self.ui.batch_mode = bool(self.settings.get("batch_mode", False))
         self.ui.video_enabled = VIDEO_ENABLED
+        self.ui.app_version = __version__
         self.ui.task_selected = False
         self.ui.task_index = self.task_index
         self._set_list_model("format_options", ["PNG", "JPEG", "TIFF"])
@@ -716,10 +720,14 @@ class SlintApplication:
         else:
             self.ui.model_description = model.description
             path = self.model_store.path_for(model)
+            usage_label = {
+                "not-allowed": "Non-commercial only · ",
+                "unclear": "Commercial terms unclear · ",
+            }.get(model.commercial_use_status, "")
             if self.model_store.is_installed(model):
                 self.model_path = str(path)
                 self.ui.model_status = (
-                    f"Installed · {model.architecture} · {model.license_name} · "
+                    f"Installed · {usage_label}{model.architecture} · {model.license_name} · "
                     f"{model.size_megabytes:.0f} MB"
                 )
                 self.ui.model_action_text = "Model Installed"
@@ -727,9 +735,7 @@ class SlintApplication:
                 self.ui.model_action_enabled = False
                 self._inspect_model()
             else:
-                self.ui.model_status = (
-                    f"Not installed · {model.license_name} · optional verified download"
-                )
+                self.ui.model_status = f"Not installed · {usage_label}{model.license_name} · optional verified download"
                 self.ui.model_action_text = f"Download {model.size_megabytes:.0f} MB"
                 self.ui.model_action_visible = True
                 self.ui.model_action_enabled = True
@@ -1414,7 +1420,8 @@ class SlintApplication:
             if self.task_index == 0
             else "Start"
         )
-        self.ui.action_text = f"{verb} {count} Images" if count > 1 else verb
+        noun = "Videos" if self.task_index == VIDEO_TASK_INDEX else "Images"
+        self.ui.action_text = f"{verb} {count} {noun}" if count > 1 else verb
         self._sync_inspector()
 
     def _output_path_for(self, image_path: str) -> str:
@@ -1737,7 +1744,10 @@ class SlintApplication:
         self.ui.status_title = "Starting"
         self.ui.status_detail = f"Loading {Path(path).name} and the selected model."
         self.ui.batch_progress = (
-            f"Image {self.batch_current} of {self.batch_total}" if self.batch_total > 1 else ""
+            f"{'Video' if self.images[index].is_video else 'Image'} "
+            f"{self.batch_current} of {self.batch_total}"
+            if self.batch_total > 1
+            else ""
         )
         self.worker.send_request(request)
         self._update_action_state()
@@ -2169,22 +2179,56 @@ class SlintApplication:
         output_path = str(data.get("output_path", ""))
         if output_path:
             self.last_output_path = output_path
+        frames = int(data.get("frames_processed", 0))
+        self.ui.progress = 1.0
+        if self.batch_paths and not self.cancel_batch:
+            self.ui.status_title = "Video complete"
+            self.ui.status_detail = (
+                f"Processed {frames} frame{'s' if frames != 1 else ''}; "
+                "starting the next queued video."
+            )
+            self._start_next_job()
+            return
+        completed = self.batch_total or 1
         self.batch_paths.clear()
         self.batch_total = 0
         self.batch_current = 0
         self.ui.batch_progress = ""
-        self.ui.progress = 1.0
-        frames = int(data.get("frames_processed", 0))
         self._show_status(
-            "Video complete",
-            f"Processed {frames} frame{'s' if frames != 1 else ''}. Output saved.",
+            "Video batch complete" if completed > 1 else "Video complete",
+            f"Finished {completed} video{'s' if completed != 1 else ''}. Output saved.",
         )
         send_notification(
             "LocalSR",
-            f"Finished video upscaling ({frames} frames). Output saved.",
+            f"Finished {completed} experimental video job{'s' if completed != 1 else ''}.",
         )
         self.refresh_hardware()
         self._update_action_state()
+
+    def copy_diagnostics(self) -> None:
+        selected_model = self._selected_catalog_model()
+        model_name = selected_model.name if selected_model is not None else "Custom or not selected"
+        task = (
+            TASK_LABELS[self.task_index]
+            if self.task_selected and 0 <= self.task_index < len(TASK_LABELS)
+            else "Not selected"
+        )
+        device = self._current_device()
+        summary = build_diagnostic_summary(
+            version=__version__,
+            task=task,
+            model=model_name,
+            device=str(device.get("name", device.get("type", "Not detected"))),
+        )
+        if copy_to_clipboard(summary):
+            self._show_status(
+                "Diagnostics copied", "Paste the privacy-filtered summary into a report."
+            )
+        else:
+            self._show_status(
+                "Clipboard unavailable",
+                "Install wl-clipboard or xclip on Linux, then try Copy Diagnostics again.",
+            )
 
     def _show_status(self, title: str, detail: str) -> None:
         self.ui.status_title = title

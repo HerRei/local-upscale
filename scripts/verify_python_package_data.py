@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Verify that wheels and sdists retain SeedVR2 runtime/license data."""
+
+from __future__ import annotations
+
+import argparse
+import tarfile
+import zipfile
+from pathlib import Path
+
+REQUIRED_SUFFIXES = (
+    "THIRD_PARTY_NOTICES.md",
+    "localsr/video_models/seedvr2/configs_3b/main.yaml",
+    "localsr/video_models/seedvr2/configs_7b/main.yaml",
+    "localsr/video_models/seedvr2/neg_emb.pt",
+    "localsr/video_models/seedvr2/pos_emb.pt",
+    "localsr/video_models/seedvr2/NOTICE.md",
+    "localsr/video_models/seedvr2/src/models/video_vae_v3/s8_c16_t4_inflation_sd3.yaml",
+    "localsr/video_models/seedvr2/vendor/LICENSE",
+    "localsr/video_models/seedvr2/vendor/models/video_vae_v3/s8_c16_t4_inflation_sd3.yaml",
+)
+
+
+def member_names(path: Path) -> set[str]:
+    if path.suffix == ".whl":
+        with zipfile.ZipFile(path) as archive:
+            return set(archive.namelist())
+    if path.name.endswith(".tar.gz"):
+        with tarfile.open(path, "r:gz") as archive:
+            return {member.name for member in archive.getmembers() if member.isfile()}
+    raise ValueError(f"Unsupported Python distribution: {path}")
+
+
+def verify(path: Path) -> None:
+    names = member_names(path)
+    missing = [
+        suffix for suffix in REQUIRED_SUFFIXES if not any(name.endswith(suffix) for name in names)
+    ]
+    if missing:
+        raise ValueError(f"{path.name} omits required package data: {', '.join(missing)}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("distributions", nargs="+", type=Path)
+    args = parser.parse_args()
+    for distribution in args.distributions:
+        verify(distribution)
+        print(f"Python package data verified: {distribution.name}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

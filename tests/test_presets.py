@@ -226,24 +226,24 @@ class TestStandardCatalogRankings:
 
     def test_photo_ultra_preset_selects_realplksr_nomos8k(self):
         selected = get_preset_model(Preset.ULTRA, ModelPurpose.PHOTO)
-        assert selected.model_id == "realplksr_nomos8k_x4"
+        assert selected.model_id == "realplksr_nomoswebphoto_x4"
 
         selected_best = select_model_for_preset(
             MODEL_CATALOG, PresetMode.BEST_UPSCALE, purpose=ModelPurpose.PHOTO
         )
-        assert selected_best.model_id == "realplksr_nomos8k_x4"
+        assert selected_best.model_id == "realplksr_nomoswebphoto_x4"
 
     def test_photo_quality_preset_selects_realplksr(self):
         selected = get_preset_model(Preset.QUALITY, ModelPurpose.PHOTO)
-        assert selected.model_id == "realplksr_nomos8k_x4"
+        assert selected.model_id == "realplksr_nomoswebphoto_x4"
 
-    def test_illustration_fast_preset_selects_span_anime_x4(self):
+    def test_illustration_fast_preset_selects_realplksr_anime(self):
         selected = get_preset_model(Preset.FAST, ModelPurpose.ILLUSTRATION)
-        assert selected.model_id == "span_anime_x4"
+        assert selected.model_id == "realplksr_hfa2k_anime_x4"
 
-    def test_illustration_via_string_anime_selects_span_anime_x4(self):
+    def test_illustration_via_string_anime_selects_realplksr_anime(self):
         selected = get_preset_model(Preset.FAST, "anime")
-        assert selected.model_id == "span_anime_x4"
+        assert selected.model_id == "realplksr_hfa2k_anime_x4"
 
     def test_face_quick_selects_hat_s_x4_face(self):
         selected = select_model_for_preset(

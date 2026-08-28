@@ -16,6 +16,8 @@ ICON_DIR = ROOT / "packaging" / "icons"
 
 with (ROOT / "pyproject.toml").open("rb") as stream:
     APP_VERSION = tomllib.load(stream)["project"]["version"]
+APP_BUNDLE_VERSION = APP_VERSION.split("-", 1)[0]
+APP_BUILD_NUMBER = str(int(APP_BUNDLE_VERSION.rsplit(".", 1)[-1]))
 
 macos_dialog_helper = None
 native_helpers = []
@@ -43,6 +45,8 @@ if sys.platform == "darwin":
 spandrel_datas, spandrel_binaries, spandrel_hidden = collect_all("spandrel")
 slint_datas, slint_binaries, slint_hidden = collect_all("slint")
 datas = spandrel_datas + slint_datas + [
+    (str(ROOT / "LICENSE"), "."),
+    (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
     (str(SOURCE / "localsr" / "ui" / "slint"), "localsr/ui/slint"),
     # SeedVR2 vendored configs, text embeddings, and license travel as data
     # so the temporal engine finds them next to its modules.
@@ -149,8 +153,11 @@ if sys.platform == "darwin":
         bundle_identifier="com.localsr.desktop",
         info_plist={
             "CFBundleDisplayName": "LocalSR",
-            "CFBundleShortVersionString": APP_VERSION,
-            "CFBundleVersion": APP_VERSION,
+            # Apple requires numeric bundle version fields. Preserve the exact
+            # prerelease identity separately for diagnostics/release auditing.
+            "CFBundleShortVersionString": APP_BUNDLE_VERSION,
+            "CFBundleVersion": APP_BUILD_NUMBER,
+            "LocalSRReleaseVersion": APP_VERSION,
             "LSMinimumSystemVersion": "12.0",
             # The bundle contains a console worker as a sibling executable.
             # Override PyInstaller's collection-level inference so the GUI is
