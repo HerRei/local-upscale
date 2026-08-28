@@ -541,14 +541,27 @@ jobs:
           ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
           TAG="${GITHUB_REF_NAME}"
           TITLE="LocalSR $TAG"
+          NOTES_FILE="docs/releases/${TAG}.md"
+          NOTES_ARGS=(--generate-notes)
+          if [[ -f "$NOTES_FILE" ]]; then
+            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          fi
           if [[ "$TAG" == *-* ]]; then
             gh release view "$TAG" >/dev/null 2>&1 || \
-              gh release create "$TAG" --title "$TITLE" --generate-notes --verify-tag --prerelease
-            gh release edit "$TAG" --title "$TITLE" --prerelease
+              gh release create "$TAG" --title "$TITLE" "${NOTES_ARGS[@]}" --verify-tag --prerelease
+            if [[ -f "$NOTES_FILE" ]]; then
+              gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE" --prerelease
+            else
+              gh release edit "$TAG" --title "$TITLE" --prerelease
+            fi
           else
             gh release view "$TAG" >/dev/null 2>&1 || \
-              gh release create "$TAG" --title "$TITLE" --generate-notes --verify-tag
-            gh release edit "$TAG" --title "$TITLE" --prerelease=false
+              gh release create "$TAG" --title "$TITLE" "${NOTES_ARGS[@]}" --verify-tag
+            if [[ -f "$NOTES_FILE" ]]; then
+              gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE" --prerelease=false
+            else
+              gh release edit "$TAG" --title "$TITLE" --prerelease=false
+            fi
           fi
           while IFS= read -r asset; do
             gh release upload "$TAG" "$asset" --clobber
