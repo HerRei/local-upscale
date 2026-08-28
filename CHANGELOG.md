@@ -5,6 +5,22 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.8-alpha] - 2026-08-29
+
+### Added
+
+- A version-synchronized, CI-validated beta-readiness register that keeps credential, licensing,
+  platform, physical-test, public-access, and Labs gates explicitly open until they are resolved.
+- A reusable acceptance-record template for artifact digest, hardware, OS/driver, diagnostics, real
+  media, resource-pressure, and thermal results.
+- The beta-readiness snapshot as a release asset and a reference in the release index.
+
+### Changed
+
+- Bounded Windows CI scratch removal and moved it to a short-path `rd` subprocess so multi-gigabyte
+  CUDA cleanup cannot occupy the only Windows runner indefinitely.
+- Synchronized app, bundle, installer, documentation, tag, and release metadata at 0.0.8-alpha.
+
 ## [0.0.7-alpha] - 2026-08-28
 
 ### Added

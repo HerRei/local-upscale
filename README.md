@@ -4,7 +4,7 @@
 
 LocalSR is a private, local-first desktop application for image restoration and super-resolution.
 Media and downloaded model weights stay on the computer; the app has no cloud processing or
-analytics. The current release line is **v0.0.7-alpha**.
+analytics. The current release line is **v0.0.8-alpha**.
 
 ## Features
 
@@ -26,7 +26,7 @@ from sources you trust.
 
 ## Platform and release artifacts
 
-The v0.0.7-alpha release workflow produces portable archives, not DMGs, AppImages, MSIs, or Windows
+The v0.0.8-alpha release workflow produces portable archives, not DMGs, AppImages, MSIs, or Windows
 Setup installers:
 
 | Platform | Architecture/backend | Artifact |
@@ -42,7 +42,11 @@ Every archive has a checksum, provenance metadata, and a native-binary architect
 release gate parses PE, ELF, and Mach-O headers and rejects duplicate archive digests. Alpha
 suffixes are published as GitHub prereleases.
 
-Production Apple Developer ID/Authenticode credentials are not configured yet. The v0.0.7-alpha
+The release also publishes `beta-readiness.json`, an intentionally honest machine-readable snapshot
+of completed and unresolved beta gates. It prevents packaging success from being confused with
+physical-device, signing, licensing, or public-access acceptance.
+
+Production Apple Developer ID/Authenticode credentials are not configured yet. The v0.0.8-alpha
 downloads are therefore not suitable for a public beta and may trigger operating-system trust
 warnings. The macOS pipeline is ready to sign, notarize, staple, and Gatekeeper-check the `.app`
 when the documented secrets are supplied. See [release documentation](docs/releasing.md) and

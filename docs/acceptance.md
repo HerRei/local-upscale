@@ -1,6 +1,6 @@
 # Release acceptance
 
-## Automated for v0.0.7-alpha
+## Automated for v0.0.8-alpha
 
 - Offline unit/integration suite on Linux, Windows x86-64, and macOS Intel CI environments.
 - Slint compile and packaged GUI/worker IPC smoke checks.
@@ -10,6 +10,9 @@
 - Wheel/sdist inspection for SeedVR2 YAML, embeddings, NOTICE, and vendor license.
 - Generated-fixture coverage for real-color photos, faces, anime-like line art, screenshot/text,
   large and transparent images, DNG handling, cancellation, low disk, and low memory.
+- CI validation of `ci/beta-readiness.json`, which must match the application version and cannot
+  claim beta readiness while any credential, decision, external clarification, manual, or Labs
+  gate remains unresolved.
 
 ## Required before public beta
 
@@ -25,4 +28,6 @@
 - Verify download URLs and the selected public feedback route from a signed-out browser.
 
 Record hardware model, OS/driver versions, selected artifact digest, model, input dimensions/format,
-result, and copied LocalSR diagnostics for each manual run.
+result, and copied LocalSR diagnostics for each manual run. Copy
+`docs/acceptance-record.example.json` for each platform/backend test and replace every `not-run`
+result with `pass`, `fail`, or `not-applicable`; retain failures as evidence rather than erasing them.

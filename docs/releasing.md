@@ -3,7 +3,7 @@
 `Build & Release` (`.github/workflows/release.yml`) builds nine portable, backend-specific archives.
 Model weights are downloaded on demand and are never included.
 
-## v0.0.7-alpha artifact matrix
+## v0.0.8-alpha artifact matrix
 
 | Platform | Backend | Archive |
 |---|---|---|
@@ -39,17 +39,17 @@ records how to reassemble and verify them.
 
 ## Version synchronization
 
-For v0.0.7-alpha, all of these must agree:
+For v0.0.8-alpha, all of these must agree:
 
-- tag: `v0.0.7-alpha`;
-- Python project/app version: `0.0.7-alpha`;
-- macOS numeric `CFBundleShortVersionString=0.0.7`, `CFBundleVersion=7`, and exact custom
-  `LocalSRReleaseVersion=0.0.7-alpha` (all derived from `pyproject.toml`);
-- Inno Setup metadata: `0.0.7-alpha`;
+- tag: `v0.0.8-alpha`;
+- Python project/app version: `0.0.8-alpha`;
+- macOS numeric `CFBundleShortVersionString=0.0.8`, `CFBundleVersion=8`, and exact custom
+  `LocalSRReleaseVersion=0.0.8-alpha` (all derived from `pyproject.toml`);
+- Inno Setup metadata: `0.0.8-alpha`;
 - changelog and README release line; and
-- GitHub release title: `LocalSR v0.0.7-alpha`.
+- GitHub release title: `LocalSR v0.0.8-alpha`.
 
-`scripts/check_release_version.py --tag v0.0.7-alpha` enforces this. A hyphenated version tag is
+`scripts/check_release_version.py --tag v0.0.8-alpha` enforces this. A hyphenated version tag is
 created with `gh release create --prerelease`; reruns also correct the title/prerelease flag.
 
 ## Signing and notarization
@@ -84,13 +84,21 @@ re-scan the frozen bundle, and decide whether the Intel artifact can use a maint
 must be removed. The repository currently has only an Intel macOS self-hosted runner; registering a
 native Apple-Silicon runner and changing artifact transfer are operational prerequisites.
 
-## Publishing v0.0.7-alpha
+## Beta readiness evidence
+
+`scripts/check_beta_readiness.py` validates `ci/beta-readiness.json` in CI and release preflight.
+The snapshot is included as a GitHub release asset and referenced by `release-index.json`. Normal
+alpha builds require a truthful, structurally valid register; only an actual beta promotion should
+use `--require-beta-ready`. Physical results should be copied from
+`docs/acceptance-record.example.json` and retained with the tested artifact digest.
+
+## Publishing v0.0.8-alpha
 
 1. Run the offline suite, lint/format, Slint compile, package-data inspection, and live-model check.
 2. Merge the release commit to `main` and require green CI.
-3. Create the annotated tag: `git tag -a v0.0.7-alpha -m "LocalSR v0.0.7-alpha"`.
+3. Create the annotated tag: `git tag -a v0.0.8-alpha -m "LocalSR v0.0.8-alpha"`.
 4. Push the tag. The workflow publishes only after all nine archives pass the final gate.
-5. Confirm the GitHub release is titled `LocalSR v0.0.7-alpha`, marked prerelease, and contains the
-   release index/checksums/metadata for all nine logical archives.
+5. Confirm the GitHub release is titled `LocalSR v0.0.8-alpha`, marked prerelease, and contains the
+   release index/checksums/metadata for all nine logical archives plus `beta-readiness.json`.
 6. Complete the physical-machine items in `docs/acceptance.md` before promoting the build to public
    beta.

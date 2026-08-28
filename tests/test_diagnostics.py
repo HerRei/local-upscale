@@ -5,12 +5,12 @@ from localsr.platform.diagnostics import build_diagnostic_summary, copy_to_clipb
 
 def test_diagnostics_omit_media_paths_and_include_support_facts():
     summary = build_diagnostic_summary(
-        version="0.0.7-alpha",
+        version="0.0.8-alpha",
         task="Upscale",
         model="SPAN Quick",
         device="CPU",
     )
-    assert "LocalSR: 0.0.7-alpha" in summary
+    assert "LocalSR: 0.0.8-alpha" in summary
     assert "Task: Upscale" in summary
     assert "file paths" in summary
     assert "/Users/" not in summary

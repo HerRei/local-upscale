@@ -1,4 +1,4 @@
-# Known limitations — v0.0.7-alpha
+# Known limitations — v0.0.8-alpha
 
 - Downloads are portable alpha archives. There is no current DMG, AppImage, MSI, Windows Setup
   executable, or supported Homebrew formula.
@@ -26,4 +26,5 @@
 - Model downloads require network access and enough free disk space; models are not bundled.
 
 The [acceptance checklist](docs/acceptance.md) separates automated evidence from remaining physical
-hardware testing.
+hardware testing. The release's `beta-readiness.json` records the same open gates in a form CI can
+validate without pretending that product decisions or manual tests are complete.

@@ -33,6 +33,7 @@ jobs:
           else
             python3 scripts/check_release_version.py
           fi
+          python3 scripts/check_beta_readiness.py
       - name: Prune only eligible managed CI storage
         run: |
           python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts
@@ -295,13 +296,8 @@ jobs:
         run: |
           if ([string]::IsNullOrWhiteSpace($env:LOCALSR_RUN_ROOT)) {
             Write-Host "No Windows scratch path was allocated"
-            exit 0
-          }
-          $base = [IO.Path]::GetFullPath("C:\lsr-ci") + [IO.Path]::DirectorySeparatorChar
-          $target = [IO.Path]::GetFullPath($env:LOCALSR_RUN_ROOT)
-          if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw "Unsafe cleanup target: $target" }
-          if (Test-Path -LiteralPath $target) {
-            Remove-Item -LiteralPath $target -Recurse -Force
+          } else {
+            ./scripts/remove_windows_scratch.ps1 -Target $env:LOCALSR_RUN_ROOT
           }
 
   build-macos-flavors:
@@ -540,6 +536,7 @@ jobs:
           touch "$ROOT/.publishing"
           python3 scripts/prepare_release_assets.py "$ROOT" \
             --manifest ci/release-artifacts.json \
+            --readiness ci/beta-readiness.json \
             --output "$ROOT/release-assets"
       - name: Create release and upload all prepared assets
         run: |

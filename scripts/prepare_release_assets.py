@@ -60,6 +60,7 @@ def main() -> None:
     parser.add_argument("artifact_root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--readiness", type=Path)
     parser.add_argument("--part-mib", type=int, default=1900)
     args = parser.parse_args()
     root = args.artifact_root.resolve()
@@ -129,6 +130,18 @@ def main() -> None:
             destination = output / source.name
             hardlink_or_copy(source, destination)
             assets.append({"filename": destination.name, "size": destination.stat().st_size})
+
+    if args.readiness:
+        readiness = json.loads(args.readiness.read_text(encoding="utf-8"))
+        readiness_path = output / "beta-readiness.json"
+        readiness_path.write_text(
+            json.dumps(readiness, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        assets.append({"filename": readiness_path.name, "size": readiness_path.stat().st_size})
+        index["beta_readiness"] = {
+            "filename": readiness_path.name,
+            "beta_ready": readiness.get("beta_ready"),
+        }
 
     index_path = output / "release-index.json"
     # The index includes itself by name. Its exact size is intentionally null to

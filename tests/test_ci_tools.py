@@ -32,6 +32,7 @@ maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 release_version = load_script(ROOT / "scripts" / "check_release_version.py")
+beta_readiness = load_script(ROOT / "scripts" / "check_beta_readiness.py")
 
 
 def thin_macho(cpu: int) -> bytes:
@@ -148,7 +149,17 @@ def test_release_verifier_rejects_duplicate_archive_digests():
 
 
 def test_release_metadata_is_synchronized():
-    assert release_version.check("v0.0.7-alpha", ROOT) == "0.0.7-alpha"
+    assert release_version.check("v0.0.8-alpha", ROOT) == "0.0.8-alpha"
+
+
+def test_beta_readiness_register_is_valid_and_honest():
+    data = beta_readiness.validate(ROOT / "ci" / "beta-readiness.json", ROOT)
+    assert data["release"] == "0.0.8-alpha"
+    assert data["beta_ready"] is False
+    statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
+    assert statuses["automated-release-integrity"] == "automated-pass"
+    assert statuses["macos-production-trust"] == "waiting-credentials"
+    assert statuses["video-labs"] == "labs"
 
 
 def test_arm_verifier_rejects_x86_member(tmp_path: Path):

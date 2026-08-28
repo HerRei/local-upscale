@@ -48,6 +48,7 @@ jobs:
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
           cd "$RUN_ROOT/source"
+          "$RUN_ROOT/environment/venv/bin/python" scripts/check_beta_readiness.py
           "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
           "$RUN_ROOT/environment/venv/bin/python" -m ruff format --check src tests scripts
       - name: Remove successful scratch
@@ -170,15 +171,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Remove only this run workspace
         if: always()
-        run: |
-          $base = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI")) + [IO.Path]::DirectorySeparatorChar
-          $target = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"))
-          if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Unsafe cleanup target: $target"
-          }
-          if (Test-Path -LiteralPath $target) {
-            Remove-Item -LiteralPath $target -Recurse -Force
-          }
+        run: ./scripts/remove_windows_scratch.ps1 -ManagedRoot (Join-Path $env:RUNNER_TEMP "LocalSR-CI") -Target (Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests")
 
   test-macos:
     name: Test macOS X64 on SSD

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "tester": "replace-with-tester-name-or-handle",
+  "tested_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "artifact": {
+    "filename": "replace-with-release-archive-name",
+    "sha256": "replace-with-64-character-release-digest",
+    "version": "0.0.8-alpha"
+  },
+  "environment": {
+    "hardware": "model, CPU, GPU, and memory",
+    "os": "operating system and version",
+    "driver": "GPU driver/runtime or not applicable",
+    "backend": "CPU, MPS, CUDA, DirectML, Intel-XPU, or AMD-ROCm"
+  },
+  "cases": [
+    {"id": "photo", "result": "not-run", "notes": ""},
+    {"id": "face", "result": "not-run", "notes": ""},
+    {"id": "anime", "result": "not-run", "notes": ""},
+    {"id": "screenshot-text", "result": "not-run", "notes": ""},
+    {"id": "large-image", "result": "not-run", "notes": ""},
+    {"id": "transparency", "result": "not-run", "notes": ""},
+    {"id": "dng", "result": "not-run", "notes": ""},
+    {"id": "cancellation", "result": "not-run", "notes": ""},
+    {"id": "low-disk", "result": "not-run", "notes": ""},
+    {"id": "low-memory", "result": "not-run", "notes": ""},
+    {"id": "thermals", "result": "not-run", "notes": ""}
+  ],
+  "diagnostics": "paste Advanced settings > Copy Diagnostics output here",
+  "overall_result": "not-run"
+}
