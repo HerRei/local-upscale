@@ -32,7 +32,7 @@ artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 artifact_auth = load_script(ROOT / "scripts" / "artifact_auth.py")
 artifact_upload = load_script(ROOT / "scripts" / "upload_artifacts.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
-scratch = load_script(ROOT / "scripts" / "ci_scratch.py")
+scratch = None if sys.platform == "win32" else load_script(ROOT / "scripts" / "ci_scratch.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 release_version = load_script(ROOT / "scripts" / "check_release_version.py")
@@ -168,7 +168,9 @@ def test_beta_readiness_register_is_valid_and_honest():
     assert statuses["video-labs"] == "labs"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="SSD scratch management uses POSIX locks")
 def test_cache_trim_tolerates_concurrent_pip_rename(tmp_path: Path, monkeypatch):
+    assert scratch is not None
     root = tmp_path / "scratch"
     cache = root / "cache"
     cache.mkdir(parents=True)
