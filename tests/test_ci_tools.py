@@ -232,6 +232,18 @@ def test_scratch_prune_removes_only_allowed_active_run_components(tmp_path: Path
     assert (directory / ".active").is_file()
 
 
+def test_linux_release_bounds_cache_before_pruning_build_inputs():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    linux_job = workflow.split("  build-linux-flavors:", 1)[1].split("  build-windows-flavors:", 1)[
+        0
+    ]
+    cache_trim = "ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2"
+    prune = "ci_scratch.py prune"
+    assert cache_trim in linux_job
+    assert prune in linux_job
+    assert linux_job.index(cache_trim) < linux_job.index(prune)
+
+
 def test_macos_signing_secrets_are_not_job_scoped():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     macos_job = workflow.split("  build-macos-flavors:", 1)[1].split("  verify-artifacts:", 1)[0]

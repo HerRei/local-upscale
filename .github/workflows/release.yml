@@ -120,6 +120,9 @@ jobs:
             "$PYTHON" scripts/validate_live_models.py \
               --report "$RUN_ROOT/staging/live-models.json"
           fi
+          # Backend wheels are fully installed now. Bound the shared cache before
+          # PyInstaller duplicates native libraries into the frozen bundle.
+          python3 scripts/ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2
       - name: Build, prune inputs, and archive on SSD
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
