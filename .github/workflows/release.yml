@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: localsr-release-${{ github.ref }}
@@ -16,8 +16,8 @@ concurrency:
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
   CI_ARTIFACT_SERVER: "http://192.168.9.134:8000"
-  PYTORCH_VERSION: "2.12.1"
-  TORCHVISION_VERSION: "0.27.1"
+  PYTORCH_VERSION: "2.13.0"
+  TORCHVISION_VERSION: "0.28.0"
   PYINSTALLER_VERSION: "6.22.2"
 
 jobs:
@@ -25,7 +25,9 @@ jobs:
     name: Storage Preflight Check
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Validate synchronized release metadata
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -80,7 +82,9 @@ jobs:
       PIP_CACHE_DIR: /ci-scratch/cache/pip
       PYINSTALLER_CONFIG_DIR: /ci-scratch/cache/pyinstaller
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Allocate lock-protected SSD scratch
         id: scratch
         run: |
@@ -103,7 +107,7 @@ jobs:
           export TMPDIR="$RUN_ROOT/tmp"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
-          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install \
             "torch==$PYTORCH_VERSION" \
             "torchvision==$TORCHVISION_VERSION" \
@@ -176,8 +180,10 @@ jobs:
             --cleanup
       - name: Mark failed scratch for bounded retention
         if: failure() || cancelled()
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          if [ -n "${{ steps.scratch.outputs.run_root }}" ]; then
+          if [ -n "$RUN_ROOT" ]; then
             python3 scripts/ci_scratch.py finish \
               --root /ci-scratch \
               --run-id "${{ github.run_id }}" \
@@ -215,7 +221,9 @@ jobs:
             index: "cu126"
             scratch: "cuda"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Allocate bounded Windows scratch
@@ -235,7 +243,7 @@ jobs:
           $venv = Join-Path $env:LOCALSR_RUN_ROOT "venv"
           python -m venv $venv
           $python = Join-Path $venv "Scripts\python.exe"
-          & $python -m pip install --upgrade pip
+          & $python -m pip install --upgrade "pip==26.2.1"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ("${{ matrix.target.backend }}" -eq "DirectML") {
             & $python -m pip install --no-cache-dir "torch-directml==0.2.5.dev240914"
@@ -329,7 +337,9 @@ jobs:
       MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
       MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Enforce guest SSD budget and allocate scratch
         id: scratch
         run: |
@@ -362,7 +372,7 @@ jobs:
           export TMPDIR="$RUN_ROOT/tmp"
           python3.11 -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
-          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install \
             -r "$RUN_ROOT/source/requirements/macos-cross-build.txt" \
             -r "$RUN_ROOT/source/requirements/macos-cross-tools.txt"
@@ -382,7 +392,7 @@ jobs:
           lipo -archs "$UNIVERSAL_PYTHON" | grep -q arm64
           "$UNIVERSAL_PYTHON" -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
-          "$PYTHON" -m pip install --upgrade pip
+          "$PYTHON" -m pip install --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install -r "$RUN_ROOT/source/requirements/macos-cross-tools.txt"
           "$PYTHON" "$RUN_ROOT/source/scripts/macos_cross_wheels.py" prepare \
             --requirements "$RUN_ROOT/source/requirements/macos-cross-build.txt" \
@@ -489,8 +499,10 @@ jobs:
             --cleanup
       - name: Mark failed scratch for bounded retention
         if: failure() || cancelled()
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          if [ -n "${{ steps.scratch.outputs.run_root }}" ]; then
+          if [ -n "$RUN_ROOT" ]; then
             python3 scripts/ci_scratch.py finish \
               --root "$CI_SCRATCH" \
               --run-id "${{ github.run_id }}" \
@@ -505,7 +517,9 @@ jobs:
     needs: [build-macos-flavors]
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Re-check HDD checksums and all native binaries
         run: |
           ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
@@ -526,10 +540,14 @@ jobs:
     needs: [verify-artifacts]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Prepare assets within GitHub's per-file limit
         run: |
           ROOT="/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}"
@@ -581,7 +599,9 @@ jobs:
     if: always()
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Enforce HDD and SSD retention limits
         run: |
           python3 scripts/ci_artifact_maintenance.py --root /mnt/hdd/ci-artifacts

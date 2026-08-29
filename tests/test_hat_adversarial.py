@@ -61,7 +61,7 @@ def test_hat_odd_and_non_divisible_dimensions(hat_checkpoint_path, tmp_path, wid
     Stress-test HAT upscaling on odd and non-divisible image dimensions.
     Verifies padding alignment, tile output cropping, and exact 2x output shape.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -139,7 +139,7 @@ def test_hat_custom_and_extreme_tile_configs(
     """
     Stress-test HAT model upscaling with custom and extreme tile sizes and halo configurations.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -182,7 +182,7 @@ def test_hat_memmap_file_lifecycle_and_cancellation(hat_checkpoint_path, tmp_pat
     2. Calling writer.cleanup() removes the memmap file.
     3. Cancellation during inference properly triggers cleanup and raises InterruptedError.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()

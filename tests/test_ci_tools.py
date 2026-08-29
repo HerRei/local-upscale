@@ -7,6 +7,7 @@ import json
 import struct
 import sys
 import tarfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,8 @@ verify = load_script(ROOT / "tests" / "verify_artifacts.py")
 preflight = load_script(ROOT / "scripts" / "storage_preflight.py")
 cross_wheels = load_script(ROOT / "scripts" / "macos_cross_wheels.py")
 artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
+artifact_auth = load_script(ROOT / "scripts" / "artifact_auth.py")
+artifact_upload = load_script(ROOT / "scripts" / "upload_artifacts.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
@@ -149,16 +152,18 @@ def test_release_verifier_rejects_duplicate_archive_digests():
 
 
 def test_release_metadata_is_synchronized():
-    assert release_version.check("v0.0.8-alpha", ROOT) == "0.0.8-alpha"
+    assert release_version.check("v0.0.9-alpha", ROOT) == "0.0.9-alpha"
 
 
 def test_beta_readiness_register_is_valid_and_honest():
     data = beta_readiness.validate(ROOT / "ci" / "beta-readiness.json", ROOT)
-    assert data["release"] == "0.0.8-alpha"
+    assert data["release"] == "0.0.9-alpha"
     assert data["beta_ready"] is False
     statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
     assert statuses["automated-release-integrity"] == "automated-pass"
     assert statuses["macos-production-trust"] == "waiting-credentials"
+    assert statuses["legacy-runtime-support"] == "decision-required"
+    assert statuses["security-monitoring"] == "decision-required"
     assert statuses["video-labs"] == "labs"
 
 
@@ -274,6 +279,81 @@ def test_artifact_path_components_and_managed_root(tmp_path: Path):
     assert maintenance.managed_root(root) == root.resolve()
     with pytest.raises(ValueError):
         maintenance.managed_root(tmp_path)
+
+
+def test_artifact_hmac_covers_metadata_and_rejects_replay():
+    secret = b"s" * 32
+    timestamp = "1787976000"
+    nonce = "a" * 32
+    headers = {
+        "Content-Length": "7",
+        "X-Run-Id": "123",
+        "X-Run-Attempt": "1",
+        "X-Platform": "linux",
+        "X-Artifact-Name": "artifact.zip",
+        "X-Content-SHA256": "b" * 64,
+    }
+    signature = artifact_auth.sign_request(
+        secret, "POST", "/v1/artifacts", timestamp, nonce, headers
+    )
+    authorization = f"{artifact_auth.AUTH_SCHEME} {signature}"
+    assert artifact_auth.verify_request(
+        secret,
+        authorization,
+        "POST",
+        "/v1/artifacts",
+        timestamp,
+        nonce,
+        headers,
+        current_time=int(timestamp),
+    )
+
+    altered = dict(headers)
+    altered["X-Artifact-Name"] = "other.zip"
+    assert not artifact_auth.verify_request(
+        secret,
+        authorization,
+        "POST",
+        "/v1/artifacts",
+        timestamp,
+        nonce,
+        altered,
+        current_time=int(timestamp),
+    )
+    cache = artifact_auth.NonceCache()
+    assert cache.claim(nonce, current_time=int(timestamp))
+    assert not cache.claim(nonce, current_time=int(timestamp))
+
+
+def test_artifact_upload_and_receiver_use_hmac_without_bearer(tmp_path: Path):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    server = artifact_server.ArtifactServer(("127.0.0.1", 0), artifact_server.Handler)
+    server.root = root
+    server.token = b"s" * 32
+    server.min_free_gib = 0
+    server.min_free_percent = 0
+    server.nonces = artifact_auth.NonceCache()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    payload = tmp_path / "LocalSR-test.zip"
+    payload.write_bytes(b"verified artifact")
+    try:
+        result = artifact_upload.upload(
+            f"http://127.0.0.1:{server.server_port}",
+            "s" * 32,
+            "123",
+            "1",
+            "linux",
+            payload,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert result["status"] == "stored"
+    assert (root / "123" / "1" / "linux" / payload.name).read_bytes() == payload.read_bytes()
+    assert "Bearer " not in (ROOT / "scripts" / "upload_artifacts.py").read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Test fixture uses a POSIX executable script")

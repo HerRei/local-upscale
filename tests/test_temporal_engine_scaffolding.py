@@ -177,6 +177,11 @@ def test_bundle_is_not_installed_when_a_file_is_missing_or_truncated(tmp_path):
     for file, payload in zip(model.files, payloads.values(), strict=True):
         (bundle_dir / file.filename).write_bytes(payload)
     assert store.is_bundle_installed(model)
+    first = bundle_dir / model.files[0].filename
+    first.write_bytes(b"x" * model.files[0].size_bytes)
+    assert not store.is_bundle_installed(model)
+    first.write_bytes(payloads[model.files[0].role])
+    assert store.is_bundle_installed(model)
     (bundle_dir / model.files[0].filename).write_bytes(b"short")
     assert not store.is_bundle_installed(model)
 

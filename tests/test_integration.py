@@ -43,12 +43,17 @@ class WorkerSubprocessHarness:
     """Helper harness to spawn, interact with, and cleanly shut down a worker subprocess."""
 
     def __init__(self):
+        environment = os.environ.copy()
+        # Synthetic test checkpoints are created locally in this process and are
+        # explicitly trusted for this isolated worker fixture.
+        environment["LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"] = "1"
         self.proc = subprocess.Popen(
             [sys.executable, "-u", "-m", "localsr.worker.__main__"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=environment,
         )
         self.pid = self.proc.pid
         self._stdout_lines: queue.Queue[str | None] = queue.Queue()
@@ -444,11 +449,12 @@ def test_f4_6_worker_shutdown_and_tempfile_cleanup(tmp_path, dummy_model):
     assert len(new_dats) == 0, f"Leftover .dat temporary memmap files found: {new_dats}"
 
 
-def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model):
+def test_full_gui_qprocess_spandrel_pipeline(qtbot, tmp_path, dummy_model, monkeypatch):
     """Run a complete GUI-to-worker upscale with a real Spandrel descriptor."""
     timeout_multiplier = 4 if sys.platform == "win32" else 1
     input_path = create_test_image(str(tmp_path / "gui_input.png"), 16, 16, color="blue")
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    monkeypatch.setenv("LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS", "1")
     window = MainWindow(settings=settings)
     qtbot.addWidget(window)
     failures = []

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release": "0.0.8-alpha",
+  "release": "0.0.9-alpha",
   "beta_ready": false,
   "gates": [
     {
       "id": "automated-release-integrity",
       "status": "automated-pass",
-      "summary": "Version synchronization, real Quick/Best inference, package data, native architecture, backend provenance, checksums, and distinct archive digests are enforced by CI.",
+      "summary": "Version synchronization, real Quick/Best inference, package data, native architecture, backend provenance, checksums, distinct archive digests, immutable workflow actions, and HMAC-authenticated artifact transfer are enforced by CI.",
       "next_action": "Keep these checks required for every release."
     },
     {
@@ -22,10 +22,10 @@
       "next_action": "Choose a certificate provider and secret-handling method before adding the signing stage."
     },
     {
-      "id": "macos-runtime-support",
+      "id": "legacy-runtime-support",
       "status": "decision-required",
-      "summary": "The cross-built macOS artifacts retain PyTorch 2.2.2 security debt.",
-      "next_action": "Build Apple Silicon natively with maintained PyTorch and decide whether a supportable Intel distribution remains viable."
+      "summary": "The cross-built macOS artifacts retain PyTorch 2.2.2 security debt, and Microsoft's current torch-directml package constrains the Windows DirectML archive to PyTorch 2.4.1.",
+      "next_action": "Build Apple Silicon natively with maintained PyTorch, decide whether Intel remains viable, and decide whether DirectML should wait for a maintained runtime, move to a different backend, or remain excluded from beta."
     },
     {
       "id": "physical-platform-acceptance",
@@ -50,6 +50,12 @@
       "status": "external-clarification",
       "summary": "The Best and anime release pages use the nonstandard license string CC-BY-0.4.",
       "next_action": "Obtain written clarification from the checkpoint publisher before public or commercial claims."
+    },
+    {
+      "id": "security-monitoring",
+      "status": "decision-required",
+      "summary": "Dependabot is enabled, but code scanning and secret scanning are disabled, branch protection is unavailable on the current private plan, and persistent self-hosted runners remain a privileged trust boundary.",
+      "next_action": "Choose the repository visibility/plan and runner-isolation approach, then enable supported scanning and protected release controls before accepting outside contributions."
     },
     {
       "id": "public-downloads-feedback",

@@ -5,6 +5,24 @@ from math import lcm
 import spandrel
 import torch
 
+from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum
+
+UNVERIFIED_CHECKPOINT_ENV = "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"
+RISKY_CHECKPOINT_SUFFIXES = {".ckpt", ".pt", ".pth"}
+
+
+class CheckpointSecurityError(RuntimeError):
+    """Raised before an untrusted pickle or TorchScript checkpoint reaches PyTorch."""
+
+
+def unverified_checkpoints_enabled() -> bool:
+    return os.environ.get(UNVERIFIED_CHECKPOINT_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 @dataclass
 class NormalizedModelInfo:
@@ -24,21 +42,49 @@ class NormalizedModelInfo:
 
 
 class ModelAdapter:
-    def __init__(self):
+    def __init__(self, *, allow_unverified_checkpoints: bool | None = None):
         self.loader = spandrel.ModelLoader()
         self.parsed = None
         self.parsed_path = None
+        self.allow_unverified_checkpoints = (
+            unverified_checkpoints_enabled()
+            if allow_unverified_checkpoints is None
+            else allow_unverified_checkpoints
+        )
+
+    def _checkpoint_trust(self, path: str) -> str:
+        candidate = os.path.abspath(path)
+        suffix = os.path.splitext(candidate)[1].lower()
+        catalog_model = CATALOG_BY_FILENAME.get(os.path.basename(candidate))
+        if catalog_model is not None:
+            if not file_matches_checksum(candidate, catalog_model.size_bytes, catalog_model.sha256):
+                raise CheckpointSecurityError(
+                    f"{catalog_model.name} failed its catalog SHA-256 check. "
+                    "LocalSR refused to deserialize it; remove the file and download it again."
+                )
+            return "catalog-verified"
+        if suffix in RISKY_CHECKPOINT_SUFFIXES:
+            if not self.allow_unverified_checkpoints:
+                raise CheckpointSecurityError(
+                    "LocalSR blocks unverified .pth, .pt, and .ckpt checkpoints because they may "
+                    "execute code while loading. Use a .safetensors checkpoint or, only for a "
+                    f"checkpoint you have independently trusted, set {UNVERIFIED_CHECKPOINT_ENV}=1."
+                )
+            return "explicitly-trusted"
+        return "safe-format"
 
     def inspect(self, path: str) -> NormalizedModelInfo:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Model file not found: {path}")
 
         # Note: Spandrel uses safe load by default where possible, but .pth can be unsafe.
-        # We assume standard spandrel behavior.
         normalized_path = os.path.abspath(path)
         if self.parsed is None or self.parsed_path != normalized_path:
+            checkpoint_trust = self._checkpoint_trust(normalized_path)
             self.parsed = self.loader.load_from_file(normalized_path)
             self.parsed_path = normalized_path
+        else:
+            checkpoint_trust = "cached"
 
         # Determine attributes using official spandrel 0.4 API
         arch = self.parsed.architecture.name
@@ -78,9 +124,10 @@ class ModelAdapter:
                     req_mult = lcm(req_mult, dimension)
 
         warnings = []
-        if path.endswith((".pth", ".pt")):
+        if checkpoint_trust == "explicitly-trusted":
             warnings.append(
-                "Security warning: .pth files can execute arbitrary code. Only use trusted checkpoints."
+                "Security warning: loading this unverified pickle/TorchScript checkpoint was "
+                "explicitly enabled. Treat it as executable code."
             )
 
         parameter_count = sum(parameter.numel() for parameter in self.parsed.model.parameters())
@@ -104,6 +151,7 @@ class ModelAdapter:
     def load(self, path: str, device: torch.device, precision: torch.dtype):
         normalized_path = os.path.abspath(path)
         if self.parsed is None or self.parsed_path != normalized_path:
+            self._checkpoint_trust(normalized_path)
             self.parsed = self.loader.load_from_file(normalized_path)
             self.parsed_path = normalized_path
         model = self.parsed.model.to(device).to(precision)

@@ -279,6 +279,7 @@ def test_recipe_with_auto_start_triggers_job_start(tmp_path):
         from pathlib import Path
         from PIL import Image
         from unittest.mock import patch
+        from localsr.core.model_catalog import ModelStore
         from localsr.ui.slint_app import create_slint_application
 
         root = Path({str(tmp_path)!r})
@@ -306,6 +307,9 @@ def test_recipe_with_auto_start_triggers_job_start(tmp_path):
         model_dir.mkdir(parents=True, exist_ok=True)
         with (model_dir / "base_95k_interp_a0p1.pth").open("wb") as f:
             f.truncate(40_484_805)
+
+        # This fixture tests recipe sequencing, not checkpoint bytes.
+        ModelStore.is_installed = lambda self, model: self.path_for(model).is_file()
 
         app = create_slint_application(
             start_worker=False,

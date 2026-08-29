@@ -1,6 +1,6 @@
 ; Inno Setup Script for LocalSR
 #define MyAppName "LocalSR"
-#define MyAppVersion "0.0.8-alpha"
+#define MyAppVersion "0.0.9-alpha"
 #define MyAppPublisher "LocalSR Team"
 #define MyAppURL "https://github.com/HerRei/local-upscale"
 #define MyAppExeName "LocalSR.exe"

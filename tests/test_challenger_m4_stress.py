@@ -79,7 +79,7 @@ def test_hat_tiling_halo_larger_than_tile_size(hat_checkpoint_path, tmp_path):
     Adversarial test: halo > tile_size (e.g. tile_size=16, halo=32).
     Verifies pad calculations, tile extraction, and accurate output dimensions.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -115,7 +115,7 @@ def test_hat_tiling_halo_zero(hat_checkpoint_path, tmp_path):
     """
     Adversarial test: halo=0 with odd image dimensions (33x47).
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -152,7 +152,7 @@ def test_hat_exception_during_inference_cleans_memmap(hat_checkpoint_path, tmp_p
     Test that if model forward pass raises an exception mid-inference,
     process_image catches it, calls writer.cleanup(), and re-raises without leaking .dat files.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -196,7 +196,7 @@ def test_hat_exception_during_progress_callback_cleans_memmap(hat_checkpoint_pat
     Test that if progress_callback raises an exception (e.g. KeyboardInterrupt or error),
     process_image cleans up the memmap file.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -238,6 +238,7 @@ def test_hat_exception_during_image_save_cleans_memmap(hat_checkpoint_path, tmp_
     the finally block in _run_job cleans up out_file.
     """
     server = WorkerServer()
+    server.model_adapter.allow_unverified_checkpoints = True
 
     input_path = str(tmp_path / "save_error_in.png")
     img = Image.new("RGB", (32, 32), color=(100, 100, 100))
@@ -280,7 +281,7 @@ def test_hat_process_cancellation_immediate(hat_checkpoint_path, tmp_path):
     Test setting cancel_event BEFORE process_image starts.
     Verifies clean InterruptedError raise and 0 leaked .dat files.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()
@@ -330,7 +331,7 @@ def test_hat_tiny_and_asymmetric_dimensions(hat_checkpoint_path, tmp_path, w, h)
     """
     Test tiny and asymmetric image dimensions (1x1 up to 17x19).
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()

@@ -8,9 +8,15 @@ import hashlib
 import http.client
 import json
 import os
+import secrets
 import time
 from pathlib import Path
 from urllib.parse import urlparse
+
+try:
+    from artifact_auth import AUTH_SCHEME, sign_request
+except ModuleNotFoundError:  # imported as a repository module in unit tests
+    from scripts.artifact_auth import AUTH_SCHEME, sign_request
 
 
 def sha256(path: Path) -> str:
@@ -41,16 +47,25 @@ def upload(
     endpoint = (parsed.path.rstrip("/") if parsed.path else "") + "/v1/artifacts"
     digest = sha256(path)
     length = path.stat().st_size
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+    signed_headers = {
+        "Content-Length": str(length),
+        "X-Run-Id": run_id,
+        "X-Run-Attempt": attempt,
+        "X-Platform": platform,
+        "X-Artifact-Name": path.name,
+        "X-Content-SHA256": digest,
+    }
+    signature = sign_request(token.encode(), "POST", endpoint, timestamp, nonce, signed_headers)
     connection = connection_for(parsed)
     connection.putrequest("POST", endpoint)
-    connection.putheader("Authorization", f"Bearer {token}")
+    connection.putheader("Authorization", f"{AUTH_SCHEME} {signature}")
+    connection.putheader("X-Auth-Timestamp", timestamp)
+    connection.putheader("X-Auth-Nonce", nonce)
     connection.putheader("Content-Type", "application/octet-stream")
-    connection.putheader("Content-Length", str(length))
-    connection.putheader("X-Run-Id", run_id)
-    connection.putheader("X-Run-Attempt", attempt)
-    connection.putheader("X-Platform", platform)
-    connection.putheader("X-Artifact-Name", path.name)
-    connection.putheader("X-Content-SHA256", digest)
+    for name, value in signed_headers.items():
+        connection.putheader(name, value)
     connection.endheaders()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):

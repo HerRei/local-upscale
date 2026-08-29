@@ -467,6 +467,10 @@ def test_quick_recipe_starts_after_installed_model_is_inspected(tmp_path):
         with model_path.open("wb") as checkpoint:
             checkpoint.truncate(model.size_bytes)
 
+        # This isolated fixture tests auto-start sequencing. Integrity behavior
+        # is covered by the model-catalog and checkpoint-security suites.
+        application.model_store.is_installed = lambda candidate: candidate.model_id == model.model_id
+
         application.apply_automatic_setup(best=False)
         assert application.pending_auto_start is True
         assert application.profile_label == "Quick"

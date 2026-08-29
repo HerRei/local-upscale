@@ -4,7 +4,7 @@
 
 LocalSR is a private, local-first desktop application for image restoration and super-resolution.
 Media and downloaded model weights stay on the computer; the app has no cloud processing or
-analytics. The current release line is **v0.0.8-alpha**.
+analytics. The current release line is **v0.0.9-alpha**.
 
 ## Features
 
@@ -21,12 +21,13 @@ analytics. The current release line is **v0.0.8-alpha**.
   contents are omitted.
 
 LocalSR does not include generative fill, outpainting, cloud inference, telemetry, or bundled model
-weights. Custom pickle-based `.pth` and `.pt` checkpoints can execute code; load only checkpoints
-from sources you trust.
+weights. Custom `.safetensors` checkpoints are accepted by default. Unverified pickle/TorchScript
+`.pth`, `.pt`, and `.ckpt` files are blocked unless the user explicitly sets
+`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`; enabling that override treats the checkpoint as code.
 
 ## Platform and release artifacts
 
-The v0.0.8-alpha release workflow produces portable archives, not DMGs, AppImages, MSIs, or Windows
+The v0.0.9-alpha release workflow produces portable archives, not DMGs, AppImages, MSIs, or Windows
 Setup installers:
 
 | Platform | Architecture/backend | Artifact |
@@ -46,7 +47,7 @@ The release also publishes `beta-readiness.json`, an intentionally honest machin
 of completed and unresolved beta gates. It prevents packaging success from being confused with
 physical-device, signing, licensing, or public-access acceptance.
 
-Production Apple Developer ID/Authenticode credentials are not configured yet. The v0.0.8-alpha
+Production Apple Developer ID/Authenticode credentials are not configured yet. The v0.0.9-alpha
 downloads are therefore not suitable for a public beta and may trigger operating-system trust
 warnings. The macOS pipeline is ready to sign, notarize, staple, and Gatekeeper-check the `.app`
 when the documented secrets are supplied. See [release documentation](docs/releasing.md) and

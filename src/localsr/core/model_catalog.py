@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlparse
 
 CATALOG_REVISION = "867e7c0ad519aba5d36b5bb4ef4a4a91781914c4"
 CATALOG_BASE_URL = (
@@ -319,6 +320,7 @@ MODEL_CATALOG = (
 )
 
 CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}
+CATALOG_BY_FILENAME = {model.filename: model for model in MODEL_CATALOG}
 
 
 def get_models_for_purpose(purpose: ModelPurpose | str) -> list[CatalogModel]:
@@ -469,16 +471,15 @@ VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}
 class ModelStore:
     def __init__(self, root: str | Path | None = None):
         self.root = Path(root) if root is not None else default_model_directory()
+        self._verification_cache: dict[
+            tuple[str, int, str], tuple[tuple[int, int, int, int, int], bool]
+        ] = {}
 
     def path_for(self, model: CatalogModel) -> Path:
         return self.root / model.filename
 
     def is_installed(self, model: CatalogModel) -> bool:
-        path = self.path_for(model)
-        try:
-            return path.is_file() and path.stat().st_size == model.size_bytes
-        except OSError:
-            return False
+        return self._verified_file(self.path_for(model), model.size_bytes, model.sha256)
 
     def bundle_dir_for(self, model: CatalogVideoModel) -> Path:
         return self.root / model.family
@@ -486,15 +487,55 @@ class ModelStore:
     def bundle_file_path(self, model: CatalogVideoModel, file: ModelFile) -> Path:
         return self.bundle_dir_for(model) / file.filename
 
+    def is_bundle_file_installed(self, model: CatalogVideoModel, file: ModelFile) -> bool:
+        return self._verified_file(self.bundle_file_path(model, file), file.size_bytes, file.sha256)
+
     def is_bundle_installed(self, model: CatalogVideoModel) -> bool:
         for file in model.files:
-            path = self.bundle_file_path(model, file)
-            try:
-                if not (path.is_file() and path.stat().st_size == file.size_bytes):
-                    return False
-            except OSError:
+            if not self.is_bundle_file_installed(model, file):
                 return False
         return True
+
+    def _verified_file(self, path: Path, expected_size: int, expected_sha256: str) -> bool:
+        """Verify installed model bytes, caching only while filesystem metadata is unchanged."""
+        try:
+            stat = path.stat()
+            if not path.is_file() or stat.st_size != expected_size:
+                return False
+        except OSError:
+            return False
+        signature = (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+        key = (os.fspath(path.absolute()), expected_size, expected_sha256.lower())
+        cached = self._verification_cache.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        verified = file_matches_checksum(path, expected_size, expected_sha256)
+        self._verification_cache[key] = (signature, verified)
+        return verified
+
+
+def file_sha256(path: str | Path, chunk_size: int = 4 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_matches_checksum(path: str | Path, expected_size: int, expected_sha256: str) -> bool:
+    candidate = Path(path)
+    try:
+        if not candidate.is_file() or candidate.stat().st_size != expected_size:
+            return False
+        return file_sha256(candidate) == expected_sha256.lower()
+    except OSError:
+        return False
 
 
 class ModelDownloadError(RuntimeError):
@@ -506,7 +547,10 @@ class ModelDownloadCancelled(ModelDownloadError):
 
 
 def _open_download(request: urllib.request.Request, timeout: float) -> BinaryIO:
-    return urllib.request.urlopen(request, timeout=timeout)
+    if urlparse(request.full_url).scheme != "https":
+        raise ModelDownloadError("Model downloads require HTTPS.")
+    # B310 is safe here because the parsed scheme is required to be HTTPS above.
+    return urllib.request.urlopen(request, timeout=timeout)  # nosec B310
 
 
 def download_model(
@@ -668,14 +712,11 @@ def download_bundle(
     completed = 0
     for file in model.files:
         destination = store.bundle_file_path(model, file)
-        try:
-            if destination.is_file() and destination.stat().st_size == file.size_bytes:
-                completed += file.size_bytes
-                if progress_callback is not None:
-                    progress_callback(completed, total)
-                continue
-        except OSError:
-            pass
+        if store.is_bundle_file_installed(model, file):
+            completed += file.size_bytes
+            if progress_callback is not None:
+                progress_callback(completed, total)
+            continue
 
         def file_progress(downloaded: int, _file_total: int, _completed: int = completed) -> None:
             if progress_callback is not None:

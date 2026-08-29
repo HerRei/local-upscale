@@ -24,7 +24,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Allocate isolated SSD workspace
         id: scratch
         run: |
@@ -46,6 +48,8 @@ jobs:
           export TMPDIR="$RUN_ROOT/tmp"
           export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
+          "$RUN_ROOT/environment/venv/bin/python" -m pip install \
+            --disable-pip-version-check --upgrade "pip==26.2.1"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
           cd "$RUN_ROOT/source"
           "$RUN_ROOT/environment/venv/bin/python" scripts/check_beta_readiness.py
@@ -81,7 +85,9 @@ jobs:
     needs: [lint]
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Allocate isolated SSD workspace
         id: scratch
         run: |
@@ -102,9 +108,10 @@ jobs:
           export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install --disable-pip-version-check \
-            "torch==2.12.1" \
-            "torchvision==0.27.1" \
+            "torch==2.13.0" \
+            "torchvision==0.28.0" \
             --index-url https://download.pytorch.org/whl/cpu
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
           "$PYTHON" -m pip install --disable-pip-version-check build
@@ -115,10 +122,11 @@ jobs:
       - name: Finalize scratch state
         if: always()
         env:
+          JOB_STATUS: ${{ job.status }}
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           if [ -n "$RUN_ROOT" ] && [ -f "$RUN_ROOT/.active" ]; then
-            if [ "${{ job.status }}" = success ]; then
+            if [ "$JOB_STATUS" = success ]; then
               STATUS=complete
               CLEANUP=--cleanup
             else
@@ -142,7 +150,9 @@ jobs:
       run:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
       - name: Ensure bounded Windows scratch capacity
@@ -157,9 +167,11 @@ jobs:
           Copy-Item -LiteralPath $env:GITHUB_WORKSPACE -Destination "$root\source" -Recurse -Force
           py -3.11 -m venv "$root\venv"
           $python = "$root\venv\Scripts\python.exe"
+          & $python -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -m pip install --disable-pip-version-check --no-cache-dir `
-            "torch==2.12.1" `
-            "torchvision==0.27.1" `
+            "torch==2.13.0" `
+            "torchvision==0.28.0" `
             --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video]"
@@ -181,7 +193,9 @@ jobs:
       CI_SCRATCH: /Volumes/CISCRATCH
       PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Allocate isolated guest SSD workspace
         id: scratch
         run: |
@@ -208,6 +222,7 @@ jobs:
           /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
             -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
           "$PYTHON" -m pip install --disable-pip-version-check pyobjc-framework-Cocoa
           cd "$RUN_ROOT/source"
@@ -216,10 +231,11 @@ jobs:
       - name: Finalize guest scratch state
         if: always()
         env:
+          JOB_STATUS: ${{ job.status }}
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           if [ -n "$RUN_ROOT" ] && [ -f "$RUN_ROOT/.active" ]; then
-            if [ "${{ job.status }}" = success ]; then
+            if [ "$JOB_STATUS" = success ]; then
               STATUS=complete
               CLEANUP=--cleanup
             else

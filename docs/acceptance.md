@@ -1,6 +1,6 @@
 # Release acceptance
 
-## Automated for v0.0.8-alpha
+## Automated for v0.0.9-alpha
 
 - Offline unit/integration suite on Linux, Windows x86-64, and macOS Intel CI environments.
 - Slint compile and packaged GUI/worker IPC smoke checks.
@@ -13,6 +13,13 @@
 - CI validation of `ci/beta-readiness.json`, which must match the application version and cannot
   claim beta readiness while any credential, decision, external clarification, manual, or Labs
   gate remains unresolved.
+- Catalog checkpoints and installed video bundles are revalidated by SHA-256 rather than file size;
+  unverified pickle/TorchScript checkpoints are blocked before Spandrel or PyTorch sees them.
+- Release workflows use an immutable checkout commit, persist no checkout credentials, grant write
+  permission only to the publishing job, and authenticate LAN artifact uploads with replay-bounded
+  HMAC without transmitting the reusable secret.
+- Both portable installer scripts refuse installation when the matching release checksum is absent
+  or invalid.
 
 ## Required before public beta
 

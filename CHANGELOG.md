@@ -5,6 +5,30 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.9-alpha] - 2026-08-29
+
+### Security
+
+- Blocked unverified pickle and TorchScript checkpoints by default. Curated `.pth` models must
+  match their catalog SHA-256 before Spandrel sees them; custom `.pth`, `.pt`, and `.ckpt` files
+  require an explicit trusted-code override, while `.safetensors` remains available normally.
+- Replaced size-only installed-model checks with cached SHA-256 verification for image and SeedVR2
+  model files, including same-size tamper detection.
+- Replaced the plaintext LAN bearer token used for release-artifact transfer with timestamped,
+  nonce-bound HMAC authentication and replay rejection; rotated the upload secret.
+- Pinned `actions/checkout` to its verified full commit, disabled credential persistence, and
+  limited release write permission to the publishing job.
+- Made the Windows portable installer require and verify the archive's release checksum before it
+  removes or installs anything; removed shell execution from the Python source installer.
+- Updated maintained Linux and Windows CPU/CUDA/XPU/ROCm builds to PyTorch 2.13.0 and modern
+  platforms' Labs dependency to Diffusers 0.38.x.
+
+### Changed
+
+- Synchronized app, bundle, installer, documentation, tag, and release metadata at 0.0.9-alpha.
+- Expanded the beta gate register to state the legacy Windows DirectML runtime and unavailable
+  repository security controls explicitly, without deciding their product-policy outcomes.
+
 ## [0.0.8-alpha] - 2026-08-29
 
 ### Added

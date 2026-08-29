@@ -480,7 +480,7 @@ def test_jobs_auto_pair_installed_face_companion(tmp_path):
     script = textwrap.dedent(
         f"""
         from pathlib import Path
-        from localsr.core.model_catalog import MODEL_CATALOG
+        from localsr.core.model_catalog import MODEL_CATALOG, ModelStore
         from localsr.ui.slint_app import CUSTOM_MODEL_ID, create_slint_application
 
         base = Path({str(tmp_path)!r})
@@ -491,6 +491,10 @@ def test_jobs_auto_pair_installed_face_companion(tmp_path):
             model = catalog[model_id]
             with open(models / model.filename, "wb") as handle:
                 handle.truncate(model.size_bytes)
+
+        # These fixtures exercise pairing only; real model integrity is covered
+        # separately with exact SHA-256 tests.
+        ModelStore.is_installed = lambda self, model: self.path_for(model).is_file()
 
         application = create_slint_application(
             start_worker=False,

@@ -387,9 +387,13 @@ def test_model_store_is_installed(tmp_path: Path):
     model_path.write_bytes(b"short")
     assert not store.is_installed(model)
 
-    # Exact size match
+    # Exact size and checksum match
     model_path.write_bytes(b"model payload")
     assert store.is_installed(model)
+
+    # A same-size replacement must not be trusted merely because its length matches.
+    model_path.write_bytes(b"evil! payload")
+    assert not store.is_installed(model)
 
 
 def test_default_model_directory():

@@ -66,28 +66,56 @@ Write-Host "📡 Fetching latest release asset for $Flavor from GitHub..." -Fore
 $ReleasesUrl = "https://api.github.com/repos/$Repo/releases"
 $Releases = Invoke-RestMethod -Uri $ReleasesUrl -Headers @{"User-Agent"="LocalSR-Installer"}
 
-$DownloadUrl = $null
+$DownloadAsset = $null
+$SelectedRelease = $null
 foreach ($rel in $Releases) {
     foreach ($asset in $rel.assets) {
-        if ($asset.name -match $Flavor -or $asset.name -match "LocalSR-Windows") {
-            $DownloadUrl = $asset.browser_download_url
+        if ($asset.name -like "*.zip" -and $asset.name -match [regex]::Escape($Flavor)) {
+            $DownloadAsset = $asset
+            $SelectedRelease = $rel
             break
         }
     }
-    if ($DownloadUrl) { break }
+    if ($DownloadAsset) { break }
 }
 
-if (-not $DownloadUrl) {
+if (-not $DownloadAsset) {
     Write-Host "❌ Error: Could not resolve a release package for $Flavor." -ForegroundColor Red
     Write-Host "Please check: https://github.com/$Repo/releases"
     exit 1
 }
 
+$DownloadUrl = $DownloadAsset.browser_download_url
 $FileName = Split-Path $DownloadUrl -Leaf
 $TempZip = "$env:TEMP\$FileName"
+$ChecksumName = "$FileName.sha256"
+$TempChecksum = "$env:TEMP\$ChecksumName"
+$ChecksumAsset = $SelectedRelease.assets |
+    Where-Object { $_.name -eq $ChecksumName } |
+    Select-Object -First 1
+
+if (-not $ChecksumAsset) {
+    throw "Release checksum asset is missing: $ChecksumName"
+}
 
 Write-Host "⬇️  Downloading $FileName..." -ForegroundColor Cyan
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip
+Invoke-WebRequest -Uri $ChecksumAsset.browser_download_url -OutFile $TempChecksum
+
+Write-Host "🔐 Verifying SHA-256 checksum..." -ForegroundColor Cyan
+$ChecksumLine = (Get-Content -LiteralPath $TempChecksum -Raw).Trim()
+if ($ChecksumLine -notmatch '^([0-9A-Fa-f]{64})\s+\*?(.+)$') {
+    throw "Release checksum file has an invalid format: $ChecksumName"
+}
+$ExpectedHash = $Matches[1]
+$ExpectedName = Split-Path $Matches[2].Trim() -Leaf
+if ($ExpectedName -ne $FileName) {
+    throw "Release checksum names $ExpectedName instead of $FileName"
+}
+$ActualHash = (Get-FileHash -LiteralPath $TempZip -Algorithm SHA256).Hash
+if (-not $ActualHash.Equals($ExpectedHash, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Release checksum verification failed; refusing to install $FileName"
+}
 
 # ------------------------------------------------------------------------------
 # 3. Extract & Provision Application
@@ -131,6 +159,7 @@ $Shortcut.Save()
 
 # Cleanup
 Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $TempChecksum -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Host "🎉 Installation complete!" -ForegroundColor Green

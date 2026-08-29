@@ -60,7 +60,7 @@ def test_f5_1_hat_checkpoint_loading(hat_checkpoint_path):
     assert getattr(parsed, "supports_half", False) is False
 
     # ModelAdapter inspect
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     assert info.architecture == "HAT"
     assert info.scale == 2
@@ -75,7 +75,7 @@ def test_f5_2_hat_tile_shape_divisibility(hat_checkpoint_path, tmp_path):
     Verifies that tile shape divisibility handling pads input tiles to multiples of 16 during processing
     and crops output back to exact expected 2x dimensions.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     assert info.size_requirements_mult == 16, (
         f"Expected mult 16 for HAT, got {info.size_requirements_mult}"
@@ -119,7 +119,7 @@ def test_f5_3_synthetic_upscaling_32_and_64(hat_checkpoint_path, tmp_path):
     Confirms architecture detection, exact 2x output tensor/array shape, non-NaN uint8 valid pixels,
     and successful Pillow RGB image opening.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     assert info.architecture == "HAT"
     assert info.scale == 2
@@ -204,7 +204,7 @@ def test_f5_4_real_photograph_500x500_upscaling(hat_checkpoint_path, tmp_path):
     (tile_size=128, halo=16). Confirm exact 2x output dimensions (~1000x1000), valid pixels, and clean .dat
     memmap file deletion upon cleanup.
     """
-    adapter = ModelAdapter()
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(hat_checkpoint_path)
     engine = InferenceEngine(adapter)
     im_mgr = ImageManager()

@@ -705,7 +705,8 @@ class SlintApplication:
                 self.ui.model_action_enabled = True
         elif model is None:
             self.ui.model_description = (
-                "Load a local Spandrel-compatible checkpoint. Only use trusted .pth or .pt files."
+                "Load a Spandrel-compatible .safetensors checkpoint. Unverified .pth/.pt files "
+                "are blocked by default because loading them can execute code."
             )
             if self.custom_model_path and Path(self.custom_model_path).is_file():
                 self.model_path = self.custom_model_path
@@ -1453,8 +1454,8 @@ class SlintApplication:
         for model in self.filtered_models:
             if model is None:
                 lines.append(
-                    "Use My Own Checkpoint — load a trusted Spandrel-compatible "
-                    ".pth or .pt file from disk."
+                    "Use My Own Checkpoint — .safetensors is accepted by default; unverified "
+                    ".pth/.pt files require an explicit advanced security override."
                 )
             else:
                 lines.append(f"{model.name} — {model.description}")

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -16,6 +15,11 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+try:
+    from artifact_auth import NonceCache, verify_request
+except ModuleNotFoundError:  # imported as a repository module in unit tests
+    from scripts.artifact_auth import NonceCache, verify_request
 
 GIB = 1024**3
 COMPONENT_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
@@ -44,6 +48,7 @@ class ArtifactServer(ThreadingHTTPServer):
     token: bytes
     min_free_gib: float
     min_free_percent: float
+    nonces: NonceCache
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -63,11 +68,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def authenticated(self) -> bool:
-        supplied = self.headers.get("Authorization", "")
-        prefix = "Bearer "
-        if not supplied.startswith(prefix):
+        timestamp = self.headers.get("X-Auth-Timestamp", "")
+        nonce = self.headers.get("X-Auth-Nonce", "")
+        if not verify_request(
+            self.server.token,
+            self.headers.get("Authorization", ""),
+            self.command,
+            self.path,
+            timestamp,
+            nonce,
+            self.headers,
+        ):
             return False
-        return hmac.compare_digest(supplied[len(prefix) :].encode(), self.server.token)
+        return self.server.nonces.claim(nonce)
 
     def do_GET(self) -> None:  # noqa: N802 - HTTP verb API
         if self.path != "/healthz":
@@ -198,7 +211,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--root", type=Path, required=True)
     result.add_argument("--token-file", type=Path, required=True)
-    result.add_argument("--bind", default="0.0.0.0")
+    result.add_argument("--bind", default="127.0.0.1")
     result.add_argument("--port", type=int, default=8000)
     result.add_argument("--min-free-gib", type=float, default=100.0)
     result.add_argument("--min-free-percent", type=float, default=20.0)
@@ -219,6 +232,7 @@ def main() -> None:
     server.token = token
     server.min_free_gib = args.min_free_gib
     server.min_free_percent = args.min_free_percent
+    server.nonces = NonceCache()
     print(f"LocalSR artifact receiver listening on {args.bind}:{args.port}; root={root}")
     server.serve_forever()
 

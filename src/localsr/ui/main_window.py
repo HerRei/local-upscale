@@ -408,7 +408,8 @@ class MainWindow(QMainWindow):
             self.model_path = self.custom_model_path
             self.model_description.setText(
                 "Use a local Spandrel-compatible .pth, .pt, or .safetensors checkpoint. "
-                "Only open pickle-based model files from sources you trust."
+                "Unverified .pth/.pt files are blocked by default because loading them can "
+                "execute code."
             )
             if self.model_path and Path(self.model_path).is_file():
                 self.model_status_label.setText(f"Custom model: {self.model_path}")
