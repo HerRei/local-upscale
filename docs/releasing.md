@@ -117,3 +117,21 @@ use `--require-beta-ready`. Physical results should be copied from
    release index/checksums/metadata for all nine logical archives plus `beta-readiness.json`.
 6. Complete the physical-machine items in `docs/acceptance.md` before promoting the build to public
    beta.
+
+## Headless macOS runner startup
+
+The stock GitHub macOS service is installed in the runner user's `~/Library/LaunchAgents` directory.
+That service belongs to the GUI login session, so a headless VM can be running at its login window
+while GitHub still reports the runner offline.
+
+`macOS Runner Boot Maintenance` is a manual, repository-owner-only workflow for the dedicated
+`macmini-macos-x64` runner. It validates the existing GitHub LaunchAgent and runner ownership, then
+installs a root-owned LaunchDaemon that invokes GitHub's required `runsvc.sh` entry point as the same
+unprivileged runner user. It does not enable automatic login or store the user's password. The
+daemon waits for `/Volumes/CISCRATCH` to become writable before connecting to GitHub.
+
+Run this workflow only when no other macOS jobs are queued. The one-time transition waits for its
+own Actions worker to exit, disables the login-scoped agent, starts the boot daemon, and reboots the
+guest. Verify that `macmini-macos-x64` returns online while the guest remains at the login window.
+If passwordless `sudo` is not already configured for the runner account, the maintenance workflow
+fails closed without changing the service; establish that policy locally before retrying.

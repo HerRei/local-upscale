@@ -1,0 +1,28 @@
+name: macOS Runner Boot Maintenance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localsr-macos-runner-maintenance
+  cancel-in-progress: false
+
+jobs:
+  install-boot-daemon:
+    name: Install pre-login macOS runner service
+    runs-on: [self-hosted, macOS, X64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install and hand off to the boot daemon
+        run: |
+          python3 scripts/macos_runner_boot_service.py install \
+            --expected-runner-name macmini-macos-x64 \
+            --expected-repository HerRei/local-upscale \
+            --handoff \
+            --reboot-after-handoff
