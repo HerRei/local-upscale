@@ -32,6 +32,7 @@ artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 artifact_auth = load_script(ROOT / "scripts" / "artifact_auth.py")
 artifact_upload = load_script(ROOT / "scripts" / "upload_artifacts.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
+scratch = load_script(ROOT / "scripts" / "ci_scratch.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 release_version = load_script(ROOT / "scripts" / "check_release_version.py")
@@ -165,6 +166,32 @@ def test_beta_readiness_register_is_valid_and_honest():
     assert statuses["legacy-runtime-support"] == "decision-required"
     assert statuses["security-monitoring"] == "decision-required"
     assert statuses["video-labs"] == "labs"
+
+
+def test_cache_trim_tolerates_concurrent_pip_rename(tmp_path: Path, monkeypatch):
+    root = tmp_path / "scratch"
+    cache = root / "cache"
+    cache.mkdir(parents=True)
+    (root / scratch.ROOT_MARKER).write_text("{}", encoding="utf-8")
+    vanishing = cache / "entry.body"
+    vanishing.write_bytes(b"cache")
+    temporary = cache / "active.tmp"
+    temporary.write_bytes(b"in progress")
+    original_stat = Path.stat
+    calls = 0
+
+    def racing_stat(path, *args, **kwargs):
+        nonlocal calls
+        if path == vanishing:
+            calls += 1
+            if calls == 2:
+                vanishing.unlink()
+                raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", racing_stat)
+    assert scratch.trim_cache(root, 0, dry_run=False) == 0
+    assert temporary.read_bytes() == b"in progress"
 
 
 def test_macos_signing_secrets_are_not_job_scoped():

@@ -209,18 +209,38 @@ def trim_cache(root: Path, maximum_bytes: int, dry_run: bool) -> int:
     cache = root / "cache"
     if not cache.exists():
         return 0
-    files = [path for path in cache.rglob("*") if path.is_file() and not path.is_symlink()]
-    total = sum(path.stat().st_size for path in files)
+    files: list[tuple[Path, os.stat_result]] = []
+    for path in cache.rglob("*"):
+        try:
+            if path.suffix == ".tmp" or not path.is_file() or path.is_symlink():
+                continue
+            files.append((path, path.stat()))
+        except FileNotFoundError:
+            # pip writes and atomically renames cache entries while CI is active.
+            continue
+    total = sum(stat.st_size for _path, stat in files)
     removed = 0
-    for path in sorted(files, key=lambda item: item.stat().st_mtime):
+    for path, scanned in sorted(files, key=lambda item: item[1].st_mtime):
         if total <= maximum_bytes:
             break
-        size = path.stat().st_size
-        print(f"cache-evict {path} ({size} bytes)")
+        try:
+            current = path.stat()
+        except FileNotFoundError:
+            total -= scanned.st_size
+            continue
+        scanned_signature = (scanned.st_dev, scanned.st_ino, scanned.st_size, scanned.st_mtime_ns)
+        current_signature = (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+        if current_signature != scanned_signature:
+            # Never unlink a file that a concurrent installer changed after the scan.
+            continue
+        print(f"cache-evict {path} ({scanned.st_size} bytes)")
         if not dry_run:
-            path.unlink()
-        total -= size
-        removed += size
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        total -= scanned.st_size
+        removed += scanned.st_size
     return removed
 
 
