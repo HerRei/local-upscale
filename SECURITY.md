@@ -15,6 +15,10 @@ downloads must match their pinned byte size and SHA-256 immediately before Spand
 `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` override is not a sandbox; use it only when you have
 independently authenticated and trust the checkpoint as executable code.
 
+SeedVR2's bundled text-conditioning embeddings are Safetensors and their expected tensor keys,
+shapes, and dtype are validated before use. Normal Labs execution does not load bundled `.pt`
+objects.
+
 ## Alpha download trust
 
 Verify every portable archive against its release `.sha256` sidecar. Checksums detect corruption

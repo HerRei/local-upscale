@@ -12,12 +12,16 @@ REQUIRED_SUFFIXES = (
     "THIRD_PARTY_NOTICES.md",
     "localsr/video_models/seedvr2/configs_3b/main.yaml",
     "localsr/video_models/seedvr2/configs_7b/main.yaml",
-    "localsr/video_models/seedvr2/neg_emb.pt",
-    "localsr/video_models/seedvr2/pos_emb.pt",
+    "localsr/video_models/seedvr2/neg_emb.safetensors",
+    "localsr/video_models/seedvr2/pos_emb.safetensors",
     "localsr/video_models/seedvr2/NOTICE.md",
     "localsr/video_models/seedvr2/src/models/video_vae_v3/s8_c16_t4_inflation_sd3.yaml",
     "localsr/video_models/seedvr2/vendor/LICENSE",
     "localsr/video_models/seedvr2/vendor/models/video_vae_v3/s8_c16_t4_inflation_sd3.yaml",
+)
+FORBIDDEN_SUFFIXES = (
+    "localsr/video_models/seedvr2/neg_emb.pt",
+    "localsr/video_models/seedvr2/pos_emb.pt",
 )
 
 
@@ -38,6 +42,13 @@ def verify(path: Path) -> None:
     ]
     if missing:
         raise ValueError(f"{path.name} omits required package data: {', '.join(missing)}")
+    forbidden = [
+        suffix for suffix in FORBIDDEN_SUFFIXES if any(name.endswith(suffix) for name in names)
+    ]
+    if forbidden:
+        raise ValueError(
+            f"{path.name} contains obsolete pickle package data: {', '.join(forbidden)}"
+        )
 
 
 def main() -> int:

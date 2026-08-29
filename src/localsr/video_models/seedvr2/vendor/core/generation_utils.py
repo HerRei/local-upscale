@@ -29,6 +29,7 @@ These utilities support the 4-phase pipeline implemented in generation_phases.py
 
 import os
 import torch
+from safetensors.torch import load_file as load_safetensors_file
 from typing import Dict, List, Optional, Tuple, Any, Callable, Union
 from torchvision.transforms import Compose, Lambda, Normalize
 
@@ -534,8 +535,22 @@ def load_text_embeddings(script_directory: str, device: torch.device,
         - Memory-efficient embedding preparation
         - Consistent movement logging
     """
-    text_pos_embeds = torch.load(os.path.join(script_directory, 'pos_emb.pt'), weights_only=True)
-    text_neg_embeds = torch.load(os.path.join(script_directory, 'neg_emb.pt'), weights_only=True)
+    # Modified for LocalSR: the upstream pickle embeddings were converted to
+    # Safetensors so legacy PyTorch builds never deserialize bundled .pt data.
+    def load_embedding(filename: str, expected_shape: tuple[int, int]) -> torch.Tensor:
+        tensors = load_safetensors_file(os.path.join(script_directory, filename), device="cpu")
+        if set(tensors) != {"embedding"}:
+            raise ValueError(f"Unexpected tensors in {filename}: {sorted(tensors)}")
+        embedding = tensors["embedding"]
+        if tuple(embedding.shape) != expected_shape or embedding.dtype != torch.bfloat16:
+            raise ValueError(
+                f"Unexpected {filename} tensor: shape={tuple(embedding.shape)}, "
+                f"dtype={embedding.dtype}"
+            )
+        return embedding
+
+    text_pos_embeds = load_embedding("pos_emb.safetensors", (58, 5120))
+    text_neg_embeds = load_embedding("neg_emb.safetensors", (64, 5120))
     
     text_pos_embeds = manage_tensor(
         tensor=text_pos_embeds,

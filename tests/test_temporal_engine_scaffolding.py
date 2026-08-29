@@ -3,6 +3,7 @@
 import hashlib
 import json
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -20,6 +21,27 @@ from localsr.core.video_engines import (
     resolve_video_engine,
 )
 from localsr.protocol.messages import VideoJobRequest
+
+
+def test_seedvr2_text_embeddings_use_validated_safetensors(monkeypatch):
+    import torch
+
+    from localsr.video_models.seedvr2.vendor.core.generation_utils import load_text_embeddings
+
+    package_dir = Path(__file__).parents[1] / "src" / "localsr" / "video_models" / "seedvr2"
+    assert not list(package_dir.glob("*emb.pt"))
+    monkeypatch.setattr(
+        torch,
+        "load",
+        lambda *_args, **_kwargs: pytest.fail("SeedVR2 embeddings must not use torch.load"),
+    )
+    embeddings = load_text_embeddings(
+        str(package_dir), torch.device("cpu"), torch.bfloat16, debug=None
+    )
+    assert tuple(embeddings["texts_pos"][0].shape) == (58, 5120)
+    assert tuple(embeddings["texts_neg"][0].shape) == (64, 5120)
+    assert embeddings["texts_pos"][0].dtype == torch.bfloat16
+    assert embeddings["texts_neg"][0].dtype == torch.bfloat16
 
 
 def test_clip_windows_cover_every_frame_without_gaps():

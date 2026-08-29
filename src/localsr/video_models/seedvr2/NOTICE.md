@@ -12,10 +12,12 @@ derive from the HuggingFace diffusers library.
   (ByteDance Ltd., HuggingFace Team) are retained unmodified.
 - Modifications by LocalSR are marked in-file with a
   "Modified for LocalSR" comment (currently: `core/alpha_upscaling.py`,
-  where OpenCV is imported lazily so RGB-only installs do not require it).
+  where OpenCV is imported lazily so RGB-only installs do not require it, and
+  `core/generation_utils.py`, where the fixed text embeddings load from Safetensors).
 - The ComfyUI interface layer (`src/interfaces/`) of the upstream project is
-  not vendored. `pos_emb.pt` / `neg_emb.pt` are the precomputed text
-  conditioning embeddings from the ByteDance release.
+  not vendored. `pos_emb.safetensors` / `neg_emb.safetensors` are byte-for-byte
+  tensor conversions of the precomputed text conditioning embeddings from the
+  ByteDance release; their source `.pt` SHA-256 values are retained in Safetensors metadata.
 
 Credits: SeedVR2 (ByteDance Seed team); ComfyUI-SeedVR2_VideoUpscaler
 implementation and MPS support (numz and contributors; AInVFX).

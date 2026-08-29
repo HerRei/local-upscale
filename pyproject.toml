@@ -93,7 +93,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "localsr.ui" = ["slint/*.slint"]
 "localsr.video_models.seedvr2" = [
-    "*.pt",
+    "*.safetensors",
     "*.md",
     "configs_3b/*.yaml",
     "configs_7b/*.yaml",

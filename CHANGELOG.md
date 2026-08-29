@@ -12,6 +12,8 @@ stable release is published.
 - Blocked unverified pickle and TorchScript checkpoints by default. Curated `.pth` models must
   match their catalog SHA-256 before Spandrel sees them; custom `.pth`, `.pt`, and `.ckpt` files
   require an explicit trusted-code override, while `.safetensors` remains available normally.
+- Converted SeedVR2's two bundled text-conditioning tensors from pickle `.pt` files to validated
+  Safetensors, removing a remaining `torch.load` path from normal Labs video execution.
 - Replaced size-only installed-model checks with cached SHA-256 verification for image and SeedVR2
   model files, including same-size tamper detection.
 - Replaced the plaintext LAN bearer token used for release-artifact transfer with timestamped,

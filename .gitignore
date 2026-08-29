@@ -32,8 +32,8 @@ Thumbs.db
 *.safetensors
 /models/
 # The SeedVR2 text-conditioning embeddings are source, not downloaded weights.
-!src/localsr/video_models/seedvr2/pos_emb.pt
-!src/localsr/video_models/seedvr2/neg_emb.pt
+!src/localsr/video_models/seedvr2/pos_emb.safetensors
+!src/localsr/video_models/seedvr2/neg_emb.safetensors
 /test-results.xml
 
 # Local agent transcripts and scratch work
