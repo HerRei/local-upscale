@@ -17,7 +17,9 @@ stable release is published.
 - Replaced the plaintext LAN bearer token used for release-artifact transfer with timestamped,
   nonce-bound HMAC authentication and replay rejection; rotated the upload secret.
 - Pinned `actions/checkout` to its verified full commit, disabled credential persistence, and
-  limited release write permission to the publishing job.
+  limited release write permission to the publishing job. Future Apple signing/notarization
+  credentials are exposed only to the dedicated signing step, not dependency installation or the
+  rest of the macOS build.
 - Made the Windows portable installer require and verify the archive's release checksum before it
   removes or installs anything; removed shell execution from the Python source installer.
 - Updated maintained Linux and Windows CPU/CUDA/XPU/ROCm builds to PyTorch 2.13.0 and modern

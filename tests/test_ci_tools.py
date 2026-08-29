@@ -167,6 +167,26 @@ def test_beta_readiness_register_is_valid_and_honest():
     assert statuses["video-labs"] == "labs"
 
 
+def test_macos_signing_secrets_are_not_job_scoped():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    macos_job = workflow.split("  build-macos-flavors:", 1)[1].split("  verify-artifacts:", 1)[0]
+    job_configuration = macos_job.split("    steps:", 1)[0]
+    signing_step = macos_job.split("      - name: Sign, notarize, and archive the verified app", 1)[
+        1
+    ].split("      - name:", 1)[0]
+    secret_names = (
+        "MACOS_CERTIFICATE_P12_BASE64",
+        "MACOS_CERTIFICATE_PASSWORD",
+        "MACOS_SIGNING_IDENTITY",
+        "MACOS_NOTARY_APPLE_ID",
+        "MACOS_NOTARY_PASSWORD",
+        "MACOS_TEAM_ID",
+    )
+    assert "secrets." not in job_configuration
+    for name in secret_names:
+        assert f"{name}: ${{{{ secrets.{name} }}}}" in signing_step
+
+
 def test_arm_verifier_rejects_x86_member(tmp_path: Path):
     artifact = tmp_path / "bad.tar.gz"
     with tarfile.open(artifact, "w:gz") as archive:

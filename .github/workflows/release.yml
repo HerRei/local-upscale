@@ -330,12 +330,6 @@ jobs:
       PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
       PYINSTALLER_CONFIG_DIR: /Volumes/CISCRATCH/cache/pyinstaller
       MACOSX_DEPLOYMENT_TARGET: "12.0"
-      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-      MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -436,10 +430,22 @@ jobs:
               "$RUN_ROOT/dist/LocalSR.app/Contents/MacOS" \
               --report "$RUN_ROOT/staging/package-smoke.json"
           fi
+      - name: Sign, notarize, and archive the verified app
+        env:
+          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+          TARGET_PACKAGE: ${{ matrix.target.pkg }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: |
+          cd "$RUN_ROOT/source"
           bash scripts/sign_macos_app.sh \
             "$RUN_ROOT/dist/LocalSR.app" \
             "$RUN_ROOT/staging/signing-report.json"
-          tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR.app
+          tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/$TARGET_PACKAGE" LocalSR.app
       - name: Verify, checksum, and write metadata before transfer
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}

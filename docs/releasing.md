@@ -74,7 +74,9 @@ artifact metadata. It does not claim Gatekeeper acceptance. Production signing r
 
 With all values present, `scripts/sign_macos_app.sh` imports the certificate into an ephemeral
 keychain, signs with hardened runtime, submits to Apple notarytool, staples the ticket, validates it,
-and requires Gatekeeper acceptance before archiving. A partial credential set fails the build.
+and requires Gatekeeper acceptance before archiving. The workflow makes these secrets available
+only to the dedicated signing/archive step, after dependency installation, packaging, and smoke
+checks have completed. A partial credential set fails the build.
 
 Windows Authenticode credentials are not configured and Windows archives remain unsigned. Add and
 verify an Authenticode signing/timestamping stage before calling a Windows build public-beta ready.
