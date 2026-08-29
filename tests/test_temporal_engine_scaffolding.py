@@ -23,6 +23,23 @@ from localsr.core.video_engines import (
 from localsr.protocol.messages import VideoJobRequest
 
 
+def test_seedvr2_vendor_download_rejects_non_https(tmp_path, monkeypatch):
+    from localsr.video_models.seedvr2.vendor.utils import downloads
+
+    opened = False
+
+    def unexpected_open(*_args, **_kwargs):
+        nonlocal opened
+        opened = True
+        raise AssertionError("non-HTTPS URL reached urlopen")
+
+    monkeypatch.setattr(downloads.urllib.request, "urlopen", unexpected_open)
+    destination = tmp_path / "model.safetensors"
+    assert not downloads.download_with_resume("file:///tmp/model.safetensors", str(destination))
+    assert not opened
+    assert not destination.exists()
+
+
 def test_seedvr2_text_embeddings_use_validated_safetensors(monkeypatch):
     import torch
 

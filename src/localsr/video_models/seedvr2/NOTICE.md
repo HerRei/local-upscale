@@ -13,7 +13,8 @@ derive from the HuggingFace diffusers library.
 - Modifications by LocalSR are marked in-file with a
   "Modified for LocalSR" comment (currently: `core/alpha_upscaling.py`,
   where OpenCV is imported lazily so RGB-only installs do not require it, and
-  `core/generation_utils.py`, where the fixed text embeddings load from Safetensors).
+  `core/generation_utils.py`, where the fixed text embeddings load from Safetensors,
+  and `utils/downloads.py`, where model downloads are restricted to HTTPS).
 - The ComfyUI interface layer (`src/interfaces/`) of the upstream project is
   not vendored. `pos_emb.safetensors` / `neg_emb.safetensors` are byte-for-byte
   tensor conversions of the precomputed text conditioning embeddings from the

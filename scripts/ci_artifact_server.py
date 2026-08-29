@@ -180,11 +180,15 @@ class Handler(BaseHTTPRequestHandler):
                         f"content SHA256 mismatch: received={actual_digest}, expected={expected_digest}"
                     )
                 os.replace(temporary, destination)
-                directory_fd = os.open(destination_dir, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                # POSIX permits opening a directory so its metadata update can be
+                # flushed after the atomic replace. Windows rejects that open with
+                # EACCES; the file contents were already flushed above.
+                if os.name != "nt":
+                    directory_fd = os.open(destination_dir, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
             finally:
                 if temporary.exists():
                     temporary.unlink()

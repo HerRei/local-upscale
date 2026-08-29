@@ -7,6 +7,7 @@ import os
 import hashlib
 import json
 import urllib.request
+from urllib.parse import urlparse
 from typing import Optional
 from tqdm import tqdm
 import time
@@ -139,8 +140,14 @@ def download_with_resume(url: str, filepath: str, debug=None) -> bool:
     headers = {'Range': f'bytes={existing_size}-'} if existing_size > 0 else {}
     
     try:
+        # Modified for LocalSR: never let a model download use a local or
+        # clear-text URL, including after redirects.
+        if urlparse(url).scheme != "https":
+            raise ValueError("SeedVR2 model downloads require HTTPS")
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:  # nosec B310
+            if urlparse(response.geturl()).scheme != "https":
+                raise ValueError("SeedVR2 model download redirected away from HTTPS")
             content_length = int(response.headers.get('Content-Length', 0))
             total_size = existing_size + content_length
             
