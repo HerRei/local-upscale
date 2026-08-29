@@ -120,7 +120,7 @@ jobs:
             "$PYTHON" scripts/validate_live_models.py \
               --report "$RUN_ROOT/staging/live-models.json"
           fi
-      - name: Build and archive on SSD
+      - name: Build, prune inputs, and archive on SSD
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
@@ -129,7 +129,15 @@ jobs:
             --workpath "$RUN_ROOT/build" \
             --distpath "$RUN_ROOT/dist" \
             packaging/localsr.spec
-          "$PYTHON" scripts/smoke_frozen_worker.py "$RUN_ROOT/dist/LocalSR" \
+          python3 scripts/ci_scratch.py prune \
+            --root /ci-scratch \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --platform linux \
+            --flavor "${{ matrix.target.name }}" \
+            --component environment \
+            --component build
+          python3 scripts/smoke_frozen_worker.py "$RUN_ROOT/dist/LocalSR" \
             --report "$RUN_ROOT/staging/package-smoke.json"
           tar -C "$RUN_ROOT/dist" -czf "$RUN_ROOT/staging/${{ matrix.target.pkg }}" LocalSR
       - name: Verify, checksum, and write metadata before transfer

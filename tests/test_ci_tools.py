@@ -196,6 +196,42 @@ def test_cache_trim_tolerates_concurrent_pip_rename(tmp_path: Path, monkeypatch)
     assert temporary.read_bytes() == b"in progress"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="SSD scratch management uses POSIX locks")
+def test_scratch_prune_removes_only_allowed_active_run_components(tmp_path: Path):
+    assert scratch is not None
+    root = tmp_path / "scratch"
+    scratch.managed_root(root, initialize=True)
+    directory = root / "runs" / "123" / "1" / "linux" / "AMD-ROCm"
+    (directory / "environment").mkdir(parents=True)
+    (directory / "build").mkdir()
+    (directory / "staging").mkdir()
+    (directory / ".active").write_text("{}", encoding="utf-8")
+    args = scratch.build_parser().parse_args(
+        [
+            "prune",
+            "--root",
+            str(root),
+            "--run-id",
+            "123",
+            "--attempt",
+            "1",
+            "--platform",
+            "linux",
+            "--flavor",
+            "AMD-ROCm",
+            "--component",
+            "environment",
+            "--component",
+            "build",
+        ]
+    )
+    args.func(args)
+    assert not (directory / "environment").exists()
+    assert not (directory / "build").exists()
+    assert (directory / "staging").is_dir()
+    assert (directory / ".active").is_file()
+
+
 def test_macos_signing_secrets_are_not_job_scoped():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     macos_job = workflow.split("  build-macos-flavors:", 1)[1].split("  verify-artifacts:", 1)[0]

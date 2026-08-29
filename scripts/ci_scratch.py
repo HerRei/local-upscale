@@ -19,6 +19,7 @@ from pathlib import Path
 ROOT_MARKER = ".localsr-ci-root"
 COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 STATE_MARKERS = (".active", ".complete", ".failed", ".abandoned")
+PRUNABLE_COMPONENTS = ("build", "environment", "wheels")
 
 
 def now() -> str:
@@ -205,6 +206,22 @@ def command_finish(args: argparse.Namespace) -> None:
         print(directory)
 
 
+def command_prune(args: argparse.Namespace) -> None:
+    """Remove regenerable build inputs from one exact, active run directory."""
+    directory = run_directory(args)
+    if not directory.is_dir() or not (directory / ".active").is_file():
+        raise ValueError(f"Scratch directory is not active: {directory}")
+    removed: list[str] = []
+    for name in args.component:
+        target = directory / name
+        if target.is_symlink():
+            raise ValueError(f"Refusing symlinked scratch component: {target}")
+        if target.exists():
+            shutil.rmtree(target)
+            removed.append(str(target))
+    print(json.dumps({"pruned_components": removed}))
+
+
 def trim_cache(root: Path, maximum_bytes: int, dry_run: bool) -> int:
     cache = root / "cache"
     if not cache.exists():
@@ -305,6 +322,10 @@ def build_parser() -> argparse.ArgumentParser:
     finish.add_argument("--status", choices=("complete", "failed"), required=True)
     finish.add_argument("--cleanup", action="store_true")
     finish.set_defaults(func=command_finish)
+    prune = subparsers.add_parser("prune")
+    common_run_arguments(prune)
+    prune.add_argument("--component", action="append", choices=PRUNABLE_COMPONENTS, required=True)
+    prune.set_defaults(func=command_prune)
     cleanup = subparsers.add_parser("cleanup")
     cleanup.add_argument("--root", type=Path, required=True)
     cleanup.add_argument("--complete-hours", type=float, default=1.0)
