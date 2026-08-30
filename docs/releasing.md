@@ -25,7 +25,8 @@ The workflow does not currently produce a DMG, AppImage, MSI, or Inno Setup exec
 Before native builds, the CPU job downloads Quick and Best into an empty temporary model cache,
 verifies pinned size and SHA-256 values, loads both through Spandrel, and runs real CPU inference.
 
-Every archive is accompanied by `.sha256`, `.metadata.json`, and `.architecture.txt`. The final gate:
+Every builder produces `.sha256`, `.metadata.json`, and `.architecture.txt` evidence beside its
+archive on the private artifact disk. The final gate:
 
 - locates exactly one of every manifest artifact;
 - re-hashes each archive and checks its sidecar and metadata;
@@ -34,8 +35,21 @@ Every archive is accompanied by `.sha256`, `.metadata.json`, and `.architecture.
 - records backend-probe and frozen-worker smoke evidence; and
 - rejects any two archives with the same SHA-256 digest.
 
-GitHub assets may be split into chunks to stay below the per-file upload limit. The release index
-records how to reassemble and verify them.
+GitHub assets may be split into chunks to stay below the per-file upload limit. The public release
+uses a compact schema-v2 contract:
+
+- `Install-LocalSR.sh` and `Install-LocalSR.ps1` are the only files normal testers need to choose;
+- `SHA256SUMS` contains standard SHA-256 lines for both installers and every stored archive/part;
+- `release-index.json` records the nine logical bundles, ordered split parts, complete-archive
+  hashes, platform/backend selection fields, provenance metadata, architecture reports, and beta
+  readiness evidence; and
+- the nine backend archives or their ordered parts remain available for manual installation.
+
+Per-archive checksum, metadata, architecture, parts-manifest, and beta-readiness sidecars are not
+published separately. They remain build evidence and are consolidated into the two verification
+files above. This reduces v0.0.9-alpha from 46 assets to 18 without removing a backend. Publishing
+uploads and validates the complete replacement set before deleting stale assets, then validates the
+exact final set again.
 
 Artifact builders send completed archives to the private receiver with a timestamped, random-nonce
 HMAC covering the method, path, length, run/attempt, platform, filename, and content digest. The
@@ -102,9 +116,9 @@ backend, or exclusion from beta remains an owner decision.
 ## Beta readiness evidence
 
 `scripts/check_beta_readiness.py` validates `ci/beta-readiness.json` in CI and release preflight.
-The snapshot is included as a GitHub release asset and referenced by `release-index.json`. Normal
-alpha builds require a truthful, structurally valid register; only an actual beta promotion should
-use `--require-beta-ready`. Physical results should be copied from
+The complete snapshot is embedded in `release-index.json`. Normal alpha builds require a truthful,
+structurally valid register; only an actual beta promotion should use `--require-beta-ready`.
+Physical results should be copied from
 `docs/acceptance-record.example.json` and retained with the tested artifact digest.
 
 ## Publishing v0.0.9-alpha
@@ -113,8 +127,9 @@ use `--require-beta-ready`. Physical results should be copied from
 2. Merge the release commit to `main` and require green CI.
 3. Create the annotated tag: `git tag -a v0.0.9-alpha -m "LocalSR v0.0.9-alpha"`.
 4. Push the tag. The workflow publishes only after all nine archives pass the final gate.
-5. Confirm the GitHub release is titled `LocalSR v0.0.9-alpha`, marked prerelease, and contains the
-   release index/checksums/metadata for all nine logical archives plus `beta-readiness.json`.
+5. Confirm the GitHub release is titled `LocalSR v0.0.9-alpha`, marked prerelease, and contains both
+   installers, `SHA256SUMS`, `release-index.json`, and all archive/part assets named by the index—18
+   assets for the current build, with no stale per-bundle sidecars.
 6. Complete the physical-machine items in `docs/acceptance.md` before promoting the build to public
    beta.
 

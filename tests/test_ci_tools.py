@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import struct
+import subprocess
 import sys
 import tarfile
 import threading
@@ -32,6 +33,8 @@ artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 artifact_auth = load_script(ROOT / "scripts" / "artifact_auth.py")
 artifact_upload = load_script(ROOT / "scripts" / "upload_artifacts.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
+prepare_release = load_script(ROOT / "scripts" / "prepare_release_assets.py")
+confirm_release = load_script(ROOT / "scripts" / "confirm_release_assets.py")
 scratch = None if sys.platform == "win32" else load_script(ROOT / "scripts" / "ci_scratch.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
@@ -166,6 +169,166 @@ def test_beta_readiness_register_is_valid_and_honest():
     assert statuses["legacy-runtime-support"] == "decision-required"
     assert statuses["security-monitoring"] == "decision-required"
     assert statuses["video-labs"] == "labs"
+
+
+def test_compact_release_assets_embed_sidecars_and_support_split_bundles(tmp_path: Path):
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / ".complete").write_text("{}\n", encoding="utf-8")
+    specs = [
+        {
+            "filename": "LocalSR-Linux-CPU-x86_64.tar.gz",
+            "platform": "linux",
+            "architecture": "x86_64",
+            "backend": "CPU",
+            "main": "LocalSR/LocalSR",
+        },
+        {
+            "filename": "LocalSR-Windows-CUDA-x86_64.zip",
+            "platform": "windows",
+            "architecture": "x86_64",
+            "backend": "CUDA",
+            "main": "LocalSR/LocalSR.exe",
+        },
+    ]
+    for spec, payload in zip(specs, (b"small archive", b"x" * (1024**2 + 3)), strict=True):
+        artifact = root / spec["platform"] / spec["filename"]
+        artifact.parent.mkdir(exist_ok=True)
+        artifact.write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        artifact.with_name(artifact.name + ".sha256").write_text(
+            f"{digest}  {artifact.name}\n", encoding="utf-8"
+        )
+        artifact.with_name(artifact.name + ".metadata.json").write_text(
+            json.dumps(
+                {
+                    "artifact_filename": artifact.name,
+                    "sha256": digest,
+                    "platform": spec["platform"],
+                    "architecture": spec["architecture"],
+                    "backend": spec["backend"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        artifact.with_name(artifact.name + ".architecture.txt").write_text(
+            "Result: PASS\nNative binaries inspected: 1\n", encoding="utf-8"
+        )
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"artifacts": specs}), encoding="utf-8")
+    readiness = tmp_path / "readiness.json"
+    readiness.write_text(
+        json.dumps({"release": "0.0.9-alpha", "beta_ready": False}), encoding="utf-8"
+    )
+    shell_installer = tmp_path / "install.sh"
+    shell_installer.write_text('#!/bin/sh\nTAG="@LOCALSR_RELEASE_TAG@"\n', encoding="utf-8")
+    powershell_installer = tmp_path / "install.ps1"
+    powershell_installer.write_text('$Tag = "@LOCALSR_RELEASE_TAG@"\n', encoding="utf-8")
+    output = root / "release-assets"
+
+    index_path = prepare_release.prepare(
+        root,
+        output=output,
+        manifest=manifest,
+        readiness=readiness,
+        tag="v0.0.9-alpha",
+        shell_installer=shell_installer,
+        powershell_installer=powershell_installer,
+        part_mib=1,
+    )
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+
+    assert index["schema_version"] == 2
+    assert index["release_tag"] == "v0.0.9-alpha"
+    assert index["beta_readiness"]["beta_ready"] is False
+    assert len(index["assets"]) == 7
+    assert index["bundles"][0]["architecture_report"].startswith("Result: PASS")
+    assert index["bundles"][0]["metadata"]["artifact_filename"] == specs[0]["filename"]
+    assert index["bundles"][0]["assets"] == [specs[0]["filename"]]
+    assert index["bundles"][1]["assets"] == [
+        specs[1]["filename"] + ".part-0001",
+        specs[1]["filename"] + ".part-0002",
+    ]
+    assert "@LOCALSR_RELEASE_TAG@" not in (output / "Install-LocalSR.sh").read_text()
+    assert "v0.0.9-alpha" in (output / "Install-LocalSR.ps1").read_text()
+    published_names = {item["filename"] for item in index["assets"]}
+    assert not any(
+        name.endswith((".sha256", ".metadata.json", ".architecture.txt", ".parts.json"))
+        for name in published_names
+    )
+    checksum_lines = (output / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    assert len(checksum_lines) == 5
+    assert all(len(line.split("  ", 1)[0]) == 64 for line in checksum_lines)
+    upload_names = [
+        Path(line).name for line in (output / "release-files.txt").read_text().splitlines()
+    ]
+    assert upload_names[:4] == [
+        "Install-LocalSR.sh",
+        "Install-LocalSR.ps1",
+        "SHA256SUMS",
+        "release-index.json",
+    ]
+
+
+def test_release_asset_confirmation_requires_exact_set():
+    index = {
+        "assets": [
+            {"filename": "Install-LocalSR.sh", "size": 100},
+            {"filename": "release-index.json", "size": None},
+        ]
+    }
+    release = {
+        "assets": [
+            {"name": "Install-LocalSR.sh", "size": 99},
+            {"name": "release-index.json", "size": 250},
+            {"name": "old.sha256", "size": 80},
+        ]
+    }
+
+    assert confirm_release.compare(index, release) == {
+        "missing": [],
+        "wrong_size": ["Install-LocalSR.sh"],
+        "wrong_digest": [],
+        "unexpected": ["old.sha256"],
+    }
+
+
+def test_release_workflow_publishes_compact_verified_asset_set():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    publish = workflow.split("  publish-release:", 1)[1].split("  retention-maintenance:", 1)[0]
+    assert '--tag "$GITHUB_REF_NAME"' in publish
+    assert "--shell-installer install.sh" in publish
+    assert "--powershell-installer install.ps1" in publish
+    assert "--allow-unexpected" in publish
+    assert "--unexpected-output" in publish
+    assert 'gh release delete-asset "$TAG" "$stale_asset" --yes' in publish
+    assert publish.count("scripts/confirm_release_assets.py") == 2
+
+
+def test_release_installer_templates_have_one_tag_marker_and_compact_manifest_support():
+    shell = (ROOT / "install.sh").read_text(encoding="utf-8")
+    powershell = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    for contents in (shell, powershell):
+        assert contents.count("@LOCALSR_RELEASE_TAG@") == 1
+        assert "release-index.json" in contents
+        assert "SHA256SUMS" in contents
+        assert "Assembled bundle checksum verification failed" in contents
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell parser is provided by Windows")
+def test_windows_release_installer_parses():
+    path = str(ROOT / "install.ps1").replace("'", "''")
+    command = (
+        "$tokens=$null; $errors=$null; "
+        f"[System.Management.Automation.Language.Parser]::ParseFile('{path}', "
+        "[ref]$tokens, [ref]$errors) | Out-Null; "
+        "if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }"
+    )
+    subprocess.run(
+        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=True,
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="SSD scratch management uses POSIX locks")

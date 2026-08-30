@@ -1,202 +1,327 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# LocalSR Smart Universal Installer (macOS & Linux)
-# Automatically probes hardware (Apple Silicon, NVIDIA CUDA, AMD ROCm, Intel XPU, CPU)
-# and installs the optimal standalone binary from GitHub Releases.
-# ==============================================================================
+# LocalSR verified installer for macOS and Linux.
 set -euo pipefail
 
 REPO="HerRei/local-upscale"
-APP_NAME="LocalSR"
-INSTALL_DIR_LINUX="${HOME}/.local/share/localsr"
-BIN_DIR_LINUX="${HOME}/.local/bin"
-DESKTOP_DIR_LINUX="${HOME}/.local/share/applications"
-INSTALL_DIR_MACOS="/Applications"
+DEFAULT_RELEASE_TAG="@LOCALSR_RELEASE_TAG@"
+RELEASE_TAG="${LOCALSR_RELEASE_TAG:-$DEFAULT_RELEASE_TAG}"
+REQUESTED_FLAVOR="${LOCALSR_FLAVOR:-}"
+INSTALL_DIR_LINUX="${LOCALSR_INSTALL_DIR:-$HOME/.local/share/localsr}"
+BIN_DIR_LINUX="$HOME/.local/bin"
+DESKTOP_DIR_LINUX="$HOME/.local/share/applications"
+TMP_DIR=""
+ROLLBACK_TARGET=""
+ROLLBACK_BACKUP=""
 
-# Colors
-BOLD="\033[1m"
-GREEN="\033[0;32m"
-CYAN="\033[0;36m"
-YELLOW="\033[1;33m"
-RED="\033[0;31m"
-NC="\033[0m"
+usage() {
+    cat <<'EOF'
+Usage: bash Install-LocalSR.sh [--tag TAG] [--flavor FLAVOR] [--install-dir PATH]
 
-echo -e "${CYAN}${BOLD}"
-echo "  _                     _  ____  ____  "
-echo " | |    ___   ___ __ _| |/ ___||  _ \ "
-echo " | |   / _ \ / __/ _\` | |\___ \| |_) |"
-echo " | |__| (_) | (_| (_| | | ___) |  _ < "
-echo " |_____\___/ \___\__,_|_||____/|_| \_\\"
-echo -e "${NC}"
-echo -e "${BOLD}LocalSR Smart Hardware Prober & Installer${NC}\n"
+The installer detects the safest matching backend, downloads only that logical
+bundle, verifies every downloaded part using SHA256SUMS, verifies the assembled
+archive using release-index.json, and then replaces the existing installation.
 
-# ------------------------------------------------------------------------------
-# 1. Detect Operating System & Hardware Acceleration Flavor
-# ------------------------------------------------------------------------------
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-FLAVOR=""
+Supported flavor overrides:
+  Linux-CPU-x86_64       Linux-CUDA-x86_64
+  Linux-Intel-x86_64     Linux-ROCm-x86_64
+  macOS-x86_64           macOS-arm64
+EOF
+}
 
-echo -e "🔍 Probing system hardware..."
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --tag)
+            [ "$#" -ge 2 ] || { echo "Missing value for --tag" >&2; exit 2; }
+            RELEASE_TAG="$2"
+            shift 2
+            ;;
+        --flavor)
+            [ "$#" -ge 2 ] || { echo "Missing value for --flavor" >&2; exit 2; }
+            REQUESTED_FLAVOR="$2"
+            shift 2
+            ;;
+        --install-dir)
+            [ "$#" -ge 2 ] || { echo "Missing value for --install-dir" >&2; exit 2; }
+            INSTALL_DIR_LINUX="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
 
-if [ "${OS}" = "Darwin" ]; then
-    echo -e "   Platform: ${GREEN}macOS (${ARCH})${NC}"
-    if [ "${ARCH}" = "arm64" ]; then
-        echo -e "   Hardware Acceleration: ${GREEN}Apple Silicon GPU (Metal Performance Shaders)${NC}"
-        FLAVOR="macOS-arm64"
-    else
-        echo -e "   Hardware Acceleration: ${YELLOW}Intel CPU (Multi-threaded Accelerate/vecLib)${NC}"
-        FLAVOR="macOS-x86_64"
+cleanup() {
+    if [ -n "$ROLLBACK_BACKUP" ] && [ -e "$ROLLBACK_BACKUP" ] && [ ! -e "$ROLLBACK_TARGET" ]; then
+        mv "$ROLLBACK_BACKUP" "$ROLLBACK_TARGET"
     fi
-elif [ "${OS}" = "Linux" ]; then
-    echo -e "   Platform: ${GREEN}Linux (${ARCH})${NC}"
-    
-    # Check NVIDIA CUDA
-    if command -v nvidia-smi &>/dev/null && [ -e /dev/nvidia0 ]; then
-        GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || echo "NVIDIA GPU")
-        echo -e "   Detected GPU: ${GREEN}${GPU_NAME} (CUDA 12.x Acceleration)${NC}"
-        FLAVOR="Linux-CUDA"
-    # Check AMD ROCm
-    elif [ -e /dev/kfd ] && (lspci 2>/dev/null | grep -qi "AMD.*Radeon" || lsmod 2>/dev/null | grep -qi "amdgpu"); then
-        echo -e "   Detected GPU: ${GREEN}AMD Radeon (ROCm Acceleration)${NC}"
-        FLAVOR="Linux-ROCm"
-    # Check Intel Arc / Xe / iGPU
-    elif (lspci 2>/dev/null | grep -qiE "Intel.*(Arc|Iris|Graphics|Xe)") && [ -d /dev/dri ]; then
-        echo -e "   Detected GPU: ${GREEN}Intel Arc / Iris Xe (XPU & OpenVINO Acceleration)${NC}"
-        FLAVOR="Linux-Intel"
+    if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+        rm -rf "$TMP_DIR"
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+
+safe_name() {
+    case "$1" in
+        ""|.*|*[!A-Za-z0-9._+-]*|*/*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+if [ "$RELEASE_TAG" = "$DEFAULT_RELEASE_TAG" ] && [ "${DEFAULT_RELEASE_TAG#@}" != "$DEFAULT_RELEASE_TAG" ]; then
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        RELEASE_TAG=$(gh release list --repo "$REPO" --limit 20 \
+            --json tagName,isDraft,publishedAt \
+            --jq '[.[] | select(.isDraft == false)] | sort_by(.publishedAt) | reverse | .[0].tagName')
     else
-        echo -e "   Hardware Acceleration: ${YELLOW}Universal CPU (Optimized SIMD / OpenMP)${NC}"
-        FLAVOR="Linux-CPU"
+        echo "This source-tree installer needs --tag TAG, or an authenticated GitHub CLI." >&2
+        exit 1
+    fi
+fi
+safe_name "$RELEASE_TAG" || { echo "Unsafe release tag: $RELEASE_TAG" >&2; exit 1; }
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+if [ -n "$REQUESTED_FLAVOR" ]; then
+    FLAVOR="$REQUESTED_FLAVOR"
+elif [ "$OS" = "Darwin" ]; then
+    case "$ARCH" in
+        arm64) FLAVOR="macOS-arm64" ;;
+        x86_64) FLAVOR="macOS-x86_64" ;;
+        *) echo "Unsupported macOS architecture: $ARCH" >&2; exit 1 ;;
+    esac
+elif [ "$OS" = "Linux" ]; then
+    case "$ARCH" in
+        x86_64|amd64) ;;
+        *) echo "This alpha publishes Linux x86_64 bundles only; detected $ARCH." >&2; exit 1 ;;
+    esac
+    if command -v nvidia-smi >/dev/null 2>&1 && [ -e /dev/nvidia0 ]; then
+        FLAVOR="Linux-CUDA-x86_64"
+    elif [ -e /dev/kfd ] && command -v lspci >/dev/null 2>&1 \
+        && lspci 2>/dev/null | grep -qiE 'AMD.*(Radeon|VGA|Display)'; then
+        FLAVOR="Linux-ROCm-x86_64"
+    elif [ -d /dev/dri ] && command -v lspci >/dev/null 2>&1 \
+        && lspci 2>/dev/null | grep -qiE 'Intel.*(Arc|Iris|Graphics|Xe)'; then
+        FLAVOR="Linux-Intel-x86_64"
+    else
+        FLAVOR="Linux-CPU-x86_64"
     fi
 else
-    echo -e "${RED}❌ Unsupported operating system: ${OS}${NC}"
+    echo "Unsupported operating system: $OS" >&2
     exit 1
 fi
 
-echo -e "   Selected Backend Flavor: ${BOLD}${CYAN}${FLAVOR}${NC}\n"
+case "$FLAVOR" in
+    Linux-CPU-x86_64|Linux-CUDA-x86_64|Linux-Intel-x86_64|Linux-ROCm-x86_64|macOS-x86_64|macOS-arm64) ;;
+    *) echo "Unsupported LocalSR flavor: $FLAVOR" >&2; exit 1 ;;
+esac
 
-# ------------------------------------------------------------------------------
-# 2. Fetch Latest Matching Release Asset from GitHub
-# ------------------------------------------------------------------------------
-echo -e "📡 Fetching latest release asset for ${BOLD}${FLAVOR}${NC} from GitHub..."
+case "$FLAVOR" in
+    Linux-CPU-x86_64) BUNDLE_NAME="LocalSR-Linux-CPU-x86_64.tar.gz" ;;
+    Linux-CUDA-x86_64) BUNDLE_NAME="LocalSR-Linux-CUDA-x86_64.tar.gz" ;;
+    Linux-Intel-x86_64) BUNDLE_NAME="LocalSR-Linux-Intel-x86_64.tar.gz" ;;
+    Linux-ROCm-x86_64) BUNDLE_NAME="LocalSR-Linux-ROCm-x86_64.tar.gz" ;;
+    macOS-x86_64) BUNDLE_NAME="LocalSR-macOS-x86_64.tar.gz" ;;
+    macOS-arm64) BUNDLE_NAME="LocalSR-macOS-arm64.tar.gz" ;;
+esac
 
-TMP_DIR=$(mktemp -d /tmp/localsr_install.XXXXXX)
-trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/localsr-install.XXXXXX")
 
-AUTH_HEADER=()
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-    AUTH_HEADER=(-H "Authorization: token ${GITHUB_TOKEN}")
-fi
-
-# Strategy A: Use GitHub CLI (gh) if authenticated
-DOWNLOADED=false
-if command -v gh &>/dev/null && gh auth status &>/dev/null; then
-    echo -e "   Authenticating via GitHub CLI..."
-    PATTERN="*${FLAVOR}*"
-    if gh release download --repo "${REPO}" -p "${PATTERN}" -D "${TMP_DIR}" --clobber 2>/dev/null; then
-        DOWNLOADED=true
+download_asset() {
+    asset_name="$1"
+    safe_name "$asset_name" || { echo "Unsafe release asset name: $asset_name" >&2; exit 1; }
+    destination="$TMP_DIR/$asset_name"
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        gh release download "$RELEASE_TAG" --repo "$REPO" \
+            --pattern "$asset_name" --dir "$TMP_DIR" --clobber
+        [ -f "$destination" ] || { echo "GitHub did not provide $asset_name" >&2; exit 1; }
+        return
     fi
-fi
+    command -v curl >/dev/null 2>&1 || {
+        echo "Install curl or authenticate GitHub CLI with: gh auth login" >&2
+        exit 1
+    }
+    curl --fail --location --proto '=https' --tlsv1.2 \
+        --output "$destination" \
+        "https://github.com/$REPO/releases/download/$RELEASE_TAG/$asset_name"
+}
 
-# Strategy B: Fallback to GitHub REST API
-if [ "${DOWNLOADED}" = "false" ]; then
-    RELEASES_JSON=$(curl -sSL "${AUTH_HEADER[@]}" "https://api.github.com/repos/${REPO}/releases" 2>/dev/null || true)
-    
-    DOWNLOAD_URL=$(echo "${RELEASES_JSON}" | grep "browser_download_url" | grep -iE "${FLAVOR}" | head -n 1 | cut -d '"' -f 4 || true)
-    
-    if [ -z "${DOWNLOAD_URL}" ]; then
-        if [ "${OS}" = "Darwin" ]; then
-            DOWNLOAD_URL=$(echo "${RELEASES_JSON}" | grep "browser_download_url" | grep -i "macOS" | head -n 1 | cut -d '"' -f 4 || true)
-        else
-            DOWNLOAD_URL=$(echo "${RELEASES_JSON}" | grep "browser_download_url" | grep -i "Linux-CPU" | head -n 1 | cut -d '"' -f 4 || true)
-        fi
-    fi
-    
-    if [ -n "${DOWNLOAD_URL}" ]; then
-        FILE_NAME=$(basename "${DOWNLOAD_URL}")
-        echo -e "⬇️  Downloading ${BOLD}${FILE_NAME}${NC}..."
-        curl -# -L "${AUTH_HEADER[@]}" -o "${TMP_DIR}/${FILE_NAME}" "${DOWNLOAD_URL}"
-        DOWNLOADED=true
-    fi
-fi
-
-ARCHIVE_FILE=$(find "${TMP_DIR}" -type f \( -name "*.zip" -o -name "*.tar.gz" \) | head -n 1)
-
-if [ -z "${ARCHIVE_FILE}" ] || [ "${DOWNLOADED}" = "false" ]; then
-    echo -e "${RED}❌ Error: Could not download release package for ${FLAVOR}.${NC}"
-    echo -e "Please download directly from: https://github.com/${REPO}/releases"
-    exit 1
-fi
-
-FILE_NAME=$(basename "${ARCHIVE_FILE}")
-
-CHECKSUM_FILE="${ARCHIVE_FILE}.sha256"
-if [ ! -f "${CHECKSUM_FILE}" ] && [ -n "${DOWNLOAD_URL:-}" ]; then
-    curl -fsSL "${AUTH_HEADER[@]}" -o "${CHECKSUM_FILE}" "${DOWNLOAD_URL}.sha256"
-fi
-if [ ! -f "${CHECKSUM_FILE}" ]; then
-    echo -e "${RED}❌ Error: Release checksum is missing; refusing to install.${NC}"
-    exit 1
-fi
-echo -e "🔐 Verifying SHA-256 checksum..."
-if command -v shasum &>/dev/null; then
-    (cd "${TMP_DIR}" && shasum -a 256 -c "$(basename "${CHECKSUM_FILE}")")
-elif command -v sha256sum &>/dev/null; then
-    (cd "${TMP_DIR}" && sha256sum -c "$(basename "${CHECKSUM_FILE}")")
-else
-    echo -e "${RED}❌ Error: No SHA-256 verification tool is available.${NC}"
-    exit 1
-fi
-
-# ------------------------------------------------------------------------------
-# 3. Extract and Provision Application
-# ------------------------------------------------------------------------------
-echo -e "📦 Installing ${BOLD}LocalSR${NC} from ${FILE_NAME}..."
-
-if [ "${OS}" = "Darwin" ]; then
-    mkdir -p "${TMP_DIR}/unpacked"
-    if [[ "${FILE_NAME}" == *.zip ]]; then
-        unzip -q -o "${ARCHIVE_FILE}" -d "${TMP_DIR}/unpacked"
+hash_file() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
     else
-        tar -xzf "${ARCHIVE_FILE}" -C "${TMP_DIR}/unpacked"
+        echo "No SHA-256 tool is available (need shasum or sha256sum)." >&2
+        exit 1
     fi
-    
-    TARGET_APP="${INSTALL_DIR_MACOS}/LocalSR.app"
-    if [ ! -w "${INSTALL_DIR_MACOS}" ]; then
-        TARGET_APP="${HOME}/Applications/LocalSR.app"
-        mkdir -p "${HOME}/Applications"
-    fi
-    
-    rm -rf "${TARGET_APP}"
-    cp -R "${TMP_DIR}/unpacked/LocalSR.app" "${TARGET_APP}"
-    
-    echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${TARGET_APP}${NC}"
+}
+
+download_asset "release-index.json"
+download_asset "SHA256SUMS"
+
+BUNDLE_DATA="$TMP_DIR/bundle-data.txt"
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$TMP_DIR/release-index.json" "$BUNDLE_NAME" "$RELEASE_TAG" > "$BUNDLE_DATA" <<'PY'
+import json
+import sys
+
+index = json.load(open(sys.argv[1], encoding="utf-8"))
+if index.get("schema_version") != 2:
+    raise SystemExit("Unsupported release-index schema")
+if index.get("release_tag") != sys.argv[3]:
+    raise SystemExit("Release index tag does not match the requested release")
+if index.get("checksum_file") != "SHA256SUMS":
+    raise SystemExit("Release index names an unexpected checksum file")
+matches = [bundle for bundle in index["bundles"] if bundle["filename"] == sys.argv[2]]
+if len(matches) != 1:
+    raise SystemExit(f"Expected one bundle named {sys.argv[2]}; found {len(matches)}")
+bundle = matches[0]
+print(bundle["filename"])
+print(bundle["sha256"])
+for asset in bundle["assets"]:
+    print(asset)
+PY
+elif command -v jq >/dev/null 2>&1; then
+    jq -er --arg name "$BUNDLE_NAME" --arg tag "$RELEASE_TAG" \
+        'if .schema_version != 2 or .release_tag != $tag or .checksum_file != "SHA256SUMS" then error("release index header mismatch") else . end | .bundles | map(select(.filename == $name)) | if length == 1 then .[0] else error("bundle not found") end | .filename, .sha256, .assets[]' \
+        "$TMP_DIR/release-index.json" > "$BUNDLE_DATA"
 else
-    mkdir -p "${INSTALL_DIR_LINUX}" "${BIN_DIR_LINUX}" "${DESKTOP_DIR_LINUX}"
-    rm -rf "${INSTALL_DIR_LINUX:?}"/*
-    tar -xzf "${ARCHIVE_FILE}" -C "${INSTALL_DIR_LINUX}" --strip-components=1 2>/dev/null || tar -xzf "${ARCHIVE_FILE}" -C "${INSTALL_DIR_LINUX}"
-    
-    chmod +x "${INSTALL_DIR_LINUX}/LocalSR" 2>/dev/null || true
-    chmod +x "${INSTALL_DIR_LINUX}/LocalSRWorker" 2>/dev/null || true
-    
-    ln -sf "${INSTALL_DIR_LINUX}/LocalSR" "${BIN_DIR_LINUX}/localsr"
-    
-    cat << DESK_EOF > "${DESKTOP_DIR_LINUX}/localsr.desktop"
+    echo "The installer needs python3 or jq to read the release manifest." >&2
+    exit 1
+fi
+
+INDEX_NAME=$(sed -n '1p' "$BUNDLE_DATA")
+EXPECTED_BUNDLE_HASH=$(sed -n '2p' "$BUNDLE_DATA")
+[ "$INDEX_NAME" = "$BUNDLE_NAME" ] || { echo "Release index selected the wrong bundle." >&2; exit 1; }
+case "$EXPECTED_BUNDLE_HASH" in
+    ""|*[!0-9a-fA-F]*) echo "Release index has an invalid bundle digest." >&2; exit 1 ;;
+esac
+[ "${#EXPECTED_BUNDLE_HASH}" -eq 64 ] || {
+    echo "Release index has an invalid bundle digest." >&2
+    exit 1
+}
+
+ASSETS=()
+while IFS= read -r asset_name; do
+    [ -n "$asset_name" ] || continue
+    safe_name "$asset_name" || { echo "Unsafe bundle asset name: $asset_name" >&2; exit 1; }
+    ASSETS+=("$asset_name")
+done < <(tail -n +3 "$BUNDLE_DATA")
+[ "${#ASSETS[@]}" -gt 0 ] || { echo "Release index contains no bundle assets." >&2; exit 1; }
+
+for asset_name in "${ASSETS[@]}"; do
+    download_asset "$asset_name"
+    checksum_matches=$(awk -v name="$asset_name" '$2 == name {print $1}' "$TMP_DIR/SHA256SUMS")
+    [ "$(printf '%s\n' "$checksum_matches" | awk 'NF {count++} END {print count+0}')" -eq 1 ] || {
+        echo "SHA256SUMS does not uniquely identify $asset_name" >&2
+        exit 1
+    }
+    case "$checksum_matches" in
+        ""|*[!0-9a-fA-F]*) echo "SHA256SUMS has an invalid digest for $asset_name" >&2; exit 1 ;;
+    esac
+    [ "${#checksum_matches}" -eq 64 ] || {
+        echo "SHA256SUMS has an invalid digest for $asset_name" >&2
+        exit 1
+    }
+    actual_hash=$(hash_file "$TMP_DIR/$asset_name")
+    [ "$(printf '%s' "$actual_hash" | tr 'A-F' 'a-f')" = "$(printf '%s' "$checksum_matches" | tr 'A-F' 'a-f')" ] || {
+        echo "Checksum verification failed for $asset_name" >&2
+        exit 1
+    }
+done
+
+ARCHIVE_FILE="$TMP_DIR/$BUNDLE_NAME"
+if [ "${#ASSETS[@]}" -eq 1 ] && [ "${ASSETS[0]}" = "$BUNDLE_NAME" ]; then
+    :
+else
+    : > "$ARCHIVE_FILE"
+    for asset_name in "${ASSETS[@]}"; do
+        cat "$TMP_DIR/$asset_name" >> "$ARCHIVE_FILE"
+    done
+fi
+ACTUAL_BUNDLE_HASH=$(hash_file "$ARCHIVE_FILE")
+[ "$(printf '%s' "$ACTUAL_BUNDLE_HASH" | tr 'A-F' 'a-f')" = "$(printf '%s' "$EXPECTED_BUNDLE_HASH" | tr 'A-F' 'a-f')" ] || {
+    echo "Assembled bundle checksum verification failed." >&2
+    exit 1
+}
+
+echo "Verified $BUNDLE_NAME for $FLAVOR."
+UNPACKED="$TMP_DIR/unpacked"
+mkdir -p "$UNPACKED"
+tar -xzf "$ARCHIVE_FILE" -C "$UNPACKED"
+
+if [ "$OS" = "Darwin" ]; then
+    SOURCE_APP="$UNPACKED/LocalSR.app"
+    [ -x "$SOURCE_APP/Contents/MacOS/LocalSR" ] || {
+        echo "Verified archive does not contain LocalSR.app." >&2
+        exit 1
+    }
+    TARGET_PARENT="/Applications"
+    if [ ! -w "$TARGET_PARENT" ]; then
+        TARGET_PARENT="$HOME/Applications"
+        mkdir -p "$TARGET_PARENT"
+    fi
+    TARGET_APP="$TARGET_PARENT/LocalSR.app"
+    NEW_APP="$TARGET_PARENT/.LocalSR.app.new.$$"
+    BACKUP_APP="$TARGET_PARENT/.LocalSR.app.previous.$$"
+    if command -v ditto >/dev/null 2>&1; then
+        ditto "$SOURCE_APP" "$NEW_APP"
+    else
+        cp -R "$SOURCE_APP" "$NEW_APP"
+    fi
+    if [ -e "$TARGET_APP" ]; then
+        mv "$TARGET_APP" "$BACKUP_APP"
+        ROLLBACK_TARGET="$TARGET_APP"
+        ROLLBACK_BACKUP="$BACKUP_APP"
+    fi
+    mv "$NEW_APP" "$TARGET_APP"
+    if [ -n "$ROLLBACK_BACKUP" ]; then
+        rm -rf "$ROLLBACK_BACKUP"
+    fi
+    ROLLBACK_TARGET=""
+    ROLLBACK_BACKUP=""
+    echo "Installed LocalSR to $TARGET_APP"
+else
+    SOURCE_EXE="$UNPACKED/LocalSR/LocalSR"
+    [ -x "$SOURCE_EXE" ] || { echo "Verified archive does not contain executable LocalSR." >&2; exit 1; }
+    SOURCE_ROOT=$(dirname "$SOURCE_EXE")
+    TARGET_PARENT=$(dirname "$INSTALL_DIR_LINUX")
+    mkdir -p "$TARGET_PARENT" "$BIN_DIR_LINUX" "$DESKTOP_DIR_LINUX"
+    NEW_DIR="$TARGET_PARENT/.localsr.new.$$"
+    BACKUP_DIR="$TARGET_PARENT/.localsr.previous.$$"
+    cp -R "$SOURCE_ROOT" "$NEW_DIR"
+    if [ -e "$INSTALL_DIR_LINUX" ]; then
+        mv "$INSTALL_DIR_LINUX" "$BACKUP_DIR"
+        ROLLBACK_TARGET="$INSTALL_DIR_LINUX"
+        ROLLBACK_BACKUP="$BACKUP_DIR"
+    fi
+    mv "$NEW_DIR" "$INSTALL_DIR_LINUX"
+    if [ -n "$ROLLBACK_BACKUP" ]; then
+        rm -rf "$ROLLBACK_BACKUP"
+    fi
+    ROLLBACK_TARGET=""
+    ROLLBACK_BACKUP=""
+    ln -sfn "$INSTALL_DIR_LINUX/LocalSR" "$BIN_DIR_LINUX/localsr"
+    cat > "$DESKTOP_DIR_LINUX/localsr.desktop" <<EOF
 [Desktop Entry]
 Name=LocalSR
-Comment=High Performance Local Image & Video Super-Resolution
-Exec=${INSTALL_DIR_LINUX}/LocalSR %F
-Icon=${INSTALL_DIR_LINUX}/localsr/ui/slint/logo.png
+Comment=Private local image and video upscaling
+Exec=$INSTALL_DIR_LINUX/LocalSR %F
 Terminal=false
 Type=Application
 Categories=Graphics;Photography;Utility;
 StartupNotify=true
-DESK_EOF
-    chmod +x "${DESKTOP_DIR_LINUX}/localsr.desktop"
-    
-    echo -e "${GREEN}✅ LocalSR successfully installed to ${BOLD}${INSTALL_DIR_LINUX}${NC}"
-    echo -e "   Executable linked: ${CYAN}${BIN_DIR_LINUX}/localsr${NC}"
+EOF
+    chmod 0755 "$DESKTOP_DIR_LINUX/localsr.desktop"
+    echo "Installed LocalSR to $INSTALL_DIR_LINUX"
+    echo "Command: $BIN_DIR_LINUX/localsr"
 fi
 
-echo -e "\n🎉 ${GREEN}${BOLD}Installation complete!${NC}"
-echo -e "Launch LocalSR from your applications menu or terminal to start upscaling."
+echo "Installation complete. Models remain on-demand downloads."

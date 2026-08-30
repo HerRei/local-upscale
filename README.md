@@ -25,7 +25,26 @@ weights. Custom `.safetensors` checkpoints are accepted by default. Unverified p
 `.pth`, `.pt`, and `.ckpt` files are blocked unless the user explicitly sets
 `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`; enabling that override treats the checkpoint as code.
 
-## Platform and release artifacts
+## Install the alpha
+
+Open the [v0.0.9-alpha release](https://github.com/HerRei/local-upscale/releases/tag/v0.0.9-alpha)
+and download just one file:
+
+- macOS or Linux: `Install-LocalSR.sh`, then run `bash Install-LocalSR.sh`.
+- Windows: `Install-LocalSR.ps1`, then run
+  `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-LocalSR.ps1`.
+
+The installer detects the platform and safest matching backend, downloads only that bundle, verifies
+every downloaded part against `SHA256SUMS`, verifies the reconstructed archive against
+`release-index.json`, and replaces an existing installation transactionally. Use `--flavor` on
+macOS/Linux or `-Flavor` on Windows only when overriding automatic hardware selection.
+
+Because the repository is private, alpha testers must first authenticate GitHub CLI with
+`gh auth login`. That requirement goes away only if the owner chooses a public download location.
+The scripts and application are not yet Developer ID/Authenticode signed; read the trust warning
+below before running them.
+
+## Platform and advanced downloads
 
 The v0.0.9-alpha release workflow produces portable archives, not DMGs, AppImages, MSIs, or Windows
 Setup installers:
@@ -39,13 +58,16 @@ Setup installers:
 | Windows 10/11 | x86-64 / NVIDIA CUDA | `LocalSR-Windows-CUDA-x86_64.zip` |
 | Linux x86-64 | CPU, CUDA, Intel XPU, or ROCm | one backend-specific `.tar.gz` |
 
-Every archive has a checksum, provenance metadata, and a native-binary architecture report. The
-release gate parses PE, ELF, and Mach-O headers and rejects duplicate archive digests. Alpha
-suffixes are published as GitHub prereleases.
+Every logical archive has a checksum, provenance metadata, and a native-binary architecture report.
+To keep the release page compact, all downloadable-part hashes are in the standard `SHA256SUMS`
+file, while logical-archive hashes, provenance, architecture reports, split-part ordering, and beta
+readiness evidence are consolidated in `release-index.json`. The release gate parses PE, ELF, and
+Mach-O headers, rejects duplicate archive digests, and requires the exact published asset set.
+Alpha suffixes are published as GitHub prereleases.
 
-The release also publishes `beta-readiness.json`, an intentionally honest machine-readable snapshot
-of completed and unresolved beta gates. It prevents packaging success from being confused with
-physical-device, signing, licensing, or public-access acceptance.
+The release index embeds an intentionally honest machine-readable snapshot of completed and
+unresolved beta gates. It prevents packaging success from being confused with physical-device,
+signing, licensing, or public-access acceptance.
 
 Production Apple Developer ID/Authenticode credentials are not configured yet. The v0.0.9-alpha
 downloads are therefore not suitable for a public beta and may trigger operating-system trust
@@ -122,9 +144,8 @@ localsr photo.png --preset quick --auto-start
 localsr video.mp4 --recipe "My Video Recipe" --auto-start
 ```
 
-The portable alpha archives do not run an installer automatically. Desktop integration claims in
-older documentation referred to planned installer formats and should not be read as current release
-artifacts.
+The portable archives do not run an installer automatically. The verified installer scripts above
+add the normal application/command shortcuts; they are not DMG, PKG, MSI, or Setup packages.
 
 ## Development and tests
 

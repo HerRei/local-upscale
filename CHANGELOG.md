@@ -30,6 +30,10 @@ stable release is published.
 ### Changed
 
 - Synchronized app, bundle, installer, documentation, tag, and release metadata at 0.0.9-alpha.
+- Consolidated the release from 46 assets to 18 without removing a backend: two verified
+  auto-selecting installers, standard `SHA256SUMS`, one schema-v2 release index, and the minimum
+  required archive/part files. Provenance, architecture reports, and beta readiness are embedded in
+  the index instead of repeated as separate downloads.
 - Expanded the beta gate register to state the legacy Windows DirectML runtime and unavailable
   repository security controls explicitly, without deciding their product-policy outcomes.
 

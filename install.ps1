@@ -1,170 +1,253 @@
-# ==============================================================================
-# LocalSR Smart Universal Installer (Windows 10 & 11)
-# Automatically probes GPU hardware (NVIDIA CUDA, Intel Arc/Iris, AMD Radeon, DirectML, CPU)
-# and installs the optimal standalone binary from GitHub Releases.
-# ==============================================================================
+# LocalSR verified installer for Windows 10 and 11.
+[CmdletBinding()]
+param(
+    [string]$Tag,
+    [ValidateSet(
+        "Windows-CPU-x86_64",
+        "Windows-DirectML-x86_64",
+        "Windows-CUDA-x86_64"
+    )]
+    [string]$Flavor,
+    [string]$InstallDir = "$env:LOCALAPPDATA\LocalSR",
+    [switch]$NoLaunch
+)
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
 $Repo = "HerRei/local-upscale"
-$InstallDir = "$env:LOCALAPPDATA\LocalSR"
-$DesktopShortcut = "$env:USERPROFILE\Desktop\LocalSR.lnk"
-$StartMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\LocalSR"
+$DefaultReleaseTag = "@LOCALSR_RELEASE_TAG@"
+$TempDir = Join-Path $env:TEMP ("localsr-install-" + [guid]::NewGuid().ToString("N"))
+$BackupDir = $null
+$InstallCommitted = $false
 
-Write-Host "  _                     _  ____  ____  " -ForegroundColor Cyan
-Write-Host " | |    ___   ___ __ _| |/ ___||  _ \ " -ForegroundColor Cyan
-Write-Host " | |   / _ \ / __/ _\` | |\___ \| |_) |" -ForegroundColor Cyan
-Write-Host " | |__| (_) | (_| (_| | | ___) |  _ < " -ForegroundColor Cyan
-Write-Host " |_____\___/ \___\__,_|_||____/|_| \_\" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "LocalSR Smart Hardware Prober & Installer for Windows" -ForegroundColor White
-Write-Host ""
-
-# ------------------------------------------------------------------------------
-# 1. Probe Hardware & Detect GPU Flavor
-# ------------------------------------------------------------------------------
-Write-Host "🔍 Probing system hardware..." -ForegroundColor Yellow
-
-$GpuControllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
-$GpuNames = ($GpuControllers | Select-Object -ExpandProperty Name) -join ", "
-$Flavor = "Windows-CPU"
-
-# Detect Architecture
-$Arch = $env:PROCESSOR_ARCHITECTURE
-if ($Arch -eq "ARM64") {
-    $ArchSuffix = "arm64"
-} else {
-    $ArchSuffix = "x86_64"
+function Test-SafeName {
+    param([Parameter(Mandatory)][string]$Name)
+    return $Name -match '^[A-Za-z0-9][A-Za-z0-9._+-]*$'
 }
 
-if ($GpuNames -match "NVIDIA") {
-    Write-Host "   Detected GPU: $GpuNames (NVIDIA CUDA 12.x Acceleration)" -ForegroundColor Green
-    $Flavor = "Windows-CUDA-$ArchSuffix"
-} elseif ($GpuNames -match "Intel.*(Arc|Iris|Ultra|Xe|Graphics)") {
-    Write-Host "   Detected GPU: $GpuNames (Intel DirectML / XPU Acceleration)" -ForegroundColor Green
-    $Flavor = "Windows-DirectML-$ArchSuffix"
-} elseif ($GpuNames -match "AMD|Radeon") {
-    Write-Host "   Detected GPU: $GpuNames (AMD DirectML Acceleration)" -ForegroundColor Green
-    $Flavor = "Windows-DirectML-$ArchSuffix"
-} elseif ($GpuNames -match "Snapdragon|Qualcomm|Adreno") {
-    Write-Host "   Detected GPU: $GpuNames (Snapdragon DirectML / QNN NPU)" -ForegroundColor Green
-    $Flavor = "Windows-DirectML-$ArchSuffix"
-} else {
-    Write-Host "   Hardware Acceleration: Universal CPU (Multi-threaded Intel MKL)" -ForegroundColor DarkYellow
-    $Flavor = "Windows-CPU-$ArchSuffix"
+function Test-GitHubCli {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    & gh auth status *> $null
+    return $LASTEXITCODE -eq 0
 }
 
-Write-Host "   Selected Backend Flavor: $Flavor" -ForegroundColor Cyan
-Write-Host ""
+function Get-ReleaseAsset {
+    param([Parameter(Mandatory)][string]$Name)
+    if (-not (Test-SafeName $Name)) {
+        throw "Unsafe release asset name: $Name"
+    }
+    $Destination = Join-Path $TempDir $Name
+    if (Test-GitHubCli) {
+        & gh release download $Tag --repo $Repo --pattern $Name --dir $TempDir --clobber
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+            throw "GitHub did not provide $Name"
+        }
+        return $Destination
+    }
 
-# ------------------------------------------------------------------------------
-# 2. Fetch Latest Matching Release Asset from GitHub
-# ------------------------------------------------------------------------------
-Write-Host "📡 Fetching latest release asset for $Flavor from GitHub..." -ForegroundColor Yellow
+    $Headers = @{"User-Agent" = "LocalSR-Installer"}
+    $Uri = "https://github.com/$Repo/releases/download/$Tag/$Name"
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -OutFile $Destination
+    }
+    catch {
+        throw "Could not download $Name. For a private release, install GitHub CLI and run 'gh auth login'. $($_.Exception.Message)"
+    }
+    return $Destination
+}
 
-$ReleasesUrl = "https://api.github.com/repos/$Repo/releases"
-$Releases = Invoke-RestMethod -Uri $ReleasesUrl -Headers @{"User-Agent"="LocalSR-Installer"}
+if (-not $Tag -and $DefaultReleaseTag.StartsWith("@")) {
+    if (-not (Test-GitHubCli)) {
+        throw "This source-tree installer needs -Tag TAG, or an authenticated GitHub CLI."
+    }
+    $ReleaseList = & gh release list --repo $Repo --limit 20 --json tagName,isDraft,publishedAt
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not list LocalSR releases."
+    }
+    $Tag = ($ReleaseList | ConvertFrom-Json |
+        Where-Object { -not $_.isDraft } |
+        Sort-Object { [datetime]$_.publishedAt } -Descending |
+        Select-Object -First 1).tagName
+}
+elseif (-not $Tag) {
+    $Tag = $DefaultReleaseTag
+}
+if (-not (Test-SafeName $Tag)) {
+    throw "Unsafe release tag: $Tag"
+}
 
-$DownloadAsset = $null
-$SelectedRelease = $null
-foreach ($rel in $Releases) {
-    foreach ($asset in $rel.assets) {
-        if ($asset.name -like "*.zip" -and $asset.name -match [regex]::Escape($Flavor)) {
-            $DownloadAsset = $asset
-            $SelectedRelease = $rel
-            break
+$Architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+if ($Architecture -ne "X64") {
+    throw "This alpha publishes Windows x86_64 bundles only; detected $Architecture."
+}
+
+if (-not $Flavor) {
+    $GpuNames = (Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty Name) -join ", "
+    if ($GpuNames -match "NVIDIA") {
+        $Flavor = "Windows-CUDA-x86_64"
+    }
+    elseif ($GpuNames -match "Intel.*(Arc|Iris|Ultra|Xe|Graphics)|AMD|Radeon|Snapdragon|Qualcomm|Adreno") {
+        $Flavor = "Windows-DirectML-x86_64"
+    }
+    else {
+        $Flavor = "Windows-CPU-x86_64"
+    }
+}
+
+$BundleName = switch ($Flavor) {
+    "Windows-CPU-x86_64" { "LocalSR-Windows-CPU-x86_64.zip" }
+    "Windows-DirectML-x86_64" { "LocalSR-Windows-DirectML-x86_64.zip" }
+    "Windows-CUDA-x86_64" { "LocalSR-Windows-CUDA-x86_64.zip" }
+}
+
+Write-Host "LocalSR verified installer" -ForegroundColor Cyan
+Write-Host "Release: $Tag"
+Write-Host "Selected backend: $Flavor"
+New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+try {
+    $IndexPath = Get-ReleaseAsset "release-index.json"
+    $SumsPath = Get-ReleaseAsset "SHA256SUMS"
+    $Index = Get-Content -LiteralPath $IndexPath -Raw | ConvertFrom-Json
+    if ($Index.schema_version -ne 2) {
+        throw "Unsupported release-index schema: $($Index.schema_version)"
+    }
+    if ($Index.release_tag -ne $Tag -or $Index.checksum_file -ne "SHA256SUMS") {
+        throw "Release index header does not match the requested release."
+    }
+    $Bundles = @($Index.bundles | Where-Object { $_.filename -eq $BundleName })
+    if ($Bundles.Count -ne 1) {
+        throw "Expected one bundle named $BundleName; found $($Bundles.Count)"
+    }
+    $Bundle = $Bundles[0]
+    if ($Bundle.sha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "Release index contains an invalid bundle digest."
+    }
+
+    $ChecksumEntries = @{}
+    foreach ($Line in Get-Content -LiteralPath $SumsPath) {
+        if ($Line -notmatch '^([0-9A-Fa-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]*)$') {
+            throw "SHA256SUMS contains a nonstandard or unsafe line."
+        }
+        if ($ChecksumEntries.ContainsKey($Matches[2])) {
+            throw "SHA256SUMS contains a duplicate entry for $($Matches[2])"
+        }
+        $ChecksumEntries[$Matches[2]] = $Matches[1]
+    }
+
+    $StoredAssets = @($Bundle.assets)
+    if ($StoredAssets.Count -eq 0) {
+        throw "Release index contains no assets for $BundleName"
+    }
+    foreach ($AssetName in $StoredAssets) {
+        if (-not (Test-SafeName $AssetName)) {
+            throw "Unsafe bundle asset name: $AssetName"
+        }
+        $AssetPath = Get-ReleaseAsset $AssetName
+        if (-not $ChecksumEntries.ContainsKey($AssetName)) {
+            throw "SHA256SUMS does not contain $AssetName"
+        }
+        $ActualPartHash = (Get-FileHash -LiteralPath $AssetPath -Algorithm SHA256).Hash
+        if (-not $ActualPartHash.Equals($ChecksumEntries[$AssetName], [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Checksum verification failed for $AssetName"
         }
     }
-    if ($DownloadAsset) { break }
+
+    $ArchivePath = Join-Path $TempDir $BundleName
+    if ($StoredAssets.Count -eq 1 -and $StoredAssets[0] -eq $BundleName) {
+        $ArchivePath = Join-Path $TempDir $StoredAssets[0]
+    }
+    else {
+        $OutputStream = [IO.File]::Open($ArchivePath, [IO.FileMode]::Create, [IO.FileAccess]::Write)
+        try {
+            foreach ($AssetName in $StoredAssets) {
+                $InputStream = [IO.File]::OpenRead((Join-Path $TempDir $AssetName))
+                try {
+                    $InputStream.CopyTo($OutputStream)
+                }
+                finally {
+                    $InputStream.Dispose()
+                }
+            }
+        }
+        finally {
+            $OutputStream.Dispose()
+        }
+    }
+
+    $ActualBundleHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
+    if (-not $ActualBundleHash.Equals($Bundle.sha256, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Assembled bundle checksum verification failed."
+    }
+    Write-Host "Verified $BundleName." -ForegroundColor Green
+
+    $UnpackedDir = Join-Path $TempDir "unpacked"
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $UnpackedDir -Force
+    $SourceExe = Get-ChildItem -LiteralPath $UnpackedDir -Filter "LocalSR.exe" -File -Recurse |
+        Select-Object -First 1
+    if (-not $SourceExe) {
+        throw "Verified archive does not contain LocalSR.exe."
+    }
+    $SourceRoot = $SourceExe.Directory.FullName
+    $InstallParent = Split-Path -Parent $InstallDir
+    New-Item -ItemType Directory -Path $InstallParent -Force | Out-Null
+    $NewDir = Join-Path $InstallParent (".localsr.new." + [guid]::NewGuid().ToString("N"))
+    $BackupDir = Join-Path $InstallParent (".localsr.previous." + [guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $SourceRoot -Destination $NewDir -Recurse
+
+    if (Test-Path -LiteralPath $InstallDir) {
+        Move-Item -LiteralPath $InstallDir -Destination $BackupDir
+    }
+    try {
+        Move-Item -LiteralPath $NewDir -Destination $InstallDir
+        $InstalledExe = Get-ChildItem -LiteralPath $InstallDir -Filter "LocalSR.exe" -File -Recurse |
+            Select-Object -ExpandProperty FullName -First 1
+        if (-not $InstalledExe) {
+            throw "LocalSR.exe was not found after installation."
+        }
+        $InstallCommitted = $true
+    }
+    catch {
+        if (Test-Path -LiteralPath $InstallDir) {
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $BackupDir) {
+            Move-Item -LiteralPath $BackupDir -Destination $InstallDir
+        }
+        throw
+    }
+    if (Test-Path -LiteralPath $BackupDir) {
+        Remove-Item -LiteralPath $BackupDir -Recurse -Force
+        $BackupDir = $null
+    }
+
+    $WshShell = New-Object -ComObject WScript.Shell
+    $ShortcutTargets = @(
+        "$env:USERPROFILE\Desktop\LocalSR.lnk",
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\LocalSR\LocalSR.lnk"
+    )
+    foreach ($ShortcutPath in $ShortcutTargets) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $ShortcutPath) -Force | Out-Null
+        $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+        $Shortcut.TargetPath = $InstalledExe
+        $Shortcut.WorkingDirectory = Split-Path -Parent $InstalledExe
+        $Shortcut.Description = "LocalSR - private local super-resolution"
+        $Shortcut.Save()
+    }
+
+    Write-Host "Installed LocalSR to $InstallDir" -ForegroundColor Green
+    if (-not $NoLaunch) {
+        Start-Process -FilePath $InstalledExe
+    }
 }
-
-if (-not $DownloadAsset) {
-    Write-Host "❌ Error: Could not resolve a release package for $Flavor." -ForegroundColor Red
-    Write-Host "Please check: https://github.com/$Repo/releases"
-    exit 1
+finally {
+    if (-not $InstallCommitted -and $BackupDir -and (Test-Path -LiteralPath $BackupDir) -and -not (Test-Path -LiteralPath $InstallDir)) {
+        Move-Item -LiteralPath $BackupDir -Destination $InstallDir
+    }
+    if (Test-Path -LiteralPath $TempDir) {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force
+    }
 }
-
-$DownloadUrl = $DownloadAsset.browser_download_url
-$FileName = Split-Path $DownloadUrl -Leaf
-$TempZip = "$env:TEMP\$FileName"
-$ChecksumName = "$FileName.sha256"
-$TempChecksum = "$env:TEMP\$ChecksumName"
-$ChecksumAsset = $SelectedRelease.assets |
-    Where-Object { $_.name -eq $ChecksumName } |
-    Select-Object -First 1
-
-if (-not $ChecksumAsset) {
-    throw "Release checksum asset is missing: $ChecksumName"
-}
-
-Write-Host "⬇️  Downloading $FileName..." -ForegroundColor Cyan
-Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip
-Invoke-WebRequest -Uri $ChecksumAsset.browser_download_url -OutFile $TempChecksum
-
-Write-Host "🔐 Verifying SHA-256 checksum..." -ForegroundColor Cyan
-$ChecksumLine = (Get-Content -LiteralPath $TempChecksum -Raw).Trim()
-if ($ChecksumLine -notmatch '^([0-9A-Fa-f]{64})\s+\*?(.+)$') {
-    throw "Release checksum file has an invalid format: $ChecksumName"
-}
-$ExpectedHash = $Matches[1]
-$ExpectedName = Split-Path $Matches[2].Trim() -Leaf
-if ($ExpectedName -ne $FileName) {
-    throw "Release checksum names $ExpectedName instead of $FileName"
-}
-$ActualHash = (Get-FileHash -LiteralPath $TempZip -Algorithm SHA256).Hash
-if (-not $ActualHash.Equals($ExpectedHash, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Release checksum verification failed; refusing to install $FileName"
-}
-
-# ------------------------------------------------------------------------------
-# 3. Extract & Provision Application
-# ------------------------------------------------------------------------------
-Write-Host "📦 Installing LocalSR to $InstallDir..." -ForegroundColor Yellow
-
-if (Test-Path $InstallDir) {
-    Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-
-Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
-
-$ExePath = Get-ChildItem -Path $InstallDir -Filter "LocalSR.exe" -Recurse | Select-Object -ExpandProperty FullName -First 1
-
-if (-not $ExePath) {
-    Write-Host "❌ Error: LocalSR.exe was not found inside the extracted package." -ForegroundColor Red
-    exit 1
-}
-
-# ------------------------------------------------------------------------------
-# 4. Create Desktop & Start Menu Shortcuts
-# ------------------------------------------------------------------------------
-$WshShell = New-Object -ComObject WScript.Shell
-
-# Desktop Shortcut
-$Shortcut = $WshShell.CreateShortcut($DesktopShortcut)
-$Shortcut.TargetPath = $ExePath
-$Shortcut.WorkingDirectory = (Split-Path $ExePath)
-$Shortcut.Description = "LocalSR - High Performance Super-Resolution"
-$Shortcut.Save()
-
-# Start Menu Shortcut
-New-Item -ItemType Directory -Path $StartMenuDir -Force | Out-Null
-$StartMenuShortcut = "$StartMenuDir\LocalSR.lnk"
-$Shortcut = $WshShell.CreateShortcut($StartMenuShortcut)
-$Shortcut.TargetPath = $ExePath
-$Shortcut.WorkingDirectory = (Split-Path $ExePath)
-$Shortcut.Description = "LocalSR - High Performance Super-Resolution"
-$Shortcut.Save()
-
-# Cleanup
-Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
-Remove-Item -Path $TempChecksum -Force -ErrorAction SilentlyContinue
-
-Write-Host ""
-Write-Host "🎉 Installation complete!" -ForegroundColor Green
-Write-Host "   Application: $ExePath" -ForegroundColor Cyan
-Write-Host "   Shortcuts created on Desktop and in Start Menu." -ForegroundColor White
-Write-Host ""
-Write-Host "Launching LocalSR..." -ForegroundColor Green
-Start-Process -FilePath $ExePath

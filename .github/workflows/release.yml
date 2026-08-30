@@ -572,6 +572,9 @@ jobs:
           python3 scripts/prepare_release_assets.py "$ROOT" \
             --manifest ci/release-artifacts.json \
             --readiness ci/beta-readiness.json \
+            --tag "$GITHUB_REF_NAME" \
+            --shell-installer install.sh \
+            --powershell-installer install.ps1 \
             --output "$ROOT/release-assets"
       - name: Create release and upload all prepared assets
         run: |
@@ -606,7 +609,17 @@ jobs:
           gh release view "$TAG" --json assets > "$ROOT/release-assets/github-release.json"
           python3 scripts/confirm_release_assets.py \
             --index "$ROOT/release-assets/release-index.json" \
-            --release-json "$ROOT/release-assets/github-release.json"
+            --release-json "$ROOT/release-assets/github-release.json" \
+            --allow-unexpected \
+            --unexpected-output "$ROOT/release-assets/stale-assets.txt"
+          while IFS= read -r stale_asset; do
+            [[ -n "$stale_asset" ]] || continue
+            gh release delete-asset "$TAG" "$stale_asset" --yes
+          done < "$ROOT/release-assets/stale-assets.txt"
+          gh release view "$TAG" --json assets > "$ROOT/release-assets/github-release-final.json"
+          python3 scripts/confirm_release_assets.py \
+            --index "$ROOT/release-assets/release-index.json" \
+            --release-json "$ROOT/release-assets/github-release-final.json"
           python3 -c 'import json,sys; from datetime import datetime,timezone; open(sys.argv[1],"w").write(json.dumps({"timestamp":datetime.now(timezone.utc).isoformat(),"status":"published"})+"\n")' "$ROOT/.published"
           rm -f "$ROOT/.publishing"
 
