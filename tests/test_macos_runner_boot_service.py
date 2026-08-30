@@ -9,6 +9,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "macos_runner_boot_service.py"
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="macOS LaunchDaemon tooling requires POSIX account modules"
+)
 
 
 def load_script():
