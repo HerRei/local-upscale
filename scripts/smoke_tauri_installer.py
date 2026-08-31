@@ -78,12 +78,14 @@ def installed_windows_executable(directory: Path) -> Path:
         path
         for path in directory.rglob("*.exe")
         if not path.name.lower().startswith(("uninstall", "unins"))
-        and "resources" not in {part.lower() for part in path.parts}
+        and not {"engine", "resources"}.intersection(
+            part.lower() for part in path.relative_to(directory).parts[:-1]
+        )
     )
     preferred = [path for path in candidates if "localsr" in path.name.lower()]
     if not preferred:
         raise RuntimeError(f"could not find the installed LocalSR executable in {directory}")
-    return preferred[0]
+    return min(preferred, key=lambda path: (len(path.relative_to(directory).parts), path.name))
 
 
 def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:

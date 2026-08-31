@@ -33,6 +33,16 @@ def test_selects_the_app_executable_not_the_uninstaller(tmp_path: Path) -> None:
     assert smoke.installed_windows_executable(tmp_path) == expected
 
 
+def test_selects_the_windows_host_instead_of_the_bundled_worker(tmp_path: Path) -> None:
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    (engine / "localsr-worker.exe").write_bytes(b"worker")
+    expected = tmp_path / "LocalSR Next Preview.exe"
+    expected.write_bytes(b"app")
+
+    assert smoke.installed_windows_executable(tmp_path) == expected
+
+
 def test_resolves_exactly_one_artifact(tmp_path: Path) -> None:
     artifact = tmp_path / "LocalSR.AppImage"
     artifact.write_bytes(b"package")
