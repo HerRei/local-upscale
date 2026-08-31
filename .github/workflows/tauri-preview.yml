@@ -66,12 +66,18 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify Next Preview (${{ matrix.os }})
+    name: Verify Next Preview (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-15]
-    runs-on: ${{ matrix.os }}
+        include:
+          - platform: Linux X64
+            runner: '["self-hosted","Linux","X64"]'
+          - platform: Windows X64
+            runner: '["self-hosted","Windows","X64"]'
+          - platform: macOS X64
+            runner: '["self-hosted","macOS","X64"]'
+    runs-on: ${{ fromJSON(matrix.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -128,16 +134,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: Linux
+            runner: '["self-hosted","Linux","X64"]'
             bundles: appimage
             package_path: desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-          - os: windows-latest
+          - os: Windows
+            runner: '["self-hosted","Windows","X64"]'
             bundles: nsis
             package_path: desktop/src-tauri/target/release/bundle/nsis/*.exe
-          - os: macos-15
+          - os: macOS
+            runner: '["self-hosted","macOS","X64"]'
             bundles: dmg
             package_path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(matrix.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
