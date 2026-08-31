@@ -1701,6 +1701,7 @@ class SlintApplication:
                     temporal_window=selected_model.temporal_window,
                     temporal_overlap=selected_model.temporal_overlap,
                     target_resolution=min(item.width, item.height) * self.output_scale,
+                    output_scale=self.output_scale,
                 )
             else:
                 request = VideoJobRequest(
@@ -1718,6 +1719,7 @@ class SlintApplication:
                     safe_memory=self.safe_memory,
                     face_model_path=self._face_companion_path(),
                     deflicker=bool(self.ui.deflicker),
+                    output_scale=self.output_scale,
                 )
         else:
             request = JobRequest(

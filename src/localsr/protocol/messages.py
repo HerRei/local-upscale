@@ -1,6 +1,47 @@
 import json
 from dataclasses import asdict, dataclass
 
+# The worker protocol is deliberately versioned independently from the desktop
+# application.  Version 1 is a backwards-compatible superset of the original
+# Slint JSON-lines messages: old clients may continue to wait for worker_ready,
+# while newer hosts negotiate capabilities with HandshakeRequest.
+PROTOCOL_VERSION = 1
+MIN_PROTOCOL_VERSION = 1
+
+
+@dataclass
+class HandshakeRequest:
+    client_name: str
+    client_version: str
+    protocol_version: int = PROTOCOL_VERSION
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "handshake_request", "data": asdict(self)})
+
+
+@dataclass
+class EngineInfo:
+    protocol_version: int
+    minimum_protocol_version: int
+    engine_id: str
+    engine_version: str
+    features: list[str]
+    model_formats: list[str]
+    video_engines: list[str]
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "engine_info", "data": asdict(self)})
+
+
+@dataclass
+class ProtocolError:
+    code: str
+    message: str
+    supported_protocol_version: int = PROTOCOL_VERSION
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "protocol_error", "data": asdict(self)})
+
 
 @dataclass
 class JobRequest:
@@ -18,6 +59,7 @@ class JobRequest:
     safe_memory: bool
     output_scale: int | None = None
     face_model_path: str | None = None
+    allow_unverified_checkpoint: bool | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})
@@ -25,12 +67,11 @@ class JobRequest:
 
 @dataclass
 class VideoJobRequest:
-    """Placeholder for the upcoming video upscale pipeline.
+    """Run frame-by-frame or temporal video restoration in the worker.
 
-    The GUI sends this once video support is wired into the worker. The worker
-    will decode frames in-process (PyAV), run a temporal SR model, and encode
-    the result. The fields mirror JobRequest plus the parameters the video
-    pipeline needs that the image pipeline does not.
+    ``model_kind=spandrel_image`` uses the normal tiled image engine for each
+    frame. Other kinds route to a vendored temporal engine with an externally
+    downloaded, checksum-pinned bundle.
     """
 
     job_id: str
@@ -60,6 +101,10 @@ class VideoJobRequest:
     # Target shortest-edge in pixels for resolution-based engines (SeedVR2
     # has no fixed scale factor). 0 lets the engine keep the input size.
     target_resolution: int = 0
+    # Frame-by-frame engines run at the checkpoint's native scale, then
+    # downsample each restored frame when a smaller 2×/3× output is requested.
+    output_scale: int | None = None
+    allow_unverified_checkpoint: bool | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})
@@ -86,6 +131,15 @@ class PreviewRequest:
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_request", "data": asdict(self)})
+
+
+@dataclass
+class MediaProbeRequest:
+    media_path: str
+    max_dimension: int = 1600
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "media_probe_request", "data": asdict(self)})
 
 
 @dataclass
@@ -193,6 +247,30 @@ class PreviewFailed:
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_failed", "data": asdict(self)})
+
+
+@dataclass
+class MediaInfo:
+    media_path: str
+    media_kind: str
+    width: int
+    height: int
+    frame_count: int = 0
+    fps: float = 0.0
+    duration_seconds: float = 0.0
+    jpeg_base64: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "media_info", "data": asdict(self)})
+
+
+@dataclass
+class MediaProbeFailed:
+    media_path: str
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "media_probe_failed", "data": asdict(self)})
 
 
 @dataclass

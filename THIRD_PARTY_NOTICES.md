@@ -6,6 +6,10 @@ own terms; this file is a distribution notice, not a replacement for their licen
 - **Slint 1.9.2** — GPLv3, Slint royalty-free/community, or commercial licensing options. Official
   LocalSR builds use the royalty-free/community attribution path and render Slint's official
   `AboutSlint` widget in the application.
+- **LocalSR Next Preview host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
+  components retain their upstream permissive or file-level terms (including Apache, BSD, ISC,
+  MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. The
+  preview uses the operating system's webview rather than bundling a browser engine.
 - **PyTorch / TorchVision** — BSD-style licenses from the PyTorch project.
 - **Spandrel** — MIT license.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included

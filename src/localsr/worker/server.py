@@ -1,5 +1,6 @@
 import base64
 import gc
+import importlib.util
 import io
 import json
 import os
@@ -16,13 +17,18 @@ from PIL import Image, ImageOps
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
 os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.52")
 
+from localsr import __version__
 from localsr.core.hardware import get_capability_report, get_memory_snapshot
+from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import ModelAdapter
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
+    MIN_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
     CapabilitiesInfo,
+    EngineInfo,
     FaceDetectionUnavailable,
     FacesDetected,
     JobCancelled,
@@ -30,10 +36,13 @@ from localsr.protocol.messages import (
     JobFailed,
     JobStarted,
     LogMessage,
+    MediaInfo,
+    MediaProbeFailed,
     ModelInfo,
     PreviewFailed,
     PreviewReady,
     ProgressUpdate,
+    ProtocolError,
     TileUpdate,
     VideoFrameCompleted,
     VideoFrameStarted,
@@ -70,6 +79,20 @@ def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
     output = io.BytesIO()
     preview.save(output, format="JPEG", quality=quality, optimize=True)
     return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def _engine_features() -> list[str]:
+    features = [
+        "image",
+        "video_frame",
+        "video_seedvr2",
+        "camera_raw",
+        "cancellation",
+        "progressive_preview",
+    ]
+    if importlib.util.find_spec("mediapipe") is not None:
+        features.extend(["face_detection", "face_aware"])
+    return features
 
 
 class WorkerServer:
@@ -154,6 +177,32 @@ class WorkerServer:
                     self.running = False
                     break
 
+                elif req_type == "handshake_request":
+                    requested_version = int(data.get("protocol_version", 0))
+                    if not MIN_PROTOCOL_VERSION <= requested_version <= PROTOCOL_VERSION:
+                        send_message(
+                            ProtocolError(
+                                code="unsupported_protocol",
+                                message=(
+                                    f"Protocol {requested_version} is not supported; "
+                                    f"this engine accepts {MIN_PROTOCOL_VERSION} through "
+                                    f"{PROTOCOL_VERSION}."
+                                ),
+                            )
+                        )
+                        continue
+                    send_message(
+                        EngineInfo(
+                            protocol_version=PROTOCOL_VERSION,
+                            minimum_protocol_version=MIN_PROTOCOL_VERSION,
+                            engine_id="localsr.pytorch-spandrel",
+                            engine_version=__version__,
+                            features=_engine_features(),
+                            model_formats=[".safetensors", ".pth", ".pt", ".ckpt"],
+                            video_engines=["spandrel_image", "seedvr2"],
+                        )
+                    )
+
                 elif req_type == "inspect_request":
                     try:
                         info = self.model_adapter.inspect(data["model_path"])
@@ -207,6 +256,65 @@ class WorkerServer:
                         gc.collect()
                     except Exception as error:  # noqa: BLE001
                         send_message(PreviewFailed(image_path=image_path, error_message=str(error)))
+
+                elif req_type == "media_probe_request":
+                    media_path = str(data.get("media_path", ""))
+                    maximum = int(data.get("max_dimension", 1600))
+                    try:
+                        if is_video_input(media_path):
+                            from localsr.core.video_io import (
+                                decode_frames,
+                                probe_video,
+                                thumbnail_jpeg,
+                            )
+
+                            probe = probe_video(media_path)
+                            preview_base64 = ""
+                            try:
+                                _, first_frame = next(decode_frames(media_path, end_frame=0))
+                                preview_base64 = base64.b64encode(
+                                    thumbnail_jpeg(
+                                        first_frame,
+                                        max_dimension=max(64, min(2048, maximum)),
+                                        quality=82,
+                                    )
+                                ).decode("ascii")
+                            except (OSError, StopIteration, ValueError):
+                                preview_base64 = ""
+                            send_message(
+                                MediaInfo(
+                                    media_path=media_path,
+                                    media_kind="video",
+                                    width=int(probe.width),
+                                    height=int(probe.height),
+                                    frame_count=int(probe.frame_count),
+                                    fps=float(probe.fps),
+                                    duration_seconds=float(probe.duration_seconds),
+                                    jpeg_base64=preview_base64,
+                                )
+                            )
+                        else:
+                            preview_data = ImageManager().load(media_path)
+                            tensor = preview_data["tensor"]
+                            _, height, width = tensor.shape
+                            send_message(
+                                MediaInfo(
+                                    media_path=media_path,
+                                    media_kind="image",
+                                    width=int(width),
+                                    height=int(height),
+                                    jpeg_base64=_encode_chw_jpeg(tensor, maximum, quality=82),
+                                )
+                            )
+                            del preview_data
+                            gc.collect()
+                    except Exception as error:  # noqa: BLE001
+                        send_message(
+                            MediaProbeFailed(
+                                media_path=media_path,
+                                error_message=str(error),
+                            )
+                        )
 
                 elif req_type == "cancel_request":
                     # The reader has already signalled an active or queued job.
@@ -263,6 +371,15 @@ class WorkerServer:
 
                     job_id = data["job_id"]
                     self._activate_job(job_id)
+                    previous_checkpoint_policy = getattr(
+                        self.model_adapter, "allow_unverified_checkpoints", False
+                    )
+                    requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
+                    self.model_adapter.allow_unverified_checkpoints = (
+                        previous_checkpoint_policy
+                        if requested_checkpoint_policy is None
+                        else bool(requested_checkpoint_policy)
+                    )
 
                     try:
                         send_message(JobStarted(job_id=job_id))
@@ -276,6 +393,7 @@ class WorkerServer:
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
+                        self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
                         # Release the face model from the engine cache if it
                         # was loaded for this job. The general model stays
                         # cached for the next image.
@@ -294,6 +412,15 @@ class WorkerServer:
 
                     job_id = data["job_id"]
                     self._activate_job(job_id)
+                    previous_checkpoint_policy = getattr(
+                        self.model_adapter, "allow_unverified_checkpoints", False
+                    )
+                    requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
+                    self.model_adapter.allow_unverified_checkpoints = (
+                        previous_checkpoint_policy
+                        if requested_checkpoint_policy is None
+                        else bool(requested_checkpoint_policy)
+                    )
 
                     try:
                         send_message(JobStarted(job_id=job_id))
@@ -304,6 +431,7 @@ class WorkerServer:
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
+                        self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
                         self.engine.release_model()
 
             except queue.Empty:
@@ -597,6 +725,8 @@ class WorkerServer:
             return frames
 
         def process_chunk(chunk: list, context: list) -> list:
+            if self.cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
             send_message(
                 VideoFrameStarted(
                     job_id=job_id,
@@ -612,6 +742,8 @@ class WorkerServer:
                 seed=42,
                 cancel_event=self.cancel_event,
             )
+            if self.cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
             result = result[len(context) :]
             state["done"] += len(chunk)
             elapsed = _time.monotonic() - started_at
@@ -635,10 +767,15 @@ class WorkerServer:
             if not first_chunk:
                 raise ValueError("No frames could be decoded from the video.")
             first_out = process_chunk(first_chunk, [])
+            if not first_out:
+                raise ValueError("The temporal engine produced no video frames.")
             out_height, out_width = first_out[0].shape[:2]
 
             def all_frames():
-                yield from first_out
+                for frame in first_out:
+                    if self.cancel_event.is_set():
+                        raise InterruptedError("video job cancelled")
+                    yield frame
                 previous_tail = first_chunk[-overlap:] if overlap > 0 else []
                 while True:
                     if self.cancel_event.is_set():
@@ -648,7 +785,10 @@ class WorkerServer:
                         return
                     output = process_chunk(chunk, list(previous_tail))
                     previous_tail = chunk[-overlap:] if overlap > 0 else []
-                    yield from output
+                    for frame in output:
+                        if self.cancel_event.is_set():
+                            raise InterruptedError("video job cancelled")
+                        yield frame
 
             encode_video(
                 all_frames(),
@@ -740,6 +880,7 @@ class WorkerServer:
             face_model_info=face_info,
             deflicker=bool(data.get("deflicker", False)),
             deflicker_window=int(data.get("deflicker_window", 3)),
+            output_scale=data.get("output_scale"),
         )
 
         def frame_started(frame_index: int, total_frames: int) -> None:

@@ -10,6 +10,29 @@ from .output_writer import OutputWriter
 from .tiling import generate_tiles
 
 
+def _resolve_torch_device(device_str: str) -> torch.device:
+    if device_str.startswith("directml:"):
+        try:
+            import torch_directml
+        except ImportError as error:
+            raise RuntimeError(
+                "DirectML was selected, but this engine pack does not include torch-directml."
+            ) from error
+        _, _, raw_index = device_str.partition(":")
+        try:
+            index = int(raw_index)
+        except ValueError as error:
+            raise RuntimeError(f"Invalid DirectML device identifier: {device_str}") from error
+        if index < 0:
+            raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
+        if not bool(getattr(torch_directml, "is_available", lambda: True)()):
+            raise RuntimeError("DirectML was selected, but no compatible adapter is available.")
+        return torch_directml.device(index)
+    if device_str.startswith("qnn"):
+        raise RuntimeError("QNN acceleration is not available in the PyTorch/Spandrel engine yet.")
+    return torch.device(device_str)
+
+
 def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | None:
     """Apply a hard allocator ceiling and return its fraction of device capacity."""
     if device.type in {"cuda", "xpu"}:
@@ -71,7 +94,7 @@ class InferenceEngine:
         desired path. Image pipelines still use process_image(), which
         calls this internally.
         """
-        device = torch.device(device_str)
+        device = _resolve_torch_device(device_str)
         precision = (
             torch.float16
             if precision_str == "fp16" and model_info.half_supported

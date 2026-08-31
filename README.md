@@ -162,6 +162,11 @@ The normal test suite is offline and deterministic. `validate_live_models.py` is
 networked acceptance check and downloads the real Quick and Best checkpoints. Release builds also
 smoke-test the frozen worker and verify every archive against [the artifact manifest](ci/release-artifacts.json).
 
+An additive Tauri/Svelte host is being developed under [`desktop/`](desktop/README.md). It preserves
+the released Slint application and uses a distinct bundle identity while sharing the same isolated
+Python inference worker and verified model cache. Its CI is separate from the current release
+workflow; it becomes the default only after parity, physical-backend, and signed-distribution gates.
+
 ## Feedback and diagnostics
 
 Repository members can use [GitHub Issues](https://github.com/HerRei/local-upscale/issues). Include

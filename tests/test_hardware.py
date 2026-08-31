@@ -5,6 +5,28 @@ from types import SimpleNamespace
 from localsr.core import hardware
 
 
+def test_mps_and_cpu_capabilities_always_describe_shared_memory(monkeypatch):
+    gib = 1024**3
+    monkeypatch.setattr(hardware.sys, "platform", "darwin")
+    monkeypatch.setattr(hardware, "_system_memory", lambda: (16 * gib, 8 * gib))
+    monkeypatch.setattr(hardware, "_mps_memory", lambda _total, _available: (12 * gib, 6 * gib))
+    monkeypatch.setattr(hardware, "_system_pressure_snapshot", lambda _total, _available: {})
+    monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(hardware.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        hardware.torch,
+        "xpu",
+        SimpleNamespace(is_available=lambda: False),
+        raising=False,
+    )
+
+    devices = hardware.get_capability_report()["devices"]
+
+    assert next(device for device in devices if device["id"] == "mps")["is_integrated"] is True
+    assert next(device for device in devices if device["id"] == "cpu")["is_integrated"] is False
+    assert all(isinstance(device["is_integrated"], bool) for device in devices)
+
+
 def test_directml_probe_can_be_explicitly_skipped_for_hardwareless_packaging_vm(
     monkeypatch,
 ):
@@ -20,6 +42,48 @@ def test_directml_probe_can_be_explicitly_skipped_for_hardwareless_packaging_vm(
     hardware._detect_directml(devices, 16 * 1024**3, 8 * 1024**3)
 
     assert devices == []
+
+
+def test_discovers_each_available_directml_adapter(monkeypatch):
+    gib = 1024**3
+    monkeypatch.delenv("LOCALSR_SKIP_DIRECTML_PROBE", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch_directml",
+        SimpleNamespace(is_available=lambda: True, device_count=lambda: 2),
+    )
+    devices = []
+
+    hardware._detect_directml(devices, 16 * gib, 8 * gib)
+
+    assert [device["id"] for device in devices] == ["directml:0", "directml:1"]
+    assert all(device["type"] == "directml" for device in devices)
+    assert all(device["is_integrated"] is True for device in devices)
+
+
+def test_capability_report_does_not_advertise_unimplemented_qnn(monkeypatch):
+    gib = 1024**3
+    monkeypatch.setattr(hardware.sys, "platform", "win32")
+    monkeypatch.setattr(hardware, "_system_memory", lambda: (16 * gib, 8 * gib))
+    monkeypatch.setattr(hardware, "_system_pressure_snapshot", lambda _total, _available: {})
+    monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(hardware.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        hardware.torch,
+        "xpu",
+        SimpleNamespace(is_available=lambda: False),
+        raising=False,
+    )
+    monkeypatch.setenv("LOCALSR_SKIP_DIRECTML_PROBE", "1")
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(get_available_providers=lambda: ["QNNExecutionProvider"]),
+    )
+
+    report = hardware.get_capability_report()
+
+    assert all(not device["type"].startswith("qnn") for device in report["devices"])
 
 
 def test_discovers_rocm_and_intel_integrated_xpu(monkeypatch):

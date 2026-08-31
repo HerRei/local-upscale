@@ -22,6 +22,9 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
 
 # Local application/runtime data
 *.dat

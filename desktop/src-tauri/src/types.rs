@@ -1,0 +1,337 @@
+use serde::{Deserialize, Serialize};
+
+pub const PROTOCOL_VERSION: u32 = 1;
+pub const APP_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " · Next Preview");
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatalogManifest {
+    pub schema_version: u32,
+    pub catalog_revision: String,
+    pub models: Vec<CatalogModel>,
+    pub video_models: Vec<CatalogVideoModel>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatalogModel {
+    pub model_id: String,
+    pub name: String,
+    pub filename: String,
+    pub description: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub download_url: String,
+    pub architecture: String,
+    pub native_scale: u32,
+    pub purposes: Vec<String>,
+    pub quality_tier: u32,
+    pub speed_tier: u32,
+    pub recommended_halo: u32,
+    pub source_url: String,
+    pub license_name: String,
+    pub license_url: String,
+    pub author: String,
+    pub memory_factor: f64,
+    pub time_factor: f64,
+    pub speed_factor: f64,
+    pub vram_estimate_mb: u64,
+    pub pair_with: String,
+    pub commercial_use_status: String,
+    pub commercial_use_allowed: Option<bool>,
+    pub automated_download_allowed: bool,
+    pub redistribution_allowed: bool,
+    pub attribution_required: bool,
+    pub terms_acceptance_required: bool,
+    pub engine_id: String,
+    pub support_tier: String,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ModelFile {
+    pub role: String,
+    pub filename: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub download_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatalogVideoModel {
+    pub model_id: String,
+    pub name: String,
+    pub description: String,
+    pub family: String,
+    pub engine_kind: String,
+    pub files: Vec<ModelFile>,
+    pub license_name: String,
+    pub license_url: String,
+    pub author: String,
+    pub source_url: String,
+    pub min_unified_memory_gb: u64,
+    pub min_vram_gb: u64,
+    pub temporal_window: u32,
+    pub temporal_overlap: u32,
+    pub commercial_use_allowed: Option<bool>,
+    pub automated_download_allowed: bool,
+    pub terms_acceptance_required: bool,
+    pub engine_id: String,
+    pub support_tier: String,
+    #[serde(default)]
+    pub total_size_bytes: u64,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MediaItem {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub width: u32,
+    pub height: u32,
+    pub frame_count: u64,
+    pub fps: f64,
+    pub duration_seconds: f64,
+    pub preview_data_url: String,
+    pub probe_status: String,
+    pub error: String,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct JobRecord {
+    pub id: String,
+    pub media_id: String,
+    pub media_name: String,
+    pub media_kind: String,
+    pub status: String,
+    pub progress: f64,
+    pub output_path: String,
+    pub error: String,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DeviceInfo {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub device_type: String,
+    pub name: String,
+    pub total_memory: u64,
+    pub free_memory: u64,
+    pub supports_fp16: bool,
+    #[serde(default)]
+    pub is_integrated: bool,
+    pub recommended_tile_sizes: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CapabilityInfo {
+    pub system_ram_total: u64,
+    pub system_ram_available: u64,
+    pub system_memory_pressure_percent: f64,
+    pub system_memory_pressure_level: String,
+    pub system_compressed_memory: u64,
+    pub system_swap_total: u64,
+    pub system_swap_used: u64,
+    pub devices: Vec<DeviceInfo>,
+}
+
+impl CapabilityInfo {
+    pub fn detecting() -> Self {
+        Self {
+            system_memory_pressure_level: "unknown".into(),
+            devices: vec![DeviceInfo {
+                id: "cpu".into(),
+                device_type: "cpu".into(),
+                name: "CPU · detecting hardware".into(),
+                recommended_tile_sizes: vec![64, 128, 192, 256],
+                ..DeviceInfo::default()
+            }],
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EngineInfo {
+    pub protocol_version: u32,
+    pub minimum_protocol_version: u32,
+    pub engine_id: String,
+    pub engine_version: String,
+    pub features: Vec<String>,
+    pub model_formats: Vec<String>,
+    pub video_engines: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Recipe {
+    pub id: String,
+    pub name: String,
+    pub task: String,
+    pub model_id: String,
+    pub output_scale: u32,
+    pub tile_size: u32,
+    pub halo: u32,
+    pub precision: String,
+    pub safe_memory: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UiSettings {
+    pub interface_scale: u32,
+    pub batch_mode: bool,
+    pub task: String,
+    pub selected_model_id: String,
+    pub selected_video_model_id: String,
+    pub custom_model_path: String,
+    pub output_scale: u32,
+    pub output_directory: String,
+    pub output_format: String,
+    pub preserve_metadata: bool,
+    pub jpeg_quality: u32,
+    pub device_id: String,
+    pub tile_size: u32,
+    pub halo: u32,
+    pub precision: String,
+    pub safe_memory: bool,
+    pub deflicker: bool,
+    pub deflicker_window: u32,
+    pub video_container: String,
+    pub video_crf: u32,
+    pub enable_face_model: bool,
+    pub allow_unsafe_pickle_model: bool,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            interface_scale: 100,
+            batch_mode: false,
+            task: String::new(),
+            selected_model_id: String::new(),
+            selected_video_model_id: "frame_by_frame".into(),
+            custom_model_path: String::new(),
+            output_scale: 4,
+            output_directory: String::new(),
+            output_format: "png".into(),
+            preserve_metadata: true,
+            jpeg_quality: 98,
+            device_id: "cpu".into(),
+            tile_size: 256,
+            halo: 32,
+            precision: "fp32".into(),
+            safe_memory: false,
+            deflicker: false,
+            deflicker_window: 3,
+            video_container: "mp4".into(),
+            video_crf: 18,
+            enable_face_model: false,
+            allow_unsafe_pickle_model: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RuntimeStatus {
+    pub worker: String,
+    pub active_job_id: String,
+    pub status_title: String,
+    pub status_detail: String,
+    pub progress: f64,
+    pub last_output_path: String,
+    pub result_preview_data_url: String,
+    pub download_model_id: String,
+    pub download_progress: f64,
+    pub elapsed_seconds: f64,
+    pub estimated_remaining_seconds: f64,
+    pub throughput: f64,
+    pub throughput_unit: String,
+    pub active_tile_size: u32,
+    pub device_free_memory: u64,
+    pub device_allocated_memory: u64,
+    pub live_system_ram_available: u64,
+    pub live_memory_pressure_percent: f64,
+    pub thermal_status: String,
+}
+
+impl Default for RuntimeStatus {
+    fn default() -> Self {
+        Self {
+            worker: "starting".into(),
+            active_job_id: String::new(),
+            status_title: "Starting".into(),
+            status_detail: "Opening the isolated inference engine.".into(),
+            progress: 0.0,
+            last_output_path: String::new(),
+            result_preview_data_url: String::new(),
+            download_model_id: String::new(),
+            download_progress: 0.0,
+            elapsed_seconds: 0.0,
+            estimated_remaining_seconds: 0.0,
+            throughput: 0.0,
+            throughput_unit: String::new(),
+            active_tile_size: 0,
+            device_free_memory: 0,
+            device_allocated_memory: 0,
+            live_system_ram_available: 0,
+            live_memory_pressure_percent: 0.0,
+            thermal_status: "Not exposed by this backend".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AppSnapshot {
+    pub app_version: String,
+    pub protocol_version: u32,
+    pub catalog: CatalogManifest,
+    pub media: Vec<MediaItem>,
+    pub jobs: Vec<JobRecord>,
+    pub settings: UiSettings,
+    pub recipes: Vec<Recipe>,
+    pub capabilities: CapabilityInfo,
+    pub engine: Option<EngineInfo>,
+    pub runtime: RuntimeStatus,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct StartBatchInput {
+    pub media_ids: Vec<String>,
+    pub batch_mode: bool,
+    pub task: String,
+    pub model_id: String,
+    pub video_model_id: String,
+    pub custom_model_path: String,
+    pub output_directory: String,
+    pub output_format: String,
+    pub output_scale: u32,
+    pub preserve_metadata: bool,
+    pub jpeg_quality: u32,
+    pub device: String,
+    pub tile_size: u32,
+    pub halo: u32,
+    pub precision: String,
+    pub safe_memory: bool,
+    pub deflicker: bool,
+    pub deflicker_window: u32,
+    pub video_container: String,
+    pub video_crf: u32,
+    pub enable_face_model: bool,
+    pub allow_unsafe_pickle_model: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WorkerEnvelope {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}

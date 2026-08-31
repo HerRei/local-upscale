@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LocalSR Next Preview",
+  "version": "0.0.9-alpha",
+  "identifier": "com.localsr.desktop.next",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self' customprotocol: asset:; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; script-src 'self'",
+      "devCsp": "default-src 'self' http://localhost:*; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost http://localhost:*; script-src 'self' http://localhost:*"
+    },
+    "windows": [
+      {
+        "title": "LocalSR",
+        "width": 1380,
+        "height": 860,
+        "minWidth": 880,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "dng"],
+        "contentTypes": ["public.image"],
+        "name": "LocalSR image input",
+        "description": "Image that can be enhanced by LocalSR",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["mp4", "mov", "m4v", "avi", "mkv", "webm"],
+        "contentTypes": ["public.movie"],
+        "name": "LocalSR video input",
+        "description": "Video that can be enhanced by LocalSR Labs",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "icon": [
+      "../../packaging/icons/LocalSR.png",
+      "../../packaging/icons/LocalSR.icns",
+      "../../packaging/icons/LocalSR.ico"
+    ],
+    "shortDescription": "Private local image and video restoration",
+    "longDescription": "LocalSR enhances images and video locally with externally downloaded AI models.",
+    "copyright": "Copyright 2026 Hermes Reisner"
+  }
+}
