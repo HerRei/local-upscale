@@ -229,6 +229,12 @@ mod tests {
             "/incoming",
         );
         assert_eq!(parsed.intent.preset.as_deref(), Some("best"));
-        assert_eq!(parsed.intent.files, vec!["/incoming/image.png"]);
+        assert_eq!(
+            parsed.intent.files,
+            vec![Path::new("/incoming")
+                .join("image.png")
+                .to_string_lossy()
+                .into_owned()]
+        );
     }
 }

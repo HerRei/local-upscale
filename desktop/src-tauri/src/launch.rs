@@ -121,7 +121,16 @@ mod tests {
 
         assert_eq!(
             parsed.intent.files,
-            vec!["/work/image.png", "/work/clip.mp4"]
+            vec![
+                Path::new("/work")
+                    .join("image.png")
+                    .to_string_lossy()
+                    .into_owned(),
+                Path::new("/work")
+                    .join("clip.mp4")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]
         );
         assert_eq!(parsed.intent.preset.as_deref(), Some("quick"));
         assert_eq!(parsed.intent.recipe.as_deref(), Some("Portraits"));
