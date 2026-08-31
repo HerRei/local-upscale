@@ -52,6 +52,44 @@ def rust_build_environment() -> dict[str, str]:
     return env
 
 
+def tauri_build_environment() -> dict[str, str]:
+    """Return the environment used by the native Tauri bundler.
+
+    linuxdeploy inspects every ELF file in an AppDir, including the already
+    self-contained PyInstaller worker.  NumPy and other wheels deliberately
+    give their private libraries unique names and resolve them from adjacent
+    ``*.libs`` directories.  Expose those directories while *building* the
+    AppImage so linuxdeploy can resolve the same private dependencies instead
+    of failing after the Rust application has compiled.
+
+    This path is only used by the packager.  It is not written into the app or
+    inherited by the installed worker at runtime.
+    """
+
+    env = rust_build_environment()
+    if not sys.platform.startswith("linux") or not ENGINE_DIR.is_dir():
+        return env
+
+    library_dirs = sorted(
+        {str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()}
+    )
+    existing = env.get("LD_LIBRARY_PATH")
+    if existing:
+        library_dirs.append(existing)
+    if library_dirs:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(library_dirs)
+    return env
+
+
+def npm_executable() -> str:
+    """Resolve npm to a directly executable path on every supported host."""
+
+    executable = shutil.which("npm")
+    if executable:
+        return executable
+    raise SystemExit("npm is missing. Install the locked frontend toolchain first.")
+
+
 def worker_executable() -> Path:
     name = "localsr-worker.exe" if os.name == "nt" else "localsr-worker"
     return ENGINE_DIR / name
@@ -138,12 +176,21 @@ def main() -> int:
     write_bundle_overlay()
 
     if not (DESKTOP / "node_modules").is_dir():
-        run(["npm", "ci"], cwd=DESKTOP)
+        run([npm_executable(), "ci"], cwd=DESKTOP)
     if not args.skip_checks:
-        run(["npm", "run", "check"], cwd=DESKTOP)
-        run(["npm", "test"], cwd=DESKTOP)
+        run([npm_executable(), "run", "check"], cwd=DESKTOP)
+        run([npm_executable(), "test"], cwd=DESKTOP)
 
-    command = ["npm", "run", "tauri", "--", "build", "--ci", "--config", str(CONFIG_PATH)]
+    command = [
+        npm_executable(),
+        "run",
+        "tauri",
+        "--",
+        "build",
+        "--ci",
+        "--config",
+        str(CONFIG_PATH),
+    ]
     if args.debug:
         command.append("--debug")
     if args.target:
@@ -152,7 +199,7 @@ def main() -> int:
         command.extend(["--bundles", args.bundles])
     if args.no_bundle:
         command.append("--no-bundle")
-    run(command, cwd=DESKTOP, env=rust_build_environment())
+    run(command, cwd=DESKTOP, env=tauri_build_environment())
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
         "The released Slint app and its artifacts were not modified.",
