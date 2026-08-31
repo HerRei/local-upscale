@@ -520,8 +520,13 @@ def test_best_recipe_downloads_then_starts_automatically(tmp_path):
         model = downloads[0]
         model_path = application.model_store.path_for(model)
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        with model_path.open("wb") as checkpoint:
-            checkpoint.truncate(model.size_bytes)
+        model_path.touch()
+
+        # This isolated fixture tests download-to-auto-start sequencing. Model
+        # size and SHA-256 enforcement have dedicated catalog and checkpoint
+        # security tests; do not hash a 116 MB sparse fixture on slow Windows
+        # acceptance VMs merely to reach the sequencing branch.
+        application.model_store.is_installed = lambda candidate: candidate.model_id == model.model_id
 
         application._on_download_completed({{
             "model_id": model.model_id,
