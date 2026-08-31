@@ -55,14 +55,16 @@ fn integration_executable() -> AppResult<PathBuf> {
     let current = fs::canonicalize(env::current_exe()?)?;
     #[cfg(target_os = "linux")]
     {
-        return Ok(resolve_linux_executable(
+        Ok(resolve_linux_executable(
             current,
             env::var_os("APPIMAGE"),
             env::var_os("APPDIR"),
-        ));
+        ))
     }
     #[cfg(not(target_os = "linux"))]
-    Ok(current)
+    {
+        Ok(current)
+    }
 }
 
 #[cfg(any(target_os = "linux", test))]
