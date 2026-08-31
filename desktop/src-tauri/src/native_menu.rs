@@ -95,9 +95,8 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
     let help_menu = SubmenuBuilder::new(manager, "Help").item(&github).build()?;
 
-    let mut menu_builder = MenuBuilder::new(manager);
     #[cfg(target_os = "macos")]
-    {
+    let menu_builder = {
         let app_menu = SubmenuBuilder::new(manager, "LocalSR")
             .about(None)
             .separator()
@@ -109,8 +108,10 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
             .separator()
             .quit()
             .build()?;
-        menu_builder = menu_builder.item(&app_menu);
-    }
+        MenuBuilder::new(manager).item(&app_menu)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let menu_builder = MenuBuilder::new(manager);
 
     let window_menu = SubmenuBuilder::new(manager, "Window")
         .minimize()
