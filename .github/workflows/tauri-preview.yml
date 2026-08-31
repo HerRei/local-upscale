@@ -130,6 +130,11 @@ jobs:
       - name: Install the stable Windows Rust toolchain
         if: runner.os == 'Windows'
         run: ./scripts/install_windows_rust.ps1
+      - name: Initialize the Windows MSVC build environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
       - name: Verify generated model policy
         run: python scripts/export_desktop_catalog.py --check
       - name: Verify Python desktop tooling and the worker contract
@@ -242,6 +247,11 @@ jobs:
       - name: Install the stable Windows Rust toolchain
         if: runner.os == 'Windows'
         run: ./scripts/install_windows_rust.ps1
+      - name: Initialize the Windows MSVC build environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
       - name: Install locked frontend dependencies
         working-directory: desktop
         run: npm ci
