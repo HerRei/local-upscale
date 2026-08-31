@@ -17,10 +17,14 @@ describe('preview viewport', () => {
 
   it('raises the zoom ceiling enough to reach source pixels for large media', () => {
     const limits = zoomLimits({ width: 12000, height: 8000 }, { width: 750, height: 500 });
+    expect(limits.min).toBe(1);
     expect(limits.actual).toBe(16);
     expect(limits.max).toBe(32);
 
-    expect(zoomLimits({ width: 640, height: 480 }, { width: 800, height: 600 }).max).toBe(8);
+    const tiny = zoomLimits({ width: 640, height: 480 }, { width: 800, height: 600 });
+    expect(tiny.min).toBe(0.8);
+    expect(tiny.actual).toBe(0.8);
+    expect(tiny.max).toBe(8);
   });
 
   it('keeps pointer-centered zoom bounded by the visible image', () => {

@@ -54,6 +54,7 @@
   let previewNaturalHeight = 1;
   let stageWidth = 1;
   let stageHeight = 1;
+  let minZoom = 1;
   let maxZoom = 8;
   let actualPixelZoom = 1;
   let viewedMediaId = '';
@@ -737,6 +738,7 @@
       { width: sourceWidth, height: sourceHeight },
       fitted
     );
+    minZoom = limits.min;
     maxZoom = limits.max;
     actualPixelZoom = Math.max(limits.min, Math.min(limits.max, limits.actual));
     if (reset) zoom = 1;
@@ -755,7 +757,7 @@
   }
 
   function setZoom(nextZoom: number, clientX?: number, clientY?: number): void {
-    const boundedZoom = Math.max(1, Math.min(maxZoom, nextZoom));
+    const boundedZoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
     if (boundedZoom === zoom) return;
     if (boundedZoom === 1 || !canvasWell) {
       zoom = boundedZoom;
@@ -878,7 +880,7 @@
           </div>
           {#if selectedMedia?.kind === 'video'}<span class="labs-chip">VIDEO · LABS / EXPERIMENTAL</span>{/if}
           <div class="zoom-hud">
-            <button aria-label="Zoom out" disabled={zoom <= 1} on:click={() => setZoom(zoom / 1.25)}>−</button>
+            <button aria-label="Zoom out" disabled={zoom <= minZoom} on:click={() => setZoom(zoom / 1.25)}>−</button>
             <span title={`Dynamic maximum ${Math.round(maxZoom * 100)}%`}>{Math.round(zoom * 100)}%</span>
             <button aria-label="Zoom in" disabled={zoom >= maxZoom} on:click={() => setZoom(zoom * 1.25)}>＋</button>
             <button class:active={Math.abs(zoom - 1) < 0.001} on:click={resetView}>Fit</button>

@@ -45,7 +45,9 @@ export function zoomLimits(image: Size, fitted: Size): { min: number; max: numbe
     positive(image.height) / positive(fitted.height)
   );
   return {
-    min: 1,
+    // Fit is 1. A tiny source is enlarged at Fit, so its true 1:1 view is
+    // below 1 and must remain reachable from the dedicated control.
+    min: Math.min(1, actual),
     max: Math.min(64, Math.max(8, actual * 2)),
     actual
   };
