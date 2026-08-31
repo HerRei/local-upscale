@@ -46,7 +46,9 @@ Finder, Explorer, Dolphin, and Nautilus actions are optional and never install
 silently. Enable or remove them from **System integrations** in the app, or run
 the packaged executable with `--install-integrations` or
 `--uninstall-integrations`. The additive command is named `localsr-next`, so it
-does not replace the released app's command.
+does not replace the released app's command. On Linux, place the AppImage where
+you intend to keep it before enabling integrations; LocalSR records the stable
+AppImage path rather than its temporary runtime mount.
 
 ## Production-shaped build
 
@@ -70,9 +72,12 @@ does not satisfy this gate.
 
 The existing `.github/workflows/release.yml` is deliberately untouched. The
 new `.github/workflows/tauri-preview.yml` verifies all three desktop hosts and
-can build short-lived private preview artifacts when manually requested. It
-exposes one conventional package per host—DMG, NSIS Setup, or AppImage—rather
-than presenting the worker's internal files as separate downloads.
+can build short-lived private Windows NSIS and Linux AppImage artifacts when
+manually requested. It exposes one conventional package per host rather than
+presenting the worker's internal files as separate downloads. The ARM DMG is
+built natively with the same script and smoke-tested locally until an ARM64
+macOS runner is available. The Intel runner remains a host-control-plane gate;
+it must not silently fall back to the unsupported PyTorch 2.2 runtime.
 
 The hosted preview packages deliberately use the portable CPU runtime on
 Windows/Linux and the native MPS-capable runtime on Apple Silicon. Selecting

@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -11,6 +11,8 @@ use crate::error::{AppError, AppResult};
 
 #[cfg(any(target_os = "linux", test))]
 const DISPLAY_NAME: &str = "LocalSR Next Preview";
+#[cfg(target_os = "linux")]
+const LINUX_ICON_PNG: &[u8] = include_bytes!("../../../packaging/icons/LocalSR.png");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct IntegrationStatus {
@@ -35,7 +37,7 @@ pub fn status() -> AppResult<IntegrationStatus> {
 }
 
 pub fn install() -> AppResult<IntegrationStatus> {
-    let executable = std::env::current_exe()?;
+    let executable = integration_executable()?;
     install_platform(&executable)?;
     status()
 }
@@ -47,6 +49,45 @@ pub fn uninstall() -> AppResult<IntegrationStatus> {
 
 fn base_dirs() -> AppResult<BaseDirs> {
     BaseDirs::new().ok_or_else(|| AppError::Config("home directory unavailable".into()))
+}
+
+fn integration_executable() -> AppResult<PathBuf> {
+    let current = fs::canonicalize(env::current_exe()?)?;
+    #[cfg(target_os = "linux")]
+    {
+        return Ok(resolve_linux_executable(
+            current,
+            env::var_os("APPIMAGE"),
+            env::var_os("APPDIR"),
+        ));
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(current)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn resolve_linux_executable(
+    current: PathBuf,
+    appimage: Option<std::ffi::OsString>,
+    appdir: Option<std::ffi::OsString>,
+) -> PathBuf {
+    let Some(appimage) = appimage.map(PathBuf::from) else {
+        return current;
+    };
+    let Some(appdir) = appdir.map(PathBuf::from) else {
+        return current;
+    };
+    let Ok(appimage) = fs::canonicalize(appimage) else {
+        return current;
+    };
+    let Ok(appdir) = fs::canonicalize(appdir) else {
+        return current;
+    };
+    if appimage.is_file() && current.starts_with(appdir) {
+        appimage
+    } else {
+        current
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -191,6 +232,10 @@ fn install_platform(executable: &Path) -> AppResult<()> {
     fs::set_permissions(&picker, fs::Permissions::from_mode(0o755))?;
 
     let application = data.join("applications/localsr-next.desktop");
+    write_atomic(
+        &data.join("icons/hicolor/1024x1024/apps/localsr-next.png"),
+        LINUX_ICON_PNG,
+    )?;
     write_atomic(&application, linux_desktop_entry(executable).as_bytes())?;
     for directory in [
         data.join("kservices5/ServiceMenus"),
@@ -223,6 +268,7 @@ fn uninstall_platform() -> AppResult<()> {
         data.join("kservices5/ServiceMenus/localsr-next.desktop"),
         data.join("kio/servicemenus/localsr-next.desktop"),
         data.join("nautilus/scripts/Enhance with LocalSR Next Preview"),
+        data.join("icons/hicolor/1024x1024/apps/localsr-next.png"),
     ] {
         remove_exact_file(&file)?;
     }
@@ -345,6 +391,17 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn desktop_exec_quote(path: &Path) -> String {
+    let escaped = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('`', "\\`")
+        .replace('$', "\\$");
+    format!("\"{escaped}\"")
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn macos_info_plist() -> String {
     r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -375,18 +432,18 @@ fn macos_workflow(app: &Path) -> String {
 
 #[cfg(any(target_os = "linux", test))]
 fn linux_desktop_entry(executable: &Path) -> String {
-    let executable = shell_quote(executable);
+    let executable = desktop_exec_quote(executable);
     format!(
-        "[Desktop Entry]\nVersion=1.0\nType=Application\nName={DISPLAY_NAME}\nGenericName=Local AI Image and Video Restoration\nComment=Enhance media locally with external AI models\nExec={executable} %F\nIcon=localsr\nTerminal=false\nCategories=Graphics;Photography;AudioVideo;Video;\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/x-msvideo;inode/directory;\nStartupNotify=true\nStartupWMClass=LocalSR Next Preview\nActions=QuickUpscale;BestQuality;\n\n[Desktop Action QuickUpscale]\nName=Quick Upscale\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action BestQuality]\nName=Best Quality Upscale\nExec={executable} --preset best --auto-start %F\n"
+        "[Desktop Entry]\nVersion=1.0\nType=Application\nName={DISPLAY_NAME}\nGenericName=Local AI Image and Video Restoration\nComment=Enhance media locally with external AI models\nExec={executable} %F\nIcon=localsr-next\nTerminal=false\nCategories=Graphics;Photography;AudioVideo;Video;\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/x-msvideo;inode/directory;\nStartupNotify=true\nStartupWMClass=LocalSR Next Preview\nActions=QuickUpscale;BestQuality;\n\n[Desktop Action QuickUpscale]\nName=Quick Upscale\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action BestQuality]\nName=Best Quality Upscale\nExec={executable} --preset best --auto-start %F\n"
     )
 }
 
 #[cfg(any(target_os = "linux", test))]
 fn linux_kde_service_menu(executable: &Path, picker: &Path) -> String {
-    let executable = shell_quote(executable);
-    let picker = shell_quote(picker);
+    let executable = desktop_exec_quote(executable);
+    let picker = desktop_exec_quote(picker);
     format!(
-        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;inode/directory;\nActions=LocalSRNextActive;LocalSRNextQuick;LocalSRNextBest;LocalSRNextPicker;\nX-KDE-Submenu=Enhance with LocalSR Next Preview\nX-KDE-Icon=localsr\n\n[Desktop Action LocalSRNextActive]\nName=Active App Settings\nExec={executable} --auto-start %F\n\n[Desktop Action LocalSRNextQuick]\nName=Quick Preset (Fast)\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action LocalSRNextBest]\nName=Best Quality Preset\nExec={executable} --preset best --auto-start %F\n\n[Desktop Action LocalSRNextPicker]\nName=Choose Recipe…\nExec={picker} %F\n"
+        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;inode/directory;\nActions=LocalSRNextActive;LocalSRNextQuick;LocalSRNextBest;LocalSRNextPicker;\nX-KDE-Submenu=Enhance with LocalSR Next Preview\nX-KDE-Icon=localsr-next\n\n[Desktop Action LocalSRNextActive]\nName=Active App Settings\nExec={executable} --auto-start %F\n\n[Desktop Action LocalSRNextQuick]\nName=Quick Preset (Fast)\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action LocalSRNextBest]\nName=Best Quality Preset\nExec={executable} --preset best --auto-start %F\n\n[Desktop Action LocalSRNextPicker]\nName=Choose Recipe…\nExec={picker} %F\n"
     )
 }
 
@@ -594,9 +651,10 @@ mod tests {
         assert!(desktop.contains("Name=LocalSR Next Preview"));
         assert!(desktop.contains("--preset quick --auto-start"));
         assert!(desktop.contains(
-            "Exec='/Applications/LocalSR Next Preview.app/Contents/MacOS/localsr-next' %F"
+            "Exec=\"/Applications/LocalSR Next Preview.app/Contents/MacOS/localsr-next\" %F"
         ));
         assert!(desktop.contains("inode/directory"));
+        assert!(desktop.contains("Icon=localsr-next"));
         assert!(!desktop.contains("%U"));
         assert!(!desktop.contains("Exec=localsr "));
 
@@ -636,6 +694,43 @@ mod tests {
         assert_eq!(
             shell_quote(Path::new("/tmp/user's app")),
             "'/tmp/user'\\''s app'"
+        );
+        assert_eq!(
+            desktop_exec_quote(Path::new("/tmp/Local $SR\\preview")),
+            "\"/tmp/Local \\$SR\\\\preview\""
+        );
+    }
+
+    #[test]
+    fn appimage_integrations_target_the_persistent_container_only_from_its_mount() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mount = temporary.path().join("mount/usr/bin");
+        fs::create_dir_all(&mount).unwrap();
+        let current = mount.join("localsr-next");
+        let appimage = temporary.path().join("LocalSR Next Preview.AppImage");
+        let other_appimage = temporary.path().join("other.AppImage");
+        let unrelated_mount = temporary.path().join("elsewhere");
+        fs::write(&current, b"host").unwrap();
+        fs::write(&appimage, b"appimage").unwrap();
+        fs::write(&other_appimage, b"other").unwrap();
+        fs::create_dir_all(&unrelated_mount).unwrap();
+        let current = fs::canonicalize(current).unwrap();
+
+        assert_eq!(
+            resolve_linux_executable(
+                current.clone(),
+                Some(appimage.clone().into_os_string()),
+                Some(temporary.path().join("mount").into_os_string()),
+            ),
+            fs::canonicalize(appimage).unwrap()
+        );
+        assert_eq!(
+            resolve_linux_executable(
+                current.clone(),
+                Some(other_appimage.into_os_string()),
+                Some(unrelated_mount.into_os_string()),
+            ),
+            current
         );
     }
 }

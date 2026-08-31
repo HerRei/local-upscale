@@ -69,19 +69,35 @@ concurrency:
 jobs:
   verify:
     name: Verify Next Preview (${{ matrix.platform }})
+    timeout-minutes: 150
+    env:
+      # actions/checkout removes ignored target directories. Keep the verified
+      # dependency build outside the checkout so small source changes do not
+      # force hour-long cold builds on the constrained self-hosted VMs.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../.localsr-tauri-target/${{ matrix.cache_key }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: Linux X64
+            cache_key: linux-x64
             runner: '["self-hosted","Linux","X64"]'
             shell: bash
+            cargo_jobs: 4
           - platform: Windows X64
+            cache_key: windows-x64
             runner: '["self-hosted","Windows","X64"]'
             shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+            cargo_jobs: 2
           - platform: macOS X64
+            cache_key: macos-x64
             runner: '["self-hosted","macOS","X64"]'
             shell: bash
+            cargo_jobs: 2
     runs-on: ${{ fromJSON(matrix.runner) }}
     defaults:
       run:
@@ -178,27 +194,30 @@ jobs:
 
   package-preview:
     name: Package private preview (${{ matrix.os }})
+    timeout-minutes: 240
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
     if: github.event_name == 'workflow_dispatch' && inputs.build_packages
     needs: verify
     strategy:
       fail-fast: false
+      # macOS package builds require a native ARM64 runner: the maintained
+      # PyTorch line no longer publishes Intel macOS wheels. The Intel runner
+      # above still verifies the Tauri control plane without reviving 2.2.x.
       matrix:
         include:
           - os: Linux
             runner: '["self-hosted","Linux","X64"]'
             shell: bash
+            cargo_jobs: 4
             bundles: appimage
             package_path: desktop/src-tauri/target/release/bundle/appimage/*.AppImage
           - os: Windows
             runner: '["self-hosted","Windows","X64"]'
             shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+            cargo_jobs: 2
             bundles: nsis
             package_path: desktop/src-tauri/target/release/bundle/nsis/*.exe
-          - os: macOS
-            runner: '["self-hosted","macOS","X64"]'
-            shell: bash
-            bundles: dmg
-            package_path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
     runs-on: ${{ fromJSON(matrix.runner) }}
     defaults:
       run:
@@ -270,14 +289,6 @@ jobs:
           python -m pip install --disable-pip-version-check "pip==${{ env.PIP_VERSION }}"
           python -m pip install --disable-pip-version-check "torch==${{ env.PYTORCH_VERSION }}" "torchvision==${{ env.TORCHVISION_VERSION }}" --index-url https://download.pytorch.org/whl/cpu
           python -m pip install --disable-pip-version-check -e ".[package,video]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
-      - name: Install the Apple inference packager
-        if: runner.os == 'macOS'
-        run: |
-          python -m pip install --disable-pip-version-check "pip==${{ env.PIP_VERSION }}"
-          python -m pip install --disable-pip-version-check \
-            "torch==${{ env.PYTORCH_VERSION }}" "torchvision==${{ env.TORCHVISION_VERSION }}"
-          python -m pip install --disable-pip-version-check \
-            -e ".[package,video]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
       - name: Build the additive desktop package
         run: python scripts/build_tauri_preview.py --bundles ${{ matrix.bundles }}
       - name: Install or mount the package and boot its bundled worker

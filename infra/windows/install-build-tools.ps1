@@ -94,4 +94,3 @@ if ($null -eq $installed) {
 
 Remove-Item -LiteralPath $bootstrapper -Force -ErrorAction SilentlyContinue
 Write-Host "MSVC build tools are ready at $installed"
-
