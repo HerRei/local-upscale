@@ -106,41 +106,23 @@ def test_process_timeout_preserves_captured_diagnostics(monkeypatch, capsys) -> 
     assert "startup detail" in output
 
 
-def test_linux_smoke_pins_x11_and_retries_transient_gtk_startup(
+def test_linux_smoke_runs_the_appimage_host_without_a_webview(
     tmp_path: Path, monkeypatch
 ) -> None:
     artifact = tmp_path / "LocalSR.AppImage"
     artifact.write_bytes(b"appimage")
-    results = iter(
-        [
-            subprocess.CompletedProcess(
-                ["appimage"], 1, stdout=b"", stderr=b"Failed to initialize GTK"
-            ),
-            subprocess.CompletedProcess(["appimage"], 0, stdout=b"", stderr=b""),
-        ]
-    )
     calls: list[tuple[list[str], dict[str, str]]] = []
 
     def fake_run(command, *, env, **_kwargs):
         calls.append((command, env.copy()))
-        return next(results)
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(smoke, "run", fake_run)
-    monkeypatch.setattr(smoke.shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
 
     smoke.smoke_linux(artifact, tmp_path / "report.json", {}, 240)
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     command, environment = calls[0]
-    assert command[:5] == [
-        "dbus-run-session",
-        "--",
-        "xvfb-run",
-        "-a",
-        "-s",
-    ]
-    assert "1920x1080x24" in command[5]
-    assert environment["GDK_BACKEND"] == "x11"
-    assert environment["LIBGL_ALWAYS_SOFTWARE"] == "1"
-    assert environment["WEBKIT_DISABLE_COMPOSITING_MODE"] == "1"
+    assert command == [str(artifact), "--headless-smoke-test"]
+    assert environment["APPIMAGE_EXTRACT_AND_RUN"] == "1"
+    assert artifact.stat().st_mode & 0o111

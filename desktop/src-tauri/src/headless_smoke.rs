@@ -15,6 +15,7 @@ use crate::types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION};
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PRODUCT_NAME: &str = "LocalSR Next Preview";
 
 pub fn run() -> i32 {
     let worker_path = packaged_worker_path();
@@ -77,7 +78,8 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
     } else {
         "localsr-worker"
     };
-    worker_candidates(&executable, worker_name)
+    let appdir = trusted_appimage_dir(&executable);
+    worker_candidates(&executable, worker_name, appdir.as_deref())
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
@@ -85,7 +87,16 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
         })
 }
 
-fn worker_candidates(executable: &Path, worker_name: &str) -> Vec<PathBuf> {
+fn trusted_appimage_dir(executable: &Path) -> Option<PathBuf> {
+    let appdir = env::var_os("APPDIR").map(PathBuf::from)?;
+    let canonical_appdir = appdir.canonicalize().ok()?;
+    let canonical_executable = executable.canonicalize().ok()?;
+    canonical_executable
+        .starts_with(&canonical_appdir)
+        .then_some(canonical_appdir)
+}
+
+fn worker_candidates(executable: &Path, worker_name: &str, appdir: Option<&Path>) -> Vec<PathBuf> {
     let Some(parent) = executable.parent() else {
         return Vec::new();
     };
@@ -99,6 +110,27 @@ fn worker_candidates(executable: &Path, worker_name: &str) -> Vec<PathBuf> {
     // headless path useful for local package diagnostics on macOS.
     if let Some(contents) = parent.parent() {
         candidates.push(contents.join("Resources").join("engine").join(worker_name));
+    }
+    if let Some(appdir) = appdir {
+        // Tauri stores AppImage resources in APPDIR/usr/lib/<productName>.
+        // Keep the Cargo package name as a compatibility fallback for locally
+        // produced bundles whose package metadata predates productName.
+        candidates.push(
+            appdir
+                .join("usr")
+                .join("lib")
+                .join(PRODUCT_NAME)
+                .join("engine")
+                .join(worker_name),
+        );
+        candidates.push(
+            appdir
+                .join("usr")
+                .join("lib")
+                .join(env!("CARGO_PKG_NAME"))
+                .join("engine")
+                .join(worker_name),
+        );
     }
     candidates
 }
@@ -326,6 +358,7 @@ mod tests {
         let candidates = worker_candidates(
             Path::new("/install/LocalSR Next Preview.exe"),
             "localsr-worker.exe",
+            None,
         );
         assert_eq!(
             candidates[0],
@@ -335,9 +368,25 @@ mod tests {
         let candidates = worker_candidates(
             Path::new("/Applications/LocalSR.app/Contents/MacOS/localsr-next"),
             "localsr-worker",
+            None,
         );
         assert!(candidates.contains(&PathBuf::from(
             "/Applications/LocalSR.app/Contents/Resources/engine/localsr-worker"
+        )));
+    }
+
+    #[test]
+    fn packaged_worker_candidates_cover_tauri_appimage_layout() {
+        let candidates = worker_candidates(
+            Path::new("/tmp/.mount_LocalSR/usr/bin/localsr-next"),
+            "localsr-worker",
+            Some(Path::new("/tmp/.mount_LocalSR")),
+        );
+        assert!(candidates.contains(&PathBuf::from(
+            "/tmp/.mount_LocalSR/usr/lib/LocalSR Next Preview/engine/localsr-worker"
+        )));
+        assert!(candidates.contains(&PathBuf::from(
+            "/tmp/.mount_LocalSR/usr/lib/localsr-next/engine/localsr-worker"
         )));
     }
 

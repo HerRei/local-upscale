@@ -8,7 +8,6 @@ import glob
 import json
 import os
 import plistlib
-import shutil
 import subprocess
 import tempfile
 import time
@@ -149,34 +148,10 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
 def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
     artifact.chmod(artifact.stat().st_mode | 0o111)
     env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
-    command = [str(artifact), "--smoke-test"]
-    attempts = 1
-    if shutil.which("xvfb-run"):
-        # Headless self-hosted runners can retain stale Wayland variables even
-        # though the test display is Xvfb. Pin GTK/WebKit to X11 and software
-        # rendering, and let each bounded retry allocate a fresh display.
-        env["GDK_BACKEND"] = "x11"
-        env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-        env["WEBKIT_DISABLE_COMPOSITING_MODE"] = "1"
-        env["NO_AT_BRIDGE"] = "1"
-        command = [
-            "xvfb-run",
-            "-a",
-            "-s",
-            "-screen 0 1920x1080x24 -nolisten tcp",
-            *command,
-        ]
-        attempts = 3
-    if shutil.which("dbus-run-session"):
-        command = ["dbus-run-session", "--", *command]
-    for attempt in range(attempts):
-        result = run(command, env=env, timeout=timeout, check=False)
-        if result.returncode == 0:
-            return
-        gtk_startup_failed = b"Failed to initialize GTK" in result.stderr
-        if not gtk_startup_failed or attempt + 1 == attempts:
-            result.check_returncode()
-        time.sleep(float(attempt + 1))
+    # Self-hosted Linux runners may not provide a functional GTK/Wayland
+    # session even under Xvfb. Exercise the actual AppImage host, its resource
+    # layout and bundled worker before WebView initialization instead.
+    run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
 
 
 def validate_report(report: Path) -> dict[str, object]:
