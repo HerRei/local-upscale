@@ -106,9 +106,7 @@ def test_process_timeout_preserves_captured_diagnostics(monkeypatch, capsys) -> 
     assert "startup detail" in output
 
 
-def test_linux_smoke_runs_the_appimage_host_without_a_webview(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_linux_smoke_runs_the_appimage_host_without_a_webview(tmp_path: Path, monkeypatch) -> None:
     artifact = tmp_path / "LocalSR.AppImage"
     artifact.write_bytes(b"appimage")
     calls: list[tuple[list[str], dict[str, str]]] = []
