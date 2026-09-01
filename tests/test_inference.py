@@ -1,3 +1,4 @@
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -6,7 +7,11 @@ import pytest
 import torch
 from torch import nn
 
-from localsr.core.inference import InferenceEngine, _apply_gpu_memory_limit
+from localsr.core.inference import (
+    InferenceEngine,
+    _apply_gpu_memory_limit,
+    _resolve_torch_device,
+)
 from localsr.core.model_adapter import NormalizedModelInfo
 
 
@@ -82,6 +87,36 @@ def test_hard_gpu_memory_limits(monkeypatch):
     mps_fraction = _apply_gpu_memory_limit(torch.device("mps"), safe_memory=True)
     assert mps_fraction == pytest.approx(0.52)
     assert calls[-1] == ("mps", pytest.approx(0.52))
+
+
+def test_directml_device_ids_use_the_backend_factory(monkeypatch):
+    calls = []
+    fake_directml = SimpleNamespace(
+        is_available=lambda: True,
+        device=lambda index: calls.append(index) or torch.device("cpu"),
+    )
+    monkeypatch.setitem(sys.modules, "torch_directml", fake_directml)
+
+    resolved = _resolve_torch_device("directml:2")
+
+    assert resolved == torch.device("cpu")
+    assert calls == [2]
+
+
+def test_directml_resolution_fails_honestly_when_no_adapter_is_available(monkeypatch):
+    fake_directml = SimpleNamespace(
+        is_available=lambda: False,
+        device=lambda _index: pytest.fail("device factory must not be called"),
+    )
+    monkeypatch.setitem(sys.modules, "torch_directml", fake_directml)
+
+    with pytest.raises(RuntimeError, match="no compatible adapter"):
+        _resolve_torch_device("directml:0")
+
+
+def test_qnn_is_rejected_until_the_engine_has_a_conversion_pipeline():
+    with pytest.raises(RuntimeError, match="not available"):
+        _resolve_torch_device("qnn-npu")
 
 
 def test_inference_dimensions():

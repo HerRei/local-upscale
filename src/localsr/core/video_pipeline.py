@@ -12,11 +12,13 @@ from __future__ import annotations
 import base64
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
 import torch
+from PIL import Image
 
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
@@ -58,33 +60,40 @@ def _deflicker_frames(
         yield from restored
         return
 
-    half = window // 2
-    buffer: list[np.ndarray] = []
-    emitted = 0
+    left = (window - 1) // 2
+    right = window - 1 - left
+    buffer: deque[tuple[int, np.ndarray]] = deque()
+    next_emit = 0
+    last_index = -1
 
-    for frame in restored:
+    def median_for(index: int) -> np.ndarray:
+        start = max(0, index - left)
+        end = index + right
+        selected = [frame for frame_index, frame in buffer if start <= frame_index <= end]
+        return np.median(np.stack(selected, axis=0), axis=0).astype(np.uint8)
+
+    for stream_index, frame in enumerate(restored):
         if cancel_event.is_set():
-            return
-        buffer.append(frame)
-        # Once the buffer has enough frames ahead, emit the center frame.
-        if len(buffer) > half:
-            center = len(buffer) - 1 - half
-            start = max(0, center - half)
-            end = min(len(buffer), center + half + 1)
-            window_frames = buffer[start:end]
-            stacked = np.stack(window_frames, axis=0)
-            yield np.median(stacked, axis=0).astype(np.uint8)
-            emitted += 1
+            raise InterruptedError("video job cancelled")
+        buffer.append((stream_index, frame))
+        last_index = stream_index
+        while next_emit + right <= stream_index:
+            yield median_for(next_emit)
+            next_emit += 1
+            minimum_needed = max(0, next_emit - left)
+            while buffer and buffer[0][0] < minimum_needed:
+                buffer.popleft()
 
-    # Flush remaining frames in buffer order, each with a shrinking window.
-    while emitted < len(buffer):
-        center = emitted
-        start = max(0, center - half)
-        end = min(len(buffer), center + half + 1)
-        window_frames = buffer[start:end]
-        stacked = np.stack(window_frames, axis=0)
-        yield np.median(stacked, axis=0).astype(np.uint8)
-        emitted += 1
+    # Flush the final frames with a shrinking look-ahead window. The deque
+    # remains bounded by `window`, even for multi-hour clips.
+    while next_emit <= last_index:
+        if cancel_event.is_set():
+            raise InterruptedError("video job cancelled")
+        yield median_for(next_emit)
+        next_emit += 1
+        minimum_needed = max(0, next_emit - left)
+        while buffer and buffer[0][0] < minimum_needed:
+            buffer.popleft()
 
 
 @dataclass
@@ -108,6 +117,7 @@ class VideoJobConfig:
     face_detection_interval: int = 5
     deflicker: bool = False
     deflicker_window: int = 3
+    output_scale: int | None = None
 
 
 @dataclass
@@ -155,9 +165,14 @@ def run_video_job(
         total_frames = 0
 
     model_info = config.model_info
-    scale = int(getattr(model_info, "scale", 1))
-    output_width = probe.width * scale
-    output_height = probe.height * scale
+    native_scale = int(getattr(model_info, "scale", 1))
+    output_scale = int(config.output_scale or native_scale)
+    if output_scale < 1 or output_scale > native_scale:
+        raise ValueError(
+            f"Video output scale must be between 1 and the model's native {native_scale}× scale."
+        )
+    output_width = probe.width * output_scale
+    output_height = probe.height * output_scale
 
     # Load the model once and reuse it for every frame.
     engine.load_model(
@@ -193,7 +208,7 @@ def run_video_job(
             end_frame=config.end_frame,
         ):
             if cancel_event.is_set():
-                return
+                raise InterruptedError("video job cancelled")
             if inference_started_at is None:
                 inference_started_at = time.monotonic()
             if frame_started_cb is not None:
@@ -256,9 +271,17 @@ def run_video_job(
                         tile_callback=tile_callback,
                     )
             except InterruptedError:
-                return
+                raise
 
             out_rgb = uint8_chw_to_rgb_hwc(out_chw)
+            if output_scale != native_scale:
+                out_rgb = np.array(
+                    Image.fromarray(out_rgb).resize(
+                        (output_width, output_height),
+                        Image.Resampling.LANCZOS,
+                    ),
+                    dtype=np.uint8,
+                )
             frames_processed += 1
 
             if frame_completed_cb is not None:

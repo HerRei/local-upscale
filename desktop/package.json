@@ -1,0 +1,33 @@
+{
+  "name": "localsr-desktop",
+  "private": true,
+  "version": "0.0.9-alpha",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build:frontend && vite preview --host localhost --port 1420 --strictPort",
+    "dev:web": "vite",
+    "build:frontend": "vite build",
+    "build": "svelte-check --tsconfig ./tsconfig.json && npm run build:frontend",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.2",
+    "svelte": "5.57.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@tauri-apps/cli": "2.11.4",
+    "@testing-library/svelte": "^5.4.2",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/node": "26.4.0",
+    "esbuild": "0.28.2",
+    "jsdom": "^30.0.1",
+    "svelte-check": "4.7.6",
+    "typescript": "6.0.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

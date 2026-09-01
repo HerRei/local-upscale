@@ -1,0 +1,699 @@
+use std::{
+    env,
+    io::{BufRead, BufReader, Write},
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::{atomic::Ordering, mpsc, Arc},
+    thread,
+    time::Duration,
+};
+
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
+
+use crate::{
+    error::{AppError, AppResult},
+    state::{emit_state_changed, lock, AppState},
+    types::{CapabilityInfo, EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
+};
+
+struct WorkerCommand {
+    program: PathBuf,
+    arguments: Vec<String>,
+    working_directory: Option<PathBuf>,
+    python_path: Option<PathBuf>,
+}
+
+pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
+    if state.worker.shutting_down.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if lock(&state.worker.sender)?.is_some() {
+        return Ok(());
+    }
+
+    let specification = resolve_worker_command(&state, &app)?;
+    let mut command = Command::new(&specification.program);
+    command.args(&specification.arguments);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // Keep the JSON-lines worker attached to pipes without flashing a
+        // console window behind the desktop application.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(directory) = specification.working_directory {
+        command.current_dir(directory);
+    }
+    if let Some(path) = specification.python_path {
+        command.env("PYTHONPATH", path);
+    }
+    command.env("PYTHONUNBUFFERED", "1");
+
+    let mut child = command.spawn().map_err(|error| {
+        AppError::Worker(format!(
+            "could not start the LocalSR inference engine: {error}"
+        ))
+    })?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::Worker("worker stdin was not available".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Worker("worker stdout was not available".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::Worker("worker stderr was not available".into()))?;
+
+    let generation = state.worker.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let (sender, receiver) = mpsc::channel::<String>();
+    *lock(&state.worker.sender)? = Some(sender);
+    {
+        let mut runtime = lock(&state.runtime)?;
+        runtime.worker = "starting".into();
+        runtime.status_title = "Starting engine".into();
+        runtime.status_detail = "The inference process is loading.".into();
+    }
+    emit_state_changed(&app);
+
+    thread::spawn(move || {
+        let mut writer = stdin;
+        for message in receiver {
+            if writeln!(writer, "{message}")
+                .and_then(|_| writer.flush())
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let reader_state = state.clone();
+    let reader_app = app.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            match serde_json::from_str::<WorkerEnvelope>(&line) {
+                Ok(envelope) => handle_worker_envelope(&reader_state, &reader_app, envelope),
+                Err(_) => {
+                    let warning = WorkerEnvelope {
+                        message_type: "warning".into(),
+                        data: json!({"message": "The inference engine sent an invalid response."}),
+                    };
+                    let _ = reader_app.emit("worker-message", warning);
+                }
+            }
+        }
+    });
+
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if cfg!(debug_assertions) {
+                eprintln!("LocalSR engine: {line}");
+            }
+        }
+    });
+
+    thread::spawn(move || {
+        let status = child.wait();
+        if state.worker.generation.load(Ordering::SeqCst) != generation
+            || state.worker.shutting_down.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        if let Ok(mut sender) = state.worker.sender.lock() {
+            *sender = None;
+        }
+        if let Ok(mut runtime) = state.runtime.lock() {
+            let active = std::mem::take(&mut runtime.active_job_id);
+            runtime.worker = "unavailable".into();
+            runtime.status_title = "Engine stopped".into();
+            runtime.status_detail = match status {
+                Ok(exit) => format!("The inference engine exited with {exit}. Restarting…"),
+                Err(_) => "The inference engine stopped unexpectedly. Restarting…".into(),
+            };
+            if !active.is_empty() {
+                if let Ok(database) = state.database.lock() {
+                    let _ = database.interrupt_active_job(
+                        &active,
+                        "The inference engine stopped before the job completed.",
+                    );
+                }
+            }
+        }
+        emit_state_changed(&app);
+
+        let attempt = state.worker.restart_count.fetch_add(1, Ordering::SeqCst) + 1;
+        if attempt <= 3 {
+            thread::sleep(Duration::from_secs(u64::from(attempt)));
+            if let Err(error) = start_worker(state.clone(), app.clone()) {
+                set_worker_failure(&state, &app, error.to_string());
+            }
+        } else {
+            set_worker_failure(
+                &state,
+                &app,
+                "The inference engine repeatedly stopped. Restart LocalSR to try again.".into(),
+            );
+        }
+    });
+
+    Ok(())
+}
+
+pub fn send(state: &AppState, message: &Value) -> AppResult<()> {
+    let encoded = serde_json::to_string(message)?;
+    let guard = lock(&state.worker.sender)?;
+    let sender = guard
+        .as_ref()
+        .ok_or_else(|| AppError::Worker("the inference engine is not ready".into()))?;
+    sender
+        .send(encoded)
+        .map_err(|_| AppError::Worker("the inference engine connection closed".into()))
+}
+
+pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Ok(());
+    }
+    let pending = lock(&state.database)?.next_queued_job()?;
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let message: Value = serde_json::from_str(&pending.request_json)?;
+    {
+        let mut runtime = lock(&state.runtime)?;
+        if runtime.worker != "ready" {
+            return Ok(());
+        }
+        runtime.active_job_id = pending.id.clone();
+        runtime.status_title = "Queued".into();
+        runtime.status_detail = "Sending the next item to the inference engine.".into();
+        runtime.progress = 0.0;
+        runtime.result_preview_data_url.clear();
+    }
+    lock(&state.database)?.set_job_status(&pending.id, "starting")?;
+    if let Err(error) = send(state, &message) {
+        lock(&state.database)?.finish_job(&pending.id, "failed", "", &error.to_string())?;
+        lock(&state.runtime)?.active_job_id.clear();
+        return Err(error);
+    }
+    emit_state_changed(app);
+    Ok(())
+}
+
+pub fn shutdown(state: &AppState) {
+    state.worker.shutting_down.store(true, Ordering::SeqCst);
+    let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
+    if let Ok(mut sender) = state.worker.sender.lock() {
+        *sender = None;
+    }
+}
+
+fn handle_worker_envelope(state: &Arc<AppState>, app: &AppHandle, envelope: WorkerEnvelope) {
+    let _ = app.emit("worker-message", envelope.clone());
+    let result = apply_worker_envelope(state, &envelope);
+    if let Err(error) = result {
+        set_worker_failure(state, app, error.to_string());
+        return;
+    }
+    emit_state_changed(app);
+
+    match envelope.message_type.as_str() {
+        "job_completed" | "video_job_completed" => {
+            let _ = app
+                .notification()
+                .builder()
+                .title("LocalSR finished")
+                .body("Your enhanced media is ready.")
+                .show();
+        }
+        "job_failed" => {
+            let _ = app
+                .notification()
+                .builder()
+                .title("LocalSR could not finish")
+                .body("Open LocalSR to review the error and diagnostics.")
+                .show();
+        }
+        _ => {}
+    }
+
+    if envelope.message_type == "engine_info" {
+        if let Err(error) = dispatch_next(state, app) {
+            set_worker_failure(state, app, error.to_string());
+        }
+    }
+    if matches!(
+        envelope.message_type.as_str(),
+        "job_completed" | "video_job_completed" | "job_cancelled" | "job_failed"
+    ) {
+        if let Err(error) = dispatch_next(state, app) {
+            set_worker_failure(state, app, error.to_string());
+        }
+    }
+}
+
+fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
+    let data = &envelope.data;
+    match envelope.message_type.as_str() {
+        "worker_ready" => {
+            {
+                let mut runtime = lock(&state.runtime)?;
+                runtime.worker = "negotiating".into();
+                runtime.status_title = "Checking engine".into();
+                runtime.status_detail = "Negotiating a compatible inference protocol.".into();
+            }
+            send(
+                state,
+                &json!({
+                    "type": "handshake_request",
+                    "data": {
+                        "client_name": "LocalSR Next Preview",
+                        "client_version": env!("CARGO_PKG_VERSION"),
+                        "protocol_version": PROTOCOL_VERSION
+                    }
+                }),
+            )?;
+        }
+        "engine_info" => {
+            let info: EngineInfo = serde_json::from_value(data.clone())?;
+            if info.minimum_protocol_version > PROTOCOL_VERSION
+                || info.protocol_version < PROTOCOL_VERSION
+            {
+                return Err(AppError::Worker(format!(
+                    "inference protocol mismatch: app {}, engine {}–{}",
+                    PROTOCOL_VERSION, info.minimum_protocol_version, info.protocol_version
+                )));
+            }
+            *lock(&state.engine)? = Some(info);
+            state.worker.restart_count.store(0, Ordering::SeqCst);
+            {
+                let mut runtime = lock(&state.runtime)?;
+                runtime.worker = "ready".into();
+                runtime.status_title = "Ready".into();
+                runtime.status_detail = "The isolated inference engine is ready.".into();
+            }
+            send(state, &json!({"type": "capabilities_request", "data": {}}))?;
+            for path in lock(&state.database)?.pending_probe_paths()? {
+                send(
+                    state,
+                    &json!({
+                        "type": "media_probe_request",
+                        "data": {"media_path": path, "max_dimension": 2048}
+                    }),
+                )?;
+            }
+        }
+        "capabilities_info" => {
+            *lock(&state.capabilities)? = serde_json::from_value::<CapabilityInfo>(data.clone())?;
+        }
+        "media_info" => {
+            let path = string(data, "media_path");
+            let encoded = string(data, "jpeg_base64");
+            let preview = if encoded.is_empty() {
+                String::new()
+            } else {
+                format!("data:image/jpeg;base64,{encoded}")
+            };
+            lock(&state.database)?.update_media_probe(
+                &path,
+                &string(data, "media_kind"),
+                integer(data, "width") as u32,
+                integer(data, "height") as u32,
+                integer(data, "frame_count"),
+                number(data, "fps"),
+                number(data, "duration_seconds"),
+                &preview,
+            )?;
+            if lock(&state.database)?.get_media_by_path(&path)?.is_none()
+                && lock(&state.runtime)?.last_output_path == path
+                && !preview.is_empty()
+            {
+                lock(&state.runtime)?.result_preview_data_url = preview;
+            }
+        }
+        "media_probe_failed" => {
+            lock(&state.database)?
+                .fail_media_probe(&string(data, "media_path"), &string(data, "error_message"))?;
+        }
+        "preview_ready" => {
+            let encoded = string(data, "jpeg_base64");
+            if !encoded.is_empty() {
+                lock(&state.runtime)?.result_preview_data_url =
+                    format!("data:image/jpeg;base64,{encoded}");
+            }
+        }
+        "job_started" => {
+            let id = string(data, "job_id");
+            lock(&state.database)?.set_job_status(&id, "running")?;
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id = id;
+            runtime.status_title = "Processing".into();
+            runtime.status_detail = "The model is preparing the first tile.".into();
+            runtime.elapsed_seconds = 0.0;
+            runtime.estimated_remaining_seconds = 0.0;
+            runtime.throughput = 0.0;
+            runtime.throughput_unit = "tiles/s".into();
+            runtime.active_tile_size = 0;
+        }
+        "progress" => {
+            let id = string(data, "job_id");
+            let progress = number(data, "percentage");
+            lock(&state.database)?.update_job_progress(&id, progress)?;
+            let mut runtime = lock(&state.runtime)?;
+            runtime.progress = progress;
+            runtime.status_title = "Enhancing".into();
+            runtime.status_detail = format!(
+                "{} of {} tiles",
+                integer(data, "completed_tiles"),
+                integer(data, "total_tiles")
+            );
+            runtime.elapsed_seconds = number(data, "elapsed_seconds");
+            runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+            let completed = integer(data, "completed_tiles") as f64;
+            runtime.throughput = if runtime.elapsed_seconds > 0.0 {
+                completed / runtime.elapsed_seconds
+            } else {
+                0.0
+            };
+            runtime.throughput_unit = "tiles/s".into();
+            runtime.active_tile_size = integer(data, "active_tile_size") as u32;
+            runtime.device_free_memory = integer(data, "device_free_memory");
+            runtime.device_allocated_memory = integer(data, "device_allocated_memory");
+            runtime.live_system_ram_available = integer(data, "system_ram_available");
+            runtime.live_memory_pressure_percent = number(data, "system_memory_pressure_percent");
+        }
+        "tile_update" => {
+            let encoded = string(data, "jpeg_base64");
+            if !encoded.is_empty() {
+                lock(&state.runtime)?.result_preview_data_url =
+                    format!("data:image/jpeg;base64,{encoded}");
+            }
+        }
+        "video_frame_started" => {
+            let mut runtime = lock(&state.runtime)?;
+            runtime.status_title = "Enhancing video · Labs".into();
+            runtime.status_detail = format!(
+                "Frame {} of {}",
+                integer(data, "frame_index") + 1,
+                integer(data, "total_frames")
+            );
+        }
+        "video_frame_completed" => {
+            let id = string(data, "job_id");
+            let completed = integer(data, "frames_processed") as f64;
+            let total = integer(data, "total_frames") as f64;
+            let progress = if total > 0.0 {
+                completed / total * 100.0
+            } else {
+                0.0
+            };
+            lock(&state.database)?.update_job_progress(&id, progress)?;
+            let mut runtime = lock(&state.runtime)?;
+            runtime.progress = progress;
+            let elapsed = number(data, "elapsed_seconds");
+            if completed > 0.0 && elapsed > 0.0 {
+                runtime.elapsed_seconds = elapsed;
+                runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+                runtime.throughput = completed / elapsed;
+                runtime.throughput_unit = "frames/s".into();
+            }
+            let encoded = string(data, "jpeg_base64");
+            if !encoded.is_empty() {
+                runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
+            }
+        }
+        "job_completed" | "video_job_completed" => {
+            let id = string(data, "job_id");
+            let output = string(data, "output_path");
+            lock(&state.database)?.finish_job(&id, "completed", &output, "")?;
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id.clear();
+            runtime.progress = 100.0;
+            runtime.last_output_path = output;
+            runtime.status_title = "Complete".into();
+            runtime.status_detail = "The output was written successfully.".into();
+            runtime.elapsed_seconds =
+                number(data, "inference_seconds").max(number(data, "elapsed_seconds"));
+            runtime.estimated_remaining_seconds = 0.0;
+        }
+        "job_cancelled" => {
+            let id = string(data, "job_id");
+            lock(&state.database)?.finish_job(&id, "cancelled", "", "Cancelled by the user.")?;
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id.clear();
+            runtime.status_title = "Cancelled".into();
+            runtime.status_detail = "Temporary output was cleaned up.".into();
+            runtime.estimated_remaining_seconds = 0.0;
+        }
+        "job_failed" => {
+            let id = string(data, "job_id");
+            let error = string(data, "error_message");
+            lock(&state.database)?.finish_job(&id, "failed", "", &error)?;
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id.clear();
+            runtime.status_title = "Could not finish".into();
+            runtime.status_detail = error;
+            runtime.estimated_remaining_seconds = 0.0;
+        }
+        "protocol_error" => {
+            let mut runtime = lock(&state.runtime)?;
+            runtime.worker = "failed".into();
+            runtime.status_title = "Engine incompatible".into();
+            runtime.status_detail = string(data, "message");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
+    #[cfg(debug_assertions)]
+    {
+        if let Some(path) = env::var_os("LOCALSR_WORKER") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Ok(WorkerCommand {
+                    program: path,
+                    arguments: Vec::new(),
+                    working_directory: None,
+                    python_path: None,
+                });
+            }
+            return Err(AppError::Worker(
+                "LOCALSR_WORKER does not point to a file".into(),
+            ));
+        }
+    }
+
+    let executable_name = if cfg!(windows) {
+        "localsr-worker.exe"
+    } else {
+        "localsr-worker"
+    };
+    let mut candidates = Vec::new();
+    if let Ok(resources) = app.path().resource_dir() {
+        candidates.push(resources.join("engine").join(executable_name));
+        candidates.push(resources.join("localsr-worker").join(executable_name));
+    }
+    if let Ok(executable) = env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join("engine").join(executable_name));
+            candidates.push(parent.join(executable_name));
+        }
+    }
+    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+        return Ok(WorkerCommand {
+            program: path,
+            arguments: Vec::new(),
+            working_directory: None,
+            python_path: None,
+        });
+    }
+
+    #[cfg(not(debug_assertions))]
+    return Err(AppError::Worker(
+        "the packaged application is missing its bundled inference engine".into(),
+    ));
+
+    #[cfg(debug_assertions)]
+    {
+        let python_candidates = if cfg!(windows) {
+            vec![
+                _state
+                    .paths
+                    .repo_root
+                    .join(".venv")
+                    .join("Scripts")
+                    .join("python.exe"),
+                _state
+                    .paths
+                    .repo_root
+                    .join(".venv311")
+                    .join("Scripts")
+                    .join("python.exe"),
+            ]
+        } else {
+            vec![
+                _state
+                    .paths
+                    .repo_root
+                    .join(".venv")
+                    .join("bin")
+                    .join("python"),
+                _state
+                    .paths
+                    .repo_root
+                    .join(".venv311")
+                    .join("bin")
+                    .join("python"),
+            ]
+        };
+        let program = python_candidates
+            .into_iter()
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
+        let source = _state.paths.repo_root.join("src");
+        if !source.is_dir() {
+            return Err(AppError::Worker(
+                "the bundled inference engine is missing; rebuild the desktop package".into(),
+            ));
+        }
+        Ok(WorkerCommand {
+            program,
+            arguments: vec!["-u".into(), "-m".into(), "localsr.worker".into()],
+            working_directory: Some(_state.paths.repo_root.clone()),
+            python_path: Some(source),
+        })
+    }
+}
+
+fn set_worker_failure(state: &AppState, app: &AppHandle, detail: String) {
+    if let Ok(mut runtime) = state.runtime.lock() {
+        runtime.worker = "failed".into();
+        runtime.status_title = "Engine unavailable".into();
+        runtime.status_detail = detail;
+    }
+    emit_state_changed(app);
+}
+
+fn string(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn integer(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or_default()
+}
+
+fn number(value: &Value, key: &str) -> f64 {
+    value.get(key).and_then(Value::as_f64).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_values_are_tolerant_of_missing_optional_fields() {
+        let value = json!({"job_id": "job-1"});
+        assert_eq!(string(&value, "job_id"), "job-1");
+        assert_eq!(number(&value, "percentage"), 0.0);
+        assert_eq!(integer(&value, "frame_count"), 0);
+    }
+
+    #[test]
+    fn worker_envelope_round_trips_protocol_type() {
+        let envelope: WorkerEnvelope = serde_json::from_value(json!({
+            "type": "worker_ready",
+            "data": {}
+        }))
+        .unwrap();
+        assert_eq!(envelope.message_type, "worker_ready");
+        assert_eq!(
+            serde_json::to_value(envelope).unwrap()["type"],
+            "worker_ready"
+        );
+    }
+
+    #[test]
+    fn legacy_capability_devices_default_to_discrete_memory() {
+        let capability: CapabilityInfo = serde_json::from_value(json!({
+            "system_ram_total": 16,
+            "system_ram_available": 8,
+            "system_memory_pressure_percent": 0.0,
+            "system_memory_pressure_level": "unknown",
+            "system_compressed_memory": 0,
+            "system_swap_total": 0,
+            "system_swap_used": 0,
+            "devices": [{
+                "id": "cpu",
+                "type": "cpu",
+                "name": "CPU",
+                "total_memory": 16,
+                "free_memory": 8,
+                "supports_fp16": false,
+                "recommended_tile_sizes": [64]
+            }]
+        }))
+        .unwrap();
+
+        assert!(!capability.devices[0].is_integrated);
+    }
+
+    #[test]
+    fn capability_contract_preserves_every_supported_backend_identifier() {
+        let device_specs = [
+            ("mps", "mps", true),
+            ("cpu", "cpu", false),
+            ("cuda:0", "cuda", false),
+            ("cuda:0", "rocm", false),
+            ("xpu:0", "xpu", true),
+            ("directml:0", "directml", true),
+        ];
+
+        for (id, backend, integrated) in device_specs {
+            let capability: CapabilityInfo = serde_json::from_value(json!({
+                "system_ram_total": 16,
+                "system_ram_available": 8,
+                "system_memory_pressure_percent": 0.0,
+                "system_memory_pressure_level": "low",
+                "system_compressed_memory": 0,
+                "system_swap_total": 0,
+                "system_swap_used": 0,
+                "devices": [{
+                    "id": id,
+                    "type": backend,
+                    "name": backend,
+                    "total_memory": 16,
+                    "free_memory": 8,
+                    "supports_fp16": backend != "cpu",
+                    "is_integrated": integrated,
+                    "recommended_tile_sizes": [64, 128]
+                }]
+            }))
+            .unwrap();
+
+            assert_eq!(capability.devices[0].id, id);
+            assert_eq!(capability.devices[0].device_type, backend);
+            assert_eq!(capability.devices[0].is_integrated, integrated);
+        }
+    }
+}

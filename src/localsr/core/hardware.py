@@ -236,6 +236,7 @@ def get_capability_report() -> dict:
                 "free_memory": free,
                 "supports_fp16": True,
                 "recommended_tile_sizes": _recommended_tiles(free),
+                "is_integrated": True,
             }
         )
 
@@ -282,7 +283,11 @@ def get_capability_report() -> dict:
 
     if sys.platform == "win32":
         _detect_directml(devices, total_ram, available_ram)
-        _detect_qnn(devices, total_ram, available_ram)
+        # QNN provider discovery is intentionally not exposed yet. The current
+        # inference engine consumes PyTorch/Spandrel checkpoints and cannot
+        # execute them through ONNX Runtime QNN without a separate conversion
+        # and validation pipeline. Advertising those devices would create a
+        # selectable backend whose every job is guaranteed to fail.
 
     cpu_budget = max(512 * 1024 * 1024, int(available_ram * 0.65))
     devices.append(
@@ -294,6 +299,7 @@ def get_capability_report() -> dict:
             "free_memory": available_ram,
             "supports_fp16": False,
             "recommended_tile_sizes": _recommended_tiles(cpu_budget),
+            "is_integrated": False,
         }
     )
 

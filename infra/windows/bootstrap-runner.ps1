@@ -15,6 +15,7 @@ $runnerRoot = "C:\actions-runner"
 $pythonRoot = "C:\Python311"
 $gitRoot = "C:\Program Files\Git"
 $watchdogSource = Join-Path $PSScriptRoot "ensure-runner.ps1"
+$buildToolsInstaller = Join-Path $PSScriptRoot "install-build-tools.ps1"
 $watchdogRoot = Join-Path $env:ProgramData "LocalSR-CI"
 $watchdogPath = Join-Path $watchdogRoot "ensure-runner.ps1"
 $runnerUrl = "https://github.com/actions/runner/releases/download/v2.336.0/actions-runner-win-x64-2.336.0.zip"
@@ -96,6 +97,11 @@ try {
         Invoke-WebRequest -Uri $gitUrl -OutFile $gitInstaller
         Invoke-Installer -Path $gitInstaller -Arguments "/VERYSILENT /NORESTART /NOCANCEL /SP-"
     }
+
+    if (-not (Test-Path -LiteralPath $buildToolsInstaller)) {
+        throw "Windows C++ build-tools installer is missing: $buildToolsInstaller"
+    }
+    & $buildToolsInstaller
 
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $requiredPaths = @($pythonRoot, "$pythonRoot\Scripts", "$gitRoot\cmd")

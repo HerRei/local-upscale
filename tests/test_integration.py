@@ -168,7 +168,17 @@ def test_f4_1_subprocess_launch():
     # Send shutdown
     proc.stdin.write(json.dumps({"type": "shutdown_request"}) + "\n")
     proc.stdin.flush()
-    proc.wait(timeout=5)
+    # Closing stdin also releases the worker's reader thread. Cold Windows
+    # runners can need more than five seconds to unload PyTorch DLLs even
+    # after the protocol loop has stopped, so keep this a bounded but
+    # realistic clean-shutdown assertion.
+    proc.stdin.close()
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        pytest.fail("Worker did not exit within 15 seconds after shutdown_request")
     assert proc.returncode == 0, f"Worker process exit code should be 0, got {proc.returncode}"
 
 

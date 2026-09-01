@@ -214,6 +214,47 @@ def test_run_video_job_upscales_every_frame(synthetic_video, tmp_path):
     assert progress_events[-1][0] == FRAME_COUNT
 
 
+def test_frame_video_respects_smaller_requested_scale(synthetic_video, tmp_path):
+    """A native 4x model can produce the 2x/3x dimensions shown by the UI."""
+    adapter = DummyAdapter(scale=4)
+    engine = InferenceEngine(adapter)
+    output = tmp_path / "requested-2x.mp4"
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(output),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        output_scale=2,
+    )
+    result = run_video_job(config, engine, threading.Event())
+    probe = probe_video(result.output_path)
+    assert (probe.width, probe.height) == (FRAME_WIDTH * 2, FRAME_HEIGHT * 2)
+
+
+def test_frame_video_rejects_scale_above_model_native_scale(synthetic_video, tmp_path):
+    adapter = DummyAdapter(scale=2)
+    engine = InferenceEngine(adapter)
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(tmp_path / "invalid.mp4"),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        output_scale=4,
+    )
+    with pytest.raises(ValueError, match="native 2×"):
+        run_video_job(config, engine, threading.Event())
+
+
 def test_run_video_job_cancel_stops_before_encode(synthetic_video, tmp_path):
     scale = 2
     adapter = DummyAdapter(scale)
@@ -238,19 +279,16 @@ def test_run_video_job_cancel_stops_before_encode(synthetic_video, tmp_path):
         if idx >= 1:
             cancel_event.set()
 
-    # The encoder will receive fewer frames than expected because the
-    # generator stops early. The pipeline should still produce a valid
-    # (short) output rather than crash.
-    result = run_video_job(
-        config=config,
-        engine=engine,
-        cancel_event=cancel_event,
-        frame_started_cb=cancel_after_first_frame,
-    )
-    # At most one frame was processed before the cancel signal was observed.
-    assert result.frames_processed <= 2
-    # The output file may or may not exist depending on where cancellation
-    # was caught; either is acceptable as long as no temp file is leaked.
+    # Cancellation propagates through the frame generator so the encoder's
+    # atomic-output guard removes both the partial and the final destination.
+    with pytest.raises(InterruptedError, match="[Cc]ancelled"):
+        run_video_job(
+            config=config,
+            engine=engine,
+            cancel_event=cancel_event,
+            frame_started_cb=cancel_after_first_frame,
+        )
+    assert not output.exists()
     assert not (tmp_path / "cancelled.mp4.tmp").exists()
 
 
@@ -340,6 +378,27 @@ def test_deflicker_window_one_is_passthrough():
     assert result[0].mean() == 10
     assert result[1].mean() == 50
     assert result[2].mean() == 200
+
+
+def test_deflicker_keeps_only_a_bounded_streaming_window():
+    """Long videos must not retain every restored frame in memory."""
+    import gc
+    import weakref
+
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    references = []
+
+    def frames():
+        for value in range(40):
+            gc.collect()
+            assert sum(reference() is not None for reference in references) <= 5
+            frame = np.full((8, 8, 3), value, dtype=np.uint8)
+            references.append(weakref.ref(frame))
+            yield frame
+
+    for _ in _deflicker_frames(frames(), window=3, cancel_event=threading.Event()):
+        pass
 
 
 def test_video_job_request_includes_deflicker_fields():
