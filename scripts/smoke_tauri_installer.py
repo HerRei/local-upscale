@@ -11,6 +11,7 @@ import plistlib
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -66,6 +67,23 @@ def mount_dmg(artifact: Path, env: dict[str, str], timeout: float) -> tuple[Path
     return Path(mount_points[-1]), str(devices[-1])
 
 
+def detach_dmg(device: str, env: dict[str, str], timeout: float, attempts: int = 5) -> None:
+    for attempt in range(attempts):
+        result = run(
+            ["hdiutil", "detach", device],
+            env=env,
+            timeout=timeout,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        if attempt + 1 < attempts:
+            # The app has exited, but its worker or LaunchServices can retain a
+            # read handle for a fraction of a second on a cold mounted bundle.
+            time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError(f"could not detach the mounted test image {device}")
+
+
 def smoke_macos(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
     mount, device = mount_dmg(artifact, env, timeout)
     try:
@@ -78,7 +96,7 @@ def smoke_macos(artifact: Path, report: Path, env: dict[str, str], timeout: floa
             timeout=timeout,
         )
     finally:
-        run(["hdiutil", "detach", device], env=env, timeout=30, check=False)
+        detach_dmg(device, env, min(timeout, 30.0))
 
 
 def installed_windows_executable(directory: Path) -> Path:

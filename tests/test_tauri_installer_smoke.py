@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import plistlib
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,3 +49,19 @@ def test_resolves_exactly_one_artifact(tmp_path: Path) -> None:
     artifact.write_bytes(b"package")
 
     assert smoke.resolve_artifact(str(tmp_path / "*.AppImage")) == artifact.resolve()
+
+
+def test_retries_a_busy_macos_test_mount(monkeypatch) -> None:
+    return_codes = iter((1, 1, 0))
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, next(return_codes))
+
+    monkeypatch.setattr(smoke, "run", fake_run)
+    monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
+
+    smoke.detach_dmg("/dev/disk-test", {}, 30)
+
+    assert calls == [["hdiutil", "detach", "/dev/disk-test"]] * 3
