@@ -114,7 +114,12 @@ jobs:
       - name: Create isolated Linux Python environment
         if: runner.os == 'Linux'
         run: |
-          VENV="$RUNNER_TEMP/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify/venv"
+          python3 scripts/storage_preflight.py \
+            --ssd-path /ci-scratch \
+            --skip-hdd \
+            --ssd-peak-gib 5
+          VENV="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify/venv"
+          mkdir -p "$(dirname "$VENV")"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
@@ -234,7 +239,12 @@ jobs:
       - name: Create isolated Linux Python environment
         if: runner.os == 'Linux'
         run: |
-          VENV="$RUNNER_TEMP/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package/venv"
+          python3 scripts/storage_preflight.py \
+            --ssd-path /ci-scratch \
+            --skip-hdd \
+            --ssd-peak-gib 5
+          VENV="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package/venv"
+          mkdir -p "$(dirname "$VENV")"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"

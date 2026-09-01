@@ -109,3 +109,10 @@ def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
     )
 
     assert build.npm_executable() == npm
+
+
+def test_linux_tauri_environments_use_the_managed_ssd_scratch() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text(encoding="utf-8")
+
+    assert workflow.count('VENV="/ci-scratch/localsr-tauri/') == 2
+    assert workflow.count("--ssd-path /ci-scratch") == 2
