@@ -22,13 +22,21 @@ def run(
     check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
     print("+", " ".join(command), flush=True)
-    return subprocess.run(
+    result = subprocess.run(
         command,
         env=env,
         timeout=timeout,
-        check=check,
+        check=False,
         capture_output=True,
     )
+    if result.returncode:
+        for label, content in (("stdout", result.stdout), ("stderr", result.stderr)):
+            decoded = content.decode(errors="replace").strip()
+            if decoded:
+                print(f"--- process {label} ---\n{decoded}", flush=True)
+    if check:
+        result.check_returncode()
+    return result
 
 
 def app_executable(app: Path) -> Path:
@@ -144,14 +152,23 @@ def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, obj
         env["XDG_DATA_HOME"] = str(Path(data_root) / "xdg")
         env["LOCALAPPDATA"] = str(Path(data_root) / "local")
         suffix = artifact.suffix.lower()
-        if suffix == ".dmg":
-            smoke_macos(artifact, report, env, timeout)
-        elif suffix == ".exe":
-            smoke_windows(artifact, report, env, timeout)
-        elif suffix == ".appimage":
-            smoke_linux(artifact, report, env, timeout)
-        else:
-            raise RuntimeError(f"unsupported Tauri package type: {artifact.name}")
+        try:
+            if suffix == ".dmg":
+                smoke_macos(artifact, report, env, timeout)
+            elif suffix == ".exe":
+                smoke_windows(artifact, report, env, timeout)
+            elif suffix == ".appimage":
+                smoke_linux(artifact, report, env, timeout)
+            else:
+                raise RuntimeError(f"unsupported Tauri package type: {artifact.name}")
+        except subprocess.CalledProcessError as error:
+            if report.is_file():
+                payload = json.loads(report.read_text(encoding="utf-8"))
+                print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
+                raise RuntimeError(
+                    f"desktop package exited with {error.returncode}: {payload}"
+                ) from error
+            raise
     payload = validate_report(report)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return payload

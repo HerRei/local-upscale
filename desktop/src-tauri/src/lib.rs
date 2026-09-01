@@ -175,6 +175,9 @@ fn start_smoke_monitor(app: tauri::AppHandle, state: Arc<AppState>) {
     thread::spawn(move || {
         let mut exit_code = 1;
         let mut worker_status = "timeout".to_owned();
+        let mut status_title = "Engine did not become ready".to_owned();
+        let mut status_detail =
+            "The packaged worker did not answer before the smoke-test timeout.".to_owned();
         // A freshly installed worker can need appreciably longer on cold,
         // CPU-only CI hosts while the dynamic libraries are first loaded.
         for _ in 0..720 {
@@ -183,11 +186,10 @@ fn start_smoke_monitor(app: tauri::AppHandle, state: Arc<AppState>) {
                 break;
             };
             worker_status = runtime.worker.clone();
-            if runtime.worker == "ready" {
-                exit_code = 0;
-                break;
-            }
-            if matches!(runtime.worker.as_str(), "failed" | "unavailable") {
+            status_title = runtime.status_title.clone();
+            status_detail = runtime.status_detail.clone();
+            if let Some(code) = smoke_terminal_exit_code(&runtime.worker) {
+                exit_code = code;
                 break;
             }
         }
@@ -199,11 +201,24 @@ fn start_smoke_monitor(app: tauri::AppHandle, state: Arc<AppState>) {
                 "architecture": env::consts::ARCH,
                 "worker": worker_status,
                 "passed": exit_code == 0,
+                "status_title": status_title,
+                "status_detail": status_detail,
             });
             let _ = write_smoke_report(Path::new(&report_path), &report);
         }
         app.exit(exit_code);
     });
+}
+
+fn smoke_terminal_exit_code(worker_status: &str) -> Option<i32> {
+    match worker_status {
+        "ready" => Some(0),
+        "failed" => Some(1),
+        // `unavailable` is recoverable: the worker supervisor changes to this
+        // state before its bounded restart. A package smoke test must exercise
+        // that recovery path instead of terminating the host first.
+        _ => None,
+    }
 }
 
 fn write_smoke_report(path: &Path, report: &serde_json::Value) -> std::io::Result<()> {
@@ -236,5 +251,13 @@ mod tests {
                 .to_string_lossy()
                 .into_owned()]
         );
+    }
+
+    #[test]
+    fn smoke_monitor_waits_for_recoverable_worker_restart() {
+        assert_eq!(smoke_terminal_exit_code("starting"), None);
+        assert_eq!(smoke_terminal_exit_code("unavailable"), None);
+        assert_eq!(smoke_terminal_exit_code("ready"), Some(0));
+        assert_eq!(smoke_terminal_exit_code("failed"), Some(1));
     }
 }
