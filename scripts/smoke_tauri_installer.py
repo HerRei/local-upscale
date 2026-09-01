@@ -23,21 +23,32 @@ def run(
     check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
     print("+", " ".join(command), flush=True)
-    result = subprocess.run(
-        command,
-        env=env,
-        timeout=timeout,
-        check=False,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            env=env,
+            timeout=timeout,
+            check=False,
+            capture_output=True,
+        )
+    except subprocess.TimeoutExpired as error:
+        print_process_output(error.stdout, error.stderr)
+        raise
     if result.returncode:
-        for label, content in (("stdout", result.stdout), ("stderr", result.stderr)):
-            decoded = content.decode(errors="replace").strip()
-            if decoded:
-                print(f"--- process {label} ---\n{decoded}", flush=True)
+        print_process_output(result.stdout, result.stderr)
     if check:
         result.check_returncode()
     return result
+
+
+def print_process_output(stdout: bytes | str | None, stderr: bytes | str | None) -> None:
+    for label, content in (("stdout", stdout), ("stderr", stderr)):
+        if isinstance(content, bytes):
+            decoded = content.decode(errors="replace").strip()
+        else:
+            decoded = (content or "").strip()
+        if decoded:
+            print(f"--- process {label} ---\n{decoded}", flush=True)
 
 
 def app_executable(app: Path) -> Path:
@@ -123,7 +134,11 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
             timeout=timeout,
         )
         executable = installed_windows_executable(install_dir)
-        run([str(executable), "--smoke-test"], env=env, timeout=timeout)
+        # Self-hosted Windows Actions runners commonly run as a service in
+        # Session 0. Exercise the installed Rust host and bundled worker before
+        # WebView initialization so this acceptance test does not require an
+        # interactive desktop.
+        run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
         uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
             install_dir.glob("unins*.exe")
         )
@@ -179,12 +194,20 @@ def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, obj
                 smoke_linux(artifact, report, env, timeout)
             else:
                 raise RuntimeError(f"unsupported Tauri package type: {artifact.name}")
-        except subprocess.CalledProcessError as error:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             if report.is_file():
                 payload = json.loads(report.read_text(encoding="utf-8"))
                 print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
+                if isinstance(error, subprocess.TimeoutExpired):
+                    raise RuntimeError(
+                        f"desktop package timed out after {error.timeout} seconds: {payload}"
+                    ) from error
                 raise RuntimeError(
                     f"desktop package exited with {error.returncode}: {payload}"
+                ) from error
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise RuntimeError(
+                    f"desktop package timed out after {error.timeout} seconds without a report"
                 ) from error
             raise
     payload = validate_report(report)

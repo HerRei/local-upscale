@@ -3,6 +3,7 @@ mod commands;
 mod database;
 mod downloads;
 mod error;
+mod headless_smoke;
 mod integrations;
 mod launch;
 mod native_menu;
@@ -28,6 +29,13 @@ use tauri::{Emitter, Manager};
 pub fn run() {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let parsed = launch::parse_os_arguments(env::args_os().skip(1), &cwd);
+    if parsed.headless_smoke_test {
+        let exit_code = headless_smoke::run();
+        if exit_code != 0 {
+            std::process::exit(exit_code);
+        }
+        return;
+    }
     if let Some(exit_code) = run_immediate_action(parsed.action) {
         if exit_code != 0 {
             std::process::exit(exit_code);

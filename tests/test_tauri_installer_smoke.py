@@ -5,6 +5,8 @@ import plistlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "smoke_tauri_installer", ROOT / "scripts" / "smoke_tauri_installer.py"
@@ -65,3 +67,40 @@ def test_retries_a_busy_macos_test_mount(monkeypatch) -> None:
     smoke.detach_dmg("/dev/disk-test", {}, 30)
 
     assert calls == [["hdiutil", "detach", "/dev/disk-test"]] * 3
+
+
+def test_windows_smoke_uses_installed_host_without_starting_webview(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "LocalSR-setup.exe"
+    artifact.write_bytes(b"installer")
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if "/S" in command:
+            install_argument = next(value for value in command if value.startswith("/D="))
+            install_dir = Path(install_argument.removeprefix("/D="))
+            install_dir.mkdir(parents=True)
+            (install_dir / "LocalSR Next Preview.exe").write_bytes(b"host")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(smoke, "run", fake_run)
+    smoke.smoke_windows(artifact, tmp_path / "report.json", {}, 240)
+
+    assert calls[1][1:] == ["--headless-smoke-test"]
+
+
+def test_process_timeout_preserves_captured_diagnostics(monkeypatch, capsys) -> None:
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            ["installed-host"], 12, output=b"starting worker", stderr=b"startup detail"
+        )
+
+    monkeypatch.setattr(smoke.subprocess, "run", timeout)
+    with pytest.raises(subprocess.TimeoutExpired):
+        smoke.run(["installed-host"], env={}, timeout=12)
+
+    output = capsys.readouterr().out
+    assert "starting worker" in output
+    assert "startup detail" in output

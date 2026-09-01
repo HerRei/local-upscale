@@ -32,6 +32,7 @@ pub struct ParsedLaunch {
     pub intent: LaunchIntent,
     pub action: ImmediateAction,
     pub smoke_test: bool,
+    pub headless_smoke_test: bool,
 }
 
 pub fn parse_os_arguments<I>(arguments: I, cwd: &Path) -> ParsedLaunch
@@ -62,6 +63,7 @@ pub fn parse_arguments(arguments: &[String], cwd: &Path) -> ParsedLaunch {
                     parsed.action = ImmediateAction::UninstallIntegrations
                 }
                 "--smoke-test" => parsed.smoke_test = true,
+                "--headless-smoke-test" => parsed.headless_smoke_test = true,
                 "--preset" if index + 1 < arguments.len() => {
                     index += 1;
                     let preset = arguments[index].to_ascii_lowercase();
@@ -140,10 +142,15 @@ mod tests {
     #[test]
     fn recognizes_explicit_integration_and_smoke_commands() {
         let parsed = parse_arguments(
-            &["--install-integrations".into(), "--smoke-test".into()],
+            &[
+                "--install-integrations".into(),
+                "--smoke-test".into(),
+                "--headless-smoke-test".into(),
+            ],
             Path::new("/"),
         );
         assert_eq!(parsed.action, ImmediateAction::InstallIntegrations);
         assert!(parsed.smoke_test);
+        assert!(parsed.headless_smoke_test);
     }
 }
