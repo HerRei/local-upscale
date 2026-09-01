@@ -70,10 +70,13 @@ the actual DMG, NSIS setup, or AppImage and launching its bundled worker with
 protocol and reach `ready`; a mocked download or source-tree Python process
 does not satisfy this gate.
 
-The existing `.github/workflows/release.yml` is deliberately untouched. The
-new `.github/workflows/tauri-preview.yml` verifies all three desktop hosts and
-can build short-lived private Windows NSIS and Linux AppImage artifacts when
-manually requested. It exposes one conventional package per host rather than
+The existing `.github/workflows/release.yml` remains the independent Slint
+release pipeline and does not invoke the preview build. The new
+`.github/workflows/tauri-preview.yml` verifies all three desktop hosts and can
+build short-lived private Windows NSIS and Linux AppImage artifacts when
+manually requested. An architecture check rejects accidental coupling between
+the two workflows, shared bundle identities, or native authority exposed to
+the webview. The preview exposes one conventional package per host rather than
 presenting the worker's internal files as separate downloads. The ARM DMG is
 built natively with the same script and smoke-tested locally until an ARM64
 macOS runner is available. The Intel runner remains a host-control-plane gate;
