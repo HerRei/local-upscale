@@ -119,3 +119,14 @@ def test_linux_tauri_environments_use_the_managed_ssd_scratch() -> None:
     assert workflow.count("--ssd-path /ci-scratch") == 2
     assert workflow.count('export TMPDIR="$ROOT/tmp"') == 2
     assert workflow.count("PIP_CACHE_DIR=/ci-scratch/cache/pip") == 2
+
+
+def test_windows_tauri_environments_bound_paths_and_native_failures() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text(encoding="utf-8")
+
+    assert "C:\\lsr-ci\\$env:GITHUB_RUN_ID\\$env:GITHUB_RUN_ATTEMPT\\t\\verify" in workflow
+    assert "C:\\lsr-ci\\$env:GITHUB_RUN_ID\\$env:GITHUB_RUN_ATTEMPT\\t\\package" in workflow
+    assert workflow.count('"TEMP=$tmp"') == 2
+    assert workflow.count('"TMP=$tmp"') == 2
+    assert workflow.count("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") == 5
+    assert workflow.count("Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT") == 2

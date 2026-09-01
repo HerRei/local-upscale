@@ -138,9 +138,18 @@ jobs:
       - name: Create isolated Windows Python environment
         if: runner.os == 'Windows'
         run: |
-          $venv = Join-Path $env:RUNNER_TEMP "LocalSR-Tauri\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\verify\venv"
+          # Keep this deliberately short: current Torch wheels contain deeply
+          # nested license paths that otherwise exceed Win32 MAX_PATH.
+          $root = "C:\lsr-ci\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\t\verify"
+          $venv = Join-Path $root "venv"
+          $tmp = Join-Path $root "tmp"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
           py -3.11 -m venv $venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "LOCALSR_PREVIEW_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALSR_PREVIEW_VENV=$venv" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TEMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           (Join-Path $venv "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install Linux Tauri prerequisites
         if: runner.os == 'Linux'
@@ -201,7 +210,9 @@ jobs:
         if: always() && runner.os == 'Windows'
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          if ($env:LOCALSR_PREVIEW_VENV -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_VENV)) {
+          if ($env:LOCALSR_PREVIEW_ROOT -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_ROOT)) {
+            Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT -Recurse -Force
+          } elseif ($env:LOCALSR_PREVIEW_VENV -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_VENV)) {
             Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_VENV -Recurse -Force
           }
 
@@ -271,9 +282,18 @@ jobs:
       - name: Create isolated Windows Python environment
         if: runner.os == 'Windows'
         run: |
-          $venv = Join-Path $env:RUNNER_TEMP "LocalSR-Tauri\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\package\venv"
+          # Keep this deliberately short: current Torch wheels contain deeply
+          # nested license paths that otherwise exceed Win32 MAX_PATH.
+          $root = "C:\lsr-ci\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\t\package"
+          $venv = Join-Path $root "venv"
+          $tmp = Join-Path $root "tmp"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
           py -3.11 -m venv $venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "LOCALSR_PREVIEW_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALSR_PREVIEW_VENV=$venv" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TEMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           (Join-Path $venv "Scripts") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install Linux Tauri prerequisites
         if: runner.os == 'Linux'
@@ -310,8 +330,11 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           python -m pip install --disable-pip-version-check "pip==${{ env.PIP_VERSION }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check "torch==${{ env.PYTORCH_VERSION }}" "torchvision==${{ env.TORCHVISION_VERSION }}" --index-url https://download.pytorch.org/whl/cpu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check -e ".[package,video]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the additive desktop package
         # The required verify matrix has already run Svelte checks and tests on
         # this exact commit. Avoid starting a second Vitest worker pool after
@@ -346,6 +369,8 @@ jobs:
         if: always() && runner.os == 'Windows'
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          if ($env:LOCALSR_PREVIEW_VENV -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_VENV)) {
+          if ($env:LOCALSR_PREVIEW_ROOT -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_ROOT)) {
+            Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT -Recurse -Force
+          } elseif ($env:LOCALSR_PREVIEW_VENV -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_VENV)) {
             Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_VENV -Recurse -Force
           }
