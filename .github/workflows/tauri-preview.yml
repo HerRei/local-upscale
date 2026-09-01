@@ -118,10 +118,15 @@ jobs:
             --ssd-path /ci-scratch \
             --skip-hdd \
             --ssd-peak-gib 5
-          VENV="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify/venv"
-          mkdir -p "$(dirname "$VENV")"
+          ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify"
+          VENV="$ROOT/venv"
+          mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
+          export TMPDIR="$ROOT/tmp"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
+          echo "LOCALSR_PREVIEW_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
+          echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
+          echo "PIP_CACHE_DIR=/ci-scratch/cache/pip" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
       - name: Create isolated macOS Python environment
         if: runner.os == 'macOS'
@@ -186,7 +191,10 @@ jobs:
         if: always() && runner.os != 'Windows'
         shell: bash
         run: |
-          if [ -n "${LOCALSR_PREVIEW_VENV:-}" ]; then
+          if [ -n "${LOCALSR_PREVIEW_ROOT:-}" ]; then
+            echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+            rm -rf "$LOCALSR_PREVIEW_ROOT"
+          elif [ -n "${LOCALSR_PREVIEW_VENV:-}" ]; then
             rm -rf "$LOCALSR_PREVIEW_VENV"
           fi
       - name: Remove the isolated Windows Python environment
@@ -243,10 +251,15 @@ jobs:
             --ssd-path /ci-scratch \
             --skip-hdd \
             --ssd-peak-gib 5
-          VENV="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package/venv"
-          mkdir -p "$(dirname "$VENV")"
+          ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package"
+          VENV="$ROOT/venv"
+          mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
+          export TMPDIR="$ROOT/tmp"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
+          echo "LOCALSR_PREVIEW_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
+          echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
+          echo "PIP_CACHE_DIR=/ci-scratch/cache/pip" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
       - name: Create isolated macOS Python environment
         if: runner.os == 'macOS'
@@ -323,7 +336,10 @@ jobs:
         if: always() && runner.os != 'Windows'
         shell: bash
         run: |
-          if [ -n "${LOCALSR_PREVIEW_VENV:-}" ]; then
+          if [ -n "${LOCALSR_PREVIEW_ROOT:-}" ]; then
+            echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+            rm -rf "$LOCALSR_PREVIEW_ROOT"
+          elif [ -n "${LOCALSR_PREVIEW_VENV:-}" ]; then
             rm -rf "$LOCALSR_PREVIEW_VENV"
           fi
       - name: Remove the isolated Windows Python environment

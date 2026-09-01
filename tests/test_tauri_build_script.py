@@ -114,5 +114,8 @@ def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
 def test_linux_tauri_environments_use_the_managed_ssd_scratch() -> None:
     workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text(encoding="utf-8")
 
-    assert workflow.count('VENV="/ci-scratch/localsr-tauri/') == 2
+    assert workflow.count('ROOT="/ci-scratch/localsr-tauri/') == 2
+    assert workflow.count('VENV="$ROOT/venv"') == 2
     assert workflow.count("--ssd-path /ci-scratch") == 2
+    assert workflow.count('export TMPDIR="$ROOT/tmp"') == 2
+    assert workflow.count("PIP_CACHE_DIR=/ci-scratch/cache/pip") == 2
