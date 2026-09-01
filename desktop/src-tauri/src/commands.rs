@@ -279,20 +279,21 @@ pub fn refresh_capabilities(state: State<'_, Arc<AppState>>) -> AppResult<()> {
 pub fn probe_path(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
     let canonical = fs::canonicalize(path)?;
     let encoded = canonical.to_string_lossy().into_owned();
-    let is_media = lock(&state.database)?
-        .get_media_by_path(&encoded)?
-        .is_some();
+    let queued_media = lock(&state.database)?.get_media_by_path(&encoded)?;
     let last_output = lock(&state.runtime)?.last_output_path.clone();
     let is_last_output = !last_output.is_empty()
         && fs::canonicalize(last_output)
             .map(|expected| expected == canonical)
             .unwrap_or(false);
-    if !is_media && !is_last_output {
+    if queued_media.is_none() && !is_last_output {
         return Err(AppError::Validation(
             "preview path was not authorized by the media queue".into(),
         ));
     }
-    if media_kind(&canonical) == Some("video") {
+    // A queued source must update its own persisted thumbnail. `preview_ready`
+    // is reserved for the completed output comparison; using it for sources
+    // previously left the center canvas empty while populating result state.
+    if queued_media.is_some() || media_kind(&canonical) == Some("video") {
         worker::send(
             &state,
             &json!({

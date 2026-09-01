@@ -11,6 +11,12 @@
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
   import {
+    boundedPreviewSize,
+    canvasTileRect,
+    tilePercentages,
+    type OutputTile
+  } from './lib/progressive-preview';
+  import {
     clampPan,
     fitSize,
     panBounds,
@@ -48,6 +54,7 @@
   let panStartX = 0;
   let panStartY = 0;
   let canvasWell: HTMLDivElement | undefined;
+  let progressiveCanvas: HTMLCanvasElement | undefined;
   let canvasWidth = 1;
   let canvasHeight = 1;
   let previewNaturalWidth = 1;
@@ -58,6 +65,20 @@
   let maxZoom = 8;
   let actualPixelZoom = 1;
   let viewedMediaId = '';
+  let laidOutSourcePreview = '';
+  let failedSourcePreview = '';
+  let previewRetryMediaId = '';
+  let progressiveVisible = false;
+  let progressiveJobId = '';
+  let progressiveOutputWidth = 0;
+  let progressiveOutputHeight = 0;
+  let progressiveGeneration = 0;
+  let progressiveWork: Promise<void> = Promise.resolve();
+  let activeTileVisible = false;
+  let activeTileX = 0;
+  let activeTileY = 0;
+  let activeTileWidth = 0;
+  let activeTileHeight = 0;
   let diagnostics = '';
   let integration: IntegrationStatus | null = null;
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
@@ -110,6 +131,7 @@
     modelReady &&
     faceReady;
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
+  $: renderableSourcePreview = sourcePreview === failedSourcePreview ? '' : sourcePreview;
   $: resultPreview = resultPreviewForSelectedMedia(snapshot);
   $: outputDimensions = selectedMedia
     ? settings.task === 'denoise'
@@ -134,7 +156,26 @@
     viewedMediaId = selectedMedia?.id ?? '';
     previewNaturalWidth = Math.max(1, selectedMedia?.width ?? 1);
     previewNaturalHeight = Math.max(1, selectedMedia?.height ?? 1);
+    laidOutSourcePreview = '';
+    failedSourcePreview = '';
+    previewRetryMediaId = '';
+    resetProgressivePreview();
     resetView();
+    scheduleViewportReset();
+  }
+
+  $: if (sourcePreview && sourcePreview !== laidOutSourcePreview) {
+    laidOutSourcePreview = sourcePreview;
+    failedSourcePreview = '';
+    scheduleViewportReset();
+  }
+
+  $: if (
+    selectedMedia &&
+    selectedMedia.probe_status === 'ready' &&
+    (!sourcePreview || sourcePreview === failedSourcePreview)
+  ) {
+    void repairSelectedPreview();
   }
 
   onMount(() => {
@@ -146,6 +187,7 @@
     const resizeObserver =
       typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => updateViewport());
     if (canvasWell) resizeObserver?.observe(canvasWell);
+    scheduleViewportReset();
 
     void (async () => {
       try {
@@ -173,6 +215,7 @@
       unlistenMenu();
       unlistenLaunchIntent();
       resizeObserver?.disconnect();
+      progressiveGeneration += 1;
     };
   });
 
@@ -204,11 +247,29 @@
   }
 
   function handleWorkerMessage(message: WorkerEnvelope): void {
+    // Tile traffic is display-only and can arrive thousands of times. Do not
+    // invalidate the full Svelte snapshot for it; only update the live canvas.
+    if (message.type === 'tile_update') {
+      queueProgressiveTile(message);
+      return;
+    }
+
     snapshot = applyWorkerEnvelope(snapshot, message);
-    if (message.type === 'media_info' || message.type === 'media_probe_failed') scheduleRefresh();
+    if (message.type === 'job_started') {
+      resetProgressivePreview(String(message.data.job_id ?? ''));
+    } else if (message.type === 'job_cancelled' || message.type === 'job_failed') {
+      resetProgressivePreview();
+    }
+    if (message.type === 'media_info') {
+      if (String(message.data.media_path ?? '') === selectedMedia?.path) {
+        failedSourcePreview = '';
+        previewRetryMediaId = '';
+      }
+      scheduleRefresh();
+    } else if (message.type === 'media_probe_failed') {
+      scheduleRefresh();
+    }
     if (message.type === 'job_completed' || message.type === 'video_job_completed') {
-      const path = String(message.data.output_path ?? '');
-      if (path) void api.probePath(path);
       scheduleRefresh();
     }
   }
@@ -672,6 +733,175 @@
     if (event.target === event.currentTarget) closeModal();
   }
 
+  function scheduleViewportReset(): void {
+    void tick().then(() => {
+      updateViewport(true);
+      // The native webview can report a transient 0×0/1×1 rectangle during
+      // its first layout pass. Re-check on the next painted frame so an image
+      // selected at startup cannot remain as a one-pixel stage.
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => updateViewport(true));
+      }
+    });
+  }
+
+  async function repairSelectedPreview(): Promise<void> {
+    const media = selectedMedia;
+    if (!media || !api.isTauri() || previewRetryMediaId === media.id) return;
+    previewRetryMediaId = media.id;
+    try {
+      await api.probePath(media.path);
+    } catch (error) {
+      console.error('Could not refresh the selected media preview', error);
+    }
+  }
+
+  function onSourcePreviewError(): void {
+    failedSourcePreview = sourcePreview;
+    previewRetryMediaId = '';
+    void repairSelectedPreview();
+  }
+
+  function resetProgressivePreview(jobId = ''): void {
+    progressiveGeneration += 1;
+    progressiveJobId = jobId;
+    progressiveOutputWidth = 0;
+    progressiveOutputHeight = 0;
+    progressiveVisible = false;
+    activeTileVisible = false;
+    progressiveWork = Promise.resolve();
+    const context = progressiveCanvas?.getContext('2d');
+    if (progressiveCanvas && context) {
+      context.clearRect(0, 0, progressiveCanvas.width, progressiveCanvas.height);
+    }
+  }
+
+  function queueProgressiveTile(message: WorkerEnvelope): void {
+    const data = message.data;
+    const jobId = String(data.job_id ?? '');
+    if (!jobId || jobId !== snapshot.runtime.active_job_id) return;
+    if (!progressiveJobId) progressiveJobId = jobId;
+    if (jobId !== progressiveJobId) return;
+    const generation = progressiveGeneration;
+    progressiveWork = progressiveWork
+      .then(() => paintProgressiveTile(data, jobId, generation))
+      .catch((error) => console.error('Could not draw progressive tile', error));
+  }
+
+  async function paintProgressiveTile(
+    data: WorkerEnvelope['data'],
+    jobId: string,
+    generation: number
+  ): Promise<void> {
+    if (generation !== progressiveGeneration || jobId !== progressiveJobId) return;
+    const phase = String(data.phase ?? '');
+    const tile: OutputTile = {
+      output_x: numeric(data.output_x),
+      output_y: numeric(data.output_y),
+      output_width: numeric(data.output_width),
+      output_height: numeric(data.output_height),
+      image_width: numeric(data.image_width),
+      image_height: numeric(data.image_height)
+    };
+    if (tile.image_width <= 0 || tile.image_height <= 0) return;
+
+    if (phase === 'reset') {
+      progressiveOutputWidth = 0;
+      progressiveOutputHeight = 0;
+      progressiveVisible = false;
+      activeTileVisible = false;
+    }
+    const ready = await ensureProgressiveCanvas(tile, jobId, generation);
+    if (!ready || generation !== progressiveGeneration || jobId !== progressiveJobId) return;
+
+    const percentage = tilePercentages(tile);
+    if (phase === 'started' && percentage) {
+      activeTileX = percentage.x;
+      activeTileY = percentage.y;
+      activeTileWidth = percentage.width;
+      activeTileHeight = percentage.height;
+      activeTileVisible = true;
+      return;
+    }
+
+    if (phase !== 'completed') return;
+    const encoded = typeof data.jpeg_base64 === 'string' ? data.jpeg_base64 : '';
+    const canvas = progressiveCanvas;
+    const context = canvas?.getContext('2d');
+    const destination = canvas
+      ? canvasTileRect(tile, { width: canvas.width, height: canvas.height })
+      : null;
+    if (encoded && canvas && context && destination) {
+      const image = await loadHtmlImage(`data:image/jpeg;base64,${encoded}`);
+      if (generation !== progressiveGeneration || jobId !== progressiveJobId) return;
+      context.drawImage(
+        image,
+        destination.x,
+        destination.y,
+        destination.width,
+        destination.height
+      );
+    }
+    activeTileVisible = false;
+  }
+
+  async function ensureProgressiveCanvas(
+    tile: OutputTile,
+    jobId: string,
+    generation: number
+  ): Promise<boolean> {
+    const canvas = progressiveCanvas;
+    if (!canvas) return false;
+    if (
+      progressiveOutputWidth === tile.image_width &&
+      progressiveOutputHeight === tile.image_height &&
+      canvas.width > 1 &&
+      canvas.height > 1
+    ) {
+      return true;
+    }
+
+    const size = boundedPreviewSize({ width: tile.image_width, height: tile.image_height });
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) return false;
+    context.fillStyle = '#111722';
+    context.fillRect(0, 0, size.width, size.height);
+    try {
+      const source = await loadHtmlImage(sourcePreview);
+      if (generation !== progressiveGeneration || jobId !== progressiveJobId) return false;
+      context.drawImage(source, 0, 0, size.width, size.height);
+    } catch {
+      // The bounded mosaic can still show completed tiles while the source
+      // preview is being repaired independently.
+    }
+    context.fillStyle = 'rgba(5, 9, 15, 0.70)';
+    context.fillRect(0, 0, size.width, size.height);
+    progressiveOutputWidth = tile.image_width;
+    progressiveOutputHeight = tile.image_height;
+    progressiveVisible = true;
+    return true;
+  }
+
+  function loadHtmlImage(source: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      if (!source) {
+        reject(new Error('preview source is empty'));
+        return;
+      }
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('preview image could not be decoded'));
+      image.src = source;
+    });
+  }
+
+  function numeric(value: unknown): number {
+    const number = Number(value ?? 0);
+    return Number.isFinite(number) ? number : 0;
+  }
+
   function onWheel(event: WheelEvent): void {
     if (!sourcePreview) return;
     event.preventDefault();
@@ -679,6 +909,12 @@
   }
 
   function pointerDown(event: PointerEvent): void {
+    if (
+      event.button !== 0 ||
+      (event.target instanceof Element && event.target.closest('button, input, select, textarea'))
+    ) {
+      return;
+    }
     const bounds = currentPanBounds();
     if (bounds.x <= 0 && bounds.y <= 0) return;
     dragging = true;
@@ -716,9 +952,12 @@
 
   function onPreviewLoad(event: Event): void {
     const image = event.currentTarget as HTMLImageElement;
+    failedSourcePreview = '';
+    previewRetryMediaId = '';
     previewNaturalWidth = Math.max(1, image.naturalWidth);
     previewNaturalHeight = Math.max(1, image.naturalHeight);
     updateViewport(true);
+    scheduleViewportReset();
   }
 
   function updateViewport(reset = false): void {
@@ -870,16 +1109,29 @@
         on:pointerup={pointerUp}
         on:pointercancel={pointerUp}
       >
-        {#if sourcePreview}
+        {#if renderableSourcePreview}
           <div class="image-stage" style={`width:${stageWidth}px;height:${stageHeight}px;transform: translate(${panX}px, ${panY}px) scale(${zoom})`}>
-            <img class="source-image" src={sourcePreview} alt={`Preview of ${selectedMedia?.name ?? 'source media'}`} draggable="false" on:load={onPreviewLoad} />
+            <img class="source-image" src={renderableSourcePreview} alt={`Preview of ${selectedMedia?.name ?? 'source media'}`} draggable="false" on:load={onPreviewLoad} on:error={onSourcePreviewError} />
+            <canvas
+              bind:this={progressiveCanvas}
+              class="progressive-image"
+              class:visible={progressiveVisible && !resultPreview}
+              aria-label="Progressive tiled preview"
+            ></canvas>
+            {#if progressiveVisible && activeTileVisible && !resultPreview}
+              <div
+                class="active-tile"
+                aria-hidden="true"
+                style={`left:${activeTileX}%;top:${activeTileY}%;width:${activeTileWidth}%;height:${activeTileHeight}%`}
+              ></div>
+            {/if}
             {#if resultPreview}
-              <img class="result-image" style={`clip-path: inset(0 ${100 - compare}% 0 0)`} src={resultPreview} alt="Progressive enhanced preview" draggable="false" />
+              <img class="result-image" style={`clip-path: inset(0 ${100 - compare}% 0 0)`} src={resultPreview} alt="Enhanced result" draggable="false" />
               <div class="compare-line" style={`left: ${compare}%`}><span>↔</span></div>
             {/if}
           </div>
           {#if selectedMedia?.kind === 'video'}<span class="labs-chip">VIDEO · LABS / EXPERIMENTAL</span>{/if}
-          <div class="zoom-hud">
+          <div class="zoom-hud" role="group" aria-label="Preview zoom" on:pointerdown|stopPropagation on:wheel|stopPropagation>
             <button aria-label="Zoom out" disabled={zoom <= minZoom} on:click={() => setZoom(zoom / 1.25)}>−</button>
             <span title={`Dynamic maximum ${Math.round(maxZoom * 100)}%`}>{Math.round(zoom * 100)}%</span>
             <button aria-label="Zoom in" disabled={zoom >= maxZoom} on:click={() => setZoom(zoom * 1.25)}>＋</button>
@@ -887,8 +1139,15 @@
             <button class:active={Math.abs(zoom - actualPixelZoom) < 0.001} title="One source pixel per screen pixel" on:click={() => setZoom(actualPixelZoom)}>1:1</button>
           </div>
           {#if resultPreview}
-            <input class="compare-slider" aria-label="Before and after comparison" type="range" min="0" max="100" bind:value={compare} />
+            <input class="compare-slider" aria-label="Before and after comparison" type="range" min="0" max="100" bind:value={compare} on:pointerdown|stopPropagation />
           {/if}
+        {:else if selectedMedia}
+          <div class="canvas-empty preview-loading">
+            <div class="canvas-icon"><span></span><span></span><span></span></div>
+            <h2>{selectedMedia.probe_status === 'failed' ? 'Preview unavailable' : 'Preparing preview…'}</h2>
+            <p>{selectedMedia.probe_status === 'failed' ? selectedMedia.error : `Loading ${selectedMedia.name} locally.`}</p>
+            {#if selectedMedia.probe_status === 'failed'}<button class="button" on:click={() => { previewRetryMediaId = ''; void repairSelectedPreview(); }}>Try Again</button>{/if}
+          </div>
         {:else}
           <div class="canvas-empty">
             <div class="canvas-icon"><span></span><span></span><span></span></div>

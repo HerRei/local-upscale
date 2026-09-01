@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings } from './lib/types';
+import type {
+  AppSnapshot,
+  LaunchIntent,
+  MediaItem,
+  UiSettings,
+  WorkerEnvelope
+} from './lib/types';
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -42,7 +48,10 @@ const api = vi.hoisted(() => ({
   })),
   installIntegrations: vi.fn(),
   uninstallIntegrations: vi.fn(),
-  listenForWorker: vi.fn(async () => () => undefined),
+  listenForWorker: vi.fn(
+    async (_callback: (message: { type: string; data: Record<string, unknown> }) => void) =>
+      () => undefined
+  ),
   listenForStateChange: vi.fn(async () => () => undefined),
   listenForNativeMenu: vi.fn(async () => () => undefined),
   listenForLaunchIntent: vi.fn(async () => () => undefined)
@@ -150,9 +159,19 @@ beforeEach(() => {
   api.listenForNativeMenu.mockResolvedValue(() => undefined);
   api.listenForLaunchIntent.mockResolvedValue(() => undefined);
   api.takeLaunchIntents.mockResolvedValue([]);
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    clearRect: vi.fn(),
+    drawImage: vi.fn(),
+    fillRect: vi.fn(),
+    fillStyle: ''
+  } as unknown as CanvasRenderingContext2D);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('LocalSR desktop interface', () => {
   it('mounts the complete three-pane workspace after native bootstrap', async () => {
@@ -492,5 +511,99 @@ describe('LocalSR desktop interface', () => {
 
     expect(screen.getByText('Enhanced')).toBeTruthy();
     expect(screen.getByLabelText('Before and after comparison')).toBeTruthy();
+  });
+
+  it('composites progressive tiles without exposing comparison and keeps 1:1 controls responsive', async () => {
+    class DecodedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private value = '';
+
+      set src(value: string) {
+        this.value = value;
+        queueMicrotask(() => this.onload?.());
+      }
+
+      get src(): string {
+        return this.value;
+      }
+    }
+    vi.stubGlobal('Image', DecodedImage);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    } as DOMRect);
+
+    const source = image('large', true);
+    source.width = 3024;
+    source.height = 1964;
+    const snapshot = readySnapshot([source]);
+    snapshot.settings.task = 'upscale';
+    await mountWith(snapshot);
+
+    const stage = document.querySelector<HTMLElement>('.image-stage');
+    await waitFor(() => expect(Number.parseFloat(stage?.style.width ?? '0')).toBeCloseTo(744));
+    expect(Number.parseFloat(stage?.style.height ?? '0')).toBeGreaterThan(480);
+
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as
+      | ((message: WorkerEnvelope) => void)
+      | undefined;
+    expect(listener).toBeTypeOf('function');
+    listener?.({ type: 'job_started', data: { job_id: 'job-progressive' } });
+    listener?.({
+      type: 'tile_update',
+      data: {
+        job_id: 'job-progressive',
+        phase: 'started',
+        output_x: 0,
+        output_y: 0,
+        output_width: 256,
+        output_height: 256,
+        image_width: 12096,
+        image_height: 7856
+      }
+    });
+    listener?.({
+      type: 'tile_update',
+      data: {
+        job_id: 'job-progressive',
+        phase: 'completed',
+        output_x: 0,
+        output_y: 0,
+        output_width: 256,
+        output_height: 256,
+        image_width: 12096,
+        image_height: 7856,
+        jpeg_base64: 'completed-tile'
+      }
+    });
+
+    const canvas = screen.getByLabelText('Progressive tiled preview');
+    await waitFor(() => expect(canvas.classList.contains('visible')).toBe(true));
+    const context = (canvas as HTMLCanvasElement).getContext('2d')!;
+    await waitFor(() => expect(context.drawImage).toHaveBeenCalledTimes(2));
+    expect(context.drawImage).toHaveBeenLastCalledWith(
+      expect.any(DecodedImage),
+      0,
+      0,
+      34,
+      34
+    );
+    expect(screen.queryByText('Enhanced')).toBeNull();
+    expect(screen.queryByLabelText('Before and after comparison')).toBeNull();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '1:1' }));
+    expect(screen.getByTitle(/Dynamic maximum/).textContent).toMatch(/^40[67]%$/);
+    expect(screen.getByLabelText('Media comparison canvas').classList.contains('panning')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Fit' }));
+    expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe('100%');
   });
 });
