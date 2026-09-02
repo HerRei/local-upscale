@@ -37,6 +37,51 @@ def locate_exact(root: Path, filename: str) -> Path:
     return matches[0]
 
 
+def has_release_sidecars(path: Path) -> bool:
+    """Return whether an installer has every file required for verification."""
+    return all(
+        path.with_name(path.name + suffix).is_file()
+        for suffix in (".sha256", ".metadata.json", ".architecture.json")
+    )
+
+
+def locate_release_input(root: Path, filename: str) -> Path:
+    """Locate an installer, combining successful jobs from workflow reruns.
+
+    The artifact server stores uploads as ``RUN_ID/ATTEMPT/PLATFORM/FILE``.
+    GitHub's "re-run failed jobs" creates a new attempt but does not rerun or
+    copy successful platform jobs. Select the newest complete upload for each
+    filename across the run while ignoring compact publish output, which has no
+    per-installer sidecars. Plain staging trees retain the strict old behavior.
+    """
+    if PurePath(filename).name != filename:
+        raise ValueError(f"unsafe release filename: {filename!r}")
+
+    attempts = [path for path in root.iterdir() if path.is_dir() and path.name.isdigit()]
+    if not attempts:
+        return locate_exact(root, filename)
+
+    by_attempt: dict[int, list[Path]] = {}
+    for attempt in attempts:
+        matches = [
+            path
+            for path in attempt.glob(f"*/{filename}")
+            if path.is_file() and has_release_sidecars(path)
+        ]
+        if matches:
+            by_attempt[int(attempt.name)] = matches
+
+    if not by_attempt:
+        raise ValueError(f"found no complete release input for {filename}")
+    newest = max(by_attempt)
+    matches = by_attempt[newest]
+    if len(matches) != 1:
+        raise ValueError(
+            f"expected exactly one complete {filename} in attempt {newest}, found {len(matches)}"
+        )
+    return matches[0]
+
+
 def load_json(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(value, dict):
@@ -135,7 +180,7 @@ def prepare(
             raise ValueError("release manifest artifact entries must be objects")
         entry = dict(raw_entry)
         filename = str(entry["filename"])
-        source = locate_exact(root, filename)
+        source = locate_release_input(root, filename)
         digest = sha256(source)
         if not SHA256_RE.fullmatch(digest):
             raise ValueError(f"invalid digest for {filename}")

@@ -160,6 +160,50 @@ def test_extracts_developer_id_and_team_from_codesign_output() -> None:
     assert team == "TEAM123456"
 
 
+def write_release_input(root: Path, attempt: int, platform: str, filename: str) -> Path:
+    artifact = root / str(attempt) / platform / filename
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(f"attempt-{attempt}-{platform}".encode())
+    for suffix in (".sha256", ".metadata.json", ".architecture.json"):
+        artifact.with_name(artifact.name + suffix).write_text("evidence", encoding="utf-8")
+    return artifact
+
+
+def test_release_input_uses_previous_successful_jobs_during_publish_rerun(
+    tmp_path: Path,
+) -> None:
+    filename = "LocalSR-v1-alpha-Linux-x86_64.AppImage"
+    expected = write_release_input(tmp_path, 1, "linux", filename)
+    (tmp_path / "2").mkdir()
+
+    assert prepare_release.locate_release_input(tmp_path, filename) == expected
+
+
+def test_release_input_combines_latest_complete_platform_artifacts(tmp_path: Path) -> None:
+    filename = "LocalSR-v1-alpha-Windows-x86_64.exe"
+    write_release_input(tmp_path, 1, "windows", filename)
+    expected = write_release_input(tmp_path, 2, "windows", filename)
+    incomplete = tmp_path / "3" / "windows" / filename
+    incomplete.parent.mkdir(parents=True)
+    incomplete.write_bytes(b"partial transfer")
+    publish_copy = tmp_path / "3" / "tauri-release-assets" / filename
+    publish_copy.parent.mkdir(parents=True)
+    publish_copy.write_bytes(b"previous publish output")
+
+    assert prepare_release.locate_release_input(tmp_path, filename) == expected
+
+
+def test_release_input_rejects_duplicate_complete_uploads_in_latest_attempt(
+    tmp_path: Path,
+) -> None:
+    filename = "LocalSR-v1-alpha-macOS-arm64.dmg"
+    write_release_input(tmp_path, 4, "macos", filename)
+    write_release_input(tmp_path, 4, "duplicate", filename)
+
+    with pytest.raises(ValueError, match="exactly one complete"):
+        prepare_release.locate_release_input(tmp_path, filename)
+
+
 def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
     staging = tmp_path / "staging"
     output = tmp_path / "output"

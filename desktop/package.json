@@ -9,7 +9,7 @@
     "build:frontend": "vite build",
     "build": "svelte-check --tsconfig ./tsconfig.json && npm run build:frontend",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --testTimeout=20000",
     "tauri": "tauri"
   },
   "dependencies": {

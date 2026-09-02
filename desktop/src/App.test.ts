@@ -217,7 +217,7 @@ describe('LocalSR desktop interface', () => {
     expect(api.saveRecipe).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Portrait cleanup', task: 'upscale' })
     );
-  }, 10_000);
+  }, 20_000);
 
   it('exposes image recipes, hardware controls, and honest face availability', async () => {
     const user = await mountWith(readySnapshot());

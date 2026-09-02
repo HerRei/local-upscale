@@ -330,9 +330,9 @@ jobs:
           persist-credentials: false
       - name: Prepare five simple user-facing assets
         run: |
-          ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
-          OUTPUT="$ROOT/tauri-release-assets"
-          python scripts/prepare_tauri_release_assets.py "$ROOT" \
+          RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"
+          OUTPUT="$RUN_ROOT/$GITHUB_RUN_ATTEMPT/tauri-release-assets"
+          "$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py "$RUN_ROOT" \
             --manifest ci/tauri-release-artifacts.json --readiness ci/beta-readiness.json \
             --tag "$GITHUB_REF_NAME" --output "$OUTPUT"
           echo "LOCALSR_RELEASE_OUTPUT=$OUTPUT" >> "$GITHUB_ENV"

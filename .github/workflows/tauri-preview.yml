@@ -143,10 +143,13 @@ jobs:
           ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify"
           VENV="$ROOT/venv"
           mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
+          CARGO_CACHE=/mnt/hdd/ci-cache/localsr-tauri-target/linux-x64
+          mkdir -p "$CARGO_CACHE"
           export TMPDIR="$ROOT/tmp"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
           echo "LOCALSR_PREVIEW_ROOT=$ROOT" >> "$GITHUB_ENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$CARGO_CACHE" >> "$GITHUB_ENV"
           echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
           echo "PIP_CACHE_DIR=/ci-scratch/cache/pip" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
