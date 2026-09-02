@@ -23,7 +23,8 @@ omegaconf==2.3.1
 # resolving the two otherwise wheel-only macOS architecture sets.
 antlr4-python3-runtime==4.9.3
 diffusers==0.35.2
-rotary-embedding-torch==0.9.1
+# 0.8.9 is the final release compatible with torch 2.2; 0.9+ requires 2.4.
+rotary-embedding-torch==0.8.9
 einops==0.8.2
 psutil==7.2.2
 tqdm==4.70.0
