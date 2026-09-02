@@ -72,7 +72,7 @@ jobs:
           python -m pip install --disable-pip-version-check \
             -e ".[package,video]" "pyinstaller==${PYINSTALLER_VERSION}"
           python -m pip check
-          python -c 'import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version("0.38.0"); assert torch.__version__.startswith("2.13.")'
+          python -c "import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
           npm ci --prefix desktop
       - name: Download and run actual Quick and Best from an empty cache
         run: |
@@ -163,7 +163,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -c 'import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version("0.38.0"); assert torch.__version__.startswith("2.13.")'
+          python -c "import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix desktop
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
