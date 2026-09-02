@@ -181,6 +181,24 @@ pub struct Recipe {
     pub halo: u32,
     pub precision: String,
     pub safe_memory: bool,
+    #[serde(default)]
+    pub video_model_id: String,
+    #[serde(default)]
+    pub custom_model_path: String,
+    #[serde(default)]
+    pub output_format: String,
+    #[serde(default)]
+    pub preserve_metadata: Option<bool>,
+    #[serde(default)]
+    pub jpeg_quality: Option<u32>,
+    #[serde(default)]
+    pub deflicker: Option<bool>,
+    #[serde(default)]
+    pub deflicker_window: Option<u32>,
+    #[serde(default)]
+    pub video_container: String,
+    #[serde(default)]
+    pub video_crf: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

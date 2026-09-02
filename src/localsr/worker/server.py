@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -23,6 +24,7 @@ from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import ModelAdapter
+from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID, ModelStore
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
@@ -104,6 +106,7 @@ class WorkerServer:
         self.active_job_id = None
         self.pending_cancel_job_ids: set[str] = set()
         self.model_adapter = ModelAdapter()
+        self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
 
     def _request_cancel(self, requested_job_id: str) -> None:
@@ -450,6 +453,10 @@ class WorkerServer:
         last_completed = 0
         smoothed_seconds_per_tile = None
         last_memory_sample_at = 0.0
+        last_tile_preview_at = 0.0
+        tile_preview_interval = max(
+            0.0, min(1.0, float(data.get("preview_interval_ms", 0)) / 1000.0)
+        )
         memory_snapshot = {}
 
         def progress_cb(completed, total, active_tile_size):
@@ -514,6 +521,7 @@ class WorkerServer:
             active_tile_size,
         ):
             nonlocal inference_started_at
+            nonlocal last_tile_preview_at
             if phase == "started" and inference_started_at is None:
                 # Model loading happens before the first tile. Starting the ETA
                 # clock here prevents that one-off cost from being multiplied by
@@ -521,10 +529,17 @@ class WorkerServer:
                 inference_started_at = time.monotonic()
             jpeg_base64 = ""
             if phase == "completed" and tile_data is not None:
-                try:
-                    jpeg_base64 = _encode_chw_jpeg(tile_data, 192, quality=72)
-                except (OSError, TypeError, ValueError):
-                    jpeg_base64 = ""
+                now = time.monotonic()
+                if (
+                    tile_preview_interval <= 0
+                    or now - last_tile_preview_at >= tile_preview_interval
+                    or (total > 0 and completed >= total)
+                ):
+                    try:
+                        jpeg_base64 = _encode_chw_jpeg(tile_data, 192, quality=72)
+                        last_tile_preview_at = now
+                    except (OSError, TypeError, ValueError):
+                        jpeg_base64 = ""
             send_message(
                 TileUpdate(
                     job_id=job_id,
@@ -832,6 +847,31 @@ class WorkerServer:
             )
         )
 
+    def _verify_temporal_bundle(self, data) -> None:
+        """Authenticate a catalog video bundle off the desktop UI thread."""
+        model_id = str(data.get("video_model_id") or "")
+        model = VIDEO_CATALOG_BY_ID.get(model_id)
+        if model is None:
+            raise ValueError("The temporal video model is not in the trusted catalog.")
+
+        supplied = Path(str(data.get("bundle_dir") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.bundle_dir_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError("The temporal video model bundle is unavailable.") from error
+        if supplied != expected:
+            raise ValueError("The temporal video model path does not match the trusted catalog.")
+
+        send_message(
+            LogMessage(level="info", message="Verifying the temporal model bundle integrity...")
+        )
+        if not self.model_store.is_bundle_installed(model):
+            raise ValueError(
+                f"{model.name} failed its catalog SHA-256 check. "
+                "LocalSR refused to load it; remove the bundle and download it again."
+            )
+
     def _run_video_job(self, job_id, data):
         # Temporal engines route before the Spandrel inspect: their bundles
         # are not single-image checkpoints. An engine this build cannot
@@ -842,6 +882,7 @@ class WorkerServer:
         model_kind = str(data.get("model_kind", "spandrel_image"))
         engine_factory = resolve_video_engine(model_kind)
         if engine_factory is not None:
+            self._verify_temporal_bundle(data)
             self._run_temporal_video_job(job_id, data, engine_factory)
             return
 

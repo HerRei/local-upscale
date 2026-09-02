@@ -108,7 +108,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
       next.runtime.status_title = 'Enhancing';
-      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} tiles`;
+      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} tiles${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.throughput = next.runtime.elapsed_seconds > 0
@@ -130,9 +130,12 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       const total = Number(data.total_frames ?? 0);
       if (done > 0 && total > 0) next.runtime.progress = (done / total) * 100;
       const elapsed = Number(data.elapsed_seconds ?? 0);
+      const remaining = Number(data.estimated_remaining_seconds ?? 0);
+      next.runtime.status_title = 'Enhancing video · Labs';
+      next.runtime.status_detail = `Frame ${done} of ${total || '?'}${remaining > 0 ? ` · ETA ${formatDuration(remaining)}` : ''}`;
       if (done > 0 && elapsed > 0) {
         next.runtime.elapsed_seconds = elapsed;
-        next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
+        next.runtime.estimated_remaining_seconds = remaining;
         next.runtime.throughput = done / elapsed;
         next.runtime.throughput_unit = 'frames/s';
       }

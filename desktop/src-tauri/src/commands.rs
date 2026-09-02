@@ -149,6 +149,22 @@ pub fn save_recipe(
             "recipe name or task is invalid".into(),
         ));
     }
+    if (!recipe.output_format.is_empty()
+        && !matches!(recipe.output_format.as_str(), "png" | "jpg" | "tif"))
+        || (!recipe.video_container.is_empty()
+            && !matches!(recipe.video_container.as_str(), "mp4" | "mkv"))
+        || recipe
+            .jpeg_quality
+            .is_some_and(|value| !(1..=100).contains(&value))
+        || recipe.video_crf.is_some_and(|value| value > 51)
+        || recipe
+            .deflicker_window
+            .is_some_and(|value| !(1..=9).contains(&value))
+    {
+        return Err(AppError::Validation(
+            "recipe contains unsupported output settings".into(),
+        ));
+    }
     let mut recipes = lock(&state.recipes)?;
     if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
         *existing = recipe;
@@ -189,15 +205,39 @@ pub fn start_jobs(
     input: StartBatchInput,
 ) -> AppResult<()> {
     validate_start_input(&input)?;
-    ensure_queue_idle(&state)?;
-    state.refresh_catalog()?;
+
+    // Do not hash the complete model library on the UI command path. A
+    // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
+    // entry here made a click on Start block the macOS event loop long enough
+    // to show the spinning wait cursor. Catalog downloads are SHA-256 checked
+    // before installation, catalog discovery is size-bounded, and
+    // the isolated Python worker independently verifies risky pickle-based
+    // image checkpoints immediately before deserializing the selected model.
+    // A deliberate catalog refresh belongs on a background maintenance path,
+    // never in this latency-sensitive command.
 
     let output_directory = prepare_output_directory(&state, &input.output_directory)?;
     let selection = resolve_model_selection(&state, &input)?;
     let media = {
         let database = lock(&state.database)?;
+        let inflight_media: HashSet<String> = database
+            .list_jobs()?
+            .into_iter()
+            .filter(|job| {
+                matches!(
+                    job.status.as_str(),
+                    "queued" | "starting" | "running" | "cancelling"
+                )
+            })
+            .map(|job| job.media_id)
+            .collect();
         let mut selected = Vec::new();
         for id in &input.media_ids {
+            if inflight_media.contains(id) {
+                return Err(AppError::Validation(
+                    "one or more selected items are already running or queued".into(),
+                ));
+            }
             selected.push(database.get_media(id)?.ok_or_else(|| {
                 AppError::Validation("a selected media item no longer exists".into())
             })?);
@@ -523,6 +563,7 @@ enum ModelSelection {
         native_scale: u32,
     },
     Temporal {
+        model_id: String,
         engine_kind: String,
         bundle_dir: String,
         temporal_window: u32,
@@ -544,6 +585,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             ));
         }
         return Ok(ModelSelection::Temporal {
+            model_id: model.model_id.clone(),
             engine_kind: model.engine_kind.clone(),
             bundle_dir: model.installed_path.clone().unwrap_or_default(),
             temporal_window: model.temporal_window,
@@ -673,6 +715,7 @@ fn build_job_message(
                 "jpeg_quality": input.jpeg_quality,
                 "preserve_metadata": input.preserve_metadata,
                 "safe_memory": input.safe_memory,
+                "preview_interval_ms": 80,
                 "output_scale": if input.task == "denoise" { 1 } else { input.output_scale.min(*native_scale).max(1) },
                 "face_model_path": face_path,
                 "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
@@ -711,6 +754,7 @@ fn build_job_message(
             }
         })),
         ModelSelection::Temporal {
+            model_id,
             engine_kind,
             bundle_dir,
             temporal_window,
@@ -742,6 +786,7 @@ fn build_job_message(
                     "deflicker": false,
                     "deflicker_window": input.deflicker_window,
                     "model_kind": engine_kind,
+                    "video_model_id": model_id,
                     "bundle_dir": bundle_dir,
                     "temporal_window": temporal_window,
                     "temporal_overlap": temporal_overlap,
@@ -995,5 +1040,40 @@ mod tests {
         .unwrap();
         assert_eq!(duplicated.len(), 1);
         assert!(normalize_media_paths(vec![text.to_string_lossy().into()]).is_err());
+    }
+
+    #[test]
+    fn image_jobs_request_a_bounded_progressive_preview_rate() {
+        let media = crate::types::MediaItem {
+            id: "media".into(),
+            path: "/input/photo.png".into(),
+            name: "photo.png".into(),
+            kind: "image".into(),
+            width: 100,
+            height: 80,
+            frame_count: 1,
+            fps: 0.0,
+            duration_seconds: 0.0,
+            preview_data_url: String::new(),
+            probe_status: "ready".into(),
+            error: String::new(),
+            selected: true,
+        };
+        let selection = ModelSelection::Image {
+            path: "/models/upscaler.safetensors".into(),
+            face_path: None,
+            native_scale: 4,
+        };
+
+        let message = build_job_message(
+            "job",
+            &media,
+            Path::new("/output/photo.png"),
+            &input("upscale"),
+            &selection,
+        )
+        .unwrap();
+
+        assert_eq!(message["data"]["preview_interval_ms"], 80);
     }
 }

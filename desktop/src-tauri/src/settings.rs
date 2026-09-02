@@ -150,4 +150,25 @@ mod tests {
         let (loaded, _) = load(&paths);
         assert_eq!(loaded.output_scale, 2);
     }
+
+    #[test]
+    fn recipes_from_older_previews_gain_safe_optional_defaults() {
+        let recipe: Recipe = serde_json::from_value(serde_json::json!({
+            "id": "old-recipe",
+            "name": "Old recipe",
+            "task": "upscale",
+            "model_id": "span_photo_x4",
+            "output_scale": 4,
+            "tile_size": 128,
+            "halo": 16,
+            "precision": "fp32",
+            "safe_memory": true
+        }))
+        .unwrap();
+
+        assert!(recipe.video_model_id.is_empty());
+        assert!(recipe.custom_model_path.is_empty());
+        assert_eq!(recipe.preserve_metadata, None);
+        assert_eq!(recipe.video_crf, None);
+    }
 }

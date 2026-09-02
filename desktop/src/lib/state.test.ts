@@ -46,16 +46,31 @@ describe('desktop state', () => {
       data: { job_id: 'job-1' }
     });
     snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: {
+        job_id: 'job-1',
+        completed_tiles: 3,
+        total_tiles: 12,
+        percentage: 25,
+        elapsed_seconds: 5,
+        estimated_remaining_seconds: 65
+      }
+    });
+    expect(snapshot.runtime.status_detail).toBe('3 of 12 tiles · ETA 1:05');
+    snapshot = applyWorkerEnvelope(snapshot, {
       type: 'video_frame_completed',
       data: {
         job_id: 'job-1',
         frames_processed: 12,
         total_frames: 48,
+        elapsed_seconds: 30,
+        estimated_remaining_seconds: 90,
         jpeg_base64: 'live-frame'
       }
     });
     expect(snapshot.runtime.worker).toBe('ready');
     expect(snapshot.runtime.progress).toBe(25);
+    expect(snapshot.runtime.status_detail).toBe('Frame 12 of 48 · ETA 1:30');
     expect(snapshot.runtime.result_preview_data_url).toContain('live-frame');
     snapshot = applyWorkerEnvelope(snapshot, {
       type: 'video_job_completed',

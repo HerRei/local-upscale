@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -181,6 +181,42 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Choose an image or video to enhance')).toBeTruthy();
     expect(screen.getByRole('button', { name: '＋ Add Media' })).toBeTruthy();
+    expect(document.querySelector('.canvas-icon svg .play-mark')).toBeTruthy();
+  });
+
+  it('opens performance diagnostics from the toolbar indicator', async () => {
+    const user = await mountWith(readySnapshot());
+
+    await user.click(screen.getByRole('button', { name: 'Performance & diagnostics' }));
+
+    expect(await screen.findByRole('heading', { name: 'Performance & Diagnostics' })).toBeTruthy();
+    expect(screen.getByText('Apple GPU (Metal)')).toBeTruthy();
+  });
+
+  it('keeps advanced controls in a dedicated scroll region', async () => {
+    const user = await mountWith(readySnapshot([image('first', true)]));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
+
+    const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
+    expect(inspector.classList.contains('inspector-scroll')).toBe(true);
+    expect(screen.getByLabelText('Interface text')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
+  });
+
+  it('saves the current setup as a named recipe beside the built-in recipes', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: '＋ Save current setup as recipe' }));
+    const name = screen.getByRole('textbox', { name: 'Recipe name' });
+    expect(document.activeElement).toBe(name);
+    await user.type(name, 'Portrait cleanup');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Portrait cleanup', task: 'upscale' })
+    );
   });
 
   it('exposes image recipes, hardware controls, and honest face availability', async () => {
@@ -320,7 +356,7 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
-  it('counts and submits only task-compatible media in a mixed batch', async () => {
+  it('routes a mixed batch by the selected media type', async () => {
     const snapshot = readySnapshot([
       video('selected-video', true),
       image('first-image'),
@@ -330,16 +366,24 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'upscale';
     const user = await mountWith(snapshot);
 
-    const start = screen.getByRole('button', { name: 'Start 2 items' }) as HTMLButtonElement;
+    const start = screen.getByRole('button', { name: 'Start 1 item' }) as HTMLButtonElement;
     expect(start.disabled).toBe(false);
+    expect(
+      (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: /Upscale Video\s*Labs \/ Experimental/i }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
     await user.click(start);
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs).toHaveBeenCalledWith(
       expect.objectContaining({
-        media_ids: ['first-image', 'second-image'],
+        media_ids: ['selected-video'],
         batch_mode: true,
-        task: 'upscale'
+        task: 'video'
       })
     );
   });
@@ -363,7 +407,7 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
-  it('explains an incompatible single selection instead of silently choosing another file', async () => {
+  it('automatically chooses the compatible task and disables mismatched task cards', async () => {
     const snapshot = readySnapshot([video('selected-video', true), image('available-image')]);
     snapshot.settings.batch_mode = true;
     snapshot.settings.task = 'upscale';
@@ -371,8 +415,51 @@ describe('LocalSR desktop interface', () => {
 
     await user.click(screen.getByRole('button', { name: 'Single' }));
 
-    expect(screen.getByText(/selected-video.mp4.*does not match upscale/i)).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Single processes only “selected-video.mp4”/i)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'Start selected video · Labs' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it('reconciles a native photo launch with a persisted video task without requiring a preset', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'video';
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async () => {
+      current.media.push(image('opened-photo', true));
+    });
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.saveSettings.mockImplementation(async (settings: UiSettings) => {
+      current.settings = structuredClone(settings);
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/opened-photo.png'], preset: null, recipe: null, auto_start: false }
+      ])
+      .mockResolvedValueOnce([]);
+
+    render(App);
+
+    await screen.findAllByText('opened-photo.png');
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }).classList
+      ).toContain('active')
+    );
+    expect(
+      (screen.getByRole('button', {
+        name: /Upscale Video\s*Labs \/ Experimental/i
+      }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
   });
 
   it('locks the single/batch scope for an active queue', async () => {
@@ -383,6 +470,63 @@ describe('LocalSR desktop interface', () => {
 
     expect((screen.getByRole('button', { name: 'Single' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('appends a differently configured video behind a running image job', async () => {
+    const current = readySnapshot([image('photo', true), video('clip')]);
+    current.settings.task = 'upscale';
+    current.runtime.active_job_id = 'running-image';
+    current.runtime.status_title = 'Enhancing';
+    current.jobs = [
+      {
+        id: 'running-image',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 25,
+        output_path: '',
+        error: '',
+        created_at: 1
+      }
+    ];
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.saveSettings.mockImplementation(async (settings: UiSettings) => {
+      current.settings = structuredClone(settings);
+    });
+
+    render(App);
+    await screen.findByText(/The isolated inference engine is ready/i);
+    const user = userEvent.setup();
+
+    expect(
+      (screen.getByRole('button', { name: 'Add selected to queue' }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    await user.click(screen.getByRole('button', { name: /^▶ clip\.mp4/i }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', {
+          name: /Upscale Video\s*Labs \/ Experimental/i
+        }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    );
+    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    const append = screen.getByRole('button', { name: 'Add selected to queue' }) as HTMLButtonElement;
+    await waitFor(() => expect(append.disabled).toBe(false));
+    await user.click(append);
+
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media_ids: ['clip'],
+        task: 'video',
+        video_model_id: 'seedvr2_3b'
+      })
+    );
   });
 
   it('appends from the main Add Media action even in single mode', async () => {
@@ -490,6 +634,17 @@ describe('LocalSR desktop interface', () => {
   });
 
   it('shows the comparison only when the completed result belongs to the selected media', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    } as DOMRect);
     const snapshot = readySnapshot([image('first', true)]);
     snapshot.runtime.last_output_path = '/private/first-output.png';
     snapshot.runtime.result_preview_data_url = 'data:image/jpeg;base64,first-result';
@@ -510,7 +665,24 @@ describe('LocalSR desktop interface', () => {
     await mountWith(snapshot);
 
     expect(screen.getByText('Enhanced')).toBeTruthy();
-    expect(screen.getByLabelText('Before and after comparison')).toBeTruthy();
+    const divider = screen.getByRole('slider', { name: 'Before and after comparison' });
+    await fireEvent.load(screen.getByAltText('Preview of first.png'));
+    await waitFor(() =>
+      expect(Number.parseFloat(document.querySelector<HTMLElement>('.image-stage')?.style.width ?? '0')).toBeGreaterThan(700)
+    );
+
+    await fireEvent.pointerDown(divider, {
+      button: 0,
+      pointerId: 1,
+      clientX: 400,
+      clientY: 300
+    });
+    await fireEvent.pointerMove(divider, { pointerId: 1, clientX: 600, clientY: 300 });
+    await fireEvent.pointerUp(divider, { pointerId: 1, clientX: 600, clientY: 300 });
+    await waitFor(() => expect(Number(divider.getAttribute('aria-valuenow'))).toBe(78));
+
+    await fireEvent.keyDown(divider, { key: 'ArrowLeft' });
+    expect(Number(divider.getAttribute('aria-valuenow'))).toBe(77);
   });
 
   it('composites progressive tiles without exposing comparison and keeps 1:1 controls responsive', async () => {
@@ -551,6 +723,8 @@ describe('LocalSR desktop interface', () => {
     const stage = document.querySelector<HTMLElement>('.image-stage');
     await waitFor(() => expect(Number.parseFloat(stage?.style.width ?? '0')).toBeCloseTo(744));
     expect(Number.parseFloat(stage?.style.height ?? '0')).toBeGreaterThan(480);
+    expect(stage?.style.left).toBe('calc(50% + 0px)');
+    expect(stage?.style.top).toBe('calc(50% + 0px)');
 
     const listener = api.listenForWorker.mock.calls[0]?.[0] as
       | ((message: WorkerEnvelope) => void)
@@ -588,8 +762,9 @@ describe('LocalSR desktop interface', () => {
     const canvas = screen.getByLabelText('Progressive tiled preview');
     await waitFor(() => expect(canvas.classList.contains('visible')).toBe(true));
     const context = (canvas as HTMLCanvasElement).getContext('2d')!;
-    await waitFor(() => expect(context.drawImage).toHaveBeenCalledTimes(2));
-    expect(context.drawImage).toHaveBeenLastCalledWith(
+    const drawImage = vi.mocked(context.drawImage);
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+    expect(drawImage).toHaveBeenLastCalledWith(
       expect.any(DecodedImage),
       0,
       0,
@@ -599,11 +774,49 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByText('Enhanced')).toBeNull();
     expect(screen.queryByLabelText('Before and after comparison')).toBeNull();
 
+    for (let completed = 1; completed <= 100; completed += 1) {
+      listener?.({
+        type: 'progress',
+        data: {
+          job_id: 'job-progressive',
+          completed_tiles: completed,
+          total_tiles: 100,
+          percentage: completed
+        }
+      });
+    }
+    expect(await screen.findByText('100 of 100 tiles')).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    for (let tileIndex = 1; tileIndex <= 100; tileIndex += 1) {
+      listener?.({
+        type: 'tile_update',
+        data: {
+          job_id: 'job-progressive',
+          phase: 'completed',
+          output_x: tileIndex * 256,
+          output_y: 0,
+          output_width: 256,
+          output_height: 256,
+          image_width: 12096,
+          image_height: 7856,
+          jpeg_base64: `completed-tile-${tileIndex}`
+        }
+      });
+    }
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(3));
+    expect(drawImage.mock.calls.length).toBeLessThan(8);
+
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '1:1' }));
     expect(screen.getByTitle(/Dynamic maximum/).textContent).toMatch(/^40[67]%$/);
     expect(screen.getByLabelText('Media comparison canvas').classList.contains('panning')).toBe(false);
-    await user.click(screen.getByRole('button', { name: 'Fit' }));
-    expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe('100%');
+    listener?.({
+      type: 'job_completed',
+      data: { job_id: 'job-progressive', output_path: '/output/complete.png' }
+    });
+    await waitFor(() => expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe('100%'));
+    expect(stage?.style.left).toBe('calc(50% + 0px)');
+    expect(stage?.style.top).toBe('calc(50% + 0px)');
   });
 });

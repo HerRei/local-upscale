@@ -149,6 +149,63 @@ def test_queued_cancel_does_not_affect_a_different_job():
     assert not server.cancel_event.is_set()
 
 
+def test_temporal_bundle_is_verified_in_worker_before_use(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import localsr.worker.server as server_module
+
+    bundle = tmp_path / "video-bundle"
+    bundle.mkdir()
+    model = SimpleNamespace(model_id="video-test", name="Video Test")
+    monkeypatch.setitem(server_module.VIDEO_CATALOG_BY_ID, "video-test", model)
+
+    class DummyStore:
+        def __init__(self):
+            self.checked = False
+
+        def bundle_dir_for(self, candidate):
+            assert candidate is model
+            return bundle
+
+        def is_bundle_installed(self, candidate):
+            assert candidate is model
+            self.checked = True
+            return True
+
+    server = WorkerServer()
+    server.model_store = DummyStore()
+    server._verify_temporal_bundle({"video_model_id": "video-test", "bundle_dir": str(bundle)})
+
+    assert server.model_store.checked is True
+
+
+def test_temporal_bundle_rejects_non_catalog_path(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import localsr.worker.server as server_module
+
+    expected = tmp_path / "expected"
+    supplied = tmp_path / "supplied"
+    expected.mkdir()
+    supplied.mkdir()
+    model = SimpleNamespace(model_id="video-test", name="Video Test")
+    monkeypatch.setitem(server_module.VIDEO_CATALOG_BY_ID, "video-test", model)
+
+    class DummyStore:
+        def bundle_dir_for(self, _candidate):
+            return expected
+
+        def is_bundle_installed(self, _candidate):
+            raise AssertionError("untrusted path must be rejected before hashing")
+
+    server = WorkerServer()
+    server.model_store = DummyStore()
+    with pytest.raises(ValueError, match="does not match"):
+        server._verify_temporal_bundle(
+            {"video_model_id": "video-test", "bundle_dir": str(supplied)}
+        )
+
+
 def test_worker_job_completion_and_cleanup(monkeypatch):
     server = WorkerServer()
     server.model_adapter = DummyModelAdapter()
@@ -223,6 +280,59 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
 
     # Check F1.4 cleanup in finally
     assert writer_instance.cleaned_up is True
+
+
+def test_worker_samples_progressive_tile_jpegs_for_desktop_requests(monkeypatch):
+    from types import SimpleNamespace
+
+    import localsr.worker.server as server_module
+    from localsr.core.image_io import ImageManager
+
+    server = WorkerServer()
+    server.model_adapter = DummyModelAdapter()
+    writer = DummyWriter()
+
+    class FastTiledEngine:
+        def process_image(self, **kwargs):
+            callback = kwargs["tile_callback"]
+            tile = SimpleNamespace(out_x=0, out_y=0, out_w=16, out_h=16)
+            for completed in range(1, 11):
+                callback("completed", tile, object(), completed, 10, 160, 16, 64)
+            return writer
+
+    encoded = []
+    server.engine = FastTiledEngine()
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": None})
+    monkeypatch.setattr(ImageManager, "save", lambda *_, **__: None)
+    monkeypatch.setattr(
+        server_module,
+        "_encode_chw_jpeg",
+        lambda *_args, **_kwargs: encoded.append(True) or "preview",
+    )
+
+    server._run_job(
+        "job-sampled-preview",
+        {
+            "job_id": "job-sampled-preview",
+            "image_path": "in.png",
+            "model_path": "model.pth",
+            "output_path": "out.png",
+            "output_format": "png",
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 64,
+            "halo": 8,
+            "jpeg_quality": 98,
+            "preserve_metadata": True,
+            "safe_memory": True,
+            "output_scale": 2,
+            "preview_interval_ms": 1000,
+        },
+    )
+
+    # The first tile makes the preview visible and the final tile is forced;
+    # rapid intermediate tiles do not monopolize the UI transport.
+    assert len(encoded) == 2
 
 
 def test_worker_memmap_cleanup_on_error(monkeypatch):
