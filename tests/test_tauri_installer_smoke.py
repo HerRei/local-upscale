@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import plistlib
+import struct
 import subprocess
 from pathlib import Path
 
@@ -14,6 +16,16 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
+
+
+def write_pe(path: Path, machine: int) -> None:
+    payload = bytearray(256)
+    payload[:2] = b"MZ"
+    struct.pack_into("<I", payload, 0x3C, 128)
+    payload[128:132] = b"PE\0\0"
+    struct.pack_into("<H", payload, 132, machine)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
 
 
 def test_reads_the_declared_macos_bundle_executable(tmp_path: Path) -> None:
@@ -73,7 +85,8 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
     tmp_path: Path, monkeypatch
 ) -> None:
     artifact = tmp_path / "LocalSR-setup.exe"
-    artifact.write_bytes(b"installer")
+    write_pe(artifact, 0x014C)
+    report = tmp_path / "report.json"
     calls: list[list[str]] = []
 
     def fake_run(command, **_kwargs):
@@ -82,13 +95,24 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
             install_argument = next(value for value in command if value.startswith("/D="))
             install_dir = Path(install_argument.removeprefix("/D="))
             install_dir.mkdir(parents=True)
-            (install_dir / "LocalSR Next Preview.exe").write_bytes(b"host")
+            write_pe(install_dir / "LocalSR Next Preview.exe", 0x8664)
+            worker = install_dir / "engine" / "localsr-worker.exe"
+            write_pe(worker, 0x8664)
+        elif command[1:] == ["--headless-smoke-test"]:
+            worker = Path(command[0]).parent / "engine" / "localsr-worker.exe"
+            report.write_text(
+                json.dumps({"passed": True, "worker": "ready", "worker_path": str(worker)}),
+                encoding="utf-8",
+            )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(smoke, "run", fake_run)
-    smoke.smoke_windows(artifact, tmp_path / "report.json", {}, 240)
+    smoke.smoke_windows(artifact, report, {}, 240)
 
     assert calls[1][1:] == ["--headless-smoke-test"]
+    evidence = json.loads(report.read_text(encoding="utf-8"))["package_architecture"]
+    assert evidence["container"]["architecture"] == "x86"
+    assert {item["architecture"] for item in evidence["native_payloads"]} == {"x86_64"}
 
 
 def test_macos_smoke_bypasses_single_instance_forwarding(tmp_path: Path, monkeypatch) -> None:

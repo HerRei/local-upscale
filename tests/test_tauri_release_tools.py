@@ -24,6 +24,17 @@ def load_script(name: str):
 verify_package = load_script("verify_tauri_release_package")
 verify_macos_signing = load_script("verify_macos_tauri_signing")
 prepare_release = load_script("prepare_tauri_release_assets")
+smoke_installer = load_script("smoke_tauri_installer")
+
+
+def write_pe(path: Path, machine: int) -> None:
+    pe = bytearray(256)
+    pe[:2] = b"MZ"
+    struct.pack_into("<I", pe, 0x3C, 128)
+    pe[128:132] = b"PE\0\0"
+    struct.pack_into("<H", pe, 132, machine)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pe)
 
 
 def test_unsigned_cross_policy_is_restricted_to_exact_non_beta_alpha() -> None:
@@ -87,16 +98,44 @@ def test_reads_x86_64_elf_and_pe_release_containers(tmp_path: Path) -> None:
     appimage = tmp_path / "LocalSR.AppImage"
     appimage.write_bytes(elf)
 
-    pe = bytearray(256)
-    pe[:2] = b"MZ"
-    struct.pack_into("<I", pe, 0x3C, 128)
-    pe[128:132] = b"PE\0\0"
-    struct.pack_into("<H", pe, 132, 0x8664)
     installer = tmp_path / "LocalSR.exe"
-    installer.write_bytes(pe)
+    write_pe(installer, 0x8664)
 
     assert verify_package.read_elf_arch(appimage) == "x86_64"
     assert verify_package.read_pe_arch(installer) == "x86_64"
+
+
+def test_verifies_x64_payload_inside_x86_nsis_bootstrap(tmp_path: Path) -> None:
+    installer = tmp_path / "LocalSR-setup.exe"
+    install_dir = tmp_path / "installed"
+    host = install_dir / "localsr-next.exe"
+    worker = install_dir / "engine" / "localsr-worker.exe"
+    report = tmp_path / "package-smoke.json"
+    write_pe(installer, 0x014C)
+    write_pe(host, 0x8664)
+    write_pe(worker, 0x8664)
+    report.write_text(
+        json.dumps({"passed": True, "worker": "ready", "worker_path": str(worker)}),
+        encoding="utf-8",
+    )
+
+    smoke_installer.record_windows_payload_architectures(installer, install_dir, host, report)
+    result = verify_package.verify(installer, "windows", "x86_64", report)
+
+    assert result["result"] == "PASS"
+    assert result["container_architecture"] == "x86"
+    assert result["native_binary_count"] == 2
+    assert {item["role"] for item in result["payloads"]} == {"host", "worker"}
+
+
+def test_rejects_nsis_without_installed_payload_evidence(tmp_path: Path) -> None:
+    installer = tmp_path / "LocalSR-setup.exe"
+    report = tmp_path / "package-smoke.json"
+    write_pe(installer, 0x014C)
+    report.write_text(json.dumps({"passed": True, "worker": "ready"}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no NSIS payload architecture evidence"):
+        verify_package.verify(installer, "windows", "x86_64", report)
 
 
 def test_rejects_wrong_native_installer_architecture(tmp_path: Path) -> None:

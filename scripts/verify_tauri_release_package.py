@@ -13,7 +13,7 @@ from pathlib import Path
 from verify_macho_tree import inspect as inspect_macho_tree
 
 ELF_ARCHES = {62: "x86_64", 183: "arm64"}
-PE_ARCHES = {0x8664: "x86_64", 0xAA64: "arm64"}
+PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
 def read_elf_arch(path: Path) -> str:
@@ -78,15 +78,68 @@ def verify_macos(path: Path, architecture: str) -> dict[str, object]:
         subprocess.run(["hdiutil", "detach", device], check=True, capture_output=True)
 
 
-def verify(path: Path, platform: str, architecture: str) -> dict[str, object]:
+def verify_windows(path: Path, architecture: str, smoke_report: Path | None) -> dict[str, object]:
+    container_architecture = read_pe_arch(path)
+    if smoke_report is None or not smoke_report.is_file():
+        raise ValueError("Windows NSIS verification requires the installed-package smoke report")
+    smoke = json.loads(smoke_report.read_text(encoding="utf-8"))
+    evidence = smoke.get("package_architecture")
+    if not isinstance(evidence, dict) or evidence.get("package_type") != "nsis":
+        raise ValueError("Windows smoke report has no NSIS payload architecture evidence")
+    container = evidence.get("container")
+    if not isinstance(container, dict) or container.get("architecture") != container_architecture:
+        raise ValueError("Windows smoke report does not match the NSIS PE bootstrap")
+    payloads = evidence.get("native_payloads")
+    if not isinstance(payloads, list):
+        raise ValueError("Windows smoke report has no native payload list")
+    by_role = {
+        item.get("role"): item
+        for item in payloads
+        if isinstance(item, dict) and isinstance(item.get("role"), str)
+    }
+    missing = sorted({"host", "worker"} - set(by_role))
+    mismatches = [
+        {
+            "role": role,
+            "path": item.get("path"),
+            "actual": item.get("architecture"),
+            "expected": architecture,
+        }
+        for role, item in sorted(by_role.items())
+        if item.get("format") != "PE" or item.get("architecture") != architecture
+    ]
+    if missing:
+        mismatches.append({"missing_roles": missing})
+    report = {
+        "schema_version": 1,
+        "artifact": path.name,
+        "container": "NSIS PE installer",
+        "container_architecture": container_architecture,
+        "required_architectures": [architecture],
+        "native_binary_count": len(payloads),
+        "main": by_role.get("host"),
+        "payloads": payloads,
+        "mismatches": mismatches,
+        "result": "PASS" if not mismatches else "FAIL",
+    }
+    if mismatches:
+        raise ValueError(f"Windows NSIS payload architecture verification failed: {mismatches}")
+    return report
+
+
+def verify(
+    path: Path,
+    platform: str,
+    architecture: str,
+    smoke_report: Path | None = None,
+) -> dict[str, object]:
     if platform == "macos":
         report = verify_macos(path, architecture)
         if report.get("result") != "PASS":
             raise ValueError(f"Mach-O verification failed: {report.get('mismatches')}")
         return report
     if platform == "windows":
-        actual = read_pe_arch(path)
-        container = "PE"
+        return verify_windows(path, architecture, smoke_report)
     elif platform == "linux":
         actual = read_elf_arch(path)
         container = "ELF"
@@ -112,9 +165,10 @@ def main() -> int:
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--platform", choices=("linux", "windows", "macos"), required=True)
     parser.add_argument("--architecture", choices=("x86_64", "arm64"), required=True)
+    parser.add_argument("--smoke-report", type=Path)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    report = verify(args.artifact.resolve(), args.platform, args.architecture)
+    report = verify(args.artifact.resolve(), args.platform, args.architecture, args.smoke_report)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
