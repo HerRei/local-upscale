@@ -26,6 +26,60 @@ verify_macos_signing = load_script("verify_macos_tauri_signing")
 prepare_release = load_script("prepare_tauri_release_assets")
 
 
+def test_unsigned_cross_policy_is_restricted_to_exact_non_beta_alpha() -> None:
+    manifest = {"release_policy": "v0.0.10-cross-alpha-exception"}
+    readiness = {"beta_ready": False}
+
+    assert (
+        prepare_release.release_policy(manifest, readiness, "0.0.10-alpha")
+        == prepare_release.CROSS_ALPHA_POLICY
+    )
+    with pytest.raises(ValueError, match="restricted"):
+        prepare_release.release_policy(manifest, readiness, "0.0.11-alpha")
+    with pytest.raises(ValueError, match="non-beta"):
+        prepare_release.release_policy(manifest, {"beta_ready": True}, "0.0.10-alpha")
+
+
+def test_unsigned_cross_policy_requires_explicit_signing_warning() -> None:
+    evidence = {
+        "status": "ad-hoc-alpha",
+        "production_signed": False,
+        "warning": "Testing-only ad-hoc signature",
+    }
+    assert (
+        prepare_release.validate_signing_evidence(
+            "macos", evidence, "ad-hoc-alpha", prepare_release.CROSS_ALPHA_POLICY
+        )
+        == evidence
+    )
+    with pytest.raises(ValueError, match="warning"):
+        prepare_release.validate_signing_evidence(
+            "macos",
+            {"status": "ad-hoc-alpha", "production_signed": False},
+            "ad-hoc-alpha",
+            prepare_release.CROSS_ALPHA_POLICY,
+        )
+
+
+def test_cross_built_macos_static_smoke_is_never_reported_as_runtime_pass() -> None:
+    evidence = {
+        "passed": False,
+        "mode": "cross-build-static",
+        "static_verified": True,
+        "runtime_tested": False,
+    }
+    assert (
+        prepare_release.validate_smoke_evidence(
+            "macos", evidence, prepare_release.CROSS_ALPHA_POLICY
+        )
+        == evidence
+    )
+    with pytest.raises(ValueError, match="acceptable"):
+        prepare_release.validate_smoke_evidence(
+            "windows", evidence, prepare_release.CROSS_ALPHA_POLICY
+        )
+
+
 def test_reads_x86_64_elf_and_pe_release_containers(tmp_path: Path) -> None:
     elf = bytearray(64)
     elf[:6] = b"\x7fELF\x02\x01"

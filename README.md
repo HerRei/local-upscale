@@ -27,18 +27,18 @@ weights. Custom `.safetensors` checkpoints are accepted by default. Unverified p
 
 ## Install the alpha
 
-The signed release pipeline will publish the [v0.0.10-alpha
-prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.10-alpha) only after every
-platform gate passes. Download the one installer matching the operating system:
+The Mac-mini cross-release pipeline publishes the [v0.0.10-alpha
+prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.10-alpha) only after its
+testing-only platform gates pass. Download the one installer matching the operating system:
 
 - Apple Silicon macOS 12+: `LocalSR-v0.0.10-alpha-macOS-arm64.dmg`
 - Windows 10/11 x86-64: `LocalSR-v0.0.10-alpha-Windows-x86_64.exe`
 - Linux x86-64: `LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage`
 
 There are only five release assets: those three installers, `SHA256SUMS`, and
-`release-index.json`. The macOS download must be Developer ID signed, notarized, stapled, and
-Gatekeeper accepted; the Windows download must have a valid timestamped Authenticode signature.
-The workflow refuses to publish an unsigned substitute or overwrite an existing release.
+`release-index.json`. This alpha is deliberately not production signed: macOS is ad-hoc sealed and
+Windows is not Authenticode signed, so Gatekeeper or SmartScreen may warn or reject it. The index
+records that state. Later signed releases still fail closed and releases are never overwritten.
 
 Because the repository is private, testers still need repository access. Choosing a public download
 location remains a beta decision.
@@ -51,21 +51,22 @@ an older LocalSR installation:
 
 | Platform | Architecture/backend | Artifact |
 |---|---|---|
-| macOS 12+ | Apple Silicon / MPS | signed and notarized `.dmg` |
-| Windows 10/11 | x86-64 / CPU | Authenticode-signed NSIS `.exe` |
+| macOS 12+ | Apple Silicon / MPS | ad-hoc, Intel→ARM cross-built `.dmg` |
+| Windows 10/11 | x86-64 / CPU | unsigned testing-only NSIS `.exe` |
 | Linux x86-64 | CPU | `.AppImage` plus SHA-256 |
 
-Every installer is installed or mounted in CI, starts its bundled isolated worker, and carries
-checksum, provenance, signing, smoke, and PE/ELF/Mach-O evidence in `release-index.json`. Digests
-must be distinct. Alpha suffixes are always GitHub prereleases.
+Linux and Windows installers are installed in CI and start their bundled worker. The Intel Mac mini
+cannot execute ARM64, so the DMG receives recursive ARM64 Mach-O and package inspection while the
+source-equivalent native ARM build received the GUI/worker smoke separately. This limitation and
+all checksum, provenance, signing, and smoke evidence are recorded in `release-index.json`.
 
 The release index embeds an intentionally honest machine-readable snapshot of completed and
 unresolved beta gates. It prevents packaging success from being confused with physical-device,
 signing, licensing, or public-access acceptance.
 
-Production Apple Developer ID/Authenticode credentials are not configured yet, so v0.0.10-alpha
-remains an unpublished candidate rather than an unsigned public download. See [release
-documentation](docs/releasing.md) and [known limitations](KNOWN_LIMITATIONS.md).
+Production Apple Developer ID/Authenticode credentials are not configured yet. They remain hard
+beta gates rather than blocking this explicitly unsigned alpha. See [release documentation](docs/releasing.md)
+and [known limitations](KNOWN_LIMITATIONS.md).
 
 Homebrew is intentionally not advertised for this alpha: the old formula used placeholder hashes
 and inconsistent tap names. It should return only after signed release assets have stable URLs and
