@@ -99,8 +99,9 @@ def test_tauri_preview_bounds_the_linux_cargo_cache_only_under_pressure() -> Non
     assert "Bound the Linux Cargo cache under storage pressure" in workflow
     assert "if: always() && runner.os == 'Linux'" in workflow
     assert 'EXPECTED="$RUNNER_WORKSPACE/.localsr-tauri-target/linux-x64"' in workflow
-    assert 'test "$CARGO_TARGET_DIR" = "$EXPECTED"' in workflow
-    assert 'find "$CARGO_TARGET_DIR" -depth -delete' in workflow
+    assert 'TARGET=$(readlink -f "$CARGO_TARGET_DIR")' in workflow
+    assert 'test "$TARGET" = "$EXPECTED"' in workflow
+    assert 'find "$TARGET" -depth -delete' in workflow
     assert "--ssd-peak-gib 8" in workflow
 
 
