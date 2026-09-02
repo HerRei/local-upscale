@@ -74,6 +74,17 @@ def test_cross_alpha_release_must_remain_exact_and_non_overwriting() -> None:
     assert any("only the v0.0.10" in violation for violation in violations)
 
 
+def test_cross_alpha_uses_supported_artifact_transfer_platforms() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "v0.0.10-cross-alpha.yml").read_text()
+
+    assert "--platform tauri-alpha-" not in workflow
+    assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform linux \\' in workflow
+    assert (
+        "--attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact" in workflow
+    )
+    assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform macos \\' in workflow
+
+
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
     assert "@tauri-apps/plugin-shell" in architecture.FORBIDDEN_WEBVIEW_PACKAGES
     assert "tauri-plugin-shell" in architecture.FORBIDDEN_TAURI_PLUGINS
