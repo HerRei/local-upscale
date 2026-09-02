@@ -223,6 +223,25 @@ jobs:
         run: |
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
+      - name: Bound the Linux Cargo cache under storage pressure
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! python3 scripts/storage_preflight.py \
+            --ssd-path / \
+            --skip-hdd \
+            --ssd-peak-gib 8; then
+            EXPECTED="$RUNNER_WORKSPACE/.localsr-tauri-target/linux-x64"
+            test "$CARGO_TARGET_DIR" = "$EXPECTED"
+            if [ -d "$CARGO_TARGET_DIR" ]; then
+              find "$CARGO_TARGET_DIR" -depth -delete
+            fi
+            mkdir -p "$CARGO_TARGET_DIR"
+            python3 scripts/storage_preflight.py \
+              --ssd-path / \
+              --skip-hdd \
+              --ssd-peak-gib 8
+          fi
       - name: Remove the isolated Python environment
         if: always() && runner.os != 'Windows'
         shell: bash
