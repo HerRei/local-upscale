@@ -93,16 +93,12 @@ def test_publish_jobs_combine_attempts_and_use_the_provisioned_python() -> None:
         assert "\n          python scripts/prepare_tauri_release_assets.py" not in workflow
 
 
-def test_tauri_preview_bounds_the_linux_cargo_cache_only_under_pressure() -> None:
+def test_tauri_preview_keeps_the_linux_cargo_cache_off_the_small_root_ssd() -> None:
     workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text()
 
-    assert "Bound the Linux Cargo cache under storage pressure" in workflow
-    assert "if: always() && runner.os == 'Linux'" in workflow
-    assert 'EXPECTED="$RUNNER_WORKSPACE/.localsr-tauri-target/linux-x64"' in workflow
-    assert 'TARGET=$(readlink -f "$CARGO_TARGET_DIR")' in workflow
-    assert 'test "$TARGET" = "$EXPECTED"' in workflow
-    assert 'find "$TARGET" -depth -delete' in workflow
-    assert "--ssd-peak-gib 8" in workflow
+    assert "CARGO_CACHE=/mnt/hdd/ci-cache/localsr-tauri-target/linux-x64" in workflow
+    assert 'mkdir -p "$CARGO_CACHE"' in workflow
+    assert 'echo "CARGO_TARGET_DIR=$CARGO_CACHE" >> "$GITHUB_ENV"' in workflow
 
 
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
