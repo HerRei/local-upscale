@@ -5,6 +5,41 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.10-alpha] - 2026-09-02
+
+### Added
+
+- Completed the additive Tauri/Svelte/Rust desktop parity pass while retaining the isolated Python
+  inference worker and the independently buildable legacy Slint host.
+- Added one durable mixed image/video FIFO queue with per-item task, model, recipe, output, and
+  hardware settings; video remains clearly Labs / Experimental.
+- Added user recipes, live performance diagnostics, native menus and shortcuts, file launch
+  arguments, notifications, and explicit Finder/Explorer/Nautilus/KDE integrations.
+- Added a compact signed-release pipeline for one DMG, one NSIS installer, and one AppImage. It
+  requires real installed-package worker smoke tests and embeds signing/native-architecture evidence
+  in one release index, leaving only five user-facing assets.
+
+### Fixed
+
+- Restored fit-to-window behavior for both small and large images, centered 1:1 zoom, dynamic zoom
+  bounds, pointer-centered panning, and a stable keyboard-accessible comparison divider.
+- Restored progressive completed-tile previews and ETA while bounding/coalescing updates across the
+  Python worker, Rust event bridge, and Svelte renderer so inference cannot flood the UI.
+- Removed the macOS beachball at job start: the native UI no longer synchronously hashes roughly
+  7 GB of installed models. Full checkpoint integrity validation still happens in the isolated
+  worker before risky model deserialization and is cached safely after verification.
+- Made mode/task transitions non-destructive, disabled photo tasks for video (and vice versa), made
+  Advanced settings scrollable, enlarged hard-to-read text, and replaced the meaningless empty-state
+  glyph with a recognizable media illustration.
+
+### Security
+
+- Temporal video requests now bind the selected catalog model ID to its exact expected bundle path
+  and verify every SeedVR2 file before the worker initializes the engine.
+- Public Tauri release jobs fail closed without Developer ID/notarization and timestamped
+  Authenticode credentials, refuse to overwrite an existing release, and require a native ARM64
+  PyTorch 2.13 macOS build instead of reviving the PyTorch 2.2.2 cross-build.
+
 ## [0.0.9-alpha] - 2026-08-29
 
 ### Security

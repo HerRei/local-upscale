@@ -1,37 +1,37 @@
 {
   "schema_version": 1,
-  "release": "0.0.9-alpha",
+  "release": "0.0.10-alpha",
   "beta_ready": false,
   "gates": [
     {
       "id": "automated-release-integrity",
       "status": "automated-pass",
-      "summary": "Version synchronization, real Quick/Best inference, package data, native architecture, backend provenance, checksums, distinct archive digests, immutable workflow actions, and HMAC-authenticated artifact transfer are enforced by CI.",
+      "summary": "Version synchronization, real Quick/Best inference, package data, native installer architecture, checksums, distinct digests, installed-worker smoke tests, immutable releases, and HMAC-authenticated artifact transfer are enforced by CI.",
       "next_action": "Keep these checks required for every release."
     },
     {
       "id": "macos-production-trust",
       "status": "waiting-credentials",
-      "summary": "Developer ID signing, notarization, stapling, and Gatekeeper verification are implemented but have no production credentials.",
+      "summary": "The Tauri pipeline requires Developer ID signing, notarization, stapling, and Gatekeeper verification, but credentials and a registered native ARM64 runner are absent.",
       "next_action": "Provide the documented Apple Developer credentials, then verify the downloaded artifact on a separate Mac."
     },
     {
       "id": "windows-production-trust",
       "status": "waiting-credentials",
-      "summary": "Windows executables are not Authenticode signed.",
-      "next_action": "Choose a certificate provider and secret-handling method before adding the signing stage."
+      "summary": "The Tauri pipeline requires a timestamped Authenticode signature, but the certificate secrets are absent.",
+      "next_action": "Choose a certificate provider and configure the documented PFX, password, thumbprint, and timestamp secrets."
     },
     {
       "id": "legacy-runtime-support",
       "status": "decision-required",
-      "summary": "The cross-built macOS artifacts retain PyTorch 2.2.2 security debt, and Microsoft's current torch-directml package constrains the Windows DirectML archive to PyTorch 2.4.1.",
-      "next_action": "Build Apple Silicon natively with maintained PyTorch, decide whether Intel remains viable, and decide whether DirectML should wait for a maintained runtime, move to a different backend, or remain excluded from beta."
+      "summary": "The new Apple-Silicon candidate requires native PyTorch 2.13 and does not ship the legacy 2.2.2 cross-build. Intel macOS and Microsoft's PyTorch-2.4.1-constrained DirectML path remain unresolved.",
+      "next_action": "Decide whether Intel remains viable and whether DirectML should wait for a maintained runtime, move to a different backend, or remain excluded from beta."
     },
     {
       "id": "physical-platform-acceptance",
       "status": "manual-required",
       "summary": "CI packaging does not prove operation on every advertised GPU, driver, and CPU combination.",
-      "next_action": "Complete and retain acceptance records for macOS ARM/Intel, Windows NVIDIA/DirectML/CPU, and Linux CUDA/ROCm/XPU/CPU."
+      "next_action": "Complete and retain acceptance records for the macOS ARM and Windows/Linux CPU installers, then for every optional GPU engine pack before advertising it."
     },
     {
       "id": "real-media-resilience",

@@ -101,7 +101,11 @@ def smoke_macos(artifact: Path, report: Path, env: dict[str, str], timeout: floa
         if len(apps) != 1:
             raise RuntimeError(f"expected one app in the DMG, found {len(apps)}")
         run(
-            [str(app_executable(apps[0])), "--smoke-test"],
+            # Run before Tauri/WebView/single-instance initialization. A
+            # developer preview may already be open on an acceptance Mac; a
+            # normal --smoke-test launch would then forward to that process
+            # and falsely exit without testing the mounted bundle's worker.
+            [str(app_executable(apps[0])), "--headless-smoke-test"],
             env=env,
             timeout=timeout,
         )

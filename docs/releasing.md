@@ -1,152 +1,119 @@
 # Native release process
 
-`Build & Release` (`.github/workflows/release.yml`) builds nine portable, backend-specific archives.
-Model weights are downloaded on demand and are never included.
+`Signed Tauri Alpha Release` (`.github/workflows/desktop-release.yml`) is the tag-triggered release
+pipeline. The former Slint archive matrix remains available as the manual-only `Legacy Slint Build`
+workflow; it cannot publish a `v*` tag and is not overwritten.
 
-## v0.0.9-alpha artifact matrix
+## v0.0.10-alpha artifact matrix
 
-| Platform | Backend | Archive |
+| Platform | Bundled runtime | User-facing installer |
 |---|---|---|
-| Linux x86-64 | CPU | `LocalSR-Linux-CPU-x86_64.tar.gz` |
-| Linux x86-64 | CUDA | `LocalSR-Linux-CUDA-x86_64.tar.gz` |
-| Linux x86-64 | Intel XPU | `LocalSR-Linux-Intel-x86_64.tar.gz` |
-| Linux x86-64 | AMD ROCm | `LocalSR-Linux-ROCm-x86_64.tar.gz` |
-| Windows x86-64 | CPU | `LocalSR-Windows-CPU-x86_64.zip` |
-| Windows x86-64 | DirectML | `LocalSR-Windows-DirectML-x86_64.zip` |
-| Windows x86-64 | CUDA | `LocalSR-Windows-CUDA-x86_64.zip` |
-| macOS 12+ Intel | CPU | `LocalSR-macOS-x86_64.tar.gz` |
-| macOS 12+ Apple Silicon | MPS | `LocalSR-macOS-arm64.tar.gz` |
+| Apple Silicon macOS 12+ | native ARM64 PyTorch 2.13 / MPS | `LocalSR-v0.0.10-alpha-macOS-arm64.dmg` |
+| Windows 10/11 x86-64 | maintained PyTorch 2.13 / CPU | `LocalSR-v0.0.10-alpha-Windows-x86_64.exe` |
+| Linux x86-64 | maintained PyTorch 2.13 / CPU | `LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage` |
 
-The macOS archives contain `LocalSR.app`. Other archives contain the `LocalSR` portable directory.
-The workflow does not currently produce a DMG, AppImage, MSI, or Inno Setup executable.
+The first Tauri alpha deliberately publishes one uncomplicated installer per supported operating
+system. GPU-specific Windows and Linux engine packs remain a beta task; the UI and worker protocol
+already preserve CUDA, ROCm, XPU, DirectML, MPS, and CPU identifiers, but this release does not claim
+physical acceptance for packs it does not ship.
 
 ## Release gates
 
-Before native builds, the CPU job downloads Quick and Best into an empty temporary model cache,
-verifies pinned size and SHA-256 values, loads both through Spandrel, and runs real CPU inference.
+Every builder installs or mounts the actual package and starts the bundled Rust host in headless
+smoke mode. That host negotiates the production JSON-Lines protocol with the bundled Python worker.
+The builders then produce private checksum, metadata, architecture, signing, and smoke evidence.
 
-Every builder produces `.sha256`, `.metadata.json`, and `.architecture.txt` evidence beside its
-archive on the private artifact disk. The final gate:
+The publishing job locates exactly the three manifest installers, streams their SHA-256 digests,
+rejects duplicate content, and requires:
 
-- locates exactly one of every manifest artifact;
-- re-hashes each archive and checks its sidecar and metadata;
-- parses PE, ELF, or Mach-O headers for every native member;
-- requires the exact architecture for the main executable and all host libraries;
-- records backend-probe and frozen-worker smoke evidence; and
-- rejects any two archives with the same SHA-256 digest.
+- a valid ARM64 Mach-O tree inside the macOS DMG;
+- a valid x86-64 PE Windows installer;
+- a valid x86-64 ELF AppImage;
+- Developer ID, notarization, stapling, and Gatekeeper evidence for macOS;
+- timestamped Authenticode evidence for Windows; and
+- a passing installed-package worker smoke report on every platform.
 
-GitHub assets may be split into chunks to stay below the per-file upload limit. The public release
-uses a compact schema-v2 contract:
+Only five files are public: the three installers, `SHA256SUMS`, and `release-index.json`. The index
+embeds the private provenance/signing/architecture/smoke evidence so users are not faced with dozens
+of sidecars. The workflow downloads the draft release again and verifies `SHA256SUMS` before making
+it visible. An existing release is immutable: reruns refuse to use `--clobber` and require a version
+bump instead.
 
-- `Install-LocalSR.sh` and `Install-LocalSR.ps1` are the only files normal testers need to choose;
-- `SHA256SUMS` contains standard SHA-256 lines for both installers and every stored archive/part;
-- `release-index.json` records the nine logical bundles, ordered split parts, complete-archive
-  hashes, platform/backend selection fields, provenance metadata, architecture reports, and beta
-  readiness evidence; and
-- the nine backend archives or their ordered parts remain available for manual installation.
-
-Per-archive checksum, metadata, architecture, parts-manifest, and beta-readiness sidecars are not
-published separately. They remain build evidence and are consolidated into the two verification
-files above. This reduces v0.0.9-alpha from 46 assets to 18 without removing a backend. Publishing
-uploads and validates the complete replacement set before deleting stale assets, then validates the
-exact final set again.
-
-Artifact builders send completed archives to the private receiver with a timestamped, random-nonce
-HMAC covering the method, path, length, run/attempt, platform, filename, and content digest. The
-reusable `CI_ARTIFACT_TOKEN` is never sent on the wire, and the receiver rejects stale signatures
-and nonce replays. The receiver and `scripts/artifact_auth.py` must be deployed together, host clocks
-must remain synchronized, and the secret must be rotated if the receiver or a runner is compromised.
-The LAN endpoint is still HTTP, so this protects authentication and integrity rather than download
-confidentiality; release archives are intended to become public after the final verification gate.
+Builders send completed evidence to the private receiver with timestamped, nonce-bound HMAC. The
+reusable `CI_ARTIFACT_TOKEN` is never transmitted, and the receiver rejects stale signatures and
+replays. The LAN endpoint remains HTTP, so HMAC protects authentication and integrity rather than
+confidentiality; release payloads are intended for publication after the final gate.
 
 ## Version synchronization
 
-For v0.0.9-alpha, all of these must agree:
+For v0.0.10-alpha, all of these must agree:
 
-- tag: `v0.0.9-alpha`;
-- Python project/app version: `0.0.9-alpha`;
-- macOS numeric `CFBundleShortVersionString=0.0.9`, `CFBundleVersion=9`, and exact custom
-  `LocalSRReleaseVersion=0.0.9-alpha` (all derived from `pyproject.toml`);
-- Inno Setup metadata: `0.0.9-alpha`;
-- changelog and README release line; and
-- GitHub release title: `LocalSR v0.0.9-alpha`.
+- tag: `v0.0.10-alpha`;
+- Python, npm, Cargo, and Tauri version: `0.0.10-alpha`;
+- legacy Inno metadata (kept reproducible): `0.0.10-alpha`;
+- the three versioned filenames in `ci/tauri-release-artifacts.json`;
+- changelog, README, known limitations, acceptance notes, and release notes; and
+- GitHub release title: `LocalSR v0.0.10-alpha`.
 
-`scripts/check_release_version.py --tag v0.0.9-alpha` enforces this. A hyphenated version tag is
-created with `gh release create --prerelease`; reruns also correct the title/prerelease flag.
+`scripts/check_release_version.py --tag v0.0.10-alpha` enforces this. Hyphenated tags are published
+with `--prerelease`. The old Slint workflow is manual-only, so one tag cannot accidentally publish
+both application architectures.
 
 ## Signing and notarization
 
-Without credentials, the alpha workflow records an explicit `ad-hoc` macOS signing report in
-artifact metadata. It does not claim Gatekeeper acceptance. Production signing requires all of:
+The pipeline fails closed. It will not substitute ad-hoc or unsigned public downloads.
 
-- `MACOS_CERTIFICATE_P12_BASE64` — Developer ID Application certificate/key exported as `.p12`;
+macOS requires all of:
+
+- `MACOS_CERTIFICATE_P12_BASE64`;
 - `MACOS_CERTIFICATE_PASSWORD`;
-- `MACOS_SIGNING_IDENTITY` — complete Developer ID Application identity;
+- `MACOS_SIGNING_IDENTITY` (Developer ID Application);
 - `MACOS_NOTARY_APPLE_ID`;
-- `MACOS_NOTARY_PASSWORD` — app-specific Apple ID password; and
+- `MACOS_NOTARY_PASSWORD` (app-specific Apple ID password); and
 - `MACOS_TEAM_ID`.
 
-With all values present, `scripts/sign_macos_app.sh` imports the certificate into an ephemeral
-keychain, signs with hardened runtime, submits to Apple notarytool, staples the ticket, validates it,
-and requires Gatekeeper acceptance before archiving. The workflow makes these secrets available
-only to the dedicated signing/archive step, after dependency installation, packaging, and smoke
-checks have completed. A partial credential set fails the build.
+Tauri signs the app, submits it to Apple, and staples the ticket. The release verifier recursively
+checks the signature, Developer ID authority and Team ID, validates the app and DMG tickets, and
+requires Gatekeeper acceptance.
 
-Windows Authenticode credentials are not configured and Windows archives remain unsigned. Add and
-verify an Authenticode signing/timestamping stage before calling a Windows build public-beta ready.
+Windows requires:
 
-## macOS runtime security limitation
+- `WINDOWS_CERTIFICATE_PFX_BASE64`;
+- `WINDOWS_CERTIFICATE_PASSWORD`;
+- `WINDOWS_CERTIFICATE_THUMBPRINT`; and
+- `WINDOWS_TIMESTAMP_URL` from the certificate provider.
 
-The current universal cross-build pins PyTorch 2.2.2 because it is the last version that publishes
-both Intel and Apple-Silicon macOS wheels. PyTorch 2.2.2 has open advisories, including a critical
-`torch.load` arbitrary-code-execution issue fixed in 2.6.0. Consequently, the unsigned macOS
-archives are private alpha evidence and are not public-beta candidates. Do not load untrusted
-checkpoints.
+The certificate is imported into the runner user's temporary certificate store, Tauri signs the
+host and NSIS installer, and the release verifier requires a valid matching signer and timestamp.
+The certificate and bounded scratch directory are removed after the job.
 
-Before public beta, build the Apple-Silicon artifact natively with a supported/current PyTorch,
-re-scan the frozen bundle, and decide whether the Intel artifact can use a maintained runtime or
-must be removed. The repository currently has only an Intel macOS self-hosted runner; registering a
-native Apple-Silicon runner and changing artifact transfer are operational prerequisites.
+At the time the v0.0.10-alpha candidate was prepared, none of these production signing secrets were
+configured. Do not tag or claim the release exists until they are supplied.
 
-The Windows DirectML archive has a separate legacy-runtime constraint: Microsoft's latest preview
-`torch-directml` wheel pins PyTorch 2.4.1. LocalSR blocks unverified pickle/TorchScript checkpoints
-before that runtime sees them, but a maintained DirectML build, a different Windows acceleration
-backend, or exclusion from beta remains an owner decision.
+## Native macOS runtime
 
-## Beta readiness evidence
+The new macOS package refuses the former PyTorch 2.2.2 universal cross-build. It must run on a
+genuinely native `[self-hosted, macOS, ARM64]` runner and verifies both `uname`/Python architecture
+and the installed PyTorch 2.13 line. Intel macOS remains an open support decision and is not
+advertised by this alpha candidate.
 
-`scripts/check_beta_readiness.py` validates `ci/beta-readiness.json` in CI and release preflight.
-The complete snapshot is embedded in `release-index.json`. Normal alpha builds require a truthful,
-structurally valid register; only an actual beta promotion should use `--require-beta-ready`.
-Physical results should be copied from
-`docs/acceptance-record.example.json` and retained with the tested artifact digest.
+The repository currently has no registered online ARM64 Actions runner. Register the Mac mini's
+native ARM64 runner and install its boot service before tagging. Do not relabel an x86-64/Rosetta
+runner as ARM64.
 
-## Publishing v0.0.9-alpha
+## Publishing v0.0.10-alpha
 
-1. Run the offline suite, lint/format, Slint compile, package-data inspection, and live-model check.
-2. Merge the release commit to `main` and require green CI.
-3. Create the annotated tag: `git tag -a v0.0.9-alpha -m "LocalSR v0.0.9-alpha"`.
-4. Push the tag. The workflow publishes only after all nine archives pass the final gate.
-5. Confirm the GitHub release is titled `LocalSR v0.0.9-alpha`, marked prerelease, and contains both
-   installers, `SHA256SUMS`, `release-index.json`, and all archive/part assets named by the index—18
-   assets for the current build, with no stale per-bundle sidecars.
-6. Complete the physical-machine items in `docs/acceptance.md` before promoting the build to public
-   beta.
+1. Supply the Apple and Windows signing secrets and register the native ARM64 macOS runner.
+2. Merge the release commit to `main` only after normal CI and Tauri CI are green.
+3. Create the annotated tag: `git tag -a v0.0.10-alpha -m "LocalSR v0.0.10-alpha"`.
+4. Push the tag. All three signed package jobs must finish before the draft release is created.
+5. Confirm the release is titled `LocalSR v0.0.10-alpha`, marked prerelease, and has exactly five
+   assets: three installers, `SHA256SUMS`, and `release-index.json`.
+6. Complete the physical-machine items in `docs/acceptance.md` before promoting this alpha to beta.
 
-## Headless macOS runner startup
+## Headless legacy macOS runner startup
 
-The stock GitHub macOS service is installed in the runner user's `~/Library/LaunchAgents` directory.
-That service belongs to the GUI login session, so a headless VM can be running at its login window
-while GitHub still reports the runner offline.
-
-`macOS Runner Boot Maintenance` is a manual, repository-owner-only workflow for the dedicated
-`macmini-macos-x64` runner. It validates the existing GitHub LaunchAgent and runner ownership, then
-installs a root-owned LaunchDaemon that invokes GitHub's required `runsvc.sh` entry point as the same
-unprivileged runner user. It does not enable automatic login or store the user's password. The
-daemon waits for `/Volumes/CISCRATCH` to become writable before connecting to GitHub.
-
-Run this workflow only when no other macOS jobs are queued. The one-time transition waits for its
-own Actions worker to exit, disables the login-scoped agent, starts the boot daemon, and reboots the
-guest. Verify that `macmini-macos-x64` returns online while the guest remains at the login window.
-If passwordless `sudo` is not already configured for the runner account, the maintenance workflow
-fails closed without changing the service; establish that policy locally before retrying.
+The manual legacy workflow can still use the boot-managed `macmini-macos-x64` runner. Its
+LaunchDaemon starts at the login window and waits for `/Volumes/CISCRATCH`. This does not satisfy the
+new native ARM64 package requirement; the Mac mini needs a separately registered native ARM64
+runner identity and matching boot service for the signed Tauri release.

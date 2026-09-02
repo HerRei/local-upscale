@@ -5,7 +5,7 @@
   "artifact": {
     "filename": "replace-with-release-archive-name",
     "sha256": "replace-with-64-character-release-digest",
-    "version": "0.0.9-alpha"
+    "version": "0.0.10-alpha"
   },
   "environment": {
     "hardware": "model, CPU, GPU, and memory",

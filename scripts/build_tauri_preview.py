@@ -95,7 +95,17 @@ def worker_executable() -> Path:
     return ENGINE_DIR / name
 
 
-def build_worker() -> None:
+def worker_target_arch(target: str | None) -> str | None:
+    if not target:
+        return None
+    if target.startswith("aarch64-"):
+        return "arm64"
+    if target.startswith("x86_64-"):
+        return "x86_64"
+    return None
+
+
+def build_worker(target: str | None = None) -> None:
     if shutil.which("pyinstaller") is None:
         try:
             import PyInstaller  # noqa: F401
@@ -106,6 +116,9 @@ def build_worker() -> None:
             ) from error
     WORKER_DIST.mkdir(parents=True, exist_ok=True)
     WORKER_WORK.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    if target_arch := worker_target_arch(target):
+        environment["LOCALSR_TARGET_ARCH"] = target_arch
     run(
         [
             sys.executable,
@@ -118,14 +131,15 @@ def build_worker() -> None:
             "--workpath",
             str(WORKER_WORK),
             str(ROOT / "packaging" / "tauri_worker.spec"),
-        ]
+        ],
+        env=environment,
     )
     executable = worker_executable()
     if not executable.is_file():
         raise SystemExit(f"worker build did not create {executable}")
 
 
-def write_bundle_overlay() -> None:
+def write_bundle_overlay(*, require_signing: bool = False) -> None:
     if not ENGINE_DIR.is_dir():
         raise SystemExit(f"missing worker engine directory: {ENGINE_DIR}")
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -136,12 +150,36 @@ def write_bundle_overlay() -> None:
             (ROOT / "THIRD_PARTY_NOTICES.md").as_posix(): "THIRD_PARTY_NOTICES.md",
         },
     }
-    if sys.platform == "darwin" and not (
-        os.environ.get("APPLE_SIGNING_IDENTITY") or os.environ.get("APPLE_CERTIFICATE")
-    ):
-        # Tauri recommends a final ad-hoc seal for credential-free Apple
-        # Silicon previews. A real identity supplied by CI overrides this.
-        bundle["macOS"] = {"signingIdentity": "-"}
+    if sys.platform == "darwin":
+        apple_signing = os.environ.get("APPLE_SIGNING_IDENTITY") or os.environ.get(
+            "APPLE_CERTIFICATE"
+        )
+        apple_id_notary = all(
+            os.environ.get(name) for name in ("APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID")
+        )
+        api_notary = all(
+            os.environ.get(name)
+            for name in ("APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_PATH")
+        )
+        if require_signing and not (apple_signing and (apple_id_notary or api_notary)):
+            raise SystemExit("production macOS signing and notarization credentials are required")
+        if not apple_signing:
+            # Tauri recommends a final ad-hoc seal for credential-free Apple
+            # Silicon previews. A real identity supplied by CI overrides this.
+            bundle["macOS"] = {"signingIdentity": "-"}
+    if os.name == "nt":
+        thumbprint = os.environ.get("WINDOWS_CERTIFICATE_THUMBPRINT", "").strip()
+        timestamp_url = os.environ.get("WINDOWS_TIMESTAMP_URL", "").strip()
+        if require_signing and (not thumbprint or not timestamp_url):
+            raise SystemExit(
+                "WINDOWS_CERTIFICATE_THUMBPRINT and WINDOWS_TIMESTAMP_URL are required"
+            )
+        if thumbprint and timestamp_url:
+            bundle["windows"] = {
+                "certificateThumbprint": thumbprint,
+                "digestAlgorithm": "sha256",
+                "timestampUrl": timestamp_url,
+            }
     CONFIG_PATH.write_text(
         json.dumps(
             {
@@ -159,6 +197,11 @@ def main() -> int:
     parser.add_argument("--debug", action="store_true", help="Build an unoptimized desktop binary")
     parser.add_argument("--skip-worker", action="store_true", help="Reuse an existing engine build")
     parser.add_argument("--skip-checks", action="store_true")
+    parser.add_argument(
+        "--require-signing",
+        action="store_true",
+        help="Refuse release bundles unless platform production signing is configured",
+    )
     parser.add_argument("--target", help="Native Rust target triple")
     bundle_mode = parser.add_mutually_exclusive_group()
     bundle_mode.add_argument(
@@ -172,8 +215,8 @@ def main() -> int:
 
     run([sys.executable, str(ROOT / "scripts" / "export_desktop_catalog.py")])
     if not args.skip_worker:
-        build_worker()
-    write_bundle_overlay()
+        build_worker(args.target)
+    write_bundle_overlay(require_signing=args.require_signing)
 
     if not (DESKTOP / "node_modules").is_dir():
         run([npm_executable(), "ci"], cwd=DESKTOP)

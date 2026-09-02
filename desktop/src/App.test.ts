@@ -91,7 +91,7 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     protocol_version: 1,
     minimum_protocol_version: 1,
     engine_id: 'localsr.test',
-    engine_version: '0.0.9-alpha',
+    engine_version: '0.0.10-alpha',
     features: ['image', 'video_frame', 'video_seedvr2'],
     model_formats: ['.safetensors'],
     video_engines: ['spandrel_image', 'seedvr2']

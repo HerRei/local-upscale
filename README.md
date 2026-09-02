@@ -4,14 +4,14 @@
 
 LocalSR is a private, local-first desktop application for image restoration and super-resolution.
 Media and downloaded model weights stay on the computer; the app has no cloud processing or
-analytics. The current release line is **v0.0.9-alpha**.
+analytics. The current release candidate is **v0.0.10-alpha**.
 
 ## Features
 
 - Upscale photos, screenshots, anime, and illustrations at 2×, 3×, or 4×.
 - Denoise and deblur images at their original dimensions.
 - Process JPEG, PNG, WebP, TIFF, and DNG camera RAW input with ICC-aware output.
-- Queue images and run one accelerator-safe job at a time.
+- Queue images and videos together with per-item models and run one accelerator-safe job at a time.
 - Use Quick Start or Best Quality recipes, or choose a model and hardware settings manually.
 - Download curated models on demand with pinned sizes and SHA-256 verification.
 - Cancel cooperatively, estimate memory/disk/time, and preview completed tiles.
@@ -27,53 +27,45 @@ weights. Custom `.safetensors` checkpoints are accepted by default. Unverified p
 
 ## Install the alpha
 
-Open the [v0.0.9-alpha release](https://github.com/HerRei/local-upscale/releases/tag/v0.0.9-alpha)
-and download just one file:
+The signed release pipeline will publish the [v0.0.10-alpha
+prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.10-alpha) only after every
+platform gate passes. Download the one installer matching the operating system:
 
-- macOS or Linux: `Install-LocalSR.sh`, then run `bash Install-LocalSR.sh`.
-- Windows: `Install-LocalSR.ps1`, then run
-  `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-LocalSR.ps1`.
+- Apple Silicon macOS 12+: `LocalSR-v0.0.10-alpha-macOS-arm64.dmg`
+- Windows 10/11 x86-64: `LocalSR-v0.0.10-alpha-Windows-x86_64.exe`
+- Linux x86-64: `LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage`
 
-The installer detects the platform and safest matching backend, downloads only that bundle, verifies
-every downloaded part against `SHA256SUMS`, verifies the reconstructed archive against
-`release-index.json`, and replaces an existing installation transactionally. Use `--flavor` on
-macOS/Linux or `-Flavor` on Windows only when overriding automatic hardware selection.
+There are only five release assets: those three installers, `SHA256SUMS`, and
+`release-index.json`. The macOS download must be Developer ID signed, notarized, stapled, and
+Gatekeeper accepted; the Windows download must have a valid timestamped Authenticode signature.
+The workflow refuses to publish an unsigned substitute or overwrite an existing release.
 
-Because the repository is private, alpha testers must first authenticate GitHub CLI with
-`gh auth login`. That requirement goes away only if the owner chooses a public download location.
-The scripts and application are not yet Developer ID/Authenticode signed; read the trust warning
-below before running them.
+Because the repository is private, testers still need repository access. Choosing a public download
+location remains a beta decision.
 
 ## Platform and advanced downloads
 
-The v0.0.9-alpha release workflow produces portable archives, not DMGs, AppImages, MSIs, or Windows
-Setup installers:
+The v0.0.10-alpha candidate is the first installable Tauri/Svelte host. It coexists with the former
+Slint app under a distinct bundle identifier and state directory, so installing it does not replace
+an older LocalSR installation:
 
 | Platform | Architecture/backend | Artifact |
 |---|---|---|
-| macOS 12+ | Apple Silicon / MPS | `LocalSR-macOS-arm64.tar.gz` |
-| macOS 12+ | Intel / CPU | `LocalSR-macOS-x86_64.tar.gz` |
-| Windows 10/11 | x86-64 / CPU | `LocalSR-Windows-CPU-x86_64.zip` |
-| Windows 10/11 | x86-64 / DirectML | `LocalSR-Windows-DirectML-x86_64.zip` |
-| Windows 10/11 | x86-64 / NVIDIA CUDA | `LocalSR-Windows-CUDA-x86_64.zip` |
-| Linux x86-64 | CPU, CUDA, Intel XPU, or ROCm | one backend-specific `.tar.gz` |
+| macOS 12+ | Apple Silicon / MPS | signed and notarized `.dmg` |
+| Windows 10/11 | x86-64 / CPU | Authenticode-signed NSIS `.exe` |
+| Linux x86-64 | CPU | `.AppImage` plus SHA-256 |
 
-Every logical archive has a checksum, provenance metadata, and a native-binary architecture report.
-To keep the release page compact, all downloadable-part hashes are in the standard `SHA256SUMS`
-file, while logical-archive hashes, provenance, architecture reports, split-part ordering, and beta
-readiness evidence are consolidated in `release-index.json`. The release gate parses PE, ELF, and
-Mach-O headers, rejects duplicate archive digests, and requires the exact published asset set.
-Alpha suffixes are published as GitHub prereleases.
+Every installer is installed or mounted in CI, starts its bundled isolated worker, and carries
+checksum, provenance, signing, smoke, and PE/ELF/Mach-O evidence in `release-index.json`. Digests
+must be distinct. Alpha suffixes are always GitHub prereleases.
 
 The release index embeds an intentionally honest machine-readable snapshot of completed and
 unresolved beta gates. It prevents packaging success from being confused with physical-device,
 signing, licensing, or public-access acceptance.
 
-Production Apple Developer ID/Authenticode credentials are not configured yet. The v0.0.9-alpha
-downloads are therefore not suitable for a public beta and may trigger operating-system trust
-warnings. The macOS pipeline is ready to sign, notarize, staple, and Gatekeeper-check the `.app`
-when the documented secrets are supplied. See [release documentation](docs/releasing.md) and
-[known limitations](KNOWN_LIMITATIONS.md).
+Production Apple Developer ID/Authenticode credentials are not configured yet, so v0.0.10-alpha
+remains an unpublished candidate rather than an unsigned public download. See [release
+documentation](docs/releasing.md) and [known limitations](KNOWN_LIMITATIONS.md).
 
 Homebrew is intentionally not advertised for this alpha: the old formula used placeholder hashes
 and inconsistent tap names. It should return only after signed release assets have stable URLs and
@@ -144,8 +136,8 @@ localsr photo.png --preset quick --auto-start
 localsr video.mp4 --recipe "My Video Recipe" --auto-start
 ```
 
-The portable archives do not run an installer automatically. The verified installer scripts above
-add the normal application/command shortcuts; they are not DMG, PKG, MSI, or Setup packages.
+The native installers register the normal application entry. Optional Finder, Explorer, Nautilus,
+KDE, and desktop actions are installed explicitly from LocalSR's native menu.
 
 ## Development and tests
 
@@ -162,10 +154,10 @@ The normal test suite is offline and deterministic. `validate_live_models.py` is
 networked acceptance check and downloads the real Quick and Best checkpoints. Release builds also
 smoke-test the frozen worker and verify every archive against [the artifact manifest](ci/release-artifacts.json).
 
-An additive Tauri/Svelte host is being developed under [`desktop/`](desktop/README.md). It preserves
-the released Slint application and uses a distinct bundle identity while sharing the same isolated
-Python inference worker and verified model cache. Its CI is separate from the current release
-workflow; it becomes the default only after parity, physical-backend, and signed-distribution gates.
+The Tauri/Svelte host lives under [`desktop/`](desktop/README.md). Rust owns native authority,
+durable queueing, model installation, and worker recovery; the isolated Python worker retains broad
+PyTorch/Spandrel/video compatibility. The legacy Slint build remains manually reproducible and its
+installed app is not overwritten.
 
 ## Feedback and diagnostics
 
@@ -179,7 +171,8 @@ as a release gate rather than being represented as solved.
 
 ## Licensing
 
-LocalSR source is distributed under the [MIT License](LICENSE). Official UI builds use Slint under
-its royalty-free/community option and display Slint's official `AboutSlint` attribution widget in
-Advanced settings. Slint, PyTorch, Spandrel, vendored SeedVR2 code, and downloaded checkpoints retain
-their own licenses. See [third-party notices](THIRD_PARTY_NOTICES.md) before redistributing a build.
+LocalSR's Tauri/Rust/Svelte application harness is distributed under the [MIT License](LICENSE).
+PyTorch, Spandrel, the retained legacy Slint host, vendored SeedVR2 code, and externally downloaded
+checkpoints retain their own licenses. Model files are not relicensed or bundled merely because the
+app offers a verified download. See [third-party notices](THIRD_PARTY_NOTICES.md) before
+redistributing a build.

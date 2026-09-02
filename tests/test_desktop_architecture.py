@@ -51,6 +51,18 @@ def test_rejects_preview_release_coupling() -> None:
     assert any("explicit manual build" in violation for violation in violations)
 
 
+def test_rejects_unsigned_or_overwriting_desktop_release() -> None:
+    violations = architecture.signed_release_violations(
+        "on:\n  push:\n    tags:\n",
+        "permissions:\n  contents: write\n  contents: write\nrun: gh release upload --clobber\n",
+    )
+
+    assert any("legacy Slint" in violation for violation in violations)
+    assert any("fail-closed Tauri signing" in violation for violation in violations)
+    assert any("must not overwrite" in violation for violation in violations)
+    assert any("only the signed desktop publishing job" in violation for violation in violations)
+
+
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
     assert "@tauri-apps/plugin-shell" in architecture.FORBIDDEN_WEBVIEW_PACKAGES
     assert "tauri-plugin-shell" in architecture.FORBIDDEN_TAURI_PLUGINS

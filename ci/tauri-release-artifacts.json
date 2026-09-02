@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "version": "0.0.10-alpha",
+  "artifacts": [
+    {
+      "filename": "LocalSR-v0.0.10-alpha-macOS-arm64.dmg",
+      "platform": "macos",
+      "architecture": "arm64",
+      "backend": "MPS",
+      "signing": "developer-id-notarized"
+    },
+    {
+      "filename": "LocalSR-v0.0.10-alpha-Windows-x86_64.exe",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "signing": "authenticode-valid"
+    },
+    {
+      "filename": "LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "signing": "sha256"
+    }
+  ]
+}

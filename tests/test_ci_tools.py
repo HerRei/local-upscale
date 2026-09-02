@@ -156,12 +156,12 @@ def test_release_verifier_rejects_duplicate_archive_digests():
 
 
 def test_release_metadata_is_synchronized():
-    assert release_version.check("v0.0.9-alpha", ROOT) == "0.0.9-alpha"
+    assert release_version.check("v0.0.10-alpha", ROOT) == "0.0.10-alpha"
 
 
 def test_beta_readiness_register_is_valid_and_honest():
     data = beta_readiness.validate(ROOT / "ci" / "beta-readiness.json", ROOT)
-    assert data["release"] == "0.0.9-alpha"
+    assert data["release"] == "0.0.10-alpha"
     assert data["beta_ready"] is False
     statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
     assert statuses["automated-release-integrity"] == "automated-pass"
