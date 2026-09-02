@@ -48,11 +48,11 @@ legacy = ["PySide6>=6.5.0"]
 video = [
     "omegaconf>=2.3.0",
     # Modern platforms use the release that fixes the custom-pipeline RCEs.
-    "diffusers>=0.38.0,<0.39; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+    "diffusers<0.39,>=0.38.0; platform_system != 'Darwin' or platform_machine != 'x86_64'",
     # Intel macOS is limited to a PyTorch build without torch.xpu, which
     # diffusers 0.36+ imports unconditionally. This legacy exception remains
     # alpha-only and is recorded as an unresolved beta security gate.
-    "diffusers>=0.33.1,<0.36; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+    "diffusers>=0.33.1,<0.39; platform_system == 'Darwin' and platform_machine == 'x86_64'",
     "rotary-embedding-torch>=0.5.3",
     "einops",
     "psutil",

@@ -318,35 +318,8 @@ nvtx = [
 
 [[package]]
 name = "diffusers"
-version = "0.35.2"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-    "python_full_version < '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
-]
-dependencies = [
-    { name = "filelock" },
-    { name = "huggingface-hub" },
-    { name = "importlib-metadata" },
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "regex" },
-    { name = "requests" },
-    { name = "safetensors" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/03/68/288ca23c7c05c73e87ffe5efffc282400ac9b017f7a9bb03883f4310ea15/diffusers-0.35.2.tar.gz", hash = "sha256:30ecd552303edfcfe1724573c3918a8462ee3ab4d529bdbd4c0045f763affded", size = 3366711, upload-time = "2025-10-15T04:05:17.213Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/2e/38d9824f8c6bb048c5ba21c6d4da54c29c162a46b58b3ef907a360a76d3e/diffusers-0.35.2-py3-none-any.whl", hash = "sha256:d50d5e74fdd6dcf55e5c1d304bc52cc7c2659abd1752740d736d7b54078b4db5", size = 4121649, upload-time = "2025-10-15T04:05:14.391Z" },
-]
-
-[[package]]
-name = "diffusers"
 version = "0.38.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "(python_full_version >= '3.12' and platform_machine != 'x86_64') or (python_full_version >= '3.12' and sys_platform != 'darwin')",
-    "(python_full_version < '3.12' and platform_machine != 'x86_64') or (python_full_version < '3.12' and sys_platform != 'darwin')",
-]
 dependencies = [
     { name = "filelock" },
     { name = "httpx" },
@@ -530,7 +503,7 @@ wheels = [
 
 [[package]]
 name = "localsr"
-version = "0.0.9a0"
+version = "0.0.10a0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
@@ -561,8 +534,7 @@ package = [
     { name = "pyinstaller" },
 ]
 video = [
-    { name = "diffusers", version = "0.35.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
-    { name = "diffusers", version = "0.38.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "diffusers" },
     { name = "einops" },
     { name = "gguf" },
     { name = "omegaconf" },
@@ -574,7 +546,7 @@ video = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=12.0.0" },
-    { name = "diffusers", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'video'", specifier = ">=0.33.1,<0.36" },
+    { name = "diffusers", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'video'", specifier = ">=0.33.1,<0.39" },
     { name = "diffusers", marker = "(platform_machine != 'x86_64' and extra == 'video') or (sys_platform != 'darwin' and extra == 'video')", specifier = ">=0.38.0,<0.39" },
     { name = "einops", marker = "extra == 'video'" },
     { name = "gguf", marker = "extra == 'video'" },
