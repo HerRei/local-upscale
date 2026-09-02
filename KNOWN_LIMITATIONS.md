@@ -1,11 +1,11 @@
 # Known limitations — v0.0.10-alpha
 
-- The next host has one uncomplicated installer per operating system, but the signed v0.0.10-alpha
-  candidate cannot be published until Apple Developer ID/notarization and Windows Authenticode
-  credentials are configured. The pipeline refuses unsigned public substitutes.
-- The new macOS DMG requires a native ARM64 Actions runner and PyTorch 2.13. No such runner is
-  currently registered. Intel macOS is not advertised by this candidate; deciding whether to
-  retain Intel support remains an owner decision.
+- The next host has one uncomplicated installer per operating system, but v0.0.10-alpha is a
+  testing-only unsigned exception: macOS is ad-hoc sealed and Windows lacks Authenticode. Production
+  signing, notarization, stapling, and trust validation remain mandatory before beta.
+- The Apple-Silicon DMG is Intel→ARM cross-built on the Mac mini with PyTorch 2.2.2, the last line
+  with paired Intel/ARM wheels. It is known security debt and may not be promoted to beta. A native
+  maintained ARM runtime and the long-term Intel-support decision remain open.
 - The first Tauri alpha bundles CPU inference on Windows/Linux and MPS on Apple Silicon. CUDA,
   DirectML, Intel XPU, and ROCm remain implemented in the worker contract but need downloadable
   engine packs and physical acceptance before the new installer can advertise them.

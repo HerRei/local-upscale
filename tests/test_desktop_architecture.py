@@ -63,6 +63,17 @@ def test_rejects_unsigned_or_overwriting_desktop_release() -> None:
     assert any("only the signed desktop publishing job" in violation for violation in violations)
 
 
+def test_cross_alpha_release_must_remain_exact_and_non_overwriting() -> None:
+    violations = architecture.cross_alpha_release_violations(
+        "on:\n  push:\n    tags:\n      - v*\npermissions:\n  contents: write\n"
+        "  contents: write\nrun: gh release upload --clobber\n"
+    )
+
+    assert any("exact v0.0.10 tag" in violation for violation in violations)
+    assert any("must not overwrite" in violation for violation in violations)
+    assert any("only the v0.0.10" in violation for violation in violations)
+
+
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
     assert "@tauri-apps/plugin-shell" in architecture.FORBIDDEN_WEBVIEW_PACKAGES
     assert "tauri-plugin-shell" in architecture.FORBIDDEN_TAURI_PLUGINS

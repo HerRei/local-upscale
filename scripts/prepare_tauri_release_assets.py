@@ -16,6 +16,8 @@ EXPECTED_LIVE_MODELS = {
     "Quick": "span_photo_x4",
     "Best": "realplksr_nomoswebphoto_x4",
 }
+SIGNED_POLICY = "production-signed"
+CROSS_ALPHA_POLICY = "v0.0.10-cross-alpha-exception"
 
 
 def sha256(path: Path) -> str:
@@ -42,6 +44,67 @@ def load_json(path: Path) -> dict[str, object]:
     return value
 
 
+def release_policy(
+    manifest: dict[str, object],
+    readiness: dict[str, object] | None,
+    version: str,
+) -> str:
+    policy = str(manifest.get("release_policy", SIGNED_POLICY))
+    if policy == SIGNED_POLICY:
+        return policy
+    if policy != CROSS_ALPHA_POLICY:
+        raise ValueError(f"unsupported release policy {policy!r}")
+    if version != "0.0.10-alpha":
+        raise ValueError("the unsigned cross-build exception is restricted to v0.0.10-alpha")
+    if readiness is None or readiness.get("beta_ready") is not False:
+        raise ValueError("the unsigned cross-build exception must be explicitly non-beta")
+    return policy
+
+
+def validate_signing_evidence(
+    platform: str,
+    signing: object,
+    expected: object,
+    policy: str,
+) -> dict[str, object]:
+    if not isinstance(signing, dict) or signing.get("status") != expected:
+        raise ValueError(f"signing evidence does not match {expected!r}")
+    if expected == "developer-id-notarized" and not all(
+        signing.get(field)
+        for field in ("developer_id", "team_id", "notarized", "stapled", "gatekeeper_accepted")
+    ):
+        raise ValueError("incomplete Developer ID/notarization evidence")
+    if expected == "authenticode-valid" and not all(
+        signing.get(field) for field in ("signer_subject", "signer_thumbprint", "timestamped")
+    ):
+        raise ValueError("incomplete Authenticode evidence")
+    if expected in {"ad-hoc-alpha", "unsigned-alpha"}:
+        if policy != CROSS_ALPHA_POLICY or platform not in {"macos", "windows"}:
+            raise ValueError("unsigned evidence is allowed only by the v0.0.10 cross-alpha policy")
+        if signing.get("production_signed") is not False or not signing.get("warning"):
+            raise ValueError("unsigned alpha evidence must record its warning and unsigned state")
+    return signing
+
+
+def validate_smoke_evidence(
+    platform: str,
+    smoke: object,
+    policy: str,
+) -> dict[str, object]:
+    if isinstance(smoke, dict) and smoke.get("passed") is True:
+        return smoke
+    if (
+        policy == CROSS_ALPHA_POLICY
+        and platform == "macos"
+        and isinstance(smoke, dict)
+        and smoke.get("mode") == "cross-build-static"
+        and smoke.get("static_verified") is True
+        and smoke.get("runtime_tested") is False
+    ):
+        return smoke
+    raise ValueError("no acceptable installed-package smoke evidence")
+
+
 def prepare(
     root: Path,
     manifest_path: Path,
@@ -58,6 +121,7 @@ def prepare(
     readiness = load_json(readiness_path) if readiness_path else None
     if readiness and readiness.get("release") != version:
         raise ValueError("beta-readiness version does not match the release manifest")
+    policy = release_policy(manifest, readiness, version)
     entries = manifest.get("artifacts")
     if not isinstance(entries, list) or len(entries) != 3:
         raise ValueError("the compact release must contain exactly three installers")
@@ -97,24 +161,21 @@ def prepare(
         for key, value in expected.items():
             if metadata.get(key) != value:
                 raise ValueError(f"{filename} metadata {key!r} does not match manifest")
-        smoke = metadata.get("package_smoke")
-        if not isinstance(smoke, dict) or smoke.get("passed") is not True:
-            raise ValueError(f"{filename} has no passing installed-package smoke evidence")
+        try:
+            smoke = validate_smoke_evidence(
+                str(entry["platform"]), metadata.get("package_smoke"), policy
+            )
+        except ValueError as error:
+            raise ValueError(f"{filename} has {error}") from error
         if architecture.get("result") != "PASS" or not architecture.get("native_binary_count"):
             raise ValueError(f"{filename} has no passing native architecture evidence")
-        signing = metadata.get("signing")
         expected_signing = entry.get("signing")
-        if not isinstance(signing, dict) or signing.get("status") != expected_signing:
-            raise ValueError(f"{filename} signing evidence does not match {expected_signing!r}")
-        if entry["platform"] == "macos" and not all(
-            signing.get(field)
-            for field in ("developer_id", "team_id", "notarized", "stapled", "gatekeeper_accepted")
-        ):
-            raise ValueError(f"{filename} has incomplete Developer ID/notarization evidence")
-        if entry["platform"] == "windows" and not all(
-            signing.get(field) for field in ("signer_subject", "signer_thumbprint", "timestamped")
-        ):
-            raise ValueError(f"{filename} has incomplete Authenticode evidence")
+        try:
+            signing = validate_signing_evidence(
+                str(entry["platform"]), metadata.get("signing"), expected_signing, policy
+            )
+        except ValueError as error:
+            raise ValueError(f"{filename} has {error}") from error
         if entry["platform"] == "linux":
             live_models = metadata.get("live_models")
             if not isinstance(live_models, dict) or live_models.get("result") != "PASS":
@@ -167,6 +228,7 @@ def prepare(
         "version": version,
         "generated_at": datetime.now(UTC).isoformat(),
         "channel": "alpha",
+        "release_policy": policy,
         "beta_ready": False,
         "live_model_evidence": live_model_evidence,
         "installers": bundles,

@@ -20,6 +20,9 @@ stable release is published.
   in one release index, leaving only five user-facing assets.
 - Made the existing real empty-cache Quick/Best download and inference acceptance test a mandatory
   gate for the signed Tauri release, with its evidence embedded in the compact release index.
+- Added a one-release Mac-mini Intel→ARM64 cross-build exception for v0.0.10-alpha. Its ad-hoc
+  macOS seal, unsigned Windows installer, static-only ARM package check, and PyTorch 2.2.2 security
+  debt are explicit in release metadata and cannot be reused by a later version or beta.
 
 ### Fixed
 
@@ -38,9 +41,9 @@ stable release is published.
 
 - Temporal video requests now bind the selected catalog model ID to its exact expected bundle path
   and verify every SeedVR2 file before the worker initializes the engine.
-- Public Tauri release jobs fail closed without Developer ID/notarization and timestamped
-  Authenticode credentials, refuse to overwrite an existing release, and require a native ARM64
-  PyTorch 2.13 macOS build instead of reviving the PyTorch 2.2.2 cross-build.
+- The normal Tauri release jobs fail closed without Developer ID/notarization and timestamped
+  Authenticode credentials and require native ARM64 PyTorch 2.13. The exact v0.0.10-alpha tag is
+  excluded and handled by the separately bounded, explicitly unsigned cross-alpha workflow.
 - Required `pip check`, PyTorch 2.13, and Diffusers 0.38 runtime assertions on every signed Tauri
   release platform so legacy vulnerable dependency resolutions cannot enter 0.0.10 artifacts.
 

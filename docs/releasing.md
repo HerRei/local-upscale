@@ -1,14 +1,15 @@
 # Native release process
 
-`Signed Tauri Alpha Release` (`.github/workflows/desktop-release.yml`) is the tag-triggered release
-pipeline. The former Slint archive matrix remains available as the manual-only `Legacy Slint Build`
-workflow; it cannot publish a `v*` tag and is not overwritten.
+`v0.0.10 Mac mini Cross Alpha` (`.github/workflows/v0.0.10-cross-alpha.yml`) is a one-release
+exception that accepts only the exact `v0.0.10-alpha` tag. The normal
+`Signed Tauri Alpha Release` pipeline explicitly skips that tag and continues to fail closed for
+later signed releases. The former Slint matrix remains manual-only and cannot publish a `v*` tag.
 
 ## v0.0.10-alpha artifact matrix
 
 | Platform | Bundled runtime | User-facing installer |
 |---|---|---|
-| Apple Silicon macOS 12+ | native ARM64 PyTorch 2.13 / MPS | `LocalSR-v0.0.10-alpha-macOS-arm64.dmg` |
+| Apple Silicon macOS 12+ | cross-built ARM64 PyTorch 2.2.2 / MPS | `LocalSR-v0.0.10-alpha-macOS-arm64.dmg` |
 | Windows 10/11 x86-64 | maintained PyTorch 2.13 / CPU | `LocalSR-v0.0.10-alpha-Windows-x86_64.exe` |
 | Linux x86-64 | maintained PyTorch 2.13 / CPU | `LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage` |
 
@@ -19,9 +20,11 @@ physical acceptance for packs it does not ship.
 
 ## Release gates
 
-Every builder installs or mounts the actual package and starts the bundled Rust host in headless
-smoke mode. That host negotiates the production JSON-Lines protocol with the bundled Python worker.
-The builders then produce private checksum, metadata, architecture, signing, and smoke evidence.
+Linux and Windows install the actual package and start the bundled Rust host in headless smoke mode.
+That host negotiates the production JSON-Lines protocol with the bundled Python worker. The Intel
+Mac mini cannot execute an ARM64 package, so the macOS job recursively verifies the DMG/Mach-O tree
+and records `runtime_tested=false`; a source-equivalent native ARM GUI/worker smoke was completed
+separately. The builders produce private checksum, metadata, architecture, signing, and smoke evidence.
 
 The publishing job locates exactly the three manifest installers, streams their SHA-256 digests,
 rejects duplicate content, and requires:
@@ -29,9 +32,9 @@ rejects duplicate content, and requires:
 - a valid ARM64 Mach-O tree inside the macOS DMG;
 - a valid x86-64 PE Windows installer;
 - a valid x86-64 ELF AppImage;
-- Developer ID, notarization, stapling, and Gatekeeper evidence for macOS;
-- timestamped Authenticode evidence for Windows; and
-- a passing installed-package worker smoke report on every platform.
+- explicit ad-hoc/unsigned warnings for macOS and Windows;
+- a passing installed-package worker smoke on Linux and Windows; and
+- an honest static-only cross-build report for macOS rather than a fabricated runtime pass.
 
 Only five files are public: the three installers, `SHA256SUMS`, and `release-index.json`. The index
 embeds the private provenance/signing/architecture/smoke evidence so users are not faced with dozens
@@ -51,7 +54,7 @@ For v0.0.10-alpha, all of these must agree:
 - tag: `v0.0.10-alpha`;
 - Python, npm, Cargo, and Tauri version: `0.0.10-alpha`;
 - legacy Inno metadata (kept reproducible): `0.0.10-alpha`;
-- the three versioned filenames in `ci/tauri-release-artifacts.json`;
+- the three versioned filenames in `ci/tauri-cross-alpha-artifacts.json`;
 - changelog, README, known limitations, acceptance notes, and release notes; and
 - GitHub release title: `LocalSR v0.0.10-alpha`.
 
@@ -61,7 +64,10 @@ both application architectures.
 
 ## Signing and notarization
 
-The pipeline fails closed. It will not substitute ad-hoc or unsigned public downloads.
+The exact v0.0.10-alpha exception is not production signed. macOS receives Tauri's ad-hoc seal and
+Windows has no Authenticode signature; Gatekeeper and SmartScreen may warn or reject them. This is
+recorded in each metadata sidecar and the public release index. It is not permitted for any later
+version or beta. The normal release pipeline continues to fail closed and requires the following:
 
 macOS requires all of:
 
@@ -87,33 +93,39 @@ The certificate is imported into the runner user's temporary certificate store, 
 host and NSIS installer, and the release verifier requires a valid matching signer and timestamp.
 The certificate and bounded scratch directory are removed after the job.
 
-At the time the v0.0.10-alpha candidate was prepared, none of these production signing secrets were
-configured. Do not tag or claim the release exists until they are supplied.
+At the time v0.0.10-alpha was prepared, none of these production signing secrets were configured.
+They are hard beta gates, not requirements for this explicitly testing-only alpha.
 
-## Native macOS runtime
+## macOS cross-build exception
 
-The new macOS package refuses the former PyTorch 2.2.2 universal cross-build. It must run on a
-genuinely native `[self-hosted, macOS, ARM64]` runner and verifies both `uname`/Python architecture
-and the installed PyTorch 2.13 line. Intel macOS remains an open support decision and is not
-advertised by this alpha candidate.
+The physical Mac mini is Intel (`Macmini6,2`). Its boot-managed macOS x64 guest prepares a genuine
+universal2 Python analysis environment from paired Intel/ARM wheels, emits an ARM64-only PyInstaller
+worker, and cross-compiles the Rust/Tauri host for `aarch64-apple-darwin`. Recursive verification
+rejects any wrong Mach-O slice.
 
-The repository currently has no registered online ARM64 Actions runner. Register the Mac mini's
-native ARM64 runner and install its boot service before tagging. Do not relabel an x86-64/Rosetta
-runner as ARM64.
+PyTorch 2.2.2 is the final version with the paired macOS wheels needed by that process. It is known
+security debt and cannot be the beta runtime. A later signed build must use maintained native ARM
+PyTorch on real Apple-Silicon hardware; Intel macOS remains an open product decision.
 
 ## Publishing v0.0.10-alpha
 
-1. Supply the Apple and Windows signing secrets and register the native ARM64 macOS runner.
-2. Merge the release commit to `main` only after normal CI and Tauri CI are green.
+1. Merge the release commit to `main` only after normal CI and Tauri CI are green.
+2. Run `v0.0.10 Mac mini Cross Alpha` manually on that exact `main` commit and require all three
+   build jobs to pass without publishing.
 3. Create the annotated tag: `git tag -a v0.0.10-alpha -m "LocalSR v0.0.10-alpha"`.
-4. Push the tag. All three signed package jobs must finish before the draft release is created.
+4. Push the tag. All three Mac-mini package jobs must finish before the draft release is created.
 5. Confirm the release is titled `LocalSR v0.0.10-alpha`, marked prerelease, and has exactly five
    assets: three installers, `SHA256SUMS`, and `release-index.json`.
 6. Complete the physical-machine items in `docs/acceptance.md` before promoting this alpha to beta.
 
-## Headless legacy macOS runner startup
+## Headless macOS runner startup
 
-The manual legacy workflow can still use the boot-managed `macmini-macos-x64` runner. Its
-LaunchDaemon starts at the login window and waits for `/Volumes/CISCRATCH`. This does not satisfy the
-new native ARM64 package requirement; the Mac mini needs a separately registered native ARM64
-runner identity and matching boot service for the signed Tauri release.
+Both the manual legacy workflow and the one-release cross-alpha workflow use
+`macmini-macos-x64`. The Linux host enables Docker at boot, the Dockur guest uses
+`restart: always`, and the existing macOS login service starts the runner automatically. A full
+guest restart acceptance check confirmed that the runner returned online without manual action.
+
+The optional `macOS Runner Boot Maintenance` workflow can migrate the listener to a root-owned
+pre-login LaunchDaemon after one-time administrator authorization. That additional hardening is not
+required for the proven automatic cross-alpha restart path and does not replace the native
+Apple-Silicon runtime/signing gate for beta.
