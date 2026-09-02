@@ -47,7 +47,7 @@ jobs:
           ROOT="/ci-scratch/localsr-v0.0.10-alpha/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/linux"
           mkdir -p "$ROOT/tmp" "$ROOT/staging" /ci-scratch/cache/pip
           python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 8
-          python3.11 -m venv "$ROOT/venv"
+          "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
             echo "LOCALSR_ALPHA_ROOT=$ROOT"
             echo "TMPDIR=$ROOT/tmp"
