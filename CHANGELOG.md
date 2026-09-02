@@ -18,6 +18,8 @@ stable release is published.
 - Added a compact signed-release pipeline for one DMG, one NSIS installer, and one AppImage. It
   requires real installed-package worker smoke tests and embeds signing/native-architecture evidence
   in one release index, leaving only five user-facing assets.
+- Made the existing real empty-cache Quick/Best download and inference acceptance test a mandatory
+  gate for the signed Tauri release, with its evidence embedded in the compact release index.
 
 ### Fixed
 
