@@ -110,7 +110,7 @@ jobs:
         run: |
           ARTIFACT="$LOCALSR_ALPHA_ROOT/staging/LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage"
           python scripts/upload_artifacts.py --server "$CI_ARTIFACT_SERVER" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform tauri-alpha-linux \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform linux \
             "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
       - name: Remove bounded Linux scratch
         if: always()
@@ -188,7 +188,7 @@ jobs:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
           $artifact = Join-Path $env:LOCALSR_ALPHA_ROOT 'staging\LocalSR-v0.0.10-alpha-Windows-x86_64.exe'
-          python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform tauri-alpha-windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
+          python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Remove bounded Windows scratch
         if: always()
@@ -306,7 +306,7 @@ jobs:
           ARTIFACT="$RUN_ROOT/staging/LocalSR-v0.0.10-alpha-macOS-arm64.dmg"
           "$RUN_ROOT/environment/venv/bin/python" "$RUN_ROOT/source/scripts/upload_artifacts.py" \
             --server "$CI_ARTIFACT_SERVER" --run-id "$GITHUB_RUN_ID" \
-            --attempt "$GITHUB_RUN_ATTEMPT" --platform tauri-alpha-macos \
+            --attempt "$GITHUB_RUN_ATTEMPT" --platform macos \
             "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
       - name: Remove verified macOS scratch
         if: always()
