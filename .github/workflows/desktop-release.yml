@@ -69,6 +69,8 @@ jobs:
             --index-url https://download.pytorch.org/whl/cpu
           python -m pip install --disable-pip-version-check \
             -e ".[package,video]" "pyinstaller==${PYINSTALLER_VERSION}"
+          python -m pip check
+          python -c 'import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version("0.38.0"); assert torch.__version__.startswith("2.13.")'
           npm ci --prefix desktop
       - name: Download and run the actual Quick and Best models from an empty cache
         run: |
@@ -175,6 +177,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check -e ".[package,video]" "pyinstaller==$env:PYINSTALLER_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c 'import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version("0.38.0"); assert torch.__version__.startswith("2.13.")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix desktop
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build, sign, and smoke-test the installed NSIS package
@@ -256,7 +262,8 @@ jobs:
             "torch==${PYTORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"
           python -m pip install --disable-pip-version-check \
             -e ".[package,video]" "pyinstaller==${PYINSTALLER_VERSION}"
-          python -c 'import platform,torch; assert platform.machine()=="arm64"; assert torch.__version__.startswith("2.13.")'
+          python -m pip check
+          python -c 'import diffusers,platform,torch; from packaging.version import Version; assert platform.machine()=="arm64"; assert Version(diffusers.__version__) >= Version("0.38.0"); assert torch.__version__.startswith("2.13.")'
           npm ci --prefix desktop
       - name: Build, sign, notarize, staple, and smoke-test the DMG
         env:

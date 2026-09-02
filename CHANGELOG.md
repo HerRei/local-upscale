@@ -41,6 +41,8 @@ stable release is published.
 - Public Tauri release jobs fail closed without Developer ID/notarization and timestamped
   Authenticode credentials, refuse to overwrite an existing release, and require a native ARM64
   PyTorch 2.13 macOS build instead of reviving the PyTorch 2.2.2 cross-build.
+- Required `pip check`, PyTorch 2.13, and Diffusers 0.38 runtime assertions on every signed Tauri
+  release platform so legacy vulnerable dependency resolutions cannot enter 0.0.10 artifacts.
 
 ## [0.0.9-alpha] - 2026-08-29
 

@@ -149,6 +149,8 @@ def signed_release_violations(legacy: str, desktop_release: str) -> list[str]:
         "installed package smoke": "smoke_tauri_installer.py",
         "real empty-cache Quick/Best inference": "validate_live_models.py",
         "embedded live-model release evidence": "--live-model-report",
+        "patched release dependency assertion": "diffusers.__version__",
+        "release environment consistency check": "python -m pip check",
         "compact three-installer manifest": "ci/tauri-release-artifacts.json",
         "explicit prerelease publication": "--prerelease",
         "tag-derived release title": 'TITLE="LocalSR $TAG"',
