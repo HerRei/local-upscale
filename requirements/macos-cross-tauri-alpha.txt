@@ -18,6 +18,10 @@ slint==1.9.2a1
 # Video remains Labs / Experimental, but the hidden worker still carries the
 # dependencies needed by the existing frame and SeedVR2 code paths.
 omegaconf==2.3.1
+# OmegaConf 2.3.x requires this exact pure-Python line. Upstream publishes it
+# only as an sdist, so CI builds one pinned py3-none-any bootstrap wheel before
+# resolving the two otherwise wheel-only macOS architecture sets.
+antlr4-python3-runtime==4.9.3
 diffusers==0.35.2
 rotary-embedding-torch==0.9.1
 einops==0.8.2
