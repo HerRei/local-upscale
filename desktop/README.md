@@ -59,10 +59,9 @@ python scripts/build_tauri_preview.py
 
 The build script exports the catalog, creates a worker-only PyInstaller engine,
 embeds that directory as a Tauri resource, runs frontend checks, and then
-builds the native installer. Platform signing environment variables supported
-by Tauri may be provided by CI. Credential-free macOS previews receive a final
-ad-hoc resource seal; all preview packages remain private acceptance builds,
-not public substitutes for Developer ID/Authenticode signing and notarization.
+builds the native installer. Credential-free local macOS previews receive an
+ad-hoc resource seal. The separate public-alpha workflow passes
+`--require-signing` and refuses ad-hoc/unsigned substitutes.
 
 Each packaged preview is acceptance-tested by mounting or silently installing
 the actual DMG, NSIS setup, or AppImage and launching its bundled worker with
@@ -70,17 +69,17 @@ the actual DMG, NSIS setup, or AppImage and launching its bundled worker with
 protocol and reach `ready`; a mocked download or source-tree Python process
 does not satisfy this gate.
 
-The existing `.github/workflows/release.yml` remains the independent Slint
-release pipeline and does not invoke the preview build. The new
+The existing `.github/workflows/release.yml` remains an independent,
+manual-only Slint build and does not invoke the preview build.
 `.github/workflows/tauri-preview.yml` verifies all three desktop hosts and can
 build short-lived private Windows NSIS and Linux AppImage artifacts when
 manually requested. An architecture check rejects accidental coupling between
 the two workflows, shared bundle identities, or native authority exposed to
-the webview. The preview exposes one conventional package per host rather than
-presenting the worker's internal files as separate downloads. The ARM DMG is
-built natively with the same script and smoke-tested locally until an ARM64
-macOS runner is available. The Intel runner remains a host-control-plane gate;
-it must not silently fall back to the unsupported PyTorch 2.2 runtime.
+the webview. `.github/workflows/desktop-release.yml` is the only tag-triggered
+pipeline; it exposes one conventional package per host and five total assets.
+It requires production signatures, a native ARM64 PyTorch 2.13 DMG, and an
+installed-package smoke test before publishing. The Intel runner remains a
+host-control-plane gate and cannot silently fall back to PyTorch 2.2.
 
 The hosted preview packages deliberately use the portable CPU runtime on
 Windows/Linux and the native MPS-capable runtime on Apple Silicon. Selecting

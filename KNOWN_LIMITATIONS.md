@@ -1,16 +1,16 @@
-# Known limitations — v0.0.9-alpha
+# Known limitations — v0.0.10-alpha
 
-- Downloads are portable alpha archives. There is no current DMG, AppImage, MSI, Windows Setup
-  executable, or supported Homebrew formula.
-- Production code-signing credentials are not configured. macOS builds are ad-hoc signed rather
-  than Developer ID signed/notarized/stapled, and Windows executables are not Authenticode signed.
-- The universal macOS cross-build currently bundles PyTorch 2.2.2 because it is the final release
-  with matching Intel and Apple-Silicon wheels. That release has open security advisories,
-  including a critical `torch.load` arbitrary-code-execution advisory fixed in PyTorch 2.6.0.
-  Treat the macOS archives as private alpha evidence only, never load untrusted model files, and
-  move the Apple-Silicon build to a native runner/current PyTorch before public beta. A supported
-  Intel distribution strategy must be chosen separately because current PyTorch has no Intel macOS
-  wheel.
+- The next host has one uncomplicated installer per operating system, but the signed v0.0.10-alpha
+  candidate cannot be published until Apple Developer ID/notarization and Windows Authenticode
+  credentials are configured. The pipeline refuses unsigned public substitutes.
+- The new macOS DMG requires a native ARM64 Actions runner and PyTorch 2.13. No such runner is
+  currently registered. Intel macOS is not advertised by this candidate; deciding whether to
+  retain Intel support remains an owner decision.
+- The first Tauri alpha bundles CPU inference on Windows/Linux and MPS on Apple Silicon. CUDA,
+  DirectML, Intel XPU, and ROCm remain implemented in the worker contract but need downloadable
+  engine packs and physical acceptance before the new installer can advertise them.
+- There is no supported Homebrew formula. Add one only after signed assets have stable public URLs
+  and real checksums.
 - The Windows DirectML archive is constrained by Microsoft's preview `torch-directml` package to
   PyTorch 2.4.1, which also has checkpoint-loading advisories. LocalSR's default checkpoint policy
   prevents unverified pickle/TorchScript models from reaching that runtime, but DirectML remains an
@@ -31,5 +31,5 @@
 - Model downloads require network access and enough free disk space; models are not bundled.
 
 The [acceptance checklist](docs/acceptance.md) separates automated evidence from remaining physical
-hardware testing. The release's `beta-readiness.json` records the same open gates in a form CI can
+hardware testing. The release index embeds the versioned beta-readiness register in a form CI can
 validate without pretending that product decisions or manual tests are complete.

@@ -155,6 +155,15 @@ export interface Recipe {
   halo: number;
   precision: string;
   safe_memory: boolean;
+  video_model_id?: string;
+  custom_model_path?: string;
+  output_format?: 'png' | 'jpg' | 'tif';
+  preserve_metadata?: boolean;
+  jpeg_quality?: number;
+  deflicker?: boolean;
+  deflicker_window?: number;
+  video_container?: 'mp4' | 'mkv';
+  video_crf?: number;
 }
 
 export interface UiSettings {

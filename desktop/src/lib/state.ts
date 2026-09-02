@@ -46,21 +46,39 @@ export function choosePresetModel(
 
 export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {
   if (!snapshot.runtime.result_preview_data_url) return '';
+  // Progressive tiles and video-frame thumbnails are useful while a job is
+  // running, but they are not a completed result and must never enable the
+  // before/after comparison. This mirrors the released Slint UI's separate
+  // `live_result_ready` and `result_ready` states.
+  if (snapshot.runtime.active_job_id) return '';
   const selected = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
   if (!selected) return '';
 
-  const owner = snapshot.runtime.active_job_id
-    ? snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)
-    : snapshot.jobs.find(
-        (job) =>
-          Boolean(snapshot.runtime.last_output_path) &&
-          job.output_path === snapshot.runtime.last_output_path
-      );
+  const owner = snapshot.jobs.find(
+    (job) =>
+      job.status === 'completed' &&
+      Boolean(snapshot.runtime.last_output_path) &&
+      job.output_path === snapshot.runtime.last_output_path
+  );
   return owner?.media_id === selected.id ? snapshot.runtime.result_preview_data_url : '';
 }
 
 export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppSnapshot {
-  const next = structuredClone(snapshot);
+  // Tiles carry display-only pixels and coordinates. Returning the existing
+  // snapshot avoids cloning media thumbnails, model metadata and job history
+  // twice per tile; App.svelte composites the pixels on its bounded canvas.
+  if (envelope.type === 'tile_update') return snapshot;
+
+  // Progress events can be frequent as well, but only mutate runtime fields.
+  // A shallow immutable update keeps Svelte reactive without copying the full
+  // application state on every inference step.
+  const next = [
+    'progress',
+    'video_frame_started',
+    'video_frame_completed'
+  ].includes(envelope.type)
+    ? { ...snapshot, runtime: { ...snapshot.runtime } }
+    : structuredClone(snapshot);
   const data = envelope.data;
   switch (envelope.type) {
     case 'worker_ready':
@@ -85,11 +103,12 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.throughput = 0;
       next.runtime.throughput_unit = 'tiles/s';
       next.runtime.active_tile_size = 0;
+      next.runtime.result_preview_data_url = '';
       break;
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
       next.runtime.status_title = 'Enhancing';
-      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} tiles`;
+      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} tiles${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.throughput = next.runtime.elapsed_seconds > 0
@@ -111,9 +130,12 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       const total = Number(data.total_frames ?? 0);
       if (done > 0 && total > 0) next.runtime.progress = (done / total) * 100;
       const elapsed = Number(data.elapsed_seconds ?? 0);
+      const remaining = Number(data.estimated_remaining_seconds ?? 0);
+      next.runtime.status_title = 'Enhancing video · Labs';
+      next.runtime.status_detail = `Frame ${done} of ${total || '?'}${remaining > 0 ? ` · ETA ${formatDuration(remaining)}` : ''}`;
       if (done > 0 && elapsed > 0) {
         next.runtime.elapsed_seconds = elapsed;
-        next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
+        next.runtime.estimated_remaining_seconds = remaining;
         next.runtime.throughput = done / elapsed;
         next.runtime.throughput_unit = 'frames/s';
       }
@@ -122,14 +144,12 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       }
       break;
     }
-    case 'tile_update':
-      if (typeof data.jpeg_base64 === 'string' && data.jpeg_base64) {
-        next.runtime.result_preview_data_url = `data:image/jpeg;base64,${data.jpeg_base64}`;
-      }
-      break;
     case 'job_completed':
     case 'video_job_completed':
       next.runtime.active_job_id = '';
+      // Drop a live video-frame thumbnail while the host decodes the final
+      // output. This prevents a transient comparison slider over one frame.
+      next.runtime.result_preview_data_url = '';
       next.runtime.progress = 100;
       next.runtime.status_title = 'Complete';
       next.runtime.status_detail = 'The output was written successfully.';

@@ -5,7 +5,8 @@ import {
   choosePresetModel,
   formatBytes,
   formatDuration,
-  modelsForTask
+  modelsForTask,
+  resultPreviewForSelectedMedia
 } from './state';
 
 describe('desktop state', () => {
@@ -45,17 +46,92 @@ describe('desktop state', () => {
       data: { job_id: 'job-1' }
     });
     snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: {
+        job_id: 'job-1',
+        completed_tiles: 3,
+        total_tiles: 12,
+        percentage: 25,
+        elapsed_seconds: 5,
+        estimated_remaining_seconds: 65
+      }
+    });
+    expect(snapshot.runtime.status_detail).toBe('3 of 12 tiles · ETA 1:05');
+    snapshot = applyWorkerEnvelope(snapshot, {
       type: 'video_frame_completed',
-      data: { job_id: 'job-1', frames_processed: 12, total_frames: 48 }
+      data: {
+        job_id: 'job-1',
+        frames_processed: 12,
+        total_frames: 48,
+        elapsed_seconds: 30,
+        estimated_remaining_seconds: 90,
+        jpeg_base64: 'live-frame'
+      }
     });
     expect(snapshot.runtime.worker).toBe('ready');
     expect(snapshot.runtime.progress).toBe(25);
+    expect(snapshot.runtime.status_detail).toBe('Frame 12 of 48 · ETA 1:30');
+    expect(snapshot.runtime.result_preview_data_url).toContain('live-frame');
     snapshot = applyWorkerEnvelope(snapshot, {
       type: 'video_job_completed',
       data: { job_id: 'job-1', output_path: '/output/result.mp4' }
     });
     expect(snapshot.runtime.active_job_id).toBe('');
     expect(snapshot.runtime.last_output_path).toBe('/output/result.mp4');
+    expect(snapshot.runtime.result_preview_data_url).toBe('');
+  });
+
+  it('keeps progressive tiles out of the completed comparison state', () => {
+    let snapshot = demoSnapshot();
+    snapshot.media = [
+      {
+        id: 'media-1',
+        path: '/input.png',
+        name: 'input.png',
+        kind: 'image',
+        width: 100,
+        height: 100,
+        frame_count: 1,
+        fps: 0,
+        duration_seconds: 0,
+        preview_data_url: 'data:image/jpeg;base64,source',
+        probe_status: 'ready',
+        error: '',
+        selected: true
+      }
+    ];
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'media-1',
+        media_name: 'input.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 10,
+        output_path: '',
+        error: '',
+        created_at: 1
+      }
+    ];
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.result_preview_data_url = 'data:image/jpeg;base64,old-result';
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'tile_update',
+      data: { job_id: 'job-1', phase: 'completed', jpeg_base64: 'one-tile' }
+    });
+
+    expect(snapshot.runtime.result_preview_data_url).toBe('data:image/jpeg;base64,old-result');
+    expect(resultPreviewForSelectedMedia(snapshot)).toBe('');
+
+    snapshot.runtime.active_job_id = '';
+    snapshot.runtime.last_output_path = '/output.png';
+    snapshot.jobs[0].status = 'completed';
+    snapshot.jobs[0].output_path = '/output.png';
+    snapshot.runtime.result_preview_data_url = 'data:image/jpeg;base64,complete';
+    expect(resultPreviewForSelectedMedia(snapshot)).toBe(
+      'data:image/jpeg;base64,complete'
+    );
   });
 
   it('formats bounded human-readable values', () => {

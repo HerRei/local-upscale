@@ -1,12 +1,13 @@
 # Release acceptance
 
-## Automated for v0.0.9-alpha
+## Automated for v0.0.10-alpha
 
 - Offline unit/integration suite on Linux, Windows x86-64, and macOS Intel CI environments.
-- Slint compile and packaged GUI/worker IPC smoke checks.
+- Svelte, Rust, and worker protocol tests on Linux, Windows, and macOS CI environments.
+- Real Tauri AppImage, NSIS, and DMG install/mount smoke checks that start the bundled worker.
 - Real empty-cache download, SHA-256 validation, Spandrel load, and CPU inference for Quick and Best.
-- PE/ELF/Mach-O parsing for every native member, exact main-executable architecture checks, backend
-  provenance, per-archive checksums, metadata sidecars, and rejection of duplicate digests.
+- PE/ELF/Mach-O parsing, exact installer/main-executable architecture checks, provenance,
+  checksums, metadata, and rejection of duplicate installer digests.
 - Wheel/sdist inspection for SeedVR2 YAML, embeddings, NOTICE, and vendor license.
 - Generated-fixture coverage for real-color photos, faces, anime-like line art, screenshot/text,
   large and transparent images, DNG handling, cancellation, low disk, and low memory.
@@ -18,18 +19,17 @@
 - Release workflows use an immutable checkout commit, persist no checkout credentials, grant write
   permission only to the publishing job, and authenticate LAN artifact uploads with replay-bounded
   HMAC without transmitting the reusable secret.
-- Both portable installer scripts refuse installation when the matching release checksum is absent
-  or invalid.
+- The signed release pipeline publishes only three installers plus `SHA256SUMS` and one consolidated
+  release index; existing releases cannot be overwritten.
 
 ## Required before public beta
 
-- Eliminate the macOS PyTorch 2.2.2 security debt: build Apple Silicon natively with a supported,
-  current PyTorch release, and either establish a supported Intel runtime or stop advertising the
-  Intel archive. Re-run the dependency/security scan on the resulting app bundles.
+- Register the native Apple-Silicon runner used by the PyTorch 2.13 DMG pipeline, supply Developer
+  ID/notarization credentials, and decide whether Intel support has a viable maintained runtime.
 - Install and run on physical macOS ARM and Intel machines and validate Gatekeeper after production
   signing/notarization.
-- Run representative jobs on Windows NVIDIA, AMD/Intel DirectML, and CPU systems.
-- Run each advertised Linux CUDA, ROCm, Intel XPU, and CPU archive on matching physical hardware.
+- Design and package the optional Windows NVIDIA/DirectML and Linux CUDA/ROCm/XPU engine packs,
+  then run them and the CPU pack on matching physical systems.
 - Repeat the image/media matrix above with real user files and inspect output quality, metadata,
   cancellation cleanup, thermal behavior, low-disk recovery, and memory-pressure recovery.
 - Verify download URLs and the selected public feedback route from a signed-out browser.

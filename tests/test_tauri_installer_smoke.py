@@ -91,6 +91,31 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
     assert calls[1][1:] == ["--headless-smoke-test"]
 
 
+def test_macos_smoke_bypasses_single_instance_forwarding(tmp_path: Path, monkeypatch) -> None:
+    artifact = tmp_path / "LocalSR.dmg"
+    artifact.write_bytes(b"dmg")
+    mount = tmp_path / "mounted"
+    app = mount / "LocalSR Next Preview.app"
+    executable = app / "Contents" / "MacOS" / "localsr-next"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"host")
+    with (app / "Contents" / "Info.plist").open("wb") as handle:
+        plistlib.dump({"CFBundleExecutable": "localsr-next"}, handle)
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(smoke, "mount_dmg", lambda *_args: (mount, "/dev/test"))
+    monkeypatch.setattr(smoke, "detach_dmg", lambda *_args: None)
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(smoke, "run", fake_run)
+    smoke.smoke_macos(artifact, tmp_path / "report.json", {}, 240)
+
+    assert calls == [[str(executable), "--headless-smoke-test"]]
+
+
 def test_process_timeout_preserves_captured_diagnostics(monkeypatch, capsys) -> None:
     def timeout(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(

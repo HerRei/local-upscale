@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted for an additive parity migration. The released Slint host remains the
-default until the new host passes the physical acceptance matrix and signed
-distribution gates.
+Accepted for an additive alpha release. The legacy Slint host remains independently
+buildable and installable; the Tauri host may publish prereleases only through the
+fail-closed signed pipeline. Public-beta/default-host promotion still requires the
+physical acceptance matrix and remaining product decisions.
 
 ## Context
 
@@ -36,9 +37,10 @@ Build a second desktop host with these layers:
 4. Models stay external. The MIT application publishes only metadata and a
    policy-aware download option; every model retains its own license and must
    be explicitly labelled where terms are non-commercial or unclear.
-5. The Slint build, version, bundle identifier, settings, and release workflow
-   remain intact. The preview uses `com.localsr.desktop.next`, its own settings
-   and queue database, and the shared verified model cache.
+5. The Slint build, bundle identifier, and settings remain intact behind a manual
+   legacy workflow. The preview uses `com.localsr.desktop.next`, its own settings
+   and queue database, the shared verified model cache, and its own signed release
+   workflow.
 
 ## Consequences
 
@@ -49,9 +51,9 @@ Build a second desktop host with these layers:
   filesystem plugin. Media and model bytes never need to cross into JavaScript.
 - Pickle-based custom checkpoints remain possible only after an explicit
   security acknowledgement; Safetensors is the safe default.
-- Packaging now produces a worker-only PyInstaller directory embedded as a
-  Tauri resource. Signing/notarization still requires owner-provided platform
-  credentials before this target can become a public release.
-- The new host does not replace the Slint release line until visual parity,
-  real-media tests, backend acceptance, accessibility, and signed installer
-  checks pass.
+- Packaging produces a worker-only PyInstaller directory embedded as a Tauri
+  resource. Alpha publication fails closed until owner-provided Developer ID,
+  notarization, and Authenticode credentials pass installed-package verification.
+- The new host can coexist as an alpha, but it does not become a public beta or
+  overwrite the Slint app until real-media, backend, accessibility, and signed
+  physical-install checks pass.

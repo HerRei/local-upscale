@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -38,6 +39,29 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     if f"## [{version}]" not in changelog:
         failures.append(f"CHANGELOG.md has no [{version}] release heading")
 
+    desktop_package = json.loads((root / "desktop/package.json").read_text(encoding="utf-8"))
+    tauri = json.loads((root / "desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    with (root / "desktop/src-tauri/Cargo.toml").open("rb") as stream:
+        cargo_version = str(tomllib.load(stream)["package"]["version"])
+    if {str(desktop_package.get("version")), str(tauri.get("version")), cargo_version} != {version}:
+        failures.append("npm, Tauri, Cargo, and Python release versions do not match")
+
+    desktop_manifest = json.loads(
+        (root / "ci/tauri-release-artifacts.json").read_text(encoding="utf-8")
+    )
+    if desktop_manifest.get("version") != version:
+        failures.append("Tauri release artifact manifest version does not match")
+    expected_installers = {
+        f"LocalSR-v{version}-macOS-arm64.dmg",
+        f"LocalSR-v{version}-Windows-x86_64.exe",
+        f"LocalSR-v{version}-Linux-x86_64.AppImage",
+    }
+    actual_installers = {
+        str(item.get("filename")) for item in desktop_manifest.get("artifacts", [])
+    }
+    if actual_installers != expected_installers:
+        failures.append("Tauri release installer names do not match the synchronized version")
+
     spec = (root / "packaging/localsr.spec").read_text(encoding="utf-8")
     expected_bundle_fields = {
         "CFBundleShortVersionString": "APP_BUNDLE_VERSION",
@@ -48,11 +72,14 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
         if f'"{field}": {variable}' not in spec:
             failures.append(f"macOS bundle field {field} is not derived from {variable}")
 
-    workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    workflow = (root / ".github/workflows/desktop-release.yml").read_text(encoding="utf-8")
     if "--prerelease" not in workflow:
         failures.append("release workflow never passes --prerelease")
     if 'TITLE="LocalSR $TAG"' not in workflow:
         failures.append("release workflow title is not derived from the tag")
+    for installer in expected_installers:
+        if installer not in workflow:
+            failures.append(f"release workflow does not stage {installer}")
 
     docs = (root / "docs/releasing.md").read_text(encoding="utf-8")
     if expected_tag not in docs:

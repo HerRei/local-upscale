@@ -24,7 +24,12 @@ pub fn load_catalog(paths: &AppPaths) -> AppResult<CatalogManifest> {
 pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
     for model in &mut catalog.models {
         let path = paths.model_root.join(&model.filename);
-        model.installed = verified_file(&path, model.size_bytes, &model.sha256);
+        // Discovery must stay metadata-only. Download installation performs
+        // the full SHA-256 check and the isolated worker re-verifies risky
+        // image checkpoints before deserializing them. Hashing every model in
+        // this synchronous path would read multi-gigabyte video bundles on the
+        // native UI thread.
+        model.installed = installed_file(&path, model.size_bytes);
         model.installed_path = model.installed.then(|| path.to_string_lossy().into_owned());
     }
     for model in &mut catalog.video_models {
@@ -33,11 +38,17 @@ pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
         model.installed = model
             .files
             .iter()
-            .all(|file| verified_file(&bundle.join(&file.filename), file.size_bytes, &file.sha256));
+            .all(|file| installed_file(&bundle.join(&file.filename), file.size_bytes));
         model.installed_path = model
             .installed
             .then(|| bundle.to_string_lossy().into_owned());
     }
+}
+
+fn installed_file(path: &Path, expected_size: u64) -> bool {
+    path.metadata()
+        .map(|metadata| metadata.is_file() && metadata.len() == expected_size)
+        .unwrap_or(false)
 }
 
 pub fn verified_file(path: &Path, expected_size: u64, expected_sha256: &str) -> bool {
@@ -120,6 +131,17 @@ mod tests {
             8,
             "a9a089195c68d2adeee23beaa2c3a93b1d4cdf09046e7a9e520b3b166dff3e6a"
         ));
+    }
+
+    #[test]
+    fn catalog_presence_check_is_metadata_only_and_size_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("model.safetensors");
+        File::create(&path).unwrap().write_all(b"trusted").unwrap();
+
+        assert!(installed_file(&path, 7));
+        assert!(!installed_file(&path, 8));
+        assert!(!installed_file(&directory.path().join("missing"), 0));
     }
 
     #[test]

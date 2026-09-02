@@ -3,8 +3,9 @@
 
 This check is intentionally dependency-free so it can run before either the
 Python engine or the Tauri toolchain is installed.  It protects the migration
-contract: the released Slint application remains independent while the new
-webview delegates native authority to Rust and inference to the Python worker.
+contract: the legacy Slint application remains independently buildable while
+the new webview delegates native authority to Rust and inference to the Python
+worker. Public Tauri alpha releases use their own fail-closed signed pipeline.
 """
 
 from __future__ import annotations
@@ -134,6 +135,32 @@ def workflow_isolation_violations(release: str, preview: str) -> list[str]:
     return violations
 
 
+def signed_release_violations(legacy: str, desktop_release: str) -> list[str]:
+    """Return violations that could publish the wrong host or unsigned installers."""
+
+    violations: list[str] = []
+    if re.search(r"(?m)^\s{4}tags:\s*$", legacy):
+        violations.append("the legacy Slint workflow must remain manual-only")
+    required = {
+        "signed release workflow tag trigger": '      - "v*"',
+        "fail-closed Tauri signing": "--require-signing",
+        "Developer ID verification": "verify_macos_tauri_signing.py",
+        "Authenticode verification": "verify_windows_tauri_signing.ps1",
+        "installed package smoke": "smoke_tauri_installer.py",
+        "compact three-installer manifest": "ci/tauri-release-artifacts.json",
+        "explicit prerelease publication": "--prerelease",
+        "tag-derived release title": 'TITLE="LocalSR $TAG"',
+    }
+    for label, token in required.items():
+        if token not in desktop_release:
+            violations.append(f"signed desktop release is missing {label}")
+    if "--clobber" in desktop_release:
+        violations.append("signed desktop releases must not overwrite published assets")
+    if desktop_release.count("contents: write") != 1:
+        violations.append("only the signed desktop publishing job may write release contents")
+    return violations
+
+
 def collect_violations(root: Path = ROOT) -> list[str]:
     """Validate the complete checked-in migration boundary."""
 
@@ -191,7 +218,9 @@ def collect_violations(root: Path = ROOT) -> list[str]:
 
     release = _read(root, ".github/workflows/release.yml")
     preview = _read(root, ".github/workflows/tauri-preview.yml")
+    desktop_release = _read(root, ".github/workflows/desktop-release.yml")
     violations.extend(workflow_isolation_violations(release, preview))
+    violations.extend(signed_release_violations(release, desktop_release))
 
     build_script = _read(root, "scripts/build_tauri_preview.py")
     if 'BUILD_ROOT = ROOT / "build" / "tauri-preview"' not in build_script:
@@ -229,7 +258,7 @@ def main() -> int:
         return 1
     print(
         "Desktop architecture boundary valid: isolated webview, Rust authority, "
-        "Python worker, and separate preview/release pipelines."
+        "Python worker, manual legacy build, and fail-closed signed Tauri release."
     )
     return 0
 

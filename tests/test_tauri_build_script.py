@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -109,6 +112,71 @@ def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
     )
 
     assert build.npm_executable() == npm
+
+
+def test_worker_target_arch_matches_pyinstaller_names() -> None:
+    assert build.worker_target_arch("aarch64-apple-darwin") == "arm64"
+    assert build.worker_target_arch("x86_64-pc-windows-msvc") == "x86_64"
+    assert build.worker_target_arch(None) is None
+
+
+def _isolated_bundle_paths(monkeypatch, tmp_path: Path) -> Path:
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    license_path = tmp_path / "LICENSE"
+    notices = tmp_path / "THIRD_PARTY_NOTICES.md"
+    license_path.write_text("MIT", encoding="utf-8")
+    notices.write_text("notices", encoding="utf-8")
+    config = tmp_path / "bundle.json"
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    monkeypatch.setattr(build, "ENGINE_DIR", engine)
+    monkeypatch.setattr(build, "CONFIG_PATH", config)
+    return config
+
+
+def test_release_overlay_refuses_unsigned_macos(monkeypatch, tmp_path: Path) -> None:
+    _isolated_bundle_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.delenv("APPLE_SIGNING_IDENTITY", raising=False)
+    monkeypatch.delenv("APPLE_CERTIFICATE", raising=False)
+
+    with pytest.raises(SystemExit, match="signing and notarization"):
+        build.write_bundle_overlay(require_signing=True)
+
+
+def test_release_overlay_refuses_signed_but_unnotarized_macos(monkeypatch, tmp_path: Path) -> None:
+    _isolated_bundle_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.setenv("APPLE_SIGNING_IDENTITY", "Developer ID Application: Example")
+    for name in (
+        "APPLE_ID",
+        "APPLE_PASSWORD",
+        "APPLE_TEAM_ID",
+        "APPLE_API_KEY",
+        "APPLE_API_ISSUER",
+        "APPLE_API_KEY_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(SystemExit, match="signing and notarization"):
+        build.write_bundle_overlay(require_signing=True)
+
+
+def test_windows_release_overlay_configures_authenticode(monkeypatch, tmp_path: Path) -> None:
+    config = _isolated_bundle_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "win32")
+    monkeypatch.setattr(build.os, "name", "nt")
+    monkeypatch.setenv("WINDOWS_CERTIFICATE_THUMBPRINT", "A1B2C3")
+    monkeypatch.setenv("WINDOWS_TIMESTAMP_URL", "https://timestamp.example.test")
+
+    build.write_bundle_overlay(require_signing=True)
+
+    windows = json.loads(config.read_text(encoding="utf-8"))["bundle"]["windows"]
+    assert windows == {
+        "certificateThumbprint": "A1B2C3",
+        "digestAlgorithm": "sha256",
+        "timestampUrl": "https://timestamp.example.test",
+    }
 
 
 def test_linux_tauri_environments_use_the_managed_ssd_scratch() -> None:

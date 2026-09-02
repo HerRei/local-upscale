@@ -1,16 +1,13 @@
-name: Build & Release
+name: Legacy Slint Build (manual)
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: localsr-release-${{ github.ref }}
+  group: localsr-legacy-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
