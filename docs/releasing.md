@@ -109,9 +109,9 @@ PyTorch on real Apple-Silicon hardware; Intel macOS remains an open product deci
 
 ## Publishing v0.0.10-alpha
 
-1. Run `v0.0.10 Mac mini Cross Alpha` manually from the release commit and require all three build
-   jobs to pass without publishing.
-2. Merge the release commit to `main` only after normal CI and Tauri CI are green.
+1. Merge the release commit to `main` only after normal CI and Tauri CI are green.
+2. Run `v0.0.10 Mac mini Cross Alpha` manually on that exact `main` commit and require all three
+   build jobs to pass without publishing.
 3. Create the annotated tag: `git tag -a v0.0.10-alpha -m "LocalSR v0.0.10-alpha"`.
 4. Push the tag. All three Mac-mini package jobs must finish before the draft release is created.
 5. Confirm the release is titled `LocalSR v0.0.10-alpha`, marked prerelease, and has exactly five
