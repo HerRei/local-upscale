@@ -200,7 +200,7 @@ jobs:
           Copy-Item -LiteralPath $sources[0].FullName -Destination $artifact
           python scripts/smoke_tauri_installer.py --artifact-glob $artifact --report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/verify_tauri_release_package.py $artifact --platform windows --architecture x86_64 --report "$artifact.architecture.json"
+          python scripts/verify_tauri_release_package.py $artifact --platform windows --architecture x86_64 --smoke-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json') --report "$artifact.architecture.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/verify_windows_tauri_signing.ps1 -Artifact $artifact -ExpectedThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT -Report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\signing-report.json')
           python scripts/write_artifact_metadata.py $artifact --commit $env:GITHUB_SHA --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --architecture x86_64 --backend CPU --smoke-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json') --signing-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\signing-report.json')

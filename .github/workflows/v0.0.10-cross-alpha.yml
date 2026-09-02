@@ -177,7 +177,7 @@ jobs:
           Copy-Item -LiteralPath $sources[0].FullName -Destination $artifact
           python scripts/smoke_tauri_installer.py --artifact-glob $artifact --report (Join-Path $env:LOCALSR_ALPHA_ROOT 'staging\package-smoke.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/verify_tauri_release_package.py $artifact --platform windows --architecture x86_64 --report "$artifact.architecture.json"
+          python scripts/verify_tauri_release_package.py $artifact --platform windows --architecture x86_64 --smoke-report (Join-Path $env:LOCALSR_ALPHA_ROOT 'staging\package-smoke.json') --report "$artifact.architecture.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/write_alpha_signing_report.py --platform windows --output (Join-Path $env:LOCALSR_ALPHA_ROOT 'staging\signing-report.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -8,10 +8,13 @@ import glob
 import json
 import os
 import plistlib
+import struct
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+
+PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
 def run(
@@ -128,6 +131,56 @@ def installed_windows_executable(directory: Path) -> Path:
     return min(preferred, key=lambda path: (len(path.relative_to(directory).parts), path.name))
 
 
+def read_pe_arch(path: Path) -> str:
+    with path.open("rb") as stream:
+        header = stream.read(65536)
+    if len(header) < 64 or header[:2] != b"MZ":
+        raise RuntimeError(f"{path.name} is not a PE binary")
+    offset = struct.unpack_from("<I", header, 0x3C)[0]
+    if offset + 6 > len(header) or header[offset : offset + 4] != b"PE\0\0":
+        raise RuntimeError(f"{path.name} has an invalid PE header")
+    machine = struct.unpack_from("<H", header, offset + 4)[0]
+    return PE_ARCHES.get(machine, f"pe-machine-0x{machine:04x}")
+
+
+def record_windows_payload_architectures(
+    artifact: Path, install_dir: Path, executable: Path, report: Path
+) -> None:
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    worker_value = payload.get("worker_path")
+    if not isinstance(worker_value, str) or not worker_value:
+        raise RuntimeError("the installed worker did not report its executable path")
+    worker = Path(worker_value).resolve()
+    root = install_dir.resolve()
+    binaries = (("host", executable.resolve()), ("worker", worker))
+    native_payloads = []
+    for role, binary in binaries:
+        if not binary.is_file():
+            raise RuntimeError(f"installed {role} executable is missing: {binary}")
+        try:
+            relative = binary.relative_to(root)
+        except ValueError as error:
+            raise RuntimeError(f"installed {role} escaped the test directory: {binary}") from error
+        native_payloads.append(
+            {
+                "role": role,
+                "path": relative.as_posix(),
+                "format": "PE",
+                "architecture": read_pe_arch(binary),
+            }
+        )
+    payload["package_architecture"] = {
+        "package_type": "nsis",
+        "container": {
+            "role": "nsis-bootstrap",
+            "format": "PE",
+            "architecture": read_pe_arch(artifact),
+        },
+        "native_payloads": native_payloads,
+    }
+    report.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
     with tempfile.TemporaryDirectory(prefix="localsr-next-installer-") as temporary:
         install_dir = Path(temporary) / "app"
@@ -142,6 +195,7 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
         # WebView initialization so this acceptance test does not require an
         # interactive desktop.
         run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
+        record_windows_payload_architectures(artifact, install_dir, executable, report)
         uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
             install_dir.glob("unins*.exe")
         )

@@ -79,9 +79,7 @@ def test_cross_alpha_uses_supported_artifact_transfer_platforms() -> None:
 
     assert "--platform tauri-alpha-" not in workflow
     assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform linux \\' in workflow
-    assert (
-        "--attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact" in workflow
-    )
+    assert "--attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact" in workflow
     assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform macos \\' in workflow
 
 
