@@ -12,6 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePath
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+EXPECTED_LIVE_MODELS = {
+    "Quick": "span_photo_x4",
+    "Best": "realplksr_nomoswebphoto_x4",
+}
 
 
 def sha256(path: Path) -> str:
@@ -61,6 +65,7 @@ def prepare(
     output.mkdir(parents=True, exist_ok=True)
     bundles: list[dict[str, object]] = []
     digests: set[str] = set()
+    live_model_evidence: dict[str, object] | None = None
     for raw_entry in entries:
         if not isinstance(raw_entry, dict):
             raise ValueError("release manifest artifact entries must be objects")
@@ -110,6 +115,37 @@ def prepare(
             signing.get(field) for field in ("signer_subject", "signer_thumbprint", "timestamped")
         ):
             raise ValueError(f"{filename} has incomplete Authenticode evidence")
+        if entry["platform"] == "linux":
+            live_models = metadata.get("live_models")
+            if not isinstance(live_models, dict) or live_models.get("result") != "PASS":
+                raise ValueError(f"{filename} has no passing real Quick/Best model evidence")
+            models = live_models.get("models")
+            if (
+                not isinstance(models, list)
+                or len(models) != len(EXPECTED_LIVE_MODELS)
+                or {
+                    model.get("preset"): model.get("model_id")
+                    for model in models
+                    if isinstance(model, dict)
+                }
+                != EXPECTED_LIVE_MODELS
+            ):
+                raise ValueError(f"{filename} has incomplete real Quick/Best model evidence")
+            for model in models:
+                output_shape = model.get("output_shape") if isinstance(model, dict) else None
+                if not isinstance(model, dict) or not all(
+                    (
+                        model.get("model_id"),
+                        SHA256_RE.fullmatch(str(model.get("sha256", ""))),
+                        isinstance(model.get("download_bytes"), int)
+                        and int(model["download_bytes"]) > 0,
+                        isinstance(output_shape, list)
+                        and len(output_shape) == 4
+                        and all(isinstance(side, int) and side > 0 for side in output_shape),
+                    )
+                ):
+                    raise ValueError(f"{filename} has malformed real model evidence")
+            live_model_evidence = live_models
 
         shutil.copy2(source, output / filename)
         bundles.append(
@@ -132,8 +168,11 @@ def prepare(
         "generated_at": datetime.now(UTC).isoformat(),
         "channel": "alpha",
         "beta_ready": False,
+        "live_model_evidence": live_model_evidence,
         "installers": bundles,
     }
+    if live_model_evidence is None:
+        raise ValueError("the release has no real Quick/Best empty-cache inference evidence")
     if readiness:
         index["beta_readiness"] = readiness
     index_path = output / "release-index.json"

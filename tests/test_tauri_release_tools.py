@@ -126,6 +126,23 @@ def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
             "package_smoke": {"passed": True, "worker": "ready"},
             "signing": signing,
         }
+        if entry["platform"] == "linux":
+            metadata["live_models"] = {
+                "result": "PASS",
+                "models": [
+                    {
+                        "preset": preset,
+                        "model_id": model_id,
+                        "sha256": character * 64,
+                        "download_bytes": 1024,
+                        "output_shape": [1, 3, 64, 64],
+                    }
+                    for preset, model_id, character in (
+                        ("Quick", "span_photo_x4", "a"),
+                        ("Best", "realplksr_nomoswebphoto_x4", "b"),
+                    )
+                ],
+            }
         artifact.with_name(artifact.name + ".metadata.json").write_text(
             json.dumps(metadata), encoding="utf-8"
         )
@@ -149,5 +166,85 @@ def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
     assert len(index["installers"]) == 3
     assert index["beta_ready"] is False
     assert index["beta_readiness"]["release"] == "1-alpha"
+    assert {item["preset"] for item in index["live_model_evidence"]["models"]} == {
+        "Quick",
+        "Best",
+    }
     assert len((output / "SHA256SUMS").read_text().splitlines()) == 3
     assert len((output / "release-files.txt").read_text().splitlines()) == 5
+
+
+def test_rejects_release_without_real_quick_and_best_evidence(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    output = tmp_path / "output"
+    entries = []
+    for index, (platform, suffix, architecture, backend, signing_status) in enumerate(
+        (
+            ("macos", ".dmg", "arm64", "MPS", "developer-id-notarized"),
+            ("windows", ".exe", "x86_64", "CPU", "authenticode-valid"),
+            ("linux", ".AppImage", "x86_64", "CPU", "sha256"),
+        )
+    ):
+        filename = f"LocalSR-v1-alpha-{platform}{suffix}"
+        entry = {
+            "filename": filename,
+            "platform": platform,
+            "architecture": architecture,
+            "backend": backend,
+            "signing": signing_status,
+        }
+        entries.append(entry)
+        directory = staging / platform
+        directory.mkdir(parents=True)
+        artifact = directory / filename
+        artifact.write_bytes(f"package-{index}".encode())
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        artifact.with_name(filename + ".sha256").write_text(
+            f"{digest}  {filename}\n", encoding="utf-8"
+        )
+        signing: dict[str, object] = {"status": signing_status}
+        if platform == "macos":
+            signing |= {
+                "developer_id": "Developer ID Application: Example",
+                "team_id": "TEAM123456",
+                "notarized": True,
+                "stapled": True,
+                "gatekeeper_accepted": True,
+            }
+        elif platform == "windows":
+            signing |= {
+                "signer_subject": "CN=Example",
+                "signer_thumbprint": "ABCD",
+                "timestamped": True,
+            }
+        artifact.with_name(filename + ".metadata.json").write_text(
+            json.dumps(
+                {
+                    "artifact_filename": filename,
+                    "sha256": digest,
+                    "platform": platform,
+                    "architecture": architecture,
+                    "backend": backend,
+                    "package_smoke": {"passed": True},
+                    "signing": signing,
+                }
+            ),
+            encoding="utf-8",
+        )
+        artifact.with_name(filename + ".architecture.json").write_text(
+            json.dumps({"result": "PASS", "native_binary_count": 1}), encoding="utf-8"
+        )
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps({"schema_version": 1, "version": "1-alpha", "artifacts": entries}),
+        encoding="utf-8",
+    )
+    readiness = tmp_path / "readiness.json"
+    readiness.write_text(
+        json.dumps({"release": "1-alpha", "beta_ready": False, "gates": []}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Quick/Best"):
+        prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)

@@ -18,6 +18,8 @@ stable release is published.
 - Added a compact signed-release pipeline for one DMG, one NSIS installer, and one AppImage. It
   requires real installed-package worker smoke tests and embeds signing/native-architecture evidence
   in one release index, leaving only five user-facing assets.
+- Made the existing real empty-cache Quick/Best download and inference acceptance test a mandatory
+  gate for the signed Tauri release, with its evidence embedded in the compact release index.
 
 ### Fixed
 
@@ -39,6 +41,8 @@ stable release is published.
 - Public Tauri release jobs fail closed without Developer ID/notarization and timestamped
   Authenticode credentials, refuse to overwrite an existing release, and require a native ARM64
   PyTorch 2.13 macOS build instead of reviving the PyTorch 2.2.2 cross-build.
+- Required `pip check`, PyTorch 2.13, and Diffusers 0.38 runtime assertions on every signed Tauri
+  release platform so legacy vulnerable dependency resolutions cannot enter 0.0.10 artifacts.
 
 ## [0.0.9-alpha] - 2026-08-29
 

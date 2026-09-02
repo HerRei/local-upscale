@@ -104,3 +104,43 @@ def test_runner_root_rejects_unexpected_temp_layout(service, tmp_path: Path) -> 
 
     with pytest.raises(service.ConfigurationError, match="expected"):
         service.runner_root_from_temp(str(wrong_temp))
+
+
+def test_missing_stock_launch_agent_can_be_migrated_safely(service, tmp_path: Path) -> None:
+    home = tmp_path / "runner-home"
+    launch_agents = home / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True)
+    runsvc = tmp_path / "actions-runner" / "runsvc.sh"
+    runsvc.parent.mkdir()
+    runsvc.write_text("#!/bin/bash\n", encoding="utf-8")
+    pointer = launch_agents / "actions.runner.HerRei-local-upscale.macmini-macos-x64.plist"
+
+    path, label = service.load_agent_identity(
+        pointer,
+        home=home,
+        runsvc=runsvc,
+        user="ci-runner",
+        uid=pointer.parent.stat().st_uid,
+    )
+
+    assert path == pointer
+    assert label == "actions.runner.HerRei-local-upscale.macmini-macos-x64"
+
+
+def test_missing_launch_agent_outside_canonical_directory_is_rejected(
+    service, tmp_path: Path
+) -> None:
+    home = tmp_path / "runner-home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    runsvc = tmp_path / "actions-runner" / "runsvc.sh"
+    runsvc.parent.mkdir()
+    runsvc.write_text("#!/bin/bash\n", encoding="utf-8")
+
+    with pytest.raises(service.ConfigurationError, match="not inside"):
+        service.load_agent_identity(
+            tmp_path / "actions.runner.HerRei-local-upscale.macmini-macos-x64.plist",
+            home=home,
+            runsvc=runsvc,
+            user="ci-runner",
+            uid=home.stat().st_uid,
+        )

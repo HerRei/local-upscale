@@ -90,6 +90,60 @@ def runner_root_from_temp(runner_temp: str) -> Path:
     return temp_path.parents[1]
 
 
+def load_agent_identity(
+    agent_raw: Path,
+    *,
+    home: Path,
+    runsvc: Path,
+    user: str,
+    uid: int,
+) -> tuple[Path, str]:
+    """Validate the stock service pointer, including a stale missing plist.
+
+    GitHub's ``svc.sh uninstall`` can remove the LaunchAgent plist without
+    clearing ``.service`` while a listener started by another supervisor is
+    still running.  The boot-daemon migration only needs the canonical label
+    in that case.  Keep the same strict path/name boundary and never follow a
+    symlink, but allow the canonical file itself to be absent.
+    """
+
+    if not agent_raw.is_absolute() or agent_raw.is_symlink():
+        fail(f"runner service pointer must name an absolute non-symlink path: {agent_raw}")
+    expected_agent_parent = (home / "Library" / "LaunchAgents").resolve(strict=True)
+    try:
+        actual_parent = agent_raw.parent.resolve(strict=True)
+    except FileNotFoundError:
+        fail(f"runner service parent is missing: {agent_raw.parent}")
+    if actual_parent != expected_agent_parent:
+        fail(f"runner service is not inside the runner user's LaunchAgents directory: {agent_raw}")
+    agent_path = actual_parent / agent_raw.name
+    if not agent_path.name.startswith("actions.runner.") or agent_path.suffix != ".plist":
+        fail(f"unexpected GitHub runner LaunchAgent name: {agent_path.name}")
+    agent_label = agent_path.stem
+
+    if not agent_path.exists():
+        return agent_path, agent_label
+    if agent_path.is_symlink():
+        fail(f"runner service pointer must not resolve through a symlink: {agent_path}")
+    _require_regular_owned_file(agent_path, uid, allow_root=True)
+
+    with agent_path.open("rb") as stream:
+        agent = plistlib.load(stream)
+    configured_label = agent.get("Label")
+    if not isinstance(configured_label, str) or configured_label != agent_label:
+        fail("GitHub runner LaunchAgent label does not match its filename")
+    arguments = agent.get("ProgramArguments")
+    if not isinstance(arguments, list) or not arguments:
+        fail("GitHub runner LaunchAgent has no ProgramArguments")
+    configured_runsvc = Path(str(arguments[0])).expanduser().resolve(strict=True)
+    if configured_runsvc != runsvc:
+        fail(f"GitHub runner LaunchAgent invokes an unexpected program: {configured_runsvc}")
+    configured_user = agent.get("UserName")
+    if configured_user not in (None, user):
+        fail(f"GitHub runner LaunchAgent names unexpected user {configured_user!r}")
+    return agent_path, agent_label
+
+
 def load_context(runner_root: Path | None = None) -> RunnerContext:
     user_record = pwd.getpwuid(os.getuid())
     user = user_record.pw_name
@@ -121,30 +175,13 @@ def load_context(runner_root: Path | None = None) -> RunnerContext:
     if not service_value:
         fail(f"runner service pointer is empty: {service_pointer}")
     agent_raw = Path(service_value).expanduser()
-    if not agent_raw.is_absolute() or agent_raw.is_symlink():
-        fail(f"runner service pointer must name an absolute non-symlink path: {service_value}")
-    agent_path = agent_raw.resolve(strict=True)
-    expected_agent_parent = (home / "Library" / "LaunchAgents").resolve(strict=True)
-    if agent_path.parent != expected_agent_parent:
-        fail(f"runner service is not inside the runner user's LaunchAgents directory: {agent_path}")
-    if not agent_path.name.startswith("actions.runner.") or agent_path.suffix != ".plist":
-        fail(f"unexpected GitHub runner LaunchAgent name: {agent_path.name}")
-    _require_regular_owned_file(agent_path, user_record.pw_uid, allow_root=True)
-
-    with agent_path.open("rb") as stream:
-        agent = plistlib.load(stream)
-    agent_label = agent.get("Label")
-    if not isinstance(agent_label, str) or agent_label != agent_path.stem:
-        fail("GitHub runner LaunchAgent label does not match its filename")
-    arguments = agent.get("ProgramArguments")
-    if not isinstance(arguments, list) or not arguments:
-        fail("GitHub runner LaunchAgent has no ProgramArguments")
-    configured_runsvc = Path(str(arguments[0])).expanduser().resolve(strict=True)
-    if configured_runsvc != runsvc:
-        fail(f"GitHub runner LaunchAgent invokes an unexpected program: {configured_runsvc}")
-    configured_user = agent.get("UserName")
-    if configured_user not in (None, user):
-        fail(f"GitHub runner LaunchAgent names unexpected user {configured_user!r}")
+    agent_path, agent_label = load_agent_identity(
+        agent_raw,
+        home=home,
+        runsvc=runsvc,
+        user=user,
+        uid=user_record.pw_uid,
+    )
 
     return RunnerContext(
         root=root,
