@@ -5,7 +5,7 @@
 # those wheels into a universal2 PyInstaller analysis environment, then emits
 # an ARM64-only worker.  This known security debt is forbidden for beta and
 # must not be reused by later release tags.
-torch==2.2.2
+torch==2.13.0
 torchvision==0.17.2
 numpy==1.26.4
 spandrel==0.4.2
