@@ -83,6 +83,16 @@ def test_cross_alpha_uses_supported_artifact_transfer_platforms() -> None:
     assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform macos \\' in workflow
 
 
+def test_publish_jobs_combine_attempts_and_use_the_provisioned_python() -> None:
+    for workflow_name in ("desktop-release.yml", "v0.0.10-cross-alpha.yml"):
+        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
+
+        assert 'RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"' in workflow
+        assert '"$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py' in workflow
+        assert 'ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"' not in workflow
+        assert "\n          python scripts/prepare_tauri_release_assets.py" not in workflow
+
+
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
     assert "@tauri-apps/plugin-shell" in architecture.FORBIDDEN_WEBVIEW_PACKAGES
     assert "tauri-plugin-shell" in architecture.FORBIDDEN_TAURI_PLUGINS
