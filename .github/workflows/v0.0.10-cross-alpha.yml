@@ -251,6 +251,11 @@ jobs:
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --upgrade "pip==$PIP_VERSION"
           "$PYTHON" -m pip install -r "$RUN_ROOT/source/requirements/macos-cross-tools.txt"
+          BOOTSTRAP_WHEELS="$RUN_ROOT/wheels/bootstrap"
+          mkdir -p "$BOOTSTRAP_WHEELS"
+          "$PYTHON" -m pip wheel --disable-pip-version-check --no-deps \
+            --wheel-dir "$BOOTSTRAP_WHEELS" "antlr4-python3-runtime==4.9.3"
+          export PIP_FIND_LINKS="$BOOTSTRAP_WHEELS"
           "$PYTHON" "$RUN_ROOT/source/scripts/macos_cross_wheels.py" prepare \
             --requirements "$RUN_ROOT/source/requirements/macos-cross-tauri-alpha.txt" \
             --output "$RUN_ROOT/wheels"
