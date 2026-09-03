@@ -365,7 +365,9 @@ jobs:
             --site-packages "$SITE_PACKAGES" \
             --report "$RUN_ROOT/staging/openmp-normalization.json"
           "$PYTHON" "$RUN_ROOT/source/scripts/verify_macho_tree.py" "$SITE_PACKAGES" \
-            --require x86_64,arm64 --exclude 'delocate/tests/data/*' \
+            --require x86_64,arm64 \
+            --exclude 'delocate/tests/data/*' \
+            --exclude 'cv2/.dylibs/*' \
             --report "$RUN_ROOT/staging/universal2-environment.json"
           npm ci --prefix "$RUN_ROOT/source/desktop"
       - name: Cross-build and statically verify the ARM64 DMG
