@@ -107,7 +107,7 @@ def test_cross_build_pair_is_exact_and_excluded_from_dependabot() -> None:
 
     assert requirements.count("torch==2.2.2") == 1
     assert requirements.count("torchvision==0.17.2") == 1
-    assert requirements.count("opencv-python-headless==4.10.0.84") == 1
+    assert requirements.count("opencv-python-headless==4.9.0.80") == 1
     assert "v0.0.11-alpha" in requirements
     assert '"requirements/macos-cross-v0.0.11-alpha.txt"' in dependabot
 
