@@ -202,7 +202,7 @@ def test_macmini_heavy_workflows_and_preview_guests_are_serialized() -> None:
 
     assert '--blocked-workflow "v0.0.11 Mac mini Cross Alpha"' in ci
     assert '--blocked-workflow "Tauri Next Preview"' in ci
-    assert '--ignore-head-sha "$GITHUB_SHA"' in ci
+    assert '--ignore-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"' in ci
     assert '--blocked-workflow "CI"' in preview
     assert '--blocked-workflow "CI"' in cross
     assert "--mode fail" in cross
