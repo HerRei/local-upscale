@@ -30,6 +30,7 @@ DEFAULT_OUTPUT = ROOT / "desktop" / "src-tauri" / "resources" / "model-catalog.j
 
 LICENSE_URLS = {
     "Apache-2.0": "https://www.apache.org/licenses/LICENSE-2.0",
+    "BSD-3-Clause": "https://opensource.org/license/bsd-3-clause",
     "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
     "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
     "CC BY-NC-SA 4.0": "https://creativecommons.org/licenses/by-nc-sa/4.0/",

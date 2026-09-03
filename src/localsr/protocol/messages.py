@@ -59,7 +59,13 @@ class JobRequest:
     safe_memory: bool
     output_scale: int | None = None
     face_model_path: str | None = None
+    face_fidelity: float = 0.7
     allow_unverified_checkpoint: bool | None = None
+    preview_enabled: bool = True
+    preview_max_fps: float = 2.0
+    preview_max_dimension: int = 320
+    scratch_directory: str | None = None
+    stages: list[dict] | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})
@@ -90,6 +96,7 @@ class VideoJobRequest:
     start_frame: int | None = None
     end_frame: int | None = None
     face_model_path: str | None = None
+    face_fidelity: float = 0.7
     deflicker: bool = False
     deflicker_window: int = 3
     # Temporal-engine routing. "spandrel_image" is the frame-by-frame path;
@@ -105,9 +112,24 @@ class VideoJobRequest:
     # downsample each restored frame when a smaller 2×/3× output is requested.
     output_scale: int | None = None
     allow_unverified_checkpoint: bool | None = None
+    preview_enabled: bool = True
+    preview_max_fps: float = 2.0
+    preview_max_dimension: int = 320
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkRequest:
+    job_id: str
+    model_path: str
+    model_id: str
+    model_name: str
+    device: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_request", "data": asdict(self)})
 
 
 @dataclass
@@ -206,6 +228,43 @@ class JobStarted:
 
 
 @dataclass
+class StageStarted:
+    job_id: str
+    stage_index: int
+    stage_count: int
+    stage_kind: str
+    model_id: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "stage_started", "data": asdict(self)})
+
+
+@dataclass
+class StageProgress:
+    job_id: str
+    stage_index: int
+    stage_count: int
+    stage_kind: str
+    completed_units: int
+    total_units: int
+    percentage: float
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "stage_progress", "data": asdict(self)})
+
+
+@dataclass
+class StageCompleted:
+    job_id: str
+    stage_index: int
+    stage_count: int
+    stage_kind: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "stage_completed", "data": asdict(self)})
+
+
+@dataclass
 class ProgressUpdate:
     job_id: str
     completed_tiles: int
@@ -293,6 +352,32 @@ class TileUpdate:
 
 
 @dataclass
+class LivePreviewFrame:
+    job_id: str
+    sequence: int
+    preview_kind: str
+    jpeg_base64: str
+    output_x: int = 0
+    output_y: int = 0
+    output_width: int = 0
+    output_height: int = 0
+    image_width: int = 0
+    image_height: int = 0
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "live_preview_frame", "data": asdict(self)})
+
+
+@dataclass
+class LivePreviewWarning:
+    job_id: str
+    message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "live_preview_warning", "data": asdict(self)})
+
+
+@dataclass
 class LogMessage:
     level: str
     message: str
@@ -335,6 +420,54 @@ class JobFailed:
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_failed", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkStarted:
+    job_id: str
+    workload_version: str
+    warmup_count: int
+    measured_frame_count: int
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_started", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkProgress:
+    job_id: str
+    completed_frames: int
+    total_frames: int
+    percentage: float
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_progress", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkCompleted:
+    job_id: str
+    result: dict[str, object]
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_completed", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkFailed:
+    job_id: str
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_failed", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkCancelled:
+    job_id: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_cancelled", "data": asdict(self)})
 
 
 @dataclass

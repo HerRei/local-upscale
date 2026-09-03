@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64},
         Arc, Mutex, MutexGuard,
@@ -16,8 +17,8 @@ use crate::{
     paths::AppPaths,
     settings,
     types::{
-        AppSnapshot, CapabilityInfo, CatalogManifest, EngineInfo, Recipe, RuntimeStatus,
-        UiSettings, APP_VERSION, PROTOCOL_VERSION,
+        AppSnapshot, BenchmarkResult, CapabilityInfo, CatalogManifest, EngineInfo, Recipe,
+        RuntimeStatus, UiSettings, APP_VERSION, PROTOCOL_VERSION,
     },
 };
 
@@ -48,6 +49,8 @@ pub struct AppState {
     pub capabilities: Mutex<CapabilityInfo>,
     pub engine: Mutex<Option<EngineInfo>>,
     pub runtime: Mutex<RuntimeStatus>,
+    pub latest_benchmark: Mutex<Option<BenchmarkResult>>,
+    pub video_preview_paths: Mutex<Vec<PathBuf>>,
     pub worker: WorkerControl,
     pub scheduler: Mutex<()>,
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -63,6 +66,7 @@ impl AppState {
         let database = Database::open(&paths.database)?;
         let catalog = load_catalog(&paths)?;
         let (settings, recipes) = settings::load(&paths);
+        let latest_benchmark = settings::load_benchmark(&paths);
         Ok(Self {
             paths,
             database: Mutex::new(database),
@@ -72,6 +76,8 @@ impl AppState {
             capabilities: Mutex::new(CapabilityInfo::detecting()),
             engine: Mutex::new(None),
             runtime: Mutex::new(RuntimeStatus::default()),
+            latest_benchmark: Mutex::new(latest_benchmark),
+            video_preview_paths: Mutex::new(Vec::new()),
             worker: WorkerControl::default(),
             scheduler: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
@@ -94,6 +100,7 @@ impl AppState {
         let capabilities = lock(&self.capabilities)?.clone();
         let engine = lock(&self.engine)?.clone();
         let runtime = lock(&self.runtime)?.clone();
+        let latest_benchmark = lock(&self.latest_benchmark)?.clone();
 
         Ok(AppSnapshot {
             app_version: APP_VERSION.into(),
@@ -106,6 +113,7 @@ impl AppState {
             capabilities,
             engine,
             runtime,
+            latest_benchmark,
         })
     }
 

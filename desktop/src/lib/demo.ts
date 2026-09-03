@@ -12,7 +12,7 @@ for (const model of catalog.video_models) {
 
 export function demoSnapshot(): AppSnapshot {
   return {
-    app_version: '0.0.10-alpha · Next Preview',
+    app_version: '0.0.11-alpha · Next Preview',
     protocol_version: 1,
     catalog,
     media: [],
@@ -23,6 +23,7 @@ export function demoSnapshot(): AppSnapshot {
       task: '',
       selected_model_id: '',
       selected_video_model_id: 'frame_by_frame',
+      preprocess_model_id: '',
       custom_model_path: '',
       output_scale: 4,
       output_directory: '',
@@ -39,6 +40,8 @@ export function demoSnapshot(): AppSnapshot {
       video_container: 'mp4',
       video_crf: 18,
       enable_face_model: false,
+      face_fidelity: 70,
+      enable_live_preview: true,
       allow_unsafe_pickle_model: false
     },
     recipes: [],
@@ -84,6 +87,7 @@ export function demoSnapshot(): AppSnapshot {
       live_system_ram_available: 0,
       live_memory_pressure_percent: 0,
       thermal_status: 'Not exposed by this backend'
-    }
+    },
+    latest_benchmark: null
   };
 }

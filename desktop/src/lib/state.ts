@@ -105,6 +105,21 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.active_tile_size = 0;
       next.runtime.result_preview_data_url = '';
       break;
+    case 'stage_started': {
+      const labels: Record<string, string> = {
+        deblock: 'Removing JPEG artifacts',
+        restore: 'Restoring',
+        upscale: 'Upscaling',
+        face_restore: 'Restoring faces'
+      };
+      const kind = String(data.stage_kind ?? '');
+      next.runtime.status_title = `${labels[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
+      next.runtime.status_detail = `Preparing ${String(data.model_id ?? 'model')}.`;
+      break;
+    }
+    case 'stage_completed':
+      next.runtime.status_detail = `${String(data.stage_kind ?? 'Processing').replace('_', ' ')} stage complete.`;
+      break;
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
       next.runtime.status_title = 'Enhancing';
@@ -144,6 +159,48 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       }
       break;
     }
+    case 'live_preview_frame':
+      if (
+        String(data.job_id ?? '') === next.runtime.active_job_id &&
+        String(data.preview_kind ?? '') === 'video' &&
+        typeof data.jpeg_base64 === 'string' &&
+        data.jpeg_base64
+      ) {
+        next.runtime.result_preview_data_url = `data:image/jpeg;base64,${data.jpeg_base64}`;
+      }
+      break;
+    case 'benchmark_started':
+      next.runtime.active_job_id = String(data.job_id ?? '');
+      next.runtime.status_title = 'Benchmark running';
+      next.runtime.status_detail = `Warming up ${Number(data.warmup_count ?? 0)} iteration${Number(data.warmup_count ?? 0) === 1 ? '' : 's'} · then measuring ${Number(data.measured_frame_count ?? 0)} frames`;
+      next.runtime.progress = 0;
+      break;
+    case 'benchmark_progress':
+      next.runtime.progress = Number(data.percentage ?? 0);
+      next.runtime.status_title = 'Benchmark running';
+      next.runtime.status_detail = `Measured ${Number(data.completed_frames ?? 0)} of ${Number(data.total_frames ?? 0)} frames`;
+      break;
+    case 'benchmark_completed':
+      next.runtime.active_job_id = '';
+      next.runtime.progress = 100;
+      next.runtime.status_title = 'Benchmark complete';
+      if (typeof data.result === 'object' && data.result) {
+        next.latest_benchmark = data.result as unknown as AppSnapshot['latest_benchmark'];
+        next.runtime.status_detail = `Score ${next.latest_benchmark?.score.toFixed(2) ?? '—'} · local result saved`;
+      }
+      break;
+    case 'benchmark_cancelled':
+      next.runtime.active_job_id = '';
+      next.runtime.progress = 0;
+      next.runtime.status_title = 'Benchmark cancelled';
+      next.runtime.status_detail = 'No partial benchmark result was stored.';
+      break;
+    case 'benchmark_failed':
+      next.runtime.active_job_id = '';
+      next.runtime.progress = 0;
+      next.runtime.status_title = 'Benchmark failed';
+      next.runtime.status_detail = String(data.error_message ?? 'The benchmark could not finish.');
+      break;
     case 'job_completed':
     case 'video_job_completed':
       next.runtime.active_job_id = '';

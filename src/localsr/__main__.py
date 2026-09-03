@@ -58,6 +58,10 @@ def main():
         return
 
     filtered_args = [arg for arg in sys.argv[1:] if not arg.startswith("-psn_")]
+    if filtered_args and filtered_args[0] in {"process", "benchmark", "watch"}:
+        from localsr.automation import run_automation_cli
+
+        raise SystemExit(run_automation_cli(filtered_args))
     parsed, unknown = _parse_cli_args(filtered_args)
 
     if parsed.install_integrations:

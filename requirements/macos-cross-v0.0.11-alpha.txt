@@ -1,10 +1,11 @@
-# One-release Intel -> Apple Silicon cross-build environment for v0.0.10-alpha.
+# One-release Intel -> Apple Silicon cross-build environment for v0.0.11-alpha.
 #
 # PyTorch 2.2.2 / torchvision 0.17.2 are the final releases that publish
-# matching CPython 3.11 Intel and Apple Silicon wheels.  The Mac mini merges
+# matching CPython 3.11 Intel and Apple Silicon wheels. The Mac mini merges
 # those wheels into a universal2 PyInstaller analysis environment, then emits
 # an ARM64-only worker.  This known security debt is forbidden for beta and
-# must not be reused by later release tags.
+# must not be reused by later release tags. Dependabot intentionally ignores
+# this file because torch and torchvision are a proven inseparable wheel pair.
 torch==2.2.2
 torchvision==0.17.2
 numpy==1.26.4
@@ -14,6 +15,9 @@ rawpy==0.25.1
 tifffile==2026.3.3
 av==14.2.0
 slint==1.9.2a1
+# YuNet face detection. 4.10 is the final OpenCV wheel line that preserves
+# macOS 12 support and NumPy 1.x compatibility for this one-release runtime.
+opencv-python-headless==4.10.0.84
 
 # Video remains Labs / Experimental, but the hidden worker still carries the
 # dependencies needed by the existing frame and SeedVR2 code paths.

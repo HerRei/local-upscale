@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::{
     error::AppResult,
     paths::AppPaths,
-    types::{Recipe, UiSettings},
+    types::{BenchmarkResult, Recipe, UiSettings},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -76,7 +76,7 @@ fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
         settings.precision = value.into();
     }
     if let Some(index) = object.get("format_index").and_then(Value::as_u64) {
-        settings.output_format = ["png", "jpg", "tif"]
+        settings.output_format = ["png", "jpg", "tif", "webp"]
             .get(index as usize)
             .copied()
             .unwrap_or("png")
@@ -95,6 +95,19 @@ pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppR
     let temporary = paths.settings.with_extension("json.tmp");
     fs::write(&temporary, bytes)?;
     replace_settings_file(&temporary, &paths.settings)?;
+    Ok(())
+}
+
+pub fn load_benchmark(paths: &AppPaths) -> Option<BenchmarkResult> {
+    let contents = fs::read_to_string(&paths.benchmark).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+pub fn save_benchmark(paths: &AppPaths, result: &BenchmarkResult) -> AppResult<()> {
+    fs::create_dir_all(&paths.next_root)?;
+    let temporary = paths.benchmark.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec_pretty(result)?)?;
+    replace_settings_file(&temporary, &paths.benchmark)?;
     Ok(())
 }
 

@@ -10,8 +10,17 @@ on:
       - "src/localsr/worker/**"
       - "src/localsr/core/hardware.py"
       - "src/localsr/core/inference.py"
+      - "src/localsr/core/benchmark.py"
+      - "src/localsr/core/face_compositing.py"
+      - "src/localsr/core/face_detection.py"
+      - "src/localsr/core/image_io.py"
+      - "src/localsr/core/live_preview.py"
+      - "src/localsr/core/model_adapter.py"
       - "src/localsr/core/model_catalog.py"
+      - "src/localsr/core/output_writer.py"
+      - "src/localsr/core/pipeline.py"
       - "src/localsr/core/video_*.py"
+      - "src/localsr/automation.py"
       - "src/localsr/video_models/**"
       - "scripts/export_desktop_catalog.py"
       - "scripts/check_desktop_architecture.py"
@@ -43,8 +52,17 @@ on:
       - "src/localsr/worker/**"
       - "src/localsr/core/hardware.py"
       - "src/localsr/core/inference.py"
+      - "src/localsr/core/benchmark.py"
+      - "src/localsr/core/face_compositing.py"
+      - "src/localsr/core/face_detection.py"
+      - "src/localsr/core/image_io.py"
+      - "src/localsr/core/live_preview.py"
+      - "src/localsr/core/model_adapter.py"
       - "src/localsr/core/model_catalog.py"
+      - "src/localsr/core/output_writer.py"
+      - "src/localsr/core/pipeline.py"
       - "src/localsr/core/video_*.py"
+      - "src/localsr/automation.py"
       - "src/localsr/video_models/**"
       - "scripts/export_desktop_catalog.py"
       - "scripts/check_desktop_architecture.py"
@@ -76,6 +94,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -85,13 +104,35 @@ env:
   PYINSTALLER_VERSION: "6.22.2"
 
 concurrency:
-  group: localsr-tauri-preview-${{ github.ref }}
+  group: localsr-tauri-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  coordinate-heavy-work:
+    name: Wait for CI and release priority
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Wait without occupying a Mac-mini guest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "CI" \
+            --blocked-workflow "v0.0.11 Mac mini Cross Alpha" \
+            --blocked-workflow "Signed Tauri Alpha Release" \
+            --blocked-workflow "Legacy Slint Build (manual)"
+
   verify:
     name: Verify Next Preview (${{ matrix.platform }})
     timeout-minutes: 150
+    needs: [coordinate-heavy-work]
     env:
       # actions/checkout removes ignored target directories. Keep the verified
       # dependency build outside the checkout so small source changes do not
@@ -103,6 +144,10 @@ jobs:
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
     strategy:
       fail-fast: false
+      # All three guests run on one physical Mac mini. Keep even the regular
+      # preview verification below the host's thermal and memory contention
+      # threshold instead of compiling in all guests at once.
+      max-parallel: 1
       matrix:
         include:
           - platform: Linux X64
@@ -255,6 +300,9 @@ jobs:
     needs: verify
     strategy:
       fail-fast: false
+      # Private package builds use the same physical host as verification and
+      # release jobs, so they must remain serialized as well.
+      max-parallel: 1
       # macOS package builds require a native ARM64 runner: the maintained
       # PyTorch line no longer publishes Intel macOS wheels. The Intel runner
       # above still verifies the Tauri control plane without reviving 2.2.x.
@@ -355,7 +403,7 @@ jobs:
             "torch==${{ env.PYTORCH_VERSION }}" "torchvision==${{ env.TORCHVISION_VERSION }}" \
             --index-url https://download.pytorch.org/whl/cpu
           python -m pip install --disable-pip-version-check \
-            -e ".[package,video]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
+            -e ".[package,video,face]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
       - name: Install the Windows inference packager
         if: runner.os == 'Windows'
         run: |
@@ -363,7 +411,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check "torch==${{ env.PYTORCH_VERSION }}" "torchvision==${{ env.TORCHVISION_VERSION }}" --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m pip install --disable-pip-version-check -e ".[package,video]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
+          python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the additive desktop package
         # The required verify matrix has already run Svelte checks and tests on

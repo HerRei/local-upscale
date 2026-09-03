@@ -42,6 +42,7 @@ class DummyEngine:
         progress_callback,
         safe_memory,
         tile_callback=None,
+        temporary_directory=None,
     ):
         progress_callback(0, 4, tile_size)
         import time
@@ -282,7 +283,7 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
     assert writer_instance.cleaned_up is True
 
 
-def test_worker_samples_progressive_tile_jpegs_for_desktop_requests(monkeypatch):
+def test_worker_hands_progressive_tiles_to_nonblocking_preview_encoder(monkeypatch):
     from types import SimpleNamespace
 
     import localsr.worker.server as server_module
@@ -300,15 +301,22 @@ def test_worker_samples_progressive_tile_jpegs_for_desktop_requests(monkeypatch)
                 callback("completed", tile, object(), completed, 10, 160, 16, 64)
             return writer
 
-    encoded = []
+    submitted = []
     server.engine = FastTiledEngine()
     monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": None})
     monkeypatch.setattr(ImageManager, "save", lambda *_, **__: None)
-    monkeypatch.setattr(
-        server_module,
-        "_encode_chw_jpeg",
-        lambda *_args, **_kwargs: encoded.append(True) or "preview",
-    )
+
+    class FakePreviewEncoder:
+        def __init__(self, *_args, **kwargs):
+            assert kwargs["max_fps"] == 2.0
+
+        def submit(self, **kwargs):
+            submitted.append(kwargs)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(server_module, "LatestPreviewEncoder", FakePreviewEncoder)
 
     server._run_job(
         "job-sampled-preview",
@@ -326,13 +334,73 @@ def test_worker_samples_progressive_tile_jpegs_for_desktop_requests(monkeypatch)
             "preserve_metadata": True,
             "safe_memory": True,
             "output_scale": 2,
-            "preview_interval_ms": 1000,
+            "preview_enabled": True,
+            "preview_max_fps": 2.0,
         },
     )
 
-    # The first tile makes the preview visible and the final tile is forced;
-    # rapid intermediate tiles do not monopolize the UI transport.
-    assert len(encoded) == 2
+    assert len(submitted) == 10
+    assert submitted[-1]["force"] is True
+    assert all(item["preview_kind"] == "tile" for item in submitted)
+
+
+def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import localsr.worker.server as server_module
+
+    server = WorkerServer()
+    server.model_adapter = DummyModelAdapter()
+
+    class FakePreviewEncoder:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def submit(self, **_kwargs):
+            return True
+
+        def close(self):
+            pass
+
+    def fake_video_job(**kwargs):
+        kwargs["frame_started_cb"](2, 10)
+        kwargs["enhanced_frame_cb"](2, 10, __import__("numpy").zeros((8, 8, 3), dtype="uint8"))
+        kwargs["progress_cb"](3, 10, 6.0)
+        return SimpleNamespace(
+            output_path="output.mp4",
+            frames_processed=10,
+            elapsed_seconds=20.0,
+            inference_seconds=19.0,
+        )
+
+    monkeypatch.setattr(server_module, "LatestPreviewEncoder", FakePreviewEncoder)
+    monkeypatch.setattr(server_module, "run_video_job", fake_video_job)
+    server._run_video_job(
+        "video-eta",
+        {
+            "video_path": "input.mp4",
+            "model_path": "model.pth",
+            "output_video_path": "output.mp4",
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 64,
+            "halo": 8,
+        },
+    )
+
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    progress = [item for item in messages if item["type"] == "video_frame_completed"]
+    assert len(progress) == 1
+    expected = {
+        "job_id": "video-eta",
+        "frame_index": 2,
+        "total_frames": 10,
+        "frames_processed": 3,
+        "elapsed_seconds": 6.0,
+        "estimated_remaining_seconds": 14.0,
+        "jpeg_base64": "",
+    }
+    assert {key: progress[0]["data"][key] for key in expected} == expected
 
 
 def test_worker_memmap_cleanup_on_error(monkeypatch):

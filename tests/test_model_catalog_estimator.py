@@ -38,9 +38,11 @@ def test_catalog_has_pinned_optional_downloads():
         "realplksr_hfa2k_anime_x4",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
+        "realesrgan_x2plus",
+        "fbcnn_color",
         "nafnet_gopro_deblur",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 9
+    assert len({model.filename for model in MODEL_CATALOG}) == 11
     upstream_hat = [
         model
         for model in MODEL_CATALOG
@@ -53,7 +55,8 @@ def test_catalog_has_pinned_optional_downloads():
         "CC-BY-4.0",
         "CC BY 4.0",
         "CC-BY-0.4 (upstream; clarify)",
-        "CC BY-NC-SA 4.0",
+        "Checkpoint rights unverified",
+        "BSD-3-Clause",
         "MIT",
     }
     assert all(len(model.sha256) == 64 for model in MODEL_CATALOG)

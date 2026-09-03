@@ -5,6 +5,8 @@ from pathlib import Path
 from localsr import __version__
 from localsr.protocol.messages import (
     PROTOCOL_VERSION,
+    BenchmarkCompleted,
+    BenchmarkRequest,
     EngineInfo,
     HandshakeRequest,
     JobRequest,
@@ -43,12 +45,12 @@ def test_additive_desktop_metadata_uses_one_version():
 
 
 def test_handshake_and_engine_info_are_language_neutral_envelopes():
-    request = _message(HandshakeRequest(client_name="test-host", client_version="0.0.10-alpha"))
+    request = _message(HandshakeRequest(client_name="test-host", client_version="0.0.11-alpha"))
     assert request == {
         "type": "handshake_request",
         "data": {
             "client_name": "test-host",
-            "client_version": "0.0.10-alpha",
+            "client_version": "0.0.11-alpha",
             "protocol_version": 1,
         },
     }
@@ -57,7 +59,7 @@ def test_handshake_and_engine_info_are_language_neutral_envelopes():
             protocol_version=1,
             minimum_protocol_version=1,
             engine_id="localsr.pytorch-spandrel",
-            engine_version="0.0.10-alpha",
+            engine_version="0.0.11-alpha",
             features=["image", "video_frame"],
             model_formats=[".safetensors"],
             video_engines=["spandrel_image"],
@@ -105,3 +107,23 @@ def test_pickle_opt_in_is_explicit_per_job():
         )
     )
     assert request["data"]["allow_unverified_checkpoint"] is True
+
+
+def test_benchmark_protocol_carries_a_versioned_real_workload_result():
+    request = _message(
+        BenchmarkRequest(
+            job_id="benchmark-1",
+            model_path="quick.pth",
+            model_id="span_photo_x4",
+            model_name="SPAN Quick",
+            device="cpu",
+        )
+    )
+    assert request["type"] == "benchmark_request"
+    completed = _message(
+        BenchmarkCompleted(
+            job_id="benchmark-1",
+            result={"workload_version": "localsr-benchmark-v1", "score": 42.5},
+        )
+    )
+    assert completed["data"]["result"]["workload_version"] == "localsr-benchmark-v1"

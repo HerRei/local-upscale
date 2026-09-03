@@ -154,9 +154,14 @@ class ModelAdapter:
             self._checkpoint_trust(normalized_path)
             self.parsed = self.loader.load_from_file(normalized_path)
             self.parsed_path = normalized_path
-        model = self.parsed.model.to(device).to(precision)
-        model.eval()
-        return model, self.parsed
+        # Run through Spandrel's descriptor rather than reaching into its raw
+        # architecture module. Most SR modules return a tensor directly, but
+        # restoration architectures such as FBCNN expose auxiliary outputs.
+        # The descriptor normalizes those architecture-specific signatures to
+        # the single-image tensor contract used by LocalSR.
+        descriptor = self.parsed.to(device).to(precision)
+        descriptor.eval()
+        return descriptor, self.parsed
 
     def release(self):
         self.parsed = None

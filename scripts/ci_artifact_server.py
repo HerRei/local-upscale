@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 from datetime import UTC, datetime
@@ -18,8 +20,17 @@ from pathlib import Path
 
 try:
     from artifact_auth import NonceCache, verify_request
-except ModuleNotFoundError:  # imported as a repository module in unit tests
-    from scripts.artifact_auth import NonceCache, verify_request
+except ModuleNotFoundError:  # imported directly from a file by isolated tooling/tests
+    _auth_spec = importlib.util.spec_from_file_location(
+        "_localsr_artifact_auth", Path(__file__).with_name("artifact_auth.py")
+    )
+    if _auth_spec is None or _auth_spec.loader is None:
+        raise RuntimeError("Could not load the adjacent artifact_auth.py module") from None
+    _auth_module = importlib.util.module_from_spec(_auth_spec)
+    sys.modules[_auth_spec.name] = _auth_module
+    _auth_spec.loader.exec_module(_auth_module)
+    NonceCache = _auth_module.NonceCache
+    verify_request = _auth_module.verify_request
 
 GIB = 1024**3
 COMPONENT_RE = re.compile(r"^[A-Za-z0-9._+-]+$")

@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -150,6 +151,8 @@ def test_image_manager_save_delegation(tmp_path):
     out_mmap = np.zeros((3, 10, 10), dtype=np.uint8)
     writer = MockOutputWriter(out_mmap)
     out_path = str(tmp_path / "out_save.png")
+    unrelated = Path(out_path + ".tmp")
+    unrelated.write_text("belongs to the user", encoding="utf-8")
 
     manager.save(
         output_writer=writer,
@@ -163,7 +166,8 @@ def test_image_manager_save_delegation(tmp_path):
     )
 
     assert os.path.exists(out_path)
-    assert not os.path.exists(out_path + ".tmp")
+    assert unrelated.read_text(encoding="utf-8") == "belongs to the user"
+    assert not list(tmp_path.glob(".out_save.png.localsr-image-*.tmp"))
     out_img = Image.open(out_path)
     assert out_img.size == (10, 10)
 
@@ -182,6 +186,5 @@ def test_atomic_save_error_cleanup(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Disk error during replace"):
         manager.save_from_writer(out_mmap, out_path, "png", 98, False, None, {}, 1)
 
-    # Check that temporary file .tmp was cleaned up
-    assert not os.path.exists(out_path + ".tmp")
+    assert not list(tmp_path.glob(".out_fail.png.localsr-image-*.tmp"))
     assert not os.path.exists(out_path)

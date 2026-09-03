@@ -5,6 +5,29 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.11-alpha] - 2026-09-03
+
+### Added
+
+- Added reproducible local benchmarking, synchronized video comparison playback, bounded live
+  processed-frame previews, staged restoration recipes, face fidelity control, native 2× model
+  support, and noninteractive CLI/watch-folder automation to the Tauri/Python architecture.
+- Added early cross-platform release preflights, serialized Mac-mini builds, validated
+  cross-attempt matrix selection, and safe partial-draft release resumption.
+
+### Changed
+
+- Migrated the active testing-only cross alpha and every active version surface to
+  `v0.0.11-alpha`; the former `v0.0.10-alpha` release and notes remain immutable history.
+- Failed release builds retain bounded non-secret evidence for approximately 48 hours, while
+  successful verified staging and all certificate material are removed immediately.
+
+### Security
+
+- Restricted artifact upload calls to the canonical `linux`, `windows`, and `macos` wire values,
+  added workflow-wide semantic validation and pinned `actionlint`, and isolated the one-release
+  Torch/torchvision cross-build pair from Dependabot updates.
+
 ## [0.0.10-alpha] - 2026-09-02
 
 ### Added

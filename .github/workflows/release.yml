@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: localsr-legacy-release-${{ github.ref }}
+  group: localsr-macmini-heavy
   cancel-in-progress: false
 
 env:
@@ -365,7 +365,7 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           mkdir -p "$RUN_ROOT/source"
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
       - name: Create isolated x86_64 environment
         if: matrix.target.architecture == 'x86_64'
         env:

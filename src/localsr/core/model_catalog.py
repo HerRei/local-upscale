@@ -94,6 +94,38 @@ class CatalogModel:
 ModelCatalogEntry = CatalogModel
 
 
+# The detector is infrastructure for the optional face-aware path rather than
+# a Spandrel restoration checkpoint, so it deliberately stays out of
+# MODEL_CATALOG and the user-facing model picker.  It is fetched only when a
+# face-aware job is requested and is subjected to the same HTTPS, size, hash,
+# partial-download, and atomic-install policy as restoration models.
+FACE_DETECTOR_MODEL = CatalogModel(
+    model_id="yunet_face_detector_2023mar",
+    name="YuNet Face Detector (2023mar)",
+    filename="face_detection_yunet_2023mar.onnx",
+    description="Small CPU face detector used to build feathered restoration masks.",
+    size_bytes=232_589,
+    sha256="8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    download_url=(
+        "https://github.com/opencv/opencv_zoo/raw/refs/heads/main/"
+        "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    ),
+    architecture="YuNet",
+    native_scale=1,
+    purposes=(ModelPurpose.FACE,),
+    quality_tier=QualityTier.STANDARD,
+    speed_tier=SpeedTier.FAST,
+    recommended_halo=0,
+    source_url=("https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet"),
+    license_name="MIT",
+    author="Shiqi Yu · OpenCV Zoo",
+    memory_factor=0.1,
+    time_factor=0.1,
+    speed_factor=1.0,
+    commercial_use_status="allowed",
+)
+
+
 MODEL_CATALOG = (
     CatalogModel(
         model_id="hat_s_x4",
@@ -121,8 +153,8 @@ MODEL_CATALOG = (
         name="HAT-S ×4 Face — Restoration",
         filename="base_95k_interp_a0p1.pth",
         description=(
-            "Non-commercial face-specialized HAT-S model blended for enhanced facial "
-            "restoration while preserving clean fidelity."
+            "Face-specialized HAT-S checkpoint with unresolved training-data/weight rights. "
+            "LocalSR can verify a user-supplied copy but does not auto-download it."
         ),
         size_bytes=40_484_805,
         sha256="92277daf002214307bea6f1e06b4fa745acdb7690728a0a9a619076e7bc8d7f2",
@@ -134,14 +166,14 @@ MODEL_CATALOG = (
         speed_tier=SpeedTier.MEDIUM,
         recommended_halo=16,
         source_url="https://github.com/HerRei/HAT",
-        license_name="CC BY-NC-SA 4.0",
+        license_name="Checkpoint rights unverified",
         author="HerRei / XPixel Group",
         memory_factor=0.65,
         time_factor=0.65,
         speed_factor=0.65,
         vram_estimate_mb=2000,
         pair_with="hat_s_x4",
-        commercial_use_status="not-allowed",
+        commercial_use_status="unclear",
     ),
     CatalogModel(
         model_id="hat_l_x4_imagenet",
@@ -290,6 +322,60 @@ MODEL_CATALOG = (
         speed_factor=0.70,
         vram_estimate_mb=1200,
         commercial_use_status="unclear",
+    ),
+    CatalogModel(
+        model_id="realesrgan_x2plus",
+        name="Real-ESRGAN ×2 — Compact",
+        filename="RealESRGAN_x2plus.pth",
+        description=(
+            "Official native 2× Real-ESRGAN checkpoint for general photos. It avoids the "
+            "extra downsampling required by 4× checkpoints when a true 2× result is wanted."
+        ),
+        size_bytes=67_061_725,
+        sha256="49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb",
+        download_url=(
+            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"
+        ),
+        architecture="RealESRGAN",
+        native_scale=2,
+        purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/xinntao/Real-ESRGAN",
+        license_name="BSD-3-Clause",
+        author="Xintao Wang et al.",
+        memory_factor=1.05,
+        time_factor=1.0,
+        speed_factor=0.55,
+        vram_estimate_mb=1800,
+    ),
+    CatalogModel(
+        model_id="fbcnn_color",
+        name="FBCNN Color — JPEG Restoration",
+        filename="fbcnn_color.pth",
+        description=(
+            "Official blind JPEG artifact-removal checkpoint. This is a 1× restoration model, "
+            "not a super-resolution model, and can be chained before upscaling."
+        ),
+        size_bytes=287_755_111,
+        sha256="8b0e4ef23d59cf7ac934a342cb31a17619e4fa4a0b3374a9d78c5174312387e8",
+        download_url=(
+            "https://github.com/jiaxi-jiang/FBCNN/releases/download/v1.0/fbcnn_color.pth"
+        ),
+        architecture="FBCNN",
+        native_scale=1,
+        purposes=(ModelPurpose.RESTORATION, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=32,
+        source_url="https://github.com/jiaxi-jiang/FBCNN",
+        license_name="Apache-2.0",
+        author="Jiaxi Jiang et al.",
+        memory_factor=1.25,
+        time_factor=1.15,
+        speed_factor=0.45,
+        vram_estimate_mb=2500,
     ),
     CatalogModel(
         model_id="nafnet_gopro_deblur",

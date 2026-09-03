@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -19,9 +20,35 @@ env:
   QT_QPA_PLATFORM: "offscreen"
 
 jobs:
+  coordinate-heavy-work:
+    name: Wait for release priority
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Wait without occupying a Mac-mini guest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "v0.0.11 Mac mini Cross Alpha" \
+            --blocked-workflow "Signed Tauri Alpha Release" \
+            --blocked-workflow "Legacy Slint Build (manual)"
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "Tauri Next Preview" \
+            --ignore-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+
   lint:
     name: Lint & format (Linux X64)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [coordinate-heavy-work]
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,7 +71,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
           export TMPDIR="$RUN_ROOT/tmp"
           export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
@@ -52,6 +79,15 @@ jobs:
             --disable-pip-version-check --upgrade "pip==26.2.1"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
           cd "$RUN_ROOT/source"
+          ACTIONLINT_ARCHIVE="$RUN_ROOT/environment/actionlint.tar.gz"
+          curl --fail --silent --show-error --location \
+            --output "$ACTIONLINT_ARCHIVE" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $ACTIONLINT_ARCHIVE" | sha256sum --check
+          tar -xzf "$ACTIONLINT_ARCHIVE" -C "$RUN_ROOT/environment" actionlint
+          "$RUN_ROOT/environment/actionlint" -color \
+            -config-file .github/actionlint.yaml \
+            .github/workflows/*.yml
           "$RUN_ROOT/environment/venv/bin/python" scripts/check_beta_readiness.py
           "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
           "$RUN_ROOT/environment/venv/bin/python" -m ruff format --check src tests scripts
@@ -103,7 +139,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
           export TMPDIR="$RUN_ROOT/tmp"
           export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
@@ -113,7 +149,7 @@ jobs:
             "torch==2.13.0" \
             "torchvision==0.28.0" \
             --index-url https://download.pytorch.org/whl/cpu
-          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
           "$PYTHON" -m pip install --disable-pip-version-check build
           cd "$RUN_ROOT/source"
           "$PYTHON" -m pytest tests/ -v
@@ -174,7 +210,7 @@ jobs:
             "torchvision==0.28.0" `
             --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video]"
+          & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video,face]"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -c "import torch, torchvision; print(f'torch={torch.__version__} torchvision={torchvision.__version__}')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -218,12 +254,12 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
           /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
             -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
           "$PYTHON" -m pip install --disable-pip-version-check pyobjc-framework-Cocoa
           cd "$RUN_ROOT/source"
           "$PYTHON" -m pytest tests/test_platform_integration.py -v

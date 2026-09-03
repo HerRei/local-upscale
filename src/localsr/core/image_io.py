@@ -1,6 +1,8 @@
 import io
 import os
+import tempfile
 import warnings
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -8,6 +10,8 @@ import torch
 from PIL import Image, ImageCms, ImageOps
 
 from localsr.core.image_formats import is_raw_input
+
+SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 
 
 def _develop_dng(path: str) -> np.ndarray:
@@ -55,23 +59,18 @@ class ImageManager:
                 stacklevel=2,
             )
 
-        # 1. Strip raw EXIF dimensions/thumbnails by just extracting what we need or resetting.
-        # But for now, we'll just not copy EXIF natively. We will only copy safe tags.
+        # Copy a deliberately small privacy allow-list. In particular, GPS,
+        # camera serial/device identity, embedded thumbnails, software, and host
+        # names never cross into an output file.
         safe_exif = {}
         try:
             exif_data = metadata_img.getexif() if metadata_img is not None else None
             if exif_data is not None:
                 # 274 is Orientation.
-                # Safe tags: Copyright, DateTime, GPS, Make, Model, Software
-                safe_tags = {
-                    306: "DateTime",
-                    315: "Artist",
-                    316: "HostComputer",
-                    33432: "Copyright",
-                    34853: "GPSInfo",
-                }
+                # Descriptive authorship/time tags only. Dimension and
+                # orientation tags are regenerated from the actual output.
                 for k, v in exif_data.items():
-                    if k in safe_tags:
+                    if k in SAFE_EXIF_TAGS:
                         safe_exif[k] = v
         except (OSError, SyntaxError, TypeError, ValueError) as error:
             warnings.warn(
@@ -196,7 +195,7 @@ class ImageManager:
             out_img = out_img.resize(target_size, Image.Resampling.LANCZOS)
 
         # Handle Alpha scaling
-        if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff"]:
+        if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp"]:
             new_size = (
                 self.alpha_channel.width * final_scale,
                 self.alpha_channel.height * final_scale,
@@ -209,16 +208,26 @@ class ImageManager:
             if icc_profile:
                 kwargs["icc_profile"] = icc_profile
 
-            if safe_exif:
-                exif = out_img.getexif()
-                for k, v in safe_exif.items():
-                    exif[k] = v
-                # Enforce orientation 1
-                exif[274] = 1
-                kwargs["exif"] = exif
+            exif = out_img.getexif()
+            for k, v in safe_exif.items():
+                exif[k] = v
+            # Enforce orientation and output dimensions even when the source
+            # carried no other safe fields. These generated structural tags do
+            # not reintroduce private camera or location metadata.
+            exif[274] = 1
+            exif[40962] = out_img.width
+            exif[40963] = out_img.height
+            kwargs["exif"] = exif
 
         fmt = format.lower()
-        tmp_path = destination_path + ".tmp"
+        destination = Path(destination_path)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.localsr-image-",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        os.close(descriptor)
+        tmp_path = Path(temporary_name)
         try:
             if fmt in ["jpg", "jpeg"]:
                 # Strip alpha if we were going to save as JPEG
@@ -230,14 +239,17 @@ class ImageManager:
             elif fmt in ["tif", "tiff"]:
                 # BigTIFF might be needed if extremely large, but PIL handles it if installed correctly with libtiff
                 out_img.save(tmp_path, format="TIFF", compression="tiff_deflate", **kwargs)
+            elif fmt == "webp":
+                out_img.save(tmp_path, format="WEBP", quality=quality, method=6, **kwargs)
             else:
                 out_img.save(tmp_path, format=fmt, **kwargs)
 
-            os.replace(tmp_path, destination_path)
+            os.replace(tmp_path, destination)
         except Exception:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
             raise

@@ -4,7 +4,7 @@
 
 LocalSR is a private, local-first desktop application for image restoration and super-resolution.
 Media and downloaded model weights stay on the computer; the app has no cloud processing or
-analytics. The current release candidate is **v0.0.10-alpha**.
+analytics. The current release candidate is **v0.0.11-alpha**.
 
 ## Features
 
@@ -27,13 +27,13 @@ weights. Custom `.safetensors` checkpoints are accepted by default. Unverified p
 
 ## Install the alpha
 
-The Mac-mini cross-release pipeline publishes the [v0.0.10-alpha
-prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.10-alpha) only after its
+The Mac-mini cross-release pipeline publishes the [v0.0.11-alpha
+prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.11-alpha) only after its
 testing-only platform gates pass. Download the one installer matching the operating system:
 
-- Apple Silicon macOS 12+: `LocalSR-v0.0.10-alpha-macOS-arm64.dmg`
-- Windows 10/11 x86-64: `LocalSR-v0.0.10-alpha-Windows-x86_64.exe`
-- Linux x86-64: `LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage`
+- Apple Silicon macOS 12+: `LocalSR-v0.0.11-alpha-macOS-arm64.dmg`
+- Windows 10/11 x86-64: `LocalSR-v0.0.11-alpha-Windows-x86_64.exe`
+- Linux x86-64: `LocalSR-v0.0.11-alpha-Linux-x86_64.AppImage`
 
 There are only five release assets: those three installers, `SHA256SUMS`, and
 `release-index.json`. This alpha is deliberately not production signed: macOS is ad-hoc sealed and
@@ -45,7 +45,7 @@ location remains a beta decision.
 
 ## Platform and advanced downloads
 
-The v0.0.10-alpha candidate is the first installable Tauri/Svelte host. It coexists with the former
+The v0.0.11-alpha candidate is the second installable Tauri/Svelte alpha. It coexists with the former
 Slint app under a distinct bundle identifier and state directory, so installing it does not replace
 an older LocalSR installation:
 
@@ -56,8 +56,8 @@ an older LocalSR installation:
 | Linux x86-64 | CPU | `.AppImage` plus SHA-256 |
 
 Linux and Windows installers are installed in CI and start their bundled worker. The Intel Mac mini
-cannot execute ARM64, so the DMG receives recursive ARM64 Mach-O and package inspection while the
-source-equivalent native ARM build received the GUI/worker smoke separately. This limitation and
+cannot execute ARM64, so the DMG receives recursive ARM64 Mach-O and package inspection only. No
+accessible physical Apple-Silicon runner supplied native runtime acceptance. This limitation and
 all checksum, provenance, signing, and smoke evidence are recorded in `release-index.json`.
 
 The release index embeds an intentionally honest machine-readable snapshot of completed and
@@ -81,7 +81,9 @@ real checksums.
 | RealPLKSR 4x HFA2k — Anime | anime and line art | 29.7 MB | upstream says `CC-BY-0.4`; clarify |
 | HAT-S ×4 | general high quality | 81 MB | Apache-2.0 |
 | HAT-L ×4 ImageNet | large/high-cost model | 166 MB | Apache-2.0 |
-| HAT-S ×4 Face | face restoration | 40 MB | CC BY-NC-SA 4.0 |
+| Real-ESRGAN ×2 | native compact 2× upscaling | 67 MB | BSD-3-Clause |
+| FBCNN Color ×1 | JPEG artifact restoration | 288 MB | Apache-2.0 |
+| HAT-S ×4 Face | optional user-supplied face restoration | 40 MB | checkpoint rights unresolved |
 | RealPLKSR Denoise ×1 | fast photo denoising | 30 MB | CC-BY-4.0 |
 | NAFNet SIDD Width64 ×1 | camera-noise removal | 464 MB | MIT |
 | NAFNet GoPro Deblur ×1 | motion deblurring | 272 MB | MIT |
@@ -90,9 +92,12 @@ Quick Start currently selects SPAN NomosUni. Best Quality selects RealPLKSR Nomo
 release preflight downloads both into a genuinely empty cache, validates their embedded checksums,
 loads them through Spandrel, and runs real CPU inference.
 
-The HAT-S Face checkpoint is **non-commercial only** under CC BY-NC-SA 4.0. The UI labels this
-restriction. It is not silently included in Quick or Best and is not licensed for a commercial
-workflow merely because the LocalSR application source is MIT.
+The HAT-S Face implementation remains available for an exact user-supplied compatible checkpoint,
+but the current asset's independent training-data, redistribution, and use terms could not be
+verified. LocalSR does not automatically download it or make a commercial-use claim. Face masks
+come from the separately MIT-licensed YuNet 2023mar detector, downloaded on first face-aware use
+with a pinned size and SHA-256. See the
+[checkpoint evidence and policy](docs/model-licenses.md).
 
 The upstream [Best release](https://github.com/Phhofm/models/releases/tag/4xNomosWebPhoto_RealPLKSR)
 and [anime release](https://github.com/Phhofm/models/releases/tag/4xHFA2k_ludvae_realplksr_dysample)
@@ -117,7 +122,7 @@ Or create an environment directly:
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[video]"
+python -m pip install -e ".[video,face]"
 python -m localsr
 ```
 
@@ -139,6 +144,19 @@ localsr video.mp4 --recipe "My Video Recipe" --auto-start
 
 The native installers register the normal application entry. Optional Finder, Explorer, Nautilus,
 KDE, and desktop actions are installed explicitly from LocalSR's native menu.
+
+The Python entry point also exposes production-path noninteractive processing, a restart-safe watch
+folder, and the versioned benchmark:
+
+```bash
+localsr process photo.png clip.mkv --output ./enhanced --model span_photo_x4 --json
+localsr watch ./incoming --output ./enhanced --stable-seconds 2 --json
+localsr benchmark --device auto --json
+```
+
+Automation never downloads a model implicitly or overwrites input/existing output files. See the
+[automation contract](docs/automation.md), [benchmark definition](docs/benchmark.md), and exact
+[metadata/color behavior](docs/metadata.md).
 
 ## Development and tests
 

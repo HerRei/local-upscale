@@ -4,6 +4,11 @@
 
 Accepted and Implemented. Integrated with `hat_s_x4_face` (blended $\alpha=0.10$ checkpoint `base_95k_interp_a0p1.pth`).
 
+Amended for v0.0.11-alpha: the processing design and fidelity-controlled spatial blend remain
+implemented, but independent rights for the exact checkpoint/training data are not verified. The
+checkpoint is no longer a trusted automatic download; the app accepts only a hash-matching
+user-supplied copy and makes no commercial-use claim.
+
 ## Context
 
 The frame-by-frame video pipeline (`src/localsr/core/video_pipeline.py`)
@@ -35,34 +40,36 @@ infer → encode loop stays unchanged.
 
 ### Detection
 
-A lightweight face detector runs on each decoded frame **before**
-inference, not after. MediaPipe Face Detection is the intended choice
-(~5 ms/frame on CPU, no GPU contention with the inference device). The
-detector runs in the worker process alongside PyAV decode.
+YuNet 2023mar runs on each sampled decoded frame **before** inference. The
+detector stays on CPU and therefore does not contend with the inference device. Its exact
+232,589-byte ONNX asset is independently MIT-licensed by the OpenCV Zoo directory and is downloaded
+on first face-aware use with a pinned SHA-256. `opencv-python-headless==4.10.0.84` is isolated in the
+`face` dependency extra and packaged in release workers; that version retains macOS 12 and NumPy 1.x
+compatibility for the v0.0.11 cross-build. Video reuses a mask for a bounded number of adjacent
+frames instead of detecting every frame.
 
 ### Model management
 
-`InferenceEngine` already caches a loaded model via `load_model()` /
-`release_model()`. The video pipeline will load **both** models at job
-start (two HAT-S checkpoints fit comfortably in 16 GB VRAM) and switch
-the active model per frame by calling `load_model` with the appropriate
-path. The cache check in `load_model` avoids reloading when switching
-back and forth.
+`InferenceEngine` caches both compatible models for the job. Face-aware tiles run through the
+face checkpoint, non-face tiles through the primary checkpoint, and boundary tiles through both.
+A feathered spatial mask blends the outputs. Fidelity is not presented as a native HAT parameter.
+LocalSR bicubic-resamples the original face region to the target size and defines the control as:
+
+`face_mix = original_upscaled × (1 − fidelity) + restored × fidelity`
+
+`output = primary × (1 − face_mask) + face_mix × face_mask`
+
+Thus zero retains the original identity-bearing pixels inside the feathered face region, one uses
+the strongest face-restoration output, and non-face regions remain exactly the primary upscaler's
+output.
 
 ### What is explicitly deferred
 
-- **Region-based compositing** (face model on the face crop, general
-  model on the rest, alpha-blended at the boundary) is not part of this
-  extension. It would give better quality on mixed-content frames but
-  requires two inference passes per frame, seamless boundary blending,
-  and the face model being trained on detector-output crops at the same
-  scale. That is a separate ADR if it becomes necessary.
-- **Temporal coherence between the two models**: switching models
-  frame-to-frame can introduce a subtle discontinuity at the switch
-  boundary. A 3-frame temporal median post-process pass (see ADR 0005,
-  if adopted) would smooth this. Without it, the discontinuity is
-  usually imperceptible because face and general HAT-S share the same
-  architecture and training lineage.
+- Native checkpoint-specific fidelity controls; the current control is a documented spatial blend.
+- Optical-flow tracking of face masks. The bounded detection interval is intentionally simpler and
+  remains Labs until motion-heavy footage is physically tested.
+- Automatic distribution of HAT-S Face. Only an exact hash-matching user-supplied checkpoint is
+  accepted while its independent weight/training-data rights remain unresolved.
 
 ## Consequences
 
@@ -70,17 +77,13 @@ back and forth.
   opt into face switching. Memory usage roughly doubles for model
   weights (from ~80 MB to ~160 MB for two HAT-S checkpoints). This is
   negligible compared to activation memory.
-- The face detector adds a CPU-side dependency (MediaPipe or
-  equivalent). It must be an optional dependency so the base video
-  pipeline continues to work without it.
+- The face detector adds the optional headless OpenCV CPU dependency. The base image/video pipeline
+  continues to work when the `face` extra is absent and feature negotiation disables the control.
 - The `VideoJobRequest` protocol message gains `face_model_path` and
   `face_threshold` fields. The GUI gains a "Use face model when
   available" toggle in the video task panel.
-- The existing `run_video_job` function gains one branch: if
-  `face_model_path` is set and a face is detected above threshold,
-  call `engine.load_model(face_model_path, ...)` before
-  `process_frame`; otherwise call `load_model(primary_model_path, ...)`.
-  No other changes to the loop.
+- `run_video_job` caches detection masks, executes the same bounded tiled face-aware function as
+  images, and keeps progress/cancellation inside the active recipe stage.
 
 ## Open questions
 
@@ -88,6 +91,5 @@ back and forth.
   portrait shots where hair, shoulders, and background are visible
   alongside the face. This will be evaluated empirically once training
   completes.
-- Whether MediaPipe is the right detector or whether a simpler
-  haar-cascade is sufficient. MediaPipe is preferred for robustness;
-  the decision can be revisited based on real-world test footage.
+- Whether a future detector can improve difficult-angle coverage without a larger or less clearly
+  licensed dependency. YuNet is the deliberately small, verified alpha baseline.

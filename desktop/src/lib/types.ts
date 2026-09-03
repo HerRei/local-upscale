@@ -157,13 +157,22 @@ export interface Recipe {
   safe_memory: boolean;
   video_model_id?: string;
   custom_model_path?: string;
-  output_format?: 'png' | 'jpg' | 'tif';
+  output_format?: 'png' | 'jpg' | 'tif' | 'webp';
   preserve_metadata?: boolean;
   jpeg_quality?: number;
   deflicker?: boolean;
   deflicker_window?: number;
   video_container?: 'mp4' | 'mkv';
   video_crf?: number;
+  enable_face_model?: boolean;
+  face_fidelity?: number;
+  stages?: RecipeStage[];
+}
+
+export interface RecipeStage {
+  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
+  model_id: string;
+  fidelity?: number;
 }
 
 export interface UiSettings {
@@ -172,10 +181,11 @@ export interface UiSettings {
   task: TaskKind | '';
   selected_model_id: string;
   selected_video_model_id: string;
+  preprocess_model_id: string;
   custom_model_path: string;
   output_scale: number;
   output_directory: string;
-  output_format: 'png' | 'jpg' | 'tif';
+  output_format: 'png' | 'jpg' | 'tif' | 'webp';
   preserve_metadata: boolean;
   jpeg_quality: number;
   device_id: string;
@@ -188,6 +198,8 @@ export interface UiSettings {
   video_container: 'mp4' | 'mkv';
   video_crf: number;
   enable_face_model: boolean;
+  face_fidelity: number;
+  enable_live_preview: boolean;
   allow_unsafe_pickle_model: boolean;
 }
 
@@ -213,6 +225,31 @@ export interface RuntimeStatus {
   thermal_status: string;
 }
 
+export interface BenchmarkResult {
+  workload_version: string;
+  backend: string;
+  device: string;
+  model_id: string;
+  model_name: string;
+  scale: number;
+  input_width: number;
+  input_height: number;
+  warmup_count: number;
+  measured_frame_count: number;
+  median_inference_ms: number;
+  p95_inference_ms: number;
+  end_to_end_fps: number;
+  processed_megapixels_per_second: number;
+  total_elapsed_seconds: number;
+  peak_memory_bytes: number | null;
+  score: number;
+}
+
+export interface VideoComparisonSources {
+  original_url: string;
+  enhanced_url: string;
+}
+
 export interface AppSnapshot {
   app_version: string;
   protocol_version: number;
@@ -224,6 +261,7 @@ export interface AppSnapshot {
   capabilities: CapabilityInfo;
   engine: EngineInfo | null;
   runtime: RuntimeStatus;
+  latest_benchmark: BenchmarkResult | null;
 }
 
 export interface WorkerEnvelope {
@@ -237,6 +275,7 @@ export interface StartBatchInput {
   task: TaskKind;
   model_id: string;
   video_model_id: string;
+  preprocess_model_id: string;
   custom_model_path: string;
   output_directory: string;
   output_format: string;
@@ -253,6 +292,8 @@ export interface StartBatchInput {
   video_container: string;
   video_crf: number;
   enable_face_model: boolean;
+  face_fidelity: number;
+  enable_live_preview: boolean;
   allow_unsafe_pickle_model: boolean;
 }
 

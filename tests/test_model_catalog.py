@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from localsr.core.model_catalog import (
+    FACE_DETECTOR_MODEL,
     MODEL_CATALOG,
     CatalogModel,
     ModelCatalogEntry,
@@ -64,15 +65,29 @@ def test_catalog_has_all_curated_models():
         "realplksr_hfa2k_anime_x4",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
+        "realesrgan_x2plus",
+        "fbcnn_color",
         "nafnet_gopro_deblur",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 9
+    assert len(MODEL_CATALOG) == 11
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 9
-    assert len({model.filename for model in MODEL_CATALOG}) == 9
+    assert len({model.model_id for model in MODEL_CATALOG}) == 11
+    assert len({model.filename for model in MODEL_CATALOG}) == 11
+
+
+def test_face_detector_is_pinned_but_not_exposed_as_a_restoration_model():
+    assert FACE_DETECTOR_MODEL not in MODEL_CATALOG
+    assert FACE_DETECTOR_MODEL.filename == "face_detection_yunet_2023mar.onnx"
+    assert FACE_DETECTOR_MODEL.size_bytes == 232_589
+    assert (
+        FACE_DETECTOR_MODEL.sha256
+        == "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+    )
+    assert FACE_DETECTOR_MODEL.download_url.startswith("https://github.com/opencv/opencv_zoo/")
+    assert FACE_DETECTOR_MODEL.license_name == "MIT"
 
 
 def test_catalog_attributes_and_integrity():
@@ -86,7 +101,7 @@ def test_catalog_attributes_and_integrity():
         assert model.size_megabytes == model.size_bytes / 1_000_000
         assert hex_pattern.match(model.sha256) is not None, f"Invalid SHA-256 for {model.model_id}"
         assert model.download_url.startswith("https://")
-        assert model.native_scale in (1, 4)
+        assert model.native_scale in (1, 2, 4)
         assert len(model.purposes) >= 1
         assert all(isinstance(p, ModelPurpose) for p in model.purposes)
         assert model.license_name in {
@@ -95,6 +110,8 @@ def test_catalog_attributes_and_integrity():
             "CC BY 4.0",
             "CC-BY-0.4 (upstream; clarify)",
             "CC BY-NC-SA 4.0",
+            "Checkpoint rights unverified",
+            "BSD-3-Clause",
             "MIT",
         }
         assert len(model.author) > 0
@@ -106,14 +123,29 @@ def test_catalog_attributes_and_integrity():
 
     face_model = get_model_by_id("hat_s_x4_face")
     assert face_model is not None
-    assert face_model.commercial_use_status == "not-allowed"
-    assert "Non-commercial" in face_model.description
+    assert face_model.commercial_use_status == "unclear"
+    assert face_model.license_name == "Checkpoint rights unverified"
+    assert "user-supplied" in face_model.description
 
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
         model = get_model_by_id(model_id)
         assert model is not None
         assert model.commercial_use_status == "unclear"
         assert "clarify" in model.license_name
+
+    native_x2 = get_model_by_id("realesrgan_x2plus")
+    assert native_x2 is not None
+    assert native_x2.native_scale == 2
+    assert native_x2.architecture == "RealESRGAN"
+    assert native_x2.license_name == "BSD-3-Clause"
+    assert native_x2.sha256 == "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb"
+
+    deblock = get_model_by_id("fbcnn_color")
+    assert deblock is not None
+    assert deblock.native_scale == 1
+    assert deblock.purposes == (ModelPurpose.RESTORATION, ModelPurpose.PHOTO)
+    assert deblock.license_name == "Apache-2.0"
+    assert deblock.sha256 == "8b0e4ef23d59cf7ac934a342cb31a17619e4fa4a0b3374a9d78c5174312387e8"
 
 
 def test_spandrel_compatible_models_metadata():

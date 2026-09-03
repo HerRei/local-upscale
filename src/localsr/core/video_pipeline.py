@@ -9,7 +9,6 @@ changing the decode/encode/cancel/progress plumbing here.
 
 from __future__ import annotations
 
-import base64
 import threading
 import time
 from collections import deque
@@ -28,7 +27,6 @@ from .video_io import (
     decode_frames,
     encode_video,
     probe_video,
-    thumbnail_jpeg,
     uint8_chw_to_rgb_hwc,
 )
 
@@ -118,6 +116,7 @@ class VideoJobConfig:
     deflicker: bool = False
     deflicker_window: int = 3
     output_scale: int | None = None
+    face_fidelity: float = 0.7
 
 
 @dataclass
@@ -134,6 +133,7 @@ def run_video_job(
     cancel_event: threading.Event,
     frame_started_cb: Callable[[int, int], None] | None = None,
     frame_completed_cb: Callable[[int, int, str], None] | None = None,
+    enhanced_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
     progress_cb: Callable[[int, int, float], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
 ) -> VideoJobResult:
@@ -202,17 +202,18 @@ def run_video_job(
         nonlocal cached_face_mask
         nonlocal frames_since_detection
 
-        for frame_index, rgb in decode_frames(
+        decoded = decode_frames(
             config.video_path,
             start_frame=config.start_frame,
             end_frame=config.end_frame,
-        ):
+        )
+        for output_frame_index, (_source_frame_index, rgb) in enumerate(decoded):
             if cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
             if inference_started_at is None:
                 inference_started_at = time.monotonic()
             if frame_started_cb is not None:
-                frame_started_cb(frame_index, total_frames)
+                frame_started_cb(output_frame_index, total_frames)
 
             tensor = rgb_to_tensor(rgb)
 
@@ -226,7 +227,7 @@ def run_video_job(
                         cached_face_mask is None
                         or frames_since_detection >= config.face_detection_interval
                     ):
-                        cached_face_mask = detect_faces(rgb)
+                        cached_face_mask = detect_faces(rgb, cancel_event=cancel_event)
                         frames_since_detection = 0
                     else:
                         frames_since_detection += 1
@@ -246,6 +247,7 @@ def run_video_job(
                             halo=config.halo,
                             cancel_event=cancel_event,
                             safe_memory=config.safe_memory,
+                            face_fidelity=config.face_fidelity,
                         )
                     else:
                         # No faces detected — use the general model.
@@ -284,14 +286,10 @@ def run_video_job(
                 )
             frames_processed += 1
 
+            if enhanced_frame_cb is not None:
+                enhanced_frame_cb(output_frame_index, total_frames, out_rgb)
             if frame_completed_cb is not None:
-                thumb_b64 = ""
-                try:
-                    thumb_bytes = thumbnail_jpeg(out_rgb, max_dimension=192, quality=72)
-                    thumb_b64 = base64.b64encode(thumb_bytes).decode("ascii")
-                except (OSError, ValueError):
-                    thumb_b64 = ""
-                frame_completed_cb(frame_index, total_frames, thumb_b64)
+                frame_completed_cb(output_frame_index, total_frames, "")
 
             if progress_cb is not None:
                 elapsed = time.monotonic() - job_started_at
@@ -307,10 +305,13 @@ def run_video_job(
         output_frames = frame_generator()
 
     # The encoder consumes the generator directly so frames never accumulate
-    # in memory beyond what PyAV's internal buffers hold.
-    # Trimmed jobs skip audio: remuxed packets would cover the full
-    # timeline and drift out of sync with the trimmed picture.
-    untrimmed = config.start_frame is None and config.end_frame is None
+    # in memory beyond what PyAV's internal buffers hold. Compatible audio and
+    # subtitle packets are trimmed and shifted onto the enhanced timeline.
+    # A deliberate frame-rate override changes video speed, so passthrough
+    # streams are omitted rather than silently producing drift.
+    source_fps = probe.fps or fps
+    rate_unchanged = config.fps_override is None or abs(float(fps) - float(source_fps)) < 1e-6
+    source_start_seconds = max(0, int(config.start_frame or 0)) / source_fps
     encode_video(
         output_frames,
         config.output_video_path,
@@ -319,7 +320,8 @@ def run_video_job(
         crf=config.crf,
         width=output_width,
         height=output_height,
-        audio_source=config.video_path if untrimmed else None,
+        audio_source=config.video_path if rate_unchanged else None,
+        source_start_seconds=source_start_seconds,
     )
 
     completed_at = time.monotonic()
@@ -345,6 +347,7 @@ def process_frame_face_aware(
     halo: int,
     cancel_event: threading.Event,
     safe_memory: bool = True,
+    face_fidelity: float = 0.7,
     face_threshold_high: float = 0.85,
     face_threshold_low: float = 0.15,
     progress_callback: Callable[[int, int, int], None] | None = None,
@@ -356,7 +359,11 @@ def process_frame_face_aware(
     through the face model. Tiles with overlap <= face_threshold_low use
     the general model. Boundary tiles run both and are alpha-blended.
 
-    Both models must share the same scale and output channels.
+    Both models must share the same scale and output channels. Since the
+    current face checkpoint has no native fidelity input, ``face_fidelity``
+    linearly blends the restored result with a bicubic reconstruction of the
+    original inside the smoothed face mask. Non-face pixels keep the general
+    model result.
 
     progress_callback and tile_callback are optional — when provided,
     they receive the same per-tile notifications as the standard
@@ -364,6 +371,11 @@ def process_frame_face_aware(
     preview work during face-aware restoration.
     """
     import gc
+
+    if int(face_model_info.scale) != int(general_model_info.scale):
+        raise ValueError("Face and primary checkpoints must have the same native scale.")
+    if int(face_model_info.out_channels) != int(general_model_info.out_channels):
+        raise ValueError("Face and primary checkpoints must have compatible output channels.")
 
     _, h, w = img_tensor.shape
     scale = general_model_info.scale
@@ -384,6 +396,24 @@ def process_frame_face_aware(
     tiles = list(generate_tiles(w, h, tile_size, halo, scale))
     total_tiles = len(tiles)
 
+    def identity_core_for(tile) -> np.ndarray:
+        """Return the source core bicubic-resampled to the model output size."""
+        import torch.nn.functional as functional
+
+        source = img_tensor[
+            :,
+            tile.core_y : tile.core_y + tile.core_h,
+            tile.core_x : tile.core_x + tile.core_w,
+        ].unsqueeze(0)
+        resized = functional.interpolate(
+            source.float(),
+            size=(tile.out_h, tile.out_w),
+            mode="bicubic",
+            align_corners=False,
+            antialias=True,
+        )
+        return resized.squeeze(0).clamp(0, 1).mul(255).round().byte().cpu().numpy()
+
     for i, tile in enumerate(tiles):
         if cancel_event.is_set():
             raise InterruptedError("Cancelled")
@@ -398,10 +428,37 @@ def process_frame_face_aware(
             tile_callback("started", tile, None, i, total_tiles, w * scale, h * scale, tile_size)
 
         if tile_class == "face":
-            engine.switch_model(face_model_path)
-            core_output = engine.run_tile(
-                tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
+            engine.switch_model(general_model_path)
+            general_core = engine.run_tile(
+                tile,
+                img_tensor,
+                general_model_info,
+                device,
+                precision,
+                halo,
+                engine.active_model,
             )
+            identity_core = identity_core_for(tile)
+            if face_fidelity <= 0.0:
+                core_output = blend_tile_outputs(
+                    identity_core,
+                    general_core,
+                    alpha,
+                    fidelity=0.0,
+                    identity_output=identity_core,
+                )
+            else:
+                engine.switch_model(face_model_path)
+                face_core = engine.run_tile(
+                    tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
+                )
+                core_output = blend_tile_outputs(
+                    face_core,
+                    general_core,
+                    alpha,
+                    fidelity=face_fidelity,
+                    identity_output=identity_core,
+                )
         elif tile_class == "general":
             engine.switch_model(general_model_path)
             core_output = engine.run_tile(
@@ -416,7 +473,13 @@ def process_frame_face_aware(
             face_core = engine.run_tile(
                 tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
             )
-            core_output = blend_tile_outputs(face_core, general_core, alpha)
+            core_output = blend_tile_outputs(
+                face_core,
+                general_core,
+                alpha,
+                fidelity=face_fidelity,
+                identity_output=identity_core_for(tile),
+            )
 
         out_array[:, tile.out_y : tile.out_y + tile.out_h, tile.out_x : tile.out_x + tile.out_w] = (
             core_output

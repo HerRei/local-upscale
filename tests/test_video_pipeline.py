@@ -7,6 +7,8 @@ per-frame inference → encode → atomic rename. Cancellation is also covered.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import threading
 from fractions import Fraction
 from pathlib import Path
@@ -20,6 +22,7 @@ from torch import nn
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import NormalizedModelInfo
 from localsr.core.video_io import (
+    VideoStageError,
     decode_frames,
     encode_video,
     probe_video,
@@ -56,6 +59,30 @@ def _make_synthetic_video(
             container.mux(packet)
     for packet in stream.encode():
         container.mux(packet)
+    container.close()
+    return path
+
+
+def _make_synthetic_video_with_audio(path: Path, *, frames: int = 8, fps: int = 8) -> Path:
+    """Write a deterministic one-second H.264/AAC source for remux tests."""
+    container = av.open(str(path), mode="w", format="mp4")
+    video = container.add_stream("libx264", rate=fps)
+    video.width, video.height, video.pix_fmt = FRAME_WIDTH, FRAME_HEIGHT, "yuv420p"
+    audio = container.add_stream("aac", rate=44_100)
+    samples_per_frame = 44_100 // fps
+    for index in range(frames):
+        rgb = np.full((FRAME_HEIGHT, FRAME_WIDTH, 3), index * 25, dtype=np.uint8)
+        for packet in video.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
+            container.mux(packet)
+        phase = np.linspace(0, 2 * np.pi, samples_per_frame, endpoint=False)
+        samples = (np.sin(phase + index) * 8_000).astype(np.int16)
+        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16", layout="mono")
+        frame.sample_rate = 44_100
+        for packet in audio.encode(frame):
+            container.mux(packet)
+    for stream in (video, audio):
+        for packet in stream.encode():
+            container.mux(packet)
     container.close()
     return path
 
@@ -142,6 +169,8 @@ def test_encode_video_produces_playable_file_with_correct_dimensions(tmp_path):
 
 def test_encode_video_atomic_rename_no_tmp_left_on_failure(tmp_path):
     destination = tmp_path / "broken.mp4"
+    unrelated = Path(f"{destination}.tmp")
+    unrelated.write_text("belongs to the user", encoding="utf-8")
 
     def bad_frames():
         yield np.full((10, 10, 3), 100, dtype=np.uint8)
@@ -150,7 +179,8 @@ def test_encode_video_atomic_rename_no_tmp_left_on_failure(tmp_path):
     with pytest.raises(RuntimeError, match="simulated"):
         encode_video(bad_frames(), str(destination), fps=5.0, width=10, height=10)
     assert not destination.exists()
-    assert not (tmp_path / "broken.mp4.tmp").exists()
+    assert unrelated.read_text(encoding="utf-8") == "belongs to the user"
+    assert not list(tmp_path.glob(".broken.mp4.localsr-*.tmp"))
 
 
 def test_rgb_to_tensor_and_back_round_trip():
@@ -480,3 +510,142 @@ def test_encode_video_remuxes_source_audio(tmp_path):
         audio_source=str(destination.with_name("missing.mp4")),
     )
     assert silent.is_file()
+
+
+@pytest.mark.parametrize("container_format", ["mp4", "matroska"])
+def test_generated_video_preserves_frame_count_timestamps_and_speed(tmp_path, container_format):
+    suffix = "mp4" if container_format == "mp4" else "mkv"
+    destination = tmp_path / f"timing.{suffix}"
+    frame_count = 9
+    fps = 30000 / 1001
+    frames = (np.full((24, 32, 3), index * 10, dtype=np.uint8) for index in range(frame_count))
+    encode_video(
+        frames,
+        str(destination),
+        fps=fps,
+        container_format=container_format,
+        width=32,
+        height=24,
+    )
+
+    decoded = list(decode_frames(str(destination)))
+    assert len(decoded) == frame_count
+    with av.open(str(destination)) as result:
+        stream = next(stream for stream in result.streams if stream.type == "video")
+        timestamps = [
+            float(frame.pts * frame.time_base)
+            for frame in result.decode(stream)
+            if frame.pts is not None and frame.time_base is not None
+        ]
+    assert timestamps == sorted(timestamps)
+    assert timestamps[-1] == pytest.approx((frame_count - 1) / fps, abs=0.02)
+    assert probe_video(str(destination)).duration_seconds == pytest.approx(
+        frame_count / fps, abs=0.08
+    )
+
+
+def test_trimmed_video_has_exact_range_and_synchronized_audio(tmp_path):
+    synthetic_video = _make_synthetic_video_with_audio(tmp_path / "trim-source.mp4")
+    adapter = DummyAdapter(scale=2)
+    engine = InferenceEngine(adapter)
+    output = tmp_path / "trimmed.mkv"
+    started = []
+    completed = []
+    result = run_video_job(
+        VideoJobConfig(
+            video_path=str(synthetic_video),
+            model_path="dummy",
+            output_video_path=str(output),
+            model_info=adapter.model_info,
+            device_str="cpu",
+            precision_str="fp32",
+            tile_size=64,
+            halo=4,
+            safe_memory=False,
+            container="matroska",
+            start_frame=2,
+            end_frame=4,
+        ),
+        engine,
+        threading.Event(),
+        frame_started_cb=lambda index, total: started.append((index, total)),
+        frame_completed_cb=lambda index, total, _preview: completed.append((index, total)),
+    )
+    assert result.frames_processed == 3
+    assert started == [(0, 3), (1, 3), (2, 3)]
+    assert completed == [(0, 3), (1, 3), (2, 3)]
+    assert len(list(decode_frames(str(output)))) == 3
+    with av.open(str(output)) as container:
+        assert {stream.type for stream in container.streams} == {"video", "audio"}
+        assert float(container.duration) / 1_000_000 < 0.6
+
+
+def test_mkv_remuxes_compatible_generated_subtitles(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("ffmpeg CLI is unavailable for subtitle fixture generation")
+    video = _make_synthetic_video(tmp_path / "plain.mp4")
+    subtitles = tmp_path / "fixture.srt"
+    subtitles.write_text(
+        "1\n00:00:00,000 --> 00:00:00,400\nLocalSR fixture\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "subtitled.mkv"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(video),
+            "-i",
+            str(subtitles),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:0",
+            "-c:v",
+            "copy",
+            "-c:s",
+            "srt",
+            str(source),
+        ],
+        check=True,
+    )
+    output = tmp_path / "subtitled-output.mkv"
+    encode_video(
+        (np.zeros((24, 32, 3), dtype=np.uint8) for _ in range(FRAME_COUNT)),
+        str(output),
+        fps=FPS,
+        container_format="matroska",
+        width=32,
+        height=24,
+        audio_source=str(source),
+    )
+    with av.open(str(output)) as result:
+        assert any(stream.type == "subtitle" for stream in result.streams)
+
+
+def test_remux_failure_names_stage_and_cleans_every_temporary(tmp_path, monkeypatch):
+    import localsr.core.video_io as video_io
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"exists")
+    destination = tmp_path / "failure.mp4"
+
+    def fail_remux(*_args, **_kwargs):
+        raise VideoStageError("audio remux", "fixture failure")
+
+    monkeypatch.setattr(video_io, "_remux_source_streams", fail_remux)
+    with pytest.raises(VideoStageError, match="audio remux.*fixture failure"):
+        encode_video(
+            (np.zeros((24, 32, 3), dtype=np.uint8) for _ in range(2)),
+            str(destination),
+            fps=5,
+            width=32,
+            height=24,
+            audio_source=str(source),
+        )
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".failure.mp4.localsr-*.tmp"))

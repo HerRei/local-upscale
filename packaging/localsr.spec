@@ -64,6 +64,7 @@ hiddenimports = sorted(
             "AppKit",
             "objc",
             "PIL._tkinter_finder",
+            "cv2",
             "rawpy",
             "tifffile",
             "torchvision",

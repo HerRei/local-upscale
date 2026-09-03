@@ -1,6 +1,6 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
@@ -9,6 +9,7 @@ import type {
   Recipe,
   StartBatchInput,
   UiSettings,
+  VideoComparisonSources,
   WorkerEnvelope
 } from './types';
 
@@ -76,12 +77,40 @@ export const saveSettings = (settings: UiSettings): Promise<void> =>
 export const startJobs = (input: StartBatchInput): Promise<void> =>
   invoke('start_jobs', { input });
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
+export const startBenchmark = (device: string): Promise<void> =>
+  invoke('start_benchmark', { input: { device } });
+export const exportBenchmark = async (): Promise<boolean> => {
+  if (!isTauri()) return false;
+  const destination = await save({
+    defaultPath: 'localsr-benchmark-v1.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (!destination) return false;
+  await invoke('export_benchmark', { destination });
+  return true;
+};
+export const prepareVideoComparison = async (mediaId: string): Promise<VideoComparisonSources> => {
+  const paths = await invoke<{ original_path: string; enhanced_path: string }>(
+    'prepare_video_comparison',
+    { mediaId }
+  );
+  return {
+    original_url: convertFileSrc(paths.original_path),
+    enhanced_url: convertFileSrc(paths.enhanced_path)
+  };
+};
+export const clearVideoComparison = (): Promise<void> => invoke('clear_video_comparison');
 export const refreshCapabilities = (): Promise<void> => invoke('refresh_capabilities');
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>
   invoke('download_model', { modelId, acceptedTerms });
 export const cancelDownload = (modelId: string): Promise<void> =>
   invoke('cancel_download', { modelId });
+export const importCatalogModel = (
+  modelId: string,
+  sourcePath: string,
+  acceptedTerms: boolean
+): Promise<void> => invoke('import_catalog_model', { modelId, sourcePath, acceptedTerms });
 export const saveRecipe = (recipe: Recipe): Promise<void> => invoke('save_recipe', { recipe });
 export const deleteRecipe = (id: string): Promise<void> => invoke('delete_recipe', { id });
 export const openResult = (path: string): Promise<void> => invoke('open_result', { path });

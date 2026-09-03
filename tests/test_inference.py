@@ -5,14 +5,17 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 from torch import nn
 
+from localsr.core.image_io import ImageManager
 from localsr.core.inference import (
     InferenceEngine,
     _apply_gpu_memory_limit,
     _resolve_torch_device,
 )
 from localsr.core.model_adapter import NormalizedModelInfo
+from localsr.core.model_catalog import get_model_by_id
 
 
 class DummyModel(nn.Module):
@@ -140,6 +143,55 @@ def test_inference_dimensions():
         arr = writer.get_array()
         assert arr.shape == (3, 33 * scale, 47 * scale)
         writer.cleanup()
+
+
+def test_catalog_native_x2_contract_covers_tiling_alpha_and_cancellation(tmp_path):
+    catalog_model = get_model_by_id("realesrgan_x2plus")
+    assert catalog_model is not None
+    assert catalog_model.native_scale == 2
+
+    adapter = DummyAdapter(catalog_model.native_scale)
+    engine = InferenceEngine(adapter)
+    events = []
+    writer = engine.process_image(
+        {"tensor": torch.rand((3, 19, 23))},
+        adapter.model_info,
+        "dummy-x2",
+        "cpu",
+        "fp32",
+        12,
+        3,
+        threading.Event(),
+        lambda completed, total, _size: events.append((completed, total)),
+        False,
+    )
+    try:
+        assert writer.get_array().shape == (3, 38, 46)
+        assert events[-1][0] == events[-1][1]
+        assert events[-1][1] > 1
+
+        manager = ImageManager()
+        manager.alpha_channel = Image.new("L", (23, 19), color=173)
+        output = tmp_path / "native-x2-alpha.png"
+        manager.save(writer, str(output), "png", 95, False, None, {}, 2)
+        with Image.open(output) as image:
+            assert image.size == (46, 38)
+            assert image.getchannel("A").getextrema() == (173, 173)
+    finally:
+        writer.cleanup()
+
+    cancelled = threading.Event()
+    cancelled.set()
+    with pytest.raises(InterruptedError, match="Cancelled"):
+        engine.process_frame(
+            torch.rand((3, 19, 23)),
+            adapter.model_info,
+            12,
+            3,
+            cancelled,
+            lambda *_args: None,
+            False,
+        )
 
 
 def test_inference_reports_started_and_completed_tiles():

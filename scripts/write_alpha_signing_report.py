@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write explicit testing-only signature evidence for v0.0.10-alpha."""
+"""Write explicit testing-only signature evidence for v0.0.11-alpha."""
 
 from __future__ import annotations
 

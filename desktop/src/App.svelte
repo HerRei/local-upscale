@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import VideoComparison from './VideoComparison.svelte';
   import * as api from './lib/api';
+  import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import {
     applyWorkerEnvelope,
     choosePresetModel,
@@ -33,6 +35,7 @@
     StartBatchInput,
     TaskKind,
     UiSettings,
+    VideoComparisonSources,
     WorkerEnvelope
   } from './lib/types';
 
@@ -78,6 +81,7 @@
   let progressivePendingCount = 0;
   let lastProgressivePaintAt = 0;
   let lastActiveTileAt = 0;
+  let lastLivePreviewSequence = 0;
   let activeTileVisible = false;
   let activeTileX = 0;
   let activeTileY = 0;
@@ -96,6 +100,10 @@
   let stagedAutoStartIds: string[] = [];
   let handlingLaunchIntents = false;
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
+  let videoComparison: VideoComparisonSources | null = null;
+  let videoComparisonKey = '';
+  let videoComparisonError = '';
+  let livePreviewWarning = '';
 
   $: settings = snapshot.settings;
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
@@ -107,10 +115,17 @@
   $: faceModel = snapshot.catalog.models.find(
     (model) => model.model_id === selectedModel?.pair_with && model.purposes.includes('face')
   );
+  $: preprocessModels = snapshot.catalog.models.filter(
+    (model) => model.native_scale === 1 && !model.purposes.includes('face')
+  );
+  $: preprocessModel = preprocessModels.find(
+    (model) => model.model_id === settings.preprocess_model_id
+  );
   $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
   $: faceEnabled = settings.enable_face_model && faceEngineAvailable;
   $: usingTemporalVideo = settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
   $: activeDownload = snapshot.runtime.download_model_id;
+  $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: customModelNeedsOptIn =
     settings.selected_model_id === '__custom__' &&
     Boolean(settings.custom_model_path) &&
@@ -122,6 +137,10 @@
         (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
       : Boolean(selectedModel?.installed);
   $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
+  $: preprocessReady =
+    settings.task !== 'upscale' ||
+    !settings.preprocess_model_id ||
+    Boolean(preprocessModel?.installed);
   $: mediaMatchesTask = selectedMedia
     ? (settings.task === 'video') === (selectedMedia.kind === 'video')
     : false;
@@ -130,6 +149,9 @@
       .filter((job) => ['queued', 'starting', 'running', 'cancelling'].includes(job.status))
       .map((job) => job.media_id)
   );
+  $: activeJobMediaId = snapshot.jobs.find(
+    (job) => job.id === snapshot.runtime.active_job_id
+  )?.media_id ?? '';
   $: runnableMedia = settings.task
     ? snapshot.media.filter(
         (media) => (settings.task === 'video') === (media.kind === 'video')
@@ -147,6 +169,7 @@
     queueSelection.length > 0 &&
     modelReady &&
     faceReady &&
+    preprocessReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   $: canStart = !snapshot.runtime.active_job_id && canQueue;
   $: canAppendToQueue = Boolean(snapshot.runtime.active_job_id) && canQueue;
@@ -157,6 +180,21 @@
   // left the packaged app in an endless re-probe/loading loop.
   $: renderableSourcePreview = sourcePreview;
   $: resultPreview = resultPreviewForSelectedMedia(snapshot);
+  $: completedVideoOutput = selectedMedia?.kind === 'video'
+    ? snapshot.jobs.find(
+        (job) =>
+          job.media_id === selectedMedia.id &&
+          job.status === 'completed' &&
+          Boolean(job.output_path)
+      )?.output_path ?? ''
+    : '';
+  $: desiredVideoComparisonKey =
+    selectedMedia?.kind === 'video' && completedVideoOutput
+      ? `${selectedMedia.id}:${completedVideoOutput}`
+      : '';
+  $: if (desiredVideoComparisonKey !== videoComparisonKey) {
+    void loadVideoComparison(desiredVideoComparisonKey);
+  }
   $: outputDimensions = selectedMedia
     ? settings.task === 'denoise'
       ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
@@ -243,6 +281,7 @@
       unlistenLaunchIntent();
       resizeObserver?.disconnect();
       progressiveGeneration += 1;
+      if (api.isTauri()) void api.clearVideoComparison();
     };
   });
 
@@ -277,14 +316,42 @@
     // Tile traffic is display-only and can arrive thousands of times. Do not
     // invalidate the full Svelte snapshot for it; only update the live canvas.
     if (message.type === 'tile_update') {
+      const jobId = String(message.data.job_id ?? '');
+      if (activeJobMediaId && selectedMedia?.id !== activeJobMediaId) return;
       queueProgressiveTile(message);
+      return;
+    }
+    if (message.type === 'live_preview_frame') {
+      const jobId = String(message.data.job_id ?? '');
+      const sequence = Number(message.data.sequence ?? 0);
+      if (
+        jobId !== snapshot.runtime.active_job_id ||
+        (activeJobMediaId && selectedMedia?.id !== activeJobMediaId) ||
+        sequence <= lastLivePreviewSequence
+      ) return;
+      lastLivePreviewSequence = sequence;
+      if (String(message.data.preview_kind ?? '') === 'tile') {
+        queueProgressiveTile({
+          type: 'tile_update',
+          data: { ...message.data, phase: 'completed' }
+        });
+      } else {
+        snapshot = applyWorkerEnvelope(snapshot, message);
+      }
+      return;
+    }
+    if (message.type === 'live_preview_warning') {
+      livePreviewWarning = String(
+        message.data.message ?? 'A sampled enhanced preview could not be displayed.'
+      );
       return;
     }
 
     if (
       message.type === 'progress' ||
       message.type === 'video_frame_started' ||
-      message.type === 'video_frame_completed'
+      message.type === 'video_frame_completed' ||
+      message.type === 'benchmark_progress'
     ) {
       queueRuntimePulse(message);
       return;
@@ -294,12 +361,16 @@
 
     snapshot = applyWorkerEnvelope(snapshot, message);
     if (message.type === 'job_started') {
+      livePreviewWarning = '';
       resetView();
       resetProgressivePreview(String(message.data.job_id ?? ''));
-    } else if (message.type === 'job_cancelled' || message.type === 'job_failed') {
-      resetProgressivePreview();
     } else if (message.type === 'job_completed' || message.type === 'video_job_completed') {
+      livePreviewWarning = '';
+      resetProgressivePreview();
       resetView();
+    } else if (message.type === 'job_cancelled' || message.type === 'job_failed') {
+      livePreviewWarning = '';
+      resetProgressivePreview();
     }
     if (message.type === 'media_info') {
       if (String(message.data.media_path ?? '') === selectedMedia?.path) {
@@ -358,7 +429,11 @@
     updateSettings({
       task,
       selected_model_id: chosen?.model_id ?? '',
-      output_scale: task === 'denoise' ? 1 : Math.max(2, settings.output_scale),
+      preprocess_model_id: task === 'upscale' ? settings.preprocess_model_id : '',
+      output_scale:
+        task === 'denoise'
+          ? 1
+          : Math.min(chosen?.native_scale ?? 4, Math.max(2, settings.output_scale)),
       enable_face_model: false
     });
     termsAccepted = false;
@@ -437,8 +512,10 @@
   }
 
   function selectPrimaryModel(modelId: string): void {
+    const model = snapshot.catalog.models.find((candidate) => candidate.model_id === modelId);
     updateSettings({
       selected_model_id: modelId,
+      output_scale: model ? Math.min(model.native_scale, Math.max(2, settings.output_scale)) : settings.output_scale,
       allow_unsafe_pickle_model: false,
       enable_face_model: false
     });
@@ -456,6 +533,7 @@
     updateSettings({
       selected_model_id: chosen.model_id,
       selected_video_model_id: 'frame_by_frame',
+      preprocess_model_id: '',
       output_scale: settings.task === 'denoise' ? 1 : chosen.native_scale,
       halo: chosen.recommended_halo,
       safe_memory: kind === 'best' ? settings.safe_memory : false,
@@ -474,22 +552,21 @@
       await api.cancelDownload(target.model_id);
       return;
     }
-    if (!target.automated_download_allowed) {
-      showModal(
-        'Manual download required',
-        'This model has unclear upstream terms. Open its source page, review the terms, and import it manually.'
-      );
-      return;
-    }
     if (target.terms_acceptance_required && !accepted) {
       showModal('Review the model terms', 'Confirm the model-specific license before downloading.');
       return;
     }
     try {
-      await api.downloadModel(target.model_id, accepted);
+      if (!target.automated_download_allowed) {
+        const sourcePath = await api.chooseCustomModel();
+        if (!sourcePath) return;
+        await api.importCatalogModel(target.model_id, sourcePath, accepted);
+      } else {
+        await api.downloadModel(target.model_id, accepted);
+      }
       await refresh();
     } catch (error) {
-      showModal('Download failed', String(error));
+      showModal(target.automated_download_allowed ? 'Download failed' : 'Import failed', String(error));
     }
   }
 
@@ -503,6 +580,7 @@
       task: settings.task,
       model_id: settings.selected_model_id,
       video_model_id: settings.selected_video_model_id,
+      preprocess_model_id: settings.task === 'upscale' ? settings.preprocess_model_id : '',
       custom_model_path: settings.custom_model_path,
       output_directory: settings.output_directory,
       output_format: settings.output_format,
@@ -519,6 +597,8 @@
       video_container: settings.video_container,
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
+      face_fidelity: settings.face_fidelity,
+      enable_live_preview: settings.enable_live_preview,
       allow_unsafe_pickle_model: settings.allow_unsafe_pickle_model
     };
     try {
@@ -553,7 +633,21 @@
       deflicker: settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
-      video_crf: settings.video_crf
+      video_crf: settings.video_crf,
+      enable_face_model: faceEnabled,
+      face_fidelity: settings.face_fidelity,
+      stages: [
+        ...(settings.task === 'upscale' && preprocessModel
+          ? [{ kind: preprocessModel.model_id === 'fbcnn_color' ? 'deblock' as const : 'restore' as const, model_id: preprocessModel.model_id }]
+          : []),
+        {
+          kind: settings.task === 'video' ? 'video' as const : settings.task === 'denoise' ? 'restore' as const : 'upscale' as const,
+          model_id: settings.task === 'video' && usingTemporalVideo ? settings.selected_video_model_id : settings.selected_model_id
+        },
+        ...(faceEnabled && faceModel
+          ? [{ kind: 'face_restore' as const, model_id: faceModel.model_id, fidelity: settings.face_fidelity / 100 }]
+          : [])
+      ]
     };
     await api.saveRecipe(recipe);
     recipeName = '';
@@ -576,12 +670,20 @@
       return;
     }
     if (recipe.task !== 'video') lastImageTask = recipe.task;
+    const recipePreprocess = recipe.task === 'upscale'
+      ? recipe.stages?.find((stage) => stage.kind === 'deblock' || stage.kind === 'restore')
+      : undefined;
+    const recipeFace = recipe.stages?.find((stage) => stage.kind === 'face_restore');
+    const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
     updateSettings({
       task: recipe.task,
       selected_model_id: recipe.model_id,
       selected_video_model_id: recipe.video_model_id || 'frame_by_frame',
+      preprocess_model_id: recipePreprocess?.model_id ?? '',
       custom_model_path: recipe.custom_model_path ?? '',
-      output_scale: recipe.output_scale,
+      output_scale: recipe.task === 'denoise'
+        ? 1
+        : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
       output_format: recipe.output_format ?? settings.output_format,
       preserve_metadata: recipe.preserve_metadata ?? settings.preserve_metadata,
       jpeg_quality: recipe.jpeg_quality ?? settings.jpeg_quality,
@@ -593,7 +695,10 @@
       deflicker_window: recipe.deflicker_window ?? settings.deflicker_window,
       video_container: recipe.video_container || settings.video_container,
       video_crf: recipe.video_crf ?? settings.video_crf,
-      enable_face_model: false,
+      enable_face_model: recipeFace ? true : recipe.enable_face_model ?? false,
+      face_fidelity: recipeFace?.fidelity === undefined
+        ? recipe.face_fidelity ?? 70
+        : Math.round(recipeFace.fidelity * 100),
       allow_unsafe_pickle_model: false
     });
     termsAccepted = false;
@@ -722,7 +827,8 @@
       !snapshot.runtime.active_job_id &&
       Boolean(settings.task) &&
       modelReady &&
-      faceReady;
+      faceReady &&
+      preprocessReady;
     if (!ready) return;
     const mediaIds = [...pendingAutoStartIds];
     pendingAutoStartIds = [];
@@ -824,6 +930,35 @@
     }
   }
 
+  async function runBenchmark(): Promise<void> {
+    try {
+      await api.startBenchmark(settings.device_id);
+      await refresh();
+    } catch (error) {
+      showModal('Benchmark could not start', String(error), 'performance');
+    }
+  }
+
+  async function copyBenchmark(): Promise<void> {
+    if (!snapshot.latest_benchmark) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(snapshot.latest_benchmark, null, 2));
+      modalMessage = 'Benchmark JSON copied. The result remains local unless you share it.';
+    } catch (error) {
+      modalMessage = `Could not copy benchmark JSON: ${String(error)}`;
+    }
+  }
+
+  async function exportBenchmark(): Promise<void> {
+    try {
+      if (await api.exportBenchmark()) {
+        modalMessage = 'Benchmark JSON exported. LocalSR never uploads benchmark data.';
+      }
+    } catch (error) {
+      modalMessage = `Could not export benchmark JSON: ${String(error)}`;
+    }
+  }
+
   function showModal(
     title: string,
     message: string,
@@ -883,6 +1018,7 @@
     progressivePendingCount = 0;
     lastProgressivePaintAt = 0;
     lastActiveTileAt = 0;
+    lastLivePreviewSequence = 0;
     activeTileVisible = false;
     progressiveWork = Promise.resolve();
     const context = progressiveCanvas?.getContext('2d');
@@ -1155,23 +1291,40 @@
     const rectangle = canvasWell.getBoundingClientRect();
     const visualWidth = Math.max(1, stageWidth * zoom);
     const left = rectangle.left + rectangle.width / 2 + panX - visualWidth / 2;
-    compare = Math.max(0, Math.min(100, ((clientX - left) / visualWidth) * 100));
+    compare = comparisonFromPointer(clientX, left, visualWidth);
   }
 
   function compareKeyDown(event: KeyboardEvent): void {
-    const steps: Record<string, number> = {
-      ArrowLeft: -1,
-      ArrowDown: -1,
-      ArrowRight: 1,
-      ArrowUp: 1,
-      PageDown: -10,
-      PageUp: 10
-    };
-    if (event.key === 'Home') compare = 0;
-    else if (event.key === 'End') compare = 100;
-    else if (event.key in steps) compare = Math.max(0, Math.min(100, compare + steps[event.key]));
-    else return;
+    const next = comparisonFromKey(compare, event.key);
+    if (next === null) return;
+    compare = next;
     event.preventDefault();
+  }
+
+  async function loadVideoComparison(key: string): Promise<void> {
+    videoComparisonKey = key;
+    videoComparison = null;
+    videoComparisonError = '';
+    if (!key) {
+      if (api.isTauri()) {
+        try {
+          await api.clearVideoComparison();
+        } catch (error) {
+          console.warn('Could not clear the video preview scope', error);
+        }
+      }
+      return;
+    }
+    if (!api.isTauri() || !selectedMedia) return;
+    const mediaId = selectedMedia.id;
+    try {
+      const sources = await api.prepareVideoComparison(mediaId);
+      if (key !== videoComparisonKey || mediaId !== selectedMedia?.id) return;
+      videoComparison = sources;
+    } catch (error) {
+      if (key !== videoComparisonKey) return;
+      videoComparisonError = `Completed video comparison is unavailable: ${String(error)}`;
+    }
   }
 
   function resetView(): void {
@@ -1267,7 +1420,10 @@
       <button class:active={page === 'enhance'} on:click={() => (page = 'enhance')}>Enhance</button>
     </nav>
     <button class="brand-mark" type="button" aria-label="Performance & diagnostics" title="Performance & diagnostics" on:click={showPerformance}><i></i><i></i><i></i></button>
-    <button class="button primary compact add-media" disabled={Boolean(snapshot.runtime.active_job_id)} on:click={() => addFiles()}>＋ Add Media</button>
+    <div class="toolbar-actions">
+      <button class="button compact benchmark-shortcut" type="button" on:click={showPerformance}>Run Benchmark</button>
+      <button class="button primary compact add-media" disabled={benchmarkRunning} on:click={() => addFiles()}>＋ Add Media</button>
+    </div>
   </header>
 
   <main class="workspace">
@@ -1312,8 +1468,8 @@
       {/if}
 
       <div class="media-actions">
-        <button class="button" disabled={Boolean(snapshot.runtime.active_job_id)} on:click={() => addFiles(false)}>{snapshot.media.length ? 'Add More…' : 'Choose…'}</button>
-        <button class="button" disabled={Boolean(snapshot.runtime.active_job_id)} on:click={addFolder}>Add Folder…</button>
+        <button class="button" disabled={benchmarkRunning} on:click={() => addFiles(false)}>{snapshot.media.length ? 'Add More…' : 'Choose…'}</button>
+        <button class="button" disabled={benchmarkRunning} on:click={addFolder}>Add Folder…</button>
         {#if snapshot.media.length}<button class="button danger ghost" disabled={Boolean(snapshot.runtime.active_job_id)} on:click={async () => { await api.clearMedia(); await refresh(); }}>Clear</button>{/if}
       </div>
     </aside>
@@ -1324,7 +1480,7 @@
           <strong>{selectedMedia?.name ?? 'Preview'}</strong>
           <span>{selectedMedia ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video Labs' : ''}` : 'No media selected'}</span>
         </div>
-        {#if resultPreview}
+        {#if resultPreview || videoComparison}
           <div class="preview-badges"><span>Original</span><span>Enhanced</span></div>
         {/if}
       </div>
@@ -1343,7 +1499,15 @@
         on:pointercancel={pointerUp}
       >
         {#if selectedMedia}
-          {#if renderableSourcePreview}
+          {#if videoComparison}
+            {#key videoComparisonKey}
+              <VideoComparison
+                originalSrc={videoComparison.original_url}
+                enhancedSrc={videoComparison.enhanced_url}
+                bind:compare
+              />
+            {/key}
+          {:else if renderableSourcePreview}
           <div class="image-stage" style={`width:${stageWidth}px;height:${stageHeight}px;left:calc(50% + ${panX}px);top:calc(50% + ${panY}px);transform:translate(-50%, -50%) scale(${zoom})`}>
             <img class="source-image" src={renderableSourcePreview} alt={`Preview of ${selectedMedia?.name ?? 'source media'}`} draggable="false" on:load={onPreviewLoad} on:error={onSourcePreviewError} />
             <canvas
@@ -1380,13 +1544,13 @@
             {/if}
           </div>
           {#if selectedMedia?.kind === 'video'}<span class="labs-chip">VIDEO · LABS / EXPERIMENTAL</span>{/if}
-          <div class="zoom-hud" role="group" aria-label="Preview zoom" on:pointerdown|stopPropagation on:wheel|stopPropagation>
+          {#if selectedMedia?.kind !== 'video'}<div class="zoom-hud" role="group" aria-label="Preview zoom" on:pointerdown|stopPropagation on:wheel|stopPropagation>
             <button aria-label="Zoom out" disabled={zoom <= minZoom} on:click={() => setZoom(zoom / 1.25)}>−</button>
             <span title={`Dynamic maximum ${Math.round(maxZoom * 100)}%`}>{Math.round(zoom * 100)}%</span>
             <button aria-label="Zoom in" disabled={zoom >= maxZoom} on:click={() => setZoom(zoom * 1.25)}>＋</button>
             <button class:active={Math.abs(zoom - 1) < 0.001} on:click={resetView}>Fit</button>
             <button class:active={Math.abs(zoom - actualPixelZoom) < 0.001} title="One source pixel per screen pixel" on:click={() => setZoom(actualPixelZoom)}>1:1</button>
-          </div>
+          </div>{/if}
           {:else}
           <div class="canvas-empty preview-loading">
             <div class="canvas-icon" aria-hidden="true">
@@ -1403,6 +1567,7 @@
             {#if selectedMedia.probe_status === 'failed'}<button class="button" on:click={() => { previewRetryMediaId = ''; void repairSelectedPreview(); }}>Try Again</button>{/if}
           </div>
           {/if}
+          {#if videoComparisonError}<p class="video-comparison-load-error" role="alert">{videoComparisonError}</p>{/if}
         {:else}
           <div class="canvas-empty">
             <div class="canvas-icon" aria-hidden="true">
@@ -1488,7 +1653,7 @@
               {/if}
               {#if !currentDownloadTarget.installed}
                 <button class="button full" class:primary={currentDownloadTarget.automated_download_allowed} disabled={Boolean(activeDownload) && activeDownload !== currentDownloadTarget.model_id} on:click={() => runDownload()}>
-                  {activeDownload === currentDownloadTarget.model_id ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel` : currentDownloadTarget.automated_download_allowed ? `Download ${formatBytes('size_bytes' in currentDownloadTarget ? currentDownloadTarget.size_bytes : currentDownloadTarget.total_size_bytes)}` : 'Manual download required'}
+                  {activeDownload === currentDownloadTarget.model_id ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel` : currentDownloadTarget.automated_download_allowed ? `Download ${formatBytes('size_bytes' in currentDownloadTarget ? currentDownloadTarget.size_bytes : currentDownloadTarget.total_size_bytes)}` : 'Choose externally downloaded checkpoint…'}
                 </button>
                 {#if activeDownload === currentDownloadTarget.model_id}<div class="download-track"><i style={`width:${snapshot.runtime.download_progress}%`}></i></div>{/if}
               {:else}
@@ -1496,6 +1661,43 @@
               {/if}
             {/if}
           </section>
+
+          {#if settings.task === 'upscale' && !usingTemporalVideo}
+            <section class="control-section model-section" aria-labelledby="preprocess-heading">
+              <label id="preprocess-heading" class="eyebrow" for="preprocess-model">RESTORE BEFORE UPSCALE</label>
+              <select
+                id="preprocess-model"
+                value={settings.preprocess_model_id}
+                on:change={(event) => updateSettings({ preprocess_model_id: event.currentTarget.value })}
+              >
+                <option value="">None · upscale directly</option>
+                {#each preprocessModels as model}
+                  <option value={model.model_id}>{model.name}{model.installed ? ' · Installed' : ` · ${formatBytes(model.size_bytes)}`}</option>
+                {/each}
+              </select>
+              {#if preprocessModel}
+                <p class="model-description">{preprocessModel.description} This lossless in-memory stage runs before the selected upscaler.</p>
+                <div class="license-line"><span>{preprocessModel.license_name}</span><span>{preprocessModel.author}</span></div>
+                {#if !preprocessModel.installed}
+                  <button
+                    class="button full"
+                    class:primary={preprocessModel.automated_download_allowed}
+                    disabled={Boolean(activeDownload) && activeDownload !== preprocessModel.model_id}
+                    on:click={() => runDownload(preprocessModel, false)}
+                  >
+                    {activeDownload === preprocessModel.model_id
+                      ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                      : preprocessModel.automated_download_allowed
+                        ? `Download restoration model · ${formatBytes(preprocessModel.size_bytes)}`
+                        : 'Choose externally downloaded checkpoint…'}
+                  </button>
+                  {#if activeDownload === preprocessModel.model_id}<div class="download-track"><i style={`width:${snapshot.runtime.download_progress}%`}></i></div>{/if}
+                {:else}
+                  <div class="installed-badge">✓ Restoration stage installed · integrity checked before use</div>
+                {/if}
+              {/if}
+            </section>
+          {/if}
 
           {#if settings.task !== 'denoise' && !usingTemporalVideo && faceModel}
             <section class="control-section">
@@ -1511,14 +1713,15 @@
                     updateSettings({ enable_face_model: event.currentTarget.checked });
                   }}
                 />
-                Face-aware pass with {faceModel.name} <em>{faceEngineAvailable ? 'non-commercial' : 'detector unavailable'}</em>
+                Face-aware pass with {faceModel.name} <em>{faceEngineAvailable ? 'checkpoint rights review required' : 'detector unavailable'}</em>
               </label>
               {#if !faceEngineAvailable}
-                <p class="model-description">Visible for workflow parity, but disabled in this package because no supported telemetry-free detector is bundled yet.</p>
+                <p class="model-description">Visible for workflow parity, but disabled because the OpenCV face-detector runtime is missing from this package.</p>
               {:else if faceEnabled}
-                <p class="model-description">Optional companion pass for faces. The face checkpoint remains separately licensed under {faceModel.license_name}.</p>
+                <p class="model-description">Optional companion pass for faces. The exact checkpoint's redistribution and training-data rights are not verified, so LocalSR only accepts a matching user-supplied copy.</p>
+                <div class="range-row"><label for="face-fidelity">Face fidelity <b>{settings.face_fidelity}% restored</b></label><input id="face-fidelity" type="range" min="0" max="100" step="5" value={settings.face_fidelity} on:input={(event) => updateSettings({ face_fidelity: Number(event.currentTarget.value) })} /><small>0% retains the resampled original face; 100% applies the strongest restoration. Non-face regions keep the primary result.</small></div>
                 {#if faceModel.terms_acceptance_required && !faceModel.installed}
-                  <label class="terms"><input type="checkbox" bind:checked={faceTermsAccepted} /> I reviewed the face model license and non-commercial restriction.</label>
+                  <label class="terms"><input type="checkbox" bind:checked={faceTermsAccepted} /> I understand that the checkpoint rights are unresolved and will provide a copy I am permitted to use.</label>
                 {/if}
                 {#if !faceModel.installed}
                   <button
@@ -1527,7 +1730,7 @@
                     disabled={Boolean(activeDownload) && activeDownload !== faceModel.model_id}
                     on:click={() => runDownload(faceModel, faceTermsAccepted)}
                   >
-                    {activeDownload === faceModel.model_id ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel` : faceModel.automated_download_allowed ? `Download companion · ${formatBytes(faceModel.size_bytes)}` : 'Manual download required'}
+                    {activeDownload === faceModel.model_id ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel` : faceModel.automated_download_allowed ? `Download companion · ${formatBytes(faceModel.size_bytes)}` : 'Choose externally downloaded face checkpoint…'}
                   </button>
                   {#if activeDownload === faceModel.model_id}<div class="download-track"><i style={`width:${snapshot.runtime.download_progress}%`}></i></div>{/if}
                 {:else}
@@ -1542,11 +1745,11 @@
             {#if advanced}
               <div class="advanced-controls">
                 {#if settings.task !== 'denoise'}
-                  <div class="field-row"><label for="scale">Output scale</label><select id="scale" value={settings.output_scale} on:change={(event) => updateSettings({ output_scale: Number(event.currentTarget.value) })}><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select></div>
+                  <div class="field-row"><label for="scale">Output scale</label><select id="scale" value={settings.output_scale} on:change={(event) => updateSettings({ output_scale: Number(event.currentTarget.value) })}>{#each Array.from({ length: Math.max(1, (selectedModel?.native_scale ?? 4) - 1) }, (_, index) => index + 2) as scale}<option value={scale}>{scale}×</option>{/each}</select></div>
                 {/if}
                 {#if settings.task !== 'video'}
-                  <div class="field-row"><label for="format">Format</label><select id="format" value={settings.output_format} on:change={(event) => updateSettings({ output_format: event.currentTarget.value as UiSettings['output_format'] })}><option value="png">PNG</option><option value="jpg">JPEG</option><option value="tif">TIFF</option></select></div>
-                  {#if settings.output_format === 'jpg'}<div class="range-row"><label for="quality">JPEG quality <b>{settings.jpeg_quality}</b></label><input id="quality" type="range" min="70" max="100" value={settings.jpeg_quality} on:change={(event) => updateSettings({ jpeg_quality: Number(event.currentTarget.value) })} /></div>{/if}
+                  <div class="field-row"><label for="format">Format</label><select id="format" value={settings.output_format} on:change={(event) => updateSettings({ output_format: event.currentTarget.value as UiSettings['output_format'] })}><option value="png">PNG</option><option value="jpg">JPEG</option><option value="tif">TIFF</option><option value="webp">WebP</option></select></div>
+                  {#if settings.output_format === 'jpg' || settings.output_format === 'webp'}<div class="range-row"><label for="quality">{settings.output_format === 'webp' ? 'WebP' : 'JPEG'} quality <b>{settings.jpeg_quality}</b></label><input id="quality" type="range" min="70" max="100" value={settings.jpeg_quality} on:change={(event) => updateSettings({ jpeg_quality: Number(event.currentTarget.value) })} /></div>{/if}
                   <label class="check-row"><input type="checkbox" checked={settings.preserve_metadata} on:change={(event) => updateSettings({ preserve_metadata: event.currentTarget.checked })} /> Preserve safe metadata and color profile</label>
                 {:else}
                   <div class="field-row"><label for="container">Container</label><select id="container" value={settings.video_container} on:change={(event) => updateSettings({ video_container: event.currentTarget.value as UiSettings['video_container'] })}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></div>
@@ -1558,6 +1761,7 @@
                 <div class="field-row"><label for="interface-scale">Interface text</label><select id="interface-scale" value={settings.interface_scale} on:change={(event) => updateSettings({ interface_scale: Number(event.currentTarget.value) as UiSettings['interface_scale'] })}><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option></select></div>
                 <div class="field-grid"><label>Tile<select value={settings.tile_size} on:change={(event) => updateSettings({ tile_size: Number(event.currentTarget.value) })}>{#each [64, 128, 192, 256, 384, 512] as size}<option value={size}>{size}</option>{/each}</select></label><label>Halo<select value={settings.halo} on:change={(event) => updateSettings({ halo: Number(event.currentTarget.value) })}>{#each [8, 16, 32, 64] as halo}<option value={halo}>{halo}</option>{/each}</select></label><label>Precision<select value={settings.precision} on:change={(event) => updateSettings({ precision: event.currentTarget.value })}><option value="fp32">FP32</option><option value="fp16">FP16</option></select></label></div>
                 <label class="check-row"><input type="checkbox" checked={settings.safe_memory} on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })} /> Safe memory mode</label>
+                <label class="check-row"><input type="checkbox" checked={settings.enable_live_preview} on:change={(event) => updateSettings({ enable_live_preview: event.currentTarget.checked })} /> Show sampled enhanced previews (max 2 fps)</label>
                 <div class="hardware-card"><span>{snapshot.capabilities.system_memory_pressure_level === 'unknown' ? 'Hardware ready' : `${snapshot.capabilities.system_memory_pressure_level} memory pressure`}</span><button on:click={() => api.refreshCapabilities()}>Refresh</button><i style={`width:${Math.max(3, snapshot.capabilities.system_memory_pressure_percent)}%`}></i></div>
               </div>
             {/if}
@@ -1577,6 +1781,7 @@
 
   <footer class="status-bar">
     <div class="status-copy"><i class:working={Boolean(snapshot.runtime.active_job_id)}></i><div><strong>{booting ? 'Starting' : snapshot.runtime.status_title}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong><span>{booting ? 'Opening the trusted desktop control plane.' : snapshot.runtime.status_detail}</span></div></div>
+    {#if livePreviewWarning}<span class="inline-warning preview-warning" role="status">Preview warning: {livePreviewWarning} Processing continues normally.</span>{/if}
     {#if snapshot.runtime.active_job_id}<div class="progress"><i style={`width:${snapshot.runtime.progress}%`}></i></div>{/if}
     <div class="status-actions">
       {#if snapshot.runtime.last_output_path}<button class="button" on:click={() => api.revealResult(snapshot.runtime.last_output_path)}>Reveal</button><button class="button" on:click={() => api.openResult(snapshot.runtime.last_output_path)}>Open</button>{/if}
@@ -1607,6 +1812,28 @@
           <div><dt>Tile</dt><dd>{snapshot.runtime.active_tile_size || settings.tile_size}px · halo {settings.halo}px</dd></div>
           <div><dt>Thermals</dt><dd>{snapshot.runtime.thermal_status}</dd></div>
         </dl>
+        <section class="benchmark-panel" aria-labelledby="benchmark-title">
+          <div>
+            <h3 id="benchmark-title">LocalSR Benchmark</h3>
+            <span>Fixed real-inference workload · data stays on this device</span>
+          </div>
+          {#if snapshot.latest_benchmark}
+            <dl class="benchmark-result">
+              <div><dt>Score</dt><dd>{snapshot.latest_benchmark.score.toFixed(2)}</dd></div>
+              <div><dt>Median / p95</dt><dd>{snapshot.latest_benchmark.median_inference_ms.toFixed(1)} / {snapshot.latest_benchmark.p95_inference_ms.toFixed(1)} ms</dd></div>
+              <div><dt>Throughput</dt><dd>{snapshot.latest_benchmark.end_to_end_fps.toFixed(2)} fps · {snapshot.latest_benchmark.processed_megapixels_per_second.toFixed(3)} MP/s</dd></div>
+              <div><dt>Device</dt><dd>{snapshot.latest_benchmark.device} · {snapshot.latest_benchmark.model_name}</dd></div>
+              <div><dt>Workload</dt><dd>{snapshot.latest_benchmark.workload_version}</dd></div>
+              <div><dt>Peak process memory</dt><dd>{snapshot.latest_benchmark.peak_memory_bytes ? formatBytes(snapshot.latest_benchmark.peak_memory_bytes) : 'Not reliably available'}</dd></div>
+            </dl>
+            <p class="benchmark-note">Score = processed input megapixels per second × 1000. Higher is better only for the same workload version; it is not a universal hardware guarantee.</p>
+          {/if}
+          {#if benchmarkRunning}<div class="download-track benchmark-progress" aria-label={`Benchmark ${Math.round(snapshot.runtime.progress)}%`}><i style={`width:${snapshot.runtime.progress}%`}></i></div>{/if}
+          <div class="benchmark-actions">
+            <button class="button primary" disabled={Boolean(snapshot.runtime.active_job_id) && !benchmarkRunning} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : 'Run Benchmark'}</button>
+            {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
+          </div>
+        </section>
       {:else if modalKind === 'integrations' && integration}
         <p class="integration-detail">Command: <code>{integration.command_name}</code><br />Platform: {integration.platform}</p>
       {:else if diagnostics}

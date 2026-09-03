@@ -14,8 +14,9 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{
     error::{AppError, AppResult},
+    settings,
     state::{emit_state_changed, lock, AppState},
-    types::{CapabilityInfo, EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
+    types::{BenchmarkResult, CapabilityInfo, EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
 };
 
 struct WorkerCommand {
@@ -34,6 +35,7 @@ struct WorkerEventGate {
     last_video_started: Option<Instant>,
     last_video_progress: Option<Instant>,
     last_video_preview: Option<Instant>,
+    last_benchmark_progress: Option<Instant>,
 }
 
 impl WorkerEventGate {
@@ -45,6 +47,10 @@ impl WorkerEventGate {
         }
 
         match envelope.message_type.as_str() {
+            // The following regular progress envelope carries the same bounded
+            // percentage and ETA. Keep the typed stage event in the protocol,
+            // but do not duplicate a high-frequency webview event.
+            "stage_progress" => false,
             "progress" => sampled(
                 &mut self.last_progress,
                 now,
@@ -85,7 +91,20 @@ impl WorkerEventGate {
                 is_last_item(data, "frames_processed", "total_frames"),
                 Duration::from_millis(100),
             ),
-            "job_completed" | "video_job_completed" | "job_cancelled" | "job_failed" => {
+            "live_preview_frame" => true,
+            "benchmark_progress" => sampled(
+                &mut self.last_benchmark_progress,
+                now,
+                is_last_item(data, "completed_frames", "total_frames"),
+                Duration::from_millis(100),
+            ),
+            "job_completed"
+            | "video_job_completed"
+            | "job_cancelled"
+            | "job_failed"
+            | "benchmark_completed"
+            | "benchmark_cancelled"
+            | "benchmark_failed" => {
                 self.job_id.clear();
                 true
             }
@@ -101,6 +120,7 @@ impl WorkerEventGate {
         self.last_video_started = None;
         self.last_video_progress = None;
         self.last_video_preview = None;
+        self.last_benchmark_progress = None;
     }
 }
 
@@ -241,18 +261,20 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         }
         if let Ok(mut runtime) = state.runtime.lock() {
             let active = std::mem::take(&mut runtime.active_job_id);
+            let last_confirmed_stage = runtime.status_title.clone();
+            let exit_summary = match &status {
+                Ok(exit) => format!("The inference engine exited with {exit}"),
+                Err(error) => {
+                    format!("The inference engine could not report its exit status: {error}")
+                }
+            };
+            let interruption = worker_interruption_detail(&exit_summary, &last_confirmed_stage);
             runtime.worker = "unavailable".into();
             runtime.status_title = "Engine stopped".into();
-            runtime.status_detail = match status {
-                Ok(exit) => format!("The inference engine exited with {exit}. Restarting…"),
-                Err(_) => "The inference engine stopped unexpectedly. Restarting…".into(),
-            };
+            runtime.status_detail = format!("{interruption} Restarting…");
             if !active.is_empty() {
                 if let Ok(database) = state.database.lock() {
-                    let _ = database.interrupt_active_job(
-                        &active,
-                        "The inference engine stopped before the job completed.",
-                    );
+                    let _ = database.interrupt_active_job(&active, &interruption);
                 }
             }
         }
@@ -377,7 +399,13 @@ fn handle_worker_envelope(state: &Arc<AppState>, app: &AppHandle, envelope: Work
     }
     if matches!(
         envelope.message_type.as_str(),
-        "job_completed" | "video_job_completed" | "job_cancelled" | "job_failed"
+        "job_completed"
+            | "video_job_completed"
+            | "job_cancelled"
+            | "job_failed"
+            | "benchmark_completed"
+            | "benchmark_cancelled"
+            | "benchmark_failed"
     ) {
         if let Err(error) = dispatch_next(state, app) {
             set_worker_failure(state, app, error.to_string());
@@ -492,6 +520,20 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.active_tile_size = 0;
             runtime.result_preview_data_url.clear();
         }
+        "stage_started" => {
+            let stage = stage_label(&string(data, "stage_kind"));
+            let index = integer(data, "stage_index") + 1;
+            let count = integer(data, "stage_count");
+            let mut runtime = lock(&state.runtime)?;
+            runtime.status_title = format!("{stage} · stage {index}/{count}");
+            runtime.status_detail = format!("Preparing {}.", string(data, "model_id"));
+        }
+        "stage_completed" => {
+            let stage = stage_label(&string(data, "stage_kind"));
+            let mut runtime = lock(&state.runtime)?;
+            runtime.status_detail = format!("{stage} stage complete.");
+        }
+        "stage_progress" => {}
         "progress" => {
             let id = string(data, "job_id");
             let progress = number(data, "percentage");
@@ -565,6 +607,72 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             if !encoded.is_empty() {
                 runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
             }
+        }
+        "live_preview_frame" => {
+            let id = string(data, "job_id");
+            let encoded = string(data, "jpeg_base64");
+            let mut runtime = lock(&state.runtime)?;
+            if id == runtime.active_job_id
+                && string(data, "preview_kind") == "video"
+                && !encoded.is_empty()
+            {
+                runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
+            }
+        }
+        "live_preview_warning" => {}
+        "benchmark_started" => {
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id = string(data, "job_id");
+            runtime.status_title = "Benchmark running".into();
+            runtime.status_detail = format!(
+                "Warming up {} iteration(s), then measuring {} frames.",
+                integer(data, "warmup_count"),
+                integer(data, "measured_frame_count")
+            );
+            runtime.progress = 0.0;
+            runtime.estimated_remaining_seconds = 0.0;
+            runtime.throughput = 0.0;
+            runtime.throughput_unit = "frames/s".into();
+        }
+        "benchmark_progress" => {
+            let mut runtime = lock(&state.runtime)?;
+            runtime.progress = number(data, "percentage");
+            runtime.status_title = "Benchmark running".into();
+            runtime.status_detail = format!(
+                "Measured {} of {} frames.",
+                integer(data, "completed_frames"),
+                integer(data, "total_frames")
+            );
+        }
+        "benchmark_completed" => {
+            let result: BenchmarkResult = serde_json::from_value(data["result"].clone())?;
+            settings::save_benchmark(&state.paths, &result)?;
+            *lock(&state.latest_benchmark)? = Some(result.clone());
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id.clear();
+            runtime.progress = 100.0;
+            runtime.status_title = "Benchmark complete".into();
+            runtime.status_detail = format!(
+                "Score {:.2} · {:.2} frames/s · local result saved.",
+                result.score, result.end_to_end_fps
+            );
+            runtime.elapsed_seconds = result.total_elapsed_seconds;
+            runtime.throughput = result.end_to_end_fps;
+            runtime.throughput_unit = "frames/s".into();
+        }
+        "benchmark_cancelled" => {
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id.clear();
+            runtime.progress = 0.0;
+            runtime.status_title = "Benchmark cancelled".into();
+            runtime.status_detail = "No partial benchmark result was stored.".into();
+        }
+        "benchmark_failed" => {
+            let mut runtime = lock(&state.runtime)?;
+            runtime.active_job_id.clear();
+            runtime.progress = 0.0;
+            runtime.status_title = "Benchmark failed".into();
+            runtime.status_detail = string(data, "error_message");
         }
         "job_completed" | "video_job_completed" => {
             let id = string(data, "job_id");
@@ -752,6 +860,25 @@ fn eta_suffix(seconds: f64) -> String {
     }
 }
 
+fn worker_interruption_detail(exit_summary: &str, last_confirmed_stage: &str) -> String {
+    let stage = last_confirmed_stage.trim();
+    if stage.is_empty() || matches!(stage, "Ready" | "Starting" | "Checking engine") {
+        format!("{exit_summary} before the worker confirmed a processing stage.")
+    } else {
+        format!("{exit_summary}. Last confirmed stage: {stage}.")
+    }
+}
+
+fn stage_label(kind: &str) -> &'static str {
+    match kind {
+        "deblock" => "Removing JPEG artifacts",
+        "restore" => "Restoring",
+        "upscale" => "Upscaling",
+        "face_restore" => "Restoring faces",
+        _ => "Processing",
+    }
+}
+
 /// High-frequency inference messages are already delivered through the typed
 /// `worker-message` event. Emitting a second full snapshot for every tile used
 /// to make the webview copy and deserialize the entire catalog thousands of
@@ -759,7 +886,11 @@ fn eta_suffix(seconds: f64) -> String {
 fn should_emit_state_changed(message_type: &str) -> bool {
     !matches!(
         message_type,
-        "progress" | "tile_update" | "video_frame_started" | "video_frame_completed"
+        "progress"
+            | "stage_progress"
+            | "tile_update"
+            | "video_frame_started"
+            | "video_frame_completed"
     )
 }
 
@@ -794,6 +925,16 @@ mod tests {
         assert_eq!(string(&value, "job_id"), "job-1");
         assert_eq!(number(&value, "percentage"), 0.0);
         assert_eq!(integer(&value, "frame_count"), 0);
+    }
+
+    #[test]
+    fn worker_death_records_the_last_confirmed_video_stage() {
+        let detail = worker_interruption_detail(
+            "The inference engine exited with status 1",
+            "Enhancing video · Labs",
+        );
+        assert!(detail.contains("Last confirmed stage: Enhancing video · Labs"));
+        assert!(!detail.contains("post-processing"));
     }
 
     #[test]

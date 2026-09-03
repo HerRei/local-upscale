@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -70,14 +71,54 @@ class DummyAdapter:
 # ── face_detection tests ────────────────────────────────────────────
 
 
-def test_detect_faces_without_mediapipe_returns_empty():
-    from localsr.core.face_detection import detect_faces
+def test_detect_faces_without_optional_runtime_returns_empty(monkeypatch):
+    from localsr.core import face_detection
+
+    def unavailable():
+        raise ImportError("cv2 unavailable")
+
+    monkeypatch.setattr(face_detection, "_import_cv2", unavailable)
 
     rgb = np.zeros((100, 100, 3), dtype=np.uint8)
-    result = detect_faces(rgb)
+    result = face_detection.detect_faces(rgb)
     assert not result.has_faces
     assert result.boxes == ()
     assert result.mask.shape == (100, 100)
+
+
+def test_yunet_detection_clamps_boxes_and_filters_low_scores(tmp_path, monkeypatch):
+    from localsr.core import face_detection
+
+    detector_path = tmp_path / "yunet.onnx"
+    detector_path.write_bytes(b"model")
+
+    class FakeDetector:
+        def detect(self, _bgr):
+            return 1, np.array(
+                [
+                    [-5.0, 10.0, 25.0, 30.0, *([0.0] * 10), 0.92],
+                    [40.0, 40.0, 10.0, 10.0, *([0.0] * 10), 0.20],
+                ],
+                dtype=np.float32,
+            )
+
+    monkeypatch.setattr(face_detection, "_import_cv2", lambda: object())
+    monkeypatch.setattr(
+        face_detection,
+        "_detector_model_path",
+        lambda **_kwargs: detector_path,
+    )
+    monkeypatch.setattr(
+        face_detection,
+        "_detector_for",
+        lambda *_args, **_kwargs: FakeDetector(),
+    )
+
+    result = face_detection.detect_faces(np.zeros((50, 50, 3), dtype=np.uint8))
+
+    assert result.boxes == (FaceBox(x=0, y=10, w=25, h=30, confidence=pytest.approx(0.92)),)
+    assert result.mask[10:40, 0:25].all()
+    assert not result.mask[:, 25:].any()
 
 
 def test_face_mask_for_tile_core_returns_float_alpha():
@@ -159,6 +200,38 @@ def test_blend_tile_outputs_mixed_alpha():
     # With smoothing the exact value won't be 125 but it should be between.
     assert np.all(blended > 80)
     assert np.all(blended < 170)
+
+
+def test_blend_tile_outputs_applies_documented_fidelity_strength():
+    face = np.full((3, 8, 8), 200, dtype=np.uint8)
+    general = np.full((3, 8, 8), 40, dtype=np.uint8)
+    alpha = np.ones((8, 8), dtype=np.float32)
+
+    preserved = blend_tile_outputs(face, general, alpha, fidelity=0.0)
+    balanced = blend_tile_outputs(face, general, alpha, fidelity=0.5)
+    restored = blend_tile_outputs(face, general, alpha, fidelity=1.0)
+
+    assert np.all(preserved == 40)
+    assert np.all(balanced == 120)
+    assert np.all(restored == 200)
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        blend_tile_outputs(face, general, alpha, fidelity=1.1)
+
+
+def test_fidelity_blends_original_and_restored_only_inside_face_mask():
+    face = np.full((3, 8, 8), 220, dtype=np.uint8)
+    general = np.full((3, 8, 8), 40, dtype=np.uint8)
+    identity = np.full((3, 8, 8), 100, dtype=np.uint8)
+    alpha = np.zeros((8, 8), dtype=np.float32)
+    alpha[:, :4] = 1.0
+
+    preserved = blend_tile_outputs(face, general, alpha, fidelity=0.0, identity_output=identity)
+    restored = blend_tile_outputs(face, general, alpha, fidelity=1.0, identity_output=identity)
+
+    assert preserved[:, 2:-2, :2].mean() == pytest.approx(100, abs=1)
+    assert restored[:, 2:-2, :2].mean() == pytest.approx(220, abs=1)
+    assert preserved[:, 2:-2, -2:].mean() == pytest.approx(40, abs=1)
+    assert restored[:, 2:-2, -2:].mean() == pytest.approx(40, abs=1)
 
 
 # ── tiling tests ────────────────────────────────────────────────────
@@ -268,6 +341,39 @@ def test_release_one_model_keeps_others():
 
 
 # ── process_frame_face_aware end-to-end test ────────────────────────
+
+
+def test_face_aware_rejects_incompatible_model_geometry_before_processing():
+    general = NormalizedModelInfo(
+        architecture="General",
+        scale=2,
+        in_channels=3,
+        out_channels=3,
+        tiling_supported=True,
+        half_supported=False,
+        size_requirements_min=1,
+        size_requirements_mult=1,
+        filename="general.pth",
+        warnings=[],
+    )
+    arguments = dict(
+        engine=object(),
+        img_tensor=torch.zeros((3, 8, 8)),
+        face_mask=FaceMask(mask=np.ones((8, 8), dtype=bool), boxes=(FaceBox(0, 0, 8, 8, 1),)),
+        general_model_path="general.pth",
+        face_model_path="face.pth",
+        general_model_info=general,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=8,
+        halo=0,
+        cancel_event=threading.Event(),
+    )
+
+    with pytest.raises(ValueError, match="same native scale"):
+        process_frame_face_aware(face_model_info=replace(general, scale=4), **arguments)
+    with pytest.raises(ValueError, match="compatible output channels"):
+        process_frame_face_aware(face_model_info=replace(general, out_channels=1), **arguments)
 
 
 def test_process_frame_face_aware_routes_tiles_correctly():
@@ -437,11 +543,13 @@ def test_job_request_includes_face_model_path():
         preserve_metadata=True,
         safe_memory=True,
         face_model_path="/tmp/face.pth",
+        face_fidelity=0.65,
     )
     import json
 
     data = json.loads(req.to_json())["data"]
     assert data["face_model_path"] == "/tmp/face.pth"
+    assert data["face_fidelity"] == 0.65
 
 
 def test_video_job_request_includes_face_model_path():
@@ -461,11 +569,13 @@ def test_video_job_request_includes_face_model_path():
         precision="fp32",
         safe_memory=True,
         face_model_path="/tmp/face.pth",
+        face_fidelity=0.65,
     )
     import json
 
     data = json.loads(req.to_json())["data"]
     assert data["face_model_path"] == "/tmp/face.pth"
+    assert data["face_fidelity"] == 0.65
 
 
 def test_jobs_auto_pair_installed_face_companion(tmp_path):
