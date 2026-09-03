@@ -53,14 +53,16 @@ AppImage path rather than its temporary runtime mount.
 ## Production-shaped build
 
 ```bash
-python -m pip install -e ".[package,video]"
+python -m pip install -e ".[package,video,face]"
 python scripts/build_tauri_preview.py
 ```
 
 The build script exports the catalog, creates a worker-only PyInstaller engine,
 embeds that directory as a Tauri resource, runs frontend checks, and then
 builds the native installer. Credential-free local macOS previews receive an
-ad-hoc resource seal. The separate public-alpha workflow passes
+ad-hoc resource seal. The explicitly testing-only `v0.0.11` cross-alpha
+workflow uses the same honest ad-hoc/unsigned exception and records it in the
+release index. The normal desktop release workflow still passes
 `--require-signing` and refuses ad-hoc/unsigned substitutes.
 
 Each packaged preview is acceptance-tested by mounting or silently installing
@@ -75,11 +77,13 @@ manual-only Slint build and does not invoke the preview build.
 build short-lived private Windows NSIS and Linux AppImage artifacts when
 manually requested. An architecture check rejects accidental coupling between
 the two workflows, shared bundle identities, or native authority exposed to
-the webview. `.github/workflows/desktop-release.yml` is the only tag-triggered
-pipeline; it exposes one conventional package per host and five total assets.
-It requires production signatures, a native ARM64 PyTorch 2.13 DMG, and an
-installed-package smoke test before publishing. The Intel runner remains a
-host-control-plane gate and cannot silently fall back to PyTorch 2.2.
+the webview. `.github/workflows/v0.0.11-cross-alpha.yml` is the only workflow
+allowed to handle the `v0.0.11-alpha` tag. It publishes exactly three
+installers plus `SHA256SUMS` and `release-index.json`, with static-only ARM
+evidence and explicit trust warnings. The normal
+`.github/workflows/desktop-release.yml` excludes that tag and requires
+production signatures, a native ARM64 maintained PyTorch runtime, and
+installed-package smoke evidence for future releases.
 
 The hosted preview packages deliberately use the portable CPU runtime on
 Windows/Linux and the native MPS-capable runtime on Apple Silicon. Selecting

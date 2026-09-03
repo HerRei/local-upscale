@@ -199,6 +199,20 @@ pub struct Recipe {
     pub video_container: String,
     #[serde(default)]
     pub video_crf: Option<u32>,
+    #[serde(default)]
+    pub enable_face_model: Option<bool>,
+    #[serde(default)]
+    pub face_fidelity: Option<u32>,
+    #[serde(default)]
+    pub stages: Vec<RecipeStage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RecipeStage {
+    pub kind: String,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -209,6 +223,7 @@ pub struct UiSettings {
     pub task: String,
     pub selected_model_id: String,
     pub selected_video_model_id: String,
+    pub preprocess_model_id: String,
     pub custom_model_path: String,
     pub output_scale: u32,
     pub output_directory: String,
@@ -225,6 +240,8 @@ pub struct UiSettings {
     pub video_container: String,
     pub video_crf: u32,
     pub enable_face_model: bool,
+    pub face_fidelity: u32,
+    pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
 }
 
@@ -236,6 +253,7 @@ impl Default for UiSettings {
             task: String::new(),
             selected_model_id: String::new(),
             selected_video_model_id: "frame_by_frame".into(),
+            preprocess_model_id: String::new(),
             custom_model_path: String::new(),
             output_scale: 4,
             output_directory: String::new(),
@@ -252,6 +270,8 @@ impl Default for UiSettings {
             video_container: "mp4".into(),
             video_crf: 18,
             enable_face_model: false,
+            face_fidelity: 70,
+            enable_live_preview: true,
             allow_unsafe_pickle_model: false,
         }
     }
@@ -278,6 +298,27 @@ pub struct RuntimeStatus {
     pub live_system_ram_available: u64,
     pub live_memory_pressure_percent: f64,
     pub thermal_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BenchmarkResult {
+    pub workload_version: String,
+    pub backend: String,
+    pub device: String,
+    pub model_id: String,
+    pub model_name: String,
+    pub scale: u32,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub warmup_count: u32,
+    pub measured_frame_count: u32,
+    pub median_inference_ms: f64,
+    pub p95_inference_ms: f64,
+    pub end_to_end_fps: f64,
+    pub processed_megapixels_per_second: f64,
+    pub total_elapsed_seconds: f64,
+    pub peak_memory_bytes: Option<u64>,
+    pub score: f64,
 }
 
 impl Default for RuntimeStatus {
@@ -318,6 +359,18 @@ pub struct AppSnapshot {
     pub capabilities: CapabilityInfo,
     pub engine: Option<EngineInfo>,
     pub runtime: RuntimeStatus,
+    pub latest_benchmark: Option<BenchmarkResult>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct StartBenchmarkInput {
+    pub device: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct VideoComparisonSources {
+    pub original_path: String,
+    pub enhanced_path: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -327,6 +380,7 @@ pub struct StartBatchInput {
     pub task: String,
     pub model_id: String,
     pub video_model_id: String,
+    pub preprocess_model_id: String,
     pub custom_model_path: String,
     pub output_directory: String,
     pub output_format: String,
@@ -343,6 +397,8 @@ pub struct StartBatchInput {
     pub video_container: String,
     pub video_crf: u32,
     pub enable_face_model: bool,
+    pub face_fidelity: u32,
+    pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
 }
 

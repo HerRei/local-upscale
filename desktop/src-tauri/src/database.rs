@@ -230,6 +230,17 @@ impl Database {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub fn latest_completed_output_for_media(&self, media_id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT output_path FROM jobs WHERE media_id=?1 AND status='completed' AND output_path != '' ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+                [media_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn next_queued_job(&self) -> AppResult<Option<PendingJob>> {
         Ok(self
             .connection

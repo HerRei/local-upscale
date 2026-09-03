@@ -29,10 +29,18 @@ const api = vi.hoisted(() => ({
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
+  startBenchmark: vi.fn(async () => undefined),
+  exportBenchmark: vi.fn(async () => true),
+  prepareVideoComparison: vi.fn(async () => ({
+    original_url: 'asset://localhost/original.mp4',
+    enhanced_url: 'asset://localhost/enhanced.mp4'
+  })),
+  clearVideoComparison: vi.fn(async () => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
   cancelDownload: vi.fn(async () => undefined),
+  importCatalogModel: vi.fn(async () => undefined),
   saveRecipe: vi.fn(async () => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
@@ -184,13 +192,75 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelector('.canvas-icon svg .play-mark')).toBeTruthy();
   });
 
-  it('opens performance diagnostics from the toolbar indicator', async () => {
+  it('makes the real benchmark discoverable and starts it from the toolbar', async () => {
     const user = await mountWith(readySnapshot());
 
-    await user.click(screen.getByRole('button', { name: 'Performance & diagnostics' }));
+    const shortcut = screen.getByRole('button', { name: 'Run Benchmark' });
+    shortcut.focus();
+    await user.keyboard('{Enter}');
 
     expect(await screen.findByRole('heading', { name: 'Performance & Diagnostics' })).toBeTruthy();
     expect(screen.getByText('Apple GPU (Metal)')).toBeTruthy();
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Run Benchmark' })
+    );
+    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
+  });
+
+  it('shows benchmark progress and keeps local results copyable and exportable', async () => {
+    const user = await mountWith(readySnapshot());
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      clipboard: { writeText: vi.fn(async () => undefined) }
+    });
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    callback({
+      type: 'benchmark_started',
+      data: { job_id: 'benchmark-1', warmup_count: 1, measured_frame_count: 5 }
+    });
+    expect(await screen.findByText('Warming up 1 iteration · then measuring 5 frames')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel Benchmark' })).toBeTruthy();
+
+    callback({
+      type: 'benchmark_progress',
+      data: { job_id: 'benchmark-1', completed_frames: 3, total_frames: 5, percentage: 60 }
+    });
+    expect(await screen.findByText('Measured 3 of 5 frames')).toBeTruthy();
+
+    callback({
+      type: 'benchmark_completed',
+      data: {
+        job_id: 'benchmark-1',
+        result: {
+          workload_version: 'localsr-benchmark-v1',
+          backend: 'mps',
+          device: 'mps',
+          model_id: 'span_photo_x4',
+          model_name: 'SPAN Quick',
+          scale: 4,
+          input_width: 128,
+          input_height: 128,
+          warmup_count: 1,
+          measured_frame_count: 5,
+          median_inference_ms: 18.81,
+          p95_inference_ms: 19.044,
+          end_to_end_fps: 53.0308,
+          processed_megapixels_per_second: 0.8689,
+          total_elapsed_seconds: 0.0943,
+          peak_memory_bytes: 448413696,
+          score: 868.86
+        }
+      }
+    });
+    expect(await screen.findByText('868.86')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Copy JSON' }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining('"workload_version": "localsr-benchmark-v1"')
+    );
+    await user.click(screen.getByRole('button', { name: 'Export JSON…' }));
+    expect(api.exportBenchmark).toHaveBeenCalledTimes(1);
   });
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
@@ -201,6 +271,19 @@ describe('LocalSR desktop interface', () => {
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
     expect(screen.getByLabelText('Interface text')).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
+  });
+
+  it('shows preview encoding failures as non-fatal warnings', async () => {
+    await mountWith(readySnapshot([image('first', true)]));
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    callback({
+      type: 'live_preview_warning',
+      data: { job_id: 'job-1', message: 'JPEG encoder unavailable' }
+    });
+
+    expect(await screen.findByText(/Preview warning: JPEG encoder unavailable/)).toBeTruthy();
+    expect(screen.getByText(/Processing continues normally/)).toBeTruthy();
   });
 
   it('saves the current setup as a named recipe beside the built-in recipes', async () => {
@@ -250,6 +333,49 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Temporal median de-flicker/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start selected video · Labs' })).toBeTruthy();
+  });
+
+  it('queues a video with its own settings while an image job is running', async () => {
+    const activeImage = image('active-image');
+    const nextVideo = video('next-video', true);
+    const snapshot = readySnapshot([activeImage, nextVideo]);
+    snapshot.runtime.active_job_id = 'image-job';
+    snapshot.runtime.status_title = 'Enhancing';
+    snapshot.jobs = [
+      {
+        id: 'image-job',
+        media_id: activeImage.id,
+        media_name: activeImage.name,
+        media_kind: 'image',
+        status: 'running',
+        progress: 20,
+        output_path: '',
+        error: '',
+        created_at: 1
+      }
+    ];
+
+    const user = await mountWith(snapshot);
+    const addMedia = screen.getByRole('button', { name: '＋ Add Media' });
+    expect((addMedia as HTMLButtonElement).disabled).toBe(false);
+    const queue = await screen.findByRole('button', { name: 'Add selected to queue' });
+    expect((queue as HTMLButtonElement).disabled).toBe(false);
+    await user.click(queue);
+
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ media_ids: ['next-video'], task: 'video' })
+    );
+  });
+
+  it('disables media-incompatible task cards', async () => {
+    await mountWith(readySnapshot([image('photo', true)]));
+    expect((screen.getByRole('button', { name: /Upscale Video/i }) as HTMLButtonElement).disabled).toBe(true);
+
+    cleanup();
+    await mountWith(readySnapshot([video('clip', true)]));
+    expect((screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Denoise\s*Noise and blur/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('preserves every executable backend id from worker discovery to job settings', async () => {

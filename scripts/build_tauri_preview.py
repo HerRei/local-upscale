@@ -112,7 +112,7 @@ def build_worker(target: str | None = None) -> None:
         except ImportError as error:
             raise SystemExit(
                 "PyInstaller is missing. Install the package build dependencies first: "
-                "python -m pip install -e '.[package,video]'"
+                "python -m pip install -e '.[package,video,face]'"
             ) from error
     WORKER_DIST.mkdir(parents=True, exist_ok=True)
     WORKER_WORK.mkdir(parents=True, exist_ok=True)
@@ -245,7 +245,7 @@ def main() -> int:
     run(command, cwd=DESKTOP, env=tauri_build_environment())
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
-        "The released Slint app and its artifacts were not modified.",
+        "The legacy Slint app and its artifacts were not modified.",
         flush=True,
     )
     return 0

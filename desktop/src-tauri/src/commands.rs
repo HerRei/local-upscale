@@ -1,22 +1,26 @@
 use std::{
     collections::HashSet,
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::{
-    downloads,
+    catalog, downloads,
     error::{AppError, AppResult},
     integrations,
     launch::LaunchIntent,
     native_menu,
     state::{emit_state_changed, lock, AppState},
-    types::{AppSnapshot, CatalogModel, Recipe, StartBatchInput, UiSettings},
+    types::{
+        AppSnapshot, CatalogModel, Recipe, StartBatchInput, StartBenchmarkInput, UiSettings,
+        VideoComparisonSources,
+    },
     worker,
 };
 
@@ -150,7 +154,10 @@ pub fn save_recipe(
         ));
     }
     if (!recipe.output_format.is_empty()
-        && !matches!(recipe.output_format.as_str(), "png" | "jpg" | "tif"))
+        && !matches!(
+            recipe.output_format.as_str(),
+            "png" | "jpg" | "tif" | "webp"
+        ))
         || (!recipe.video_container.is_empty()
             && !matches!(recipe.video_container.as_str(), "mp4" | "mkv"))
         || recipe
@@ -165,6 +172,7 @@ pub fn save_recipe(
             "recipe contains unsupported output settings".into(),
         ));
     }
+    validate_recipe_stages(&recipe)?;
     let mut recipes = lock(&state.recipes)?;
     if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
         *existing = recipe;
@@ -182,6 +190,61 @@ pub fn save_recipe(
         ))
     })?;
     emit_state_changed(&app);
+    Ok(())
+}
+
+fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
+    if recipe.stages.is_empty() {
+        // Recipes saved by pre-v0.0.11 previews are deliberately accepted and
+        // reconstructed from their legacy top-level fields by the frontend.
+        return Ok(());
+    }
+    if recipe.stages.len() > 3
+        || recipe.stages.iter().any(|stage| {
+            stage.model_id.trim().is_empty()
+                || !matches!(
+                    stage.kind.as_str(),
+                    "deblock" | "restore" | "upscale" | "face_restore" | "video"
+                )
+                || stage
+                    .fidelity
+                    .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        })
+    {
+        return Err(AppError::Validation(
+            "recipe contains an invalid or unbounded stage list".into(),
+        ));
+    }
+
+    let kinds: Vec<&str> = recipe
+        .stages
+        .iter()
+        .map(|stage| stage.kind.as_str())
+        .collect();
+    let valid = match recipe.task.as_str() {
+        "upscale" => {
+            let upscale = kinds.iter().position(|kind| *kind == "upscale");
+            upscale.is_some_and(|index| {
+                kinds.iter().filter(|kind| **kind == "upscale").count() == 1
+                    && index <= 1
+                    && (index == 0 || matches!(kinds[0], "deblock" | "restore"))
+                    && kinds[index + 1..]
+                        .iter()
+                        .all(|kind| *kind == "face_restore")
+                    && kinds[index + 1..].len() <= 1
+            })
+        }
+        "denoise" => kinds.as_slice() == ["restore"],
+        "video" => {
+            matches!(kinds.as_slice(), ["video"] | ["video", "face_restore"])
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(AppError::Validation(
+            "recipe stages do not match the selected task or stage order".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -278,7 +341,14 @@ pub fn start_jobs(
         }
         let job_id = Uuid::new_v4().to_string();
         let output = unique_output_path(&output_directory, &item.path, &input, &mut reserved);
-        let message = build_job_message(&job_id, item, &output, &input, &selection)?;
+        let message = build_job_message(
+            &job_id,
+            item,
+            &output,
+            &state.paths.work_root,
+            &input,
+            &selection,
+        )?;
         jobs.push((job_id, item.id.clone(), serde_json::to_string(&message)?));
     }
 
@@ -308,6 +378,209 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
     }
     emit_state_changed(&app);
     Ok(())
+}
+
+#[tauri::command]
+pub fn start_benchmark(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    input: StartBenchmarkInput,
+) -> AppResult<()> {
+    ensure_queue_idle(&state)?;
+    if lock(&state.runtime)?.worker != "ready" {
+        return Err(AppError::Validation(
+            "wait for the inference worker to become ready".into(),
+        ));
+    }
+    let (model_path, model_name) = {
+        let catalog = lock(&state.catalog)?;
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.model_id == "span_photo_x4")
+            .ok_or_else(|| {
+                AppError::Config("benchmark model is missing from the catalog".into())
+            })?;
+        if !model.installed {
+            return Err(AppError::Validation(
+                "download and verify the Quick model before running the benchmark".into(),
+            ));
+        }
+        (
+            model.installed_path.clone().unwrap_or_default(),
+            model.name.clone(),
+        )
+    };
+    let device_exists = lock(&state.capabilities)?
+        .devices
+        .iter()
+        .any(|device| device.id == input.device);
+    if !device_exists {
+        return Err(AppError::Validation(
+            "the selected benchmark device is unavailable".into(),
+        ));
+    }
+    let job_id = format!("benchmark-{}", Uuid::new_v4());
+    {
+        let mut runtime = lock(&state.runtime)?;
+        if !runtime.active_job_id.is_empty() {
+            return Err(AppError::Validation(
+                "wait for the current work to finish before benchmarking".into(),
+            ));
+        }
+        runtime.active_job_id = job_id.clone();
+        runtime.status_title = "Benchmark preparing".into();
+        runtime.status_detail = "Loading the fixed LocalSR benchmark workload.".into();
+        runtime.progress = 0.0;
+    }
+    if let Err(error) = worker::send(
+        &state,
+        &json!({
+            "type": "benchmark_request",
+            "data": {
+                "job_id": job_id,
+                "model_path": model_path,
+                "model_id": "span_photo_x4",
+                "model_name": model_name,
+                "device": input.device
+            }
+        }),
+    ) {
+        lock(&state.runtime)?.active_job_id.clear();
+        return Err(error);
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn export_benchmark(state: State<'_, Arc<AppState>>, destination: String) -> AppResult<()> {
+    let result = lock(&state.latest_benchmark)?
+        .clone()
+        .ok_or_else(|| AppError::Validation("run a benchmark before exporting it".into()))?;
+    let destination = PathBuf::from(destination);
+    write_benchmark_export(&destination, &serde_json::to_vec_pretty(&result)?)
+}
+
+fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
+    if destination.file_name().is_none() {
+        return Err(AppError::Validation(
+            "choose a benchmark JSON filename".into(),
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AppError::Validation("benchmark destination is invalid".into()))?;
+    if !parent.is_dir() {
+        return Err(AppError::Validation(
+            "benchmark destination folder does not exist".into(),
+        ));
+    }
+    if destination.exists() {
+        return Err(AppError::Validation(
+            "the chosen benchmark file already exists; choose a new name".into(),
+        ));
+    }
+    let file_name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| AppError::Validation("benchmark destination is invalid".into()))?;
+    let temporary = parent.join(format!(
+        ".{file_name}.localsr-benchmark-{}.tmp",
+        Uuid::new_v4()
+    ));
+    let export_result = (|| -> AppResult<()> {
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        output.write_all(bytes)?;
+        output.sync_all()?;
+        drop(output);
+
+        // hard_link() creates the destination without replacing an existing
+        // file, then unlinking our same-directory temporary makes the publish
+        // atomic and no-clobber on supported desktop filesystems.
+        fs::hard_link(&temporary, destination).map_err(|error| {
+            if destination.exists() {
+                AppError::Validation(
+                    "the chosen benchmark file already exists; choose a new name".into(),
+                )
+            } else {
+                AppError::Io(error)
+            }
+        })?;
+        fs::remove_file(&temporary)?;
+        Ok(())
+    })();
+    if export_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    export_result
+}
+
+#[tauri::command]
+pub fn prepare_video_comparison(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+) -> AppResult<VideoComparisonSources> {
+    clear_video_scope(&state, &app);
+    let (original, enhanced) = {
+        let database = lock(&state.database)?;
+        let media = database
+            .get_media(&media_id)?
+            .ok_or_else(|| AppError::Validation("the selected video is no longer queued".into()))?;
+        if media.kind != "video" {
+            return Err(AppError::Validation(
+                "video comparison is available only for completed video jobs".into(),
+            ));
+        }
+        let output = database
+            .latest_completed_output_for_media(&media_id)?
+            .ok_or_else(|| AppError::Validation("this video has no completed output".into()))?;
+        (PathBuf::from(media.path), PathBuf::from(output))
+    };
+    let original = fs::canonicalize(original)?;
+    let enhanced = fs::canonicalize(enhanced)?;
+    if !original.is_file() || !enhanced.is_file() {
+        return Err(AppError::Validation(
+            "the original or enhanced video is no longer available".into(),
+        ));
+    }
+    let scope = app.asset_protocol_scope();
+    scope.allow_file(&original).map_err(|error| {
+        AppError::Config(format!(
+            "could not authorize the original video preview: {error}"
+        ))
+    })?;
+    if let Err(error) = scope.allow_file(&enhanced) {
+        let _ = scope.forbid_file(&original);
+        return Err(AppError::Config(format!(
+            "could not authorize the enhanced video preview: {error}"
+        )));
+    }
+    *lock(&state.video_preview_paths)? = vec![original.clone(), enhanced.clone()];
+    Ok(VideoComparisonSources {
+        original_path: original.to_string_lossy().into_owned(),
+        enhanced_path: enhanced.to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
+pub fn clear_video_comparison(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    clear_video_scope(&state, &app);
+    Ok(())
+}
+
+fn clear_video_scope(state: &AppState, app: &AppHandle) {
+    let Ok(mut paths) = state.video_preview_paths.lock() else {
+        return;
+    };
+    let scope = app.asset_protocol_scope();
+    for path in paths.drain(..) {
+        let _ = scope.forbid_file(path);
+    }
 }
 
 #[tauri::command]
@@ -365,6 +638,84 @@ pub async fn download_model(
 #[tauri::command]
 pub fn cancel_download(state: State<'_, Arc<AppState>>, model_id: String) -> AppResult<()> {
     downloads::cancel_download(&state, &model_id)
+}
+
+#[tauri::command]
+pub fn import_catalog_model(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    model_id: String,
+    source_path: String,
+    accepted_terms: bool,
+) -> AppResult<()> {
+    let (filename, size_bytes, sha256, terms_required) = {
+        let catalog = lock(&state.catalog)?;
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.model_id == model_id)
+            .ok_or_else(|| AppError::Validation("unknown catalog model".into()))?;
+        (
+            catalog::safe_model_filename(&model.filename)?.to_owned(),
+            model.size_bytes,
+            model.sha256.clone(),
+            model.terms_acceptance_required,
+        )
+    };
+    if terms_required && !accepted_terms {
+        return Err(AppError::Validation(
+            "review and accept this checkpoint's stated terms before importing it".into(),
+        ));
+    }
+    let source = fs::canonicalize(source_path)
+        .map_err(|_| AppError::Validation("the selected checkpoint is unavailable".into()))?;
+    if !source.is_file() || !catalog::verified_file(&source, size_bytes, &sha256) {
+        return Err(AppError::Validation(
+            "the selected file does not match the catalog size and SHA-256 digest".into(),
+        ));
+    }
+    fs::create_dir_all(&state.paths.model_root)?;
+    let destination = state.paths.model_root.join(filename);
+    import_verified_catalog_file(&source, &destination, size_bytes, &sha256)?;
+    state.refresh_catalog()?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+fn import_verified_catalog_file(
+    source: &Path,
+    destination: &Path,
+    size_bytes: u64,
+    sha256: &str,
+) -> AppResult<()> {
+    if destination.exists() {
+        let existing = fs::canonicalize(destination)?;
+        if existing == source || catalog::verified_file(destination, size_bytes, sha256) {
+            return Ok(());
+        }
+        return Err(AppError::Validation(
+            "a conflicting checkpoint already exists in LocalSR's model library; remove it manually before importing"
+                .into(),
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AppError::Validation("model destination is invalid".into()))?;
+    let temporary = parent.join(format!(".model-import-{}.tmp", Uuid::new_v4()));
+    let result = (|| -> AppResult<()> {
+        fs::copy(source, &temporary)?;
+        if !catalog::verified_file(&temporary, size_bytes, sha256) {
+            return Err(AppError::Validation(
+                "the imported copy failed its SHA-256 verification".into(),
+            ));
+        }
+        fs::rename(&temporary, destination)?;
+        Ok(())
+    })();
+    if temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[tauri::command]
@@ -501,8 +852,10 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     {
         return Err(AppError::Validation("unknown task".into()));
     }
-    if !matches!(settings.output_format.as_str(), "png" | "jpg" | "tif")
-        || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
+    if !matches!(
+        settings.output_format.as_str(),
+        "png" | "jpg" | "tif" | "webp"
+    ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
     {
         return Err(AppError::Validation(
@@ -515,6 +868,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         || !(1..=9).contains(&settings.deflicker_window)
         || !(0..=51).contains(&settings.video_crf)
         || !(1..=100).contains(&settings.jpeg_quality)
+        || settings.face_fidelity > 100
     {
         return Err(AppError::Validation(
             "one or more numeric settings are out of range".into(),
@@ -530,6 +884,7 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         task: input.task.clone(),
         selected_model_id: input.model_id.clone(),
         selected_video_model_id: input.video_model_id.clone(),
+        preprocess_model_id: input.preprocess_model_id.clone(),
         custom_model_path: input.custom_model_path.clone(),
         output_scale: input.output_scale,
         output_directory: input.output_directory.clone(),
@@ -546,6 +901,8 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         video_container: input.video_container.clone(),
         video_crf: input.video_crf,
         enable_face_model: input.enable_face_model,
+        face_fidelity: input.face_fidelity,
+        enable_live_preview: input.enable_live_preview,
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
     };
     validate_settings(&settings)?;
@@ -558,7 +915,9 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
 #[derive(Clone)]
 enum ModelSelection {
     Image {
+        model_id: String,
         path: String,
+        preprocess: Option<ResolvedImageStage>,
         face_path: Option<String>,
         native_scale: u32,
     },
@@ -569,6 +928,13 @@ enum ModelSelection {
         temporal_window: u32,
         temporal_overlap: u32,
     },
+}
+
+#[derive(Clone)]
+struct ResolvedImageStage {
+    kind: &'static str,
+    model_id: String,
+    path: String,
 }
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
@@ -657,12 +1023,52 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
                     .into(),
             ));
         }
+        if selected_model.is_some_and(|primary| primary.native_scale != face.native_scale) {
+            return Err(AppError::Validation(
+                "the face companion native scale does not match the selected upscaler".into(),
+            ));
+        }
         face.installed_path.clone()
     } else {
         None
     };
+    let preprocess = if input.preprocess_model_id.is_empty() {
+        None
+    } else {
+        if input.task != "upscale" {
+            return Err(AppError::Validation(
+                "pre-processing can only be chained before an image upscale".into(),
+            ));
+        }
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.model_id == input.preprocess_model_id)
+            .ok_or_else(|| AppError::Validation("unknown pre-processing model".into()))?;
+        if model.native_scale != 1 || model.purposes.iter().any(|purpose| purpose == "face") {
+            return Err(AppError::Validation(
+                "the pre-processing stage must use a 1× restoration model".into(),
+            ));
+        }
+        if !model.installed {
+            return Err(AppError::Validation(
+                "download and verify the selected pre-processing model first".into(),
+            ));
+        }
+        Some(ResolvedImageStage {
+            kind: if model.model_id == "fbcnn_color" {
+                "deblock"
+            } else {
+                "restore"
+            },
+            model_id: model.model_id.clone(),
+            path: model.installed_path.clone().unwrap_or_default(),
+        })
+    };
     Ok(ModelSelection::Image {
+        model_id: input.model_id.clone(),
         path,
+        preprocess,
         face_path,
         native_scale: selected_model
             .map(|model| model.native_scale)
@@ -691,13 +1097,16 @@ fn build_job_message(
     job_id: &str,
     media: &crate::types::MediaItem,
     output: &Path,
+    scratch_directory: &Path,
     input: &StartBatchInput,
     selection: &ModelSelection,
 ) -> AppResult<Value> {
     let output = output.to_string_lossy().into_owned();
     match selection {
         ModelSelection::Image {
+            model_id,
             path,
+            preprocess,
             face_path,
             native_scale,
         } if input.task != "video" => Ok(json!({
@@ -707,6 +1116,7 @@ fn build_job_message(
                 "image_path": media.path,
                 "model_path": path,
                 "output_path": output,
+                "scratch_directory": scratch_directory.to_string_lossy(),
                 "output_format": input.output_format,
                 "device": input.device,
                 "tile_size": input.tile_size,
@@ -715,9 +1125,20 @@ fn build_job_message(
                 "jpeg_quality": input.jpeg_quality,
                 "preserve_metadata": input.preserve_metadata,
                 "safe_memory": input.safe_memory,
-                "preview_interval_ms": 80,
+                "preview_enabled": input.enable_live_preview,
+                "preview_max_fps": 2.0,
+                "preview_max_dimension": 320,
                 "output_scale": if input.task == "denoise" { 1 } else { input.output_scale.min(*native_scale).max(1) },
                 "face_model_path": face_path,
+                "face_fidelity": f64::from(input.face_fidelity) / 100.0,
+                "stages": image_pipeline_stages(
+                    preprocess.as_ref(),
+                    model_id,
+                    path,
+                    face_path.as_deref(),
+                    input.face_fidelity,
+                    &input.task,
+                ),
                 "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
             }
         })),
@@ -742,6 +1163,7 @@ fn build_job_message(
                 "start_frame": null,
                 "end_frame": null,
                 "face_model_path": face_path,
+                "face_fidelity": f64::from(input.face_fidelity) / 100.0,
                 "deflicker": input.deflicker,
                 "deflicker_window": input.deflicker_window,
                 "model_kind": "spandrel_image",
@@ -750,7 +1172,10 @@ fn build_job_message(
                 "temporal_overlap": 0,
                 "target_resolution": 0,
                 "output_scale": input.output_scale,
-                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
+                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                "preview_enabled": input.enable_live_preview,
+                "preview_max_fps": 2.0,
+                "preview_max_dimension": 320
             }
         })),
         ModelSelection::Temporal {
@@ -792,11 +1217,47 @@ fn build_job_message(
                     "temporal_overlap": temporal_overlap,
                     "target_resolution": target,
                     "output_scale": input.output_scale,
-                    "allow_unverified_checkpoint": false
+                    "allow_unverified_checkpoint": false,
+                    "preview_enabled": input.enable_live_preview,
+                    "preview_max_fps": 2.0,
+                    "preview_max_dimension": 320
                 }
             }))
         }
     }
+}
+
+fn image_pipeline_stages(
+    preprocess: Option<&ResolvedImageStage>,
+    model_id: &str,
+    model_path: &str,
+    face_path: Option<&str>,
+    face_fidelity: u32,
+    task: &str,
+) -> Vec<Value> {
+    let mut stages = Vec::with_capacity(3);
+    if let Some(stage) = preprocess {
+        stages.push(json!({
+            "kind": stage.kind,
+            "model_id": stage.model_id,
+            "model_path": stage.path,
+        }));
+    }
+    stages.push(json!({
+        "kind": if task == "denoise" { "restore" } else { "upscale" },
+        "model_id": model_id,
+        "model_path": model_path,
+    }));
+    if let Some(path) = face_path {
+        stages.push(json!({
+            "kind": "face_restore",
+            "model_id": "hat_s_x4_face",
+            "model_path": path,
+            "fidelity": f64::from(face_fidelity) / 100.0,
+            "execution": "fused-with-upscale",
+        }));
+    }
+    stages
 }
 
 fn prepare_output_directory(state: &AppState, requested: &str) -> AppResult<PathBuf> {
@@ -948,6 +1409,7 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::RecipeStage;
 
     fn input(task: &str) -> StartBatchInput {
         StartBatchInput {
@@ -956,6 +1418,7 @@ mod tests {
             task: task.into(),
             model_id: "model".into(),
             video_model_id: "frame_by_frame".into(),
+            preprocess_model_id: String::new(),
             custom_model_path: String::new(),
             output_directory: String::new(),
             output_format: "png".into(),
@@ -972,6 +1435,8 @@ mod tests {
             video_container: "mp4".into(),
             video_crf: 18,
             enable_face_model: false,
+            face_fidelity: 70,
+            enable_live_preview: true,
             allow_unsafe_pickle_model: false,
         }
     }
@@ -996,6 +1461,27 @@ mod tests {
         );
         assert_eq!(first.file_name().unwrap(), "photo_upscaled_4x_1.png");
         assert_eq!(second.file_name().unwrap(), "photo_upscaled_4x_2.png");
+    }
+
+    #[test]
+    fn benchmark_export_is_unique_atomic_and_never_clobbers() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("result.json");
+        let unrelated = directory.path().join("result.json.tmp");
+        fs::write(&unrelated, b"user-owned").unwrap();
+
+        write_benchmark_export(&destination, br#"{"score":42}"#).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), br#"{"score":42}"#);
+        assert_eq!(fs::read(&unrelated).unwrap(), b"user-owned");
+        assert!(directory.path().read_dir().unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("localsr-benchmark")));
+
+        let error = write_benchmark_export(&destination, b"replacement").unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+        assert_eq!(fs::read(&destination).unwrap(), br#"{"score":42}"#);
     }
 
     #[test]
@@ -1043,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    fn image_jobs_request_a_bounded_progressive_preview_rate() {
+    fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         let media = crate::types::MediaItem {
             id: "media".into(),
             path: "/input/photo.png".into(),
@@ -1060,7 +1546,9 @@ mod tests {
             selected: true,
         };
         let selection = ModelSelection::Image {
+            model_id: "model".into(),
             path: "/models/upscaler.safetensors".into(),
+            preprocess: None,
             face_path: None,
             native_scale: 4,
         };
@@ -1069,11 +1557,159 @@ mod tests {
             "job",
             &media,
             Path::new("/output/photo.png"),
+            Path::new("/app-owned/work"),
             &input("upscale"),
             &selection,
         )
         .unwrap();
 
-        assert_eq!(message["data"]["preview_interval_ms"], 80);
+        assert_eq!(message["data"]["preview_enabled"], true);
+        assert_eq!(message["data"]["preview_max_fps"], 2.0);
+        assert_eq!(message["data"]["preview_max_dimension"], 320);
+        assert_eq!(message["data"]["face_fidelity"], 0.7);
+        assert_eq!(message["data"]["scratch_directory"], "/app-owned/work");
+        assert_eq!(message["data"]["stages"].as_array().unwrap().len(), 1);
+        assert_eq!(message["data"]["stages"][0]["kind"], "upscale");
+    }
+
+    #[test]
+    fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
+        let media = crate::types::MediaItem {
+            id: "media".into(),
+            path: "/input/photo.png".into(),
+            name: "photo.png".into(),
+            kind: "image".into(),
+            width: 100,
+            height: 80,
+            frame_count: 1,
+            fps: 0.0,
+            duration_seconds: 0.0,
+            preview_data_url: String::new(),
+            probe_status: "ready".into(),
+            error: String::new(),
+            selected: true,
+        };
+        let selection = ModelSelection::Image {
+            model_id: "upscale".into(),
+            path: "/models/upscale.pth".into(),
+            preprocess: Some(ResolvedImageStage {
+                kind: "deblock",
+                model_id: "fbcnn_color".into(),
+                path: "/models/fbcnn.pth".into(),
+            }),
+            face_path: Some("/models/face.pth".into()),
+            native_scale: 4,
+        };
+        let mut options = input("upscale");
+        options.enable_face_model = true;
+        options.face_fidelity = 65;
+        let message = build_job_message(
+            "job",
+            &media,
+            Path::new("/output/photo.png"),
+            Path::new("/app-owned/work"),
+            &options,
+            &selection,
+        )
+        .unwrap();
+
+        let stages = message["data"]["stages"].as_array().unwrap();
+        assert_eq!(
+            stages
+                .iter()
+                .map(|stage| stage["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["deblock", "upscale", "face_restore"]
+        );
+        assert_eq!(stages[2]["execution"], "fused-with-upscale");
+        assert_eq!(stages[2]["fidelity"], 0.65);
+    }
+
+    #[test]
+    fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
+        let legacy = Recipe {
+            id: "legacy".into(),
+            name: "Legacy".into(),
+            task: "upscale".into(),
+            model_id: "model".into(),
+            output_scale: 4,
+            tile_size: 256,
+            halo: 32,
+            precision: "fp32".into(),
+            safe_memory: true,
+            video_model_id: String::new(),
+            custom_model_path: String::new(),
+            output_format: "png".into(),
+            preserve_metadata: Some(true),
+            jpeg_quality: Some(98),
+            deflicker: None,
+            deflicker_window: None,
+            video_container: String::new(),
+            video_crf: None,
+            enable_face_model: None,
+            face_fidelity: None,
+            stages: Vec::new(),
+        };
+        assert!(validate_recipe_stages(&legacy).is_ok());
+
+        let mut invalid = legacy;
+        invalid.stages = vec![
+            RecipeStage {
+                kind: "upscale".into(),
+                model_id: "first".into(),
+                fidelity: None,
+            },
+            RecipeStage {
+                kind: "upscale".into(),
+                model_id: "second".into(),
+                fidelity: None,
+            },
+        ];
+        assert!(validate_recipe_stages(&invalid).is_err());
+    }
+
+    #[test]
+    fn verified_catalog_import_is_atomic_and_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("downloaded.pth");
+        let destination = directory.path().join("models").join("model.pth");
+        fs::create_dir(destination.parent().unwrap()).unwrap();
+        fs::write(&source, b"trusted checkpoint").unwrap();
+        let source = fs::canonicalize(source).unwrap();
+        let digest = catalog::sha256_file(&source).unwrap();
+
+        import_verified_catalog_file(&source, &destination, 18, &digest).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"trusted checkpoint");
+        assert!(directory
+            .path()
+            .join("models")
+            .read_dir()
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")));
+
+        import_verified_catalog_file(&source, &destination, 18, &digest).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"trusted checkpoint");
+    }
+
+    #[test]
+    fn verified_catalog_import_rejects_conflict_and_bad_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("downloaded.pth");
+        let destination = directory.path().join("models").join("model.pth");
+        fs::create_dir(destination.parent().unwrap()).unwrap();
+        fs::write(&source, b"trusted checkpoint").unwrap();
+        let source = fs::canonicalize(source).unwrap();
+
+        assert!(import_verified_catalog_file(&source, &destination, 18, &"0".repeat(64)).is_err());
+        assert!(!destination.exists());
+
+        fs::write(&destination, b"conflicting bytes").unwrap();
+        let digest = catalog::sha256_file(&source).unwrap();
+        assert!(import_verified_catalog_file(&source, &destination, 18, &digest).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"conflicting bytes");
     }
 }

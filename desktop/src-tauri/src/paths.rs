@@ -10,6 +10,8 @@ pub struct AppPaths {
     pub model_root: PathBuf,
     pub database: PathBuf,
     pub settings: PathBuf,
+    pub benchmark: PathBuf,
+    pub work_root: PathBuf,
     pub legacy_settings: PathBuf,
     pub default_output: PathBuf,
     #[cfg(debug_assertions)]
@@ -25,6 +27,8 @@ impl AppPaths {
         let model_root = shared_root.join("models");
         std::fs::create_dir_all(&next_root)?;
         std::fs::create_dir_all(&model_root)?;
+        let work_root = next_root.join("work");
+        std::fs::create_dir_all(&work_root)?;
 
         let default_output = UserDirs::new()
             .and_then(|dirs| dirs.desktop_dir().map(Path::to_path_buf))
@@ -39,6 +43,8 @@ impl AppPaths {
         Ok(Self {
             database: next_root.join("queue.sqlite3"),
             settings: next_root.join("settings.json"),
+            benchmark: next_root.join("benchmark-latest.json"),
+            work_root,
             legacy_settings: shared_root.join("settings.json"),
             next_root,
             model_root,
@@ -57,6 +63,8 @@ impl AppPaths {
         Self {
             database: next_root.join("queue.sqlite3"),
             settings: next_root.join("settings.json"),
+            benchmark: next_root.join("benchmark-latest.json"),
+            work_root: next_root.join("work"),
             legacy_settings: shared_root.join("settings.json"),
             model_root: shared_root.join("models"),
             default_output: root.join("output"),
