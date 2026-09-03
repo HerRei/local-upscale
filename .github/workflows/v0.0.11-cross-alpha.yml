@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -21,6 +22,25 @@ env:
   PYINSTALLER_VERSION: "6.22.2"
 
 jobs:
+  coordinate-heavy-work:
+    name: Require an idle Mac mini
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Fail before occupying a guest if validation is active
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --mode fail \
+            --blocked-workflow "CI" \
+            --blocked-workflow "Tauri Next Preview"
+
   preflight:
     name: Preflight ${{ matrix.platform }} release runner
     strategy:
@@ -33,6 +53,7 @@ jobs:
             runner: '["self-hosted","Windows","X64","localsr-windows-builder"]'
           - platform: macos
             runner: '["self-hosted","macOS","X64","localsr-macos-cross-builder"]'
+    needs: [coordinate-heavy-work]
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
     steps:
@@ -313,7 +334,7 @@ jobs:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
           mkdir -p "$RUN_ROOT/source"
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
       - name: Create the universal2 analysis environment
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}

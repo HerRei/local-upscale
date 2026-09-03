@@ -8,20 +8,47 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: localsr-macmini-heavy
-  cancel-in-progress: false
+  group: localsr-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
   QT_QPA_PLATFORM: "offscreen"
 
 jobs:
+  coordinate-heavy-work:
+    name: Wait for release priority
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Wait without occupying a Mac-mini guest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "v0.0.11 Mac mini Cross Alpha" \
+            --blocked-workflow "Signed Tauri Alpha Release" \
+            --blocked-workflow "Legacy Slint Build (manual)"
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "Tauri Next Preview" \
+            --ignore-head-sha "$GITHUB_SHA"
+
   lint:
     name: Lint & format (Linux X64)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [coordinate-heavy-work]
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,7 +71,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
           export TMPDIR="$RUN_ROOT/tmp"
           export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
@@ -110,7 +137,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
           export TMPDIR="$RUN_ROOT/tmp"
           export PIP_CACHE_DIR="/ci-scratch/cache/pip"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
@@ -225,7 +252,7 @@ jobs:
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude .git "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
+          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
           /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
             -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"

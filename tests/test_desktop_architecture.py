@@ -96,6 +96,7 @@ def test_v0011_tag_has_one_exclusive_unsigned_publisher() -> None:
 
     assert '      - "v0.0.11-alpha"' in cross
     assert "github.ref == 'refs/tags/v0.0.11-alpha'" in cross
+    assert '      - "!v0.0.11-alpha"' in signed
     assert signed.count("github.ref_name != 'v0.0.11-alpha'") >= 4
     assert "v0.0.11-alpha" not in (ROOT / ".github/workflows/release.yml").read_text()
 
@@ -188,20 +189,35 @@ def test_tauri_preview_keeps_the_linux_cargo_cache_off_the_small_root_ssd() -> N
 
 
 def test_macmini_heavy_workflows_and_preview_guests_are_serialized() -> None:
-    workflow_names = (
-        "ci.yml",
-        "release.yml",
-        "desktop-release.yml",
-        "tauri-preview.yml",
-        "v0.0.11-cross-alpha.yml",
-    )
-    for workflow_name in workflow_names:
-        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
-        assert "group: localsr-macmini-heavy" in workflow
-        assert "cancel-in-progress: false" in workflow
-
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     preview = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text()
+    cross = (ROOT / ".github" / "workflows" / "v0.0.11-cross-alpha.yml").read_text()
+
+    # CI and Preview may cancel only older runs of themselves. They must not
+    # share GitHub's one-pending-run concurrency queue with a release.
+    assert "group: localsr-ci-${{ github.ref }}" in ci
+    assert "group: localsr-tauri-${{ github.ref }}" in preview
+    assert "group: localsr-macmini-heavy" in cross
+    assert "cancel-in-progress: false" in cross
+
+    assert '--blocked-workflow "v0.0.11 Mac mini Cross Alpha"' in ci
+    assert '--blocked-workflow "Tauri Next Preview"' in ci
+    assert '--ignore-head-sha "$GITHUB_SHA"' in ci
+    assert '--blocked-workflow "CI"' in preview
+    assert '--blocked-workflow "CI"' in cross
+    assert "--mode fail" in cross
+    assert "runs-on: ubuntu-latest" in ci
+    assert "runs-on: ubuntu-latest" in preview
+    assert "runs-on: ubuntu-latest" in cross
     assert preview.count("max-parallel: 1") == 2
+
+
+def test_isolated_workflow_copies_preserve_github_for_actionlint() -> None:
+    for workflow_name in ("ci.yml", "release.yml", "v0.0.11-cross-alpha.yml"):
+        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
+        assert "--exclude .git " not in workflow
+        if "rsync -a" in workflow:
+            assert "--exclude '/.git/'" in workflow
 
 
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
