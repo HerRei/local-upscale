@@ -1,10 +1,11 @@
-# One-release Intel -> Apple Silicon cross-build environment for v0.0.10-alpha.
+# One-release Intel -> Apple Silicon cross-build environment for v0.0.11-alpha.
 #
 # PyTorch 2.2.2 / torchvision 0.17.2 are the final releases that publish
-# matching CPython 3.11 Intel and Apple Silicon wheels.  The Mac mini merges
+# matching CPython 3.11 Intel and Apple Silicon wheels. The Mac mini merges
 # those wheels into a universal2 PyInstaller analysis environment, then emits
 # an ARM64-only worker.  This known security debt is forbidden for beta and
-# must not be reused by later release tags.
+# must not be reused by later release tags. Dependabot intentionally ignores
+# this file because torch and torchvision are a proven inseparable wheel pair.
 torch==2.2.2
 torchvision==0.17.2
 numpy==1.26.4

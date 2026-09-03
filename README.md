@@ -4,7 +4,7 @@
 
 LocalSR is a private, local-first desktop application for image restoration and super-resolution.
 Media and downloaded model weights stay on the computer; the app has no cloud processing or
-analytics. The current release candidate is **v0.0.10-alpha**.
+analytics. The current release candidate is **v0.0.11-alpha**.
 
 ## Features
 
@@ -27,13 +27,13 @@ weights. Custom `.safetensors` checkpoints are accepted by default. Unverified p
 
 ## Install the alpha
 
-The Mac-mini cross-release pipeline publishes the [v0.0.10-alpha
-prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.10-alpha) only after its
+The Mac-mini cross-release pipeline publishes the [v0.0.11-alpha
+prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.11-alpha) only after its
 testing-only platform gates pass. Download the one installer matching the operating system:
 
-- Apple Silicon macOS 12+: `LocalSR-v0.0.10-alpha-macOS-arm64.dmg`
-- Windows 10/11 x86-64: `LocalSR-v0.0.10-alpha-Windows-x86_64.exe`
-- Linux x86-64: `LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage`
+- Apple Silicon macOS 12+: `LocalSR-v0.0.11-alpha-macOS-arm64.dmg`
+- Windows 10/11 x86-64: `LocalSR-v0.0.11-alpha-Windows-x86_64.exe`
+- Linux x86-64: `LocalSR-v0.0.11-alpha-Linux-x86_64.AppImage`
 
 There are only five release assets: those three installers, `SHA256SUMS`, and
 `release-index.json`. This alpha is deliberately not production signed: macOS is ad-hoc sealed and
@@ -45,7 +45,7 @@ location remains a beta decision.
 
 ## Platform and advanced downloads
 
-The v0.0.10-alpha candidate is the first installable Tauri/Svelte host. It coexists with the former
+The v0.0.11-alpha candidate is the second installable Tauri/Svelte alpha. It coexists with the former
 Slint app under a distinct bundle identifier and state directory, so installing it does not replace
 an older LocalSR installation:
 
@@ -56,8 +56,8 @@ an older LocalSR installation:
 | Linux x86-64 | CPU | `.AppImage` plus SHA-256 |
 
 Linux and Windows installers are installed in CI and start their bundled worker. The Intel Mac mini
-cannot execute ARM64, so the DMG receives recursive ARM64 Mach-O and package inspection while the
-source-equivalent native ARM build received the GUI/worker smoke separately. This limitation and
+cannot execute ARM64, so the DMG receives recursive ARM64 Mach-O and package inspection only. No
+accessible physical Apple-Silicon runner supplied native runtime acceptance. This limitation and
 all checksum, provenance, signing, and smoke evidence are recorded in `release-index.json`.
 
 The release index embeds an intentionally honest machine-readable snapshot of completed and

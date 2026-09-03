@@ -2228,7 +2228,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "localsr-next"
-version = "0.0.10-alpha"
+version = "0.0.11-alpha"
 dependencies = [
  "directories",
  "fs2",

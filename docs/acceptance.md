@@ -1,11 +1,11 @@
 # Release acceptance
 
-## Automated for v0.0.10-alpha
+## Automated for v0.0.11-alpha
 
 - Offline unit/integration suite on Linux, Windows x86-64, and macOS Intel CI environments.
 - Svelte, Rust, and worker protocol tests on Linux, Windows, and macOS CI environments.
 - Real Tauri AppImage and NSIS install smoke checks that start the bundled worker; recursive static
-  ARM64 DMG inspection plus a separate source-equivalent native ARM GUI/worker smoke.
+  ARM64 DMG inspection only. No native Apple-Silicon runtime pass is claimed.
 - Real empty-cache download, SHA-256 validation, Spandrel load, and CPU inference for Quick and Best.
 - PE/ELF/Mach-O parsing, exact installer/main-executable architecture checks, provenance,
   checksums, metadata, and rejection of duplicate installer digests.
@@ -20,7 +20,7 @@
 - Release workflows use an immutable checkout commit, persist no checkout credentials, grant write
   permission only to the publishing job, and authenticate LAN artifact uploads with replay-bounded
   HMAC without transmitting the reusable secret.
-- The v0.0.10 alpha pipeline publishes only three installers plus `SHA256SUMS` and one consolidated
+- The v0.0.11 alpha pipeline publishes only three installers plus `SHA256SUMS` and one consolidated
   release index; its unsigned/cross-build state is explicit and existing releases cannot be overwritten.
 
 ## Required before public beta

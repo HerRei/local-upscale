@@ -17,6 +17,10 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CROSS_ALPHA_VERSION = "0.0.11-alpha"
+CROSS_ALPHA_TAG = f"v{CROSS_ALPHA_VERSION}"
+CROSS_ALPHA_WORKFLOW = ".github/workflows/v0.0.11-cross-alpha.yml"
+CANONICAL_UPLOAD_PLATFORMS = {"linux", "macos", "windows"}
 
 FORBIDDEN_WEBVIEW_PACKAGES = {
     "@tauri-apps/plugin-fs",
@@ -152,9 +156,9 @@ def signed_release_violations(legacy: str, desktop_release: str) -> list[str]:
         "patched release dependency assertion": "diffusers.__version__",
         "release environment consistency check": "python -m pip check",
         "compact three-installer manifest": "ci/tauri-release-artifacts.json",
-        "explicit prerelease publication": "--prerelease",
+        "explicit prerelease publication": "publish_tauri_release.py",
         "tag-derived release title": 'TITLE="LocalSR $TAG"',
-        "v0.0.10 exception exclusion": "github.ref_name != 'v0.0.10-alpha'",
+        "v0.0.11 exception exclusion": f"github.ref_name != '{CROSS_ALPHA_TAG}'",
     }
     for label, token in required.items():
         if token not in desktop_release:
@@ -171,26 +175,52 @@ def cross_alpha_release_violations(workflow: str) -> list[str]:
 
     violations: list[str] = []
     required = {
-        "exact v0.0.10 tag trigger": '      - "v0.0.10-alpha"',
-        "Mac mini Intel runner": "runs-on: [self-hosted, macOS, X64]",
+        "exact v0.0.11 tag trigger": f'      - "{CROSS_ALPHA_TAG}"',
+        "Mac mini Intel runner": "runs-on: [self-hosted, macOS, X64, localsr-macos-cross-builder]",
         "universal2 wheel preparation": "macos_cross_wheels.py",
-        "dedicated alpha requirements": "requirements/macos-cross-tauri-alpha.txt",
+        "dedicated alpha requirements": "requirements/macos-cross-v0.0.11-alpha.txt",
         "ARM64 Rust target": "--target aarch64-apple-darwin",
         "ARM64 package verification": "--platform macos --architecture arm64",
         "explicit unsigned evidence": "write_alpha_signing_report.py",
         "honest static-only macOS smoke": '"mode":"cross-build-static"',
         "real empty-cache Quick/Best inference": "validate_live_models.py",
         "exception manifest": "ci/tauri-cross-alpha-artifacts.json",
-        "explicit prerelease publication": "--prerelease",
-        "exact publish ref": "github.ref == 'refs/tags/v0.0.10-alpha'",
+        "explicit prerelease publication": "publish_tauri_release.py",
+        "exact publish ref": f"github.ref == 'refs/tags/{CROSS_ALPHA_TAG}'",
     }
     for label, token in required.items():
         if token not in workflow:
-            violations.append(f"v0.0.10 cross-alpha release is missing {label}")
+            violations.append(f"v0.0.11 cross-alpha release is missing {label}")
     if "--clobber" in workflow:
-        violations.append("v0.0.10 cross-alpha release must not overwrite published assets")
+        violations.append("v0.0.11 cross-alpha release must not overwrite published assets")
     if workflow.count("contents: write") != 1:
-        violations.append("only the v0.0.10 cross-alpha publishing job may write release contents")
+        violations.append("only the v0.0.11 cross-alpha publishing job may write release contents")
+    return violations
+
+
+def workflow_upload_platform_violations(root: Path) -> list[str]:
+    """Inspect every upload_artifacts.py call site for the wire-level enum."""
+
+    violations: list[str] = []
+    workflows = root / ".github" / "workflows"
+    for path in sorted(workflows.glob("*.yml")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if "upload_artifacts.py" not in line:
+                continue
+            invocation = " ".join(lines[index : index + 12])
+            match = re.search(r"--platform\s+['\"]?([A-Za-z0-9_.-]+)", invocation)
+            relative = path.relative_to(root)
+            if match is None:
+                violations.append(
+                    f"{relative}:{index + 1} upload call has no literal --platform value"
+                )
+                continue
+            platform = match.group(1)
+            if platform not in CANONICAL_UPLOAD_PLATFORMS:
+                violations.append(
+                    f"{relative}:{index + 1} upload platform {platform!r} is not canonical"
+                )
     return violations
 
 
@@ -252,10 +282,11 @@ def collect_violations(root: Path = ROOT) -> list[str]:
     release = _read(root, ".github/workflows/release.yml")
     preview = _read(root, ".github/workflows/tauri-preview.yml")
     desktop_release = _read(root, ".github/workflows/desktop-release.yml")
-    cross_alpha_release = _read(root, ".github/workflows/v0.0.10-cross-alpha.yml")
+    cross_alpha_release = _read(root, CROSS_ALPHA_WORKFLOW)
     violations.extend(workflow_isolation_violations(release, preview))
     violations.extend(signed_release_violations(release, desktop_release))
     violations.extend(cross_alpha_release_violations(cross_alpha_release))
+    violations.extend(workflow_upload_platform_violations(root))
 
     build_script = _read(root, "scripts/build_tauri_preview.py")
     if 'BUILD_ROOT = ROOT / "build" / "tauri-preview"' not in build_script:
@@ -294,7 +325,7 @@ def main() -> int:
     print(
         "Desktop architecture boundary valid: isolated webview, Rust authority, "
         "Python worker, manual legacy build, fail-closed signed Tauri release, "
-        "and the exact v0.0.10 cross-alpha exception."
+        "and the exact v0.0.11 cross-alpha exception."
     )
     return 0
 

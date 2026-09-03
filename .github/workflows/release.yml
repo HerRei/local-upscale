@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: localsr-legacy-release-${{ github.ref }}
+  group: localsr-macmini-heavy
   cancel-in-progress: false
 
 env:

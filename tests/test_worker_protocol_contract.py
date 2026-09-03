@@ -43,12 +43,12 @@ def test_additive_desktop_metadata_uses_one_version():
 
 
 def test_handshake_and_engine_info_are_language_neutral_envelopes():
-    request = _message(HandshakeRequest(client_name="test-host", client_version="0.0.10-alpha"))
+    request = _message(HandshakeRequest(client_name="test-host", client_version="0.0.11-alpha"))
     assert request == {
         "type": "handshake_request",
         "data": {
             "client_name": "test-host",
-            "client_version": "0.0.10-alpha",
+            "client_version": "0.0.11-alpha",
             "protocol_version": 1,
         },
     }
@@ -57,7 +57,7 @@ def test_handshake_and_engine_info_are_language_neutral_envelopes():
             protocol_version=1,
             minimum_protocol_version=1,
             engine_id="localsr.pytorch-spandrel",
-            engine_version="0.0.10-alpha",
+            engine_version="0.0.11-alpha",
             features=["image", "video_frame"],
             model_formats=[".safetensors"],
             video_engines=["spandrel_image"],

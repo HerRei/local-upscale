@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: localsr-signed-desktop-release-${{ github.ref }}
+  group: localsr-macmini-heavy
   cancel-in-progress: false
 
 env:
@@ -21,10 +21,48 @@ env:
   PYINSTALLER_VERSION: "6.22.2"
 
 jobs:
+  preflight:
+    name: Preflight signed ${{ matrix.platform }} runner
+    if: github.ref_name != 'v0.0.11-alpha'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: '["self-hosted","Linux","X64","localsr-linux-builder"]'
+          - platform: windows
+            runner: '["self-hosted","Windows","X64","localsr-windows-builder"]'
+          - platform: macos
+            runner: '["self-hosted","macOS","ARM64"]'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify Linux release prerequisites
+        if: runner.os == 'Linux'
+        run: python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /ci-scratch --scratch-min-free-gib 15 --require-tool python3 --require-tool curl --require-tool git
+      - name: Verify Windows release prerequisites
+        if: runner.os == 'Windows'
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          ./scripts/ensure_windows_vc_runtime.ps1
+          ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
+          py -3.11 scripts/release_runner_preflight.py --server $env:CI_ARTIFACT_SERVER --platform windows --scratch-path C:\ --scratch-min-free-gib 20 --require-tool py --require-tool git
+      - name: Verify native Apple-Silicon release prerequisites
+        if: runner.os == 'macOS'
+        run: |
+          test "$(uname -m)" = arm64
+          python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" \
+            --platform macos --scratch-path /Volumes/CISCRATCH --scratch-min-free-gib 10 \
+            --require-tool python3 --require-tool git --require-tool codesign --require-tool xcrun
+
   build-linux:
     name: Build Linux x86_64 AppImage
-    if: github.ref_name != 'v0.0.10-alpha'
-    runs-on: [self-hosted, Linux, X64]
+    if: github.ref_name != 'v0.0.11-alpha'
+    needs: [preflight]
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 240
     env:
       PIP_CACHE_DIR: /ci-scratch/cache/pip
@@ -45,8 +83,12 @@ jobs:
           components: clippy,rustfmt
       - name: Allocate bounded SSD working storage
         run: |
-          ROOT="/ci-scratch/localsr-tauri-release/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/linux"
-          mkdir -p "$ROOT/tmp" "$ROOT/staging" /ci-scratch/cache/pip
+          python3 scripts/release_scratch.py init --root /ci-scratch
+          python3 scripts/release_scratch.py cleanup --root /ci-scratch
+          ROOT=$(python3 scripts/release_scratch.py start --root /ci-scratch \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --platform linux --flavor signed-tauri)
+          mkdir -p /ci-scratch/cache/pip
           python3 scripts/storage_preflight.py --ssd-path /ci-scratch --skip-hdd --ssd-peak-gib 8
           "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
@@ -88,7 +130,7 @@ jobs:
           python scripts/build_tauri_preview.py --skip-checks --require-signing --bundles appimage
           SOURCE=$(find "$CARGO_TARGET_DIR/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage')
           test "$(printf '%s\n' "$SOURCE" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
-          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage"
+          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.11-alpha-Linux-x86_64.AppImage"
           cp "$SOURCE" "$ARTIFACT"
           chmod +x "$ARTIFACT"
           python scripts/smoke_tauri_installer.py \
@@ -109,21 +151,25 @@ jobs:
         env:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
-          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.10-alpha-Linux-x86_64.AppImage"
+          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.11-alpha-Linux-x86_64.AppImage"
           python scripts/upload_artifacts.py --server "$CI_ARTIFACT_SERVER" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform tauri-linux \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform linux \
             "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
-      - name: Remove bounded Linux scratch
+      - name: Finalize bounded Linux scratch
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
-          if [[ "${LOCALSR_TAURI_ROOT:-}" == /ci-scratch/localsr-tauri-release/*/linux ]]; then
-            rm -rf -- "$LOCALSR_TAURI_ROOT"
+          if [[ -n "${LOCALSR_TAURI_ROOT:-}" && -f "$LOCALSR_TAURI_ROOT/.localsr-release-run.json" ]]; then
+            python3 scripts/release_scratch.py finish --root /ci-scratch \
+              --target "$LOCALSR_TAURI_ROOT" --status "$JOB_STATUS" --retain-hours 48
           fi
 
   build-windows:
     name: Build signed Windows x86_64 installer
-    if: github.ref_name != 'v0.0.10-alpha'
-    runs-on: [self-hosted, Windows, X64]
+    if: github.ref_name != 'v0.0.11-alpha'
+    needs: [build-linux]
+    runs-on: [self-hosted, Windows, X64, localsr-windows-builder]
     timeout-minutes: 240
     defaults:
       run:
@@ -144,7 +190,13 @@ jobs:
           arch: x64
       - name: Allocate bounded Windows working storage
         run: |
-          $root = "C:\lsr-ci\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\tauri-release"
+          py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $root = "C:\lsr-ci\runs\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\windows\signed-tauri"
+          py -3.11 scripts/release_scratch.py start --root C:\lsr-ci --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --flavor signed-tauri
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $venv = Join-Path $root "venv"
           $tmp = Join-Path $root "tmp"
           New-Item -ItemType Directory -Force -Path $tmp, (Join-Path $root "staging") | Out-Null
@@ -196,7 +248,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $sources = @(Get-ChildItem -Path (Join-Path $env:CARGO_TARGET_DIR 'release\bundle\nsis') -Filter '*.exe' -File)
           if ($sources.Count -ne 1) { throw "Expected one NSIS installer, found $($sources.Count)" }
-          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT 'staging\LocalSR-v0.0.10-alpha-Windows-x86_64.exe'
+          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT 'staging\LocalSR-v0.0.11-alpha-Windows-x86_64.exe'
           Copy-Item -LiteralPath $sources[0].FullName -Destination $artifact
           python scripts/smoke_tauri_installer.py --artifact-glob $artifact --report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -209,22 +261,25 @@ jobs:
         env:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
-          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT 'staging\LocalSR-v0.0.10-alpha-Windows-x86_64.exe'
-          python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform tauri-windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
+          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT 'staging\LocalSR-v0.0.11-alpha-Windows-x86_64.exe'
+          python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Remove the imported certificate and bounded scratch
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
           if ($env:LOCALSR_IMPORTED_CERTIFICATE) {
             Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:LOCALSR_IMPORTED_CERTIFICATE" -Force -ErrorAction SilentlyContinue
           }
-          if ($env:LOCALSR_TAURI_ROOT -like 'C:\lsr-ci\*\tauri-release' -and (Test-Path -LiteralPath $env:LOCALSR_TAURI_ROOT)) {
-            Remove-Item -LiteralPath $env:LOCALSR_TAURI_ROOT -Recurse -Force
+          if ($env:LOCALSR_TAURI_ROOT -and (Test-Path -LiteralPath (Join-Path $env:LOCALSR_TAURI_ROOT '.localsr-release-run.json'))) {
+            py -3.11 scripts/release_scratch.py finish --root C:\lsr-ci --target $env:LOCALSR_TAURI_ROOT --status $env:JOB_STATUS --retain-hours 48 --secret release-certificate.pfx
           }
 
   build-macos-arm64:
     name: Build signed and notarized macOS ARM64 DMG
-    if: github.ref_name != 'v0.0.10-alpha'
+    if: github.ref_name != 'v0.0.11-alpha'
+    needs: [build-windows]
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 300
     env:
@@ -251,8 +306,12 @@ jobs:
           python3 -c 'import platform; assert platform.machine() == "arm64", platform.machine()'
       - name: Allocate bounded guest SSD working storage
         run: |
-          ROOT="/Volumes/CISCRATCH/localsr-tauri-release/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/macos-arm64"
-          mkdir -p "$ROOT/tmp" "$ROOT/staging" /Volumes/CISCRATCH/cache/pip
+          python3 scripts/release_scratch.py init --root /Volumes/CISCRATCH
+          python3 scripts/release_scratch.py cleanup --root /Volumes/CISCRATCH
+          ROOT=$(python3 scripts/release_scratch.py start --root /Volumes/CISCRATCH \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --platform macos --flavor signed-arm64)
+          mkdir -p /Volumes/CISCRATCH/cache/pip
           python3 scripts/storage_preflight.py --ssd-path /Volumes/CISCRATCH --skip-hdd --ssd-peak-gib 10
           /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv "$ROOT/venv"
           {
@@ -287,7 +346,7 @@ jobs:
           python scripts/build_tauri_preview.py --skip-checks --require-signing --bundles dmg
           SOURCE=$(find "$CARGO_TARGET_DIR/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg')
           test "$(printf '%s\n' "$SOURCE" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
-          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.10-alpha-macOS-arm64.dmg"
+          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.11-alpha-macOS-arm64.dmg"
           cp "$SOURCE" "$ARTIFACT"
           python scripts/smoke_tauri_installer.py --artifact-glob "$ARTIFACT" \
             --report "$LOCALSR_TAURI_ROOT/staging/package-smoke.json"
@@ -304,22 +363,46 @@ jobs:
         env:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
-          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.10-alpha-macOS-arm64.dmg"
+          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.11-alpha-macOS-arm64.dmg"
           python scripts/upload_artifacts.py --server "$CI_ARTIFACT_SERVER" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform tauri-macos \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform macos \
             "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
-      - name: Remove bounded macOS scratch
+      - name: Finalize bounded macOS scratch
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
-          if [[ "${LOCALSR_TAURI_ROOT:-}" == /Volumes/CISCRATCH/localsr-tauri-release/*/macos-arm64 ]]; then
-            rm -rf -- "$LOCALSR_TAURI_ROOT"
+          if [[ -n "${LOCALSR_TAURI_ROOT:-}" && -f "$LOCALSR_TAURI_ROOT/.localsr-release-run.json" ]]; then
+            python3 scripts/release_scratch.py finish --root /Volumes/CISCRATCH \
+              --target "$LOCALSR_TAURI_ROOT" --status "$JOB_STATUS" --retain-hours 48
           fi
+
+  verify-release-matrix:
+    name: Verify complete signed release matrix
+    if: github.ref_name != 'v0.0.11-alpha'
+    needs: [build-macos-arm64]
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify all package and private evidence before publication
+        run: |
+          RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"
+          OUTPUT="$RUN_ROOT/$GITHUB_RUN_ATTEMPT/tauri-signed-rehearsal"
+          TAG="${GITHUB_REF_NAME:-v0.0.11-alpha}"
+          if [[ "$TAG" != v* ]]; then TAG=v0.0.11-alpha; fi
+          "$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py "$RUN_ROOT" \
+            --manifest ci/tauri-release-artifacts.json --readiness ci/beta-readiness.json \
+            --tag "$TAG" --commit "$GITHUB_SHA" --output "$OUTPUT" --verification-only
+          test "$(wc -l < "$OUTPUT/release-files.txt" | tr -d ' ')" = 5
 
   publish-release:
     name: Publish compact immutable prerelease
-    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v0.0.10-alpha'
-    needs: [build-linux, build-windows, build-macos-arm64]
-    runs-on: [self-hosted, Linux, X64]
+    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v0.0.11-alpha'
+    needs: [verify-release-matrix]
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     permissions:
       contents: write
     env:
@@ -334,27 +417,14 @@ jobs:
           OUTPUT="$RUN_ROOT/$GITHUB_RUN_ATTEMPT/tauri-release-assets"
           "$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py "$RUN_ROOT" \
             --manifest ci/tauri-release-artifacts.json --readiness ci/beta-readiness.json \
-            --tag "$GITHUB_REF_NAME" --output "$OUTPUT"
+            --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --output "$OUTPUT"
           echo "LOCALSR_RELEASE_OUTPUT=$OUTPUT" >> "$GITHUB_ENV"
-      - name: Create, verify, and publish an immutable prerelease
+      - name: Create or resume, verify, and publish an immutable prerelease
         run: |
           TAG="$GITHUB_REF_NAME"
           TITLE="LocalSR $TAG"
           NOTES_FILE="docs/releases/$TAG.md"
           test -f "$NOTES_FILE"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; published alpha releases are immutable. Bump the version." >&2
-            exit 1
-          fi
-          gh release create "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE" \
-            --verify-tag --prerelease --draft
-          while IFS= read -r asset; do
-            gh release upload "$TAG" "$asset"
-          done < "$LOCALSR_RELEASE_OUTPUT/release-files.txt"
-          VERIFY="$LOCALSR_RELEASE_OUTPUT/download-verification"
-          mkdir -p "$VERIFY"
-          gh release download "$TAG" --dir "$VERIFY"
-          test "$(find "$VERIFY" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
-          (cd "$VERIFY" && sha256sum --check SHA256SUMS)
-          gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE" \
-            --draft=false --prerelease
+          "$HOME/.venv-ci/bin/python3.11" scripts/publish_tauri_release.py \
+            --tag "$TAG" --commit "$GITHUB_SHA" --title "$TITLE" \
+            --notes "$NOTES_FILE" --output "$LOCALSR_RELEASE_OUTPUT"

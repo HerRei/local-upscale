@@ -17,7 +17,7 @@ EXPECTED_LIVE_MODELS = {
     "Best": "realplksr_nomoswebphoto_x4",
 }
 SIGNED_POLICY = "production-signed"
-CROSS_ALPHA_POLICY = "v0.0.10-cross-alpha-exception"
+CROSS_ALPHA_POLICY = "v0.0.11-cross-alpha-exception"
 
 
 def sha256(path: Path) -> str:
@@ -99,8 +99,8 @@ def release_policy(
         return policy
     if policy != CROSS_ALPHA_POLICY:
         raise ValueError(f"unsupported release policy {policy!r}")
-    if version != "0.0.10-alpha":
-        raise ValueError("the unsigned cross-build exception is restricted to v0.0.10-alpha")
+    if version != "0.0.11-alpha":
+        raise ValueError("the unsigned cross-build exception is restricted to v0.0.11-alpha")
     if readiness is None or readiness.get("beta_ready") is not False:
         raise ValueError("the unsigned cross-build exception must be explicitly non-beta")
     return policy
@@ -125,7 +125,7 @@ def validate_signing_evidence(
         raise ValueError("incomplete Authenticode evidence")
     if expected in {"ad-hoc-alpha", "unsigned-alpha"}:
         if policy != CROSS_ALPHA_POLICY or platform not in {"macos", "windows"}:
-            raise ValueError("unsigned evidence is allowed only by the v0.0.10 cross-alpha policy")
+            raise ValueError("unsigned evidence is allowed only by the v0.0.11 cross-alpha policy")
         if signing.get("production_signed") is not False or not signing.get("warning"):
             raise ValueError("unsigned alpha evidence must record its warning and unsigned state")
     return signing
@@ -156,6 +156,9 @@ def prepare(
     tag: str,
     output: Path,
     readiness_path: Path | None = None,
+    *,
+    expected_commit: str | None = None,
+    verification_only: bool = False,
 ) -> Path:
     manifest = load_json(manifest_path)
     if manifest.get("schema_version") != 1:
@@ -175,6 +178,8 @@ def prepare(
     bundles: list[dict[str, object]] = []
     digests: set[str] = set()
     live_model_evidence: dict[str, object] | None = None
+    release_commit = ""
+    source_matrix: dict[str, dict[str, object]] = {}
     for raw_entry in entries:
         if not isinstance(raw_entry, dict):
             raise ValueError("release manifest artifact entries must be objects")
@@ -206,6 +211,31 @@ def prepare(
         for key, value in expected.items():
             if metadata.get(key) != value:
                 raise ValueError(f"{filename} metadata {key!r} does not match manifest")
+        commit = str(metadata.get("repository_commit", ""))
+        if not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise ValueError(f"{filename} has no valid repository commit evidence")
+        if release_commit and commit != release_commit:
+            raise ValueError(f"release matrix mixes commits: {release_commit} and {commit}")
+        release_commit = commit
+        attempt = str(metadata.get("run_attempt", ""))
+        if not attempt.isdigit():
+            raise ValueError(f"{filename} has no valid workflow-attempt evidence")
+        run_id = str(metadata.get("github_run_id", ""))
+        if not run_id.isdigit():
+            raise ValueError(f"{filename} has no valid workflow-run evidence")
+        if root.name.isdigit() and root.name != run_id:
+            raise ValueError(f"{filename} run metadata {run_id} does not match storage root")
+        if source.parent.parent.name.isdigit() and source.parent.parent.name != attempt:
+            raise ValueError(f"{filename} attempt metadata {attempt} does not match storage path")
+        if source.parent.parent.name.isdigit() and source.parent.name != entry["platform"]:
+            raise ValueError(f"{filename} platform storage path does not match manifest")
+        source_matrix[str(entry["platform"])] = {
+            "run_id": int(run_id),
+            "attempt": int(attempt),
+            "commit": commit,
+            "filename": filename,
+            "sha256": digest,
+        }
         try:
             smoke = validate_smoke_evidence(
                 str(entry["platform"]), metadata.get("package_smoke"), policy
@@ -253,7 +283,11 @@ def prepare(
                     raise ValueError(f"{filename} has malformed real model evidence")
             live_model_evidence = live_models
 
-        shutil.copy2(source, output / filename)
+        destination = output / filename
+        if destination.exists() and sha256(destination) != digest:
+            raise ValueError(f"refusing to overwrite conflicting prepared asset {filename}")
+        if not destination.exists():
+            shutil.copy2(source, destination)
         bundles.append(
             entry
             | {
@@ -274,16 +308,41 @@ def prepare(
         "generated_at": datetime.now(UTC).isoformat(),
         "channel": "alpha",
         "release_policy": policy,
+        "repository_commit": release_commit,
+        "source_matrix": source_matrix,
         "beta_ready": False,
         "live_model_evidence": live_model_evidence,
         "installers": bundles,
     }
     if live_model_evidence is None:
         raise ValueError("the release has no real Quick/Best empty-cache inference evidence")
+    if expected_commit is not None:
+        if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+            raise ValueError("expected release commit must be a lowercase 40-character SHA")
+        if release_commit != expected_commit:
+            raise ValueError(
+                f"release matrix commit {release_commit} does not match {expected_commit}"
+            )
+    index["verification_only"] = verification_only
     if readiness:
         index["beta_readiness"] = readiness
     index_path = output / "release-index.json"
     index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output / "matrix-selection.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "release_tag": tag,
+                "version": version,
+                "repository_commit": release_commit,
+                "platforms": source_matrix,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     files = [str(output / str(item["filename"])) for item in bundles]
     files.extend([str(output / "SHA256SUMS"), str(index_path)])
     (output / "release-files.txt").write_text("\n".join(files) + "\n", encoding="utf-8")
@@ -297,6 +356,8 @@ def main() -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--readiness", type=Path, required=True)
+    parser.add_argument("--commit")
+    parser.add_argument("--verification-only", action="store_true")
     args = parser.parse_args()
     path = prepare(
         args.root.resolve(),
@@ -304,6 +365,8 @@ def main() -> int:
         args.tag,
         args.output.resolve(),
         args.readiness.resolve(),
+        expected_commit=args.commit,
+        verification_only=args.verification_only,
     )
     print(path)
     return 0

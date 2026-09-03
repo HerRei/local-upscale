@@ -1,6 +1,6 @@
-# Known limitations — v0.0.10-alpha
+# Known limitations — v0.0.11-alpha
 
-- The next host has one uncomplicated installer per operating system, but v0.0.10-alpha is a
+- The next host has one uncomplicated installer per operating system, but v0.0.11-alpha is a
   testing-only unsigned exception: macOS is ad-hoc sealed and Windows lacks Authenticode. Production
   signing, notarization, stapling, and trust validation remain mandatory before beta.
 - The Apple-Silicon DMG is Intel→ARM cross-built on the Mac mini with PyTorch 2.2.2, the last line

@@ -69,28 +69,43 @@ def test_cross_alpha_release_must_remain_exact_and_non_overwriting() -> None:
         "  contents: write\nrun: gh release upload --clobber\n"
     )
 
-    assert any("exact v0.0.10 tag" in violation for violation in violations)
+    assert any("exact v0.0.11 tag" in violation for violation in violations)
     assert any("must not overwrite" in violation for violation in violations)
-    assert any("only the v0.0.10" in violation for violation in violations)
+    assert any("only the v0.0.11" in violation for violation in violations)
 
 
-def test_cross_alpha_uses_supported_artifact_transfer_platforms() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "v0.0.10-cross-alpha.yml").read_text()
-
-    assert "--platform tauri-alpha-" not in workflow
-    assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform linux \\' in workflow
-    assert "--attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact" in workflow
-    assert '--attempt "$GITHUB_RUN_ATTEMPT" --platform macos \\' in workflow
+def test_every_workflow_upload_uses_the_canonical_platform_contract() -> None:
+    assert architecture.workflow_upload_platform_violations(ROOT) == []
 
 
 def test_publish_jobs_combine_attempts_and_use_the_provisioned_python() -> None:
-    for workflow_name in ("desktop-release.yml", "v0.0.10-cross-alpha.yml"):
+    for workflow_name in ("desktop-release.yml", "v0.0.11-cross-alpha.yml"):
         workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
 
         assert 'RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"' in workflow
         assert '"$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py' in workflow
         assert 'ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"' not in workflow
         assert "\n          python scripts/prepare_tauri_release_assets.py" not in workflow
+
+
+def test_v0011_tag_has_one_exclusive_unsigned_publisher() -> None:
+    signed = (ROOT / ".github/workflows/desktop-release.yml").read_text()
+    cross = (ROOT / ".github/workflows/v0.0.11-cross-alpha.yml").read_text()
+
+    assert '      - "v0.0.11-alpha"' in cross
+    assert "github.ref == 'refs/tags/v0.0.11-alpha'" in cross
+    assert signed.count("github.ref_name != 'v0.0.11-alpha'") >= 4
+    assert "v0.0.11-alpha" not in (ROOT / ".github/workflows/release.yml").read_text()
+
+
+def test_cross_build_pair_is_exact_and_excluded_from_dependabot() -> None:
+    requirements = (ROOT / "requirements/macos-cross-v0.0.11-alpha.txt").read_text()
+    dependabot = (ROOT / ".github/dependabot.yml").read_text()
+
+    assert requirements.count("torch==2.2.2") == 1
+    assert requirements.count("torchvision==0.17.2") == 1
+    assert "v0.0.11-alpha" in requirements
+    assert '"requirements/macos-cross-v0.0.11-alpha.txt"' in dependabot
 
 
 def test_tauri_preview_keeps_the_linux_cargo_cache_off_the_small_root_ssd() -> None:

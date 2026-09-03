@@ -46,21 +46,21 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     if {str(desktop_package.get("version")), str(tauri.get("version")), cargo_version} != {version}:
         failures.append("npm, Tauri, Cargo, and Python release versions do not match")
 
-    desktop_manifest = json.loads(
-        (root / "ci/tauri-release-artifacts.json").read_text(encoding="utf-8")
-    )
-    if desktop_manifest.get("version") != version:
-        failures.append("Tauri release artifact manifest version does not match")
     expected_installers = {
         f"LocalSR-v{version}-macOS-arm64.dmg",
         f"LocalSR-v{version}-Windows-x86_64.exe",
         f"LocalSR-v{version}-Linux-x86_64.AppImage",
     }
-    actual_installers = {
-        str(item.get("filename")) for item in desktop_manifest.get("artifacts", [])
-    }
-    if actual_installers != expected_installers:
-        failures.append("Tauri release installer names do not match the synchronized version")
+    for relative, label in (
+        ("ci/tauri-release-artifacts.json", "signed Tauri"),
+        ("ci/tauri-cross-alpha-artifacts.json", "cross-alpha Tauri"),
+    ):
+        manifest = json.loads((root / relative).read_text(encoding="utf-8"))
+        if manifest.get("version") != version:
+            failures.append(f"{label} artifact manifest version does not match")
+        actual_installers = {str(item.get("filename")) for item in manifest.get("artifacts", [])}
+        if actual_installers != expected_installers:
+            failures.append(f"{label} installer names do not match the synchronized version")
 
     spec = (root / "packaging/localsr.spec").read_text(encoding="utf-8")
     expected_bundle_fields = {
@@ -72,18 +72,28 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
         if f'"{field}": {variable}' not in spec:
             failures.append(f"macOS bundle field {field} is not derived from {variable}")
 
-    workflow = (root / ".github/workflows/desktop-release.yml").read_text(encoding="utf-8")
-    if "--prerelease" not in workflow:
-        failures.append("release workflow never passes --prerelease")
-    if 'TITLE="LocalSR $TAG"' not in workflow:
-        failures.append("release workflow title is not derived from the tag")
-    for installer in expected_installers:
-        if installer not in workflow:
-            failures.append(f"release workflow does not stage {installer}")
+    for relative, label in (
+        (".github/workflows/desktop-release.yml", "signed release workflow"),
+        (f".github/workflows/v{version.split('-')[0]}-cross-alpha.yml", "cross-alpha workflow"),
+    ):
+        path = root / relative
+        if not path.is_file():
+            failures.append(f"{label} is missing: {relative}")
+            continue
+        workflow = path.read_text(encoding="utf-8")
+        if "publish_tauri_release.py" not in workflow and "--prerelease" not in workflow:
+            failures.append(f"{label} has no prerelease-only publisher")
+        if 'TITLE="LocalSR $TAG"' not in workflow:
+            failures.append(f"{label} title is not derived from the tag")
+        for installer in expected_installers:
+            if installer not in workflow:
+                failures.append(f"{label} does not stage {installer}")
 
     docs = (root / "docs/releasing.md").read_text(encoding="utf-8")
     if expected_tag not in docs:
         failures.append(f"release documentation does not identify {expected_tag}")
+    if not (root / "docs/releases" / f"{expected_tag}.md").is_file():
+        failures.append(f"release notes are missing for {expected_tag}")
 
     if failures:
         raise ValueError("Release version mismatch:\n- " + "\n- ".join(failures))

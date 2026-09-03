@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release": "0.0.10-alpha",
+  "release": "0.0.11-alpha",
   "beta_ready": false,
   "gates": [
     {
@@ -12,19 +12,19 @@
     {
       "id": "macos-production-trust",
       "status": "waiting-credentials",
-      "summary": "The testing-only v0.0.10 alpha is ad-hoc sealed. Beta requires Developer ID signing, notarization, stapling, Gatekeeper verification, and a maintained native ARM64 build path; those credentials and runner are absent.",
+      "summary": "The testing-only v0.0.11 alpha is ad-hoc sealed. Beta requires Developer ID signing, notarization, stapling, Gatekeeper verification, and a maintained native ARM64 build path; those credentials and runner are absent.",
       "next_action": "Provide the documented Apple Developer credentials, then verify the downloaded artifact on a separate Mac."
     },
     {
       "id": "windows-production-trust",
       "status": "waiting-credentials",
-      "summary": "The testing-only v0.0.10 alpha is unsigned on Windows. Beta requires a timestamped Authenticode signature, but the certificate secrets are absent.",
+      "summary": "The testing-only v0.0.11 alpha is unsigned on Windows. Beta requires a timestamped Authenticode signature, but the certificate secrets are absent.",
       "next_action": "Choose a certificate provider and configure the documented PFX, password, thumbprint, and timestamp secrets."
     },
     {
       "id": "legacy-runtime-support",
       "status": "decision-required",
-      "summary": "The v0.0.10 Apple-Silicon alpha temporarily ships the known-debt PyTorch 2.2.2 cross-build. Beta requires a maintained native ARM runtime. Intel macOS and Microsoft's PyTorch-2.4.1-constrained DirectML path remain unresolved.",
+      "summary": "The v0.0.11 Apple-Silicon alpha temporarily ships the known-debt PyTorch 2.2.2 cross-build. Beta requires a maintained native ARM runtime. Intel macOS and Microsoft's PyTorch-2.4.1-constrained DirectML path remain unresolved.",
       "next_action": "Decide whether Intel remains viable and whether DirectML should wait for a maintained runtime, move to a different backend, or remain excluded from beta."
     },
     {

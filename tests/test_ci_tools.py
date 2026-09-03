@@ -40,6 +40,8 @@ macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 release_version = load_script(ROOT / "scripts" / "check_release_version.py")
 beta_readiness = load_script(ROOT / "scripts" / "check_beta_readiness.py")
+runner_preflight = load_script(ROOT / "scripts" / "release_runner_preflight.py")
+release_scratch = load_script(ROOT / "scripts" / "release_scratch.py")
 
 
 def thin_macho(cpu: int) -> bytes:
@@ -156,12 +158,12 @@ def test_release_verifier_rejects_duplicate_archive_digests():
 
 
 def test_release_metadata_is_synchronized():
-    assert release_version.check("v0.0.10-alpha", ROOT) == "0.0.10-alpha"
+    assert release_version.check("v0.0.11-alpha", ROOT) == "0.0.11-alpha"
 
 
 def test_beta_readiness_register_is_valid_and_honest():
     data = beta_readiness.validate(ROOT / "ci" / "beta-readiness.json", ROOT)
-    assert data["release"] == "0.0.10-alpha"
+    assert data["release"] == "0.0.11-alpha"
     assert data["beta_ready"] is False
     statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
     assert statuses["automated-release-integrity"] == "automated-pass"
@@ -480,6 +482,84 @@ def test_storage_preflight_includes_peak_and_reserve(monkeypatch: pytest.MonkeyP
         lambda _path: (1000, 500, 500),
     )
     assert not preflight.status_for("SSD", Path("."), 25, 200, 300).passed
+
+
+def test_release_runner_preflight_validates_receiver_shape_and_reserve():
+    healthy = {
+        "status": "ok",
+        "free_bytes": 500,
+        "free_percent": 40.0,
+        "timestamp": "2026-09-03T00:00:00+00:00",
+    }
+    assert (
+        runner_preflight.validate_health(healthy, minimum_free_bytes=400, minimum_free_percent=20)
+        == healthy
+    )
+    with pytest.raises(RuntimeError, match="reserve is too low"):
+        runner_preflight.validate_health(healthy, minimum_free_bytes=600, minimum_free_percent=20)
+    with pytest.raises(ValueError, match="free_percent"):
+        runner_preflight.validate_health(
+            healthy | {"free_percent": "unknown"},
+            minimum_free_bytes=1,
+            minimum_free_percent=1,
+        )
+
+
+def test_release_runner_preflight_rejects_missing_tools_and_noncanonical_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(runner_preflight.shutil, "disk_usage", lambda _path: (1000, 100, 900))
+    monkeypatch.setattr(
+        runner_preflight.shutil,
+        "which",
+        lambda name: "/usr/bin/python3" if name == "python3" else None,
+    )
+    assert (
+        runner_preflight.validate_runner("linux", tmp_path, 800, ["python3"])["platform"] == "linux"
+    )
+    with pytest.raises(RuntimeError, match="missing required tools: cargo"):
+        runner_preflight.validate_runner("linux", tmp_path, 800, ["cargo"])
+    with pytest.raises(ValueError, match="unsupported release platform"):
+        runner_preflight.validate_runner("tauri-linux", tmp_path, 1, [])
+
+
+def test_release_scratch_cleans_success_and_retains_failures_for_48_hours(
+    tmp_path: Path,
+):
+    root = tmp_path / "ci-scratch"
+    successful = release_scratch.start(root, "12", "1", "linux", "alpha")
+    (successful / "staging" / "report.json").write_text("{}", encoding="utf-8")
+    assert release_scratch.finish(successful, root, "success") is None
+    assert not successful.exists()
+
+    failed = release_scratch.start(root, "12", "2", "windows", "alpha")
+    (failed / "release-certificate.pfx").write_bytes(b"secret")
+    retained = release_scratch.finish(
+        failed,
+        root,
+        "failure",
+        secrets=["release-certificate.pfx"],
+    )
+    assert retained == failed
+    assert not (failed / "release-certificate.pfx").exists()
+    marker = json.loads((failed / ".retained.json").read_text(encoding="utf-8"))
+    assert marker["status"] == "failure"
+    assert marker["contains_secrets"] is False
+    assert marker["expires_at"] > marker["retained_at"]
+
+
+def test_release_scratch_rejects_broad_and_unowned_cleanup_targets(tmp_path: Path):
+    with pytest.raises(ValueError, match="unmanaged"):
+        release_scratch.managed_root(tmp_path, initialize=True)
+    root = tmp_path / "ci-scratch"
+    target = release_scratch.start(root, "9", "1", "linux", "alpha")
+    outside = tmp_path / "unrelated"
+    outside.mkdir()
+    with pytest.raises(ValueError, match="outside managed runs"):
+        release_scratch.finish(outside, root, "success")
+    (target / release_scratch.RUN_MARKER).unlink()
+    with pytest.raises(ValueError, match="ownership marker"):
+        release_scratch.finish(target, root, "success")
 
 
 def test_cross_wheel_pair_is_merged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
