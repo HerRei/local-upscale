@@ -4,8 +4,10 @@
   testing-only unsigned exception: macOS is ad-hoc sealed and Windows lacks Authenticode. Production
   signing, notarization, stapling, and trust validation remain mandatory before beta.
 - The Apple-Silicon DMG is Intel→ARM cross-built on the Mac mini with PyTorch 2.2.2, the last line
-  with paired Intel/ARM wheels. It is known security debt and may not be promoted to beta. A native
-  maintained ARM runtime and the long-term Intel-support decision remain open.
+  with paired Intel/ARM wheels. It is known security debt and the paired Labs video runtime also
+  carries Diffusers 0.35.2 advisories. LocalSR never enables Diffusers remote custom pipelines,
+  but this package may not be promoted to beta. A native maintained ARM runtime and the long-term
+  Intel-support decision remain open.
 - The v0.0.11 installers bundle only CPU inference on Windows/Linux and MPS on Apple Silicon. CUDA,
   DirectML, Intel XPU, and ROCm remain worker capabilities under development; none is shipped or
   advertised as a supported v0.0.11 backend. Downloadable engine packs and physical acceptance are
@@ -29,6 +31,9 @@
   provenance. It does not replace physical GPU/driver acceptance on every advertised device.
 - Future optional GPU engine packs will require compatible hardware, drivers, and a matching,
   separately verified backend archive. They are not included in these three alpha installers.
+- Tauri's current Linux WebKit/GTK3 stack transitively pins `glib` 0.18, which has the
+  `GHSA-wrw7-89jp-8q8g` iterator-soundness advisory. The patched `glib` 0.20 line requires the
+  upstream GTK4 migration rather than a safe lockfile-only update; this remains a beta blocker.
 - The repository and its Issues are private. General-public feedback intake is not available yet.
 - Custom `.safetensors` models are accepted by default. Unverified `.pth`, `.pt`, and `.ckpt`
   models are blocked unless `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` is explicitly set; that escape
