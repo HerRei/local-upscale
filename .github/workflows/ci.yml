@@ -120,7 +120,7 @@ jobs:
             "torch==2.13.0" \
             "torchvision==0.28.0" \
             --index-url https://download.pytorch.org/whl/cpu
-          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
           "$PYTHON" -m pip install --disable-pip-version-check build
           cd "$RUN_ROOT/source"
           "$PYTHON" -m pytest tests/ -v
@@ -181,7 +181,7 @@ jobs:
             "torchvision==0.28.0" `
             --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video]"
+          & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video,face]"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -c "import torch, torchvision; print(f'torch={torch.__version__} torchvision={torchvision.__version__}')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -230,7 +230,7 @@ jobs:
             -m venv "$RUN_ROOT/environment/venv"
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video]"
+          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
           "$PYTHON" -m pip install --disable-pip-version-check pyobjc-framework-Cocoa
           cd "$RUN_ROOT/source"
           "$PYTHON" -m pytest tests/test_platform_integration.py -v

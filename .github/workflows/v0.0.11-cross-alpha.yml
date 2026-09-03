@@ -71,6 +71,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Revalidate release runner immediately before build
+        run: |
+          python3 scripts/release_runner_preflight.py \
+            --server "$CI_ARTIFACT_SERVER" --platform linux \
+            --scratch-path /ci-scratch --scratch-min-free-gib 15 \
+            --require-tool python3 --require-tool curl --require-tool git
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -114,7 +120,7 @@ jobs:
             "torch==${PYTORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
             --index-url https://download.pytorch.org/whl/cpu
           python -m pip install --disable-pip-version-check \
-            -e ".[package,video]" "pyinstaller==${PYINSTALLER_VERSION}"
+            -e ".[package,video,face]" "pyinstaller==${PYINSTALLER_VERSION}"
           python -m pip check
           python -c "import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
           npm ci --prefix desktop
@@ -178,10 +184,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Recheck bounded scratch and signed Microsoft VC++ runtime
+      - name: Revalidate release runner immediately before build
         run: |
           ./scripts/ensure_windows_vc_runtime.ps1
           ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
+          py -3.11 scripts/release_runner_preflight.py --server $env:CI_ARTIFACT_SERVER --platform windows --scratch-path C:\ --scratch-min-free-gib 20 --require-tool py --require-tool git
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -217,7 +224,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m pip install --disable-pip-version-check -e ".[package,video]" "pyinstaller==$env:PYINSTALLER_VERSION"
+          python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==$env:PYINSTALLER_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -271,6 +278,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Revalidate release runner immediately before build
+        run: |
+          python3 scripts/release_runner_preflight.py \
+            --server "$CI_ARTIFACT_SERVER" --platform macos \
+            --scratch-path "$CI_SCRATCH" --scratch-min-free-gib 6 \
+            --require-tool python3 --require-tool curl --require-tool git \
+            --require-tool lipo --require-tool codesign --require-tool hdiutil
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -286,13 +300,14 @@ jobs:
       - name: Allocate bounded guest SSD working storage
         id: scratch
         run: |
-          python3 scripts/ci_scratch.py init --root "$CI_SCRATCH"
-          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH" --cache-max-gib 2
+          python3 scripts/release_scratch.py init --root "$CI_SCRATCH"
+          python3 scripts/release_scratch.py cleanup --root "$CI_SCRATCH"
           python3 scripts/storage_preflight.py \
             --ssd-path "$CI_SCRATCH" --skip-hdd --ssd-min-percent 20 --ssd-min-gib 6 --ssd-peak-gib 15
-          python3 scripts/ci_scratch.py start \
+          RUN_ROOT=$(python3 scripts/release_scratch.py start \
             --root "$CI_SCRATCH" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
-            --platform macos --flavor tauri-v0.0.11-cross-alpha --github-output "$GITHUB_OUTPUT"
+            --platform macos --flavor tauri-v0.0.11-cross-alpha)
+          echo "run_root=$RUN_ROOT" >> "$GITHUB_OUTPUT"
       - name: Copy the working set to the guest SSD
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
@@ -348,7 +363,7 @@ jobs:
           cp "$SOURCE" "$ARTIFACT"
           "$PYTHON" scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform macos --architecture arm64 --report "$ARTIFACT.architecture.json"
-          "$PYTHON" -c 'import json,sys; open(sys.argv[1],"w").write(json.dumps({"passed":False,"mode":"cross-build-static","static_verified":True,"runtime_tested":False,"reason":"Intel Mac mini cannot execute ARM64 and no accessible physical Apple-Silicon runner is registered; static package evidence only."},indent=2)+"\n")' \
+          "$PYTHON" -c 'import json,sys; open(sys.argv[1],"w").write(json.dumps({"passed":False,"mode":"cross-build-static","version":"0.0.11-alpha","architecture":"arm64","static_verified":True,"runtime_tested":False,"reason":"Intel Mac mini cannot execute ARM64 and no accessible physical Apple-Silicon runner is registered; static package evidence only."},indent=2)+"\n")' \
             "$RUN_ROOT/staging/package-smoke.json"
           "$PYTHON" scripts/write_alpha_signing_report.py \
             --platform macos --output "$RUN_ROOT/staging/signing-report.json"
@@ -369,17 +384,15 @@ jobs:
             --server "$CI_ARTIFACT_SERVER" --run-id "$GITHUB_RUN_ID" \
             --attempt "$GITHUB_RUN_ATTEMPT" --platform macos \
             "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
-      - name: Remove verified macOS scratch
+      - name: Finalize bounded macOS scratch
         if: always()
         env:
           RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          if [[ "${RUN_ROOT:-}" == /Volumes/CISCRATCH/runs/*/macos/tauri-v0.0.11-cross-alpha ]]; then
-            python3 scripts/ci_scratch.py finish \
-              --root "$CI_SCRATCH" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
-              --platform macos --flavor tauri-v0.0.11-cross-alpha \
-              --status "${{ job.status == 'success' && 'complete' || 'failed' }}" \
-              ${{ job.status == 'success' && '--cleanup' || '' }}
+          if [[ -n "${RUN_ROOT:-}" && -f "$RUN_ROOT/.localsr-release-run.json" ]]; then
+            python3 scripts/release_scratch.py finish --root "$CI_SCRATCH" \
+              --target "$RUN_ROOT" --status "$JOB_STATUS" --retain-hours 48
           fi
 
   verify-release-matrix:

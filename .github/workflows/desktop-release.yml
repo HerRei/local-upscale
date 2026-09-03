@@ -33,7 +33,10 @@ jobs:
           - platform: windows
             runner: '["self-hosted","Windows","X64","localsr-windows-builder"]'
           - platform: macos
-            runner: '["self-hosted","macOS","ARM64"]'
+            # No native ARM64 runner is registered yet. Route to the confirmed
+            # Mac-mini runner so the explicit architecture gate fails quickly
+            # instead of leaving a signed release queued forever.
+            runner: '["self-hosted","macOS","X64","localsr-macos-cross-builder"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
     steps:
@@ -53,7 +56,10 @@ jobs:
       - name: Verify native Apple-Silicon release prerequisites
         if: runner.os == 'macOS'
         run: |
-          test "$(uname -m)" = arm64
+          if [[ "$(uname -m)" != arm64 ]]; then
+            echo "::error::A registered native macOS ARM64 runner is required for signed releases; static cross-build evidence is alpha-only."
+            exit 1
+          fi
           python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" \
             --platform macos --scratch-path /Volumes/CISCRATCH --scratch-min-free-gib 10 \
             --require-tool python3 --require-tool git --require-tool codesign --require-tool xcrun
@@ -70,6 +76,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Revalidate release runner immediately before build
+        run: python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /ci-scratch --scratch-min-free-gib 15 --require-tool python3 --require-tool curl --require-tool git
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -113,7 +121,7 @@ jobs:
             "torch==${PYTORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
             --index-url https://download.pytorch.org/whl/cpu
           python -m pip install --disable-pip-version-check \
-            -e ".[package,video]" "pyinstaller==${PYINSTALLER_VERSION}"
+            -e ".[package,video,face]" "pyinstaller==${PYINSTALLER_VERSION}"
           python -m pip check
           python -c "import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
           npm ci --prefix desktop
@@ -178,6 +186,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Revalidate release runner immediately before build
+        run: |
+          ./scripts/ensure_windows_vc_runtime.ps1
+          ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
+          py -3.11 scripts/release_runner_preflight.py --server $env:CI_ARTIFACT_SERVER --platform windows --scratch-path C:\ --scratch-min-free-gib 20 --require-tool py --require-tool git
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -222,16 +235,18 @@ jobs:
           $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
           $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
           if ($null -eq $certificate) { throw "The Authenticode certificate could not be imported" }
+          # Persist the imported identity before any later validation can fail,
+          # so the always() step removes it even on a thumbprint mismatch.
+          "LOCALSR_IMPORTED_CERTIFICATE=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           $wantedThumbprint = $env:WINDOWS_CERTIFICATE_THUMBPRINT.Replace(' ','').ToUpperInvariant()
           if ($certificate.Thumbprint.ToUpperInvariant() -ne $wantedThumbprint) { throw "Imported certificate thumbprint mismatch" }
-          "LOCALSR_IMPORTED_CERTIFICATE=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install the maintained CPU worker toolchain
         run: |
           python -m pip install --disable-pip-version-check "pip==$env:PIP_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m pip install --disable-pip-version-check -e ".[package,video]" "pyinstaller==$env:PYINSTALLER_VERSION"
+          python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==$env:PYINSTALLER_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -280,7 +295,9 @@ jobs:
     name: Build signed and notarized macOS ARM64 DMG
     if: github.ref_name != 'v0.0.11-alpha'
     needs: [build-windows]
-    runs-on: [self-hosted, macOS, ARM64]
+    # Deliberately uses the registered Mac-mini label until a native ARM64
+    # signing runner is provisioned; the architecture gate below fails closed.
+    runs-on: [self-hosted, macOS, X64, localsr-macos-cross-builder]
     timeout-minutes: 300
     env:
       MACOSX_DEPLOYMENT_TARGET: "12.0"
@@ -289,6 +306,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Revalidate release runner immediately before build
+        run: |
+          if [[ "$(uname -m)" != arm64 ]]; then
+            echo "::error::A registered native macOS ARM64 runner is required for signed releases; static cross-build evidence is alpha-only."
+            exit 1
+          fi
+          python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" \
+            --platform macos --scratch-path /Volumes/CISCRATCH --scratch-min-free-gib 10 \
+            --require-tool python3 --require-tool git --require-tool codesign --require-tool xcrun
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -302,7 +328,10 @@ jobs:
           components: clippy,rustfmt
       - name: Require a genuinely native Apple Silicon runner
         run: |
-          test "$(uname -m)" = arm64
+          if [[ "$(uname -m)" != arm64 ]]; then
+            echo "::error::A registered native macOS ARM64 runner is required for signed releases."
+            exit 1
+          fi
           python3 -c 'import platform; assert platform.machine() == "arm64", platform.machine()'
       - name: Allocate bounded guest SSD working storage
         run: |
@@ -327,7 +356,7 @@ jobs:
           python -m pip install --disable-pip-version-check \
             "torch==${PYTORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"
           python -m pip install --disable-pip-version-check \
-            -e ".[package,video]" "pyinstaller==${PYINSTALLER_VERSION}"
+            -e ".[package,video,face]" "pyinstaller==${PYINSTALLER_VERSION}"
           python -m pip check
           python -c "import diffusers,platform,torch; from packaging.version import Version; assert platform.machine()=='arm64'; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
           npm ci --prefix desktop

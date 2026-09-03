@@ -15,6 +15,9 @@ rawpy==0.25.1
 tifffile==2026.3.3
 av==14.2.0
 slint==1.9.2a1
+# YuNet face detection. 4.10 is the final OpenCV wheel line that preserves
+# macOS 12 support and NumPy 1.x compatibility for this one-release runtime.
+opencv-python-headless==4.10.0.84
 
 # Video remains Labs / Experimental, but the hidden worker still carries the
 # dependencies needed by the existing frame and SeedVR2 code paths.

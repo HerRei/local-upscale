@@ -77,19 +77,102 @@ def test_cross_built_macos_static_smoke_is_never_reported_as_runtime_pass() -> N
     evidence = {
         "passed": False,
         "mode": "cross-build-static",
+        "version": "0.0.11-alpha",
+        "architecture": "arm64",
         "static_verified": True,
         "runtime_tested": False,
+        "reason": "No native Apple-Silicon runner was available.",
     }
     assert (
         prepare_release.validate_smoke_evidence(
-            "macos", evidence, prepare_release.CROSS_ALPHA_POLICY
+            "macos", evidence, prepare_release.CROSS_ALPHA_POLICY, "0.0.11-alpha"
         )
         == evidence
     )
     with pytest.raises(ValueError, match="acceptable"):
         prepare_release.validate_smoke_evidence(
-            "windows", evidence, prepare_release.CROSS_ALPHA_POLICY
+            "windows", evidence, prepare_release.CROSS_ALPHA_POLICY, "0.0.11-alpha"
         )
+
+
+def installed_smoke(version: str) -> dict[str, object]:
+    return {
+        "passed": True,
+        "mode": "headless-installed-host",
+        "version": version,
+        "worker": "ready",
+        "worker_path": "/installed/localsr-worker",
+    }
+
+
+def architecture_evidence(filename: str, architecture: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "artifact": filename,
+        "required_architectures": [architecture],
+        "native_binary_count": 1,
+        "mismatches": [],
+        "result": "PASS",
+    }
+
+
+def test_release_matrix_rejects_weak_smoke_and_architecture_evidence() -> None:
+    with pytest.raises(ValueError, match="acceptable"):
+        prepare_release.validate_smoke_evidence(
+            "linux",
+            {"passed": True},
+            prepare_release.SIGNED_POLICY,
+            "0.0.11-alpha",
+        )
+    with pytest.raises(ValueError, match="different artifact"):
+        prepare_release.validate_architecture_evidence(
+            "LocalSR.AppImage",
+            architecture_evidence("other.AppImage", "x86_64"),
+            "x86_64",
+        )
+
+
+def cross_macos_provenance() -> dict[str, object]:
+    return {
+        "torch_version": "2.2.2",
+        "torch_arm64_wheel": "torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
+        "torch_arm64_sha256": "a" * 64,
+        "universal2_wheel": ("torch-2.2.2-cp311-none-macosx_11_0_arm64.macosx_10_9_x86_64.whl"),
+        "static_evidence": ["wheel", "merge", "Mach-O verification"],
+        "openmp_normalization": {
+            "schema_version": 1,
+            "operation": "pair-torch-openmp-aliases",
+            "source_sha256": {"torch/lib/libiomp5.dylib": "b" * 64},
+            "outputs": [
+                {
+                    "path": f"library-{index}.dylib",
+                    "architectures": ["arm64", "x86_64"],
+                    "sha256": character * 64,
+                }
+                for index, character in enumerate(("c", "d", "e"))
+            ],
+        },
+    }
+
+
+def test_cross_macos_provenance_requires_exact_pins_and_dual_arch_openmp() -> None:
+    evidence = cross_macos_provenance()
+    assert prepare_release.validate_cross_macos_provenance(evidence) == evidence
+    with pytest.raises(ValueError, match="torch 2.2.2"):
+        prepare_release.validate_cross_macos_provenance(evidence | {"torch_version": "2.3.0"})
+    malformed = dict(evidence)
+    malformed["openmp_normalization"] = {
+        **evidence["openmp_normalization"],
+        "outputs": [
+            {
+                "path": "library.dylib",
+                "architectures": ["x86_64"],
+                "sha256": "f" * 64,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="output evidence"):
+        prepare_release.validate_cross_macos_provenance(malformed)
 
 
 def test_reads_x86_64_elf_and_pe_release_containers(tmp_path: Path) -> None:
@@ -256,7 +339,9 @@ def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
                 "timestamped": True,
             }
         metadata = {
+            "schema_version": 1,
             "artifact_filename": artifact.name,
+            "artifact_size": artifact.stat().st_size,
             "sha256": digest,
             "platform": entry["platform"],
             "architecture": entry["architecture"],
@@ -264,7 +349,8 @@ def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
             "repository_commit": "c" * 40,
             "github_run_id": "1",
             "run_attempt": "1",
-            "package_smoke": {"passed": True, "worker": "ready"},
+            "timestamp": "2026-09-03T12:00:00+00:00",
+            "package_smoke": installed_smoke("1-alpha"),
             "signing": signing,
         }
         if entry["platform"] == "linux":
@@ -288,7 +374,8 @@ def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
             json.dumps(metadata), encoding="utf-8"
         )
         artifact.with_name(artifact.name + ".architecture.json").write_text(
-            json.dumps({"result": "PASS", "native_binary_count": 1}), encoding="utf-8"
+            json.dumps(architecture_evidence(artifact.name, str(entry["architecture"]))),
+            encoding="utf-8",
         )
 
     manifest = tmp_path / "manifest.json"
@@ -313,6 +400,11 @@ def test_compacts_exactly_three_verified_installers(tmp_path: Path) -> None:
     }
     assert len((output / "SHA256SUMS").read_text().splitlines()) == 3
     assert len((output / "release-files.txt").read_text().splitlines()) == 5
+    second_output = tmp_path / "output-rerun"
+    prepare_release.prepare(staging, manifest, "v1-alpha", second_output, readiness)
+    assert (output / "release-index.json").read_bytes() == (
+        second_output / "release-index.json"
+    ).read_bytes()
 
 
 def test_rejects_release_without_real_quick_and_best_evidence(tmp_path: Path) -> None:
@@ -359,7 +451,9 @@ def test_rejects_release_without_real_quick_and_best_evidence(tmp_path: Path) ->
                 "timestamped": True,
             }
         metadata = {
+            "schema_version": 1,
             "artifact_filename": filename,
+            "artifact_size": artifact.stat().st_size,
             "sha256": digest,
             "platform": platform,
             "architecture": architecture,
@@ -367,14 +461,15 @@ def test_rejects_release_without_real_quick_and_best_evidence(tmp_path: Path) ->
             "repository_commit": "d" * 40,
             "github_run_id": "1",
             "run_attempt": "1",
-            "package_smoke": {"passed": True},
+            "timestamp": "2026-09-03T12:00:00+00:00",
+            "package_smoke": installed_smoke("1-alpha"),
             "signing": signing,
         }
         artifact.with_name(filename + ".metadata.json").write_text(
             json.dumps(metadata), encoding="utf-8"
         )
         artifact.with_name(filename + ".architecture.json").write_text(
-            json.dumps({"result": "PASS", "native_binary_count": 1}), encoding="utf-8"
+            json.dumps(architecture_evidence(filename, architecture)), encoding="utf-8"
         )
 
     manifest = tmp_path / "manifest.json"
@@ -403,6 +498,7 @@ def test_draft_resume_uploads_only_missing_matching_assets(tmp_path: Path) -> No
     }
     release = {
         "tagName": "v1-alpha",
+        "targetCommitish": "a" * 40,
         "isDraft": True,
         "isPrerelease": True,
         "assets": [
@@ -413,13 +509,14 @@ def test_draft_resume_uploads_only_missing_matching_assets(tmp_path: Path) -> No
         ],
     }
 
-    assert publish_release.plan_draft_resume(release, expected, tag="v1-alpha") == [second]
+    assert publish_release.plan_draft_resume(
+        release, expected, tag="v1-alpha", commit="a" * 40
+    ) == [second]
 
     first_publication = release | {"assets": []}
-    assert publish_release.plan_draft_resume(first_publication, expected, tag="v1-alpha") == [
-        first,
-        second,
-    ]
+    assert publish_release.plan_draft_resume(
+        first_publication, expected, tag="v1-alpha", commit="a" * 40
+    ) == [first, second]
 
 
 def test_draft_resume_fails_closed_on_digest_commit_or_published_state(
@@ -430,16 +527,66 @@ def test_draft_resume_fails_closed_on_digest_commit_or_published_state(
     expected = {asset.name: (asset, hashlib.sha256(asset.read_bytes()).hexdigest())}
     base = {
         "tagName": "v1-alpha",
+        "targetCommitish": "a" * 40,
         "isDraft": True,
         "isPrerelease": True,
         "assets": [{"name": asset.name, "digest": "sha256:" + "0" * 64}],
     }
     with pytest.raises(ValueError, match="digest mismatch"):
-        publish_release.plan_draft_resume(base, expected, tag="v1-alpha")
+        publish_release.plan_draft_resume(base, expected, tag="v1-alpha", commit="a" * 40)
     with pytest.raises(ValueError, match="tag does not match"):
-        publish_release.plan_draft_resume(base | {"tagName": "v2"}, expected, tag="v1-alpha")
+        publish_release.plan_draft_resume(
+            base | {"tagName": "v2"}, expected, tag="v1-alpha", commit="a" * 40
+        )
+    with pytest.raises(ValueError, match="target commit"):
+        publish_release.plan_draft_resume(
+            base | {"targetCommitish": "b" * 40},
+            expected,
+            tag="v1-alpha",
+            commit="a" * 40,
+        )
     with pytest.raises(ValueError, match="immutable"):
-        publish_release.plan_draft_resume(base | {"isDraft": False}, expected, tag="v1-alpha")
+        publish_release.plan_draft_resume(
+            base | {"isDraft": False}, expected, tag="v1-alpha", commit="a" * 40
+        )
+
+    matching = base | {
+        "targetCommitish": "main",
+        "assets": [{"name": asset.name, "digest": "sha256:" + expected[asset.name][1]}],
+    }
+    assert (
+        publish_release.plan_draft_resume(matching, expected, tag="v1-alpha", commit="a" * 40) == []
+    )
+
+
+def test_published_release_requires_exact_title_state_and_assets(tmp_path: Path) -> None:
+    asset = tmp_path / "asset"
+    asset.write_bytes(b"expected")
+    digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+    expected = {asset.name: (asset, digest)}
+    release = {
+        "tagName": "v1-alpha",
+        "name": "LocalSR v1-alpha",
+        "targetCommitish": "main",
+        "isDraft": False,
+        "isPrerelease": True,
+        "assets": [{"name": asset.name, "digest": f"sha256:{digest}"}],
+    }
+    publish_release.verify_published_release(
+        release,
+        expected,
+        tag="v1-alpha",
+        commit="a" * 40,
+        title="LocalSR v1-alpha",
+    )
+    with pytest.raises(ValueError, match="identity"):
+        publish_release.verify_published_release(
+            release | {"name": "Wrong"},
+            expected,
+            tag="v1-alpha",
+            commit="a" * 40,
+            title="LocalSR v1-alpha",
+        )
 
 
 def test_release_tag_must_resolve_to_the_expected_commit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -467,7 +614,9 @@ def test_release_matrix_rejects_cross_attempt_commit_mixing(tmp_path: Path) -> N
             f"{digest}  {filename}\n", encoding="utf-8"
         )
         metadata = {
+            "schema_version": 1,
             "artifact_filename": filename,
+            "artifact_size": artifact.stat().st_size,
             "sha256": digest,
             "platform": platform,
             "architecture": "arm64" if platform == "macos" else "x86_64",
@@ -475,7 +624,8 @@ def test_release_matrix_rejects_cross_attempt_commit_mixing(tmp_path: Path) -> N
             "repository_commit": commit,
             "github_run_id": "1",
             "run_attempt": str(attempt),
-            "package_smoke": {"passed": True},
+            "timestamp": "2026-09-03T12:00:00+00:00",
+            "package_smoke": installed_smoke("0.0.11-alpha"),
             "signing": {"status": "sha256"},
         }
         if platform == "linux":
@@ -500,7 +650,10 @@ def test_release_matrix_rejects_cross_attempt_commit_mixing(tmp_path: Path) -> N
             encoding="utf-8",
         )
         artifact.with_name(filename + ".architecture.json").write_text(
-            json.dumps({"result": "PASS", "native_binary_count": 1}), encoding="utf-8"
+            json.dumps(
+                architecture_evidence(filename, "arm64" if platform == "macos" else "x86_64")
+            ),
+            encoding="utf-8",
         )
         entries.append(
             {

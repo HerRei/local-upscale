@@ -135,19 +135,119 @@ def validate_smoke_evidence(
     platform: str,
     smoke: object,
     policy: str,
+    version: str,
 ) -> dict[str, object]:
-    if isinstance(smoke, dict) and smoke.get("passed") is True:
+    if (
+        isinstance(smoke, dict)
+        and smoke.get("passed") is True
+        and smoke.get("mode") == "headless-installed-host"
+        and smoke.get("worker") == "ready"
+        and isinstance(smoke.get("worker_path"), str)
+        and bool(str(smoke["worker_path"]).strip())
+        and smoke.get("version") == version
+    ):
         return smoke
     if (
         policy == CROSS_ALPHA_POLICY
         and platform == "macos"
         and isinstance(smoke, dict)
+        and smoke.get("passed") is False
         and smoke.get("mode") == "cross-build-static"
         and smoke.get("static_verified") is True
         and smoke.get("runtime_tested") is False
+        and smoke.get("version") == version
+        and smoke.get("architecture") == "arm64"
+        and isinstance(smoke.get("reason"), str)
+        and bool(str(smoke["reason"]).strip())
     ):
         return smoke
     raise ValueError("no acceptable installed-package smoke evidence")
+
+
+def validate_architecture_evidence(
+    filename: str,
+    architecture: object,
+    expected_architecture: str,
+) -> dict[str, object]:
+    if not isinstance(architecture, dict):
+        raise ValueError("architecture evidence must be a JSON object")
+    if architecture.get("schema_version") != 1:
+        raise ValueError("architecture evidence has an unsupported schema")
+    if architecture.get("artifact") != filename:
+        raise ValueError("architecture evidence names a different artifact")
+    if architecture.get("required_architectures") != [expected_architecture]:
+        raise ValueError("architecture evidence does not require the manifest architecture")
+    if architecture.get("mismatches") != []:
+        raise ValueError("architecture evidence contains native binary mismatches")
+    if architecture.get("result") != "PASS":
+        raise ValueError("architecture evidence did not pass")
+    count = architecture.get("native_binary_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        raise ValueError("architecture evidence has no native binaries")
+    return architecture
+
+
+def validate_cross_macos_provenance(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("cross-built macOS artifact has no MPS wheel provenance")
+    if value.get("torch_version") != "2.2.2":
+        raise ValueError("cross-built macOS artifact does not use the proven torch 2.2.2 pin")
+    arm_wheel = str(value.get("torch_arm64_wheel", ""))
+    if "torch-2.2.2" not in arm_wheel or "arm64" not in arm_wheel:
+        raise ValueError("cross-built macOS artifact has invalid ARM64 torch wheel provenance")
+    if not SHA256_RE.fullmatch(str(value.get("torch_arm64_sha256", ""))):
+        raise ValueError("cross-built macOS artifact has no ARM64 torch wheel digest")
+    universal_wheel = str(value.get("universal2_wheel", "")).lower()
+    if not (
+        "universal2" in universal_wheel
+        or ("x86_64" in universal_wheel and "arm64" in universal_wheel)
+    ):
+        raise ValueError("cross-built macOS artifact has no dual-architecture torch wheel")
+    static_evidence = value.get("static_evidence")
+    if (
+        not isinstance(static_evidence, list)
+        or len(static_evidence) < 3
+        or not all(isinstance(item, str) and item.strip() for item in static_evidence)
+    ):
+        raise ValueError("cross-built macOS artifact has incomplete static provenance")
+    normalization = value.get("openmp_normalization")
+    if not isinstance(normalization, dict):
+        raise ValueError("cross-built macOS artifact has no OpenMP normalization evidence")
+    if normalization.get("schema_version") != 1 or normalization.get("operation") != (
+        "pair-torch-openmp-aliases"
+    ):
+        raise ValueError("cross-built macOS artifact has invalid OpenMP normalization evidence")
+    source_hashes = normalization.get("source_sha256")
+    if (
+        not isinstance(source_hashes, dict)
+        or not source_hashes
+        or not all(SHA256_RE.fullmatch(str(digest)) for digest in source_hashes.values())
+    ):
+        raise ValueError("cross-built macOS OpenMP sources have invalid digests")
+    outputs = normalization.get("outputs")
+    if not isinstance(outputs, list) or len(outputs) < 3:
+        raise ValueError("cross-built macOS OpenMP output evidence is incomplete")
+    for output in outputs:
+        if (
+            not isinstance(output, dict)
+            or set(output.get("architectures", [])) != {"x86_64", "arm64"}
+            or not SHA256_RE.fullmatch(str(output.get("sha256", "")))
+            or not str(output.get("path", "")).strip()
+        ):
+            raise ValueError("cross-built macOS OpenMP output evidence is malformed")
+    return value
+
+
+def parse_evidence_timestamp(value: object, filename: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"{filename} has no artifact evidence timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{filename} has an invalid artifact evidence timestamp") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"{filename} artifact evidence timestamp has no timezone")
+    return parsed.astimezone(UTC)
 
 
 def prepare(
@@ -180,6 +280,7 @@ def prepare(
     live_model_evidence: dict[str, object] | None = None
     release_commit = ""
     source_matrix: dict[str, dict[str, object]] = {}
+    evidence_timestamps: list[datetime] = []
     for raw_entry in entries:
         if not isinstance(raw_entry, dict):
             raise ValueError("release manifest artifact entries must be objects")
@@ -201,6 +302,8 @@ def prepare(
             raise ValueError(f"checksum sidecar mismatch for {filename}")
         metadata = load_json(metadata_path)
         architecture = load_json(architecture_path)
+        if metadata.get("schema_version") != 1:
+            raise ValueError(f"{filename} metadata has an unsupported schema")
         expected = {
             "artifact_filename": filename,
             "sha256": digest,
@@ -211,6 +314,9 @@ def prepare(
         for key, value in expected.items():
             if metadata.get(key) != value:
                 raise ValueError(f"{filename} metadata {key!r} does not match manifest")
+        if metadata.get("artifact_size") != source.stat().st_size:
+            raise ValueError(f"{filename} metadata artifact size does not match the installer")
+        evidence_timestamps.append(parse_evidence_timestamp(metadata.get("timestamp"), filename))
         commit = str(metadata.get("repository_commit", ""))
         if not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ValueError(f"{filename} has no valid repository commit evidence")
@@ -238,12 +344,16 @@ def prepare(
         }
         try:
             smoke = validate_smoke_evidence(
-                str(entry["platform"]), metadata.get("package_smoke"), policy
+                str(entry["platform"]), metadata.get("package_smoke"), policy, version
             )
         except ValueError as error:
             raise ValueError(f"{filename} has {error}") from error
-        if architecture.get("result") != "PASS" or not architecture.get("native_binary_count"):
-            raise ValueError(f"{filename} has no passing native architecture evidence")
+        try:
+            architecture = validate_architecture_evidence(
+                filename, architecture, str(entry["architecture"])
+            )
+        except ValueError as error:
+            raise ValueError(f"{filename} has {error}") from error
         expected_signing = entry.get("signing")
         try:
             signing = validate_signing_evidence(
@@ -251,6 +361,12 @@ def prepare(
             )
         except ValueError as error:
             raise ValueError(f"{filename} has {error}") from error
+        mps_evidence: dict[str, object] | None = None
+        if policy == CROSS_ALPHA_POLICY and entry["platform"] == "macos":
+            try:
+                mps_evidence = validate_cross_macos_provenance(metadata.get("mps"))
+            except ValueError as error:
+                raise ValueError(f"{filename} has {error}") from error
         if entry["platform"] == "linux":
             live_models = metadata.get("live_models")
             if not isinstance(live_models, dict) or live_models.get("result") != "PASS":
@@ -296,6 +412,7 @@ def prepare(
                 "signing_evidence": signing,
                 "architecture_evidence": architecture,
                 "smoke_evidence": smoke,
+                **({"mps_evidence": mps_evidence} if mps_evidence is not None else {}),
             }
         )
 
@@ -305,7 +422,9 @@ def prepare(
         "schema_version": 1,
         "release_tag": tag,
         "version": version,
-        "generated_at": datetime.now(UTC).isoformat(),
+        # Derive this from immutable uploaded evidence so a failed publication
+        # job can recreate byte-identical public metadata on a safe rerun.
+        "generated_at": max(evidence_timestamps).isoformat(),
         "channel": "alpha",
         "release_policy": policy,
         "repository_commit": release_commit,

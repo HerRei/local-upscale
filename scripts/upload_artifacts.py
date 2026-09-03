@@ -6,17 +6,28 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 import secrets
+import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 try:
     from artifact_auth import AUTH_SCHEME, sign_request
-except ModuleNotFoundError:  # imported as a repository module in unit tests
-    from scripts.artifact_auth import AUTH_SCHEME, sign_request
+except ModuleNotFoundError:  # imported directly from a file by isolated tooling/tests
+    _auth_spec = importlib.util.spec_from_file_location(
+        "_localsr_artifact_auth", Path(__file__).with_name("artifact_auth.py")
+    )
+    if _auth_spec is None or _auth_spec.loader is None:
+        raise RuntimeError("Could not load the adjacent artifact_auth.py module") from None
+    _auth_module = importlib.util.module_from_spec(_auth_spec)
+    sys.modules[_auth_spec.name] = _auth_module
+    _auth_spec.loader.exec_module(_auth_module)
+    AUTH_SCHEME = _auth_module.AUTH_SCHEME
+    sign_request = _auth_module.sign_request
 
 
 def sha256(path: Path) -> str:

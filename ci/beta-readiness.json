@@ -41,9 +41,9 @@
     },
     {
       "id": "face-model-commercial-policy",
-      "status": "decision-required",
-      "summary": "The optional HAT-S Face checkpoint is CC BY-NC-SA 4.0 and cannot be treated as commercially licensed.",
-      "next_action": "Decide whether to retain it as a clearly noncommercial option, replace it, or exclude it from distributed recommendations."
+      "status": "external-clarification",
+      "summary": "The HAT source license does not independently establish the exact face checkpoint's weight, training-data, redistribution, or commercial-use rights. LocalSR disables automatic download and accepts only a hash-matching user-supplied copy without making commercial claims.",
+      "next_action": "Obtain written checkpoint and training-data rights from the publisher, or replace it with a checkpoint whose exact terms are documented before beta."
     },
     {
       "id": "best-anime-upstream-license",

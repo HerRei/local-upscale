@@ -51,9 +51,17 @@ def plan_draft_resume(
     expected: dict[str, tuple[Path, str]],
     *,
     tag: str,
+    commit: str,
 ) -> list[Path]:
     if release.get("tagName") != tag:
         raise ValueError("draft release tag does not match the requested tag")
+    # GitHub ignores target_commitish when the tag already exists and commonly
+    # reports the symbolic default branch (for example ``main``) instead.  A
+    # concrete SHA is still fail-closed here; publish() independently peels the
+    # local annotated tag and requires its exact commit before any draft work.
+    target_commitish = str(release.get("targetCommitish") or "")
+    if len(target_commitish) == 40 and target_commitish != commit:
+        raise ValueError("draft release target commit does not match the requested commit")
     if release.get("isDraft") is not True:
         raise ValueError("published releases are immutable; refusing to modify the release")
     if release.get("isPrerelease") is not True:
@@ -82,6 +90,26 @@ def plan_draft_resume(
     return [path for name, (path, _digest) in expected.items() if name not in existing]
 
 
+def verify_published_release(
+    release: dict[str, object],
+    expected: dict[str, tuple[Path, str]],
+    *,
+    tag: str,
+    commit: str,
+    title: str,
+) -> None:
+    if release.get("tagName") != tag or release.get("name") != title:
+        raise ValueError("published release identity does not match the requested tag and title")
+    if release.get("isDraft") is not False or release.get("isPrerelease") is not True:
+        raise ValueError("GitHub release did not reach published prerelease state")
+    # Reuse the strict asset and commitish validation by projecting the final
+    # release into draft state. No network mutation happens in this helper.
+    projected = dict(release)
+    projected["isDraft"] = True
+    if plan_draft_resume(projected, expected, tag=tag, commit=commit):
+        raise ValueError("published release is missing expected assets")
+
+
 def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=check, text=True, capture_output=True)
 
@@ -94,7 +122,7 @@ def view_release(tag: str) -> dict[str, object] | None:
             "view",
             tag,
             "--json",
-            "tagName,isDraft,isPrerelease,targetCommitish,assets,url",
+            "tagName,name,isDraft,isPrerelease,targetCommitish,assets,url",
         ],
         check=False,
     )
@@ -166,13 +194,13 @@ def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str
         release = view_release(tag)
         if release is None:
             raise RuntimeError("GitHub did not return the newly created draft")
-    missing = plan_draft_resume(release, expected, tag=tag)
+    missing = plan_draft_resume(release, expected, tag=tag, commit=commit)
     for path in missing:
         run(["gh", "release", "upload", tag, str(path)])
     complete = view_release(tag)
     if complete is None:
         raise RuntimeError("GitHub draft disappeared during upload")
-    if plan_draft_resume(complete, expected, tag=tag):
+    if plan_draft_resume(complete, expected, tag=tag, commit=commit):
         raise RuntimeError("GitHub draft is still missing expected assets after upload")
     with tempfile.TemporaryDirectory(prefix="localsr-release-verify-", dir=output) as temporary:
         directory = Path(temporary)
@@ -193,8 +221,9 @@ def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str
         ]
     )
     final = view_release(tag)
-    if final is None or final.get("isDraft") is not False or final.get("isPrerelease") is not True:
-        raise RuntimeError("GitHub release did not reach published prerelease state")
+    if final is None:
+        raise RuntimeError("GitHub release disappeared after publication")
+    verify_published_release(final, expected, tag=tag, commit=commit, title=title)
     return str(final.get("url") or "")
 
 
