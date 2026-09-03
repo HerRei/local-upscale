@@ -402,6 +402,7 @@ class InferenceEngine:
         progress_callback: Callable[[int, int, int], None],
         safe_memory: bool = True,
         tile_callback: Callable[..., None] | None = None,
+        temporary_directory: str | None = None,
     ) -> OutputWriter:
 
         # load_model applies GPU memory limits and loads the model onto device.
@@ -412,7 +413,11 @@ class InferenceEngine:
         _, h, w = img_tensor.shape
         scale = model_info.scale
 
-        writer = OutputWriter((model_info.out_channels, h * scale, w * scale), dtype=np.uint8)
+        writer = OutputWriter(
+            (model_info.out_channels, h * scale, w * scale),
+            dtype=np.uint8,
+            temporary_directory=temporary_directory,
+        )
 
         current_tile_size = tile_size
 
@@ -509,7 +514,9 @@ class InferenceEngine:
                         # Re-initialize output writer cleanly
                         writer.cleanup()
                         writer = OutputWriter(
-                            (model_info.out_channels, h * scale, w * scale), dtype=np.uint8
+                            (model_info.out_channels, h * scale, w * scale),
+                            dtype=np.uint8,
+                            temporary_directory=temporary_directory,
                         )
                         continue
                     else:

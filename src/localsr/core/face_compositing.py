@@ -35,8 +35,10 @@ def blend_tile_outputs(
     face_output: np.ndarray,
     general_output: np.ndarray,
     face_alpha: np.ndarray,
+    fidelity: float = 1.0,
+    identity_output: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Alpha-blend two tile core outputs by the (smoothed) face mask.
+    """Blend restored faces over the general output with an identity endpoint.
 
     All inputs are (C, H, W) with face_output/general_output as uint8
     and face_alpha as float32 in [0, 1]. The alpha is at core resolution
@@ -47,6 +49,20 @@ def blend_tile_outputs(
         raise ValueError(
             f"Shape mismatch: face {face_output.shape} vs general {general_output.shape}"
         )
+    if identity_output is None:
+        identity_output = general_output
+    if identity_output.shape != general_output.shape:
+        raise ValueError(
+            f"Shape mismatch: identity {identity_output.shape} vs general {general_output.shape}"
+        )
+    if not 0.0 <= fidelity <= 1.0:
+        raise ValueError("Face restoration fidelity must be between 0 and 1.")
+    # The companion HAT checkpoint has no native fidelity parameter. LocalSR
+    # therefore defines an honest two-step spatial blend:
+    #   face_mix = original_upscaled * (1-fidelity) + restored * fidelity
+    #   output = general * (1-mask) + face_mix * mask
+    # A value of 0 retains the resampled original inside the face mask; 1 uses
+    # the strongest checkpoint result. Non-face pixels always remain general.
     alpha = smooth_alpha(face_alpha, kernel_size=5)
     # Upscale alpha from core resolution to output resolution (core * scale).
     out_h, out_w = face_output.shape[1], face_output.shape[2]
@@ -62,7 +78,9 @@ def blend_tile_outputs(
             alpha = np.pad(alpha, ((0, 0), (0, out_w - alpha.shape[1])), mode="edge")
     # Broadcast alpha to (1, H, W) for channel-wise blending.
     alpha_3d = alpha[None, :, :]
-    blended = face_output.astype(np.float32) * alpha_3d + general_output.astype(np.float32) * (
-        1.0 - alpha_3d
+    face_mix = (
+        identity_output.astype(np.float32) * (1.0 - fidelity)
+        + face_output.astype(np.float32) * fidelity
     )
+    blended = face_mix * alpha_3d + general_output.astype(np.float32) * (1.0 - alpha_3d)
     return blended.clip(0, 255).astype(np.uint8)

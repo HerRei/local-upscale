@@ -9,8 +9,10 @@ path.
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from fractions import Fraction
+from pathlib import Path
 
 import av
 import numpy as np
@@ -25,6 +27,14 @@ class VideoProbe:
     frame_count: int
     codec: str
     duration_seconds: float
+
+
+class VideoStageError(RuntimeError):
+    """An actionable encode/remux failure with the actual subsystem named."""
+
+    def __init__(self, stage: str, message: str):
+        self.stage = stage
+        super().__init__(f"Video {stage} stage failed: {message}")
 
 
 def probe_video(path: str) -> VideoProbe:
@@ -93,77 +103,243 @@ def encode_video(
     height: int,
     pixel_format: str = "yuv420p",
     audio_source: str | None = None,
+    source_start_seconds: float = 0.0,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
-    Writes to destination_path + ".tmp" and atomically renames on success.
-    On any exception the temp file is removed and the destination is never
-    created. When audio_source names a container with an audio stream, its
-    packets are remuxed unchanged into the output; incompatible or absent
-    audio falls back to a silent video rather than failing the job.
+    The enhanced picture is encoded to an app-owned temporary container, then
+    remuxed with compatible source audio/subtitles without re-encoding those
+    streams. The final destination appears only through one atomic replace.
     """
-    tmp_path = destination_path + ".tmp"
-    output_container = av.open(tmp_path, mode="w", format=container_format)
-    fps_fraction = Fraction(int(fps * 1000), 1000) if fps else Fraction(25, 1)
-    stream = output_container.add_stream(codec, rate=fps_fraction)
-    stream.width = int(width)
-    stream.height = int(height)
-    stream.pix_fmt = pixel_format
-    stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium"}
-
-    # Every stream must exist before the first mux writes the container
-    # header, so the audio template is claimed up front; the packets are
-    # copied after the picture is done.
-    audio_container = None
-    audio_in = None
-    audio_out = None
-    if audio_source is not None:
-        try:
-            audio_container = av.open(audio_source)
-            audio_in = next((s for s in audio_container.streams if s.type == "audio"), None)
-            if audio_in is not None:
-                audio_out = output_container.add_stream_from_template(audio_in)
-        except (av.FFmpegError, ValueError, OSError):
-            audio_in = None
-            audio_out = None
-
+    destination = Path(destination_path)
+    encoded_temporary = _owned_output_temporary(destination, "video")
+    mux_temporary = _owned_output_temporary(destination, "mux")
+    output_container = None
     try:
+        fps_fraction = (
+            Fraction(str(float(fps))).limit_denominator(100_000) if fps else Fraction(25, 1)
+        )
+        output_container = av.open(str(encoded_temporary), mode="w", format=container_format)
+        stream = output_container.add_stream(codec, rate=fps_fraction)
+        stream.width = int(width)
+        stream.height = int(height)
+        stream.pix_fmt = pixel_format
+        stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium"}
+        frame_count = 0
         for rgb in frames:
             if rgb.dtype != np.uint8:
                 rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+            if rgb.shape != (int(height), int(width), 3):
+                raise ValueError(
+                    f"frame {frame_count} has shape {rgb.shape}; expected ({height}, {width}, 3)"
+                )
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+            frame.pts = frame_count
+            frame.time_base = Fraction(1, 1) / fps_fraction
             for packet in stream.encode(frame):
                 output_container.mux(packet)
+            frame_count += 1
+        if frame_count == 0:
+            raise ValueError("the inference pipeline produced no frames")
         for packet in stream.encode():
             output_container.mux(packet)
-        if audio_container is not None and audio_in is not None and audio_out is not None:
-            try:
-                for packet in audio_container.demux(audio_in):
-                    if packet.dts is None:
-                        continue
-                    packet.stream = audio_out
-                    output_container.mux(packet)
-            except (av.FFmpegError, ValueError, OSError):
-                pass
         output_container.close()
-        os.replace(tmp_path, destination_path)
+        output_container = None
+
+        source = Path(audio_source) if audio_source else None
+        if source is not None and source.is_file():
+            copied = _remux_source_streams(
+                encoded_temporary,
+                source,
+                mux_temporary,
+                container_format=container_format,
+                source_start_seconds=max(0.0, float(source_start_seconds)),
+            )
+            if copied:
+                os.replace(mux_temporary, destination)
+            else:
+                os.replace(encoded_temporary, destination)
+        else:
+            os.replace(encoded_temporary, destination)
         return destination_path
-    except BaseException:
-        try:
-            output_container.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
+    except InterruptedError:
         raise
+    except VideoStageError:
+        raise
+    except BaseException as error:
+        raise VideoStageError("encode", str(error)) from error
     finally:
-        if audio_container is not None:
+        if output_container is not None:
             try:
-                audio_container.close()
+                output_container.close()
             except Exception:
                 pass
+        for temporary in (encoded_temporary, mux_temporary):
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _owned_output_temporary(destination: Path, phase: str) -> Path:
+    """Reserve one unique LocalSR-owned sibling for an atomic final replace."""
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.name}.localsr-{phase}-",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    return Path(name)
+
+
+def _packet_time(packet: av.Packet) -> float:
+    timestamp = packet.dts if packet.dts is not None else packet.pts
+    return (
+        float(timestamp * packet.time_base) if timestamp is not None and packet.time_base else 0.0
+    )
+
+
+def _packet_end_time(packet: av.Packet) -> float:
+    start = _packet_time(packet)
+    if packet.duration is None or packet.time_base is None:
+        return start
+    return start + max(0.0, float(packet.duration * packet.time_base))
+
+
+def _shift_packet_to_trimmed_timeline(packet: av.Packet, start_seconds: float) -> None:
+    if start_seconds <= 0.0 or packet.time_base is None:
+        return
+    offset = int(round(start_seconds / float(packet.time_base)))
+    if packet.pts is not None:
+        packet.pts = max(0, packet.pts - offset)
+    if packet.dts is not None:
+        packet.dts = max(0, packet.dts - offset)
+
+
+def _next_packet(iterator):
+    for packet in iterator:
+        if packet.dts is not None or packet.pts is not None:
+            return packet
+    return None
+
+
+def _next_trimmed_packet(iterator, start_seconds: float, end_seconds: float):
+    """Return the next packet overlapping the selected source time range."""
+    for packet in iterator:
+        if packet.dts is None and packet.pts is None:
+            continue
+        packet_start = _packet_time(packet)
+        packet_end = _packet_end_time(packet)
+        if packet_end < start_seconds - 0.01:
+            continue
+        if packet_start > end_seconds + 0.05:
+            continue
+        _shift_packet_to_trimmed_timeline(packet, start_seconds)
+        return packet
+    return None
+
+
+def _remux_source_streams(
+    video_path: Path,
+    source_path: Path,
+    output_path: Path,
+    *,
+    container_format: str,
+    source_start_seconds: float = 0.0,
+) -> bool:
+    """Interleave encoded video and compatible source audio/subtitles."""
+    video_container = None
+    source_container = None
+    output_container = None
+    try:
+        video_container = av.open(str(video_path))
+        source_container = av.open(str(source_path))
+        video_in = next(
+            (stream for stream in video_container.streams if stream.type == "video"), None
+        )
+        if video_in is None:
+            raise VideoStageError("remux", "the enhanced temporary file has no video stream")
+
+        auxiliary_inputs = [
+            stream for stream in source_container.streams if stream.type in {"audio", "subtitle"}
+        ]
+        if not auxiliary_inputs:
+            return False
+
+        output_container = av.open(str(output_path), mode="w", format=container_format)
+        video_out = output_container.add_stream_from_template(video_in)
+        auxiliary_outputs: dict[int, object] = {}
+        for stream in auxiliary_inputs:
+            try:
+                auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)
+            except (av.FFmpegError, ValueError, OSError) as error:
+                if stream.type == "subtitle":
+                    # The requested container does not support this subtitle
+                    # codec. The enhanced video remains valid and the stream is
+                    # not falsely advertised as copied.
+                    continue
+                raise VideoStageError(
+                    "audio remux",
+                    f"{stream.codec_context.name or 'audio'} is incompatible with {container_format}: {error}",
+                ) from error
+
+        selected_aux = [stream for stream in auxiliary_inputs if stream.index in auxiliary_outputs]
+        if not selected_aux:
+            output_container.close()
+            output_container = None
+            try:
+                output_path.unlink()
+            except FileNotFoundError:
+                pass
+            return False
+
+        duration = (
+            float(video_in.duration * video_in.time_base)
+            if video_in.duration is not None and video_in.time_base is not None
+            else None
+        )
+        source_end_seconds = source_start_seconds + (duration or float("inf"))
+        video_packets = video_container.demux(video_in)
+        auxiliary_packets = source_container.demux(*selected_aux)
+        video_packet = _next_packet(video_packets)
+        auxiliary_packet = _next_trimmed_packet(
+            auxiliary_packets, source_start_seconds, source_end_seconds
+        )
+        while video_packet is not None or auxiliary_packet is not None:
+            use_video = auxiliary_packet is None or (
+                video_packet is not None
+                and _packet_time(video_packet) <= _packet_time(auxiliary_packet)
+            )
+            if use_video:
+                packet = video_packet
+                packet.stream = video_out
+                output_container.mux(packet)
+                video_packet = _next_packet(video_packets)
+            else:
+                packet = auxiliary_packet
+                packet_time = _packet_time(packet)
+                if duration is None or packet_time <= duration + 0.05:
+                    packet.stream = auxiliary_outputs[packet.stream.index]
+                    output_container.mux(packet)
+                auxiliary_packet = _next_trimmed_packet(
+                    auxiliary_packets, source_start_seconds, source_end_seconds
+                )
+        output_container.close()
+        output_container = None
+        return True
+    except VideoStageError:
+        raise
+    except (av.FFmpegError, ValueError, OSError) as error:
+        raise VideoStageError("audio/subtitle remux", str(error)) from error
+    except BaseException:
+        raise
+    finally:
+        for container in (output_container, source_container, video_container):
+            if container is not None:
+                try:
+                    container.close()
+                except Exception:
+                    pass
 
 
 def uint8_chw_to_rgb_hwc(array_chw: np.ndarray) -> np.ndarray:

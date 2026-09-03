@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -64,7 +65,7 @@ def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
 
     for fmt, filename in formats:
         dest_path = str(tmp_path / filename)
-        tmp_expected = dest_path + ".tmp"
+        calls_before = len(replace_history)
 
         # Save image
         manager.save_from_writer(
@@ -78,14 +79,18 @@ def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
             scale=1,
         )
 
-        # Assert final file exists and .tmp is gone
+        # Assert the final file exists and this save left no app-owned temporary
+        # file behind.  Output names are intentionally randomized so LocalSR
+        # never adopts or deletes a user's pre-existing ``<output>.tmp`` file.
         assert os.path.exists(dest_path), f"Destination {dest_path} should exist"
-        assert not os.path.exists(tmp_expected), (
-            f"Temp file {tmp_expected} should be removed by os.replace"
-        )
+        assert not list(tmp_path.glob(f".{filename}.localsr-image-*.tmp"))
 
-        # Confirm os.replace was called with tmp_path -> dest_path
-        assert (tmp_expected, dest_path) in replace_history
+        # Confirm one unique same-directory temporary was atomically replaced.
+        assert len(replace_history) == calls_before + 1
+        temporary, destination = replace_history[-1]
+        assert Path(temporary).parent == tmp_path
+        assert Path(temporary).name.startswith(f".{filename}.localsr-image-")
+        assert Path(destination) == Path(dest_path)
 
     # Overwrite test: create an existing file with dummy content first
     overwrite_target = str(tmp_path / "overwrite_test.png")
@@ -119,7 +124,6 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
 
     # 1. Exception during os.replace
     dest_path1 = str(tmp_path / "fail_replace.png")
-    tmp_path1 = dest_path1 + ".tmp"
 
     def faulty_replace(src, dst):
         assert os.path.exists(src), ".tmp file must exist when os.replace fails"
@@ -139,13 +143,14 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
             scale=1,
         )
 
-    assert not os.path.exists(tmp_path1), "Orphaned .tmp file must be cleaned up on replace failure"
+    assert not list(tmp_path.glob(".fail_replace.png.localsr-image-*.tmp")), (
+        "Orphaned app-owned temporary must be cleaned up on replace failure"
+    )
     assert not os.path.exists(dest_path1), "Destination path should not exist on replace failure"
 
     # 2. Exception during PIL image save (partial file creation simulated)
     monkeypatch.undo()
     dest_path2 = str(tmp_path / "fail_pil_save.png")
-    tmp_path2 = dest_path2 + ".tmp"
 
     def faulty_pil_save(self, fp, *args, **kwargs):
         # Create a dummy partial file on disk
@@ -168,8 +173,8 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
             scale=1,
         )
 
-    assert not os.path.exists(tmp_path2), (
-        "Orphaned partial .tmp file must be cleaned up on PIL save failure"
+    assert not list(tmp_path.glob(".fail_pil_save.png.localsr-image-*.tmp")), (
+        "Orphaned app-owned temporary must be cleaned up on PIL save failure"
     )
     assert not os.path.exists(dest_path2), "Destination path should not exist on PIL save failure"
 

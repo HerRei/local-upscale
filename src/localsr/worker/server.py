@@ -19,16 +19,35 @@ os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
 os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.52")
 
 from localsr import __version__
+from localsr.core.benchmark import (
+    MEASURED_FRAME_COUNT,
+    WARMUP_COUNT,
+    WORKLOAD_MODEL_ID,
+    WORKLOAD_VERSION,
+    run_benchmark,
+)
 from localsr.core.hardware import get_capability_report, get_memory_snapshot
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
+from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter
-from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID, ModelStore
+from localsr.core.model_catalog import CATALOG_BY_ID, VIDEO_CATALOG_BY_ID, ModelStore
+from localsr.core.output_writer import cleanup_stale_work_files
+from localsr.core.pipeline import (
+    PipelineStage,
+    PipelineStageError,
+    parse_pipeline_stages,
+)
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
     PROTOCOL_VERSION,
+    BenchmarkCancelled,
+    BenchmarkCompleted,
+    BenchmarkFailed,
+    BenchmarkProgress,
+    BenchmarkStarted,
     CapabilitiesInfo,
     EngineInfo,
     FaceDetectionUnavailable,
@@ -37,6 +56,8 @@ from localsr.protocol.messages import (
     JobCompleted,
     JobFailed,
     JobStarted,
+    LivePreviewFrame,
+    LivePreviewWarning,
     LogMessage,
     MediaInfo,
     MediaProbeFailed,
@@ -45,6 +66,9 @@ from localsr.protocol.messages import (
     PreviewReady,
     ProgressUpdate,
     ProtocolError,
+    StageCompleted,
+    StageProgress,
+    StageStarted,
     TileUpdate,
     VideoFrameCompleted,
     VideoFrameStarted,
@@ -91,14 +115,22 @@ def _engine_features() -> list[str]:
         "camera_raw",
         "cancellation",
         "progressive_preview",
+        "benchmark_v1",
     ]
-    if importlib.util.find_spec("mediapipe") is not None:
-        features.extend(["face_detection", "face_aware"])
+    if importlib.util.find_spec("cv2") is not None:
+        try:
+            cv2 = importlib.import_module("cv2")
+        except (ImportError, OSError):
+            pass
+        else:
+            if hasattr(cv2, "FaceDetectorYN"):
+                features.extend(["face_detection", "face_aware"])
     return features
 
 
 class WorkerServer:
     def __init__(self):
+        cleanup_stale_work_files()
         self.message_queue = queue.Queue()
         self.cancel_event = threading.Event()
         self.state_lock = threading.Lock()
@@ -336,7 +368,7 @@ class WorkerServer:
                         img = Image.open(image_path)
                         img = ImageOps.exif_transpose(img)
                         rgb = np.array(img.convert("RGB"))
-                        result = detect_faces(rgb)
+                        result = detect_faces(rgb, cancel_event=self.cancel_event)
                         boxes = [
                             {
                                 "x": int(box.x),
@@ -348,13 +380,6 @@ class WorkerServer:
                             for box in result.boxes
                         ]
                         send_message(FacesDetected(image_path=image_path, boxes=boxes))
-                    except ImportError:
-                        send_message(
-                            FaceDetectionUnavailable(
-                                image_path=image_path,
-                                message="MediaPipe is not installed. Face detection is unavailable.",
-                            )
-                        )
                     except Exception as error:  # noqa: BLE001
                         send_message(
                             FaceDetectionUnavailable(
@@ -437,6 +462,30 @@ class WorkerServer:
                         self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
                         self.engine.release_model()
 
+                elif req_type == "benchmark_request":
+                    if self.active_job_id is not None:
+                        send_message(
+                            BenchmarkFailed(
+                                job_id=str(data.get("job_id") or ""),
+                                error_message="The inference worker is already busy.",
+                            )
+                        )
+                        continue
+
+                    job_id = str(data.get("job_id") or "")
+                    self._activate_job(job_id)
+                    try:
+                        self._run_benchmark(job_id, data)
+                    except InterruptedError:
+                        send_message(BenchmarkCancelled(job_id=job_id))
+                    except Exception as error:  # noqa: BLE001
+                        traceback.print_exc(file=sys.stderr)
+                        send_message(BenchmarkFailed(job_id=job_id, error_message=str(error)))
+                    finally:
+                        self._deactivate_job(job_id)
+                        self.model_adapter.release()
+                        self.engine.release_model()
+
             except queue.Empty:
                 continue
             except KeyboardInterrupt:
@@ -445,21 +494,145 @@ class WorkerServer:
             except Exception as e:  # noqa: BLE001
                 send_message(LogMessage(level="error", message=f"Worker loop error: {e}"))
 
+    def _run_benchmark(self, job_id: str, data: dict) -> None:
+        """Authenticate and execute the fixed, production-path v1 benchmark."""
+        requested_model_id = str(data.get("model_id") or "")
+        if requested_model_id != WORKLOAD_MODEL_ID:
+            raise ValueError(
+                f"{WORKLOAD_VERSION} requires the trusted {WORKLOAD_MODEL_ID} checkpoint."
+            )
+        model = CATALOG_BY_ID[WORKLOAD_MODEL_ID]
+        supplied = Path(str(data.get("model_path") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.path_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                "Download and verify the Quick model before benchmarking."
+            ) from error
+        if supplied != expected or not self.model_store.is_installed(model):
+            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+
+        send_message(
+            BenchmarkStarted(
+                job_id=job_id,
+                workload_version=WORKLOAD_VERSION,
+                warmup_count=WARMUP_COUNT,
+                measured_frame_count=MEASURED_FRAME_COUNT,
+            )
+        )
+        info = self.model_adapter.inspect(str(expected))
+
+        def progress(completed: int, total: int) -> None:
+            send_message(
+                BenchmarkProgress(
+                    job_id=job_id,
+                    completed_frames=completed,
+                    total_frames=total,
+                    percentage=completed / max(1, total) * 100.0,
+                )
+            )
+
+        result = run_benchmark(
+            engine=self.engine,
+            model_info=info,
+            model_path=str(expected),
+            model_name=model.name,
+            device=str(data.get("device") or "cpu"),
+            cancel_event=self.cancel_event,
+            progress_callback=progress,
+        )
+        send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
+
     def _run_job(self, job_id, data):
         job_started_at = time.monotonic()
         inference_started_at = None
         processing_call_started_at = None
+        stages = parse_pipeline_stages(data.get("stages"))
+        if not stages:
+            legacy_stages = [
+                PipelineStage(
+                    kind="restore" if data.get("output_scale") == 1 else "upscale",
+                    model_id="legacy-primary",
+                    model_path=str(data["model_path"]),
+                )
+            ]
+            if data.get("face_model_path"):
+                legacy_stages.append(
+                    PipelineStage(
+                        kind="face_restore",
+                        model_id="legacy-face",
+                        model_path=str(data["face_model_path"]),
+                        fidelity=float(data.get("face_fidelity", 0.7)),
+                        execution="fused-with-upscale",
+                    )
+                )
+            stages = tuple(legacy_stages)
+        primary_index = next(
+            (index for index, stage in enumerate(stages) if stage.kind == "upscale"), None
+        )
+        if primary_index is None:
+            primary_index = next(
+                index for index, stage in enumerate(stages) if stage.kind == "restore"
+            )
+        primary_stage = stages[primary_index]
+        if Path(primary_stage.model_path) != Path(str(data["model_path"])):
+            raise ValueError(
+                "The primary pipeline stage does not match the authenticated job model."
+            )
+        preprocess_stage = stages[0] if primary_index == 1 else None
+        face_stage = stages[-1] if stages[-1].kind == "face_restore" else None
+        if (
+            face_stage is not None
+            and str(data.get("face_model_path") or "") != face_stage.model_path
+        ):
+            raise ValueError("The face pipeline stage does not match the authenticated face model.")
+
+        stage_count = len(stages)
+        active_stage_index = primary_index
+        active_stage_span = 1 + int(face_stage is not None)
+        active_stage = primary_stage
+        scratch_directory = data.get("scratch_directory")
+        if scratch_directory:
+            cleanup_stale_work_files(scratch_directory)
         last_progress_at = None
         last_completed = 0
         smoothed_seconds_per_tile = None
         last_memory_sample_at = 0.0
-        last_tile_preview_at = 0.0
-        tile_preview_interval = max(
-            0.0, min(1.0, float(data.get("preview_interval_ms", 0)) / 1000.0)
+        preview_encoder = LatestPreviewEncoder(
+            lambda packet: self._emit_live_preview(packet),
+            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
+            enabled=bool(data.get("preview_enabled", True)),
+            max_fps=float(data.get("preview_max_fps", 2.0)),
+            max_dimension=int(data.get("preview_max_dimension", 320)),
         )
         memory_snapshot = {}
 
+        def start_stage(index: int, stage: PipelineStage) -> None:
+            send_message(
+                StageStarted(
+                    job_id=job_id,
+                    stage_index=index,
+                    stage_count=stage_count,
+                    stage_kind=stage.kind,
+                    model_id=stage.model_id,
+                )
+            )
+
+        def complete_stage(index: int, stage: PipelineStage) -> None:
+            send_message(
+                StageCompleted(
+                    job_id=job_id,
+                    stage_index=index,
+                    stage_count=stage_count,
+                    stage_kind=stage.kind,
+                )
+            )
+
         def progress_cb(completed, total, active_tile_size):
+            nonlocal active_stage
+            nonlocal active_stage_index
+            nonlocal active_stage_span
             nonlocal last_completed
             nonlocal last_memory_sample_at
             nonlocal last_progress_at
@@ -468,8 +641,14 @@ class WorkerServer:
 
             now = time.monotonic()
             elapsed = now - (inference_started_at or now)
-            seconds_per_tile = elapsed / max(completed, 1)
-            estimated_remaining = seconds_per_tile * max(0, total - completed)
+            stage_fraction = max(0.0, min(1.0, completed / max(total, 1)))
+            completed_weight = active_stage_index + stage_fraction * active_stage_span
+            percentage = completed_weight / max(stage_count, 1) * 100.0
+            estimated_remaining = (
+                elapsed / completed_weight * max(0.0, stage_count - completed_weight)
+                if completed_weight > 0
+                else 0.0
+            )
             last_progress_at = now
             last_completed = completed
 
@@ -481,11 +660,34 @@ class WorkerServer:
                 last_memory_sample_at = now
 
             send_message(
+                StageProgress(
+                    job_id=job_id,
+                    stage_index=active_stage_index,
+                    stage_count=stage_count,
+                    stage_kind=active_stage.kind,
+                    completed_units=completed,
+                    total_units=total,
+                    percentage=percentage,
+                )
+            )
+            if face_stage is not None and active_stage is primary_stage:
+                send_message(
+                    StageProgress(
+                        job_id=job_id,
+                        stage_index=primary_index + 1,
+                        stage_count=stage_count,
+                        stage_kind=face_stage.kind,
+                        completed_units=completed,
+                        total_units=total,
+                        percentage=percentage,
+                    )
+                )
+            send_message(
                 ProgressUpdate(
                     job_id=job_id,
                     completed_tiles=completed,
                     total_tiles=total,
-                    percentage=completed / total * 100.0,
+                    percentage=percentage,
                     elapsed_seconds=elapsed,
                     estimated_remaining_seconds=estimated_remaining,
                     active_tile_size=active_tile_size,
@@ -521,25 +723,24 @@ class WorkerServer:
             active_tile_size,
         ):
             nonlocal inference_started_at
-            nonlocal last_tile_preview_at
             if phase == "started" and inference_started_at is None:
                 # Model loading happens before the first tile. Starting the ETA
                 # clock here prevents that one-off cost from being multiplied by
                 # every remaining tile.
                 inference_started_at = time.monotonic()
-            jpeg_base64 = ""
             if phase == "completed" and tile_data is not None:
-                now = time.monotonic()
-                if (
-                    tile_preview_interval <= 0
-                    or now - last_tile_preview_at >= tile_preview_interval
-                    or (total > 0 and completed >= total)
-                ):
-                    try:
-                        jpeg_base64 = _encode_chw_jpeg(tile_data, 192, quality=72)
-                        last_tile_preview_at = now
-                    except (OSError, TypeError, ValueError):
-                        jpeg_base64 = ""
+                preview_encoder.submit(
+                    job_id=job_id,
+                    preview_kind="tile",
+                    pixels=tile_data,
+                    force=bool(total > 0 and completed >= total),
+                    output_x=int(tile.out_x),
+                    output_y=int(tile.out_y),
+                    output_width=int(tile.out_w),
+                    output_height=int(tile.out_h),
+                    image_width=int(output_width),
+                    image_height=int(output_height),
+                )
             send_message(
                 TileUpdate(
                     job_id=job_id,
@@ -553,109 +754,215 @@ class WorkerServer:
                     image_width=int(output_width),
                     image_height=int(output_height),
                     active_tile_size=int(active_tile_size),
-                    jpeg_base64=jpeg_base64,
+                    jpeg_base64="",
                 )
             )
 
-        send_message(LogMessage(level="info", message="Loading model..."))
-        info = self.model_adapter.inspect(data["model_path"])
-
-        face_model_path = data.get("face_model_path")
-        face_info = None
-        if face_model_path:
-            try:
-                face_info = self.model_adapter.inspect(face_model_path)
-            except Exception as error:  # noqa: BLE001
-                send_message(WarningMessage(message=f"Could not inspect face model: {error}"))
-                face_model_path = None
-
-        # Load image (this separates RGB and Alpha)
+        # Load image once. Metadata and alpha remain attached to this manager
+        # until the one final, atomic write after every inference stage.
         send_message(LogMessage(level="info", message="Loading image..."))
         im_manager = ImageManager()
         img_data = im_manager.load(data["image_path"])
 
         out_file = None
+        intermediate_file = None
+        info = None
         try:
-            send_message(LogMessage(level="info", message="Starting inference..."))
+            send_message(LogMessage(level="info", message="Starting inference pipeline..."))
             processing_call_started_at = time.monotonic()
+            working_img_data = img_data
 
-            if face_model_path and face_info:
-                # Face-aware image processing: detect faces, then use
-                # per-tile model selection with boundary blending.
-                from localsr.core.face_detection import detect_faces
-                from localsr.core.video_pipeline import process_frame_face_aware
-
-                # Convert the loaded image tensor to an RGB array for detection.
-                tensor = img_data["tensor"]
-                _, img_h, img_w = tensor.shape
-                rgb_for_detection = tensor.permute(1, 2, 0).clamp(0, 1).mul(255).byte().numpy()
-                face_mask = detect_faces(rgb_for_detection)
-
-                if face_mask.has_faces:
-                    send_message(
-                        LogMessage(
-                            level="info",
-                            message=f"Detected {len(face_mask.boxes)} face(s). Using face-aware restoration.",
-                        )
+            if preprocess_stage is not None:
+                if self.cancel_event.is_set():
+                    raise InterruptedError("Cancelled between pipeline stages.")
+                active_stage = preprocess_stage
+                active_stage_index = 0
+                active_stage_span = 1
+                start_stage(0, preprocess_stage)
+                send_message(
+                    LogMessage(
+                        level="info",
+                        message=(
+                            f"Running {preprocess_stage.kind} stage with "
+                            f"{preprocess_stage.model_id}..."
+                        ),
                     )
-                    # process_frame_face_aware returns an (C, H*scale, W*scale) numpy array.
-                    # We wrap it in a temporary OutputWriter-like object so the save path works.
-                    from localsr.core.output_writer import OutputWriter
-
-                    face_aware_result = process_frame_face_aware(
-                        engine=self.engine,
-                        img_tensor=tensor,
-                        face_mask=face_mask,
-                        general_model_path=data["model_path"],
-                        face_model_path=face_model_path,
-                        general_model_info=info,
-                        face_model_info=face_info,
-                        device_str=data["device"],
-                        precision_str=data["precision"],
-                        tile_size=data["tile_size"],
-                        halo=data["halo"],
-                        cancel_event=self.cancel_event,
-                        safe_memory=data["safe_memory"],
-                        progress_callback=progress_cb,
-                        tile_callback=tile_cb,
-                    )
-                    # Write the result into an OutputWriter so the existing
-                    # save logic can handle it.
-                    writer = OutputWriter(face_aware_result.shape, dtype=np.uint8)
-                    writer.mmap[:] = face_aware_result
-                    writer.mmap.flush()
-                    out_file = writer
-                else:
-                    send_message(
-                        LogMessage(level="info", message="No faces detected. Using general model.")
-                    )
-                    out_file = self.engine.process_image(
-                        img_data=img_data,
-                        model_info=info,
-                        model_path=data["model_path"],
-                        device_str=data["device"],
-                        precision_str=data["precision"],
-                        tile_size=data["tile_size"],
-                        halo=data["halo"],
-                        cancel_event=self.cancel_event,
-                        progress_callback=progress_cb,
-                        safe_memory=data["safe_memory"],
-                        tile_callback=tile_cb,
-                    )
-            else:
-                out_file = self.engine.process_image(
-                    img_data=img_data,
-                    model_info=info,
-                    model_path=data["model_path"],
-                    device_str=data["device"],
-                    precision_str=data["precision"],
-                    tile_size=data["tile_size"],
-                    halo=data["halo"],
-                    cancel_event=self.cancel_event,
-                    progress_callback=progress_cb,
-                    safe_memory=data["safe_memory"],
-                    tile_callback=tile_cb,
                 )
+                try:
+                    preprocess_info = self.model_adapter.inspect(preprocess_stage.model_path)
+                    if preprocess_info.scale != 1:
+                        raise ValueError(
+                            "A preprocessing restoration checkpoint must have native scale 1×."
+                        )
+                    intermediate_file = self.engine.process_image(
+                        img_data=working_img_data,
+                        model_info=preprocess_info,
+                        model_path=preprocess_stage.model_path,
+                        device_str=data["device"],
+                        precision_str=data["precision"],
+                        tile_size=data["tile_size"],
+                        halo=data["halo"],
+                        cancel_event=self.cancel_event,
+                        progress_callback=progress_cb,
+                        safe_memory=data["safe_memory"],
+                        tile_callback=tile_cb,
+                        temporary_directory=scratch_directory,
+                    )
+                    if self.cancel_event.is_set():
+                        raise InterruptedError("Cancelled between pipeline stages.")
+
+                    # Convert the lossless uint8 memmap to the production tensor
+                    # representation. No JPEG/PNG intermediate is created.
+                    import torch
+
+                    restored = np.asarray(intermediate_file.get_array())
+                    working_img_data = {
+                        **img_data,
+                        "tensor": torch.from_numpy(np.array(restored, copy=True))
+                        .float()
+                        .div_(255.0),
+                    }
+                    complete_stage(0, preprocess_stage)
+                except InterruptedError:
+                    raise
+                except Exception as error:  # noqa: BLE001
+                    raise PipelineStageError(preprocess_stage, str(error)) from error
+                finally:
+                    if intermediate_file is not None:
+                        intermediate_file.cleanup()
+                        intermediate_file = None
+                    self.engine.release_model(preprocess_stage.model_path)
+
+            if self.cancel_event.is_set():
+                raise InterruptedError("Cancelled between pipeline stages.")
+
+            active_stage = primary_stage
+            active_stage_index = primary_index
+            active_stage_span = 1 + int(face_stage is not None)
+            start_stage(primary_index, primary_stage)
+            if face_stage is not None:
+                start_stage(primary_index + 1, face_stage)
+
+            send_message(LogMessage(level="info", message="Loading primary model..."))
+            try:
+                info = self.model_adapter.inspect(primary_stage.model_path)
+            except Exception as error:  # noqa: BLE001
+                raise PipelineStageError(primary_stage, str(error)) from error
+
+            face_model_path = data.get("face_model_path")
+            face_info = None
+            if face_model_path:
+                try:
+                    face_info = self.model_adapter.inspect(face_model_path)
+                except Exception as error:  # noqa: BLE001
+                    raise PipelineStageError(face_stage or primary_stage, str(error)) from error
+                if face_info.scale != info.scale:
+                    raise PipelineStageError(
+                        face_stage or primary_stage,
+                        "Face and primary checkpoints must have the same native scale.",
+                    )
+                if face_info.out_channels != info.out_channels:
+                    raise PipelineStageError(
+                        face_stage or primary_stage,
+                        "Face and primary checkpoints must have compatible output channels.",
+                    )
+
+            try:
+                if face_model_path and face_info:
+                    # Face restoration is fused with the paired upscale pass:
+                    # both model outputs are blended only within feathered face
+                    # masks, avoiding a second full-resolution intermediate.
+                    from localsr.core.face_detection import detect_faces
+                    from localsr.core.output_writer import OutputWriter
+                    from localsr.core.video_pipeline import process_frame_face_aware
+
+                    tensor = working_img_data["tensor"]
+                    rgb_for_detection = tensor.permute(1, 2, 0).clamp(0, 1).mul(255).byte().numpy()
+                    face_mask = detect_faces(
+                        rgb_for_detection,
+                        cancel_event=self.cancel_event,
+                    )
+
+                    if face_mask.has_faces:
+                        send_message(
+                            LogMessage(
+                                level="info",
+                                message=(
+                                    f"Detected {len(face_mask.boxes)} face(s); applying "
+                                    "fidelity-controlled face restoration."
+                                ),
+                            )
+                        )
+                        face_aware_result = process_frame_face_aware(
+                            engine=self.engine,
+                            img_tensor=tensor,
+                            face_mask=face_mask,
+                            general_model_path=primary_stage.model_path,
+                            face_model_path=face_model_path,
+                            general_model_info=info,
+                            face_model_info=face_info,
+                            device_str=data["device"],
+                            precision_str=data["precision"],
+                            tile_size=data["tile_size"],
+                            halo=data["halo"],
+                            cancel_event=self.cancel_event,
+                            safe_memory=data["safe_memory"],
+                            face_fidelity=float(data.get("face_fidelity", 0.7)),
+                            progress_callback=progress_cb,
+                            tile_callback=tile_cb,
+                        )
+                        out_file = OutputWriter(
+                            face_aware_result.shape,
+                            dtype=np.uint8,
+                            temporary_directory=scratch_directory,
+                        )
+                        out_file.mmap[:] = face_aware_result
+                        out_file.mmap.flush()
+                    else:
+                        send_message(
+                            LogMessage(
+                                level="info",
+                                message="No faces detected; the primary model completed unchanged.",
+                            )
+                        )
+                        out_file = self.engine.process_image(
+                            img_data=working_img_data,
+                            model_info=info,
+                            model_path=primary_stage.model_path,
+                            device_str=data["device"],
+                            precision_str=data["precision"],
+                            tile_size=data["tile_size"],
+                            halo=data["halo"],
+                            cancel_event=self.cancel_event,
+                            progress_callback=progress_cb,
+                            safe_memory=data["safe_memory"],
+                            tile_callback=tile_cb,
+                            temporary_directory=scratch_directory,
+                        )
+                else:
+                    out_file = self.engine.process_image(
+                        img_data=working_img_data,
+                        model_info=info,
+                        model_path=primary_stage.model_path,
+                        device_str=data["device"],
+                        precision_str=data["precision"],
+                        tile_size=data["tile_size"],
+                        halo=data["halo"],
+                        cancel_event=self.cancel_event,
+                        progress_callback=progress_cb,
+                        safe_memory=data["safe_memory"],
+                        tile_callback=tile_cb,
+                        temporary_directory=scratch_directory,
+                    )
+            except InterruptedError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                failed_stage = face_stage if face_stage is not None else primary_stage
+                raise PipelineStageError(failed_stage, str(error)) from error
+
+            complete_stage(primary_index, primary_stage)
+            if face_stage is not None:
+                complete_stage(primary_index + 1, face_stage)
 
             if self.cancel_event.is_set():
                 send_message(JobCancelled(job_id=job_id))
@@ -692,8 +999,28 @@ class WorkerServer:
         except InterruptedError:
             send_message(JobCancelled(job_id=job_id))
         finally:
+            preview_encoder.close()
+            if intermediate_file is not None:
+                intermediate_file.cleanup()
             if out_file is not None:
                 out_file.cleanup()
+
+    @staticmethod
+    def _emit_live_preview(packet: PreviewPacket) -> None:
+        send_message(
+            LivePreviewFrame(
+                job_id=packet.job_id,
+                sequence=packet.sequence,
+                preview_kind=packet.preview_kind,
+                jpeg_base64=packet.jpeg_base64,
+                output_x=packet.output_x,
+                output_y=packet.output_y,
+                output_width=packet.output_width,
+                output_height=packet.output_height,
+                image_width=packet.image_width,
+                image_height=packet.image_height,
+            )
+        )
 
     def _run_temporal_video_job(self, job_id, data, engine_factory):
         """Stream a video through a clip-based temporal engine.
@@ -728,6 +1055,13 @@ class WorkerServer:
         chunk_new = 33  # 4n+1: fresh frames per streamed chunk
         decode_iter = decode_frames(video_path)
         state = {"done": 0}
+        preview_encoder = LatestPreviewEncoder(
+            lambda packet: self._emit_live_preview(packet),
+            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
+            enabled=bool(data.get("preview_enabled", True)),
+            max_fps=float(data.get("preview_max_fps", 2.0)),
+            max_dimension=int(data.get("preview_max_dimension", 320)),
+        )
 
         def read_chunk() -> list:
             frames = []
@@ -787,9 +1121,21 @@ class WorkerServer:
             out_height, out_width = first_out[0].shape[:2]
 
             def all_frames():
+                emitted = 0
                 for frame in first_out:
                     if self.cancel_event.is_set():
                         raise InterruptedError("video job cancelled")
+                    preview_encoder.submit(
+                        job_id=job_id,
+                        preview_kind="video",
+                        pixels=frame,
+                        force=bool(total_frames > 0 and emitted + 1 >= total_frames),
+                        output_width=int(frame.shape[1]),
+                        output_height=int(frame.shape[0]),
+                        image_width=int(frame.shape[1]),
+                        image_height=int(frame.shape[0]),
+                    )
+                    emitted += 1
                     yield frame
                 previous_tail = first_chunk[-overlap:] if overlap > 0 else []
                 while True:
@@ -803,6 +1149,17 @@ class WorkerServer:
                     for frame in output:
                         if self.cancel_event.is_set():
                             raise InterruptedError("video job cancelled")
+                        preview_encoder.submit(
+                            job_id=job_id,
+                            preview_kind="video",
+                            pixels=frame,
+                            force=bool(total_frames > 0 and emitted + 1 >= total_frames),
+                            output_width=int(frame.shape[1]),
+                            output_height=int(frame.shape[0]),
+                            image_width=int(frame.shape[1]),
+                            image_height=int(frame.shape[0]),
+                        )
+                        emitted += 1
                         yield frame
 
             encode_video(
@@ -821,6 +1178,7 @@ class WorkerServer:
             send_message(JobCancelled(job_id=job_id))
             return
         finally:
+            preview_encoder.close()
             engine = None  # noqa: F841 — releases the models
             try:
                 import torch
@@ -919,9 +1277,18 @@ class WorkerServer:
             fps_override=data.get("fps"),
             face_model_path=face_model_path,
             face_model_info=face_info,
+            face_fidelity=float(data.get("face_fidelity", 0.7)),
             deflicker=bool(data.get("deflicker", False)),
             deflicker_window=int(data.get("deflicker_window", 3)),
             output_scale=data.get("output_scale"),
+        )
+
+        preview_encoder = LatestPreviewEncoder(
+            lambda packet: self._emit_live_preview(packet),
+            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
+            enabled=bool(data.get("preview_enabled", True)),
+            max_fps=float(data.get("preview_max_fps", 2.0)),
+            max_dimension=int(data.get("preview_max_dimension", 320)),
         )
 
         def frame_started(frame_index: int, total_frames: int) -> None:
@@ -933,19 +1300,16 @@ class WorkerServer:
                 )
             )
 
-        def frame_completed(frame_index: int, total_frames: int, jpeg_b64: str) -> None:
-            # The thumbnail carrier. ETA is sent separately by progress_cb to
-            # avoid duplicating the elapsed-time calculation here.
-            send_message(
-                VideoFrameCompleted(
-                    job_id=job_id,
-                    frame_index=int(frame_index),
-                    total_frames=int(total_frames),
-                    frames_processed=0,
-                    elapsed_seconds=0.0,
-                    estimated_remaining_seconds=0.0,
-                    jpeg_base64=jpeg_b64,
-                )
+        def enhanced_frame(frame_index: int, total_frames: int, pixels: np.ndarray) -> None:
+            preview_encoder.submit(
+                job_id=job_id,
+                preview_kind="video",
+                pixels=pixels,
+                force=bool(total_frames > 0 and frame_index + 1 >= total_frames),
+                output_width=int(pixels.shape[1]),
+                output_height=int(pixels.shape[0]),
+                image_width=int(pixels.shape[1]),
+                image_height=int(pixels.shape[0]),
             )
 
         def progress_cb(frames_done: int, total_frames: int, elapsed: float) -> None:
@@ -954,12 +1318,10 @@ class WorkerServer:
                 remaining = per_frame * max(0, total_frames - frames_done)
             else:
                 remaining = 0.0
-            # Re-send with the real progress numbers. frame_completed above is
-            # the per-frame thumbnail carrier; this one carries ETA.
             send_message(
                 VideoFrameCompleted(
                     job_id=job_id,
-                    frame_index=0,
+                    frame_index=max(0, int(frames_done) - 1),
                     total_frames=int(total_frames),
                     frames_processed=int(frames_done),
                     elapsed_seconds=float(elapsed),
@@ -975,12 +1337,15 @@ class WorkerServer:
                 engine=self.engine,
                 cancel_event=self.cancel_event,
                 frame_started_cb=frame_started,
-                frame_completed_cb=frame_completed,
+                enhanced_frame_cb=enhanced_frame,
                 progress_cb=progress_cb,
             )
         except InterruptedError:
+            preview_encoder.close()
             send_message(JobCancelled(job_id=job_id))
             return
+        finally:
+            preview_encoder.close()
 
         if self.cancel_event.is_set():
             send_message(JobCancelled(job_id=job_id))

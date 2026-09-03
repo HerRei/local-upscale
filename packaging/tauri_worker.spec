@@ -33,6 +33,7 @@ hiddenimports = sorted(
         + [
             "PIL._tkinter_finder",
             "av",
+            "cv2",
             "rawpy",
             "tifffile",
             "torchvision",

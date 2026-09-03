@@ -10,6 +10,7 @@
     { "$ref": "#/$defs/pathRequest" },
     { "$ref": "#/$defs/jobRequest" },
     { "$ref": "#/$defs/videoJobRequest" },
+    { "$ref": "#/$defs/benchmarkRequest" },
     { "$ref": "#/$defs/cancelRequest" },
     { "$ref": "#/$defs/workerReady" },
     { "$ref": "#/$defs/engineInfo" },
@@ -119,9 +120,26 @@
         "halo": { "type": "integer", "minimum": 0, "maximum": 256 },
         "precision": { "enum": ["fp32", "fp16", "bf16"] },
         "safe_memory": { "type": "boolean" },
+        "scratch_directory": { "type": ["string", "null"], "minLength": 1 },
         "face_model_path": { "type": ["string", "null"] },
-        "allow_unverified_checkpoint": { "type": ["boolean", "null"] }
+        "face_fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "allow_unverified_checkpoint": { "type": ["boolean", "null"] },
+        "preview_enabled": { "type": "boolean" },
+        "preview_max_fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
+        "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 }
       }
+    },
+    "pipelineStage": {
+      "type": "object",
+      "required": ["kind", "model_id", "model_path"],
+      "properties": {
+        "kind": { "enum": ["deblock", "restore", "upscale", "face_restore"] },
+        "model_id": { "type": "string", "minLength": 1 },
+        "model_path": { "type": "string", "minLength": 1 },
+        "fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "execution": { "enum": ["sequential", "fused-with-upscale"] }
+      },
+      "additionalProperties": false
     },
     "jobRequest": {
       "allOf": [
@@ -144,10 +162,16 @@
                   "properties": {
                     "image_path": { "type": "string", "minLength": 1 },
                     "output_path": { "type": "string", "minLength": 1 },
-                    "output_format": { "enum": ["png", "jpg", "tif"] },
+                    "output_format": { "enum": ["png", "jpg", "tif", "webp"] },
                     "jpeg_quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                     "preserve_metadata": { "type": "boolean" },
-                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 }
+                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+                    "stages": {
+                      "type": ["array", "null"],
+                      "minItems": 1,
+                      "maxItems": 3,
+                      "items": { "$ref": "#/$defs/pipelineStage" }
+                    }
                   }
                 }
               ]
@@ -194,6 +218,28 @@
                   }
                 }
               ]
+            }
+          }
+        }
+      ]
+    },
+    "benchmarkRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "benchmark_request" },
+            "data": {
+              "type": "object",
+              "required": ["job_id", "model_path", "model_id", "model_name", "device"],
+              "properties": {
+                "job_id": { "type": "string", "minLength": 1 },
+                "model_path": { "type": "string", "minLength": 1 },
+                "model_id": { "const": "span_photo_x4" },
+                "model_name": { "type": "string", "minLength": 1 },
+                "device": { "type": "string", "minLength": 1 }
+              },
+              "additionalProperties": false
             }
           }
         }
@@ -257,8 +303,13 @@
                 "media_info",
                 "media_probe_failed",
                 "job_started",
+                "stage_started",
+                "stage_progress",
+                "stage_completed",
                 "progress",
                 "tile_update",
+                "live_preview_frame",
+                "live_preview_warning",
                 "log",
                 "warning",
                 "job_completed",
@@ -267,6 +318,11 @@
                 "video_frame_started",
                 "video_frame_completed",
                 "video_job_completed",
+                "benchmark_started",
+                "benchmark_progress",
+                "benchmark_completed",
+                "benchmark_cancelled",
+                "benchmark_failed",
                 "faces_detected",
                 "face_detection_unavailable"
               ]
