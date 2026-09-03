@@ -36,6 +36,24 @@ def test_find_blocking_runs_filters_name_status_and_current_run() -> None:
     ]
 
 
+def test_fifo_filter_ignores_newer_peers_but_always_blocks_same_head() -> None:
+    runs = [
+        {"id": 40, "name": "CI", "status": "queued", "head_sha": "older"},
+        {"id": 60, "name": "CI", "status": "queued", "head_sha": "newer"},
+        {"id": 70, "name": "CI", "status": "queued", "head_sha": "release-head"},
+    ]
+
+    blocking = workflow_coordination.find_blocking_runs(
+        runs,
+        blocked_workflows={"CI"},
+        current_run_id=50,
+        only_older_runs=True,
+        always_block_head_shas={"release-head"},
+    )
+
+    assert [run.database_id for run in blocking] == [40, 70]
+
+
 def test_fail_mode_reports_active_run_without_sleeping(monkeypatch) -> None:
     monkeypatch.setattr(
         workflow_coordination,

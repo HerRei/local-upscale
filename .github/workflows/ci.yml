@@ -42,7 +42,13 @@ jobs:
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "CI" \
+            --only-older-runs
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
             --blocked-workflow "Tauri Next Preview" \
+            --only-older-runs \
             --ignore-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
 
   lint:

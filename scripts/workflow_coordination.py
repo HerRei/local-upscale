@@ -58,8 +58,11 @@ def find_blocking_runs(
     blocked_workflows: set[str],
     current_run_id: int,
     ignored_head_shas: set[str] | None = None,
+    only_older_runs: bool = False,
+    always_block_head_shas: set[str] | None = None,
 ) -> list[ActiveRun]:
     ignored_head_shas = ignored_head_shas or set()
+    always_block_head_shas = always_block_head_shas or set()
     blocking: list[ActiveRun] = []
     for run in runs:
         database_id = run.get("id")
@@ -74,6 +77,11 @@ def find_blocking_runs(
             or not isinstance(status, str)
             or status not in ACTIVE_STATUSES
             or (isinstance(head_sha, str) and head_sha in ignored_head_shas)
+            or (
+                only_older_runs
+                and database_id > current_run_id
+                and head_sha not in always_block_head_shas
+            )
         ):
             continue
         html_url = run.get("html_url")
@@ -98,6 +106,8 @@ def coordinate(
     timeout_seconds: int,
     poll_seconds: int,
     ignored_head_shas: set[str] | None = None,
+    only_older_runs: bool = False,
+    always_block_head_shas: set[str] | None = None,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
     while True:
@@ -106,6 +116,8 @@ def coordinate(
             blocked_workflows=blocked_workflows,
             current_run_id=current_run_id,
             ignored_head_shas=ignored_head_shas,
+            only_older_runs=only_older_runs,
+            always_block_head_shas=always_block_head_shas,
         )
         if not blocking:
             print("Mac-mini heavyweight workflow slot is clear.")
@@ -138,6 +150,17 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Ignore a matching run head (used only to give same-commit CI priority)",
     )
+    parser.add_argument(
+        "--only-older-runs",
+        action="store_true",
+        help="Wait only for lower run IDs so peers form a deterministic FIFO",
+    )
+    parser.add_argument(
+        "--always-block-head-sha",
+        action="append",
+        default=[],
+        help="With --only-older-runs, still block a newer run for this exact head",
+    )
     return parser.parse_args()
 
 
@@ -158,6 +181,8 @@ def main() -> None:
             timeout_seconds=args.timeout_seconds,
             poll_seconds=args.poll_seconds,
             ignored_head_shas=set(args.ignore_head_sha),
+            only_older_runs=args.only_older_runs,
+            always_block_head_shas=set(args.always_block_head_sha),
         )
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
