@@ -124,10 +124,20 @@ jobs:
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "CI" \
             --blocked-workflow "v0.0.11 Mac mini Cross Alpha" \
             --blocked-workflow "Signed Tauri Alpha Release" \
             --blocked-workflow "Legacy Slint Build (manual)"
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "CI" \
+            --only-older-runs \
+            --always-block-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          python3 scripts/workflow_coordination.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --blocked-workflow "Tauri Next Preview" \
+            --only-older-runs
 
   verify:
     name: Verify Next Preview (${{ matrix.platform }})

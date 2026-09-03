@@ -203,7 +203,13 @@ def test_macmini_heavy_workflows_and_preview_guests_are_serialized() -> None:
     assert '--blocked-workflow "v0.0.11 Mac mini Cross Alpha"' in ci
     assert '--blocked-workflow "Tauri Next Preview"' in ci
     assert '--ignore-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"' in ci
+    assert ci.count("--only-older-runs") == 2
     assert '--blocked-workflow "CI"' in preview
+    assert preview.count("--only-older-runs") == 2
+    assert (
+        '--always-block-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"'
+        in preview
+    )
     assert '--blocked-workflow "CI"' in cross
     assert "--mode fail" in cross
     assert "runs-on: ubuntu-latest" in ci
