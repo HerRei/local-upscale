@@ -21,7 +21,7 @@ omegaconf==2.3.1
 # OmegaConf 2.3.x requires this exact pure-Python line. Upstream publishes it
 # only as an sdist, so CI builds one pinned py3-none-any bootstrap wheel before
 # resolving the two otherwise wheel-only macOS architecture sets.
-antlr4-python3-runtime==4.9.3
+antlr4-python3-runtime==4.13.2
 diffusers==0.35.2
 # 0.8.9 is the final release compatible with torch 2.2; 0.9+ requires 2.4.
 rotary-embedding-torch==0.8.9
