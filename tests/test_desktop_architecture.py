@@ -219,6 +219,10 @@ def test_isolated_workflow_copies_preserve_github_for_actionlint() -> None:
         if "rsync -a" in workflow:
             assert "--exclude '/.git/'" in workflow
 
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "-config-file .github/actionlint.yaml" in ci
+    assert ".github/workflows/*.yml" in ci
+
 
 def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
     assert "@tauri-apps/plugin-shell" in architecture.FORBIDDEN_WEBVIEW_PACKAGES

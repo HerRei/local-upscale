@@ -85,7 +85,9 @@ jobs:
             https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $ACTIONLINT_ARCHIVE" | sha256sum --check
           tar -xzf "$ACTIONLINT_ARCHIVE" -C "$RUN_ROOT/environment" actionlint
-          "$RUN_ROOT/environment/actionlint" -color
+          "$RUN_ROOT/environment/actionlint" -color \
+            -config-file .github/actionlint.yaml \
+            .github/workflows/*.yml
           "$RUN_ROOT/environment/venv/bin/python" scripts/check_beta_readiness.py
           "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
           "$RUN_ROOT/environment/venv/bin/python" -m ruff format --check src tests scripts
