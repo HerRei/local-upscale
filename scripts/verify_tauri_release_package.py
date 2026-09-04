@@ -74,7 +74,16 @@ def verify_macos(path: Path, architecture: str) -> dict[str, object]:
             apps[0],
             {architecture},
             main,
-            excludes=("Contents/MacOS/cv2/.dylibs/*", "Contents/MacOS/_internal/cv2/.dylibs/*"),
+            excludes=(
+                "*/cv2/.dylibs/*",
+                "*/_internal/libavcodec.*",
+                "*/_internal/libavformat.*",
+                "*/_internal/libavutil.*",
+                "*/_internal/libjxl*",
+                "*/_internal/libogg.*",
+                "*/_internal/libswresample.*",
+                "*/_internal/libswscale.*",
+            ),
         )
         report["container"] = "Apple UDIF disk image"
         report["artifact"] = path.name
