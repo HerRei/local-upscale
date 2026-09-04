@@ -132,8 +132,20 @@ def build_worker(target: str | None = None) -> None:
             str(WORKER_WORK),
             str(ROOT / "packaging" / "tauri_worker.spec"),
         ],
+        cwd=ROOT,
         env=environment,
     )
+    if target_arch and sys.platform == "darwin":
+        run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "thin_macho_binaries.py"),
+                str(WORKER_DIST),
+                target_arch,
+            ],
+            cwd=ROOT,
+            env=environment,
+        )
     executable = worker_executable()
     if not executable.is_file():
         raise SystemExit(f"worker build did not create {executable}")

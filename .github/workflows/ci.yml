@@ -133,7 +133,7 @@ jobs:
       - name: Allocate isolated SSD workspace
         id: scratch
         run: |
-          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 8
+          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 5
           python3 scripts/ci_scratch.py start \
             --root /ci-scratch \
             --run-id "${{ github.run_id }}" \
@@ -248,7 +248,7 @@ jobs:
             --skip-hdd \
             --ssd-min-percent 20 \
             --ssd-min-gib 6 \
-            --ssd-peak-gib 8
+            --ssd-peak-gib 5
           python3 scripts/ci_scratch.py start \
             --root "$CI_SCRATCH" \
             --run-id "${{ github.run_id }}" \
