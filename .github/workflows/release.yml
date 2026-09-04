@@ -44,7 +44,7 @@ jobs:
           python3 scripts/storage_preflight.py \
             --ssd-path / \
             --hdd-path /mnt/hdd \
-            --ssd-peak-gib 20 \
+            --ssd-min-percent 15 --ssd-peak-gib 20 \
             --hdd-peak-gib 20 \
             --metrics "/mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/preflight.json"
       - name: Check artifact receiver
@@ -352,7 +352,7 @@ jobs:
             --skip-hdd \
             --ssd-min-percent 20 \
             --ssd-min-gib 6 \
-            --ssd-peak-gib 15
+            --ssd-min-percent 15 --ssd-peak-gib 15
           python3 scripts/ci_scratch.py start \
             --root "$CI_SCRATCH" \
             --run-id "${{ github.run_id }}" \
@@ -546,7 +546,7 @@ jobs:
           python3 scripts/storage_preflight.py \
             --ssd-path / \
             --hdd-path /mnt/hdd \
-            --ssd-peak-gib 0 \
+            --ssd-min-percent 15 --ssd-peak-gib 0 \
             --hdd-peak-gib 0
 
   publish-release:

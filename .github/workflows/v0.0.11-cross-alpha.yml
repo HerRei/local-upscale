@@ -117,7 +117,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor v0.0.11-alpha)
           mkdir -p /ci-scratch/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-peak-gib 8
+          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 8
           "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
             echo "LOCALSR_ALPHA_ROOT=$ROOT"
@@ -327,7 +327,7 @@ jobs:
           python3 scripts/release_scratch.py init --root "$CI_SCRATCH"
           python3 scripts/release_scratch.py cleanup --root "$CI_SCRATCH"
           python3 scripts/storage_preflight.py \
-            --ssd-path "$CI_SCRATCH" --skip-hdd --ssd-min-percent 20 --ssd-min-gib 6 --ssd-peak-gib 15
+            --ssd-path "$CI_SCRATCH" --skip-hdd --ssd-min-percent 20 --ssd-min-gib 6 --ssd-min-percent 15 --ssd-peak-gib 15
           RUN_ROOT=$(python3 scripts/release_scratch.py start \
             --root "$CI_SCRATCH" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform macos --flavor tauri-v0.0.11-cross-alpha)

@@ -98,7 +98,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor signed-tauri)
           mkdir -p /ci-scratch/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path /ci-scratch --skip-hdd --ssd-peak-gib 8
+          python3 scripts/storage_preflight.py --ssd-path /ci-scratch --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 8
           "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
             echo "LOCALSR_TAURI_ROOT=$ROOT"
@@ -342,7 +342,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform macos --flavor signed-arm64)
           mkdir -p /Volumes/CISCRATCH/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path /Volumes/CISCRATCH --skip-hdd --ssd-peak-gib 10
+          python3 scripts/storage_preflight.py --ssd-path /Volumes/CISCRATCH --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 10
           /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv "$ROOT/venv"
           {
             echo "LOCALSR_TAURI_ROOT=$ROOT"

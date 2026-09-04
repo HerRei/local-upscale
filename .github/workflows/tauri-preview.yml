@@ -194,7 +194,7 @@ jobs:
           python3 scripts/storage_preflight.py \
             --ssd-path /ci-scratch \
             --skip-hdd \
-            --ssd-peak-gib 5
+            --ssd-min-percent 15 --ssd-peak-gib 5
           ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify"
           VENV="$ROOT/venv"
           mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
@@ -349,7 +349,7 @@ jobs:
           python3 scripts/storage_preflight.py \
             --ssd-path /ci-scratch \
             --skip-hdd \
-            --ssd-peak-gib 5
+            --ssd-min-percent 15 --ssd-peak-gib 5
           ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package"
           VENV="$ROOT/venv"
           mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
