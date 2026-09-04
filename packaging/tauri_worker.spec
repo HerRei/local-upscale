@@ -63,6 +63,19 @@ analysis = Analysis(
     noarchive=False,
     optimize=1,
 )
+
+if sys.platform == "darwin" and target_arch in ("arm64", "x86_64"):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import filter_macho_architecture
+    from PyInstaller.building.datastruct import TOC
+    
+    report_path = ROOT / "staging" / "architecture-pruning-report.json"
+    analysis.binaries = TOC(
+        filter_macho_architecture.filter_binaries(
+            analysis.binaries, target_arch, report_path
+        )
+    )
+
 pyz = PYZ(analysis.pure)
 executable = EXE(
     pyz,
