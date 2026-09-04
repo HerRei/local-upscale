@@ -108,6 +108,14 @@ PyTorch 2.2.2 is the final version with the paired macOS wheels needed by that p
 security debt and cannot be the beta runtime. A later signed build must use maintained native ARM
 PyTorch on real Apple-Silicon hardware; Intel macOS remains an open product decision.
 
+## Failure Recovery
+
+1. The macOS cross-build intentionally runs first to expose universal2, wheel and Mach-O problems before the other expensive builds.
+2. For a transient failure where the repository commit has not changed, use "Re-run failed jobs" on the existing workflow run.
+3. The release preparation code will reuse verified platform artifacts from earlier attempts of that same run.
+4. If fixing the failure requires a new commit/SHA, start a new workflow run and rebuild every platform.
+5. Never reuse binaries from an older commit as products of a newer commit.
+
 ## Publishing v0.0.11-alpha
 
 1. Merge the release commit to `main` only after normal CI and Tauri CI are green.

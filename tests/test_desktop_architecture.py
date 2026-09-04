@@ -234,3 +234,21 @@ def test_rust_and_npm_forbidden_plugin_names_cover_both_ecosystems() -> None:
     assert "@tauri-apps/plugin-shell" in architecture.FORBIDDEN_WEBVIEW_PACKAGES
     assert "tauri-plugin-shell" in architecture.FORBIDDEN_TAURI_PLUGINS
     assert architecture.FORBIDDEN_WEBVIEW_PACKAGES.isdisjoint(architecture.FORBIDDEN_TAURI_PLUGINS)
+
+
+def test_v0011_cross_alpha_fail_fast_macmini_dependency_chain() -> None:
+    workflow = (ROOT / ".github/workflows/v0.0.11-cross-alpha.yml").read_text()
+
+    def get_needs(job: str) -> str:
+        import re
+
+        match = re.search(
+            rf"^  {job}:\n(?:^    .*\n)*?^    needs:\s*\[(.*?)\]", workflow, re.MULTILINE
+        )
+        assert match is not None, f"Could not find needs for {job}"
+        return match.group(1).strip()
+
+    assert get_needs("build-macos-cross") == "preflight"
+    assert get_needs("build-windows") == "build-macos-cross"
+    assert get_needs("build-linux") == "build-windows"
+    assert get_needs("verify-release-matrix") == "build-linux"
