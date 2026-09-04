@@ -70,21 +70,7 @@ def verify_macos(path: Path, architecture: str) -> dict[str, object]:
         if not executable_name:
             raise ValueError("the bundled app has no CFBundleExecutable")
         main = apps[0] / "Contents" / "MacOS" / str(executable_name)
-        report = inspect_macho_tree(
-            apps[0],
-            {architecture},
-            main,
-            excludes=(
-                "*/cv2/.dylibs/*",
-                "*/_internal/libavcodec.*",
-                "*/_internal/libavformat.*",
-                "*/_internal/libavutil.*",
-                "*/_internal/libjxl*",
-                "*/_internal/libogg.*",
-                "*/_internal/libswresample.*",
-                "*/_internal/libswscale.*",
-            ),
-        )
+        report = inspect_macho_tree(apps[0], {architecture}, main)
         report["container"] = "Apple UDIF disk image"
         report["artifact"] = path.name
         return report
