@@ -7,6 +7,11 @@ def thin_binaries(directory: Path, target_arch: str) -> None:
         return
 
     for path in directory.rglob("*"):
+        if path.is_symlink() and not path.exists():
+            print(f"Removing broken symlink: {path.name}")
+            path.unlink()
+            continue
+
         if path.is_file() and (path.suffix in (".dylib", ".so") or not path.suffix):
             # Check if it's a Mach-O file
             try:
