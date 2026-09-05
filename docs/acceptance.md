@@ -13,8 +13,10 @@
 - Generated-fixture coverage for real-color photos, faces, anime-like line art, screenshot/text,
   large and transparent images, DNG handling, cancellation, low disk, and low memory.
 - CI validation of `ci/beta-readiness.json`, which must match the application version and cannot
-  claim beta readiness while any credential, decision, external clarification, manual, or Labs
-  gate remains unresolved.
+  claim beta readiness while a blocking gate remains unresolved. Schema v2 separates optional
+  feature maturity from release requirements; manual passes require an evidence reference.
+  Standard video has a blocking acceptance gate. Optional SeedVR2 and processing Labs gates do not
+  independently block beta. Video cases are listed in the acceptance record template.
 - Catalog checkpoints and installed video bundles are revalidated by SHA-256 rather than file size;
   unverified pickle/TorchScript checkpoints are blocked before Spandrel or PyTorch sees them.
 - Release workflows use an immutable checkout commit, persist no checkout credentials, grant write

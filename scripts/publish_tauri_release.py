@@ -198,7 +198,7 @@ def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str
     for path in missing:
         run(["gh", "release", "upload", tag, str(path)])
     import time
-    for attempt in range(60):
+    for _attempt in range(60):
         complete = view_release(tag)
         if complete is None:
             raise RuntimeError("GitHub draft disappeared during upload")

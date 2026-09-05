@@ -11,21 +11,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_STATUSES = {
     "automated-pass",
+    "manual-pass",
     "waiting-credentials",
     "decision-required",
     "manual-required",
     "external-clarification",
     "labs",
 }
-UNRESOLVED_STATUSES = ALLOWED_STATUSES - {"automated-pass"}
+UNRESOLVED_STATUSES = ALLOWED_STATUSES - {"automated-pass", "manual-pass"}
+
+
+def blocks_release(gate: dict) -> bool:
+    return gate["blocking"] and gate["status"] in UNRESOLVED_STATUSES
 
 
 def validate(path: Path, root: Path = ROOT) -> dict[str, object]:
     data = json.loads(path.read_text(encoding="utf-8"))
     with (root / "pyproject.toml").open("rb") as stream:
         version = str(tomllib.load(stream)["project"]["version"])
-    if data.get("schema_version") != 1:
-        raise ValueError("beta-readiness schema_version must be 1")
+    if data.get("schema_version") != 2:
+        raise ValueError("beta-readiness schema_version must be 2")
     if data.get("release") != version:
         raise ValueError("beta-readiness release does not match pyproject.toml")
     gates = data.get("gates")
@@ -43,7 +48,15 @@ def validate(path: Path, root: Path = ROOT) -> dict[str, object]:
         status = gate.get("status")
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"{gate_id}: unsupported status {status!r}")
-        if status in UNRESOLVED_STATUSES:
+        if not isinstance(gate.get("blocking"), bool):
+            raise ValueError(f"{gate_id}: blocking must be a boolean")
+        if not isinstance(gate.get("scope"), str) or not gate["scope"].strip():
+            raise ValueError(f"{gate_id}: scope must be non-empty")
+        if status == "manual-pass" and (
+            not isinstance(gate.get("evidence"), str) or not gate["evidence"].strip()
+        ):
+            raise ValueError(f"{gate_id}: manual-pass requires an evidence reference")
+        if blocks_release(gate):
             unresolved += 1
         for field in ("summary", "next_action"):
             if not isinstance(gate.get(field), str) or not gate[field].strip():
@@ -63,13 +76,18 @@ def main() -> int:
     args = parser.parse_args()
     data = validate(args.path)
     gates = data["gates"]
-    unresolved = [gate for gate in gates if gate["status"] in UNRESOLVED_STATUSES]
+    unresolved = [gate for gate in gates if blocks_release(gate)]
+    optional = [
+        gate for gate in gates if not gate["blocking"] and gate["status"] in UNRESOLVED_STATUSES
+    ]
     print(
         f"Beta readiness register valid for v{data['release']}: "
-        f"{len(gates) - len(unresolved)} complete, {len(unresolved)} unresolved"
+        f"{len(unresolved)} blocking, {len(optional)} optional experimental/pending"
     )
     for gate in unresolved:
         print(f"- {gate['id']}: {gate['status']} — {gate['next_action']}")
+    for gate in optional:
+        print(f"- Optional {gate['id']}: {gate['status']} — {gate['summary']}")
     return 1 if args.require_beta_ready and unresolved else 0
 
 

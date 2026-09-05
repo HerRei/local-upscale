@@ -92,6 +92,7 @@ class SceneResult:
     cv_percent: float
     megapixels_per_second: float
     encode_ms: float | None = None
+    preview: dict | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -420,6 +421,7 @@ def run_scene(
     clock: Callable[[], float] = time.perf_counter,
     warm: bool = False,
     tensor: torch.Tensor | None = None,
+    render_callback: Callable[[np.ndarray], None] | None = None,
 ) -> tuple[list[float], float | None, int]:
     """Run one fixed scene; returns (timings, encode_ms, iterations)."""
     scene_tensor = tensor if tensor is not None else _scene_tensor(scene)
@@ -446,6 +448,10 @@ def run_scene(
         if scene.scene_id == "s3-gallery-encode" and not warm:
             encode_ms = _encode_jpeg_ms(output)
         timings.append(clock() - started)
+        # Capture outside the synchronized measurement. Production uses this
+        # only for the existing unmeasured per-scene warm-up, once per scene.
+        if render_callback is not None:
+            render_callback(output)
 
     process_once()
     return timings, encode_ms, len(timings)
@@ -463,6 +469,7 @@ def run_device_phase(
     cancel_event: threading.Event,
     progress_callback: StageCallback | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    preview_callback: Callable[[dict], None] | None = None,
 ) -> DeviceBenchmark:
     """Warm up, measure every scene, and gate the phase on timing stability."""
     if not scenes:
@@ -549,6 +556,35 @@ def run_device_phase(
                 raise InterruptedError("benchmark cancelled")
             emit("started", scene.scene_id, scene_index)
             scene_tensor = _scene_tensor(scene)
+            preview = None
+
+            def capture_render(output, *, scene_tensor=scene_tensor, scene=scene):
+                nonlocal preview
+                import base64
+
+                from .video_io import thumbnail_jpeg, uint8_chw_to_rgb_hwc
+
+                source = (scene_tensor * 255).round().byte().numpy()
+
+                def data_url(array):
+                    jpeg = thumbnail_jpeg(
+                        uint8_chw_to_rgb_hwc(array), max_dimension=640, quality=90
+                    )
+                    return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
+
+                preview = {
+                    "device": device_id,
+                    "scene_id": scene.scene_id,
+                    "input_width": scene.width,
+                    "input_height": scene.height,
+                    "output_width": int(output.shape[2]),
+                    "output_height": int(output.shape[1]),
+                    "input_data_url": data_url(source),
+                    "output_data_url": data_url(output),
+                }
+                if preview_callback is not None:
+                    preview_callback(preview)
+
             # Re-warm briefly per scene (tile shape changes memory pools).
             run_scene(
                 engine=engine,
@@ -559,6 +595,7 @@ def run_device_phase(
                 clock=clock,
                 warm=True,
                 tensor=scene_tensor,
+                render_callback=capture_render,
             )
             timings: list[float] = []
             encode_ms: float | None = None
@@ -621,6 +658,7 @@ def run_device_phase(
                     cv_percent=round(cv * 100.0, 2),
                     megapixels_per_second=round(mps, 4),
                     encode_ms=round(encode_ms, 3) if encode_ms is not None else None,
+                    preview=preview,
                 ).to_dict()
             )
             emit(

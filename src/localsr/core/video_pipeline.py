@@ -24,9 +24,11 @@ from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
 from .inference import InferenceEngine
 from .tiling import generate_tiles
 from .video_io import (
-    decode_frames,
+    TimedVideoFrame,
+    decode_timed_frames,
     encode_video,
     probe_video,
+    selected_frame_count,
     uint8_chw_to_rgb_hwc,
 )
 
@@ -38,21 +40,16 @@ def rgb_to_tensor(rgb: np.ndarray) -> torch.Tensor:
 
 
 def _deflicker_frames(
-    restored: Iterator[np.ndarray],
+    restored: Iterator[np.ndarray | TimedVideoFrame],
     window: int,
     cancel_event: threading.Event,
-) -> Iterator[np.ndarray]:
-    """Temporal median de-flicker over a sliding window of restored frames.
+) -> Iterator[np.ndarray | TimedVideoFrame]:
+    """Conservative, experimental smoothing of low-amplitude static-region flicker.
 
-    For each output frame, take the per-pixel median of the current frame
-    and its (window - 1) neighbors. This removes per-frame flicker caused
-    by independent restoration while preserving genuine motion, because
-    a median ignores outliers but tracks the majority.
-
-    The buffer holds at most `window` frames. Frames are emitted with a
-    one-frame delay so the window is centered on the current frame. The
-    first and last frames use a smaller window since they have fewer
-    neighbors.
+    Regions that differ by more than 12 levels bypass filtering, including
+    motion and hard cuts. A half-strength blend limits damage to low-contrast
+    details. This is not optical-flow restoration. Timing and bounded buffering
+    are preserved; edge frames use only their available neighbors.
     """
     if window < 2:
         yield from restored
@@ -60,15 +57,26 @@ def _deflicker_frames(
 
     left = (window - 1) // 2
     right = window - 1 - left
-    buffer: deque[tuple[int, np.ndarray]] = deque()
+    buffer = deque()
     next_emit = 0
     last_index = -1
 
-    def median_for(index: int) -> np.ndarray:
+    def median_for(index: int):
         start = max(0, index - left)
         end = index + right
         selected = [frame for frame_index, frame in buffer if start <= frame_index <= end]
-        return np.median(np.stack(selected, axis=0), axis=0).astype(np.uint8)
+        current = next(frame for frame_index, frame in buffer if frame_index == index)
+
+        def pixels(frame):
+            return frame.rgb if isinstance(frame, TimedVideoFrame) else frame
+
+        original = pixels(current)
+        stack = np.stack([pixels(frame) for frame in selected]).astype(np.int16)
+        static = np.max(np.abs(stack - original), axis=(0, 3)) <= 12
+        median = np.median(stack, axis=0)
+        blended = np.rint((original.astype(float) + median) / 2).astype(np.uint8)
+        output = np.where(static[..., None], blended, original)
+        return current.with_pixels(output) if isinstance(current, TimedVideoFrame) else output
 
     for stream_index, frame in enumerate(restored):
         if cancel_event.is_set():
@@ -136,6 +144,7 @@ def run_video_job(
     enhanced_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
     progress_cb: Callable[[int, int, float], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
 
@@ -148,21 +157,15 @@ def run_video_job(
     inference_started_at: float | None = None
 
     probe = probe_video(config.video_path)
+    if config.fps_override is not None and (
+        not np.isfinite(config.fps_override) or config.fps_override <= 0
+    ):
+        raise ValueError("Video FPS override must be a finite positive number.")
     fps = config.fps_override if config.fps_override else probe.fps
     if fps <= 0:
         fps = 25.0
 
-    total_frames = probe.frame_count
-    if total_frames <= 0 and config.end_frame is not None:
-        total_frames = int(config.end_frame) + 1
-    if config.start_frame is not None:
-        total_frames = max(0, total_frames - int(config.start_frame))
-    if config.end_frame is not None and config.start_frame is not None:
-        total_frames = int(config.end_frame) - int(config.start_frame) + 1
-    if total_frames <= 0:
-        # Without a reliable count we still proceed; the UI shows "?" until
-        # the first frame lands.
-        total_frames = 0
+    total_frames = selected_frame_count(probe.frame_count, config.start_frame, config.end_frame)
 
     model_info = config.model_info
     native_scale = int(getattr(model_info, "scale", 1))
@@ -196,18 +199,20 @@ def run_video_job(
     cached_face_mask: FaceMask | None = None
     frames_since_detection = 0
 
-    def frame_generator() -> Iterator[np.ndarray]:
+    def frame_generator() -> Iterator[TimedVideoFrame]:
         nonlocal inference_started_at
         nonlocal frames_processed
         nonlocal cached_face_mask
         nonlocal frames_since_detection
 
-        decoded = decode_frames(
+        decoded = decode_timed_frames(
             config.video_path,
             start_frame=config.start_frame,
             end_frame=config.end_frame,
+            cancel_event=cancel_event,
         )
-        for output_frame_index, (_source_frame_index, rgb) in enumerate(decoded):
+        for output_frame_index, source_frame in enumerate(decoded):
+            rgb = source_frame.rgb
             if cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
             if inference_started_at is None:
@@ -295,7 +300,7 @@ def run_video_job(
                 elapsed = time.monotonic() - job_started_at
                 progress_cb(frames_processed, total_frames, elapsed)
 
-            yield out_rgb
+            yield source_frame.with_pixels(out_rgb)
 
     # Apply temporal de-flicker if enabled. The median filter wraps the
     # restored-frame generator so the encoder receives smoothed frames.
@@ -309,9 +314,11 @@ def run_video_job(
     # subtitle packets are trimmed and shifted onto the enhanced timeline.
     # A deliberate frame-rate override changes video speed, so passthrough
     # streams are omitted rather than silently producing drift.
-    source_fps = probe.fps or fps
-    rate_unchanged = config.fps_override is None or abs(float(fps) - float(source_fps)) < 1e-6
-    source_start_seconds = max(0, int(config.start_frame or 0)) / source_fps
+    rate_unchanged = config.fps_override is None
+    if not rate_unchanged and warning_callback:
+        warning_callback(
+            "FPS override changes playback speed; source audio and subtitles are omitted."
+        )
     encode_video(
         output_frames,
         config.output_video_path,
@@ -321,7 +328,9 @@ def run_video_job(
         width=output_width,
         height=output_height,
         audio_source=config.video_path if rate_unchanged else None,
-        source_start_seconds=source_start_seconds,
+        preserve_timing=rate_unchanged,
+        cancel_event=cancel_event,
+        warning_callback=warning_callback,
     )
 
     completed_at = time.monotonic()

@@ -18,9 +18,11 @@
   PyTorch 2.4.1, which also has checkpoint-loading advisories. LocalSR's default checkpoint policy
   prevents unverified pickle/TorchScript models from reaching that runtime, but DirectML remains an
   alpha-only backend until a maintained runtime or replacement backend is selected.
-- Video, SeedVR2, de-flicker, video comparison, and mixed-media queue combinations are Labs /
-  Experimental. MP4 and MKV are supported; compatible audio and subtitle streams are remuxed, but
-  codec/container combinations and large SeedVR2 memory demands still require physical testing.
+- Standard video supports SDR input and H.264 output in MP4/MKV, preserving source presentation
+  timing and normalizing right-angle rotation and mirrors. HDR PQ/HLG requires prior SDR conversion.
+  Source audio/subtitles are copied when compatible; trims have compressed-packet precision.
+  SeedVR2, de-flicker, and video face processing remain individually Labs. Installed-platform
+  playback, longer clips, codec combinations, and resource pressure still require recorded acceptance.
 - The HAT-S Face code path supports fidelity-controlled blending, but the current checkpoint's
   independent weight/training-data rights are unresolved. It is excluded from trusted automatic
   downloads and commercial recommendations; only a hash-matching user-supplied copy is accepted.

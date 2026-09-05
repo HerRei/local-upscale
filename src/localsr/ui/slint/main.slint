@@ -1230,12 +1230,12 @@ export component MainWindow inherits Window {
                             accessible-role: button;
                             accessible-enabled: root.video-enabled && root.model-selection-enabled;
                             accessible-label: root.video-enabled ?
-                                "Upscale Video · Labs" : "Video enhancement, coming soon";
+                                "Upscale Video" : "Video enhancement, coming soon";
 
                             Text {
                                 width: parent.width;
                                 height: parent.height;
-                                text: root.video-enabled ? "Upscale Video · Labs / Experimental" : "Video enhancement · Coming soon";
+                                text: root.video-enabled ? "Upscale Video · SDR" : "Video enhancement · Coming soon";
                                 color: root.video-enabled ? Theme.accent : Theme.text-tertiary;
                                 font-size: root.video-enabled ? 12px : 11px;
                                 font-weight: root.video-enabled ? 500 : 400;
@@ -1676,7 +1676,7 @@ export component MainWindow inherits Window {
 
                             // Video-only: temporal de-flicker toggle.
                             CheckControl {
-                                text: "De-flicker (temporal median)";
+                                text: "De-flicker · Labs (static regions)";
                                 checked: root.deflicker;
                                 active: root.controls-enabled && root.task-index == 2;
                                 toggled(value) => {

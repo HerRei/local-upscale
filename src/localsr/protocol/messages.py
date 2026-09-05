@@ -424,6 +424,15 @@ class JobFailed:
 
 
 @dataclass
+class BenchmarkPreview:
+    job_id: str
+    render: dict
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_preview", "data": asdict(self)})
+
+
+@dataclass
 class BenchmarkStarted:
     job_id: str
     workload_version: str

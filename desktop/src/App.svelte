@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
+  import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import {
@@ -28,6 +29,7 @@
   import type {
     AppSnapshot,
     BenchmarkDeviceResult,
+    BenchmarkRender,
     CatalogModel,
     CatalogVideoModel,
     IntegrationStatus,
@@ -42,6 +44,7 @@
 
   let snapshot: AppSnapshot = demoSnapshot();
   let booting = true;
+  let benchmarkRenders: BenchmarkRender[] = [];
   let page: 'media' | 'preview' | 'enhance' = 'preview';
   let advanced = false;
   let recipeEditorOpen = false;
@@ -314,6 +317,18 @@
   }
 
   function handleWorkerMessage(message: WorkerEnvelope): void {
+    if (message.type === 'benchmark_started') benchmarkRenders = [];
+    if (['benchmark_completed', 'benchmark_cancelled', 'benchmark_failed'].includes(message.type)) benchmarkRenders = [];
+    if (message.type === 'benchmark_preview') {
+      if (String(message.data.job_id ?? '') !== snapshot.runtime.active_job_id) return;
+      const render = message.data.render as BenchmarkRender | undefined;
+      if (render?.input_data_url?.startsWith('data:image/jpeg;base64,') &&
+          render?.output_data_url?.startsWith('data:image/jpeg;base64,')) {
+        benchmarkRenders = [...benchmarkRenders.filter(item =>
+          item.device !== render.device || item.scene_id !== render.scene_id), render];
+      }
+      return;
+    }
     // Tile traffic is display-only and can arrive thousands of times. Do not
     // invalidate the full Svelte snapshot for it; only update the live canvas.
     if (message.type === 'tile_update') {
@@ -1500,7 +1515,7 @@
       <div class="preview-header">
         <div>
           <strong>{selectedMedia?.name ?? 'Preview'}</strong>
-          <span>{selectedMedia ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video Labs' : ''}` : 'No media selected'}</span>
+          <span>{selectedMedia ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}` : 'No media selected'}</span>
         </div>
         {#if resultPreview || videoComparison}
           <div class="preview-badges"><span>Original</span><span>Enhanced</span></div>
@@ -1565,7 +1580,7 @@
               ><span aria-hidden="true">↔</span></div>
             {/if}
           </div>
-          {#if selectedMedia?.kind === 'video'}<span class="labs-chip">VIDEO · LABS / EXPERIMENTAL</span>{/if}
+          {#if selectedMedia?.kind === 'video'}<span class="labs-chip">VIDEO · LOCAL UPSCALING</span>{/if}
           {#if selectedMedia?.kind !== 'video'}<div class="zoom-hud" role="group" aria-label="Preview zoom" on:pointerdown|stopPropagation on:wheel|stopPropagation>
             <button aria-label="Zoom out" disabled={zoom <= minZoom} on:click={() => setZoom(zoom / 1.25)}>−</button>
             <span title={`Dynamic maximum ${Math.round(maxZoom * 100)}%`}>{Math.round(zoom * 100)}%</span>
@@ -1617,7 +1632,7 @@
           <div class="task-grid">
             <button disabled={selectedMedia?.kind === 'video'} class:active={settings.task === 'upscale'} on:click={() => setTask('upscale')}><b>Upscale</b><span>Photos and artwork</span></button>
             <button disabled={selectedMedia?.kind === 'video'} class:active={settings.task === 'denoise'} on:click={() => setTask('denoise')}><b>Denoise</b><span>Noise and blur</span></button>
-            <button disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'} class="video-task" class:active={settings.task === 'video'} on:click={() => setTask('video')}><b>Upscale Video</b><span>Labs / Experimental</span></button>
+            <button disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'} class="video-task" class:active={settings.task === 'video'} on:click={() => setTask('video')}><b>Upscale Video</b><span>Local SDR video</span></button>
           </div>
         </section>
 
@@ -1735,7 +1750,7 @@
                     updateSettings({ enable_face_model: event.currentTarget.checked });
                   }}
                 />
-                Face-aware pass with {faceModel.name} <em>{faceEngineAvailable ? 'checkpoint rights review required' : 'detector unavailable'}</em>
+                Face-aware pass with {faceModel.name} {settings.task === 'video' ? '· Labs' : ''}<em>{faceEngineAvailable ? 'checkpoint rights review required' : 'detector unavailable'}</em>
               </label>
               {#if !faceEngineAvailable}
                 <p class="model-description">Visible for workflow parity, but disabled because the OpenCV face-detector runtime is missing from this package.</p>
@@ -1776,13 +1791,21 @@
                 {:else}
                   <div class="field-row"><label for="container">Container</label><select id="container" value={settings.video_container} on:change={(event) => updateSettings({ video_container: event.currentTarget.value as UiSettings['video_container'] })}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></div>
                   <div class="range-row"><label for="crf">Video quality · CRF <b>{settings.video_crf}</b></label><input id="crf" type="range" min="12" max="30" value={settings.video_crf} on:change={(event) => updateSettings({ video_crf: Number(event.currentTarget.value) })} /></div>
-                  <label class="check-row"><input type="checkbox" checked={settings.deflicker} on:change={(event) => updateSettings({ deflicker: event.currentTarget.checked })} /> Temporal median de-flicker</label>
+                  {#if !usingTemporalVideo}
+                    <label class="check-row"><input type="checkbox" checked={settings.deflicker} on:change={(event) => updateSettings({ deflicker: event.currentTarget.checked })} /> De-flicker · Labs</label>
+                    <p class="model-description">Gentle smoothing in static regions. Moving details and scene cuts bypass the filter.</p>
+                  {:else}
+                    <p class="model-description">SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and hardware limits are still being validated.</p>
+                  {/if}
+                  <p class="model-description">SDR output · original timing and orientation preserved. Convert HDR footage to SDR before importing.</p>
                 {/if}
                 <button class="directory-field" on:click={chooseOutput}><span><small>Save to</small>{settings.output_directory || 'Choose an output folder'}</span><b>Choose…</b></button>
                 <div class="field-row"><label for="device">Hardware</label><select id="device" value={settings.device_id} on:change={(event) => updateSettings({ device_id: event.currentTarget.value })}>{#each snapshot.capabilities.devices as device}<option value={device.id}>{device.name}</option>{/each}</select></div>
                 <div class="field-row"><label for="interface-scale">Interface text</label><select id="interface-scale" value={settings.interface_scale} on:change={(event) => updateSettings({ interface_scale: Number(event.currentTarget.value) as UiSettings['interface_scale'] })}><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option></select></div>
+                {#if !usingTemporalVideo}
                 <div class="field-grid"><label>Tile<select value={settings.tile_size} on:change={(event) => updateSettings({ tile_size: Number(event.currentTarget.value) })}>{#each [64, 128, 192, 256, 384, 512] as size}<option value={size}>{size}</option>{/each}</select></label><label>Halo<select value={settings.halo} on:change={(event) => updateSettings({ halo: Number(event.currentTarget.value) })}>{#each [8, 16, 32, 64] as halo}<option value={halo}>{halo}</option>{/each}</select></label><label>Precision<select value={settings.precision} on:change={(event) => updateSettings({ precision: event.currentTarget.value })}><option value="fp32">FP32</option><option value="fp16">FP16</option></select></label></div>
-                <label class="check-row"><input type="checkbox" checked={settings.safe_memory} on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })} /> Safe memory mode</label>
+                {/if}
+                {#if !usingTemporalVideo}<label class="check-row"><input type="checkbox" checked={settings.safe_memory} on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })} /> Safe memory mode</label>{/if}
                 <label class="check-row"><input type="checkbox" checked={settings.enable_live_preview} on:change={(event) => updateSettings({ enable_live_preview: event.currentTarget.checked })} /> Show sampled enhanced previews (max 2 fps)</label>
                 <div class="hardware-card"><span>{snapshot.capabilities.system_memory_pressure_level === 'unknown' ? 'Hardware ready' : `${snapshot.capabilities.system_memory_pressure_level} memory pressure`}</span><button on:click={() => api.refreshCapabilities()}>Refresh</button><i style={`width:${Math.max(3, snapshot.capabilities.system_memory_pressure_percent)}%`}></i></div>
               </div>
@@ -1811,7 +1834,7 @@
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}>{settings.batch_mode ? `Add ${queueSelection.length} to queue` : 'Add selected to queue'}</button>
         <button class="button danger" on:click={() => api.cancelJobs()}>Cancel queue</button>
       {:else}
-        <button class="button primary start" disabled={!canStart} on:click={() => start()}>{settings.batch_mode ? `Start ${queueSelection.length} item${queueSelection.length === 1 ? '' : 's'}` : settings.task === 'video' ? 'Start selected video · Labs' : settings.task === 'denoise' ? 'Denoise selected' : 'Upscale selected'}</button>
+        <button class="button primary start" disabled={!canStart} on:click={() => start()}>{settings.batch_mode ? `Start ${queueSelection.length} item${queueSelection.length === 1 ? '' : 's'}` : settings.task === 'video' ? 'Start selected video' : settings.task === 'denoise' ? 'Denoise selected' : 'Upscale selected'}</button>
       {/if}
     </div>
   </footer>
@@ -1832,6 +1855,13 @@
           </div>
           <p class="benchmark-intro">A repeatable real-inference test across the GPU, CPU, tiled processing, and image encoding.</p>
 
+          <BenchmarkStudio
+            renders={benchmarkRenders.length ? benchmarkRenders : benchmarkRunning ? [] :
+              (snapshot.latest_benchmark?.device_results ?? []).flatMap(device =>
+                device.scenes.flatMap(scene => scene.preview ? [scene.preview] : []))}
+            running={benchmarkRunning}
+          />
+
           {#if benchmarkRunning}
             <div class="benchmark-running-card" role="status" aria-live="polite">
               <div><strong>{snapshot.runtime.status_title}</strong><b>{Math.round(snapshot.runtime.progress)}%</b></div>
@@ -1840,7 +1870,7 @@
             </div>
           {/if}
 
-          {#if snapshot.latest_benchmark}
+          {#if snapshot.latest_benchmark && !benchmarkRunning}
             {#if snapshot.latest_benchmark.workload_version.startsWith('localsr-benchmark-v2')}
               <div class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-hero">
                 <div class="benchmark-score-block">

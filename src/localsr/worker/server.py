@@ -46,6 +46,7 @@ from localsr.protocol.messages import (
     BenchmarkCancelled,
     BenchmarkCompleted,
     BenchmarkFailed,
+    BenchmarkPreview,
     BenchmarkProgress,
     BenchmarkStageCompleted,
     BenchmarkStageProgress,
@@ -663,6 +664,9 @@ class WorkerServer:
                 scenes=V2_SCENES,
                 cancel_event=self.cancel_event,
                 progress_callback=stage_progress,
+                preview_callback=lambda render: send_message(
+                    BenchmarkPreview(job_id=job_id, render=render)
+                ),
             )
             device_results.append(phase.to_dict())
 
@@ -1157,13 +1161,29 @@ class WorkerServer:
         """
         import time as _time
 
-        from localsr.core.video_io import decode_frames, encode_video, probe_video
+        from localsr.core.video_io import (
+            decode_timed_frames,
+            encode_video,
+            probe_video,
+            selected_frame_count,
+        )
 
         video_path = data["video_path"]
         output_path = data["output_video_path"]
         probe = probe_video(video_path)
+        if data.get("fps") is not None:
+            if not np.isfinite(float(data["fps"])) or float(data["fps"]) <= 0:
+                raise ValueError("Video FPS override must be a finite positive number.")
+            send_message(
+                LogMessage(
+                    level="warning",
+                    message="FPS override changes playback speed; source audio and subtitles are omitted.",
+                )
+            )
         fps = data.get("fps") or probe.fps or 25.0
-        total_frames = probe.frame_count
+        total_frames = selected_frame_count(
+            probe.frame_count, data.get("start_frame"), data.get("end_frame")
+        )
         window = int(data.get("temporal_window") or 9)
         overlap = max(0, min(int(data.get("temporal_overlap") or 2), window - 1))
         resolution = int(data.get("target_resolution") or 0)
@@ -1178,7 +1198,9 @@ class WorkerServer:
 
         started_at = _time.monotonic()
         chunk_new = 33  # 4n+1: fresh frames per streamed chunk
-        decode_iter = decode_frames(video_path)
+        decode_iter = decode_timed_frames(
+            video_path, data.get("start_frame"), data.get("end_frame"), self.cancel_event
+        )
         state = {"done": 0}
         preview_encoder = LatestPreviewEncoder(
             lambda packet: self._emit_live_preview(packet),
@@ -1192,10 +1214,10 @@ class WorkerServer:
             frames = []
             for _ in range(chunk_new):
                 try:
-                    _, rgb = next(decode_iter)
+                    frame = next(decode_iter)
                 except StopIteration:
                     break
-                frames.append(rgb)
+                frames.append(frame)
             return frames
 
         def process_chunk(chunk: list, context: list) -> list:
@@ -1209,7 +1231,7 @@ class WorkerServer:
                 )
             )
             result = engine.process_frames(
-                context + chunk,
+                [frame.rgb for frame in context + chunk],
                 resolution=resolution,
                 batch_size=window,
                 temporal_overlap=overlap,
@@ -1218,7 +1240,15 @@ class WorkerServer:
             )
             if self.cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
-            result = result[len(context) :]
+            if len(result) != len(context) + len(chunk):
+                raise ValueError(
+                    f"Temporal engine returned {len(result)} frames for "
+                    f"{len(context) + len(chunk)} input frames."
+                )
+            result = [
+                frame.with_pixels(rgb)
+                for frame, rgb in zip(chunk, result[len(context) :], strict=True)
+            ]
             state["done"] += len(chunk)
             elapsed = _time.monotonic() - started_at
             per_frame = elapsed / max(1, state["done"])
@@ -1243,7 +1273,7 @@ class WorkerServer:
             first_out = process_chunk(first_chunk, [])
             if not first_out:
                 raise ValueError("The temporal engine produced no video frames.")
-            out_height, out_width = first_out[0].shape[:2]
+            out_height, out_width = first_out[0].rgb.shape[:2]
 
             def all_frames():
                 emitted = 0
@@ -1253,12 +1283,12 @@ class WorkerServer:
                     preview_encoder.submit(
                         job_id=job_id,
                         preview_kind="video",
-                        pixels=frame,
+                        pixels=frame.rgb,
                         force=bool(total_frames > 0 and emitted + 1 >= total_frames),
-                        output_width=int(frame.shape[1]),
-                        output_height=int(frame.shape[0]),
-                        image_width=int(frame.shape[1]),
-                        image_height=int(frame.shape[0]),
+                        output_width=int(frame.rgb.shape[1]),
+                        output_height=int(frame.rgb.shape[0]),
+                        image_width=int(frame.rgb.shape[1]),
+                        image_height=int(frame.rgb.shape[0]),
                     )
                     emitted += 1
                     yield frame
@@ -1277,12 +1307,12 @@ class WorkerServer:
                         preview_encoder.submit(
                             job_id=job_id,
                             preview_kind="video",
-                            pixels=frame,
+                            pixels=frame.rgb,
                             force=bool(total_frames > 0 and emitted + 1 >= total_frames),
-                            output_width=int(frame.shape[1]),
-                            output_height=int(frame.shape[0]),
-                            image_width=int(frame.shape[1]),
-                            image_height=int(frame.shape[0]),
+                            output_width=int(frame.rgb.shape[1]),
+                            output_height=int(frame.rgb.shape[0]),
+                            image_width=int(frame.rgb.shape[1]),
+                            image_height=int(frame.rgb.shape[0]),
                         )
                         emitted += 1
                         yield frame
@@ -1295,9 +1325,12 @@ class WorkerServer:
                 crf=int(data.get("crf", 18)),
                 width=int(out_width),
                 height=int(out_height),
-                audio_source=video_path
-                if data.get("start_frame") is None and data.get("end_frame") is None
-                else None,
+                audio_source=video_path if data.get("fps") is None else None,
+                preserve_timing=data.get("fps") is None,
+                cancel_event=self.cancel_event,
+                warning_callback=lambda message: send_message(
+                    LogMessage(level="warning", message=message)
+                ),
             )
         except InterruptedError:
             send_message(JobCancelled(job_id=job_id))
@@ -1464,6 +1497,9 @@ class WorkerServer:
                 frame_started_cb=frame_started,
                 enhanced_frame_cb=enhanced_frame,
                 progress_cb=progress_cb,
+                warning_callback=lambda message: send_message(
+                    LogMessage(level="warning", message=message)
+                ),
             )
         except InterruptedError:
             preview_encoder.close()

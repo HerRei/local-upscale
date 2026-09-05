@@ -225,6 +225,17 @@ export interface RuntimeStatus {
   thermal_status: string;
 }
 
+export interface BenchmarkRender {
+  device: string;
+  scene_id: string;
+  input_width: number;
+  input_height: number;
+  output_width: number;
+  output_height: number;
+  input_data_url: string;
+  output_data_url: string;
+}
+
 export interface BenchmarkSceneResult {
   scene_id: string;
   purpose: string;
@@ -239,6 +250,7 @@ export interface BenchmarkSceneResult {
   cv_percent: number;
   megapixels_per_second: number;
   encode_ms?: number | null;
+  preview?: BenchmarkRender | null;
 }
 
 export interface BenchmarkDeviceResult {

@@ -63,7 +63,7 @@ from localsr.ui.slint_worker import SlintWorkerClient
 
 CUSTOM_MODEL_ID = "__custom__"
 FORMAT_VALUES = ("png", "jpg", "tif")
-TASK_LABELS = ("Upscale", "Denoise", "Upscale Video · Labs")
+TASK_LABELS = ("Upscale", "Denoise", "Upscale Video")
 VIDEO_TASK_INDEX = 2
 VIDEO_ENABLED = True
 
@@ -2203,7 +2203,7 @@ class SlintApplication:
         )
         send_notification(
             "LocalSR",
-            f"Finished {completed} experimental video job{'s' if completed != 1 else ''}.",
+            f"Finished {completed} video job{'s' if completed != 1 else ''}.",
         )
         self.refresh_hardware()
         self._update_action_state()

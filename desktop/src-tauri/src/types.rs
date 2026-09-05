@@ -316,6 +316,8 @@ pub struct BenchmarkSceneResult {
     pub megapixels_per_second: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encode_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

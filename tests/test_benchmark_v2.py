@@ -263,6 +263,13 @@ def test_run_device_phase_warms_up_and_measures_all_scenes():
         SceneSpec("test-tiled", 32, 16, 16, "tiled-end-to-end"),
     )
     stages: list[StageUpdate] = []
+    previews = []
+
+    def capture(preview):
+        previews.append(preview)
+        # Even expensive preview transport is outside the measured iterations.
+        ticks["value"] += 1000
+
     result = run_device_phase(
         engine=engine,
         model_info=_FakeModelInfo(),
@@ -274,6 +281,7 @@ def test_run_device_phase_warms_up_and_measures_all_scenes():
         cancel_event=cancel,
         progress_callback=stages.append,
         clock=clock,
+        preview_callback=capture,
     )
     assert result.device == "cpu"
     assert result.warmup_iterations >= 1
@@ -287,6 +295,18 @@ def test_run_device_phase_warms_up_and_measures_all_scenes():
         expected_output_mps, abs=0.0001
     )
     assert result.score > 0
+    assert len(previews) == 2
+    assert result.scenes[0]["preview"] == previews[0]
+    import base64
+    import io
+
+    from PIL import Image
+
+    captured = Image.open(
+        io.BytesIO(base64.b64decode(previews[0]["output_data_url"].split(",", 1)[1]))
+    )
+    assert captured.size == (64, 64)
+    assert np.asarray(captured).max() == 0  # the engine's actual black output
     assert engine.loaded[1] == "cpu"
     assert engine.loaded[2] == PRECISION
     assert result.peak_memory_bytes is None or result.peak_memory_bytes >= 0
