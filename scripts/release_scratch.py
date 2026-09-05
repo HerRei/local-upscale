@@ -59,11 +59,11 @@ def run_directory(
     components = (
         safe_component(run_id, "run id"),
         safe_component(attempt, "attempt"),
-        safe_component(platform, "platform"),
-        safe_component(flavor, "flavor"),
+        safe_component(platform[0], "platform"),
+        safe_component(flavor.split("-")[-1], "flavor"),
     )
-    target = managed.joinpath("runs", *components).resolve()
-    if not target.is_relative_to(managed / "runs"):
+    target = managed.joinpath("r", *components).resolve()
+    if not target.is_relative_to(managed / "r"):
         raise ValueError(f"release scratch escaped its managed root: {target}")
     return target
 
@@ -98,7 +98,7 @@ def start(
 def validate_existing_target(target: Path, root: Path) -> Path:
     managed = managed_root(root)
     resolved = target.resolve()
-    if not resolved.is_relative_to(managed / "runs"):
+    if not resolved.is_relative_to(managed / "r"):
         raise ValueError(f"refusing release scratch target outside managed runs: {resolved}")
     if resolved.is_symlink() or not (resolved / RUN_MARKER).is_file():
         raise ValueError(f"release scratch target has no ownership marker: {resolved}")
@@ -148,7 +148,7 @@ def cleanup(root: Path, *, now: datetime | None = None, force: bool = False) -> 
     managed = managed_root(root)
     moment = now or datetime.now(UTC)
     removed: list[Path] = []
-    runs = managed / "runs"
+    runs = managed / "r"
     if not runs.exists():
         return removed
     for marker in sorted(runs.rglob(RETAINED_MARKER)):

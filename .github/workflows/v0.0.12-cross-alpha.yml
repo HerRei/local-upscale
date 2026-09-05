@@ -244,8 +244,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           py -3.11 scripts/storage_preflight.py --ssd-path C:\lsr-ci --skip-hdd --ssd-min-percent 2 --ssd-min-gib 2 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $root = "C:\lsr-ci\runs\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\windows\v0.0.12-alpha-${{ matrix.id }}"
-          py -3.11 scripts/release_scratch.py start --root C:\lsr-ci --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --flavor v0.0.12-alpha-${{ matrix.id }}
+          $root = "C:\lsr-ci\r\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\w\${{ matrix.id }}"
+          py -3.11 scripts/release_scratch.py start --root C:\lsr-ci --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --flavor v0.0.12-alpha-windows-x86_64-${{ matrix.id }} > $null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $venv = Join-Path $root "venv"
           $tmp = Join-Path $root "tmp"
