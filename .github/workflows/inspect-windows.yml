@@ -1,0 +1,13 @@
+name: Inspect Windows Storage
+on:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: [self-hosted, Windows, X64, localsr-windows-builder]
+    steps:
+      - name: List lsr-ci
+        run: |
+          Get-ChildItem -Path C:\lsr-ci -Recurse | Where-Object { -not $_.PSIsContainer } | Group-Object DirectoryName | Select-Object Name, @{Name="SizeMB";Expression={($_.Group | Measure-Object Length -Sum).Sum / 1MB}} | Sort-Object SizeMB -Descending | Select-Object -First 20
+          Get-ChildItem -Path C:\lsr-ci -Force
+          Get-ChildItem -Path C:\lsr-ci\runs -Force
+          Get-ChildItem -Path C:\lsr-ci\wheelhouses -Force
