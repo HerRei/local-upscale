@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and compact the three user-facing Tauri installers for publication."""
+"""Validate and compact the complete backend matrix and payloads for publication."""
 
 from __future__ import annotations
 
@@ -7,9 +7,11 @@ import argparse
 import hashlib
 import json
 import re
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
+
+from release_targets import ROOT, validate_manifest
+from tauri_public_assets import prepare_engine_parts, prepare_installer
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EXPECTED_LIVE_MODELS = {
@@ -17,7 +19,7 @@ EXPECTED_LIVE_MODELS = {
     "Best": "realplksr_nomoswebphoto_x4",
 }
 SIGNED_POLICY = "production-signed"
-CROSS_ALPHA_POLICY = "v0.0.11-cross-alpha-exception"
+CROSS_ALPHA_POLICY = "v0.0.12-cross-alpha-exception"
 
 
 def sha256(path: Path) -> str:
@@ -99,8 +101,8 @@ def release_policy(
         return policy
     if policy != CROSS_ALPHA_POLICY:
         raise ValueError(f"unsupported release policy {policy!r}")
-    if version != "0.0.11-alpha":
-        raise ValueError("the unsigned cross-build exception is restricted to v0.0.11-alpha")
+    if version != "0.0.12-alpha":
+        raise ValueError("the unsigned cross-build exception is restricted to v0.0.12-alpha")
     if readiness is None or readiness.get("beta_ready") is not False:
         raise ValueError("the unsigned cross-build exception must be explicitly non-beta")
     return policy
@@ -125,7 +127,7 @@ def validate_signing_evidence(
         raise ValueError("incomplete Authenticode evidence")
     if expected in {"ad-hoc-alpha", "unsigned-alpha"}:
         if policy != CROSS_ALPHA_POLICY or platform not in {"macos", "windows"}:
-            raise ValueError("unsigned evidence is allowed only by the v0.0.11 cross-alpha policy")
+            raise ValueError("unsigned evidence is allowed only by the v0.0.12 cross-alpha policy")
         if signing.get("production_signed") is not False or not signing.get("warning"):
             raise ValueError("unsigned alpha evidence must record its warning and unsigned state")
     return signing
@@ -271,11 +273,11 @@ def prepare(
         raise ValueError("beta-readiness version does not match the release manifest")
     policy = release_policy(manifest, readiness, version)
     entries = manifest.get("artifacts")
-    if not isinstance(entries, list) or len(entries) != 3:
-        raise ValueError("the compact release must contain exactly three installers")
+    validate_manifest(manifest)
 
     output.mkdir(parents=True, exist_ok=True)
     bundles: list[dict[str, object]] = []
+    public_assets: list[dict] = []
     digests: set[str] = set()
     live_model_evidence: dict[str, object] | None = None
     release_commit = ""
@@ -335,7 +337,7 @@ def prepare(
             raise ValueError(f"{filename} attempt metadata {attempt} does not match storage path")
         if source.parent.parent.name.isdigit() and source.parent.name != entry["platform"]:
             raise ValueError(f"{filename} platform storage path does not match manifest")
-        source_matrix[str(entry["platform"])] = {
+        source_matrix[str(entry["id"])] = {
             "run_id": int(run_id),
             "attempt": int(attempt),
             "commit": commit,
@@ -399,16 +401,39 @@ def prepare(
                     raise ValueError(f"{filename} has malformed real model evidence")
             live_model_evidence = live_models
 
-        destination = output / filename
-        if destination.exists() and sha256(destination) != digest:
-            raise ValueError(f"refusing to overwrite conflicting prepared asset {filename}")
-        if not destination.exists():
-            shutil.copy2(source, destination)
+        if not (policy == CROSS_ALPHA_POLICY and entry["platform"] == "macos"):
+            probe = metadata.get("backend_probe")
+            if (
+                not isinstance(probe, dict)
+                or probe.get("backend") != entry["backend"]
+                or probe.get("runtime_verified") is not True
+                or probe.get("cpu_inference_verified") is not True
+                or probe != smoke.get("backend_probe")
+            ):
+                raise ValueError(f"{filename} has no verified installed backend identity")
+        if entry["platform"] != "macos":
+            dependencies = metadata.get("dependency_wheelhouse")
+            lock = ROOT / "requirements/locks" / f"{entry['id']}.txt"
+            if (
+                not isinstance(dependencies, dict)
+                or dependencies.get("schema_version") != 1
+                or dependencies.get("target") != entry["id"]
+                or dependencies.get("source_lock_sha256") != sha256(lock)
+                or not dependencies.get("wheels")
+            ):
+                raise ValueError(f"{filename} has no matching locked wheelhouse provenance")
+        downloads = prepare_installer(source, output)
+        if entry.get("external_engine"):
+            downloads.extend(prepare_engine_parts(metadata, smoke, source, output))
+        public_assets.extend(downloads)
         bundles.append(
             entry
             | {
                 "sha256": digest,
                 "size": source.stat().st_size,
+                "download_files": downloads,
+                "backend_evidence": metadata.get("backend_probe"),
+                "dependency_evidence": metadata.get("dependency_wheelhouse"),
                 "signing_evidence": signing,
                 "architecture_evidence": architecture,
                 "smoke_evidence": smoke,
@@ -416,7 +441,9 @@ def prepare(
             }
         )
 
-    checksums = "".join(f"{item['sha256']}  {item['filename']}\n" for item in bundles)
+    if len({item["filename"] for item in public_assets}) != len(public_assets):
+        raise ValueError("release contains duplicate public asset filenames")
+    checksums = "".join(f"{item['sha256']}  {item['filename']}\n" for item in public_assets)
     (output / "SHA256SUMS").write_text(checksums, encoding="utf-8")
     index = {
         "schema_version": 1,
@@ -432,6 +459,7 @@ def prepare(
         "beta_ready": False,
         "live_model_evidence": live_model_evidence,
         "installers": bundles,
+        "public_assets": public_assets,
     }
     if live_model_evidence is None:
         raise ValueError("the release has no real Quick/Best empty-cache inference evidence")
@@ -454,7 +482,7 @@ def prepare(
                 "release_tag": tag,
                 "version": version,
                 "repository_commit": release_commit,
-                "platforms": source_matrix,
+                "targets": source_matrix,
             },
             indent=2,
             sort_keys=True,
@@ -462,7 +490,7 @@ def prepare(
         + "\n",
         encoding="utf-8",
     )
-    files = [str(output / str(item["filename"])) for item in bundles]
+    files = [str(output / str(item["filename"])) for item in public_assets]
     files.extend([str(output / "SHA256SUMS"), str(index_path)])
     (output / "release-files.txt").write_text("\n".join(files) + "\n", encoding="utf-8")
     return index_path

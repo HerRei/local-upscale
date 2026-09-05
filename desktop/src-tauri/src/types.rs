@@ -505,7 +505,7 @@ mod tests {
         assert!(!result.is_v2());
         assert_eq!(result.score, 409.6);
         assert!(result.device_results.is_empty());
-        assert_eq!(result.stable, false);
+        assert!(!result.stable);
     }
 
     #[test]

@@ -22,9 +22,26 @@ env:
   PYINSTALLER_VERSION: "6.22.2"
 
 jobs:
+  plan:
+    name: Validate the complete release target registry
+    runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.targets.outputs.linux }}
+      windows: ${{ steps.targets.outputs.windows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate and expand the complete target registry
+        id: targets
+        run: |
+          python3 scripts/check_release_version.py
+          python3 scripts/release_targets.py --github-output "$GITHUB_OUTPUT"
+
   preflight:
     name: Preflight signed ${{ matrix.platform }} runner
     if: github.ref_name != 'v0.0.12-alpha'
+    needs: [plan]
     strategy:
       fail-fast: false
       matrix:
@@ -68,23 +85,11 @@ jobs:
   build-linux:
     name: Build Linux x86_64 ${{ matrix.backend }} AppImage
     if: github.ref_name != 'v0.0.12-alpha'
-    needs: [preflight]
+    needs: [preflight, plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - backend: CPU
-            index: cpu
-            pkg_name: LocalSR-v0.0.12-alpha-Linux-CPU-x86_64.AppImage
-          - backend: CUDA
-            index: cu126
-            pkg_name: LocalSR-v0.0.12-alpha-Linux-CUDA-x86_64.AppImage
-          - backend: Intel-XPU
-            index: xpu
-            pkg_name: LocalSR-v0.0.12-alpha-Linux-Intel-x86_64.AppImage
-          - backend: AMD-ROCm
-            index: rocm7.2
-            pkg_name: LocalSR-v0.0.12-alpha-Linux-ROCm-x86_64.AppImage
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.linux) }}
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 240
     env:
@@ -112,14 +117,14 @@ jobs:
           python3 scripts/release_scratch.py cleanup --root /ci-scratch
           ROOT=$(python3 scripts/release_scratch.py start --root /ci-scratch \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
-            --platform linux --flavor signed-tauri)
+            --platform linux --flavor signed-tauri-${{ matrix.id }})
           mkdir -p /ci-scratch/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path /ci-scratch --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 8
+          python3 scripts/storage_preflight.py --ssd-path /ci-scratch --skip-hdd --ssd-min-percent 15 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
             echo "LOCALSR_TAURI_ROOT=$ROOT"
             echo "TMPDIR=$ROOT/tmp"
-            echo "CARGO_TARGET_DIR=$ROOT/cargo-target"
+            echo "CARGO_TARGET_DIR=/ci-scratch/cargo-target/tauri-x86_64"
           } >> "$GITHUB_ENV"
           echo "$ROOT/venv/bin" >> "$GITHUB_PATH"
       - name: Validate release identity and architecture
@@ -134,13 +139,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
-          python -m pip install --disable-pip-version-check \
-            "torch==${PYTORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
-            --index-url https://download.pytorch.org/whl/${{ matrix.index }}
-          python -m pip install --disable-pip-version-check \
-            -e ".[package,video,face]" "pyinstaller==${PYINSTALLER_VERSION}"
+          python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
+            --cache-root /ci-scratch/wheelhouses --report "$LOCALSR_TAURI_ROOT/staging/dependency-wheelhouse.json"
           python -m pip check
-          python -c "import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
+          python -c "import diffusers; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0')"
           npm ci --prefix desktop
       - name: Download and run the actual Quick and Best models from an empty cache
         run: |
@@ -158,7 +160,7 @@ jobs:
           ARTIFACT="$LOCALSR_TAURI_ROOT/staging/${{ matrix.pkg_name }}"
           cp "$SOURCE" "$ARTIFACT"
           chmod +x "$ARTIFACT"
-          python scripts/smoke_tauri_installer.py \
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 \
             --artifact-glob "$ARTIFACT" \
             --report "$LOCALSR_TAURI_ROOT/staging/package-smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
@@ -171,6 +173,7 @@ jobs:
             --platform linux --architecture x86_64 --backend "${{ matrix.backend }}" \
             --smoke-report "$LOCALSR_TAURI_ROOT/staging/package-smoke.json" \
             --signing-report "$LOCALSR_TAURI_ROOT/staging/signing-report.json" \
+            --dependency-report "$LOCALSR_TAURI_ROOT/staging/dependency-wheelhouse.json" \
             --live-model-report "$LOCALSR_TAURI_ROOT/staging/live-models.json"
       - name: Transfer only verified release inputs
         env:
@@ -193,20 +196,11 @@ jobs:
   build-windows:
     name: Build signed Windows x86_64 ${{ matrix.backend }} installer
     if: github.ref_name != 'v0.0.12-alpha'
-    needs: [build-linux]
+    needs: [build-linux, plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - backend: CPU
-            index: cpu
-            pkg_name: LocalSR-v0.0.12-alpha-Windows-CPU-x86_64.exe
-          - backend: DirectML
-            index: ''
-            pkg_name: LocalSR-v0.0.12-alpha-Windows-DirectML-x86_64.exe
-          - backend: CUDA
-            index: cu126
-            pkg_name: LocalSR-v0.0.12-alpha-Windows-CUDA-x86_64.exe
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.windows) }}
     runs-on: [self-hosted, Windows, X64, localsr-windows-builder]
     timeout-minutes: 240
     defaults:
@@ -237,8 +231,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $root = "C:\lsr-ci\runs\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\windows\signed-tauri"
-          py -3.11 scripts/release_scratch.py start --root C:\lsr-ci --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --flavor signed-tauri
+          py -3.11 scripts/storage_preflight.py --ssd-path C:\lsr-ci --skip-hdd --ssd-min-percent 15 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $root = "C:\lsr-ci\runs\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\windows\signed-tauri-${{ matrix.id }}"
+          py -3.11 scripts/release_scratch.py start --root C:\lsr-ci --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --flavor signed-tauri-${{ matrix.id }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $venv = Join-Path $root "venv"
           $tmp = Join-Path $root "tmp"
@@ -248,7 +244,7 @@ jobs:
           "LOCALSR_TAURI_ROOT=$root" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "TEMP=$tmp" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "TMP=$tmp" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "CARGO_TARGET_DIR=$(Join-Path $root 'cargo-target')" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "CARGO_TARGET_DIR=C:\lsr-ci\cargo-target\tauri-x86_64" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           (Join-Path $venv "Scripts") | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Import the release Authenticode certificate
         env:
@@ -274,20 +270,11 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check "pip==$env:PIP_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ("${{ matrix.backend }}" -eq "DirectML") {
-            python -m pip install --disable-pip-version-check "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url https://download.pytorch.org/whl/cpu
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            python -m pip install --disable-pip-version-check "torch-directml==0.2.5.dev240914"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } else {
-            python -m pip install --disable-pip-version-check "torch==$env:PYTORCH_VERSION" "torchvision==$env:TORCHVISION_VERSION" --index-url "https://download.pytorch.org/whl/${{ matrix.index }}"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==$env:PYINSTALLER_VERSION"
+          python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" --cache-root C:\lsr-ci\wheelhouses --report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\dependency-wheelhouse.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -c "import diffusers,torch; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
+          python -c "import diffusers; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix desktop
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -299,25 +286,38 @@ jobs:
           if ("${{ matrix.backend }}" -eq "DirectML") {
             $env:LOCALSR_SKIP_DIRECTML_PROBE = "1"
           }
-          python scripts/build_tauri_preview.py --skip-checks --require-signing --bundles nsis
+          $buildArgs = @('--skip-checks', '--bundles', 'nsis')
+          $payloadArgs = @()
+          if ("${{ matrix.backend }}" -eq "DirectML") { $env:LOCALSR_SKIP_DIRECTML_PROBE = "1" }
+          if ("${{ matrix.backend }}" -eq "CUDA") {
+            $buildArgs += @('--external-engine-prefix', ([IO.Path]::GetFileNameWithoutExtension("${{ matrix.pkg_name }}") + '.engine.tar.gz'))
+          }
+          $buildArgs += '--require-signing'
+          python scripts/build_tauri_preview.py @buildArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $sources = @(Get-ChildItem -Path (Join-Path $env:CARGO_TARGET_DIR 'release\bundle\nsis') -Filter '*.exe' -File)
           if ($sources.Count -ne 1) { throw "Expected one NSIS installer, found $($sources.Count)" }
-          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT \'staging\${{ matrix.pkg_name }}\'
+          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT 'staging\${{ matrix.pkg_name }}'
           Copy-Item -LiteralPath $sources[0].FullName -Destination $artifact
-          python scripts/smoke_tauri_installer.py --artifact-glob $artifact --report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json')
+          if ("${{ matrix.backend }}" -eq "CUDA") {
+            $payloadRoot = Join-Path $env:GITHUB_WORKSPACE 'build\tauri-preview\engine-payload'
+            Get-ChildItem -LiteralPath $payloadRoot -Filter '*.part-*' -File | Copy-Item -Destination (Join-Path $env:LOCALSR_TAURI_ROOT 'staging')
+            $payloadArgs = @('--engine-payload-manifest', (Join-Path $payloadRoot 'engine-payload.json'))
+          }
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 1800 --artifact-glob $artifact --report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/verify_tauri_release_package.py $artifact --platform windows --architecture x86_64 --smoke-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json') --report "$artifact.architecture.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/verify_windows_tauri_signing.ps1 -Artifact $artifact -ExpectedThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT -Report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\signing-report.json')
-          python scripts/write_artifact_metadata.py $artifact --commit $env:GITHUB_SHA --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --architecture x86_64 --backend "${{ matrix.backend }}" --smoke-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json') --signing-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\signing-report.json')
+          python scripts/write_artifact_metadata.py $artifact @payloadArgs --dependency-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\dependency-wheelhouse.json') --commit $env:GITHUB_SHA --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --architecture x86_64 --backend "${{ matrix.backend }}" --smoke-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\package-smoke.json') --signing-report (Join-Path $env:LOCALSR_TAURI_ROOT 'staging\signing-report.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Transfer only verified release inputs
         env:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
-          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT \'staging\${{ matrix.pkg_name }}\'
-          python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
+          $payloadFiles = @(Get-ChildItem -Path (Join-Path $env:LOCALSR_TAURI_ROOT 'staging') -Filter '*.part-*' -File | ForEach-Object { $_.FullName })
+          $artifact = Join-Path $env:LOCALSR_TAURI_ROOT 'staging\${{ matrix.pkg_name }}'
+          python scripts/upload_artifacts.py @payloadFiles --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Remove the imported certificate and bounded scratch
         if: always()
@@ -386,7 +386,7 @@ jobs:
           {
             echo "LOCALSR_TAURI_ROOT=$ROOT"
             echo "TMPDIR=$ROOT/tmp"
-            echo "CARGO_TARGET_DIR=$ROOT/cargo-target"
+            echo "CARGO_TARGET_DIR=/Volumes/CISCRATCH/cargo-target/tauri-arm64"
           } >> "$GITHUB_ENV"
           echo "$ROOT/venv/bin" >> "$GITHUB_PATH"
       - name: Install the maintained native ARM worker toolchain
@@ -417,7 +417,7 @@ jobs:
           test "$(printf '%s\n' "$SOURCE" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
           ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.12-alpha-macOS-arm64.dmg"
           cp "$SOURCE" "$ARTIFACT"
-          python scripts/smoke_tauri_installer.py --artifact-glob "$ARTIFACT" \
+          python scripts/smoke_tauri_installer.py --backend MPS --artifact-glob "$ARTIFACT" \
             --report "$LOCALSR_TAURI_ROOT/staging/package-smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform macos --architecture arm64 --report "$ARTIFACT.architecture.json"
@@ -465,7 +465,8 @@ jobs:
           "$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py "$RUN_ROOT" \
             --manifest ci/tauri-release-artifacts.json --readiness ci/beta-readiness.json \
             --tag "$TAG" --commit "$GITHUB_SHA" --output "$OUTPUT" --verification-only
-          test "$(wc -l < "$OUTPUT/release-files.txt" | tr -d ' ')" = 5
+          "$HOME/.venv-ci/bin/python3.11" scripts/verify_prepared_release.py "$OUTPUT" \
+            --manifest ci/tauri-release-artifacts.json --commit "$GITHUB_SHA"
 
   publish-release:
     name: Publish compact immutable prerelease
@@ -480,7 +481,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Prepare five simple user-facing assets
+      - name: Prepare all verified backend downloads
         run: |
           RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"
           OUTPUT="$RUN_ROOT/$GITHUB_RUN_ATTEMPT/tauri-release-assets"

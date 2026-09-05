@@ -71,6 +71,8 @@ def main() -> None:
     parser.add_argument("--normalization-report", type=Path)
     parser.add_argument("--signing-report", type=Path)
     parser.add_argument("--live-model-report", type=Path)
+    parser.add_argument("--engine-payload-manifest", type=Path)
+    parser.add_argument("--dependency-report", type=Path)
     args = parser.parse_args()
     digest = sha256(args.artifact)
     metadata: dict[str, object] = {
@@ -96,6 +98,13 @@ def main() -> None:
         metadata["backend_probe"] = json.loads(args.backend_probe.read_text(encoding="utf-8"))
     if args.smoke_report:
         metadata["package_smoke"] = json.loads(args.smoke_report.read_text(encoding="utf-8"))
+        if "backend_probe" in metadata["package_smoke"]:
+            metadata["backend_probe"] = metadata["package_smoke"]["backend_probe"]
+    if args.engine_payload_manifest:
+        metadata["engine_payload"] = json.loads(args.engine_payload_manifest.read_text())
+        metadata["engine_payload_sha256"] = sha256(args.engine_payload_manifest)
+    if args.dependency_report:
+        metadata["dependency_wheelhouse"] = json.loads(args.dependency_report.read_text())
     if args.wheel_manifest:
         metadata["mps"] = mps_provenance(args.wheel_manifest, args.normalization_report)
     if args.signing_report:

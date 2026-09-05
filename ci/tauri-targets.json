@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "id": "macos-arm64-mps",
+      "platform": "macos",
+      "architecture": "arm64",
+      "backend": "MPS",
+      "index": "",
+      "suffix": "macOS-arm64.dmg",
+      "signing": "developer-id-notarized",
+      "alpha_signing": "ad-hoc-alpha"
+    },
+    {
+      "id": "windows-x86_64-cpu",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "index": "cpu",
+      "suffix": "Windows-CPU-x86_64.exe",
+      "signing": "authenticode-valid",
+      "alpha_signing": "unsigned-alpha",
+      "scratch_peak_gib": 15
+    },
+    {
+      "id": "windows-x86_64-directml",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "backend": "DirectML",
+      "index": "",
+      "suffix": "Windows-DirectML-x86_64.exe",
+      "signing": "authenticode-valid",
+      "alpha_signing": "unsigned-alpha",
+      "scratch_peak_gib": 20
+    },
+    {
+      "id": "windows-x86_64-cuda",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "backend": "CUDA",
+      "index": "cu126",
+      "suffix": "Windows-CUDA-x86_64.exe",
+      "signing": "authenticode-valid",
+      "alpha_signing": "unsigned-alpha",
+      "external_engine": true,
+      "scratch_peak_gib": 40
+    },
+    {
+      "id": "linux-x86_64-cpu",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "index": "cpu",
+      "suffix": "Linux-CPU-x86_64.AppImage",
+      "signing": "sha256",
+      "alpha_signing": "sha256",
+      "scratch_peak_gib": 15
+    },
+    {
+      "id": "linux-x86_64-cuda",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CUDA",
+      "index": "cu126",
+      "suffix": "Linux-CUDA-x86_64.AppImage",
+      "signing": "sha256",
+      "alpha_signing": "sha256",
+      "scratch_peak_gib": 45
+    },
+    {
+      "id": "linux-x86_64-xpu",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "Intel-XPU",
+      "index": "xpu",
+      "suffix": "Linux-Intel-x86_64.AppImage",
+      "signing": "sha256",
+      "alpha_signing": "sha256",
+      "scratch_peak_gib": 50
+    },
+    {
+      "id": "linux-x86_64-rocm",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "AMD-ROCm",
+      "index": "rocm7.2",
+      "suffix": "Linux-ROCm-x86_64.AppImage",
+      "signing": "sha256",
+      "alpha_signing": "sha256",
+      "scratch_peak_gib": 100
+    }
+  ],
+  "legacy_manifest": "ci/release-artifacts.json",
+  "legacy_note": "The independent legacy Slint workflow retains all nine targets, including Intel macOS CPU."
+}

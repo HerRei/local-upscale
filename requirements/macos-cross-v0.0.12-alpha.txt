@@ -1,4 +1,4 @@
-# One-release Intel -> Apple Silicon cross-build environment for v0.0.11-alpha.
+# One-release Intel -> Apple Silicon cross-build environment for v0.0.12-alpha.
 #
 # PyTorch 2.2.2 / torchvision 0.17.2 are the final releases that publish
 # matching CPython 3.11 Intel and Apple Silicon wheels. The Mac mini merges

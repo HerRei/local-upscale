@@ -4,7 +4,7 @@
 
 LocalSR is a private, local-first desktop application for image restoration and super-resolution.
 Media and downloaded model weights stay on the computer; the app has no cloud processing or
-analytics. The current release candidate is **v0.0.11-alpha**.
+analytics. The current release candidate is **v0.0.12-alpha**.
 
 ## Features
 
@@ -28,33 +28,44 @@ weights. Custom `.safetensors` checkpoints are accepted by default. Unverified p
 
 ## Install the alpha
 
-The Mac-mini cross-release pipeline publishes the [v0.0.11-alpha
-prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.11-alpha) only after its
-testing-only platform gates pass. Download the one installer matching the operating system:
+The Mac-mini cross-release pipeline publishes the [v0.0.12-alpha
+prerelease](https://github.com/HerRei/local-upscale/releases/tag/v0.0.12-alpha) only after its
+testing-only platform gates pass. Choose the distribution for your OS and backend:
 
-- Apple Silicon macOS 12+: `LocalSR-v0.0.11-alpha-macOS-arm64.dmg`
-- Windows 10/11 x86-64: `LocalSR-v0.0.11-alpha-Windows-x86_64.exe`
-- Linux x86-64: `LocalSR-v0.0.11-alpha-Linux-x86_64.AppImage`
+| Platform | Backend choices | Download |
+|---|---|---|
+| Apple Silicon macOS 12+ | MPS | `LocalSR-v0.0.12-alpha-macOS-arm64.dmg` |
+| Windows 10/11 x86-64 | CPU, DirectML, CUDA | The corresponding `Windows-CPU`, `Windows-DirectML`, or `Windows-CUDA` installer |
+| Linux x86-64 | CPU, CUDA, Intel XPU, AMD ROCm | The corresponding `Linux-CPU`, `Linux-CUDA`, `Linux-Intel`, or `Linux-ROCm` AppImage |
 
-There are only five release assets: those three installers, `SHA256SUMS`, and
-`release-index.json`. This alpha is deliberately not production signed: macOS is ad-hoc sealed and
-Windows is not Authenticode signed, so Gatekeeper or SmartScreen may warn or reject it. The index
-records that state. Later signed releases still fail closed and releases are never overwritten.
+For **Windows CUDA**, download its `.exe` and every matching `.engine.tar.gz.part-*` file
+into the same folder, then run the installer. It verifies and installs the existing inference
+engine automatically; no Python or pip setup is required. Keep the payload files for offline
+engine installation.
+
+Large Linux AppImages are supplied as `.part-*` files with a matching `.restore.sh` helper.
+Download that complete set, run `bash <matching-file>.restore.sh`, then launch the reconstructed
+AppImage. The helper checks each part and the complete AppImage before making it executable.
+
+`SHA256SUMS` covers all public installers and payload files. `release-index.json` records each
+backend's exact download set, checksums, build commit, and validation evidence. This alpha is
+ad-hoc sealed on macOS and unsigned on Windows; production signing and physical GPU acceptance
+remain pending. Published releases remain immutable.
 
 Because the repository is private, testers still need repository access. Choosing a public download
 location remains a beta decision.
 
 ## Platform and advanced downloads
 
-The v0.0.11-alpha candidate is the second installable Tauri/Svelte alpha. It coexists with the former
+The v0.0.12-alpha candidate uses the Tauri/Svelte host. It coexists with the former
 Slint app under a distinct bundle identifier and state directory, so installing it does not replace
 an older LocalSR installation:
 
 | Platform | Architecture/backend | Artifact |
 |---|---|---|
 | macOS 12+ | Apple Silicon / MPS | ad-hoc, Intel→ARM cross-built `.dmg` |
-| Windows 10/11 | x86-64 / CPU | unsigned testing-only NSIS `.exe` |
-| Linux x86-64 | CPU | `.AppImage` plus SHA-256 |
+| Windows 10/11 | x86-64 / CPU, CUDA, DirectML | unsigned NSIS; CUDA uses adjacent payloads |
+| Linux x86-64 | CPU, CUDA, XPU, ROCm | `.AppImage` or verified parts plus restore helper |
 
 Linux and Windows installers are installed in CI and start their bundled worker. The Intel Mac mini
 cannot execute ARM64, so the DMG receives recursive ARM64 Mach-O and package inspection only. No

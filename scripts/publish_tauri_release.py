@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create or safely resume one immutable five-file Tauri prerelease draft."""
+"""Create or safely resume one immutable complete-backend Tauri prerelease draft."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path, PurePath
 
-EXPECTED_PUBLIC_COUNT = 5
+MAX_PUBLIC_ASSET_BYTES = 2 * 1024**3
 
 
 def sha256(path: Path) -> str:
@@ -24,8 +24,13 @@ def sha256(path: Path) -> str:
 def expected_assets(output: Path) -> dict[str, tuple[Path, str]]:
     listing = output / "release-files.txt"
     paths = [Path(line) for line in listing.read_text(encoding="utf-8").splitlines() if line]
-    if len(paths) != EXPECTED_PUBLIC_COUNT:
-        raise ValueError(f"expected exactly five public files, found {len(paths)}")
+    index = json.loads((output / "release-index.json").read_text())
+    public = index.get("public_assets")
+    if not isinstance(public, list) or not public:
+        raise ValueError("release index has no verified public assets")
+    wanted = {item["filename"] for item in public} | {"SHA256SUMS", "release-index.json"}
+    if len(paths) != len(wanted) or {path.name for path in paths} != wanted:
+        raise ValueError("release file list does not match the verified release index")
     result: dict[str, tuple[Path, str]] = {}
     for path in paths:
         resolved = path.resolve()
@@ -33,11 +38,17 @@ def expected_assets(output: Path) -> dict[str, tuple[Path, str]]:
             raise ValueError(f"release file escaped prepared output: {path}")
         if not path.is_file() or path.name in result:
             raise ValueError(f"release file is missing or duplicated: {path.name}")
+        if path.stat().st_size >= MAX_PUBLIC_ASSET_BYTES:
+            raise ValueError(f"release asset exceeds GitHub's size limit: {path.name}")
         result[path.name] = (path, sha256(path))
     if set(result) & {"release-files.txt", "matrix-selection.json"}:
         raise ValueError("private preparation manifests must not be public assets")
     if not {"SHA256SUMS", "release-index.json"}.issubset(result):
         raise ValueError("SHA256SUMS and release-index.json are required public assets")
+    for item in public:
+        path, digest = result[item["filename"]]
+        if digest != item["sha256"] or path.stat().st_size != item["size"]:
+            raise ValueError(f"public asset differs from verified index: {path.name}")
     return result
 
 
@@ -166,7 +177,7 @@ def verify_downloads(directory: Path, expected: dict[str, tuple[Path, str]]) -> 
         checksum_names.add(name)
     installers = set(expected) - {"SHA256SUMS", "release-index.json"}
     if checksum_names != installers:
-        raise ValueError("SHA256SUMS must cover exactly the three installers")
+        raise ValueError("SHA256SUMS must cover every public installer and payload")
 
 
 def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str:
@@ -198,6 +209,7 @@ def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str
     for path in missing:
         run(["gh", "release", "upload", tag, str(path)])
     import time
+
     for _attempt in range(60):
         complete = view_release(tag)
         if complete is None:
@@ -212,7 +224,9 @@ def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str
             raise
         time.sleep(10)
     else:
-        raise RuntimeError("GitHub draft is still missing expected assets after upload (timed out waiting for digests)")
+        raise RuntimeError(
+            "GitHub draft is still missing expected assets after upload (timed out waiting for digests)"
+        )
     with tempfile.TemporaryDirectory(prefix="localsr-release-verify-", dir=output) as temporary:
         directory = Path(temporary)
         run(["gh", "release", "download", tag, "--dir", str(directory)])

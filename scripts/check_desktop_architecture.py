@@ -17,9 +17,9 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CROSS_ALPHA_VERSION = "0.0.11-alpha"
+CROSS_ALPHA_VERSION = "0.0.12-alpha"
 CROSS_ALPHA_TAG = f"v{CROSS_ALPHA_VERSION}"
-CROSS_ALPHA_WORKFLOW = ".github/workflows/v0.0.11-cross-alpha.yml"
+CROSS_ALPHA_WORKFLOW = ".github/workflows/v0.0.12-cross-alpha.yml"
 CANONICAL_UPLOAD_PLATFORMS = {"linux", "macos", "windows"}
 
 FORBIDDEN_WEBVIEW_PACKAGES = {
@@ -158,7 +158,7 @@ def signed_release_violations(legacy: str, desktop_release: str) -> list[str]:
         "compact three-installer manifest": "ci/tauri-release-artifacts.json",
         "explicit prerelease publication": "publish_tauri_release.py",
         "tag-derived release title": 'TITLE="LocalSR $TAG"',
-        "v0.0.11 exception exclusion": f"github.ref_name != '{CROSS_ALPHA_TAG}'",
+        "v0.0.12 exception exclusion": f"github.ref_name != '{CROSS_ALPHA_TAG}'",
     }
     for label, token in required.items():
         if token not in desktop_release:
@@ -175,26 +175,26 @@ def cross_alpha_release_violations(workflow: str) -> list[str]:
 
     violations: list[str] = []
     required = {
-        "exact v0.0.11 tag trigger": f'      - "{CROSS_ALPHA_TAG}"',
+        "exact v0.0.12 tag trigger": f'      - "{CROSS_ALPHA_TAG}"',
         "Mac mini Intel runner": "runs-on: [self-hosted, macOS, X64, localsr-macos-cross-builder]",
         "universal2 wheel preparation": "macos_cross_wheels.py",
-        "dedicated alpha requirements": "requirements/macos-cross-v0.0.11-alpha.txt",
+        "dedicated alpha requirements": "requirements/macos-cross-v0.0.12-alpha.txt",
         "ARM64 Rust target": "--target aarch64-apple-darwin",
         "ARM64 package verification": "--platform macos --architecture arm64",
         "explicit unsigned evidence": "write_alpha_signing_report.py",
         "honest static-only macOS smoke": '"mode":"cross-build-static"',
         "real empty-cache Quick/Best inference": "validate_live_models.py",
-        "exception manifest": "ci/tauri-cross-alpha-artifacts.json",
+        "exception manifest": "ci/v0.0.12-cross-alpha-artifacts.json",
         "explicit prerelease publication": "publish_tauri_release.py",
         "exact publish ref": f"github.ref == 'refs/tags/{CROSS_ALPHA_TAG}'",
     }
     for label, token in required.items():
         if token not in workflow:
-            violations.append(f"v0.0.11 cross-alpha release is missing {label}")
+            violations.append(f"v0.0.12 cross-alpha release is missing {label}")
     if "--clobber" in workflow:
-        violations.append("v0.0.11 cross-alpha release must not overwrite published assets")
+        violations.append("v0.0.12 cross-alpha release must not overwrite published assets")
     if workflow.count("contents: write") != 1:
-        violations.append("only the v0.0.11 cross-alpha publishing job may write release contents")
+        violations.append("only the v0.0.12 cross-alpha publishing job may write release contents")
     return violations
 
 
@@ -325,7 +325,7 @@ def main() -> int:
     print(
         "Desktop architecture boundary valid: isolated webview, Rust authority, "
         "Python worker, manual legacy build, fail-closed signed Tauri release, "
-        "and the exact v0.0.11 cross-alpha exception."
+        "and the exact v0.0.12 cross-alpha exception."
     )
     return 0
 

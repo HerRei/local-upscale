@@ -9,6 +9,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from release_targets import validate_manifest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -46,21 +48,21 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     if {str(desktop_package.get("version")), str(tauri.get("version")), cargo_version} != {version}:
         failures.append("npm, Tauri, Cargo, and Python release versions do not match")
 
-    expected_installers = {
-        f"LocalSR-v{version}-macOS-arm64.dmg",
-        f"LocalSR-v{version}-Windows-x86_64.exe",
-        f"LocalSR-v{version}-Linux-x86_64.AppImage",
-    }
     for relative, label in (
         ("ci/tauri-release-artifacts.json", "signed Tauri"),
-        ("ci/tauri-cross-alpha-artifacts.json", "cross-alpha Tauri"),
+        (f"ci/v{version.split('-')[0]}-cross-alpha-artifacts.json", "cross-alpha Tauri"),
     ):
-        manifest = json.loads((root / relative).read_text(encoding="utf-8"))
+        path = root / relative
+        if not path.is_file():
+            failures.append(f"{label} manifest is missing: {relative}")
+            continue
+        manifest = json.loads(path.read_text(encoding="utf-8"))
         if manifest.get("version") != version:
             failures.append(f"{label} artifact manifest version does not match")
-        actual_installers = {str(item.get("filename")) for item in manifest.get("artifacts", [])}
-        if actual_installers != expected_installers:
-            failures.append(f"{label} installer names do not match the synchronized version")
+        try:
+            validate_manifest(manifest)
+        except ValueError as error:
+            failures.append(f"{label}: {error}")
 
     spec = (root / "packaging/localsr.spec").read_text(encoding="utf-8")
     expected_bundle_fields = {
@@ -85,9 +87,9 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
             failures.append(f"{label} has no prerelease-only publisher")
         if 'TITLE="LocalSR $TAG"' not in workflow:
             failures.append(f"{label} title is not derived from the tag")
-        for installer in expected_installers:
-            if installer not in workflow:
-                failures.append(f"{label} does not stage {installer}")
+        for token in ("release_targets.py", "matrix.pkg_name", "verify_prepared_release.py"):
+            if token not in workflow:
+                failures.append(f"{label} does not use the complete generated matrix: {token}")
 
     docs = (root / "docs/releasing.md").read_text(encoding="utf-8")
     if expected_tag not in docs:

@@ -1524,6 +1524,18 @@ class WorkerServer:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--backend-probe":
+        import argparse
+
+        from localsr.core.backend_validation import probe
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--backend-probe", required=True)
+        parser.add_argument("--output", type=Path, required=True)
+        args = parser.parse_args()
+        result = probe(args.backend_probe)
+        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        return
     server = WorkerServer()
     server.run()
 

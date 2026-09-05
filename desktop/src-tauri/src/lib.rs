@@ -2,6 +2,7 @@ mod catalog;
 mod commands;
 mod database;
 mod downloads;
+mod engine_payload;
 mod error;
 mod headless_smoke;
 mod integrations;
@@ -27,6 +28,9 @@ use state::{lock, AppState};
 use tauri::{Emitter, Manager};
 
 pub fn run() {
+    if let Some(exit_code) = engine_payload::run_arguments(&env::args_os().collect::<Vec<_>>()) {
+        std::process::exit(exit_code);
+    }
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let parsed = launch::parse_os_arguments(env::args_os().skip(1), &cwd);
     if parsed.headless_smoke_test {

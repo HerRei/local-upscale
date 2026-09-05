@@ -1,22 +1,44 @@
 # Native release process
 
-`v0.0.11 Mac mini Cross Alpha` (`.github/workflows/v0.0.11-cross-alpha.yml`) is a one-release
-exception that accepts only the exact `v0.0.11-alpha` tag. The normal
+`v0.0.12 Mac mini Cross Alpha` (`.github/workflows/v0.0.12-cross-alpha.yml`) is a one-release
+exception that accepts only the exact `v0.0.12-alpha` tag. The normal
 `Signed Tauri Alpha Release` pipeline explicitly skips that tag and continues to fail closed for
 later signed releases. The former Slint matrix remains manual-only and cannot publish a `v*` tag.
 
-## v0.0.11-alpha artifact matrix
+## v0.0.12-alpha artifact matrix
 
-| Platform | Bundled runtime | User-facing installer |
+The canonical target registry is `ci/tauri-targets.json`. Both desktop workflows expand their
+Windows/Linux matrices from it, and generated manifests must match it exactly. The legacy manual
+workflow retains its existing nine targets, including Intel macOS CPU.
+
+| Platform | Backend variants | Runtime |
 |---|---|---|
-| Apple Silicon macOS 12+ | cross-built ARM64 PyTorch 2.2.2 / MPS | `LocalSR-v0.0.11-alpha-macOS-arm64.dmg` |
-| Windows 10/11 x86-64 | maintained PyTorch 2.13 / CPU | `LocalSR-v0.0.11-alpha-Windows-x86_64.exe` |
-| Linux x86-64 | maintained PyTorch 2.13 / CPU | `LocalSR-v0.0.11-alpha-Linux-x86_64.AppImage` |
+| Apple Silicon macOS 12+ | MPS | cross-built Torch 2.2.2; static verification only |
+| Windows 10/11 x86-64 | CPU, CUDA | Torch 2.13; CUDA uses an installer plus verified external payloads |
+| Windows 10/11 x86-64 | DirectML | torch-directml 0.2.5.dev240914, Torch 2.4.1, torchvision 0.19.1 |
+| Linux x86-64 | CPU, CUDA, Intel XPU, AMD ROCm | Separate Torch 2.13 distributions |
 
-The first Tauri alpha deliberately publishes one uncomplicated installer per supported operating
-system. GPU-specific Windows and Linux engine packs remain a beta task; the UI and worker protocol
-already preserve CUDA, ROCm, XPU, DirectML, MPS, and CPU identifiers, but this release does not claim
-physical acceptance for packs it does not ship.
+`requirements/locks/` contains the reviewed transitive Windows/Linux dependency locks and hashes.
+Refresh them deliberately with `scripts/lock_backend_requirements.py` and uv 0.12.8; releases use
+`backend_wheelhouse.py` to build/reuse verified wheelhouses and install offline. The special
+universal2 Mac recipe remains separately pinned. Cached wheels live outside disposable scratch:
+`/ci-scratch/wheelhouses` or `C:\lsr-ci\wheelhouses`. Cargo build outputs are retained under
+`cargo-target/tauri-*`; only bundle output is cleared between variants. Heavy jobs remain serialized.
+Monitor disk reserves and remove obsolete wheelhouse keys only when no active build uses them.
+The registry budgets peak working space per backend before dependency installation (15–100 GiB,
+plus the protected disk reserve). ROCm's budget is largest because its wheel, expanded runtime,
+frozen worker, AppDir, and smoke-test extraction can coexist. These are conservative estimates,
+not measured guarantees; retain observed peak usage in the release handoff and tune from evidence.
+
+Windows CUDA's small NSIS installer embeds its engine manifest. Adjacent 1,900 MiB payload parts
+are checked by the Rust host before extraction into a staging directory and atomic promotion.
+Missing or corrupted files abort installation. The installed frozen worker receives the same
+identity/CPU-inference probe as the other variants. This does not change worker packaging to
+portable Python and does not claim GPU execution on the packaging VM.
+
+Oversized Linux AppImages are published as verified parts plus a generated shell helper that
+reconstructs and verifies the original executable. `release-index.json` lists the exact files for
+each logical distribution; public file counts therefore vary with payload size.
 
 ## Release gates
 
@@ -27,7 +49,7 @@ and records `runtime_tested=false`. No accessible physical ARM runner exists, so
 no native-runtime claim. The builders produce private checksum, metadata, architecture, signing,
 and smoke evidence.
 
-The publishing job locates exactly the three manifest installers, streams their SHA-256 digests,
+The publishing job locates every manifest distribution, streams their SHA-256 digests,
 rejects duplicate content, and requires:
 
 - a valid ARM64 Mach-O tree inside the macOS DMG;
@@ -37,11 +59,12 @@ rejects duplicate content, and requires:
 - a passing installed-package worker smoke on Linux and Windows; and
 - an honest static-only cross-build report for macOS rather than a fabricated runtime pass.
 
-Only five files are public: the three installers, `SHA256SUMS`, and `release-index.json`. The index
-embeds the private provenance/signing/architecture/smoke evidence so users are not faced with dozens
-of sidecars. The workflow downloads the draft release again and verifies `SHA256SUMS` before making
-it visible. An existing release is immutable: reruns refuse to use `--clobber` and require a version
-bump instead.
+Public files consist of the verified installers, necessary payload parts/helpers, `SHA256SUMS`,
+and `release-index.json`. Per-target evidence remains in the release index; standalone internal
+sidecars and matrix-selection files stay private. The verifier requires all eight target IDs,
+distinct installers, matching source commits, installed backend evidence, and the complete payload
+set. GitHub asset sizes are checked before upload. Publication downloads the draft again and
+verifies every checksum before making it visible; published releases cannot be overwritten.
 
 Builders send completed evidence to the private receiver with timestamped, nonce-bound HMAC. The
 reusable `CI_ARTIFACT_TOKEN` is never transmitted, and the receiver rejects stale signatures and
@@ -50,22 +73,22 @@ confidentiality; release payloads are intended for publication after the final g
 
 ## Version synchronization
 
-For v0.0.11-alpha, all of these must agree:
+For v0.0.12-alpha, all of these must agree:
 
-- tag: `v0.0.11-alpha`;
-- Python, npm, Cargo, and Tauri version: `0.0.11-alpha`;
-- legacy Inno metadata (kept reproducible): `0.0.11-alpha`;
-- the three versioned filenames in `ci/tauri-cross-alpha-artifacts.json`;
+- tag: `v0.0.12-alpha`;
+- Python, npm, Cargo, and Tauri version: `0.0.12-alpha`;
+- legacy Inno metadata (kept reproducible): `0.0.12-alpha`;
+- all eight versioned filenames in `ci/v0.0.12-cross-alpha-artifacts.json`;
 - changelog, README, known limitations, acceptance notes, and release notes; and
-- GitHub release title: `LocalSR v0.0.11-alpha`.
+- GitHub release title: `LocalSR v0.0.12-alpha`.
 
-`scripts/check_release_version.py --tag v0.0.11-alpha` enforces this. Hyphenated tags are published
+`scripts/check_release_version.py --tag v0.0.12-alpha` enforces this. Hyphenated tags are published
 with `--prerelease`. The old Slint workflow is manual-only, so one tag cannot accidentally publish
 both application architectures.
 
 ## Signing and notarization
 
-The exact v0.0.11-alpha exception is not production signed. macOS receives Tauri's ad-hoc seal and
+The exact v0.0.12-alpha exception is not production signed. macOS receives Tauri's ad-hoc seal and
 Windows has no Authenticode signature; Gatekeeper and SmartScreen may warn or reject them. This is
 recorded in each metadata sidecar and the public release index. It is not permitted for any later
 version or beta. The normal release pipeline continues to fail closed and requires the following:
@@ -94,7 +117,7 @@ The certificate is imported into the runner user's temporary certificate store, 
 host and NSIS installer, and the release verifier requires a valid matching signer and timestamp.
 The certificate and bounded scratch directory are removed after the job.
 
-At the time v0.0.11-alpha was prepared, none of these production signing secrets were configured.
+At the time v0.0.12-alpha was prepared, none of these production signing secrets were configured.
 They are hard beta gates, not requirements for this explicitly testing-only alpha.
 
 ## macOS cross-build exception
@@ -116,15 +139,15 @@ PyTorch on real Apple-Silicon hardware; Intel macOS remains an open product deci
 4. If fixing the failure requires a new commit/SHA, start a new workflow run and rebuild every platform.
 5. Never reuse binaries from an older commit as products of a newer commit.
 
-## Publishing v0.0.11-alpha
+## Publishing v0.0.12-alpha
 
 1. Merge the release commit to `main` only after normal CI and Tauri CI are green.
-2. Run `v0.0.11 Mac mini Cross Alpha` manually on that exact `main` commit and require all three
+2. Run `v0.0.12 Mac mini Cross Alpha` manually on that exact `main` commit and require all backend
    build jobs to pass without publishing.
-3. Create the annotated tag: `git tag -a v0.0.11-alpha -m "LocalSR v0.0.11-alpha"`.
-4. Push the tag. All three Mac-mini package jobs must finish before the draft release is created.
-5. Confirm the release is titled `LocalSR v0.0.11-alpha`, marked prerelease, and has exactly five
-   assets: three installers, `SHA256SUMS`, and `release-index.json`.
+3. Create the annotated tag: `git tag -a v0.0.12-alpha -m "LocalSR v0.0.12-alpha"`.
+4. Push the tag. All Mac-mini backend package jobs must finish before the draft release is created.
+5. Confirm the release is titled `LocalSR v0.0.12-alpha`, marked prerelease, and includes all eight
+   distributions and the exact public download set recorded in `release-index.json`.
 6. Complete the physical-machine items in `docs/acceptance.md` before promoting this alpha to beta.
 
 ## Headless macOS runner startup

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import plistlib
@@ -112,6 +113,7 @@ def smoke_macos(artifact: Path, report: Path, env: dict[str, str], timeout: floa
             env=env,
             timeout=timeout,
         )
+        verify_backend(report, env, timeout)
     finally:
         detach_dmg(device, env, min(timeout, 30.0))
 
@@ -196,6 +198,13 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
         # interactive desktop.
         run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
         record_windows_payload_architectures(artifact, install_dir, executable, report)
+        payload_path = install_dir / "engine-payload.json"
+        if payload_path.is_file():
+            data = json.loads(report.read_text())
+            data["engine_payload"] = json.loads(payload_path.read_text())
+            data["engine_payload_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+            report.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        verify_backend(report, env, timeout)
         uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
             install_dir.glob("unins*.exe")
         )
@@ -210,6 +219,40 @@ def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: floa
     # session even under Xvfb. Exercise the actual AppImage host, its resource
     # layout and bundled worker before WebView initialization instead.
     run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
+    # APPIMAGE_EXTRACT_AND_RUN removes its temporary tree when the host exits.
+    # Extract an owned copy so the identity probe exercises that exact payload.
+    if env.get("LOCALSR_SMOKE_BACKEND"):
+        with tempfile.TemporaryDirectory(prefix="localsr-backend-appimage-") as temporary:
+            subprocess.run(
+                [str(artifact), "--appimage-extract"],
+                cwd=temporary,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+            workers = list((Path(temporary) / "squashfs-root").rglob("localsr-worker"))
+            if len(workers) != 1:
+                raise RuntimeError("AppImage does not contain exactly one frozen worker")
+            verify_backend(report, env, timeout, worker=workers[0])
+
+
+def verify_backend(
+    report: Path, env: dict[str, str], timeout: float, *, worker: Path | None = None
+) -> None:
+    backend = env.get("LOCALSR_SMOKE_BACKEND")
+    if not backend:
+        return
+    data = json.loads(report.read_text())
+    worker = worker or Path(data["worker_path"])
+    probe_path = report.with_name(report.stem + ".backend.json")
+    probe_path.unlink(missing_ok=True)
+    run(
+        [str(worker), "--backend-probe", backend, "--output", str(probe_path)],
+        env=env,
+        timeout=timeout,
+    )
+    data["backend_probe"] = json.loads(probe_path.read_text())
+    report.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def validate_report(report: Path) -> dict[str, object]:
@@ -236,6 +279,7 @@ def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, obj
     report.unlink(missing_ok=True)
     env = os.environ.copy()
     env["LOCALSR_SMOKE_REPORT"] = str(report)
+    env["LOCALSR_SMOKE_TIMEOUT_SECONDS"] = str(int(timeout))
     with tempfile.TemporaryDirectory(prefix="localsr-next-smoke-data-") as data_root:
         env["XDG_DATA_HOME"] = str(Path(data_root) / "xdg")
         env["LOCALAPPDATA"] = str(Path(data_root) / "local")
@@ -275,7 +319,12 @@ def main() -> int:
     parser.add_argument("--artifact-glob", required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=240.0)
+    parser.add_argument(
+        "--backend", choices=("CPU", "CUDA", "DirectML", "Intel-XPU", "AMD-ROCm", "MPS")
+    )
     args = parser.parse_args()
+    if args.backend:
+        os.environ["LOCALSR_SMOKE_BACKEND"] = args.backend
     smoke(resolve_artifact(args.artifact_glob), args.report, args.timeout)
     return 0
 

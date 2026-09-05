@@ -5,6 +5,14 @@ stable release is published.
 
 ## [Unreleased]
 
+## [0.0.12-alpha] - 2026-09-05
+
+- Correct video timing/orientation, standard-video readiness labels, and visual benchmark rendering.
+- Preserve all eight Tauri backend variants with a generated release matrix and per-backend validation.
+- Deliver Windows CUDA through the installer plus verified external engine payloads.
+- Reuse locked dependency wheelhouses and persist platform build caches.
+- This remains a testing alpha: Windows is unsigned and the Mac ARM cross-build has static validation only.
+
 ## [0.0.11-alpha] - 2026-09-03
 
 ### Added

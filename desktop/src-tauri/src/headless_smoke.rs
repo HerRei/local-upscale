@@ -18,11 +18,16 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PRODUCT_NAME: &str = "LocalSR Next Preview";
 
 pub fn run() -> i32 {
+    let timeout = std::env::var("LOCALSR_SMOKE_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|seconds| Duration::from_secs(seconds.clamp(30, 1800)))
+        .unwrap_or(START_TIMEOUT);
     let worker_path = packaged_worker_path();
     let result = worker_path
         .as_ref()
         .map_err(|error| error.clone())
-        .and_then(|path| run_worker_handshake(path, START_TIMEOUT));
+        .and_then(|path| run_worker_handshake(path, timeout));
 
     let (worker, passed, status_title, status_detail, engine) = match result {
         Ok(info) => (

@@ -151,7 +151,7 @@ def build_worker(target: str | None = None) -> None:
         raise SystemExit(f"worker build did not create {executable}")
 
 
-def write_bundle_overlay(*, require_signing: bool = False) -> None:
+def write_bundle_overlay(*, require_signing: bool = False, payload: Path | None = None) -> None:
     if not ENGINE_DIR.is_dir():
         raise SystemExit(f"missing worker engine directory: {ENGINE_DIR}")
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -162,7 +162,20 @@ def write_bundle_overlay(*, require_signing: bool = False) -> None:
             (ROOT / "THIRD_PARTY_NOTICES.md").as_posix(): "THIRD_PARTY_NOTICES.md",
         },
     }
+    if payload is not None:
+        resources = bundle["resources"]
+        del resources[f"{ENGINE_DIR.as_posix()}/"]
+        resources[payload.as_posix()] = "engine-payload.json"
+        bundle["windows"] = {
+            "nsis": {"installerHooks": str(ROOT / "packaging/windows/engine-payload.nsh")}
+        }
     if sys.platform == "darwin":
+        from importlib.metadata import version
+
+        # The maintained Torch 2.13 ARM wheels have a macOS 14 deployment floor.
+        # The explicitly pinned 2.2 cross-alpha retains the existing macOS 12 floor.
+        if version("torch").split("+")[0].startswith("2.13."):
+            bundle["macOS"] = {"minimumSystemVersion": "14.0"}
         apple_signing = os.environ.get("APPLE_SIGNING_IDENTITY") or os.environ.get(
             "APPLE_CERTIFICATE"
         )
@@ -178,7 +191,7 @@ def write_bundle_overlay(*, require_signing: bool = False) -> None:
         if not apple_signing:
             # Tauri recommends a final ad-hoc seal for credential-free Apple
             # Silicon previews. A real identity supplied by CI overrides this.
-            bundle["macOS"] = {"signingIdentity": "-"}
+            bundle.setdefault("macOS", {}).update({"signingIdentity": "-"})
     if os.name == "nt":
         thumbprint = os.environ.get("WINDOWS_CERTIFICATE_THUMBPRINT", "").strip()
         timestamp_url = os.environ.get("WINDOWS_TIMESTAMP_URL", "").strip()
@@ -187,11 +200,13 @@ def write_bundle_overlay(*, require_signing: bool = False) -> None:
                 "WINDOWS_CERTIFICATE_THUMBPRINT and WINDOWS_TIMESTAMP_URL are required"
             )
         if thumbprint and timestamp_url:
-            bundle["windows"] = {
-                "certificateThumbprint": thumbprint,
-                "digestAlgorithm": "sha256",
-                "timestampUrl": timestamp_url,
-            }
+            bundle.setdefault("windows", {}).update(
+                {
+                    "certificateThumbprint": thumbprint,
+                    "digestAlgorithm": "sha256",
+                    "timestampUrl": timestamp_url,
+                }
+            )
     CONFIG_PATH.write_text(
         json.dumps(
             {
@@ -215,6 +230,9 @@ def main() -> int:
         help="Refuse release bundles unless platform production signing is configured",
     )
     parser.add_argument("--target", help="Native Rust target triple")
+    parser.add_argument(
+        "--external-engine-prefix", help="Create adjacent CUDA engine payloads for NSIS"
+    )
     bundle_mode = parser.add_mutually_exclusive_group()
     bundle_mode.add_argument(
         "--bundles",
@@ -228,7 +246,17 @@ def main() -> int:
     run([sys.executable, str(ROOT / "scripts" / "export_desktop_catalog.py")])
     if not args.skip_worker:
         build_worker(args.target)
-    write_bundle_overlay(require_signing=args.require_signing)
+    payload = None
+    if args.external_engine_prefix:
+        if os.name != "nt" or args.bundles != "nsis":
+            parser.error("external engine payloads require a Windows NSIS build")
+        from prepare_engine_payload import prepare
+
+        output = BUILD_ROOT / "engine-payload"
+        if output.exists():
+            shutil.rmtree(output)
+        payload = prepare(ENGINE_DIR, output, args.external_engine_prefix)
+    write_bundle_overlay(require_signing=args.require_signing, payload=payload)
 
     if not (DESKTOP / "node_modules").is_dir():
         run([npm_executable(), "ci"], cwd=DESKTOP)
@@ -254,7 +282,16 @@ def main() -> int:
         command.extend(["--bundles", args.bundles])
     if args.no_bundle:
         command.append("--no-bundle")
-    run(command, cwd=DESKTOP, env=tauri_build_environment())
+    environment = tauri_build_environment()
+    cargo_target = Path(environment.get("CARGO_TARGET_DIR", DESKTOP / "src-tauri/target"))
+    if args.target:
+        cargo_target = cargo_target / args.target
+    # Keep compiled dependencies, but never select installers left by a previous
+    # backend or release from the shared Cargo output directory.
+    bundles = cargo_target / ("debug" if args.debug else "release") / "bundle"
+    if bundles.exists():
+        shutil.rmtree(bundles)
+    run(command, cwd=DESKTOP, env=environment)
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
         "The legacy Slint app and its artifacts were not modified.",
