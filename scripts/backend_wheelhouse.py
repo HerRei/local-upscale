@@ -92,26 +92,35 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
         env = os.environ.copy()
         env["SOURCE_DATE_EPOCH"] = "1704067200"
         print(f"Building wheelhouse {target}/{key[:12]} from the reviewed lock", flush=True)
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "wheel",
-                "--disable-pip-version-check",
-                "--no-cache-dir",
-                "--require-hashes",
-                "--no-deps",
-                "--wheel-dir",
-                str(stage),
-                "-r",
-                str(lock),
-                "--build-constraint",
-                str(ROOT / "requirements/build-tools.txt"),
-            ],
-            check=True,
-            env=env,
-        )
+        
+        args = [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--require-hashes",
+            "--no-deps",
+            "--wheel-dir",
+            str(stage),
+        ]
+        
+        for line in lock.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("--index-url "):
+                args.extend(["--index-url", line.split(maxsplit=1)[1]])
+            elif line.startswith("--extra-index-url "):
+                args.extend(["--extra-index-url", line.split(maxsplit=1)[1]])
+                
+        args.extend([
+            "-r",
+            str(lock),
+            "--build-constraint",
+            str(ROOT / "requirements/build-tools.txt"),
+        ])
+        
+        subprocess.run(args, check=True, env=env)
         records = describe_wheels(stage)
         manifest = {
             "schema_version": 1,
