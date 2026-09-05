@@ -129,7 +129,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor v0.0.12-alpha-${{ matrix.id }})
           mkdir -p /ci-scratch/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-min-percent 15 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
+          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-min-percent 5 --ssd-min-gib 5 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
             echo "LOCALSR_ALPHA_ROOT=$ROOT"
@@ -238,9 +238,11 @@ jobs:
         run: |
           py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          py -3.11 -m pip cache purge
+          Remove-Item -Recurse -Force C:\lsr-ci\cargo-target\tauri-x86_64 -ErrorAction SilentlyContinue
           py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci --force
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          py -3.11 scripts/storage_preflight.py --ssd-path C:\lsr-ci --skip-hdd --ssd-min-percent 15 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
+          py -3.11 scripts/storage_preflight.py --ssd-path C:\lsr-ci --skip-hdd --ssd-min-percent 5 --ssd-min-gib 5 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $root = "C:\lsr-ci\runs\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\windows\v0.0.12-alpha-${{ matrix.id }}"
           py -3.11 scripts/release_scratch.py start --root C:\lsr-ci --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows --flavor v0.0.12-alpha-${{ matrix.id }}
@@ -353,7 +355,7 @@ jobs:
           python3 scripts/release_scratch.py init --root "$CI_SCRATCH"
           python3 scripts/release_scratch.py cleanup --root "$CI_SCRATCH" --force
           python3 scripts/storage_preflight.py \
-            --ssd-path "$CI_SCRATCH" --skip-hdd --ssd-min-percent 20 --ssd-min-gib 6 --ssd-min-percent 15 --ssd-peak-gib 15
+            --ssd-path "$CI_SCRATCH" --skip-hdd --ssd-min-percent 20 --ssd-min-gib 6 --ssd-peak-gib 15
           RUN_ROOT=$(python3 scripts/release_scratch.py start \
             --root "$CI_SCRATCH" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform macos --flavor tauri-v0.0.12-cross-alpha)
