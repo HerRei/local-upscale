@@ -167,5 +167,5 @@
     <label>Speed <select aria-label="Playback speed" value={playbackRate} on:change={rateChanged}><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
   </div>
   {#if playbackError}<p class="video-error" role="alert">{playbackError}</p>{/if}
-  <span class="video-labs">VIDEO · LABS / EXPERIMENTAL</span>
+  <span class="video-labs">VIDEO · COMPARISON</span>
 </div>

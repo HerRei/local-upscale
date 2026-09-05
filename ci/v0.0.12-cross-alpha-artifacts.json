@@ -1,34 +1,35 @@
 {
   "schema_version": 1,
   "version": "0.0.12-alpha",
+  "release_policy": "v0.0.12-cross-alpha-exception",
   "artifacts": [
     {
       "filename": "LocalSR-v0.0.12-alpha-macOS-arm64.dmg",
       "platform": "macos",
       "architecture": "arm64",
       "backend": "MPS",
-      "signing": "developer-id-notarized"
+      "signing": "ad-hoc-alpha"
     },
     {
       "filename": "LocalSR-v0.0.12-alpha-Windows-CPU-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CPU",
-      "signing": "authenticode-valid"
+      "signing": "unsigned-alpha"
     },
     {
       "filename": "LocalSR-v0.0.12-alpha-Windows-DirectML-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "DirectML",
-      "signing": "authenticode-valid"
+      "signing": "unsigned-alpha"
     },
     {
       "filename": "LocalSR-v0.0.12-alpha-Windows-CUDA-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CUDA",
-      "signing": "authenticode-valid"
+      "signing": "unsigned-alpha"
     },
     {
       "filename": "LocalSR-v0.0.12-alpha-Linux-CPU-x86_64.AppImage",

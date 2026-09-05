@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "release": "0.0.11-alpha",
   "beta_ready": false,
   "gates": [
@@ -7,67 +7,105 @@
       "id": "automated-release-integrity",
       "status": "automated-pass",
       "summary": "Version synchronization, real Quick/Best inference, package data, native installer architecture, checksums, distinct digests, installed-worker smoke tests, immutable releases, and HMAC-authenticated artifact transfer are enforced by CI.",
-      "next_action": "Keep these checks required for every release."
+      "next_action": "Keep these checks required for every release.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "macos-production-trust",
       "status": "waiting-credentials",
       "summary": "The testing-only v0.0.11 alpha is ad-hoc sealed. Beta requires Developer ID signing, notarization, stapling, Gatekeeper verification, and a maintained native ARM64 build path; those credentials and runner are absent.",
-      "next_action": "Provide the documented Apple Developer credentials, then verify the downloaded artifact on a separate Mac."
+      "next_action": "Provide the documented Apple Developer credentials, then verify the downloaded artifact on a separate Mac.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "windows-production-trust",
       "status": "waiting-credentials",
       "summary": "The testing-only v0.0.11 alpha is unsigned on Windows. Beta requires a timestamped Authenticode signature, but the certificate secrets are absent.",
-      "next_action": "Choose a certificate provider and configure the documented PFX, password, thumbprint, and timestamp secrets."
+      "next_action": "Choose a certificate provider and configure the documented PFX, password, thumbprint, and timestamp secrets.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "legacy-runtime-support",
       "status": "decision-required",
       "summary": "The v0.0.11 Apple-Silicon alpha temporarily ships the known-debt PyTorch 2.2.2 and Diffusers 0.35.2 cross-build. Beta requires a maintained native ARM runtime. Intel macOS and Microsoft's PyTorch-2.4.1-constrained DirectML path remain unresolved.",
-      "next_action": "Decide whether Intel remains viable and whether DirectML should wait for a maintained runtime, move to a different backend, or remain excluded from beta."
+      "next_action": "Decide whether Intel remains viable and whether DirectML should wait for a maintained runtime, move to a different backend, or remain excluded from beta.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "physical-platform-acceptance",
       "status": "manual-required",
       "summary": "CI packaging does not prove operation on every advertised GPU, driver, and CPU combination.",
-      "next_action": "Complete and retain acceptance records for the macOS ARM and Windows/Linux CPU installers, then for every optional GPU engine pack before advertising it."
+      "next_action": "Complete and retain acceptance records for the macOS ARM and Windows/Linux CPU installers, then for every optional GPU engine pack before advertising it.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "real-media-resilience",
       "status": "manual-required",
       "summary": "Generated fixtures cover edge paths, but representative user media and resource-pressure behavior still require physical testing.",
-      "next_action": "Test large images, transparency, DNG, cancellation, low disk, low memory, and thermals using the acceptance record template."
+      "next_action": "Test large images, transparency, DNG, cancellation, low disk, low memory, and thermals using the acceptance record template.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "face-model-commercial-policy",
       "status": "external-clarification",
       "summary": "The HAT source license does not independently establish the exact face checkpoint's weight, training-data, redistribution, or commercial-use rights. LocalSR disables automatic download and accepts only a hash-matching user-supplied copy without making commercial claims.",
-      "next_action": "Obtain written checkpoint and training-data rights from the publisher, or replace it with a checkpoint whose exact terms are documented before beta."
+      "next_action": "Obtain written checkpoint and training-data rights from the publisher, or replace it with a checkpoint whose exact terms are documented before beta.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "best-anime-upstream-license",
       "status": "external-clarification",
       "summary": "The Best and anime release pages use the nonstandard license string CC-BY-0.4.",
-      "next_action": "Obtain written clarification from the checkpoint publisher before public or commercial claims."
+      "next_action": "Obtain written clarification from the checkpoint publisher before public or commercial claims.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "security-monitoring",
       "status": "decision-required",
       "summary": "Dependabot is enabled, but code scanning and secret scanning are disabled, branch protection is unavailable on the current private plan, and persistent self-hosted runners remain a privileged trust boundary. Tauri's Linux GTK3 dependency graph also retains the glib 0.18 GHSA-wrw7-89jp-8q8g advisory until the upstream GTK4 migration is viable.",
-      "next_action": "Choose the repository visibility/plan and runner-isolation approach, enable supported scanning and protected release controls, and complete the GTK4 migration before accepting outside contributions or declaring beta readiness."
+      "next_action": "Choose the repository visibility/plan and runner-isolation approach, enable supported scanning and protected release controls, and complete the GTK4 migration before accepting outside contributions or declaring beta readiness.",
+      "blocking": true,
+      "scope": "application"
     },
     {
       "id": "public-downloads-feedback",
       "status": "decision-required",
       "summary": "The private repository and restricted issue intake are not accessible to general beta users.",
-      "next_action": "Choose a public download location and low-friction feedback route, then test both while signed out."
+      "next_action": "Choose a public download location and low-friction feedback route, then test both while signed out.",
+      "blocking": true,
+      "scope": "application"
     },
     {
-      "id": "video-labs",
+      "id": "standard-video-acceptance",
+      "status": "manual-required",
+      "blocking": true,
+      "scope": "standard-video",
+      "summary": "SDR frame-by-frame video has timing, orientation, trim and motion regression coverage. Installed-platform playback, long-clip and resource acceptance remains pending.",
+      "next_action": "Run the local visual video benchmark and complete the video cases in docs/acceptance-record.example.json on each supported installer."
+    },
+    {
+      "id": "temporal-video-labs",
       "status": "labs",
-      "summary": "Video, SeedVR2, de-flicker, codecs, and multi-video behavior remain experimental.",
-      "next_action": "Keep all video surfaces labeled Labs until queue, codec, resource, and physical-device coverage is complete."
+      "blocking": false,
+      "scope": "seedvr2",
+      "summary": "SeedVR2 remains an optional experimental engine; standard video readiness is tracked separately.",
+      "next_action": "Verify real multi-chunk inference, continuity, memory pressure and cancellation on supported hardware."
+    },
+    {
+      "id": "video-processing-labs",
+      "status": "labs",
+      "blocking": false,
+      "scope": "deflicker-and-video-faces",
+      "summary": "Conservative de-flicker and motion-sensitive face processing remain individually experimental.",
+      "next_action": "Validate representative moving detail, pans, scene cuts and moving faces before promoting these options."
     }
   ]
 }

@@ -1154,7 +1154,7 @@ fn build_job_message(
                 "output_video_path": output,
                 "container": input.video_container,
                 "crf": input.video_crf,
-                "fps": if media.fps > 0.0 { Some(media.fps) } else { None },
+                "fps": null,
                 "device": input.device,
                 "tile_size": input.tile_size,
                 "halo": input.halo,
@@ -1199,7 +1199,7 @@ fn build_job_message(
                     "output_video_path": output,
                     "container": input.video_container,
                     "crf": input.video_crf,
-                    "fps": if media.fps > 0.0 { Some(media.fps) } else { None },
+                    "fps": null,
                     "device": input.device,
                     "tile_size": input.tile_size,
                     "halo": input.halo,
@@ -1571,6 +1571,39 @@ mod tests {
         assert_eq!(message["data"]["scratch_directory"], "/app-owned/work");
         assert_eq!(message["data"]["stages"].as_array().unwrap().len(), 1);
         assert_eq!(message["data"]["stages"][0]["kind"], "upscale");
+
+        // Probed average FPS is metadata, not a request to retime a VFR clip.
+        let mut video = media.clone();
+        video.kind = "video".into();
+        video.fps = 29.97;
+        let video_message = build_job_message(
+            "video-job",
+            &video,
+            Path::new("/output/clip.mp4"),
+            Path::new("/app-owned/work"),
+            &input("video"),
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(video_message["type"], "video_job_request");
+        assert!(video_message["data"]["fps"].is_null());
+        let temporal = ModelSelection::Temporal {
+            model_id: "seedvr2_3b".into(),
+            engine_kind: "seedvr2".into(),
+            bundle_dir: "/models/seedvr2".into(),
+            temporal_window: 9,
+            temporal_overlap: 2,
+        };
+        let temporal_message = build_job_message(
+            "temporal-job",
+            &video,
+            Path::new("/output/clip.mp4"),
+            Path::new("/app-owned/work"),
+            &input("video"),
+            &temporal,
+        )
+        .unwrap();
+        assert!(temporal_message["data"]["fps"].is_null());
     }
 
     #[test]

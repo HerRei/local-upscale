@@ -961,6 +961,7 @@ fn should_emit_state_changed(message_type: &str) -> bool {
             | "benchmark_stage_started"
             | "benchmark_stage_progress"
             | "benchmark_stage_completed"
+            | "benchmark_preview"
     )
 }
 

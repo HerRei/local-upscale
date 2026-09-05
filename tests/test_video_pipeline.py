@@ -354,13 +354,13 @@ def test_video_job_protocol_messages_include_video_specific_types():
     assert json.loads(job_done.to_json())["type"] == "video_job_completed"
 
 
-def test_deflicker_median_removes_per_frame_flicker():
-    """The 3-frame median should smooth out a frame that's an outlier."""
+def test_deflicker_reduces_low_amplitude_static_flicker():
+    """Reduce subtle static flicker without treating hard cuts as outliers."""
     from localsr.core.video_pipeline import _deflicker_frames
 
     # Five frames where the middle one is a bright outlier.
     frame_base = np.full((4, 4, 3), 50, dtype=np.uint8)
-    frame_outlier = np.full((4, 4, 3), 200, dtype=np.uint8)
+    frame_outlier = np.full((4, 4, 3), 60, dtype=np.uint8)
     frames = [
         frame_base.copy(),
         frame_base.copy(),
@@ -371,11 +371,7 @@ def test_deflicker_median_removes_per_frame_flicker():
     cancel = threading.Event()
     result = list(_deflicker_frames(iter(frames), window=3, cancel_event=cancel))
     assert len(result) == 5
-    # The center frame (index 2) gets the full 3-frame window [50, 200, 50]
-    # so its median is 50 — the outlier is removed.
-    assert result[2].mean() < 80
-    # The outlier frame at index 2 is gone in the output. Edge frames
-    # use a 2-frame window so they blend, but that's expected behavior.
+    assert 50 < result[2].mean() < 60
 
 
 def test_deflicker_preserves_genuine_motion():

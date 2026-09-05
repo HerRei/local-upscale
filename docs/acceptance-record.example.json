@@ -14,17 +14,116 @@
     "backend": "CPU, MPS, CUDA, DirectML, Intel-XPU, or AMD-ROCm"
   },
   "cases": [
-    {"id": "photo", "result": "not-run", "notes": ""},
-    {"id": "face", "result": "not-run", "notes": ""},
-    {"id": "anime", "result": "not-run", "notes": ""},
-    {"id": "screenshot-text", "result": "not-run", "notes": ""},
-    {"id": "large-image", "result": "not-run", "notes": ""},
-    {"id": "transparency", "result": "not-run", "notes": ""},
-    {"id": "dng", "result": "not-run", "notes": ""},
-    {"id": "cancellation", "result": "not-run", "notes": ""},
-    {"id": "low-disk", "result": "not-run", "notes": ""},
-    {"id": "low-memory", "result": "not-run", "notes": ""},
-    {"id": "thermals", "result": "not-run", "notes": ""}
+    {
+      "id": "photo",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "face",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "anime",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "screenshot-text",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "large-image",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "transparency",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "dng",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "cancellation",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "low-disk",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "low-memory",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "thermals",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-cfr-audio",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-vfr-audio-trim",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-rotation-mirror",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-containers-subtitles",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-hdr-rejection",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-long-clip-memory",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-cancel-finalize",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-mixed-queue",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-native-playback",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "seedvr2-multichunk-optional",
+      "result": "not-run",
+      "notes": ""
+    },
+    {
+      "id": "video-deflicker-motion-optional",
+      "result": "not-run",
+      "notes": ""
+    }
   ],
   "diagnostics": "paste Advanced settings > Copy Diagnostics output here",
   "overall_result": "not-run"

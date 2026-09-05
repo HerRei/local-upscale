@@ -170,7 +170,38 @@ def test_beta_readiness_register_is_valid_and_honest():
     assert statuses["macos-production-trust"] == "waiting-credentials"
     assert statuses["legacy-runtime-support"] == "decision-required"
     assert statuses["security-monitoring"] == "decision-required"
-    assert statuses["video-labs"] == "labs"
+    assert statuses["standard-video-acceptance"] == "manual-required"
+    assert statuses["temporal-video-labs"] == "labs"
+    assert not next(gate for gate in data["gates"] if gate["id"] == "temporal-video-labs")[
+        "blocking"
+    ]
+
+
+def test_optional_labs_do_not_block_an_otherwise_ready_release(tmp_path):
+    data = json.loads((ROOT / "ci/beta-readiness.json").read_text())
+    for gate in data["gates"]:
+        if gate["blocking"]:
+            gate["status"] = "automated-pass"
+    data["beta_ready"] = True
+    path = tmp_path / "readiness.json"
+    path.write_text(json.dumps(data))
+    assert beta_readiness.validate(path, ROOT)["beta_ready"]
+    data["gates"][-1]["blocking"] = True
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="disagrees"):
+        beta_readiness.validate(path, ROOT)
+
+
+def test_manual_acceptance_requires_evidence(tmp_path):
+    data = json.loads((ROOT / "ci/beta-readiness.json").read_text())
+    data["gates"][0]["status"] = "manual-pass"
+    path = tmp_path / "readiness.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="evidence"):
+        beta_readiness.validate(path, ROOT)
+    data["gates"][0]["evidence"] = "docs/acceptance/local-run.json"
+    path.write_text(json.dumps(data))
+    beta_readiness.validate(path, ROOT)
 
 
 def test_compact_release_assets_embed_sidecars_and_support_split_bundles(tmp_path: Path):

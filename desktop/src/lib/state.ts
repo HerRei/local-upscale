@@ -137,7 +137,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.live_memory_pressure_percent = Number(data.system_memory_pressure_percent ?? 0);
       break;
     case 'video_frame_started':
-      next.runtime.status_title = 'Enhancing video · Labs';
+      next.runtime.status_title = 'Enhancing video';
       next.runtime.status_detail = `Frame ${Number(data.frame_index ?? 0) + 1} of ${Number(data.total_frames ?? 0) || '?'}`;
       break;
     case 'video_frame_completed': {
@@ -146,7 +146,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       if (done > 0 && total > 0) next.runtime.progress = (done / total) * 100;
       const elapsed = Number(data.elapsed_seconds ?? 0);
       const remaining = Number(data.estimated_remaining_seconds ?? 0);
-      next.runtime.status_title = 'Enhancing video · Labs';
+      next.runtime.status_title = 'Enhancing video';
       next.runtime.status_detail = `Frame ${done} of ${total || '?'}${remaining > 0 ? ` · ETA ${formatDuration(remaining)}` : ''}`;
       if (done > 0 && elapsed > 0) {
         next.runtime.elapsed_seconds = elapsed;

@@ -35,7 +35,7 @@ describe('video comparison player', () => {
     expect(screen.getByRole('slider', { name: 'Video position' })).toBeTruthy();
     expect(screen.getByText('Original')).toBeTruthy();
     expect(screen.getByText('Enhanced')).toBeTruthy();
-    expect(screen.getByText('VIDEO · LABS / EXPERIMENTAL')).toBeTruthy();
+    expect(screen.getByText('VIDEO · COMPARISON')).toBeTruthy();
   });
 
   it('keeps audio enabled only on the enhanced stream', () => {

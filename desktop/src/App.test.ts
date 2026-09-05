@@ -414,9 +414,9 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText(/disabled unless a supported local detector/i)).toBeTruthy();
   });
 
-  it('keeps both frame and temporal video engines visibly experimental', async () => {
+  it('labels experimental engines separately from standard video', async () => {
     const user = await mountWith(readySnapshot());
-    await chooseTask(user, /Upscale Video\s*Labs \/ Experimental/i);
+    await chooseTask(user, /Upscale Video\s*Local SDR video/i);
 
     const engine = screen.getByLabelText('Video engine');
     expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
@@ -425,8 +425,11 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
-    expect(screen.getByRole('checkbox', { name: /Temporal median de-flicker/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Start selected video · Labs' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start selected video' })).toBeTruthy();
+    await user.selectOptions(engine, 'seedvr2_3b');
+    expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
   it('queues a video with its own settings while an image job is running', async () => {
@@ -593,7 +596,7 @@ describe('LocalSR desktop interface', () => {
         .disabled
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: /Upscale Video\s*Labs \/ Experimental/i }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: /Upscale Video\s*Local SDR video/i }) as HTMLButtonElement)
         .disabled
     ).toBe(false);
     await user.click(start);
@@ -641,7 +644,7 @@ describe('LocalSR desktop interface', () => {
         .disabled
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: 'Start selected video · Labs' }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement)
         .disabled
     ).toBe(false);
   });
@@ -676,7 +679,7 @@ describe('LocalSR desktop interface', () => {
     );
     expect(
       (screen.getByRole('button', {
-        name: /Upscale Video\s*Labs \/ Experimental/i
+        name: /Upscale Video\s*Local SDR video/i
       }) as HTMLButtonElement).disabled
     ).toBe(true);
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
@@ -730,7 +733,7 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() =>
       expect(
         (screen.getByRole('button', {
-          name: /Upscale Video\s*Labs \/ Experimental/i
+          name: /Upscale Video\s*Local SDR video/i
         }) as HTMLButtonElement).disabled
       ).toBe(false)
     );

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass
+import threading
+import warnings
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -29,6 +31,67 @@ class VideoProbe:
     duration_seconds: float
 
 
+@dataclass(frozen=True)
+class TimedVideoFrame:
+    """Pixels and their source presentation interval, independent of inference."""
+
+    index: int
+    rgb: np.ndarray
+    timestamp: Fraction
+    duration: Fraction
+    time_base: Fraction
+
+    def with_pixels(self, rgb: np.ndarray) -> TimedVideoFrame:
+        return replace(self, rgb=rgb)
+
+
+def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
+    """Return a right-angle rotation and horizontal reflection from FFmpeg's matrix.
+
+    Pixels are normalized on decode so inference, thumbnails and exports agree.
+    Reject perspective/arbitrary transforms instead of silently changing framing.
+    """
+    for side_data in frame.side_data:
+        if side_data.type.name != "DISPLAYMATRIX":
+            continue
+        matrix = np.frombuffer(side_data, dtype=np.int32).reshape(3, 3)
+        basis = matrix[:2, :2].astype(float) / 65536
+        rotations = (
+            np.array([[1, 0], [0, 1]]),
+            np.array([[0, -1], [1, 0]]),
+            np.array([[-1, 0], [0, -1]]),
+            np.array([[0, 1], [-1, 0]]),
+        )
+        if matrix[0, 2] or matrix[1, 2] or matrix[2, 0] or matrix[2, 1]:
+            raise ValueError(
+                "Video display transform includes unsupported translation or perspective."
+            )
+        for turns, rotation in enumerate(rotations):
+            for flipped in (False, True):
+                candidate = rotation @ np.diag([-1, 1]) if flipped else rotation
+                if np.allclose(basis, candidate, atol=1e-4):
+                    return turns, flipped
+        raise ValueError("Video display transform must use a right-angle rotation or mirror.")
+    return 0, False
+
+
+def _check_sdr(stream, frame) -> None:
+    transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
+    if transfer in (16, 18):
+        raise ValueError(
+            "HDR (PQ/HLG) video needs an SDR conversion before enhancement. "
+            "LocalSR currently exports 8-bit SDR video."
+        )
+
+
+def selected_frame_count(count: int, start: int | None, end: int | None) -> int:
+    first = max(0, int(start or 0))
+    if end is not None and int(end) < first:
+        raise ValueError("Video end frame must be at or after its start frame.")
+    last = min(count - 1, end) if count > 0 and end is not None else end
+    return max(0, (last + 1 if last is not None else count) - first)
+
+
 class VideoStageError(RuntimeError):
     """An actionable encode/remux failure with the actual subsystem named."""
 
@@ -38,7 +101,7 @@ class VideoStageError(RuntimeError):
 
 
 def probe_video(path: str) -> VideoProbe:
-    """Probe a video container without decoding frames."""
+    """Probe metadata and one frame to resolve its display orientation."""
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
@@ -50,9 +113,14 @@ def probe_video(path: str) -> VideoProbe:
             duration_sec = float(container.duration) / 1_000_000.0
             frame_count = int(round(duration_sec * fps)) if fps else 0
         duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
+        first = next(container.decode(stream), None)
+        turns, _ = _display_transform(first) if first is not None else (0, False)
+        width, height = int(stream.width or 0), int(stream.height or 0)
+        if turns % 2:
+            width, height = height, width
         return VideoProbe(
-            width=int(stream.width or 0),
-            height=int(stream.height or 0),
+            width=width,
+            height=height,
             fps=fps,
             frame_count=frame_count,
             codec=str(stream.codec_context.name or "unknown"),
@@ -70,7 +138,19 @@ def decode_frames(
     Frames are converted to RGB on decode. start_frame/end_frame are
     inclusive 0-indexed bounds; None means unbounded on that side.
     """
-    start = max(0, int(start_frame)) if start_frame is not None else 0
+    for frame in decode_timed_frames(path, start_frame, end_frame):
+        yield frame.index, frame.rgb
+
+
+def decode_timed_frames(
+    path: str,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
+    cancel_event: threading.Event | None = None,
+):
+    """Decode oriented SDR frames with exact source times and one-frame lookahead."""
+    start = max(0, int(start_frame or 0))
+    selected_frame_count(0, start, end_frame)
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
@@ -79,16 +159,39 @@ def decode_frames(
             stream.thread_type = "FRAME"
         except (KeyError, ValueError):
             pass
-        index = 0
-        for frame in container.decode(stream):
+        pending = None
+        for index, frame in enumerate(container.decode(stream)):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
             if index < start:
-                index += 1
                 continue
+            if frame.pts is None or frame.time_base is None:
+                raise ValueError(
+                    "Video frame has no presentation timestamp; remux the source first."
+                )
+            timestamp = frame.pts * frame.time_base
+            if pending is not None:
+                interval = timestamp - pending.timestamp
+                if interval <= 0:
+                    raise ValueError("Video presentation timestamps must increase.")
+                yield replace(pending, duration=interval)
+                pending = None
             if end_frame is not None and index > end_frame:
-                break
+                return
+            _check_sdr(stream, frame)
             rgb = frame.to_ndarray(format="rgb24")
-            yield index, rgb
-            index += 1
+            turns, flipped = _display_transform(frame)
+            rgb = np.rot90(rgb, turns)
+            if flipped:
+                rgb = np.fliplr(rgb)
+            rgb = np.ascontiguousarray(rgb)
+            duration = getattr(frame, "duration", 0) or 0
+            interval = (
+                duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
+            )
+            pending = TimedVideoFrame(index, rgb, timestamp, Fraction(interval), frame.time_base)
+        if pending is not None:
+            yield pending
 
 
 def encode_video(
@@ -104,6 +207,9 @@ def encode_video(
     pixel_format: str = "yuv420p",
     audio_source: str | None = None,
     source_start_seconds: float = 0.0,
+    preserve_timing: bool = True,
+    cancel_event: threading.Event | None = None,
+    warning_callback=None,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -119,14 +225,41 @@ def encode_video(
         fps_fraction = (
             Fraction(str(float(fps))).limit_denominator(100_000) if fps else Fraction(25, 1)
         )
+        iterator = iter(frames)
+        first = next(iterator, None)
+        if first is None:
+            raise ValueError("the inference pipeline produced no frames")
+        timed = isinstance(first, TimedVideoFrame) and preserve_timing
+        origin = first.timestamp if timed else Fraction(0)
+        time_base = first.time_base if timed else Fraction(1, 1) / fps_fraction
+        if timed:
+            source_start_seconds = float(origin)
         output_container = av.open(str(encoded_temporary), mode="w", format=container_format)
         stream = output_container.add_stream(codec, rate=fps_fraction)
+        stream.time_base = time_base
+        stream.codec_context.time_base = time_base
         stream.width = int(width)
         stream.height = int(height)
         stream.pix_fmt = pixel_format
-        stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium"}
+        # Keep decode and presentation order aligned so VFR packet durations
+        # describe the displayed interval, including the final held frame.
+        stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium", "bf": "0"}
         frame_count = 0
-        for rgb in frames:
+        durations = {}
+        previous_pts = None
+
+        def mux(packet):
+            duration = durations.pop(packet.pts * packet.time_base, None)
+            if duration is not None:
+                packet.duration = max(1, round(duration / packet.time_base))
+            output_container.mux(packet)
+
+        from itertools import chain
+
+        for item in chain((first,), iterator):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
+            rgb = item.rgb if isinstance(item, TimedVideoFrame) else item
             if rgb.dtype != np.uint8:
                 rgb = np.clip(rgb, 0, 255).astype(np.uint8)
             if rgb.shape != (int(height), int(width), 3):
@@ -134,15 +267,19 @@ def encode_video(
                     f"frame {frame_count} has shape {rgb.shape}; expected ({height}, {width}, 3)"
                 )
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
-            frame.pts = frame_count
-            frame.time_base = Fraction(1, 1) / fps_fraction
+            frame.pts = round((item.timestamp - origin) / time_base) if timed else frame_count
+            frame.time_base = time_base
+            if previous_pts is not None and frame.pts <= previous_pts:
+                raise ValueError("Output presentation timestamps must increase.")
+            previous_pts = frame.pts
+            durations[frame.pts * time_base] = item.duration if timed else time_base
             for packet in stream.encode(frame):
-                output_container.mux(packet)
+                mux(packet)
             frame_count += 1
         if frame_count == 0:
             raise ValueError("the inference pipeline produced no frames")
         for packet in stream.encode():
-            output_container.mux(packet)
+            mux(packet)
         output_container.close()
         output_container = None
 
@@ -153,7 +290,9 @@ def encode_video(
                 source,
                 mux_temporary,
                 container_format=container_format,
-                source_start_seconds=max(0.0, float(source_start_seconds)),
+                source_start_seconds=float(source_start_seconds),
+                cancel_event=cancel_event,
+                warning_callback=warning_callback,
             )
             if copied:
                 os.replace(mux_temporary, destination)
@@ -207,7 +346,7 @@ def _packet_end_time(packet: av.Packet) -> float:
 
 
 def _shift_packet_to_trimmed_timeline(packet: av.Packet, start_seconds: float) -> None:
-    if start_seconds <= 0.0 or packet.time_base is None:
+    if start_seconds == 0.0 or packet.time_base is None:
         return
     offset = int(round(start_seconds / float(packet.time_base)))
     if packet.pts is not None:
@@ -223,16 +362,18 @@ def _next_packet(iterator):
     return None
 
 
-def _next_trimmed_packet(iterator, start_seconds: float, end_seconds: float):
+def _next_trimmed_packet(iterator, start_seconds: float, end_seconds: float, cancel_event=None):
     """Return the next packet overlapping the selected source time range."""
     for packet in iterator:
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("video job cancelled")
         if packet.dts is None and packet.pts is None:
             continue
         packet_start = _packet_time(packet)
         packet_end = _packet_end_time(packet)
-        if packet_end < start_seconds - 0.01:
+        if packet_end <= start_seconds:
             continue
-        if packet_start > end_seconds + 0.05:
+        if packet_start >= end_seconds:
             continue
         _shift_packet_to_trimmed_timeline(packet, start_seconds)
         return packet
@@ -246,6 +387,8 @@ def _remux_source_streams(
     *,
     container_format: str,
     source_start_seconds: float = 0.0,
+    cancel_event: threading.Event | None = None,
+    warning_callback=None,
 ) -> bool:
     """Interleave encoded video and compatible source audio/subtitles."""
     video_container = None
@@ -277,6 +420,11 @@ def _remux_source_streams(
                     # The requested container does not support this subtitle
                     # codec. The enhanced video remains valid and the stream is
                     # not falsely advertised as copied.
+                    message = f"Subtitle stream {stream.index} was omitted: incompatible with {container_format}."
+                    if warning_callback:
+                        warning_callback(message)
+                    else:
+                        warnings.warn(message, stacklevel=2)
                     continue
                 raise VideoStageError(
                     "audio remux",
@@ -303,9 +451,11 @@ def _remux_source_streams(
         auxiliary_packets = source_container.demux(*selected_aux)
         video_packet = _next_packet(video_packets)
         auxiliary_packet = _next_trimmed_packet(
-            auxiliary_packets, source_start_seconds, source_end_seconds
+            auxiliary_packets, source_start_seconds, source_end_seconds, cancel_event
         )
         while video_packet is not None or auxiliary_packet is not None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
             use_video = auxiliary_packet is None or (
                 video_packet is not None
                 and _packet_time(video_packet) <= _packet_time(auxiliary_packet)
@@ -322,12 +472,12 @@ def _remux_source_streams(
                     packet.stream = auxiliary_outputs[packet.stream.index]
                     output_container.mux(packet)
                 auxiliary_packet = _next_trimmed_packet(
-                    auxiliary_packets, source_start_seconds, source_end_seconds
+                    auxiliary_packets, source_start_seconds, source_end_seconds, cancel_event
                 )
         output_container.close()
         output_container = None
         return True
-    except VideoStageError:
+    except (VideoStageError, InterruptedError):
         raise
     except (av.FFmpegError, ValueError, OSError) as error:
         raise VideoStageError("audio/subtitle remux", str(error)) from error
