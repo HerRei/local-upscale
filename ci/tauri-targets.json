@@ -43,7 +43,7 @@
       "signing": "authenticode-valid",
       "alpha_signing": "unsigned-alpha",
       "external_engine": true,
-      "scratch_peak_gib": 40
+      "scratch_peak_gib": 32
     },
     {
       "id": "linux-x86_64-cpu",
