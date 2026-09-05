@@ -301,6 +301,42 @@ pub struct RuntimeStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BenchmarkSceneResult {
+    pub scene_id: String,
+    pub purpose: String,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub iterations: u32,
+    pub median_ms: f64,
+    pub p05_ms: f64,
+    pub p95_ms: f64,
+    pub cv_percent: f64,
+    pub megapixels_per_second: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encode_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BenchmarkDeviceResult {
+    pub device: String,
+    pub device_type: String,
+    pub device_name: String,
+    pub thermal_state: String,
+    pub warmup_iterations: u32,
+    #[serde(default)]
+    pub peak_memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub peak_device_memory_bytes: Option<u64>,
+    pub stable: bool,
+    pub cv_percent: f64,
+    #[serde(default)]
+    pub score: f64,
+    pub scenes: Vec<BenchmarkSceneResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BenchmarkResult {
     pub workload_version: String,
     pub backend: String,
@@ -319,6 +355,34 @@ pub struct BenchmarkResult {
     pub total_elapsed_seconds: f64,
     pub peak_memory_bytes: Option<u64>,
     pub score: f64,
+    // ---- LocalSR Benchmark v2 (localsr-benchmark-v2) ----
+    // v2 results are multi-device/multi-scene payloads. The v1 fields above
+    // stay mandatory so an old saved result keeps deserializing; v2 fills
+    // them with the fastest accelerator's headline scene for continuity.
+    #[serde(default)]
+    pub device_results: Vec<BenchmarkDeviceResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_score: Option<f64>,
+    #[serde(default)]
+    pub stable: bool,
+    #[serde(default)]
+    pub cv_percent: f64,
+    #[serde(default)]
+    pub result_elapsed_seconds: f64,
+    #[serde(default)]
+    pub thermal_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_ratio: Option<f64>,
+}
+
+impl BenchmarkResult {
+    pub fn is_v2(&self) -> bool {
+        self.workload_version.starts_with("localsr-benchmark-v2")
+    }
 }
 
 impl Default for RuntimeStatus {
@@ -408,4 +472,110 @@ pub struct WorkerEnvelope {
     pub message_type: String,
     #[serde(default)]
     pub data: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_benchmark_results_keep_deserializing_after_v2_fields_were_added() {
+        let legacy = serde_json::json!({
+            "workload_version": "localsr-benchmark-v1",
+            "backend": "mps",
+            "device": "mps",
+            "model_id": "span_photo_x4",
+            "model_name": "Quick",
+            "scale": 4,
+            "input_width": 128,
+            "input_height": 128,
+            "warmup_count": 1,
+            "measured_frame_count": 5,
+            "median_inference_ms": 40.0,
+            "p95_inference_ms": 48.0,
+            "end_to_end_fps": 25.0,
+            "processed_megapixels_per_second": 0.4096,
+            "total_elapsed_seconds": 0.2,
+            "peak_memory_bytes": 1234,
+            "score": 409.6
+        });
+        let result: BenchmarkResult = serde_json::from_value(legacy).unwrap();
+        assert!(!result.is_v2());
+        assert_eq!(result.score, 409.6);
+        assert!(result.device_results.is_empty());
+        assert_eq!(result.stable, false);
+    }
+
+    #[test]
+    fn v2_benchmark_results_carry_the_full_device_table() {
+        let scene = serde_json::json!({
+            "scene_id": "s1-classroom",
+            "purpose": "compute",
+            "input_width": 512,
+            "input_height": 512,
+            "output_width": 2048,
+            "output_height": 2048,
+            "iterations": 9,
+            "median_ms": 400.0,
+            "p05_ms": 390.0,
+            "p95_ms": 430.0,
+            "cv_percent": 3.1,
+            "megapixels_per_second": 1.28,
+            "encode_ms": null
+        });
+        let device = serde_json::json!({
+            "device": "mps",
+            "device_type": "mps",
+            "device_name": "Apple GPU (Metal)",
+            "thermal_state": "nominal",
+            "warmup_iterations": 6,
+            "peak_memory_bytes": 8_000_000,
+            "peak_device_memory_bytes": 4_000_000,
+            "stable": true,
+            "cv_percent": 3.1,
+            "score": 1.28,
+            "scenes": [scene]
+        });
+        let mut v2 = serde_json::json!({
+            "workload_version": "localsr-benchmark-v2",
+            "backend": "mps",
+            "device": "mps",
+            "model_id": "span_photo_x4",
+            "model_name": "Quick",
+            "scale": 4,
+            "input_width": 512,
+            "input_height": 512,
+            "warmup_count": 6,
+            "measured_frame_count": 15,
+            "median_inference_ms": 400.0,
+            "p95_inference_ms": 430.0,
+            "end_to_end_fps": 2.5,
+            "processed_megapixels_per_second": 0.2621,
+            "total_elapsed_seconds": 180.0,
+            "peak_memory_bytes": 8_000_000,
+            "score": 1.41,
+            "system_score": 1.41,
+            "cpu_score": 0.06,
+            "stable": true,
+            "cv_percent": 3.1,
+            "result_elapsed_seconds": 180.0,
+            "thermal_state": "nominal",
+            "reference_label": "Apple M1 (8-core GPU)",
+            "reference_ratio": 1.08
+        });
+        v2["device_results"] = serde_json::Value::Array(vec![device]);
+        let result: BenchmarkResult = serde_json::from_value(v2).unwrap();
+        assert!(result.is_v2());
+        assert_eq!(result.device_results.len(), 1);
+        assert_eq!(result.device_results[0].scenes[0].scene_id, "s1-classroom");
+        assert_eq!(result.device_results[0].scenes[0].encode_ms, None);
+        assert_eq!(result.system_score, Some(1.41));
+        assert_eq!(result.cpu_score, Some(0.06));
+        assert_eq!(
+            result.reference_label.as_deref(),
+            Some("Apple M1 (8-core GPU)")
+        );
+        assert_eq!(result.reference_ratio, Some(1.08));
+        assert!(result.stable);
+    }
 }

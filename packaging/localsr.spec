@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_submodules
 
 
 ROOT = Path(SPECPATH).parent
@@ -47,6 +47,10 @@ slint_datas, slint_binaries, slint_hidden = collect_all("slint")
 datas = spandrel_datas + slint_datas + [
     (str(ROOT / "LICENSE"), "."),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
+    (
+        str(SOURCE / "localsr" / "core" / "benchmark_references.json"),
+        "localsr/core",
+    ),
     (str(SOURCE / "localsr" / "ui" / "slint"), "localsr/ui/slint"),
     # SeedVR2 vendored configs, text embeddings, and license travel as data
     # so the temporal engine finds them next to its modules.
@@ -71,6 +75,14 @@ hiddenimports = sorted(
         ]
     )
 )
+# torchvision's stable-channel compiled ops (_C_stable, image_stable) are
+# loaded through importlib file lookup, so PyInstaller drops them without
+# packaging/hooks/hook-torchvision.py. That hook already overrides the
+# community torchvision hook; also merge whatever compiled extensions the
+# installed torchvision ships into the explicit binary list so the bundle
+# works even if the hook path is not passed on a custom Analysis.
+_torchvision_binaries = collect_dynamic_libs("torchvision")
+binaries = spandrel_binaries + slint_binaries + _torchvision_binaries
 excludes = [
     "IPython",
     "jupyter",
@@ -85,7 +97,7 @@ def analysis(script):
     return Analysis(
         [str(script)],
         pathex=[str(SOURCE)],
-        binaries=spandrel_binaries + slint_binaries,
+        binaries=binaries,
         datas=datas,
         hiddenimports=hiddenimports,
         hookspath=[str(ROOT / "packaging" / "hooks")],

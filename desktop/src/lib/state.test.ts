@@ -134,6 +134,54 @@ describe('desktop state', () => {
     );
   });
 
+  it('tracks benchmark v2 stages and stable output throughput', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'benchmark_started',
+      data: {
+        job_id: 'benchmark-v2',
+        workload_version: 'localsr-benchmark-v2',
+        measured_frame_count: 10
+      }
+    });
+    expect(snapshot.runtime.status_detail).toContain('10 phases');
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'benchmark_stage_progress',
+      data: {
+        job_id: 'benchmark-v2',
+        stage: 'mps:s1-classroom',
+        completed_units: 8,
+        total_units: 0,
+        percentage: 14.5
+      }
+    });
+    expect(snapshot.runtime.progress).toBe(14.5);
+    expect(snapshot.runtime.status_detail).toBe('mps · s1-classroom · iteration 8');
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'benchmark_completed',
+      data: {
+        job_id: 'benchmark-v2',
+        result: {
+          workload_version: 'localsr-benchmark-v2',
+          score: 21.35,
+          system_score: 21.35,
+          cpu_score: 3.85,
+          stable: true,
+          cv_percent: 2.18,
+          result_elapsed_seconds: 198.3,
+          total_elapsed_seconds: 198.3,
+          thermal_state: 'nominal'
+        }
+      }
+    });
+    expect(snapshot.runtime.status_detail).toContain('System score 21.35');
+    expect(snapshot.runtime.throughput).toBe(21.35);
+    expect(snapshot.runtime.throughput_unit).toBe('output MP/s');
+    expect(snapshot.runtime.thermal_status).toBe('nominal');
+  });
+
   it('formats bounded human-readable values', () => {
     expect(formatBytes(1024 ** 3)).toBe('1.0 GB');
     expect(formatDuration(125)).toBe('2:05');

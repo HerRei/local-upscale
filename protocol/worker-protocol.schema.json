@@ -237,7 +237,8 @@
                 "model_path": { "type": "string", "minLength": 1 },
                 "model_id": { "const": "span_photo_x4" },
                 "model_name": { "type": "string", "minLength": 1 },
-                "device": { "type": "string", "minLength": 1 }
+                "device": { "type": "string", "minLength": 1 },
+                "workload": { "enum": ["v1", "v2"] }
               },
               "additionalProperties": false
             }
@@ -320,6 +321,9 @@
                 "video_job_completed",
                 "benchmark_started",
                 "benchmark_progress",
+                "benchmark_stage_started",
+                "benchmark_stage_progress",
+                "benchmark_stage_completed",
                 "benchmark_completed",
                 "benchmark_cancelled",
                 "benchmark_failed",

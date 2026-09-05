@@ -51,6 +51,7 @@ impl WorkerEventGate {
             // percentage and ETA. Keep the typed stage event in the protocol,
             // but do not duplicate a high-frequency webview event.
             "stage_progress" => false,
+            "benchmark_stage_progress" => false,
             "progress" => sampled(
                 &mut self.last_progress,
                 now,
@@ -623,26 +624,61 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         "benchmark_started" => {
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id = string(data, "job_id");
+            let is_v2 = string(data, "workload_version").starts_with("localsr-benchmark-v2");
             runtime.status_title = "Benchmark running".into();
-            runtime.status_detail = format!(
-                "Warming up {} iteration(s), then measuring {} frames.",
-                integer(data, "warmup_count"),
-                integer(data, "measured_frame_count")
-            );
+            runtime.status_detail = if is_v2 {
+                format!(
+                    "Multi-device benchmark · {} phase(s) · warming up each device.",
+                    integer(data, "measured_frame_count")
+                )
+            } else {
+                format!(
+                    "Warming up {} iteration(s), then measuring {} frames.",
+                    integer(data, "warmup_count"),
+                    integer(data, "measured_frame_count")
+                )
+            };
             runtime.progress = 0.0;
             runtime.estimated_remaining_seconds = 0.0;
             runtime.throughput = 0.0;
             runtime.throughput_unit = "frames/s".into();
         }
         "benchmark_progress" => {
+            let stage = string(data, "stage");
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = number(data, "percentage");
             runtime.status_title = "Benchmark running".into();
-            runtime.status_detail = format!(
-                "Measured {} of {} frames.",
-                integer(data, "completed_frames"),
-                integer(data, "total_frames")
-            );
+            runtime.status_detail = if stage.is_empty() {
+                format!(
+                    "Measured {} of {} frames.",
+                    integer(data, "completed_frames"),
+                    integer(data, "total_frames")
+                )
+            } else {
+                format!(
+                    "Phase {stage} · {} of {}.",
+                    integer(data, "completed_frames"),
+                    integer(data, "total_frames")
+                )
+            };
+        }
+        "benchmark_stage_started" | "benchmark_stage_progress" | "benchmark_stage_completed" => {
+            let event = envelope.message_type.trim_start_matches("benchmark_stage_");
+            let stage = string(data, "stage").replace(':', " · ");
+            let completed_units = integer(data, "completed_units");
+            let total_units = integer(data, "total_units");
+            let mut runtime = lock(&state.runtime)?;
+            runtime.progress = number(data, "percentage");
+            runtime.status_title = "Benchmark running".into();
+            runtime.status_detail = if event == "progress" && completed_units > 0 {
+                if total_units > 0 {
+                    format!("{stage} · iteration {completed_units} of {total_units}.")
+                } else {
+                    format!("{stage} · iteration {completed_units}.")
+                }
+            } else {
+                format!("{stage} · {event}.")
+            };
         }
         "benchmark_completed" => {
             let result: BenchmarkResult = serde_json::from_value(data["result"].clone())?;
@@ -652,13 +688,43 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.active_job_id.clear();
             runtime.progress = 100.0;
             runtime.status_title = "Benchmark complete".into();
-            runtime.status_detail = format!(
-                "Score {:.2} · {:.2} frames/s · local result saved.",
-                result.score, result.end_to_end_fps
-            );
+            runtime.status_detail = if result.is_v2() {
+                if result.stable {
+                    if let Some(system_score) = result.system_score {
+                        format!(
+                            "System score {:.2} · CPU {:.2} output MP/s · stable ({:.1}% spread).",
+                            system_score,
+                            result.cpu_score.unwrap_or_default(),
+                            result.cv_percent
+                        )
+                    } else {
+                        format!(
+                            "CPU score {:.2} output MP/s · stable ({:.1}% spread).",
+                            result.cpu_score.unwrap_or_default(),
+                            result.cv_percent
+                        )
+                    }
+                } else {
+                    format!(
+                        "Unstable run ({:.1}% spread) — close background apps and retry.",
+                        result.cv_percent
+                    )
+                }
+            } else {
+                format!(
+                    "Score {:.2} · {:.2} frames/s · local result saved.",
+                    result.score, result.end_to_end_fps
+                )
+            };
             runtime.elapsed_seconds = result.total_elapsed_seconds;
-            runtime.throughput = result.end_to_end_fps;
-            runtime.throughput_unit = "frames/s".into();
+            if result.is_v2() {
+                runtime.throughput = result.system_score.unwrap_or_default();
+                runtime.throughput_unit = "output MP/s".into();
+                runtime.thermal_status = result.thermal_state.clone();
+            } else {
+                runtime.throughput = result.end_to_end_fps;
+                runtime.throughput_unit = "frames/s".into();
+            }
         }
         "benchmark_cancelled" => {
             let mut runtime = lock(&state.runtime)?;
@@ -891,6 +957,10 @@ fn should_emit_state_changed(message_type: &str) -> bool {
             | "tile_update"
             | "video_frame_started"
             | "video_frame_completed"
+            | "benchmark_progress"
+            | "benchmark_stage_started"
+            | "benchmark_stage_progress"
+            | "benchmark_stage_completed"
     )
 }
 

@@ -225,6 +225,36 @@ export interface RuntimeStatus {
   thermal_status: string;
 }
 
+export interface BenchmarkSceneResult {
+  scene_id: string;
+  purpose: string;
+  input_width: number;
+  input_height: number;
+  output_width: number;
+  output_height: number;
+  iterations: number;
+  median_ms: number;
+  p05_ms: number;
+  p95_ms: number;
+  cv_percent: number;
+  megapixels_per_second: number;
+  encode_ms?: number | null;
+}
+
+export interface BenchmarkDeviceResult {
+  device: string;
+  device_type: string;
+  device_name: string;
+  thermal_state: string;
+  warmup_iterations: number;
+  peak_memory_bytes?: number | null;
+  peak_device_memory_bytes?: number | null;
+  stable: boolean;
+  cv_percent: number;
+  score: number;
+  scenes: BenchmarkSceneResult[];
+}
+
 export interface BenchmarkResult {
   workload_version: string;
   backend: string;
@@ -243,6 +273,15 @@ export interface BenchmarkResult {
   total_elapsed_seconds: number;
   peak_memory_bytes: number | null;
   score: number;
+  device_results?: BenchmarkDeviceResult[];
+  system_score?: number | null;
+  cpu_score?: number | null;
+  stable?: boolean;
+  cv_percent?: number;
+  result_elapsed_seconds?: number;
+  thermal_state?: string;
+  reference_label?: string | null;
+  reference_ratio?: number | null;
 }
 
 export interface VideoComparisonSources {

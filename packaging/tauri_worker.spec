@@ -22,6 +22,10 @@ datas = spandrel_datas + [
     (str(ROOT / "LICENSE"), "."),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
     (
+        str(SOURCE / "localsr" / "core" / "benchmark_references.json"),
+        "localsr/core",
+    ),
+    (
         str(SOURCE / "localsr" / "video_models" / "seedvr2"),
         "localsr/video_models/seedvr2",
     ),
