@@ -106,16 +106,34 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
             str(stage),
         ]
         
+        index_urls = []
+        extra_index_urls = []
         for line in lock.read_text().splitlines():
             line = line.strip()
             if line.startswith("--index-url "):
-                args.extend(["--index-url", line.split(maxsplit=1)[1]])
+                index_urls.append(line.split(maxsplit=1)[1])
             elif line.startswith("--extra-index-url "):
-                args.extend(["--extra-index-url", line.split(maxsplit=1)[1]])
+                extra_index_urls.append(line.split(maxsplit=1)[1])
                 
+        # Swap so that PyTorch (if present) becomes the primary index to avoid pip dropping it
+        for url in index_urls + extra_index_urls:
+            if "pytorch.org" in url:
+                args.extend(["--index-url", url])
+            elif "pypi.org" in url:
+                args.extend(["--extra-index-url", url])
+            else:
+                args.extend(["--extra-index-url", url])
+
+        temp_lock = stage / "stripped_lock.txt"
+        with temp_lock.open("w") as out:
+            for line in lock.read_text().splitlines():
+                if line.startswith("--index-url ") or line.startswith("--extra-index-url "):
+                    continue
+                out.write(line + "\n")
+
         args.extend([
             "-r",
-            str(lock),
+            str(temp_lock),
             "--build-constraint",
             str(ROOT / "requirements/build-tools.txt"),
         ])
