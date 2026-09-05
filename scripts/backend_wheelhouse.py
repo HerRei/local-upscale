@@ -42,7 +42,7 @@ def describe_wheels(directory: Path) -> list[dict]:
     seen = set()
     for path in sorted(directory.glob("*.whl")):
         with zipfile.ZipFile(path) as wheel:
-            metadata = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+            metadata = [name for name in wheel.namelist() if name.count("/") == 1 and name.endswith(".dist-info/METADATA")]
             if len(metadata) != 1:
                 raise ValueError(f"invalid wheel metadata: {path.name}")
             fields = email.message_from_bytes(wheel.read(metadata[0]))
