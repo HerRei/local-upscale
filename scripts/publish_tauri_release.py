@@ -197,11 +197,22 @@ def publish(tag: str, commit: str, title: str, notes: Path, output: Path) -> str
     missing = plan_draft_resume(release, expected, tag=tag, commit=commit)
     for path in missing:
         run(["gh", "release", "upload", tag, str(path)])
-    complete = view_release(tag)
-    if complete is None:
-        raise RuntimeError("GitHub draft disappeared during upload")
-    if plan_draft_resume(complete, expected, tag=tag, commit=commit):
-        raise RuntimeError("GitHub draft is still missing expected assets after upload")
+    import time
+    for attempt in range(60):
+        complete = view_release(tag)
+        if complete is None:
+            raise RuntimeError("GitHub draft disappeared during upload")
+        try:
+            if not plan_draft_resume(complete, expected, tag=tag, commit=commit):
+                break
+        except ValueError as e:
+            if "has no SHA-256 digest" in str(e):
+                time.sleep(10)
+                continue
+            raise
+        time.sleep(10)
+    else:
+        raise RuntimeError("GitHub draft is still missing expected assets after upload (timed out waiting for digests)")
     with tempfile.TemporaryDirectory(prefix="localsr-release-verify-", dir=output) as temporary:
         directory = Path(temporary)
         run(["gh", "release", "download", tag, "--dir", str(directory)])

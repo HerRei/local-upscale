@@ -97,6 +97,7 @@ include-package-data = false
 where = ["src"]
 
 [tool.setuptools.package-data]
+"localsr.core" = ["benchmark_references.json"]
 "localsr.ui" = ["slint/*.slint"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",

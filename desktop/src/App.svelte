@@ -27,6 +27,7 @@
   } from './lib/viewport';
   import type {
     AppSnapshot,
+    BenchmarkDeviceResult,
     CatalogModel,
     CatalogVideoModel,
     IntegrationStatus,
@@ -906,6 +907,27 @@
     );
   }
 
+  function benchmarkDeviceBarWidth(
+    score: number,
+    devices: BenchmarkDeviceResult[]
+  ): number {
+    const fastest = Math.max(1, ...devices.map((device) => device.score));
+    return Math.max(5, Math.min(100, (score / fastest) * 100));
+  }
+
+  function benchmarkSceneLabel(sceneId: string): string {
+    switch (sceneId) {
+      case 's1-classroom':
+        return 'Classroom';
+      case 's2-gallery':
+        return 'Gallery · tiled';
+      case 's3-gallery-encode':
+        return 'Gallery · encode';
+      default:
+        return sceneId;
+    }
+  }
+
   async function showIntegrations(): Promise<void> {
     integration = await api.integrationStatus();
     showModal('System Integrations', integration.summary, 'integrations');
@@ -1461,7 +1483,7 @@
                   {#if inflightMediaIds.has(media.id)}<small class="queue-state">{snapshot.jobs.find((job) => job.media_id === media.id && ['queued', 'starting', 'running', 'cancelling'].includes(job.status))?.status ?? 'queued'}</small>{/if}
                 </div>
               </button>
-              <button type="button" class="remove" disabled={Boolean(snapshot.runtime.active_job_id)} aria-label={`Remove ${media.name}`} on:click|stopPropagation={async () => { await api.removeMedia(media.id); await refresh(); }}>×</button>
+              <button type="button" class="remove" disabled={Boolean(snapshot.runtime.active_job_id)} aria-label={`Remove ${media.name}`} on:click|stopPropagation={async () => { await api.removeMedia(media.id); await refresh(); }}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
             </div>
           {/each}
         </div>
@@ -1508,7 +1530,7 @@
               />
             {/key}
           {:else if renderableSourcePreview}
-          <div class="image-stage" style={`width:${stageWidth}px;height:${stageHeight}px;left:calc(50% + ${panX}px);top:calc(50% + ${panY}px);transform:translate(-50%, -50%) scale(${zoom})`}>
+          <div class="image-stage" style={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}>
             <img class="source-image" src={renderableSourcePreview} alt={`Preview of ${selectedMedia?.name ?? 'source media'}`} draggable="false" on:load={onPreviewLoad} on:error={onSourcePreviewError} />
             <canvas
               bind:this={progressiveCanvas}
@@ -1608,7 +1630,7 @@
             </div>
             <div class="recipe-tools">
               {#each snapshot.recipes as recipe (recipe.id)}
-                <div class="saved-recipe"><button disabled={Boolean(selectedMedia) && (recipe.task === 'video') !== (selectedMedia.kind === 'video')} on:click={() => applyRecipe(recipe)}><b>{recipe.name}</b><span>{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span></button><button aria-label={`Delete ${recipe.name}`} on:click={async () => { await api.deleteRecipe(recipe.id); await refresh(); }}>×</button></div>
+                <div class="saved-recipe"><button disabled={Boolean(selectedMedia) && (recipe.task === 'video') !== (selectedMedia.kind === 'video')} on:click={() => applyRecipe(recipe)}><b>{recipe.name}</b><span>{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span></button><button aria-label={`Delete ${recipe.name}`} on:click={async () => { await api.deleteRecipe(recipe.id); await refresh(); }}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
               {/each}
               {#if recipeEditorOpen}
                 <div class="recipe-input"><input aria-label="Recipe name" placeholder="Name this setup" bind:value={recipeName} on:keydown={(event) => { if (event.key === 'Enter') void addRecipe(); if (event.key === 'Escape') recipeEditorOpen = false; }} /><button on:click={addRecipe}>Save</button></div>
@@ -1797,9 +1819,141 @@
 
 {#if modalTitle}
   <div class="modal-backdrop" role="presentation" on:click={closeFromBackdrop}>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
+    <div class="modal" class:performance-modal={modalKind === 'performance'} role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
       <h2 id="modal-title">{modalTitle}</h2><p>{modalMessage}</p>
       {#if modalKind === 'performance'}
+        <section class="benchmark-panel" aria-labelledby="benchmark-title">
+          <div class="benchmark-heading">
+            <div>
+              <span class="eyebrow">BENCHMARK V2</span>
+              <h3 id="benchmark-title">LocalSR System Score</h3>
+            </div>
+            <span class="benchmark-private">100% local</span>
+          </div>
+          <p class="benchmark-intro">A repeatable real-inference test across the GPU, CPU, tiled processing, and image encoding.</p>
+
+          {#if benchmarkRunning}
+            <div class="benchmark-running-card" role="status" aria-live="polite">
+              <div><strong>{snapshot.runtime.status_title}</strong><b>{Math.round(snapshot.runtime.progress)}%</b></div>
+              <span>{snapshot.runtime.status_detail}</span>
+              <div class="download-track benchmark-progress" aria-label={`Benchmark ${Math.round(snapshot.runtime.progress)}%`}><i style={`width:${snapshot.runtime.progress}%`}></i></div>
+            </div>
+          {/if}
+
+          {#if snapshot.latest_benchmark}
+            {#if snapshot.latest_benchmark.workload_version.startsWith('localsr-benchmark-v2')}
+              <div class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-hero">
+                <div class="benchmark-score-block">
+                  <div class="benchmark-score-label">
+                    <span>System score</span>
+                    <span class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-status-pill">
+                      {snapshot.latest_benchmark.stable ? '● Stable result' : '● Unstable result'}
+                    </span>
+                  </div>
+                  {#if snapshot.latest_benchmark.stable}
+                    {#if snapshot.latest_benchmark.system_score != null}
+                      <div class="benchmark-score-value">
+                        <strong>{snapshot.latest_benchmark.system_score.toFixed(2)}</strong>
+                        <span>output MP/s</span>
+                      </div>
+                      <p>Higher is faster · GPU score across all three scenes</p>
+                    {:else}
+                      <div class="benchmark-score-value text-score"><strong>CPU only</strong></div>
+                      <p>No supported accelerator was available for a system score.</p>
+                    {/if}
+                  {:else}
+                    <div class="benchmark-score-value text-score"><strong>Run varied too much</strong></div>
+                    <p>Close background apps and rerun for a publishable score.</p>
+                  {/if}
+                </div>
+
+                <div class="benchmark-comparison">
+                  {#if snapshot.latest_benchmark.stable && snapshot.latest_benchmark.reference_label && snapshot.latest_benchmark.reference_ratio != null}
+                    <span>Compared with reference</span>
+                    <strong>{snapshot.latest_benchmark.reference_ratio.toFixed(2)}×</strong>
+                    <b>{snapshot.latest_benchmark.reference_label}</b>
+                    <div class="benchmark-reference-track" aria-label={`${snapshot.latest_benchmark.reference_ratio.toFixed(2)} times the ${snapshot.latest_benchmark.reference_label} reference`}>
+                      <i style={`width:${Math.max(4, Math.min(100, snapshot.latest_benchmark.reference_ratio * 50))}%`}></i>
+                      <span>1×</span>
+                    </div>
+                  {:else}
+                    <span>Result confidence</span>
+                    <strong>{(snapshot.latest_benchmark.cv_percent ?? 0).toFixed(1)}%</strong>
+                    <b>timing spread · target ≤ 5%</b>
+                  {/if}
+                </div>
+              </div>
+
+              <dl class="benchmark-facts">
+                {#if snapshot.latest_benchmark.stable}
+                  <div><dt>Consistency</dt><dd>{(snapshot.latest_benchmark.cv_percent ?? 0).toFixed(1)}% spread</dd></div>
+                {:else}
+                  <div><dt>Consistency</dt><dd class="warning-value">{(snapshot.latest_benchmark.cv_percent ?? 0).toFixed(1)}% spread</dd></div>
+                {/if}
+                <div><dt>Total time</dt><dd>{formatDuration(snapshot.latest_benchmark.result_elapsed_seconds ?? snapshot.latest_benchmark.total_elapsed_seconds)}</dd></div>
+                <div><dt>Workload</dt><dd>v2 · 3 fixed scenes</dd></div>
+              </dl>
+
+              {#if snapshot.latest_benchmark.device_results?.length}
+                <div class="benchmark-section-title"><strong>Hardware results</strong><span>Relative throughput</span></div>
+                <div class="benchmark-devices" aria-label="Per-device benchmark results">
+                  {#each snapshot.latest_benchmark.device_results as device (device.device)}
+                    <article class="benchmark-device" class:cpu={device.device_type === 'cpu'} aria-label={`${device.device_name} benchmark result`}>
+                      <div class="benchmark-device-heading">
+                        <div><span>{device.device_type === 'cpu' ? 'CPU' : 'ACCELERATOR'}</span><strong>{device.device_name}</strong></div>
+                        <div class="benchmark-device-score"><strong>{device.score.toFixed(2)}</strong><span>output MP/s</span></div>
+                      </div>
+                      <div class="benchmark-device-track" aria-hidden="true"><i style={`width:${benchmarkDeviceBarWidth(device.score, snapshot.latest_benchmark.device_results ?? [])}%`}></i></div>
+                      <div class="benchmark-device-meta">
+                        <span class:warning-value={!device.stable}>{device.stable ? '● Stable' : '● Unstable'}</span>
+                        <span>{device.cv_percent.toFixed(1)}% spread</span>
+                        <span>{device.thermal_state}</span>
+                      </div>
+                      <details class="benchmark-scenes">
+                        <summary>Scene breakdown</summary>
+                        {#each device.scenes as scene (scene.scene_id)}
+                          <div class="benchmark-scene">
+                            <span class="scene-name">{benchmarkSceneLabel(scene.scene_id)}</span>
+                            <strong>{scene.megapixels_per_second.toFixed(2)} MP/s</strong>
+                            <span class="scene-metric">{scene.median_ms.toFixed(0)} ms</span>
+                            <span class="scene-metric subtle">{scene.encode_ms != null ? `+${scene.encode_ms.toFixed(0)} ms encode` : `${scene.iterations} runs`}</span>
+                          </div>
+                        {/each}
+                      </details>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+              <p class="benchmark-note">The system score is the geometric mean of output throughput across the GPU scenes. CPU is shown separately. Results over 5% timing spread are marked unstable.</p>
+            {:else}
+              <div class="benchmark-hero legacy-score">
+                <div class="benchmark-score-block">
+                  <div class="benchmark-score-label"><span>Legacy score</span><span class="benchmark-status-pill">V1 workload</span></div>
+                  <div class="benchmark-score-value"><strong>{snapshot.latest_benchmark.score.toFixed(2)}</strong><span>points</span></div>
+                  <p>Keep this result for comparison with other v1 runs only.</p>
+                </div>
+              </div>
+              <dl class="benchmark-facts legacy-facts">
+                <div><dt>Median / p95</dt><dd>{snapshot.latest_benchmark.median_inference_ms.toFixed(1)} / {snapshot.latest_benchmark.p95_inference_ms.toFixed(1)} ms</dd></div>
+                <div><dt>Throughput</dt><dd>{snapshot.latest_benchmark.end_to_end_fps.toFixed(2)} fps · {snapshot.latest_benchmark.processed_megapixels_per_second.toFixed(3)} MP/s</dd></div>
+                <div><dt>Device</dt><dd>{snapshot.latest_benchmark.device} · {snapshot.latest_benchmark.model_name}</dd></div>
+                <div><dt>Peak process memory</dt><dd>{snapshot.latest_benchmark.peak_memory_bytes ? formatBytes(snapshot.latest_benchmark.peak_memory_bytes) : 'Not reliably available'}</dd></div>
+              </dl>
+              <p class="benchmark-note">This is an older v1 result. Run the benchmark again to get the more stable multi-device v2 score.</p>
+            {/if}
+          {:else if !benchmarkRunning}
+            <div class="benchmark-empty">
+              <div class="benchmark-empty-gauge" aria-hidden="true"><i></i></div>
+              <div><strong>No benchmark result yet</strong><span>Run the fixed workload to measure this system and create a local score.</span></div>
+            </div>
+          {/if}
+          <div class="benchmark-actions">
+            <button class="button primary" disabled={Boolean(snapshot.runtime.active_job_id) && !benchmarkRunning} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : 'Run Benchmark'}</button>
+            {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
+          </div>
+        </section>
+
+        <div class="performance-section-heading"><strong>Live hardware</strong><span>Current worker state</span></div>
         <dl class="performance-grid">
           <div><dt>Backend</dt><dd>{activeDevice?.type?.toUpperCase() ?? 'Detecting'}</dd></div>
           <div><dt>Device</dt><dd>{activeDevice?.name ?? 'Detecting'}</dd></div>
@@ -1812,28 +1966,6 @@
           <div><dt>Tile</dt><dd>{snapshot.runtime.active_tile_size || settings.tile_size}px · halo {settings.halo}px</dd></div>
           <div><dt>Thermals</dt><dd>{snapshot.runtime.thermal_status}</dd></div>
         </dl>
-        <section class="benchmark-panel" aria-labelledby="benchmark-title">
-          <div>
-            <h3 id="benchmark-title">LocalSR Benchmark</h3>
-            <span>Fixed real-inference workload · data stays on this device</span>
-          </div>
-          {#if snapshot.latest_benchmark}
-            <dl class="benchmark-result">
-              <div><dt>Score</dt><dd>{snapshot.latest_benchmark.score.toFixed(2)}</dd></div>
-              <div><dt>Median / p95</dt><dd>{snapshot.latest_benchmark.median_inference_ms.toFixed(1)} / {snapshot.latest_benchmark.p95_inference_ms.toFixed(1)} ms</dd></div>
-              <div><dt>Throughput</dt><dd>{snapshot.latest_benchmark.end_to_end_fps.toFixed(2)} fps · {snapshot.latest_benchmark.processed_megapixels_per_second.toFixed(3)} MP/s</dd></div>
-              <div><dt>Device</dt><dd>{snapshot.latest_benchmark.device} · {snapshot.latest_benchmark.model_name}</dd></div>
-              <div><dt>Workload</dt><dd>{snapshot.latest_benchmark.workload_version}</dd></div>
-              <div><dt>Peak process memory</dt><dd>{snapshot.latest_benchmark.peak_memory_bytes ? formatBytes(snapshot.latest_benchmark.peak_memory_bytes) : 'Not reliably available'}</dd></div>
-            </dl>
-            <p class="benchmark-note">Score = processed input megapixels per second × 1000. Higher is better only for the same workload version; it is not a universal hardware guarantee.</p>
-          {/if}
-          {#if benchmarkRunning}<div class="download-track benchmark-progress" aria-label={`Benchmark ${Math.round(snapshot.runtime.progress)}%`}><i style={`width:${snapshot.runtime.progress}%`}></i></div>{/if}
-          <div class="benchmark-actions">
-            <button class="button primary" disabled={Boolean(snapshot.runtime.active_job_id) && !benchmarkRunning} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : 'Run Benchmark'}</button>
-            {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
-          </div>
-        </section>
       {:else if modalKind === 'integrations' && integration}
         <p class="integration-detail">Command: <code>{integration.command_name}</code><br />Platform: {integration.platform}</p>
       {:else if diagnostics}

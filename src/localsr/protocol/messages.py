@@ -127,6 +127,7 @@ class BenchmarkRequest:
     model_id: str
     model_name: str
     device: str
+    workload: str = "v1"
 
     def to_json(self) -> str:
         return json.dumps({"type": "benchmark_request", "data": asdict(self)})
@@ -434,11 +435,55 @@ class BenchmarkStarted:
 
 
 @dataclass
+class BenchmarkStageStarted:
+    job_id: str
+    device: str
+    stage: str
+    stage_index: int
+    stage_count: int
+    percentage: float
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_stage_started", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkStageProgress:
+    job_id: str
+    device: str
+    stage: str
+    stage_index: int
+    stage_count: int
+    completed_units: int
+    total_units: int
+    percentage: float
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_stage_progress", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkStageCompleted:
+    job_id: str
+    device: str
+    stage: str
+    stage_index: int
+    stage_count: int
+    percentage: float
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_stage_completed", "data": asdict(self)})
+
+
+@dataclass
 class BenchmarkProgress:
     job_id: str
     completed_frames: int
     total_frames: int
     percentage: float
+    # Optional human-readable phase label ("mps:s2-gallery", "cpu:warmup").
+    # Absent in v1 progress; the host may surface it or ignore it.
+    stage: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "benchmark_progress", "data": asdict(self)})

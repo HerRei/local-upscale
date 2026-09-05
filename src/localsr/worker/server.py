@@ -47,6 +47,9 @@ from localsr.protocol.messages import (
     BenchmarkCompleted,
     BenchmarkFailed,
     BenchmarkProgress,
+    BenchmarkStageCompleted,
+    BenchmarkStageProgress,
+    BenchmarkStageStarted,
     BenchmarkStarted,
     CapabilitiesInfo,
     EngineInfo,
@@ -495,7 +498,12 @@ class WorkerServer:
                 send_message(LogMessage(level="error", message=f"Worker loop error: {e}"))
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
-        """Authenticate and execute the fixed, production-path v1 benchmark."""
+        """Authenticate and execute the fixed, production-path benchmark."""
+        workload = str(data.get("workload") or "v1")
+        if workload == "v2":
+            self._run_benchmark_v2(job_id, data)
+            return
+
         requested_model_id = str(data.get("model_id") or "")
         if requested_model_id != WORKLOAD_MODEL_ID:
             raise ValueError(
@@ -542,6 +550,123 @@ class WorkerServer:
             cancel_event=self.cancel_event,
             progress_callback=progress,
         )
+        send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
+
+    def _run_benchmark_v2(self, job_id: str, data: dict) -> None:
+        """Run the multi-device, multi-scene v2 benchmark (Blender-style)."""
+        from localsr.core.benchmark_v2 import (
+            SCENES as V2_SCENES,
+        )
+        from localsr.core.benchmark_v2 import (
+            WORKLOAD_MODEL_ID as V2_MODEL_ID,
+        )
+        from localsr.core.benchmark_v2 import (
+            WORKLOAD_VERSION as V2_WORKLOAD_VERSION,
+        )
+        from localsr.core.benchmark_v2 import (
+            StageUpdate,
+            aggregate_v2,
+            run_device_phase,
+        )
+        from localsr.core.hardware import get_capability_report
+
+        requested_model_id = str(data.get("model_id") or "")
+        if requested_model_id != V2_MODEL_ID:
+            raise ValueError(
+                f"{V2_WORKLOAD_VERSION} requires the trusted {V2_MODEL_ID} checkpoint."
+            )
+        model = CATALOG_BY_ID[V2_MODEL_ID]
+        supplied = Path(str(data.get("model_path") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.path_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                "Download and verify the Quick model before benchmarking."
+            ) from error
+        if supplied != expected or not self.model_store.is_installed(model):
+            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+
+        devices = get_capability_report()["devices"]
+        # CPU last: accelerators run first while the machine is coolest, and
+        # the CPU phase benefits from warming caches anyway. ``cpu`` always
+        # exists in a capability report.
+        ordered = [d for d in devices if d["id"] != "cpu"] + [
+            d for d in devices if d["id"] == "cpu"
+        ]
+        stages_per_device = len(V2_SCENES) + 2
+        total_phases = len(ordered) * stages_per_device
+        send_message(
+            BenchmarkStarted(
+                job_id=job_id,
+                workload_version=V2_WORKLOAD_VERSION,
+                warmup_count=0,
+                measured_frame_count=total_phases,
+            )
+        )
+        info = self.model_adapter.inspect(str(expected))
+
+        started_at = time.monotonic()
+        device_results: list[dict] = []
+        for device_index, device in enumerate(ordered):
+            if self.cancel_event.is_set():
+                raise InterruptedError("benchmark cancelled")
+            device_id = str(device["id"])
+
+            def stage_progress(
+                update: StageUpdate,
+                *,
+                current_device_index: int = device_index,
+                current_device_id: str = device_id,
+            ) -> None:
+                stage_index = current_device_index * stages_per_device + update.stage_index
+                percentage = (stage_index + update.fraction) / max(1, total_phases) * 100.0
+                # Keep the original aggregate event for older hosts, then send
+                # the richer v2 envelope understood by current hosts.
+                send_message(
+                    BenchmarkProgress(
+                        job_id=job_id,
+                        completed_frames=stage_index,
+                        total_frames=total_phases,
+                        percentage=percentage,
+                        stage=update.stage,
+                    )
+                )
+                common = {
+                    "job_id": job_id,
+                    "device": current_device_id,
+                    "stage": update.stage,
+                    "stage_index": stage_index + 1,
+                    "stage_count": total_phases,
+                    "percentage": percentage,
+                }
+                if update.event == "started":
+                    send_message(BenchmarkStageStarted(**common))
+                elif update.event == "progress":
+                    send_message(
+                        BenchmarkStageProgress(
+                            **common,
+                            completed_units=update.completed_units,
+                            total_units=update.total_units,
+                        )
+                    )
+                else:
+                    send_message(BenchmarkStageCompleted(**common))
+
+            phase = run_device_phase(
+                engine=self.engine,
+                model_info=info,
+                model_path=str(expected),
+                device_id=device_id,
+                device_name=str(device.get("name") or device_id),
+                device_type=str(device.get("type") or device_id),
+                scenes=V2_SCENES,
+                cancel_event=self.cancel_event,
+                progress_callback=stage_progress,
+            )
+            device_results.append(phase.to_dict())
+
+        result = aggregate_v2(device_results, time.monotonic() - started_at)
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
     def _run_job(self, job_id, data):

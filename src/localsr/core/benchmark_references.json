@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "workload_version": "localsr-benchmark-v2",
+  "metric": "output_megapixels_per_second",
+  "entries": [
+    {
+      "id": "apple-m1-pro-16gpu",
+      "label": "Apple M1 Pro (16-core GPU)",
+      "kind": "accelerator",
+      "backend": "mps",
+      "hardware_model": "MacBookPro18,3",
+      "score": 21.28,
+      "sample_count": 2,
+      "samples": [21.35, 21.2],
+      "maximum_cv_percent": 3.31,
+      "source": "physical-local-run",
+      "os": "macOS 26.6.1"
+    }
+  ]
+}

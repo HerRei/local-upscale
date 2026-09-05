@@ -7,6 +7,9 @@ from localsr.protocol.messages import (
     PROTOCOL_VERSION,
     BenchmarkCompleted,
     BenchmarkRequest,
+    BenchmarkStageCompleted,
+    BenchmarkStageProgress,
+    BenchmarkStageStarted,
     EngineInfo,
     HandshakeRequest,
     JobRequest,
@@ -117,9 +120,11 @@ def test_benchmark_protocol_carries_a_versioned_real_workload_result():
             model_id="span_photo_x4",
             model_name="SPAN Quick",
             device="cpu",
+            workload="v2",
         )
     )
     assert request["type"] == "benchmark_request"
+    assert request["data"]["workload"] == "v2"
     completed = _message(
         BenchmarkCompleted(
             job_id="benchmark-1",
@@ -127,3 +132,21 @@ def test_benchmark_protocol_carries_a_versioned_real_workload_result():
         )
     )
     assert completed["data"]["result"]["workload_version"] == "localsr-benchmark-v1"
+
+
+def test_benchmark_v2_stage_envelopes_are_additive_protocol_messages():
+    common = {
+        "job_id": "benchmark-1",
+        "device": "mps",
+        "stage": "mps:s1-classroom",
+        "stage_index": 2,
+        "stage_count": 10,
+        "percentage": 15.0,
+    }
+    started = _message(BenchmarkStageStarted(**common))
+    progress = _message(BenchmarkStageProgress(**common, completed_units=3, total_units=0))
+    completed = _message(BenchmarkStageCompleted(**common))
+    assert started["type"] == "benchmark_stage_started"
+    assert progress["type"] == "benchmark_stage_progress"
+    assert progress["data"]["completed_units"] == 3
+    assert completed["type"] == "benchmark_stage_completed"

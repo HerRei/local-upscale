@@ -220,14 +220,20 @@ describe('LocalSR desktop interface', () => {
       type: 'benchmark_started',
       data: { job_id: 'benchmark-1', warmup_count: 1, measured_frame_count: 5 }
     });
-    expect(await screen.findByText('Warming up 1 iteration · then measuring 5 frames')).toBeTruthy();
+    expect(
+      await within(screen.getByRole('dialog')).findByText(
+        'Warming up 1 iteration · then measuring 5 frames'
+      )
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Cancel Benchmark' })).toBeTruthy();
 
     callback({
       type: 'benchmark_progress',
       data: { job_id: 'benchmark-1', completed_frames: 3, total_frames: 5, percentage: 60 }
     });
-    expect(await screen.findByText('Measured 3 of 5 frames')).toBeTruthy();
+    expect(
+      await within(screen.getByRole('dialog')).findByText('Measured 3 of 5 frames')
+    ).toBeTruthy();
 
     callback({
       type: 'benchmark_completed',
@@ -261,6 +267,94 @@ describe('LocalSR desktop interface', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Export JSON…' }));
     expect(api.exportBenchmark).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes the v2 score, confidence, reference, and device results visually prominent', async () => {
+    const snapshot = readySnapshot();
+    snapshot.latest_benchmark = {
+      workload_version: 'localsr-benchmark-v2',
+      backend: 'mps',
+      device: 'mps',
+      model_id: 'span_photo_x4',
+      model_name: 'SPAN Quick',
+      scale: 4,
+      input_width: 512,
+      input_height: 512,
+      warmup_count: 7,
+      measured_frame_count: 18,
+      median_inference_ms: 0,
+      p95_inference_ms: 0,
+      end_to_end_fps: 0,
+      processed_megapixels_per_second: 22.86,
+      total_elapsed_seconds: 191.87,
+      peak_memory_bytes: 512 * 1024 ** 2,
+      score: 22.86,
+      system_score: 22.86,
+      cpu_score: 4.07,
+      stable: true,
+      cv_percent: 2.4,
+      result_elapsed_seconds: 191.87,
+      thermal_state: 'nominal',
+      reference_label: 'Apple M1 Pro (16-core GPU)',
+      reference_ratio: 1.07,
+      device_results: [
+        {
+          device: 'mps',
+          device_type: 'mps',
+          device_name: 'Apple GPU (Metal)',
+          thermal_state: 'nominal',
+          warmup_iterations: 7,
+          peak_memory_bytes: 512 * 1024 ** 2,
+          peak_device_memory_bytes: 256 * 1024 ** 2,
+          stable: true,
+          cv_percent: 2.4,
+          score: 22.86,
+          scenes: [
+            {
+              scene_id: 's1-classroom',
+              purpose: 'compute',
+              input_width: 512,
+              input_height: 512,
+              output_width: 2048,
+              output_height: 2048,
+              iterations: 8,
+              median_ms: 165.2,
+              p05_ms: 162.1,
+              p95_ms: 170.3,
+              cv_percent: 2.1,
+              megapixels_per_second: 25.4,
+              encode_ms: null
+            }
+          ]
+        },
+        {
+          device: 'cpu',
+          device_type: 'cpu',
+          device_name: 'CPU',
+          thermal_state: 'nominal',
+          warmup_iterations: 5,
+          peak_memory_bytes: 384 * 1024 ** 2,
+          peak_device_memory_bytes: null,
+          stable: true,
+          cv_percent: 2.2,
+          score: 4.07,
+          scenes: []
+        }
+      ]
+    };
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const dialog = await screen.findByRole('dialog');
+
+    expect(dialog.classList.contains('performance-modal')).toBe(true);
+    expect(dialog.querySelector('.benchmark-score-value strong')?.textContent).toBe('22.86');
+    expect(within(dialog).getByText('● Stable result')).toBeTruthy();
+    expect(within(dialog).getByText('1.07×')).toBeTruthy();
+    expect(within(dialog).getByText('Apple M1 Pro (16-core GPU)')).toBeTruthy();
+    expect(within(dialog).getByRole('article', { name: 'Apple GPU (Metal) benchmark result' })).toBeTruthy();
+    expect(within(dialog).getByRole('article', { name: 'CPU benchmark result' })).toBeTruthy();
+    expect(within(dialog).getByText('Hardware results')).toBeTruthy();
   });
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
@@ -849,8 +943,10 @@ describe('LocalSR desktop interface', () => {
     const stage = document.querySelector<HTMLElement>('.image-stage');
     await waitFor(() => expect(Number.parseFloat(stage?.style.width ?? '0')).toBeCloseTo(744));
     expect(Number.parseFloat(stage?.style.height ?? '0')).toBeGreaterThan(480);
-    expect(stage?.style.left).toBe('calc(50% + 0px)');
-    expect(stage?.style.top).toBe('calc(50% + 0px)');
+    // Pan rides inside the transform so it animates with zoom without jitter.
+    expect(stage?.style.left).toBe('50%');
+    expect(stage?.style.top).toBe('50%');
+    expect(stage?.style.transform).toBe('translate(calc(-50% + 0px), calc(-50% + 0px)) scale(1)');
 
     const listener = api.listenForWorker.mock.calls[0]?.[0] as
       | ((message: WorkerEnvelope) => void)
@@ -942,7 +1038,7 @@ describe('LocalSR desktop interface', () => {
       data: { job_id: 'job-progressive', output_path: '/output/complete.png' }
     });
     await waitFor(() => expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe('100%'));
-    expect(stage?.style.left).toBe('calc(50% + 0px)');
-    expect(stage?.style.top).toBe('calc(50% + 0px)');
+    expect(stage?.style.left).toBe('50%');
+    expect(stage?.style.top).toBe('50%');
   });
 });

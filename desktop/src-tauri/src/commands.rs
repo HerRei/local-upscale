@@ -442,6 +442,7 @@ pub fn start_benchmark(
                 "model_path": model_path,
                 "model_id": "span_photo_x4",
                 "model_name": model_name,
+                "workload": "v2",
                 "device": input.device
             }
         }),

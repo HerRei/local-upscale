@@ -172,21 +172,56 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'benchmark_started':
       next.runtime.active_job_id = String(data.job_id ?? '');
       next.runtime.status_title = 'Benchmark running';
-      next.runtime.status_detail = `Warming up ${Number(data.warmup_count ?? 0)} iteration${Number(data.warmup_count ?? 0) === 1 ? '' : 's'} · then measuring ${Number(data.measured_frame_count ?? 0)} frames`;
+      next.runtime.status_detail = String(data.workload_version ?? '').startsWith(
+        'localsr-benchmark-v2'
+      )
+        ? `Multi-device benchmark · ${Number(data.measured_frame_count ?? 0)} phases · warming up each device`
+        : `Warming up ${Number(data.warmup_count ?? 0)} iteration${Number(data.warmup_count ?? 0) === 1 ? '' : 's'} · then measuring ${Number(data.measured_frame_count ?? 0)} frames`;
       next.runtime.progress = 0;
       break;
     case 'benchmark_progress':
       next.runtime.progress = Number(data.percentage ?? 0);
       next.runtime.status_title = 'Benchmark running';
-      next.runtime.status_detail = `Measured ${Number(data.completed_frames ?? 0)} of ${Number(data.total_frames ?? 0)} frames`;
+      next.runtime.status_detail = data.stage
+        ? `Phase ${String(data.stage).replace(':', ' · ')} · ${Number(data.completed_frames ?? 0)} of ${Number(data.total_frames ?? 0)}`
+        : `Measured ${Number(data.completed_frames ?? 0)} of ${Number(data.total_frames ?? 0)} frames`;
       break;
+    case 'benchmark_stage_started':
+    case 'benchmark_stage_progress':
+    case 'benchmark_stage_completed': {
+      const event = envelope.type.replace('benchmark_stage_', '');
+      const stage = String(data.stage ?? '').replace(':', ' · ');
+      const completed = Number(data.completed_units ?? 0);
+      const total = Number(data.total_units ?? 0);
+      next.runtime.progress = Number(data.percentage ?? 0);
+      next.runtime.status_title = 'Benchmark running';
+      next.runtime.status_detail =
+        event === 'progress' && completed > 0
+          ? `${stage} · iteration ${completed}${total > 0 ? ` of ${total}` : ''}`
+          : `${stage} · ${event}`;
+      break;
+    }
     case 'benchmark_completed':
       next.runtime.active_job_id = '';
       next.runtime.progress = 100;
       next.runtime.status_title = 'Benchmark complete';
       if (typeof data.result === 'object' && data.result) {
         next.latest_benchmark = data.result as unknown as AppSnapshot['latest_benchmark'];
-        next.runtime.status_detail = `Score ${next.latest_benchmark?.score.toFixed(2) ?? '—'} · local result saved`;
+        const result = next.latest_benchmark;
+        if (result?.workload_version.startsWith('localsr-benchmark-v2')) {
+          next.runtime.status_detail = result.stable
+            ? result.system_score != null
+              ? `System score ${result.system_score.toFixed(2)} · CPU ${(result.cpu_score ?? 0).toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
+              : `CPU score ${(result.cpu_score ?? 0).toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
+            : `Unstable run (${(result.cv_percent ?? 0).toFixed(1)}% spread) — close background apps and retry`;
+          next.runtime.elapsed_seconds =
+            result.result_elapsed_seconds ?? result.total_elapsed_seconds;
+          next.runtime.throughput = result.system_score ?? 0;
+          next.runtime.throughput_unit = 'output MP/s';
+          next.runtime.thermal_status = result.thermal_state ?? next.runtime.thermal_status;
+        } else {
+          next.runtime.status_detail = `Score ${result?.score.toFixed(2) ?? '—'} · local result saved`;
+        }
       }
       break;
     case 'benchmark_cancelled':
