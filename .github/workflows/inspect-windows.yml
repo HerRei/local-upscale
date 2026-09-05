@@ -5,9 +5,11 @@ jobs:
   inspect:
     runs-on: [self-hosted, Windows, X64, localsr-windows-builder]
     steps:
-      - name: List lsr-ci
+      - name: List and Clean lsr-ci
         run: |
           Get-ChildItem -Path C:\lsr-ci -Recurse | Where-Object { -not $_.PSIsContainer } | Group-Object DirectoryName | Select-Object Name, @{Name="SizeMB";Expression={($_.Group | Measure-Object Length -Sum).Sum / 1MB}} | Sort-Object SizeMB -Descending | Select-Object -First 20
           Get-ChildItem -Path C:\lsr-ci -Force
-          Get-ChildItem -Path C:\lsr-ci\runs -Force
-          Get-ChildItem -Path C:\lsr-ci\wheelhouses -Force
+          if (Test-Path C:\lsr-ci\wheelhouses) {
+              Remove-Item -Recurse -Force C:\lsr-ci\wheelhouses\* -ErrorAction SilentlyContinue
+          }
+          Write-Host "Wheelhouses cleared."
