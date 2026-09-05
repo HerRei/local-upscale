@@ -1,0 +1,19 @@
+name: Cleanup Windows Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: [self-hosted, Windows, X64, localsr-windows-builder]
+    steps:
+      - name: Clear Wheelhouses
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          if (Test-Path -LiteralPath C:\lsr-ci\wheelhouses) {
+            Remove-Item -Recurse -Force C:\lsr-ci\wheelhouses\* -ErrorAction SilentlyContinue
+          }
+          Write-Host "Wheelhouses cleared."
+          $volume = Get-Volume -DriveLetter C
+          $freeGiB = [math]::Round($volume.SizeRemaining / 1GB, 2)
+          Write-Host "Free space on C: is now $freeGiB GiB"
