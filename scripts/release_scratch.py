@@ -144,7 +144,7 @@ def finish(
     return resolved
 
 
-def cleanup(root: Path, *, now: datetime | None = None) -> list[Path]:
+def cleanup(root: Path, *, now: datetime | None = None, force: bool = False) -> list[Path]:
     managed = managed_root(root)
     moment = now or datetime.now(UTC)
     removed: list[Path] = []
@@ -157,7 +157,7 @@ def cleanup(root: Path, *, now: datetime | None = None) -> list[Path]:
         expires = datetime.fromisoformat(str(value.get("expires_at", "")))
         if expires.tzinfo is None:
             raise ValueError(f"retention expiry must contain a timezone: {marker}")
-        if expires <= moment:
+        if force or expires <= moment:
             shutil.rmtree(target)
             removed.append(target)
     return removed
@@ -184,6 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     end.add_argument("--secret", action="append", default=[])
     prune = subparsers.add_parser("cleanup")
     prune.add_argument("--root", type=Path, required=True)
+    prune.add_argument("--force", action="store_true", help="Force cleanup ignoring expiry")
     return parser
 
 
@@ -207,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(retained or "removed")
     else:
-        for path in cleanup(args.root):
+        for path in cleanup(args.root, force=args.force):
             print(path)
     return 0
 

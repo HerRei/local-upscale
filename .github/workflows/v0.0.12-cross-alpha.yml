@@ -124,7 +124,7 @@ jobs:
       - name: Allocate bounded SSD working storage
         run: |
           python3 scripts/release_scratch.py init --root /ci-scratch
-          python3 scripts/release_scratch.py cleanup --root /ci-scratch
+          python3 scripts/release_scratch.py cleanup --root /ci-scratch --force
           ROOT=$(python3 scripts/release_scratch.py start --root /ci-scratch \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor v0.0.12-alpha-${{ matrix.id }})
@@ -238,7 +238,7 @@ jobs:
         run: |
           py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci
+          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci --force
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           py -3.11 scripts/storage_preflight.py --ssd-path C:\lsr-ci --skip-hdd --ssd-min-percent 15 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -351,7 +351,7 @@ jobs:
         id: scratch
         run: |
           python3 scripts/release_scratch.py init --root "$CI_SCRATCH"
-          python3 scripts/release_scratch.py cleanup --root "$CI_SCRATCH"
+          python3 scripts/release_scratch.py cleanup --root "$CI_SCRATCH" --force
           python3 scripts/storage_preflight.py \
             --ssd-path "$CI_SCRATCH" --skip-hdd --ssd-min-percent 20 --ssd-min-gib 6 --ssd-min-percent 15 --ssd-peak-gib 15
           RUN_ROOT=$(python3 scripts/release_scratch.py start \
