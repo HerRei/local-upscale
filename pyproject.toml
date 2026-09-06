@@ -43,6 +43,7 @@ dev = [
     "pytest-qt>=4.2.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.1.0",
+    "pyright==1.1.411",
 ]
 legacy = ["PySide6>=6.5.0"]
 video = [
@@ -89,6 +90,15 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 timeout = 300
 timeout_method = "thread"
+
+# Start with the language-neutral protocol and pure pipeline configuration.
+# Expand this boundary as additional engine modules receive complete types.
+[tool.pyright]
+include = ["src/localsr/protocol", "src/localsr/core/pipeline.py"]
+extraPaths = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.setuptools]
 include-package-data = false

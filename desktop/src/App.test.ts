@@ -57,7 +57,7 @@ const api = vi.hoisted(() => ({
   installIntegrations: vi.fn(),
   uninstallIntegrations: vi.fn(),
   listenForWorker: vi.fn(
-    async (_callback: (message: { type: string; data: Record<string, unknown> }) => void) =>
+    async (_callback: (message: { type: string; data: Record<string, unknown> }) => void): Promise<() => void> =>
       () => undefined
   ),
   listenForStateChange: vi.fn(async () => () => undefined),
@@ -182,6 +182,33 @@ afterEach(() => {
 });
 
 describe('LocalSR desktop interface', () => {
+  it('does not register native listeners if bootstrap finishes after the window closes', async () => {
+    let finishBootstrap!: (snapshot: AppSnapshot) => void;
+    api.bootstrap.mockImplementationOnce(() => new Promise(resolve => { finishBootstrap = resolve; }));
+    const app = render(App);
+    app.unmount();
+    finishBootstrap(readySnapshot());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(api.listenForWorker).not.toHaveBeenCalled();
+    expect(api.listenForStateChange).not.toHaveBeenCalled();
+    expect(api.takeLaunchIntents).not.toHaveBeenCalled();
+  });
+
+  it('releases a native listener that finishes registering after the window closes', async () => {
+    let finishRegistration!: (unlisten: () => void) => void;
+    const unlisten = vi.fn();
+    api.bootstrap.mockResolvedValue(readySnapshot());
+    api.listenForWorker.mockImplementationOnce(() => new Promise(resolve => { finishRegistration = resolve; }));
+    const app = render(App);
+    await waitFor(() => expect(api.listenForWorker).toHaveBeenCalledOnce());
+    app.unmount();
+    finishRegistration(unlisten);
+    await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
+    expect(api.listenForStateChange).not.toHaveBeenCalled();
+    expect(api.listenForNativeMenu).not.toHaveBeenCalled();
+    expect(api.listenForLaunchIntent).not.toHaveBeenCalled();
+  });
+
   it('mounts the complete three-pane workspace after native bootstrap', async () => {
     await mountWith(readySnapshot());
 

@@ -71,9 +71,13 @@ jobs:
       - name: Verify Linux receiver, storage, and tools
         if: runner.os == 'Linux'
         run: |
+          mountpoint -q /mnt/hdd
           python3 scripts/release_runner_preflight.py \
-            --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /ci-scratch \
-            --scratch-min-free-gib 15 --require-tool python3 --require-tool curl --require-tool git
+            --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /mnt/hdd \
+            --scratch-min-free-gib 200 --require-tool python3 --require-tool curl --require-tool git
+          python3 scripts/storage_preflight.py \
+            --ssd-path / --ssd-min-percent 15 --ssd-min-gib 6 --ssd-peak-gib 8 \
+            --hdd-path /mnt/hdd --hdd-peak-gib 100
       - name: Verify Windows receiver, storage, VC runtime, and tools
         if: runner.os == 'Windows'
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -99,16 +103,20 @@ jobs:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 240
     env:
-      PIP_CACHE_DIR: /ci-scratch/cache/pip
+      # The 110 GiB system SSD also holds the macOS guest disk. Linux GPU
+      # environments, frozen workers and AppImages need the separate HDD.
+      LOCALSR_LINUX_SCRATCH: /mnt/hdd/ci-scratch
+      PIP_CACHE_DIR: /mnt/hdd/ci-scratch/cache/pip
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Revalidate release runner immediately before build
         run: |
+          mountpoint -q /mnt/hdd
           python3 scripts/release_runner_preflight.py \
             --server "$CI_ARTIFACT_SERVER" --platform linux \
-            --scratch-path /ci-scratch --scratch-min-free-gib 15 \
+            --scratch-path /mnt/hdd --scratch-min-free-gib 200 \
             --require-tool python3 --require-tool curl --require-tool git
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -121,24 +129,31 @@ jobs:
         with:
           toolchain: stable
           components: clippy,rustfmt
-      - name: Allocate bounded SSD working storage
+      - name: Allocate bounded Linux working storage on the HDD
         run: |
-          python3 scripts/release_scratch.py init --root /ci-scratch
-          python3 scripts/release_scratch.py cleanup --root /ci-scratch --force
-          ROOT=$(python3 scripts/release_scratch.py start --root /ci-scratch \
+          python3 scripts/release_scratch.py init --root "$LOCALSR_LINUX_SCRATCH"
+          python3 scripts/release_scratch.py cleanup --root "$LOCALSR_LINUX_SCRATCH" --force
+          ROOT=$(python3 scripts/release_scratch.py start --root "$LOCALSR_LINUX_SCRATCH" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor v0.0.12-alpha-${{ matrix.id }})
-          mkdir -p /ci-scratch/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-min-percent 2 --ssd-min-gib 2 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
+          mkdir -p "$PIP_CACHE_DIR" "$ROOT/source"
+          python3 scripts/storage_preflight.py \
+            --ssd-path / --ssd-min-percent 15 --ssd-min-gib 6 --ssd-peak-gib 8 \
+            --hdd-path "$LOCALSR_LINUX_SCRATCH" --hdd-peak-gib "${{ matrix.scratch_peak_gib }}"
+          # Archive only the checked-out source: stale runner build directories
+          # must not follow the job or put large PyInstaller outputs on the SSD.
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git archive HEAD | tar -x -C "$ROOT/source"
           "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
           {
             echo "LOCALSR_ALPHA_ROOT=$ROOT"
             echo "TMPDIR=$ROOT/tmp"
-            echo "CARGO_TARGET_DIR=/ci-scratch/cargo-target/tauri-x86_64"
+            echo "CARGO_TARGET_DIR=$LOCALSR_LINUX_SCRATCH/cargo-target/tauri-x86_64"
           } >> "$GITHUB_ENV"
           echo "$ROOT/venv/bin" >> "$GITHUB_PATH"
       - name: Validate the exact alpha identity
         run: |
+          cd "$LOCALSR_ALPHA_ROOT/source"
           TAG_ARGUMENTS=()
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG_ARGUMENTS=(--tag "$GITHUB_REF_NAME"); fi
           python scripts/check_release_version.py "${TAG_ARGUMENTS[@]}"
@@ -146,16 +161,18 @@ jobs:
           python scripts/export_desktop_catalog.py --check
       - name: Install maintained Linux packaging dependencies
         run: |
+          cd "$LOCALSR_ALPHA_ROOT/source"
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
-            --cache-root /ci-scratch/wheelhouses --report "$LOCALSR_ALPHA_ROOT/staging/dependency-wheelhouse.json"
+            --cache-root "$LOCALSR_LINUX_SCRATCH/wheelhouses" --report "$LOCALSR_ALPHA_ROOT/staging/dependency-wheelhouse.json"
           python -m pip check
           python -c "import diffusers; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0')"
           npm ci --prefix desktop
       - name: Download and run actual Quick and Best from an empty cache
         run: |
+          cd "$LOCALSR_ALPHA_ROOT/source"
           LIVE_MODEL_CACHE="$LOCALSR_ALPHA_ROOT/live-model-cache"
           mkdir -p "$LIVE_MODEL_CACHE"
           test -z "$(find "$LIVE_MODEL_CACHE" -mindepth 1 -maxdepth 1 -print -quit)"
@@ -164,6 +181,7 @@ jobs:
             --report "$LOCALSR_ALPHA_ROOT/staging/live-models.json"
       - name: Build and smoke-test the AppImage
         run: |
+          cd "$LOCALSR_ALPHA_ROOT/source"
           python scripts/build_tauri_preview.py --skip-checks --bundles appimage
           SOURCE=$(find "$CARGO_TARGET_DIR/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage')
           test "$(printf '%s\n' "$SOURCE" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
@@ -199,7 +217,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           if [[ -n "${LOCALSR_ALPHA_ROOT:-}" && -f "$LOCALSR_ALPHA_ROOT/.localsr-release-run.json" ]]; then
-            python3 scripts/release_scratch.py finish --root /ci-scratch \
+            python3 scripts/release_scratch.py finish --root "$LOCALSR_LINUX_SCRATCH" \
               --target "$LOCALSR_ALPHA_ROOT" --status "$JOB_STATUS" --retain-hours 48
           fi
 

@@ -42,7 +42,11 @@ def describe_wheels(directory: Path) -> list[dict]:
     seen = set()
     for path in sorted(directory.glob("*.whl")):
         with zipfile.ZipFile(path) as wheel:
-            metadata = [name for name in wheel.namelist() if name.count("/") == 1 and name.endswith(".dist-info/METADATA")]
+            metadata = [
+                name
+                for name in wheel.namelist()
+                if name.count("/") == 1 and name.endswith(".dist-info/METADATA")
+            ]
             if len(metadata) != 1:
                 raise ValueError(f"invalid wheel metadata: {path.name}")
             fields = email.message_from_bytes(wheel.read(metadata[0]))
@@ -92,7 +96,7 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
         env = os.environ.copy()
         env["SOURCE_DATE_EPOCH"] = "1704067200"
         print(f"Building wheelhouse {target}/{key[:12]} from the reviewed lock", flush=True)
-        
+
         args = [
             sys.executable,
             "-m",
@@ -105,7 +109,7 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
             "--wheel-dir",
             str(stage),
         ]
-        
+
         index_urls = []
         extra_index_urls = []
         for line in lock.read_text().splitlines():
@@ -114,7 +118,7 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
                 index_urls.append(line.split(maxsplit=1)[1])
             elif line.startswith("--extra-index-url "):
                 extra_index_urls.append(line.split(maxsplit=1)[1])
-                
+
         # Swap so that PyTorch (if present) becomes the primary index to avoid pip dropping it
         for url in index_urls + extra_index_urls:
             if "pytorch.org" in url:
@@ -131,13 +135,15 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
                     continue
                 out.write(line + "\n")
 
-        args.extend([
-            "-r",
-            str(temp_lock),
-            "--build-constraint",
-            str(ROOT / "requirements/build-tools.txt"),
-        ])
-        
+        args.extend(
+            [
+                "-r",
+                str(temp_lock),
+                "--build-constraint",
+                str(ROOT / "requirements/build-tools.txt"),
+            ]
+        )
+
         subprocess.run(args, check=True, env=env)
         records = describe_wheels(stage)
         manifest = {

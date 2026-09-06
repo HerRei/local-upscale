@@ -1,5 +1,6 @@
 import json
 from dataclasses import asdict, dataclass
+from typing import Protocol
 
 # The worker protocol is deliberately versioned independently from the desktop
 # application.  Version 1 is a backwards-compatible superset of the original
@@ -7,6 +8,12 @@ from dataclasses import asdict, dataclass
 # while newer hosts negotiate capabilities with HandshakeRequest.
 PROTOCOL_VERSION = 1
 MIN_PROTOCOL_VERSION = 1
+
+
+class WorkerMessage(Protocol):
+    """A serializable event accepted by the worker's JSON-lines transport."""
+
+    def to_json(self) -> str: ...
 
 
 @dataclass
@@ -65,7 +72,7 @@ class JobRequest:
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
     scratch_directory: str | None = None
-    stages: list[dict] | None = None
+    stages: list[dict[str, object]] | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})

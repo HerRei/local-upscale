@@ -49,19 +49,19 @@ class WorkerClient(QObject):
         self.buffer = ""
 
     def start(self):
-        if self.process.state() != QProcess.NotRunning:
+        if self.process.state() != QProcess.ProcessState.NotRunning:
             return
         self._is_shutting_down = False
         program, arguments = worker_command()
         self.process.start(program, arguments)
 
     def send_request(self, req):
-        if self.process.state() == QProcess.Running:
+        if self.process.state() == QProcess.ProcessState.Running:
             msg = req.to_json() + "\n"
             self.process.write(msg.encode("utf-8"))
 
     def handle_stdout(self):
-        data = self.process.readAllStandardOutput().data().decode("utf-8", errors="replace")
+        data = bytes(self.process.readAllStandardOutput().data()).decode("utf-8", errors="replace")
         self.buffer += data
         while "\n" in self.buffer:
             line, self.buffer = self.buffer.split("\n", 1)
@@ -124,7 +124,7 @@ class WorkerClient(QObject):
                 self.log_received.emit({"level": "stdout", "message": line})
 
     def handle_stderr(self):
-        data = self.process.readAllStandardError().data().decode("utf-8", errors="replace")
+        data = bytes(self.process.readAllStandardError().data()).decode("utf-8", errors="replace")
         for line in data.splitlines():
             if line.strip():
                 self.log_received.emit({"level": "stderr", "message": line.strip()})
@@ -142,12 +142,12 @@ class WorkerClient(QObject):
     def stop(self):
         self._is_shutting_down = True
         state = self.process.state()
-        if state == QProcess.NotRunning:
+        if state == QProcess.ProcessState.NotRunning:
             return
-        if state == QProcess.Starting:
+        if state == QProcess.ProcessState.Starting:
             self.process.waitForStarted(1000)
             state = self.process.state()
-        if state == QProcess.Running:
+        if state == QProcess.ProcessState.Running:
             self.send_request(ShutdownRequest())
             self.process.waitForBytesWritten(1000)
             if self.process.waitForFinished(3000):

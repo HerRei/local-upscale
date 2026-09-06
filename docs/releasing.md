@@ -22,9 +22,15 @@ workflow retains its existing nine targets, including Intel macOS CPU.
 Refresh them deliberately with `scripts/lock_backend_requirements.py` and uv 0.12.8; releases use
 `backend_wheelhouse.py` to build/reuse verified wheelhouses and install offline. The special
 universal2 Mac recipe remains separately pinned. Cached wheels live outside disposable scratch:
-`/ci-scratch/wheelhouses` or `C:\lsr-ci\wheelhouses`. Cargo build outputs are retained under
+`/mnt/hdd/ci-scratch/wheelhouses` (cross-alpha Linux), `/ci-scratch/wheelhouses`
+(signed Linux lane), or `C:\lsr-ci\wheelhouses`. Cargo build outputs are retained under
 `cargo-target/tauri-*`; only bundle output is cleared between variants. Heavy jobs remain serialized.
 Monitor disk reserves and remove obsolete wheelhouse keys only when no active build uses them.
+The cross-alpha Linux job archives the exact checkout into its bounded HDD workspace and keeps
+its venv, frozen worker, Cargo outputs, wheelhouses, and AppImages there. The 110 GiB system SSD
+also holds the macOS guest disk and cannot accommodate the 100 GiB ROCm scratch budget. The job
+requires `/mnt/hdd` to be mounted, checks both volumes, and retains the HDD reserve; it never falls
+back to the SSD when that mount is missing. This trades build I/O speed for sufficient capacity.
 The registry budgets peak working space per backend before dependency installation (15–100 GiB,
 plus the protected disk reserve). ROCm's budget is largest because its wheel, expanded runtime,
 frozen worker, AppDir, and smoke-test extraction can coexist. These are conservative estimates,

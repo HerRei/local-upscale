@@ -7,6 +7,9 @@ stable release is published.
 
 ## [0.0.12-alpha] - 2026-09-05
 
+- Separate image-job execution and progress reporting; release previews and temporary outputs on failures.
+- Split desktop queue, preview, and advanced settings components and fix late listener cleanup on close.
+- Add gradual Python type checking and a complete local validation command.
 - Correct video timing/orientation, standard-video readiness labels, and visual benchmark rendering.
 - Preserve all eight Tauri backend variants with a generated release matrix and per-backend validation.
 - Deliver Windows CUDA through the installer plus verified external engine payloads.

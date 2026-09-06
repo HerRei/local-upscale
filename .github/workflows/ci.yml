@@ -158,6 +158,7 @@ jobs:
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
           "$PYTHON" -m pip install --disable-pip-version-check build
           cd "$RUN_ROOT/source"
+          "$PYTHON" -m pyright --pythonpath "$PYTHON"
           "$PYTHON" -m pytest tests/ -v
           "$PYTHON" -m build
           "$PYTHON" scripts/verify_python_package_data.py dist/*.whl dist/*.tar.gz

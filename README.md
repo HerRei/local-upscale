@@ -173,13 +173,14 @@ Automation never downloads a model implicitly or overwrites input/existing outpu
 ## Development and tests
 
 ```bash
-python -m pip install -e ".[dev,video,package]"
-python -m pytest -q
-ruff check src tests scripts smoke_test_gui.py
-ruff format --check src tests scripts smoke_test_gui.py
-python -m localsr.ui.slint_check
-python scripts/validate_live_models.py
+./local-ci.sh setup
+./local-ci.sh
 ```
+
+The local pipeline checks Python, Svelte, Rust, workflow syntax, repository policy,
+and Python package contents. It reuses installed dependencies and stops at the
+first failure. See [development checks and code boundaries](docs/development.md)
+for prerequisites, individual commands, and the initial Python type-checking scope.
 
 The normal test suite is offline and deterministic. `validate_live_models.py` is deliberately a
 networked acceptance check and downloads the real Quick and Best checkpoints. Release builds also

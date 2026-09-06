@@ -22,7 +22,14 @@ def load_script(path: Path):
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    # Match `python scripts/tool.py` without relying on another test module
+    # to leave the scripts directory on the global import path.
+    original_path = sys.path[:]
+    try:
+        sys.path.insert(0, str(path.parent))
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = original_path
     return module
 
 
