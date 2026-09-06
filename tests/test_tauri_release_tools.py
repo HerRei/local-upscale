@@ -317,6 +317,8 @@ def release_fixture(tmp_path: Path):
             "cpu_inference_verified": True,
             "hardware_tested": False,
         }
+        if entry["backend"] == "Intel-XPU":
+            probe.update(xpu_runtime_files_verified=True, xpu_runtime_library_count=5)
         smoke = installed_smoke("1-alpha") | {"backend_probe": probe}
         metadata = {
             "schema_version": 1,
@@ -408,7 +410,9 @@ def test_compacts_every_backend_and_verified_payload(tmp_path: Path) -> None:
     assert index_path.read_bytes() == (second / "release-index.json").read_bytes()
 
 
-@pytest.mark.parametrize("failure", ["model", "backend", "payload", "wheelhouse", "missing-target"])
+@pytest.mark.parametrize(
+    "failure", ["model", "backend", "payload", "wheelhouse", "missing-target", "xpu-runtime"]
+)
 def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> None:
     staging, manifest, output, readiness = release_fixture(tmp_path)
     match = {
@@ -417,6 +421,7 @@ def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> No
         "payload": "payload digest",
         "wheelhouse": "wheelhouse provenance",
         "missing-target": "every target",
+        "xpu-runtime": "bundled Intel runtime",
     }[failure]
     if failure == "missing-target":
         data = json.loads(manifest.read_text())
@@ -424,6 +429,12 @@ def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> No
         manifest.write_text(json.dumps(data))
     elif failure == "payload":
         next(staging.rglob("*.part-0001")).write_bytes(b"corrupted")
+    elif failure == "xpu-runtime":
+        path = next(staging.rglob("*Linux-Intel*.metadata.json"))
+        data = json.loads(path.read_text())
+        data["backend_probe"].pop("xpu_runtime_files_verified")
+        data["package_smoke"]["backend_probe"].pop("xpu_runtime_files_verified")
+        path.write_text(json.dumps(data))
     else:
         path = next(staging.rglob("*Linux-CPU*.metadata.json"))
         data = json.loads(path.read_text())

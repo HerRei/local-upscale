@@ -7,10 +7,11 @@ private subprocess resource, not a second user-facing application.
 
 import os
 import sys
+from importlib import metadata
 from pathlib import Path
 
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 
 ROOT = Path(SPECPATH).parent
@@ -44,6 +45,23 @@ hiddenimports = sorted(
         ]
     )
 )
+
+# Intel runtime wheels put SYCL/UR/oneMKL libraries outside torch/lib. Several
+# GPU adapters and kernels use dlopen rather than ELF DT_NEEDED dependencies.
+if sys.platform == "linux" and "+xpu" in metadata.version("torch").lower():
+    sys.path[:0] = [str(ROOT / "scripts"), str(SOURCE)]
+    from collect_xpu_runtime import collect_runtime
+
+    runtime = collect_runtime(
+        ROOT / "staging",
+        torch_version=metadata.version("torch"),
+        prefix=Path(sys.prefix),
+        distributions=metadata.distributions(),
+    )
+    spandrel_binaries += runtime.binaries
+    datas += runtime.datas
+    for distribution_name in runtime.metadata_names:
+        datas += copy_metadata(distribution_name)
 
 analysis = Analysis(
     [str(ROOT / "packaging" / "worker_entrypoint.py")],

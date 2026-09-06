@@ -1,5 +1,6 @@
 """Validate runtime identity without claiming unperformed GPU hardware tests."""
 
+import sys
 from pathlib import Path
 
 
@@ -39,6 +40,10 @@ def probe(backend: str) -> dict[str, object]:
         result["xpu_build"] = xpu_build
         if not xpu_build:
             raise RuntimeError(f"Intel artifact lacks an XPU torch runtime: {result}")
+        if getattr(sys, "frozen", False):
+            from localsr.core.xpu_runtime import verify_bundled_runtime
+
+            result.update(verify_bundled_runtime(Path(sys._MEIPASS), str(torch.__version__)))
     elif normalized == "directml":
         import torch_directml
 
