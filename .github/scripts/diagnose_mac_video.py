@@ -30,7 +30,7 @@ def run_tests(target):
                 with tempfile.TemporaryDirectory(prefix="localsr-native-stack-") as directory:
                     sample = Path(directory) / "sample.txt"
                     try:
-                        subprocess.run(["/usr/bin/sample", str(process.pid), "3", "-file", str(sample)], timeout=15, check=False)
+                        subprocess.run(["/usr/bin/sample", str(process.pid), "1", "10", "-file", str(sample)], timeout=60, check=False)
                         if sample.exists():
                             print(sample.read_text()[:24000], flush=True)
                     except subprocess.TimeoutExpired:

@@ -12,6 +12,7 @@ import os
 import tempfile
 import threading
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
@@ -100,12 +101,29 @@ class VideoStageError(RuntimeError):
         super().__init__(f"Video {stage} stage failed: {message}")
 
 
-def probe_video(path: str) -> VideoProbe:
-    """Probe metadata and one frame to resolve its display orientation."""
+@contextmanager
+def _video_decoder(path: str, *, frame_threads: bool = False):
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
+        if frame_threads:
+            try:
+                stream.thread_type = "FRAME"
+            except (KeyError, ValueError):
+                pass
+        try:
+            yield container, stream
+        finally:
+            # Early trim, cancellation and rejected frames leave buffered work
+            # in FFmpeg's decoder threads. Flush while PyAV releases the GIL,
+            # before its codec-context destructor joins those threads.
+            stream.codec_context.flush_buffers()
+
+
+def probe_video(path: str) -> VideoProbe:
+    """Probe metadata and one frame to resolve its display orientation."""
+    with _video_decoder(path) as (container, stream):
         avg_fps = stream.average_rate
         fps = float(avg_fps) if avg_fps else 0.0
         frame_count = int(stream.frames or 0)
@@ -151,14 +169,7 @@ def decode_timed_frames(
     """Decode oriented SDR frames with exact source times and one-frame lookahead."""
     start = max(0, int(start_frame or 0))
     selected_frame_count(0, start, end_frame)
-    with av.open(path) as container:
-        stream = next((s for s in container.streams if s.type == "video"), None)
-        if stream is None:
-            raise ValueError(f"No video stream in {path}")
-        try:
-            stream.thread_type = "FRAME"
-        except (KeyError, ValueError):
-            pass
+    with _video_decoder(path, frame_threads=True) as (container, stream):
         pending = None
         for index, frame in enumerate(container.decode(stream)):
             if cancel_event is not None and cancel_event.is_set():
