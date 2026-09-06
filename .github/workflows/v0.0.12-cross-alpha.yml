@@ -305,7 +305,7 @@ jobs:
         run: |
           $payloadFiles = @(Get-ChildItem -Path (Join-Path $env:LOCALSR_ALPHA_ROOT 'staging') -Filter '*.part-*' -File | ForEach-Object { $_.FullName })
           $artifact = Join-Path $env:LOCALSR_ALPHA_ROOT 'staging\${{ matrix.pkg_name }}'
-          python scripts/upload_artifacts.py @payloadFiles --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json"
+          python scripts/upload_artifacts.py --server $env:CI_ARTIFACT_SERVER --run-id $env:GITHUB_RUN_ID --attempt $env:GITHUB_RUN_ATTEMPT --platform windows $artifact "$artifact.sha256" "$artifact.metadata.json" "$artifact.architecture.json" @payloadFiles
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Finalize bounded Windows scratch
         if: always()
