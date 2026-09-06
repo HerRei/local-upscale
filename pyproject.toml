@@ -65,7 +65,7 @@ face = [
     # 4.10 is the newest line with both macOS 12 x86_64 and arm64 wheels
     # while remaining compatible with the NumPy 1.x runtime required by the
     # one-release PyTorch 2.2.2 cross-build exception.
-    "opencv-python-headless==4.10.0.84",
+    "opencv-python-headless==5.0.0.93",
 ]
 
 [build-system]
