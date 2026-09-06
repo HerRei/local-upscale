@@ -1,20 +1,21 @@
 name: Diagnose macOS X64 runner
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   diagnose:
     runs-on: [self-hosted, macOS, X64]
+    timeout-minutes: 25
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: '1'
     steps:
-      - name: Report runner and SSD scratch state without modifying it
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Diagnose the unchanged video tests with an independent watchdog
         run: |
-          uname -a
-          uname -m
-          sw_vers
-          df -h / /Volumes/CISCRATCH
-          diskutil info /Volumes/CISCRATCH
-          test -r /Volumes/CISCRATCH
+          PYTHON=/Volumes/CISCRATCH/runs/34029959673/1/macos/tests/environment/venv/bin/python
+          test -x "$PYTHON"
+          "$PYTHON" .github/scripts/diagnose_mac_video.py
