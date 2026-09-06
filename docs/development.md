@@ -30,6 +30,10 @@ beta-readiness blockers. Release CI still builds every registered backend and
 verifies each artifact's source commit and runtime evidence. Real-model acceptance
 remains an explicit, networked check: `python scripts/validate_live_models.py`.
 
+Native-library deadlocks may prevent Python's timeout thread from running. The test suite also
+uses pytest's C-level fault-handler watchdog: a test that exceeds five minutes prints thread
+stacks and fails the process. Pytest 9.1.1 or newer is required for this behavior.
+
 ## Image worker
 
 `WorkerServer` owns process messages, job activation, cancellation, and terminal

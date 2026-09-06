@@ -148,8 +148,10 @@ PyTorch on real Apple-Silicon hardware; Intel macOS remains an open product deci
 ## Publishing v0.0.12-alpha
 
 1. Merge the release commit to `main` only after normal CI and Tauri CI are green.
-2. Run `v0.0.12 Mac mini Cross Alpha` manually on that exact `main` commit and require all backend
-   build jobs to pass without publishing.
+2. Wait for any CI/Preview runs triggered by integration to finish before starting the release.
+   An optional manual cross-alpha run rehearses the complete matrix without publishing. The tag
+   run performs the same complete build and verification gates before publication; a second full
+   rehearsal is not required when using that path.
 3. Create the annotated tag: `git tag -a v0.0.12-alpha -m "LocalSR v0.0.12-alpha"`.
 4. Push the tag. All Mac-mini backend package jobs must finish before the draft release is created.
 5. Confirm the release is titled `LocalSR v0.0.12-alpha`, marked prerelease, and includes all eight

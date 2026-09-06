@@ -261,7 +261,7 @@ jobs:
         env:
           PYTHONPATH: src
         run: |
-          python -m pip install --disable-pip-version-check "pytest==9.0.2"
+          python -m pip install --disable-pip-version-check "pytest==9.1.1"
           python -m pytest tests/test_desktop_architecture.py tests/test_worker_protocol_contract.py tests/test_tauri_build_script.py tests/test_tauri_installer_smoke.py tests/test_tauri_release_tools.py -q
       - name: Install locked frontend dependencies
         working-directory: desktop

@@ -90,6 +90,25 @@ def test_explicit_fps_override_changes_speed(tmp_path):
     assert timestamps(output) == pytest.approx([index / 10 for index in range(10)], abs=0.001)
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_early_decode_exit_can_reopen_the_same_video(tmp_path, cancel):
+    source = make_vfr(tmp_path / "early-exit.mp4")
+    for _ in range(10):
+        event = threading.Event()
+        decoded = decode_timed_frames(str(source), cancel_event=event)
+        try:
+            assert next(decoded).index == 0
+            if cancel:
+                event.set()
+                with pytest.raises(InterruptedError, match="cancelled"):
+                    next(decoded)
+        finally:
+            decoded.close()
+    assert timestamps(source) == pytest.approx(
+        [0, 0.04, 0.08, 0.12, 0.48, 0.84, 1.2, 1.56, 1.92, 2.28], abs=0.001
+    )
+
+
 @pytest.mark.parametrize("transfer", [16, 18])
 def test_hdr_is_rejected_before_silent_sdr_export(tmp_path, transfer):
     source = make_vfr(tmp_path / "hdr.mp4", transfer=transfer)

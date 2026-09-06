@@ -39,7 +39,7 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 dev = [
     "PySide6>=6.5.0",
     "pyobjc-framework-Cocoa>=12.2.2; sys_platform == 'darwin'",
-    "pytest>=7.0.0",
+    "pytest>=9.1.1",
     "pytest-qt>=4.2.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.1.0",
@@ -90,6 +90,10 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 timeout = 300
 timeout_method = "thread"
+# Native codec deadlocks can hold the GIL and block Python's timeout thread.
+# The C-level watchdog still emits thread stacks and fails the process.
+faulthandler_timeout = 300
+faulthandler_exit_on_timeout = true
 
 # Start with the language-neutral protocol and pure pipeline configuration.
 # Expand this boundary as additional engine modules receive complete types.
