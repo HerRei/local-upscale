@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -120,7 +121,7 @@ def test_worker_target_arch_matches_pyinstaller_names() -> None:
     assert build.worker_target_arch(None) is None
 
 
-def _isolated_bundle_paths(monkeypatch, tmp_path: Path) -> Path:
+def _isolated_bundle_paths(monkeypatch, tmp_path: Path, *, torch_version: str = "2.13.0") -> Path:
     engine = tmp_path / "engine"
     engine.mkdir()
     license_path = tmp_path / "LICENSE"
@@ -131,6 +132,13 @@ def _isolated_bundle_paths(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(build, "ROOT", tmp_path)
     monkeypatch.setattr(build, "ENGINE_DIR", engine)
     monkeypatch.setattr(build, "CONFIG_PATH", config)
+    installed_version = importlib.metadata.version
+
+    def dependency_version(name):
+        # Bundle-policy fixtures must be independent of the host's ML runtime.
+        return torch_version if name == "torch" else installed_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", dependency_version)
     return config
 
 
@@ -160,6 +168,24 @@ def test_release_overlay_refuses_signed_but_unnotarized_macos(monkeypatch, tmp_p
 
     with pytest.raises(SystemExit, match="signing and notarization"):
         build.write_bundle_overlay(require_signing=True)
+
+
+@pytest.mark.parametrize("torch_version,minimum", [("2.13.0", "14.0"), ("2.2.2", "12.0")])
+def test_macos_overlay_preserves_the_runtime_deployment_floor(
+    monkeypatch, tmp_path: Path, torch_version: str, minimum: str
+) -> None:
+    config = _isolated_bundle_paths(monkeypatch, tmp_path, torch_version=torch_version)
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.delenv("APPLE_SIGNING_IDENTITY", raising=False)
+    monkeypatch.delenv("APPLE_CERTIFICATE", raising=False)
+
+    build.write_bundle_overlay()
+
+    base = json.loads((build.DESKTOP / "src-tauri" / "tauri.conf.json").read_text())
+    overlay = json.loads(config.read_text())["bundle"]["macOS"]
+    effective = {**base["bundle"]["macOS"], **overlay}
+    assert effective["minimumSystemVersion"] == minimum
+    assert effective["signingIdentity"] == "-"
 
 
 def test_windows_release_overlay_configures_authenticode(monkeypatch, tmp_path: Path) -> None:
