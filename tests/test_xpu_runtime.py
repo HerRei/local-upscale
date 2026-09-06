@@ -117,6 +117,29 @@ def test_collection_rejects_an_installed_record_that_points_outside_the_environm
         )
 
 
+def test_collection_preserves_notices_outside_distribution_metadata(
+    tmp_path: Path, intel_runtime
+) -> None:
+    prefix, distributions = intel_runtime
+    distributions.append(
+        distribution(
+            prefix,
+            "onemkl-license",
+            {"../share/doc/mkl/licensing/third-party-programs.txt": b"Upstream notices"},
+        )
+    )
+    files = collect_runtime(
+        tmp_path / "staging",
+        torch_version=TORCH_VERSION,
+        prefix=prefix,
+        distributions=distributions,
+    )
+    assert (
+        str(prefix / "share/doc/mkl/licensing/third-party-programs.txt"),
+        "licenses/intel/onemkl-license/share/doc/mkl/licensing",
+    ) in files.datas
+
+
 def test_collection_refuses_an_incomplete_adapter_inventory(tmp_path: Path, intel_runtime) -> None:
     prefix, distributions = intel_runtime
     info = prefix / "lib/python3.11/site-packages/intel_cmplr_lib_ur-2026.0.0.dist-info/RECORD"

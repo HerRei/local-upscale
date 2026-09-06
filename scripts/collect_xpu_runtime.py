@@ -42,6 +42,7 @@ def collect_runtime(
     prefix = prefix.resolve()
     libraries: dict[str, Path] = {}
     device_data: dict[str, Path] = {}
+    notices: list[tuple[str, str]] = []
     versions: dict[str, str] = {}
     for distribution in distributions:
         name = re.sub(r"[-_.]+", "-", distribution.metadata.get("Name", "")).lower()
@@ -54,13 +55,30 @@ def collect_runtime(
         for record in records:
             filename = Path(record).name
             is_library = re.fullmatch(r".+\.so(?:\.[0-9]+)*", filename) is not None
-            if not is_library and Path(filename).suffix not in DEVICE_DATA_SUFFIXES:
+            parts = [part.lower() for part in Path(record).parts]
+            # copy_metadata retains dist-info licenses; Intel also installs
+            # compiler and oneMKL third-party notices outside site-packages.
+            is_notice = not any(part.endswith(".dist-info") for part in parts) and (
+                any(part in {"licensing", "licenses", "license"} for part in parts)
+                or filename.lower().startswith(
+                    ("license", "copying", "notice", "third-party", "third_party")
+                )
+            )
+            if (
+                not is_library
+                and not is_notice
+                and Path(filename).suffix not in DEVICE_DATA_SUFFIXES
+            ):
                 continue
             source = Path(distribution.locate_file(record)).resolve()
             if not source.is_relative_to(prefix) or not source.is_file():
                 raise RuntimeError(
                     f"Intel runtime record is missing or outside the build environment: {record}"
                 )
+            if is_notice:
+                notice_directory = Path("licenses/intel") / name / source.relative_to(prefix).parent
+                notices.append((str(source), notice_directory.as_posix()))
+                continue
             destination = libraries if is_library else device_data
             previous = libraries.get(filename) or device_data.get(filename)
             if previous is not None and previous != source:
@@ -98,6 +116,7 @@ def collect_runtime(
     return RuntimeFiles(
         binaries=[(str(source), ".") for _, source in sorted(libraries.items())],
         datas=[(str(source), ".") for _, source in sorted(device_data.items())]
-        + [(str(manifest), "localsr")],
+        + [(str(manifest), "localsr")]
+        + sorted(notices),
         metadata_names=sorted(versions),
     )
