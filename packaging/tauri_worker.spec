@@ -63,6 +63,10 @@ analysis = Analysis(
         "pytest",
         "slint",
         "tkinter",
+        # Triton is only required for torch.compile/inductor. The packaged
+        # worker does not enable that path, and linuxdeploy cannot patch
+        # Triton's large native library while producing the CUDA AppImage.
+        "triton",
     ],
     noarchive=False,
     optimize=1,

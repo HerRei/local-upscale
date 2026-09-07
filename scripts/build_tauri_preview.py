@@ -93,14 +93,49 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
     standard system path.
 
     Creating temporary symlinks in /usr/local/lib lets linuxdeploy's bundled
-    ldd/patchelf resolve these cross-references.  The caller is responsible for
-    removing the returned paths after the build completes.
+    ldd/patchelf resolve these cross-references.  Temporary stub libraries also
+    let ldd resolve host-provided NVIDIA driver sonames that must remain
+    external to the AppImage.  The caller is responsible for removing the
+    returned paths after the build completes.
     """
     if not sys.platform.startswith("linux") or not ENGINE_DIR.is_dir():
         return []
 
     system_lib = Path("/usr/local/lib")
     created: list[Path] = []
+
+    driver_stub_dir = BUILD_ROOT / "linuxdeploy-driver-stubs"
+    driver_stub_dir.mkdir(parents=True, exist_ok=True)
+    driver_stub_source = driver_stub_dir / "stub.c"
+    driver_stub_source.write_text("void __localsr_linuxdeploy_stub(void) {}\n", encoding="utf-8")
+    for driver_library in ("libcuda.so.1", "libnvidia-ml.so.1"):
+        stub = driver_stub_dir / driver_library
+        if not stub.exists():
+            compiler = shutil.which("cc") or shutil.which("gcc")
+            if compiler is None:
+                raise SystemExit(
+                    "cannot create linuxdeploy driver stubs because no C compiler is available"
+                )
+            subprocess.run(
+                [
+                    compiler,
+                    "-shared",
+                    f"-Wl,-soname,{driver_library}",
+                    "-o",
+                    str(stub),
+                    str(driver_stub_source),
+                ],
+                check=True,
+            )
+        dest = system_lib / driver_library
+        if not dest.exists() and not dest.is_symlink():
+            result = subprocess.run(
+                ["sudo", "ln", "-sf", str(stub.resolve()), str(dest)],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                created.append(dest)
+
     for so_file in sorted(ENGINE_DIR.rglob("*.so*")):
         if not so_file.is_file():
             continue
@@ -120,9 +155,18 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
             if result.returncode == 0:
                 created.append(dest)
     if created:
+        # linuxdeploy resolves dependencies through ldd.  On Ubuntu runners, new
+        # /usr/local/lib entries are not visible to ldd until ldconfig refreshes
+        # the dynamic linker cache.
+        ldconfig = subprocess.run(["sudo", "ldconfig"], capture_output=True, text=True)
+        if ldconfig.returncode != 0:
+            raise SystemExit(
+                "created linuxdeploy library symlinks but sudo ldconfig failed: "
+                + ldconfig.stderr.strip()
+            )
         print(
-            f"Created {len(created)} /usr/local/lib symlink(s) to expose"
-            " PyInstaller engine libs to linuxdeploy.",
+            f"Created {len(created)} /usr/local/lib symlink(s) and refreshed"
+            " ldconfig to expose PyInstaller engine libs to linuxdeploy.",
             flush=True,
         )
     return created
@@ -403,11 +447,16 @@ def main() -> int:
         run(command, cwd=DESKTOP, env=environment)
     finally:
         _restore_linuxdeploy_wrapper(linuxdeploy_backup)
+        removed_linuxdeploy_symlinks = False
         for link in linuxdeploy_symlinks:
             try:
                 link.unlink()
+                removed_linuxdeploy_symlinks = True
             except OSError:
-                subprocess.run(["sudo", "rm", "-f", str(link)], capture_output=True)
+                result = subprocess.run(["sudo", "rm", "-f", str(link)], capture_output=True)
+                removed_linuxdeploy_symlinks = removed_linuxdeploy_symlinks or result.returncode == 0
+        if removed_linuxdeploy_symlinks:
+            subprocess.run(["sudo", "ldconfig"], capture_output=True)
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
         "The legacy Slint app and its artifacts were not modified.",
