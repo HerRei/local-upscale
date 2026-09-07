@@ -200,6 +200,9 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
     linuxdeploy.write_text(
         "#!/bin/bash\n"
         "set -euo pipefail\n"
+        'while [[ "${1-__unset__}" == "" ]]; do\n'
+        "  shift\n"
+        "done\n"
         "appimage_args=()\n"
         'if [[ "${1:-}" == "--appimage-extract-and-run" ]]; then\n'
         '  appimage_args+=("$1")\n'
