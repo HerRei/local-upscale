@@ -81,6 +81,48 @@ def tauri_build_environment() -> dict[str, str]:
     return env
 
 
+def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
+    """Symlink hash-named PyInstaller .so files into /usr/local/lib.
+
+    linuxdeploy runs as an AppImage whose bundled dynamic linker ignores the
+    caller's LD_LIBRARY_PATH.  When it encounters a PyInstaller-packaged
+    binary that lists another hash-named PyInstaller lib (e.g.
+    libavcodec-9aae324f.so.59.37.100) as a NEEDED entry, it fails with
+    "Could not find dependency" because that hashed name does not exist at any
+    standard system path.
+
+    Creating temporary symlinks in /usr/local/lib lets linuxdeploy's bundled
+    ldd/patchelf resolve these cross-references.  The caller is responsible for
+    removing the returned paths after the build completes.
+    """
+    if not sys.platform.startswith("linux") or not ENGINE_DIR.is_dir():
+        return []
+
+    system_lib = Path("/usr/local/lib")
+    created: list[Path] = []
+    for so_file in sorted(ENGINE_DIR.rglob("*.so*")):
+        if not so_file.is_file():
+            continue
+        dest = system_lib / so_file.name
+        if dest.exists() or dest.is_symlink():
+            continue
+        try:
+            dest.symlink_to(so_file.resolve())
+            created.append(dest)
+        except OSError:
+            # If we lack write permission to /usr/local/lib (non-root CI
+            # runners), silently skip; the build may still succeed on newer
+            # linuxdeploy versions that tolerate missing private deps.
+            pass
+    if created:
+        print(
+            f"Created {len(created)} /usr/local/lib symlink(s) to expose"
+            " PyInstaller engine libs to linuxdeploy.",
+            flush=True,
+        )
+    return created
+
+
 def npm_executable() -> str:
     """Resolve npm to a directly executable path on every supported host."""
 
@@ -291,7 +333,15 @@ def main() -> int:
     bundles = cargo_target / ("debug" if args.debug else "release") / "bundle"
     if bundles.exists():
         shutil.rmtree(bundles)
-    run(command, cwd=DESKTOP, env=environment)
+    linuxdeploy_symlinks = _symlink_engine_libs_for_linuxdeploy()
+    try:
+        run(command, cwd=DESKTOP, env=environment)
+    finally:
+        for link in linuxdeploy_symlinks:
+            try:
+                link.unlink()
+            except OSError:
+                pass
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
         "The legacy Slint app and its artifacts were not modified.",
