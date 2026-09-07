@@ -127,6 +127,60 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
     return created
 
 
+def _wrap_linuxdeploy_for_appimage() -> Path | None:
+    """Temporarily add known external GPU driver excludes to linuxdeploy.
+
+    Tauri invokes the cached linuxdeploy AppImage directly and does not expose
+    linuxdeploy's ``--exclude-library`` arguments through tauri.conf.json.
+    CUDA workers legitimately retain a runtime dependency on the host NVIDIA
+    driver library, which is absent from the packaging VM and must not be
+    bundled into the AppImage.  Replace the cached tool with a small wrapper
+    only for the duration of this build, then restore the original binary.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+
+    linuxdeploy = Path.home() / ".cache" / "tauri" / "linuxdeploy-x86_64.AppImage"
+    if not linuxdeploy.is_file():
+        return None
+    backup = linuxdeploy.with_name(f"{linuxdeploy.name}.localsr-original")
+    if backup.exists():
+        raise SystemExit(f"stale linuxdeploy backup requires manual cleanup: {backup}")
+
+    linuxdeploy.rename(backup)
+    excludes = [
+        "libcuda.so.1",
+        "libnvidia-ml.so.1",
+    ]
+    arguments = " ".join(
+        f"--exclude-library {library}" for library in excludes
+    )
+    linuxdeploy.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'exec "{backup}" {arguments} "$@"\n',
+        encoding="utf-8",
+    )
+    linuxdeploy.chmod(0o755)
+    print(
+        "Wrapped linuxdeploy to exclude external GPU driver libraries: "
+        + ", ".join(excludes),
+        flush=True,
+    )
+    return backup
+
+
+def _restore_linuxdeploy_wrapper(backup: Path | None) -> None:
+    if backup is None:
+        return
+    linuxdeploy = backup.with_name(backup.name.removesuffix(".localsr-original"))
+    try:
+        linuxdeploy.unlink(missing_ok=True)
+        backup.rename(linuxdeploy)
+    except OSError as error:
+        raise RuntimeError(f"could not restore linuxdeploy wrapper: {error}") from error
+
+
 def npm_executable() -> str:
     """Resolve npm to a directly executable path on every supported host."""
 
@@ -338,9 +392,11 @@ def main() -> int:
     if bundles.exists():
         shutil.rmtree(bundles)
     linuxdeploy_symlinks = _symlink_engine_libs_for_linuxdeploy()
+    linuxdeploy_backup = _wrap_linuxdeploy_for_appimage() if args.bundles == "appimage" else None
     try:
         run(command, cwd=DESKTOP, env=environment)
     finally:
+        _restore_linuxdeploy_wrapper(linuxdeploy_backup)
         for link in linuxdeploy_symlinks:
             try:
                 link.unlink()
