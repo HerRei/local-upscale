@@ -198,7 +198,7 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
         "libnvidia-ml.so.1",
     ]
     linuxdeploy.write_text(
-        "#!/usr/bin/env bash\n"
+        "#!/bin/bash\n"
         "set -euo pipefail\n"
         "appimage_args=()\n"
         'if [[ "${1:-}" == "--appimage-extract-and-run" ]]; then\n'
