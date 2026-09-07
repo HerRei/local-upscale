@@ -1,0 +1,45 @@
+name: Debug CUDA
+
+on:
+  push:
+    branches:
+      - fix/debug-cuda
+  workflow_dispatch:
+
+jobs:
+  build-linux-cuda:
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.0.12-alpha
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        env:
+          LOCALSR_LINUX_SCRATCH: /mnt/hdd/ci-scratch
+          JOB_STATUS: success
+          NO_STRIP: "true"
+        run: |
+          ROOT=$(python3 scripts/release_scratch.py start --root "$LOCALSR_LINUX_SCRATCH" --run-id "$GITHUB_RUN_ID" --attempt "7" --platform linux --flavor debug-cuda)
+          mkdir -p "$ROOT/source"
+          git archive HEAD | tar -x -C "$ROOT/source"
+          
+          "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
+          export PATH="$ROOT/venv/bin:$PATH"
+          export LOCALSR_ALPHA_ROOT="$ROOT"
+          export TMPDIR="$ROOT/tmp"
+          export CARGO_TARGET_DIR="$LOCALSR_LINUX_SCRATCH/cargo-target/tauri-x86_64"
+          
+          cd "$ROOT/source"
+          python3 scripts/backend_wheelhouse.py --platform linux --architecture x86_64 --backend CUDA --output "$LOCALSR_ALPHA_ROOT/wheelhouse"
+          pip install --no-index --find-links "$LOCALSR_ALPHA_ROOT/wheelhouse" "localsr[package,video,face] @ file://$LOCALSR_ALPHA_ROOT/source"
+          
+          python scripts/export_desktop_catalog.py --check
+          npm ci --prefix desktop
+          python scripts/build_tauri_preview.py --skip-checks --bundles appimage || {
+             echo "build_tauri_preview failed, running tauri with verbose"
+             npm run tauri --prefix desktop -- build --ci --config "$ROOT/source/build/tauri-preview/tauri-worker.conf.json" --bundles appimage -v
+          }
