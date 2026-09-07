@@ -1,0 +1,22 @@
+name: Nuke Cache
+
+on:
+  push:
+    branches:
+      - fix/nuke-cache
+  workflow_dispatch:
+
+jobs:
+  nuke:
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    steps:
+      - name: Inject NO_STRIP
+        run: |
+          echo "Current directory: $(pwd)"
+          RUNNER_DIR=$(dirname $(pwd))
+          RUNNER_DIR=$(dirname $RUNNER_DIR)
+          RUNNER_DIR=$(dirname $RUNNER_DIR)
+          echo "Runner directory: $RUNNER_DIR"
+          echo "NO_STRIP=true" >> "$RUNNER_DIR/.env"
+          echo "Cat .env:"
+          cat "$RUNNER_DIR/.env"
