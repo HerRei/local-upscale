@@ -1,0 +1,48 @@
+name: Debug CUDA
+
+on:
+  push:
+    branches:
+      - fix/debug-cuda
+  workflow_dispatch:
+
+jobs:
+  build-linux-cuda:
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v0.0.12-release-pipeline
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        env:
+          LOCALSR_LINUX_SCRATCH: /mnt/hdd/ci-scratch
+          JOB_STATUS: success
+          PIP_CACHE_DIR: /mnt/hdd/ci-scratch/cache/pip
+          PIP_VERSION: "26.2.1"
+          PYTORCH_VERSION: "2.13.0"
+          TORCHVISION_VERSION: "0.28.0"
+          PYINSTALLER_VERSION: "6.22.2"
+        run: |
+          ROOT=$(python3 scripts/release_scratch.py start --root "$LOCALSR_LINUX_SCRATCH" --run-id "$GITHUB_RUN_ID" --attempt "11" --platform linux --flavor debug-cuda)
+          mkdir -p "$ROOT/source"
+          git archive HEAD | tar -x -C "$ROOT/source"
+          
+          "$HOME/.venv-ci/bin/python3.11" -m venv "$ROOT/venv"
+          export PATH="$ROOT/venv/bin:$PATH"
+          export LOCALSR_ALPHA_ROOT="$ROOT"
+          export TMPDIR="$ROOT/tmp"
+          export CARGO_TARGET_DIR="$LOCALSR_LINUX_SCRATCH/cargo-target/tauri-x86_64"
+          
+          cd "$ROOT/source"
+          python -m pip install --disable-pip-version-check "pip==$PIP_VERSION"
+          mkdir -p "$LOCALSR_ALPHA_ROOT/staging"
+          python scripts/backend_wheelhouse.py --target "linux-x86_64-cuda" \
+            --cache-root "$LOCALSR_LINUX_SCRATCH/wheelhouses" \
+            --report "$LOCALSR_ALPHA_ROOT/staging/dependency-wheelhouse.json"
+          python -m pip check
+          npm ci --prefix desktop
+          python scripts/build_tauri_preview.py --skip-checks --bundles appimage

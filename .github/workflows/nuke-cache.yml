@@ -10,13 +10,9 @@ jobs:
   nuke:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Inject NO_STRIP
+      - name: Check sudo and ldconfig
         run: |
-          echo "Current directory: $(pwd)"
-          RUNNER_DIR=$(dirname $(pwd))
-          RUNNER_DIR=$(dirname $RUNNER_DIR)
-          RUNNER_DIR=$(dirname $RUNNER_DIR)
-          echo "Runner directory: $RUNNER_DIR"
-          echo "NO_STRIP=true" >> "$RUNNER_DIR/.env"
-          echo "Cat .env:"
-          cat "$RUNNER_DIR/.env"
+          sudo -n true && echo "has_passwordless_sudo=yes" || echo "has_passwordless_sudo=no"
+          sudo -n ldconfig -v 2>&1 | head -5 || echo "ldconfig_sudo=no"
+          ls -la /usr/local/lib/ | head -5
+          sudo touch /usr/local/lib/test-write && echo "can_write=/usr/local/lib" && sudo rm /usr/local/lib/test-write || echo "cannot_write=/usr/local/lib"
