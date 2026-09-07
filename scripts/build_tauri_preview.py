@@ -200,6 +200,8 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
     linuxdeploy.write_text(
         "#!/bin/bash\n"
         "set -euo pipefail\n"
+        'log="${LOCALSR_LINUXDEPLOY_WRAPPER_LOG:-/tmp/localsr-linuxdeploy-wrapper.log}"\n'
+        '{ printf "wrapper argv:"; printf " <%s>" "$@"; printf "\\n"; } >> "$log" 2>/dev/null || true\n'
         'while [[ "${1-__unset__}" == "" ]]; do\n'
         "  shift\n"
         "done\n"
@@ -208,9 +210,12 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
         '  appimage_args+=("$1")\n'
         "  shift\n"
         "fi\n"
-        f'exec "{backup}" "${{appimage_args[@]}}" '
+        f'"{backup}" "${{appimage_args[@]}}" '
         + " ".join(f"--exclude-library={library}" for library in excludes)
-        + ' "$@"\n',
+        + ' "$@" >> "$log" 2>&1\n'
+        'rc=$?\n'
+        'echo "wrapper rc=$rc" >> "$log" 2>/dev/null || true\n'
+        'exit "$rc"\n',
         encoding="utf-8",
     )
     linuxdeploy.chmod(0o755)
