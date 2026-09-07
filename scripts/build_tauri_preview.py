@@ -153,13 +153,17 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
         "libcuda.so.1",
         "libnvidia-ml.so.1",
     ]
-    arguments = " ".join(
-        f"--exclude-library {library}" for library in excludes
-    )
     linuxdeploy.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        f'exec "{backup}" {arguments} "$@"\n',
+        "appimage_args=()\n"
+        'if [[ "${1:-}" == "--appimage-extract-and-run" ]]; then\n'
+        '  appimage_args+=("$1")\n'
+        "  shift\n"
+        "fi\n"
+        f'exec "{backup}" "${{appimage_args[@]}}" '
+        + " ".join(f"--exclude-library={library}" for library in excludes)
+        + ' "$@"\n',
         encoding="utf-8",
     )
     linuxdeploy.chmod(0o755)
