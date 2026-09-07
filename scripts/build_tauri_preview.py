@@ -179,8 +179,10 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
     linuxdeploy's ``--exclude-library`` arguments through tauri.conf.json.
     CUDA workers legitimately retain a runtime dependency on the host NVIDIA
     driver library, which is absent from the packaging VM and must not be
-    bundled into the AppImage.  Replace the cached tool with a small wrapper
-    only for the duration of this build, then restore the original binary.
+    bundled into the AppImage.  Replace the cached tool with a tiny compiled
+    launcher only for the duration of this build, then restore the original
+    binary.  Using an ELF launcher avoids Tauri/AppImage launch failures that
+    occur when the cached AppImage path is replaced with a shell script.
     """
     if not sys.platform.startswith("linux"):
         return None
@@ -192,35 +194,59 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
     if backup.exists():
         raise SystemExit(f"stale linuxdeploy backup requires manual cleanup: {backup}")
 
-    linuxdeploy.rename(backup)
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if compiler is None:
+        raise SystemExit("cannot wrap linuxdeploy because no C compiler is available")
+
     excludes = [
         "libcuda.so.1",
         "libnvidia-ml.so.1",
     ]
-    linuxdeploy.write_text(
-        "#!/bin/bash\n"
-        "set -euo pipefail\n"
-        'log="${LOCALSR_LINUXDEPLOY_WRAPPER_LOG:-/tmp/localsr-linuxdeploy-wrapper.log}"\n'
-        '{ printf "wrapper argv:"; printf " <%s>" "$@"; printf "\\n"; } >> "$log" 2>/dev/null || true\n'
-        'while [[ "${1-__unset__}" == "" ]]; do\n'
-        "  shift\n"
-        "done\n"
-        "appimage_args=()\n"
-        'if [[ "${1:-}" == "--appimage-extract-and-run" ]]; then\n'
-        '  appimage_args+=("$1")\n'
-        "  shift\n"
-        "fi\n"
-        f'"{backup}" "${{appimage_args[@]}}" '
-        + " ".join(f"--exclude-library={library}" for library in excludes)
-        + ' "$@" >> "$log" 2>&1\n'
-        'rc=$?\n'
-        'echo "wrapper rc=$rc" >> "$log" 2>/dev/null || true\n'
-        'exit "$rc"\n',
+    wrapper_dir = BUILD_ROOT / "linuxdeploy-wrapper"
+    wrapper_dir.mkdir(parents=True, exist_ok=True)
+    source = wrapper_dir / "linuxdeploy-wrapper.c"
+    binary = wrapper_dir / "linuxdeploy-wrapper"
+    source.write_text(
+        "#include <errno.h>\n"
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
+        "#include <string.h>\n"
+        "#include <unistd.h>\n"
+        f"static const char *backup_path = {json.dumps(str(backup))};\n"
+        "int main(int argc, char **argv) {\n"
+        "  FILE *log = fopen(getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") ? getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") : \"/tmp/localsr-linuxdeploy-wrapper.log\", \"a\");\n"
+        "  if (log) {\n"
+        "    fputs(\"wrapper argv:\", log);\n"
+        "    for (int i = 1; i < argc; ++i) fprintf(log, \" <%s>\", argv[i] ? argv[i] : \"\");\n"
+        "    fputc('\\n', log);\n"
+        "    fclose(log);\n"
+        "  }\n"
+        "  int first = 1;\n"
+        "  while (first < argc && argv[first] && argv[first][0] == '\\0') first++;\n"
+        "  char **next = calloc((size_t)argc + 5, sizeof(char *));\n"
+        "  if (!next) return 127;\n"
+        "  int out = 0;\n"
+        "  next[out++] = (char *)backup_path;\n"
+        "  if (first < argc && strcmp(argv[first], \"--appimage-extract-and-run\") == 0) next[out++] = argv[first++];\n"
+        "  next[out++] = \"--exclude-library=libcuda.so.1\";\n"
+        "  next[out++] = \"--exclude-library=libnvidia-ml.so.1\";\n"
+        "  for (int i = first; i < argc; ++i) next[out++] = argv[i];\n"
+        "  next[out] = NULL;\n"
+        "  execv(backup_path, next);\n"
+        "  log = fopen(getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") ? getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") : \"/tmp/localsr-linuxdeploy-wrapper.log\", \"a\");\n"
+        "  if (log) { fprintf(log, \"execv failed: %s\\n\", strerror(errno)); fclose(log); }\n"
+        "  fprintf(stderr, \"localsr linuxdeploy wrapper execv failed: %s\\n\", strerror(errno));\n"
+        "  return 127;\n"
+        "}\n",
         encoding="utf-8",
     )
+    subprocess.run([compiler, "-O2", "-o", str(binary), str(source)], check=True)
+
+    linuxdeploy.rename(backup)
+    shutil.copy2(binary, linuxdeploy)
     linuxdeploy.chmod(0o755)
     print(
-        "Wrapped linuxdeploy to exclude external GPU driver libraries: "
+        "Wrapped linuxdeploy with an ELF launcher to exclude external GPU driver libraries: "
         + ", ".join(excludes),
         flush=True,
     )
