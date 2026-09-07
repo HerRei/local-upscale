@@ -70,6 +70,7 @@ def tauri_build_environment() -> dict[str, str]:
     if not sys.platform.startswith("linux") or not ENGINE_DIR.is_dir():
         return env
 
+    env["NO_STRIP"] = "true"
     library_dirs = sorted(
         {str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()}
     )
@@ -370,6 +371,7 @@ def main() -> int:
         "tauri",
         "--",
         "build",
+        "--verbose",
         "--ci",
         "--config",
         str(CONFIG_PATH),
