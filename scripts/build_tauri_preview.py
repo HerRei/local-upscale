@@ -110,10 +110,14 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
             dest.symlink_to(so_file.resolve())
             created.append(dest)
         except OSError:
-            # If we lack write permission to /usr/local/lib (non-root CI
-            # runners), silently skip; the build may still succeed on newer
-            # linuxdeploy versions that tolerate missing private deps.
-            pass
+            # We lack direct write access; try with sudo (self-hosted CI
+            # runners running as a non-root user with NOPASSWD sudo).
+            result = subprocess.run(
+                ["sudo", "ln", "-sf", str(so_file.resolve()), str(dest)],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                created.append(dest)
     if created:
         print(
             f"Created {len(created)} /usr/local/lib symlink(s) to expose"
@@ -341,7 +345,7 @@ def main() -> int:
             try:
                 link.unlink()
             except OSError:
-                pass
+                subprocess.run(["sudo", "rm", "-f", str(link)], capture_output=True)
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
         "The legacy Slint app and its artifacts were not modified.",
