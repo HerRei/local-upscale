@@ -13,6 +13,30 @@ jobs:
           $freeGiB = [math]::Round($volume.SizeRemaining / 1GB, 2)
           $sizeGiB = [math]::Round($volume.Size / 1GB, 2)
           Write-Host "Windows C: size=$sizeGiB GiB free=$freeGiB GiB"
+          function Show-ChildSizes($Path, $Label) {
+            if (-not (Test-Path -LiteralPath $Path)) {
+              return
+            }
+            Write-Host "$Label child sizes:"
+            Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                $item = $_
+                $bytes = 0
+                if ($item.PSIsContainer) {
+                  $bytes = (Get-ChildItem -LiteralPath $item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue |
+                    Measure-Object -Property Length -Sum).Sum
+                } else {
+                  $bytes = $item.Length
+                }
+                [PSCustomObject]@{
+                  GiB = [math]::Round(($bytes / 1GB), 2)
+                  FullName = $item.FullName
+                }
+              } |
+              Sort-Object GiB -Descending |
+              Select-Object -First 20 |
+              Format-Table -AutoSize
+          }
           Write-Host "Filesystem drives:"
           Get-PSDrive -PSProvider FileSystem |
             Select-Object Name, Root, Used, Free |
@@ -23,12 +47,15 @@ jobs:
             Get-ChildItem -LiteralPath C:\lsr-ci -Force -ErrorAction SilentlyContinue |
               Select-Object Mode, Length, LastWriteTime, FullName |
               Format-Table -AutoSize
+            Show-ChildSizes -Path C:\lsr-ci -Label "C:\lsr-ci"
           }
           Write-Host "C:\actions-runner\_work shallow listing:"
           Get-ChildItem -LiteralPath C:\actions-runner\_work -Force -ErrorAction SilentlyContinue |
             Select-Object Mode, Length, LastWriteTime, FullName |
             Format-Table -AutoSize
+          Show-ChildSizes -Path C:\actions-runner\_work -Label "C:\actions-runner\_work"
           Write-Host "NetworkService local app data shallow listing:"
           Get-ChildItem -LiteralPath C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local -Force -ErrorAction SilentlyContinue |
             Select-Object Mode, Length, LastWriteTime, FullName |
             Format-Table -AutoSize
+          Show-ChildSizes -Path C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local -Label "NetworkService local app data"
