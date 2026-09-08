@@ -18,6 +18,13 @@ from pathlib import Path
 PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
+def temporary_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
+    kwargs = {"prefix": prefix}
+    if os.name == "nt":
+        kwargs["ignore_cleanup_errors"] = True
+    return tempfile.TemporaryDirectory(**kwargs)
+
+
 def run(
     command: list[str],
     *,
@@ -184,7 +191,7 @@ def record_windows_payload_architectures(
 
 
 def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
-    with tempfile.TemporaryDirectory(prefix="localsr-next-installer-") as temporary:
+    with temporary_directory(prefix="localsr-next-installer-") as temporary:
         install_dir = Path(temporary) / "app"
         run(
             [str(artifact), "/S", f"/D={install_dir}"],
@@ -280,7 +287,7 @@ def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, obj
     env = os.environ.copy()
     env["LOCALSR_SMOKE_REPORT"] = str(report)
     env["LOCALSR_SMOKE_TIMEOUT_SECONDS"] = str(int(timeout))
-    with tempfile.TemporaryDirectory(prefix="localsr-next-smoke-data-") as data_root:
+    with temporary_directory(prefix="localsr-next-smoke-data-") as data_root:
         env["XDG_DATA_HOME"] = str(Path(data_root) / "xdg")
         env["LOCALAPPDATA"] = str(Path(data_root) / "local")
         suffix = artifact.suffix.lower()

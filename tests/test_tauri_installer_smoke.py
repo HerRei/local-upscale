@@ -81,6 +81,24 @@ def test_retries_a_busy_macos_test_mount(monkeypatch) -> None:
     assert calls == [["hdiutil", "detach", "/dev/disk-test"]] * 3
 
 
+def test_windows_temp_directories_ignore_post_uninstall_cleanup_errors(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeTemporaryDirectory:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(smoke.os, "name", "nt")
+    monkeypatch.setattr(smoke.tempfile, "TemporaryDirectory", FakeTemporaryDirectory)
+
+    smoke.temporary_directory(prefix="localsr-next-installer-")
+
+    assert captured == {
+        "prefix": "localsr-next-installer-",
+        "ignore_cleanup_errors": True,
+    }
+
+
 def test_windows_smoke_uses_installed_host_without_starting_webview(
     tmp_path: Path, monkeypatch
 ) -> None:
