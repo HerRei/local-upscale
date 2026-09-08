@@ -11,6 +11,15 @@
       "signing": "developer-id-notarized"
     },
     {
+      "id": "windows-x86_64-cuda",
+      "filename": "LocalSR-v0.0.12-alpha-Windows-CUDA-x86_64.exe",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "backend": "CUDA",
+      "signing": "authenticode-valid",
+      "external_engine": true
+    },
+    {
       "id": "windows-x86_64-cpu",
       "filename": "LocalSR-v0.0.12-alpha-Windows-CPU-x86_64.exe",
       "platform": "windows",
@@ -25,15 +34,6 @@
       "architecture": "x86_64",
       "backend": "DirectML",
       "signing": "authenticode-valid"
-    },
-    {
-      "id": "windows-x86_64-cuda",
-      "filename": "LocalSR-v0.0.12-alpha-Windows-CUDA-x86_64.exe",
-      "platform": "windows",
-      "architecture": "x86_64",
-      "backend": "CUDA",
-      "signing": "authenticode-valid",
-      "external_engine": true
     },
     {
       "id": "linux-x86_64-cpu",
