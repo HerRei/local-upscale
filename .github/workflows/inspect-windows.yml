@@ -9,41 +9,26 @@ jobs:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          function Measure-DirectoryGiB([string]$Path) {
-            if (-not (Test-Path -LiteralPath $Path)) { return 0 }
-            $sum = Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
-              Where-Object { -not $_.PSIsContainer } |
-              Measure-Object -Property Length -Sum
-            return [math]::Round(($sum.Sum / 1GB), 2)
-          }
-
           $volume = Get-Volume -DriveLetter C
           $freeGiB = [math]::Round($volume.SizeRemaining / 1GB, 2)
           $sizeGiB = [math]::Round($volume.Size / 1GB, 2)
           Write-Host "Windows C: size=$sizeGiB GiB free=$freeGiB GiB"
-          Write-Host "Known runner and cache paths by size:"
-          @(
-            "C:\lsr-ci",
-            "C:\actions-runner\_work",
-            "C:\actions-runner\_work\_temp",
-            "C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local\pip",
-            "C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local\npm-cache",
-            "C:\WINDOWS\ServiceProfiles\NetworkService\.cargo",
-            "C:\WINDOWS\Temp",
-            "C:\ProgramData\chocolatey"
-          ) |
-            ForEach-Object {
-              [PSCustomObject]@{ Path = $_; SizeGiB = Measure-DirectoryGiB $_ }
-            } |
-            Sort-Object SizeGiB -Descending |
+          Write-Host "Filesystem drives:"
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, Root, Used, Free |
             Format-Table -AutoSize
 
           if (Test-Path -LiteralPath C:\lsr-ci) {
-            Write-Host "C:\lsr-ci children by size:"
-            Get-ChildItem -LiteralPath C:\lsr-ci -Force -Directory -ErrorAction SilentlyContinue |
-              ForEach-Object {
-                [PSCustomObject]@{ Path = $_.FullName; SizeGiB = Measure-DirectoryGiB $_.FullName }
-              } |
-              Sort-Object SizeGiB -Descending |
+            Write-Host "C:\lsr-ci shallow listing:"
+            Get-ChildItem -LiteralPath C:\lsr-ci -Force -ErrorAction SilentlyContinue |
+              Select-Object Mode, Length, LastWriteTime, FullName |
               Format-Table -AutoSize
           }
+          Write-Host "C:\actions-runner\_work shallow listing:"
+          Get-ChildItem -LiteralPath C:\actions-runner\_work -Force -ErrorAction SilentlyContinue |
+            Select-Object Mode, Length, LastWriteTime, FullName |
+            Format-Table -AutoSize
+          Write-Host "NetworkService local app data shallow listing:"
+          Get-ChildItem -LiteralPath C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local -Force -ErrorAction SilentlyContinue |
+            Select-Object Mode, Length, LastWriteTime, FullName |
+            Format-Table -AutoSize
