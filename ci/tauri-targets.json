@@ -12,6 +12,18 @@
       "alpha_signing": "ad-hoc-alpha"
     },
     {
+      "id": "windows-x86_64-cuda",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "backend": "CUDA",
+      "index": "cu126",
+      "suffix": "Windows-CUDA-x86_64.exe",
+      "signing": "authenticode-valid",
+      "alpha_signing": "unsigned-alpha",
+      "external_engine": true,
+      "scratch_peak_gib": 32
+    },
+    {
       "id": "windows-x86_64-cpu",
       "platform": "windows",
       "architecture": "x86_64",
@@ -32,18 +44,6 @@
       "signing": "authenticode-valid",
       "alpha_signing": "unsigned-alpha",
       "scratch_peak_gib": 20
-    },
-    {
-      "id": "windows-x86_64-cuda",
-      "platform": "windows",
-      "architecture": "x86_64",
-      "backend": "CUDA",
-      "index": "cu126",
-      "suffix": "Windows-CUDA-x86_64.exe",
-      "signing": "authenticode-valid",
-      "alpha_signing": "unsigned-alpha",
-      "external_engine": true,
-      "scratch_peak_gib": 32
     },
     {
       "id": "linux-x86_64-cpu",
