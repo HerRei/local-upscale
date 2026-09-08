@@ -161,6 +161,7 @@ def test_cross_alpha_windows_preflight_cleans_managed_scratch_before_reserve_che
 
     assert "--include-unretained" in preflight
     assert "--include-legacy-runs" in preflight
+    assert "--include-orphaned-runs" in preflight
     assert "C:\\WINDOWS\\ServiceProfiles\\NetworkService\\AppData\\Local" in preflight
     assert "LocalSR" in preflight
     assert pip_purge < reserve_check

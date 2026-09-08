@@ -619,6 +619,23 @@ def test_release_scratch_can_clean_legacy_numeric_run_directories(tmp_path: Path
     assert nested_numeric.exists()
 
 
+def test_release_scratch_can_force_clean_orphaned_markerless_run_directories(tmp_path: Path):
+    root = tmp_path / "ci-scratch"
+    marked = release_scratch.start(root, "12", "1", "windows", "cuda")
+    orphan = root / "r" / "11"
+    orphan.mkdir(parents=True)
+    (orphan / "large.bin").write_bytes(b"x")
+
+    with pytest.raises(ValueError, match="requires --force"):
+        release_scratch.cleanup(root, include_orphaned_runs=True)
+
+    removed = release_scratch.cleanup(root, force=True, include_orphaned_runs=True)
+
+    assert removed == [orphan]
+    assert not orphan.exists()
+    assert marked.exists()
+
+
 def test_release_scratch_rejects_broad_and_unowned_cleanup_targets(tmp_path: Path):
     with pytest.raises(ValueError, match="unmanaged"):
         release_scratch.managed_root(tmp_path, initialize=True)

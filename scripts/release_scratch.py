@@ -151,8 +151,11 @@ def cleanup(
     force: bool = False,
     include_unretained: bool = False,
     include_legacy_runs: bool = False,
+    include_orphaned_runs: bool = False,
 ) -> list[Path]:
     managed = managed_root(root)
+    if include_orphaned_runs and not force:
+        raise ValueError("orphaned release run cleanup requires --force")
     moment = now or datetime.now(UTC)
     removed: list[Path] = []
     runs = managed / "r"
@@ -176,6 +179,14 @@ def cleanup(
     if include_legacy_runs:
         for candidate in sorted(managed.iterdir()):
             if candidate.is_dir() and candidate.name.isdecimal():
+                shutil.rmtree(candidate)
+                removed.append(candidate)
+    if include_orphaned_runs:
+        for candidate in sorted(runs.iterdir()):
+            if not candidate.is_dir() or candidate.is_symlink():
+                continue
+            has_marker = any(candidate.rglob(RUN_MARKER)) or any(candidate.rglob(RETAINED_MARKER))
+            if not has_marker:
                 shutil.rmtree(candidate)
                 removed.append(candidate)
     return removed
@@ -213,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also remove direct numeric run directories from the older scratch layout",
     )
+    prune.add_argument(
+        "--include-orphaned-runs",
+        action="store_true",
+        help="Also remove markerless run directories below the managed r/ layout; requires --force",
+    )
     return parser
 
 
@@ -241,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             include_unretained=args.include_unretained,
             include_legacy_runs=args.include_legacy_runs,
+            include_orphaned_runs=args.include_orphaned_runs,
         ):
             print(path)
     return 0
