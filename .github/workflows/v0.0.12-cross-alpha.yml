@@ -82,6 +82,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci --force --include-unretained
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/ensure_windows_vc_runtime.ps1
           ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
           py -3.11 scripts/release_runner_preflight.py --server $env:CI_ARTIFACT_SERVER --platform windows --scratch-path C:\ --scratch-min-free-gib 20 --require-tool py --require-tool git

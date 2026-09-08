@@ -144,6 +144,21 @@ def test_release_builds_revalidate_runner_health_immediately_before_work() -> No
         assert workflow.count("scripts/release_runner_preflight.py") >= 6
 
 
+def test_cross_alpha_windows_preflight_cleans_managed_scratch_before_reserve_check() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "v0.0.12-cross-alpha.yml").read_text()
+    preflight = workflow[
+        workflow.index("Verify Windows receiver, storage, VC runtime, and tools") : workflow.index(
+            "Verify macOS receiver, storage, and tools"
+        )
+    ]
+
+    cleanup = preflight.index("release_scratch.py cleanup --root C:\\lsr-ci")
+    reserve_check = preflight.index("ensure_windows_scratch.ps1 -MinimumFreeGiB 20")
+
+    assert "--include-unretained" in preflight
+    assert cleanup < reserve_check
+
+
 def test_signed_windows_cleanup_survives_thumbprint_validation_failure() -> None:
     workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
     persisted = workflow.index('"LOCALSR_IMPORTED_CERTIFICATE=$($certificate.Thumbprint)"')
