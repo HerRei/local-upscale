@@ -586,6 +586,20 @@ def test_release_scratch_cleans_success_and_retains_failures_for_48_hours(
     assert marker["expires_at"] > marker["retained_at"]
 
 
+def test_release_scratch_can_force_clean_unretained_marked_runs(tmp_path: Path):
+    root = tmp_path / "ci-scratch"
+    interrupted = release_scratch.start(root, "12", "1", "windows", "cuda")
+    (interrupted / "build" / "large.bin").write_bytes(b"x")
+
+    assert release_scratch.cleanup(root, force=True) == []
+    assert interrupted.exists()
+
+    removed = release_scratch.cleanup(root, force=True, include_unretained=True)
+
+    assert removed == [interrupted]
+    assert not interrupted.exists()
+
+
 def test_release_scratch_rejects_broad_and_unowned_cleanup_targets(tmp_path: Path):
     with pytest.raises(ValueError, match="unmanaged"):
         release_scratch.managed_root(tmp_path, initialize=True)

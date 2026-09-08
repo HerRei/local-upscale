@@ -144,7 +144,13 @@ def finish(
     return resolved
 
 
-def cleanup(root: Path, *, now: datetime | None = None, force: bool = False) -> list[Path]:
+def cleanup(
+    root: Path,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    include_unretained: bool = False,
+) -> list[Path]:
     managed = managed_root(root)
     moment = now or datetime.now(UTC)
     removed: list[Path] = []
@@ -160,6 +166,12 @@ def cleanup(root: Path, *, now: datetime | None = None, force: bool = False) -> 
         if force or expires <= moment:
             shutil.rmtree(target)
             removed.append(target)
+    if include_unretained:
+        for marker in sorted(runs.rglob(RUN_MARKER)):
+            target = validate_existing_target(marker.parent, managed)
+            if target.exists() and not (target / RETAINED_MARKER).exists():
+                shutil.rmtree(target)
+                removed.append(target)
     return removed
 
 
@@ -185,6 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
     prune = subparsers.add_parser("cleanup")
     prune.add_argument("--root", type=Path, required=True)
     prune.add_argument("--force", action="store_true", help="Force cleanup ignoring expiry")
+    prune.add_argument(
+        "--include-unretained",
+        action="store_true",
+        help="Also remove marked run directories that never reached finish",
+    )
     return parser
 
 
@@ -208,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(retained or "removed")
     else:
-        for path in cleanup(args.root, force=args.force):
+        for path in cleanup(
+            args.root, force=args.force, include_unretained=args.include_unretained
+        ):
             print(path)
     return 0
 

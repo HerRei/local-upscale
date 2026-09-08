@@ -261,7 +261,7 @@ jobs:
           if (Test-Path -LiteralPath C:\lsr-ci\wheelhouses) {
             Get-ChildItem -Path C:\lsr-ci\wheelhouses | Where-Object { $_.Name -ne "${{ matrix.id }}" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           }
-          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci --force
+          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci --force --include-unretained
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           py -3.11 scripts/storage_preflight.py --ssd-path C:\lsr-ci --skip-hdd --ssd-min-percent 2 --ssd-min-gib 2 --ssd-peak-gib "${{ matrix.scratch_peak_gib }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
