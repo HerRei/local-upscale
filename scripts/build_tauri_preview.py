@@ -19,6 +19,11 @@ WORKER_DIST = BUILD_ROOT / "worker-dist"
 WORKER_WORK = BUILD_ROOT / "worker-build"
 ENGINE_DIR = WORKER_DIST / "engine"
 CONFIG_PATH = BUILD_ROOT / "tauri-worker.conf.json"
+LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
+LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
+LINUXDEPLOY_PRIVATE_LIBRARY_ALIASES = {
+    "libamd_comgr.so.3": "libamd_comgr.so",
+}
 
 
 def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
@@ -95,20 +100,23 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
     Creating temporary symlinks in /usr/local/lib lets linuxdeploy's bundled
     ldd/patchelf resolve these cross-references.  Temporary stub libraries also
     let ldd resolve host-provided NVIDIA driver sonames that must remain
-    external to the AppImage.  The caller is responsible for removing the
-    returned paths after the build completes.
+    external to the AppImage.  Some wheel-packaged private libraries advertise
+    versioned SONAME dependencies even though the wheel ships an unversioned
+    file, so this also creates known private aliases back to the bundled engine
+    libraries.  The caller is responsible for removing the returned paths after
+    the build completes.
     """
     if not sys.platform.startswith("linux") or not ENGINE_DIR.is_dir():
         return []
 
-    system_lib = Path("/usr/local/lib")
+    system_lib = LINUXDEPLOY_SYSTEM_LIB
     created: list[Path] = []
 
     driver_stub_dir = BUILD_ROOT / "linuxdeploy-driver-stubs"
     driver_stub_dir.mkdir(parents=True, exist_ok=True)
     driver_stub_source = driver_stub_dir / "stub.c"
     driver_stub_source.write_text("void __localsr_linuxdeploy_stub(void) {}\n", encoding="utf-8")
-    for driver_library in ("libcuda.so.1", "libnvidia-ml.so.1"):
+    for driver_library in LINUXDEPLOY_DRIVER_LIBRARIES:
         stub = driver_stub_dir / driver_library
         if not stub.exists():
             compiler = shutil.which("cc") or shutil.which("gcc")
@@ -150,6 +158,28 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
             # runners running as a non-root user with NOPASSWD sudo).
             result = subprocess.run(
                 ["sudo", "ln", "-sf", str(so_file.resolve()), str(dest)],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                created.append(dest)
+    available_engine_libs = {
+        so_file.name: so_file.resolve()
+        for so_file in sorted(ENGINE_DIR.rglob("*.so*"))
+        if so_file.is_file()
+    }
+    for alias, target_name in sorted(LINUXDEPLOY_PRIVATE_LIBRARY_ALIASES.items()):
+        target = available_engine_libs.get(target_name)
+        if target is None:
+            continue
+        dest = system_lib / alias
+        if dest.exists() or dest.is_symlink():
+            continue
+        try:
+            dest.symlink_to(target)
+            created.append(dest)
+        except OSError:
+            result = subprocess.run(
+                ["sudo", "ln", "-sf", str(target), str(dest)],
                 capture_output=True,
             )
             if result.returncode == 0:

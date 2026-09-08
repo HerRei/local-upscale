@@ -104,6 +104,39 @@ def test_does_not_change_library_lookup_outside_linux(monkeypatch, tmp_path: Pat
     assert build.tauri_build_environment() == base_environment
 
 
+def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: Path) -> None:
+    engine = tmp_path / "engine"
+    torch_libraries = engine / "_internal" / "torch" / "lib"
+    torch_libraries.mkdir(parents=True)
+    rocm_library = torch_libraries / "libamd_comgr.so"
+    rocm_library.touch()
+    system_lib = tmp_path / "usr-local-lib"
+    system_lib.mkdir()
+    build_root = tmp_path / "build"
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(build.sys, "platform", "linux")
+    monkeypatch.setattr(build, "ENGINE_DIR", engine)
+    monkeypatch.setattr(build, "BUILD_ROOT", build_root)
+    monkeypatch.setattr(build, "LINUXDEPLOY_SYSTEM_LIB", system_lib)
+    monkeypatch.setattr(build, "LINUXDEPLOY_DRIVER_LIBRARIES", ())
+    monkeypatch.setattr(build.subprocess, "run", fake_run)
+
+    created = build._symlink_engine_libs_for_linuxdeploy()
+
+    direct_link = system_lib / "libamd_comgr.so"
+    alias_link = system_lib / "libamd_comgr.so.3"
+    assert direct_link in created
+    assert alias_link in created
+    assert direct_link.resolve() == rocm_library
+    assert alias_link.resolve() == rocm_library
+    assert commands == [["sudo", "ldconfig"]]
+
+
 def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
     npm = r"C:\toolcache\node\npm.cmd"
     monkeypatch.setattr(
