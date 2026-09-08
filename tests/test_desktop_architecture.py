@@ -156,13 +156,17 @@ def test_cross_alpha_windows_preflight_cleans_managed_scratch_before_reserve_che
     pip_purge = preflight.index("py -3.11 -m pip cache purge")
     cargo_purge = preflight.index("C:\\lsr-ci\\cargo-target\\tauri-x86_64")
     wheelhouse_purge = preflight.index("C:\\lsr-ci\\wheelhouses")
+    app_data_cleanup = preflight.index("com.localsr.desktop.next")
     reserve_check = preflight.index("ensure_windows_scratch.ps1 -MinimumFreeGiB 20")
 
     assert "--include-unretained" in preflight
     assert "--include-legacy-runs" in preflight
+    assert "C:\\WINDOWS\\ServiceProfiles\\NetworkService\\AppData\\Local" in preflight
+    assert "LocalSR" in preflight
     assert pip_purge < reserve_check
     assert cargo_purge < reserve_check
     assert wheelhouse_purge < reserve_check
+    assert app_data_cleanup < reserve_check
     assert cleanup < reserve_check
 
 
