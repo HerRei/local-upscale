@@ -5,11 +5,37 @@ jobs:
   inspect:
     runs-on: [self-hosted, Windows, X64, localsr-windows-builder]
     steps:
-      - name: List and Clean lsr-ci
+      - name: Inspect Windows storage
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          Get-ChildItem -Path C:\lsr-ci -Recurse | Where-Object { -not $_.PSIsContainer } | Group-Object DirectoryName | Select-Object Name, @{Name="SizeMB";Expression={($_.Group | Measure-Object Length -Sum).Sum / 1MB}} | Sort-Object SizeMB -Descending | Select-Object -First 20
-          Get-ChildItem -Path C:\lsr-ci -Force
-          if (Test-Path C:\lsr-ci\wheelhouses) {
-              Remove-Item -Recurse -Force C:\lsr-ci\wheelhouses\* -ErrorAction SilentlyContinue
+          $ErrorActionPreference = "Stop"
+          function Measure-DirectoryGiB([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+            $sum = Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { -not $_.PSIsContainer } |
+              Measure-Object -Property Length -Sum
+            return [math]::Round(($sum.Sum / 1GB), 2)
           }
-          Write-Host "Wheelhouses cleared."
+
+          $volume = Get-Volume -DriveLetter C
+          $freeGiB = [math]::Round($volume.SizeRemaining / 1GB, 2)
+          $sizeGiB = [math]::Round($volume.Size / 1GB, 2)
+          Write-Host "Windows C: size=$sizeGiB GiB free=$freeGiB GiB"
+          Write-Host "Top-level C:\ directories by size:"
+          Get-ChildItem -LiteralPath C:\ -Force -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              [PSCustomObject]@{ Path = $_.FullName; SizeGiB = Measure-DirectoryGiB $_.FullName }
+            } |
+            Sort-Object SizeGiB -Descending |
+            Select-Object -First 20 |
+            Format-Table -AutoSize
+
+          if (Test-Path -LiteralPath C:\lsr-ci) {
+            Write-Host "C:\lsr-ci children by size:"
+            Get-ChildItem -LiteralPath C:\lsr-ci -Force -Directory -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                [PSCustomObject]@{ Path = $_.FullName; SizeGiB = Measure-DirectoryGiB $_.FullName }
+              } |
+              Sort-Object SizeGiB -Descending |
+              Format-Table -AutoSize
+          }
