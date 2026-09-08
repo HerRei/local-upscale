@@ -85,7 +85,7 @@ jobs:
           py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           py -3.11 -m pip cache purge
-          Remove-Item -Recurse -Force C:\lsr-ci\cargo-target\tauri-x86_64 -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force C:\lsr-ci\cargo-target -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force C:\lsr-ci\wheelhouses -ErrorAction SilentlyContinue
           $runnerLocalAppData = "C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local"
           foreach ($name in @("LocalSR", "com.localsr.desktop.next", "tauri", "pip", "npm-cache")) {
@@ -269,7 +269,7 @@ jobs:
           py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           py -3.11 -m pip cache purge
-          Remove-Item -Recurse -Force C:\lsr-ci\cargo-target\tauri-x86_64 -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force C:\lsr-ci\cargo-target -ErrorAction SilentlyContinue
           $runnerLocalAppData = "C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local"
           foreach ($name in @("LocalSR", "com.localsr.desktop.next", "tauri", "pip", "npm-cache")) {
             Remove-Item -Recurse -Force (Join-Path $runnerLocalAppData $name) -ErrorAction SilentlyContinue
