@@ -600,6 +600,25 @@ def test_release_scratch_can_force_clean_unretained_marked_runs(tmp_path: Path):
     assert not interrupted.exists()
 
 
+def test_release_scratch_can_clean_legacy_numeric_run_directories(tmp_path: Path):
+    root = tmp_path / "ci-scratch"
+    release_scratch.managed_root(root, initialize=True)
+    legacy = root / "34123456789"
+    legacy.mkdir()
+    (legacy / "large.bin").write_bytes(b"x")
+    named_cache = root / "wheelhouses"
+    named_cache.mkdir()
+    nested_numeric = root / "r" / "34123456789"
+    nested_numeric.mkdir(parents=True)
+
+    removed = release_scratch.cleanup(root, include_legacy_runs=True)
+
+    assert removed == [legacy]
+    assert not legacy.exists()
+    assert named_cache.exists()
+    assert nested_numeric.exists()
+
+
 def test_release_scratch_rejects_broad_and_unowned_cleanup_targets(tmp_path: Path):
     with pytest.raises(ValueError, match="unmanaged"):
         release_scratch.managed_root(tmp_path, initialize=True)

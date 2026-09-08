@@ -150,6 +150,7 @@ def cleanup(
     now: datetime | None = None,
     force: bool = False,
     include_unretained: bool = False,
+    include_legacy_runs: bool = False,
 ) -> list[Path]:
     managed = managed_root(root)
     moment = now or datetime.now(UTC)
@@ -172,6 +173,11 @@ def cleanup(
             if target.exists() and not (target / RETAINED_MARKER).exists():
                 shutil.rmtree(target)
                 removed.append(target)
+    if include_legacy_runs:
+        for candidate in sorted(managed.iterdir()):
+            if candidate.is_dir() and candidate.name.isdecimal():
+                shutil.rmtree(candidate)
+                removed.append(candidate)
     return removed
 
 
@@ -202,6 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also remove marked run directories that never reached finish",
     )
+    prune.add_argument(
+        "--include-legacy-runs",
+        action="store_true",
+        help="Also remove direct numeric run directories from the older scratch layout",
+    )
     return parser
 
 
@@ -226,7 +237,10 @@ def main(argv: list[str] | None = None) -> int:
         print(retained or "removed")
     else:
         for path in cleanup(
-            args.root, force=args.force, include_unretained=args.include_unretained
+            args.root,
+            force=args.force,
+            include_unretained=args.include_unretained,
+            include_legacy_runs=args.include_legacy_runs,
         ):
             print(path)
     return 0

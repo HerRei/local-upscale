@@ -159,6 +159,7 @@ def test_cross_alpha_windows_preflight_cleans_managed_scratch_before_reserve_che
     reserve_check = preflight.index("ensure_windows_scratch.ps1 -MinimumFreeGiB 20")
 
     assert "--include-unretained" in preflight
+    assert "--include-legacy-runs" in preflight
     assert pip_purge < reserve_check
     assert cargo_purge < reserve_check
     assert wheelhouse_purge < reserve_check
