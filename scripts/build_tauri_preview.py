@@ -23,6 +23,7 @@ LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
 LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
 LINUXDEPLOY_PRIVATE_LIBRARY_ALIASES = {
     "libamd_comgr.so.3": "libamd_comgr.so",
+    "libamdhip64.so.7": "libamdhip64.so",
 }
 
 

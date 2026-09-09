@@ -108,8 +108,12 @@ def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: P
     engine = tmp_path / "engine"
     torch_libraries = engine / "_internal" / "torch" / "lib"
     torch_libraries.mkdir(parents=True)
-    rocm_library = torch_libraries / "libamd_comgr.so"
-    rocm_library.touch()
+    rocm_libraries = {
+        "libamd_comgr.so": "libamd_comgr.so.3",
+        "libamdhip64.so": "libamdhip64.so.7",
+    }
+    for library_name in rocm_libraries:
+        (torch_libraries / library_name).touch()
     system_lib = tmp_path / "usr-local-lib"
     system_lib.mkdir()
     build_root = tmp_path / "build"
@@ -128,12 +132,14 @@ def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: P
 
     created = build._symlink_engine_libs_for_linuxdeploy()
 
-    direct_link = system_lib / "libamd_comgr.so"
-    alias_link = system_lib / "libamd_comgr.so.3"
-    assert direct_link in created
-    assert alias_link in created
-    assert direct_link.resolve() == rocm_library
-    assert alias_link.resolve() == rocm_library
+    for library_name, alias_name in rocm_libraries.items():
+        rocm_library = torch_libraries / library_name
+        direct_link = system_lib / library_name
+        alias_link = system_lib / alias_name
+        assert direct_link in created
+        assert alias_link in created
+        assert direct_link.resolve() == rocm_library
+        assert alias_link.resolve() == rocm_library
     assert commands == [["sudo", "ldconfig"]]
 
 
