@@ -252,6 +252,20 @@ jobs:
       - name: Revalidate release runner immediately before build
         run: |
           ./scripts/ensure_windows_vc_runtime.ps1
+          py -3.11 scripts/release_scratch.py init --root C:\lsr-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          py -3.11 -m pip cache purge
+          Remove-Item -Recurse -Force C:\lsr-ci\cargo-target -ErrorAction SilentlyContinue
+          $runnerLocalAppData = "C:\WINDOWS\ServiceProfiles\NetworkService\AppData\Local"
+          foreach ($name in @("LocalSR", "com.localsr.desktop.next", "tauri", "pip", "npm-cache")) {
+            Remove-Item -Recurse -Force (Join-Path $runnerLocalAppData $name) -ErrorAction SilentlyContinue
+          }
+          Remove-Item -Recurse -Force (Join-Path $runnerLocalAppData "Temp\*") -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath C:\lsr-ci\wheelhouses) {
+            Get-ChildItem -Path C:\lsr-ci\wheelhouses | Where-Object { $_.Name -ne "${{ matrix.id }}" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          py -3.11 scripts/release_scratch.py cleanup --root C:\lsr-ci --force --include-unretained --include-legacy-runs --include-orphaned-runs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
           py -3.11 scripts/release_runner_preflight.py --server $env:CI_ARTIFACT_SERVER --platform windows --scratch-path C:\ --scratch-min-free-gib 20 --require-tool py --require-tool git
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
