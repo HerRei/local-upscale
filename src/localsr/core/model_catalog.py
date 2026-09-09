@@ -204,7 +204,7 @@ MODEL_CATALOG = (
             "preserving clean-image fidelity. LocalSR can verify a user-supplied copy but does "
             "not auto-download it."
         ),
-        size_bytes=165_774_123,
+        size_bytes=165_676_233,
         sha256="8a5548208310fcc7195abd4e1cf17ed87faaf3e5c38e2edeb63a45ac5b9c2af4",
         download_url="https://github.com/HerRei/HAT/releases/download/v1.0.1-hat-l-face/hat_l_x4_face_task4.pth",
         architecture="HAT",

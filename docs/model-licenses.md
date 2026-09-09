@@ -67,7 +67,7 @@ otherwise it accepts an exact user-supplied file after size and SHA-256 verifica
 
 - Exact file: `hat_l_x4_face_task4.pth`, produced by the private HAT-L face fine-tune
   (Task 4 selection pipeline, September 2026).
-- Size: `165,774,123` bytes.
+- Size: `165,676,233` bytes.
 - SHA-256: `8a5548208310fcc7195abd4e1cf17ed87faaf3e5c38e2edeb63a45ac5b9c2af4`.
 - Provenance: a linear weight interpolation at α = 0.25 (75% ImageNet-pretrained base HAT-L,
   25% face-tuned final checkpoint of refinement run 3). The face tuning was L1-only (no GAN, no
