@@ -9,20 +9,25 @@ import hashlib
 import json
 import os
 import plistlib
+import shutil
 import struct
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
-def temporary_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
-    kwargs = {"prefix": prefix}
-    if os.name == "nt":
-        kwargs["ignore_cleanup_errors"] = True
-    return tempfile.TemporaryDirectory(**kwargs)
+@contextmanager
+def temporary_directory(prefix: str) -> Iterator[str]:
+    path = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=os.name == "nt")
 
 
 def run(

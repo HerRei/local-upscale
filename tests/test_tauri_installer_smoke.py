@@ -82,21 +82,20 @@ def test_retries_a_busy_macos_test_mount(monkeypatch) -> None:
 
 
 def test_windows_temp_directories_ignore_post_uninstall_cleanup_errors(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeTemporaryDirectory:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
+    removed: dict[str, object] = {}
 
     monkeypatch.setattr(smoke.os, "name", "nt")
-    monkeypatch.setattr(smoke.tempfile, "TemporaryDirectory", FakeTemporaryDirectory)
+    monkeypatch.setattr(smoke.tempfile, "mkdtemp", lambda **_kwargs: r"C:\localsr-temp")
+    monkeypatch.setattr(
+        smoke.shutil,
+        "rmtree",
+        lambda path, **kwargs: removed.update({"path": path, **kwargs}),
+    )
 
-    smoke.temporary_directory(prefix="localsr-next-installer-")
+    with smoke.temporary_directory(prefix="localsr-next-installer-") as temporary:
+        assert temporary == r"C:\localsr-temp"
 
-    assert captured == {
-        "prefix": "localsr-next-installer-",
-        "ignore_cleanup_errors": True,
-    }
+    assert removed == {"path": r"C:\localsr-temp", "ignore_errors": True}
 
 
 def test_windows_smoke_uses_installed_host_without_starting_webview(
