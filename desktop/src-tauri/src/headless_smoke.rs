@@ -13,16 +13,13 @@ use serde_json::{json, Value};
 use crate::types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION};
 
 const START_TIMEOUT: Duration = Duration::from_secs(180);
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+const MIN_SHUTDOWN_TIMEOUT: u64 = 15;
+const MAX_SHUTDOWN_TIMEOUT: u64 = 120;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PRODUCT_NAME: &str = "LocalSR Next Preview";
 
 pub fn run() -> i32 {
-    let timeout = std::env::var("LOCALSR_SMOKE_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|seconds| Duration::from_secs(seconds.clamp(30, 1800)))
-        .unwrap_or(START_TIMEOUT);
+    let timeout = smoke_timeout();
     let worker_path = packaged_worker_path();
     let result = worker_path
         .as_ref()
@@ -198,7 +195,7 @@ fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<EngineInfo, St
     let handshake = wait_for_handshake(&mut child, &mut stdin, &receiver, timeout);
     let shutdown = send_message(&mut stdin, &json!({"type": "shutdown_request", "data": {}}));
     drop(stdin);
-    let exit_status = wait_for_exit(&mut child, SHUTDOWN_TIMEOUT);
+    let exit_status = wait_for_exit(&mut child, shutdown_timeout(timeout));
     let _ = stdout_thread.join();
     let stderr = stderr_thread.join().unwrap_or_default();
 
@@ -212,6 +209,19 @@ fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<EngineInfo, St
             Err(error) => Err(error),
         });
     result.map_err(|error| append_stderr(error, &stderr))
+}
+
+fn smoke_timeout() -> Duration {
+    std::env::var("LOCALSR_SMOKE_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|seconds| Duration::from_secs(seconds.clamp(30, 1800)))
+        .unwrap_or(START_TIMEOUT)
+}
+
+fn shutdown_timeout(smoke_timeout: Duration) -> Duration {
+    let seconds = (smoke_timeout.as_secs() / 10).clamp(MIN_SHUTDOWN_TIMEOUT, MAX_SHUTDOWN_TIMEOUT);
+    Duration::from_secs(seconds)
 }
 
 fn wait_for_handshake(
@@ -415,5 +425,21 @@ mod tests {
         let mut incompatible = valid;
         incompatible.minimum_protocol_version = PROTOCOL_VERSION + 1;
         assert!(validate_engine_info(&incompatible).is_err());
+    }
+
+    #[test]
+    fn shutdown_timeout_scales_with_smoke_timeout_inside_bounds() {
+        assert_eq!(
+            shutdown_timeout(Duration::from_secs(30)),
+            Duration::from_secs(MIN_SHUTDOWN_TIMEOUT)
+        );
+        assert_eq!(
+            shutdown_timeout(Duration::from_secs(600)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            shutdown_timeout(Duration::from_secs(1800)),
+            Duration::from_secs(MAX_SHUTDOWN_TIMEOUT)
+        );
     }
 }
