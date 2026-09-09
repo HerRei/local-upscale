@@ -60,6 +60,7 @@ def test_catalog_has_all_curated_models():
         "hat_s_x4",
         "hat_s_x4_face",
         "hat_l_x4_imagenet",
+        "hat_l_x4_face",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
         "realplksr_hfa2k_anime_x4",
@@ -71,11 +72,11 @@ def test_catalog_has_all_curated_models():
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 11
+    assert len(MODEL_CATALOG) == 12
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 11
-    assert len({model.filename for model in MODEL_CATALOG}) == 11
+    assert len({model.model_id for model in MODEL_CATALOG}) == 12
+    assert len({model.filename for model in MODEL_CATALOG}) == 12
 
 
 def test_face_detector_is_pinned_but_not_exposed_as_a_restoration_model():

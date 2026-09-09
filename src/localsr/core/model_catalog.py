@@ -196,6 +196,34 @@ MODEL_CATALOG = (
         vram_estimate_mb=6000,
     ),
     CatalogModel(
+        model_id="hat_l_x4_face",
+        name="HAT-L ×4 Face — Restoration",
+        filename="hat_l_x4_face_task4.pth",
+        description=(
+            "Face-specialized HAT-L checkpoint blended for enhanced facial restoration while "
+            "preserving clean-image fidelity. LocalSR can verify a user-supplied copy but does "
+            "not auto-download it."
+        ),
+        size_bytes=165_774_123,
+        sha256="8a5548208310fcc7195abd4e1cf17ed87faaf3e5c38e2edeb63a45ac5b9c2af4",
+        download_url="https://github.com/HerRei/HAT/releases/download/v1.0.1-hat-l-face/hat_l_x4_face_task4.pth",
+        architecture="HAT",
+        native_scale=4,
+        purposes=(ModelPurpose.FACE, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=16,
+        source_url="https://github.com/HerRei/HAT",
+        license_name="Checkpoint rights unverified",
+        author="HerRei / XPixel Group",
+        memory_factor=1.8,
+        time_factor=1.8,
+        speed_factor=0.30,
+        vram_estimate_mb=6000,
+        pair_with="hat_l_x4_imagenet",
+        commercial_use_status="unclear",
+    ),
+    CatalogModel(
         model_id="denoise_realplksr_1x",
         name="RealPLKSR Denoise — Slim",
         filename="1xDeNoise_realplksr_otf.pth",

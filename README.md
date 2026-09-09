@@ -96,6 +96,7 @@ real checksums.
 | Real-ESRGAN ×2 | native compact 2× upscaling | 67 MB | BSD-3-Clause |
 | FBCNN Color ×1 | JPEG artifact restoration | 288 MB | Apache-2.0 |
 | HAT-S ×4 Face | optional user-supplied face restoration | 40 MB | checkpoint rights unresolved |
+| HAT-L ×4 Face | optional user-supplied face restoration (large) | 166 MB | checkpoint rights unresolved |
 | RealPLKSR Denoise ×1 | fast photo denoising | 30 MB | CC-BY-4.0 |
 | NAFNet SIDD Width64 ×1 | camera-noise removal | 464 MB | MIT |
 | NAFNet GoPro Deblur ×1 | motion deblurring | 272 MB | MIT |
@@ -106,7 +107,10 @@ loads them through Spandrel, and runs real CPU inference.
 
 The HAT-S Face implementation remains available for an exact user-supplied compatible checkpoint,
 but the current asset's independent training-data, redistribution, and use terms could not be
-verified. LocalSR does not automatically download it or make a commercial-use claim. Face masks
+verified. LocalSR does not automatically download it or make a commercial-use claim. The same
+policy applies to the larger HAT-L Face checkpoint, a private L1-only face fine-tune blended back
+toward the stock ImageNet HAT-L weights (it restores degraded faces better than stock HAT-L while
+staying close on clean images; use stock HAT-L for general work). Face masks
 come from the separately MIT-licensed YuNet 2023mar detector, downloaded on first face-aware use
 with a pinned size and SHA-256. See the
 [checkpoint evidence and policy](docs/model-licenses.md).

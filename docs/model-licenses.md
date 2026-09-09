@@ -63,6 +63,24 @@ otherwise it accepts an exact user-supplied file after size and SHA-256 verifica
 - Policy: rights unresolved; no trusted automatic download and no commercial-use claim. A user may
   import only an exact matching checkpoint they are independently permitted to use.
 
+### HAT-L Face (`hat_l_x4_face`)
+
+- Exact file: `hat_l_x4_face_task4.pth`, produced by the private HAT-L face fine-tune
+  (Task 4 selection pipeline, September 2026).
+- Size: `165,774,123` bytes.
+- SHA-256: `8a5548208310fcc7195abd4e1cf17ed87faaf3e5c38e2edeb63a45ac5b9c2af4`.
+- Provenance: a linear weight interpolation at α = 0.25 (75% ImageNet-pretrained base HAT-L,
+  25% face-tuned final checkpoint of refinement run 3). The face tuning was L1-only (no GAN, no
+  perceptual loss) on a research-only face corpus; the interpolation back toward the base keeps
+  general-image fidelity close to stock HAT-L.
+- Evaluation summary (512-pair recovery buckets, Y-PSNR): clean 32.58 dB vs base 32.78
+  (−0.19), mild 29.13 vs 28.69 (+0.44), hard 25.97 vs 25.72 (+0.25). It is a face-restoration
+  model, not a general upgrade; on clean or non-face images stock HAT-L remains the better choice.
+- Rights: same unresolved status as `hat_s_x4_face` — Apache-2.0 code terms, no independent
+  checkpoint/training-data rights established. No trusted automatic download, no commercial-use
+  claim; a user may import only an exact matching checkpoint they are independently permitted
+  to use.
+
 RestoreFormer was considered for this role, but no exact checkpoint with independently verified
 redistribution and training-data terms was established for this release. It is therefore not in the
 trusted auto-download catalog. This avoids presenting source-code licensing as if it also proved
