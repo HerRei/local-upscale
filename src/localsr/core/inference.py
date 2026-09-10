@@ -186,6 +186,8 @@ class InferenceEngine:
         precision: torch.dtype,
         halo: int,
         model,
+        *,
+        float_output: bool = False,
     ) -> np.ndarray:
         """Run inference on a single tile and return the core output as uint8 (C, H, W).
 
@@ -257,6 +259,8 @@ class InferenceEngine:
             halo * scale : out_cpu.shape[2] - halo * scale,
         ]
 
+        if float_output:
+            return out_core.clamp(0, 1).numpy()
         out_core = torch.clamp(out_core, 0, 1) * 255.0
         return out_core.byte().numpy()
 
@@ -272,6 +276,7 @@ class InferenceEngine:
         device: torch.device | None = None,
         precision: torch.dtype | None = None,
         tile_callback: Callable[..., None] | None = None,
+        float_output: bool = False,
     ) -> np.ndarray:
         """Process a single frame using the already-loaded model.
 
@@ -291,7 +296,8 @@ class InferenceEngine:
         scale = model_info.scale
         out_channels = model_info.out_channels
         out_shape = (out_channels, h * scale, w * scale)
-        out_array = np.zeros(out_shape, dtype=np.uint8)
+        output_dtype = np.float32 if float_output else np.uint8
+        out_array = np.zeros(out_shape, dtype=output_dtype)
 
         current_tile_size = tile_size
         min_tile_size = 64 if safe_memory else 4
@@ -318,7 +324,14 @@ class InferenceEngine:
                         )
 
                     out_core_np = self.run_tile(
-                        t, img_tensor, model_info, device, precision, halo, model
+                        t,
+                        img_tensor,
+                        model_info,
+                        device,
+                        precision,
+                        halo,
+                        model,
+                        **({"float_output": True} if float_output else {}),
                     )
 
                     out_array[:, t.out_y : t.out_y + t.out_h, t.out_x : t.out_x + t.out_w] = (
@@ -383,7 +396,7 @@ class InferenceEngine:
                             current_tile_size,
                         )
                     # Re-initialize output array cleanly
-                    out_array = np.zeros(out_shape, dtype=np.uint8)
+                    out_array = np.zeros(out_shape, dtype=output_dtype)
                     continue
                 raise
 

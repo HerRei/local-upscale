@@ -874,6 +874,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         settings.output_format.as_str(),
         "png" | "jpg" | "tif" | "webp"
     ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
+        || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
     {
         return Err(AppError::Validation(
@@ -917,6 +918,7 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         deflicker: input.deflicker,
         deflicker_window: input.deflicker_window,
         video_container: input.video_container.clone(),
+        video_hdr_mode: input.video_hdr_mode.clone(),
         video_crf: input.video_crf,
         enable_face_model: input.enable_face_model,
         face_fidelity: input.face_fidelity,
@@ -1172,7 +1174,7 @@ fn build_job_message(
             "data": {
                 "job_id": job_id,
                 "video_path": media.path,
-                "hdr_mode": "tone_map",
+                "hdr_mode": input.video_hdr_mode,
                 "model_path": path,
                 "output_video_path": output,
                 "container": input.video_container,
@@ -1218,7 +1220,7 @@ fn build_job_message(
                 "data": {
                     "job_id": job_id,
                     "video_path": media.path,
-                    "hdr_mode": "tone_map",
+                    "hdr_mode": input.video_hdr_mode,
                     "model_path": "",
                     "output_video_path": output,
                     "container": input.video_container,
@@ -1459,6 +1461,7 @@ mod tests {
             deflicker: false,
             deflicker_window: 3,
             video_container: "mp4".into(),
+            video_hdr_mode: "tone_map".into(),
             video_crf: 18,
             enable_face_model: false,
             face_fidelity: 70,
@@ -1616,6 +1619,19 @@ mod tests {
         assert_eq!(video_message["type"], "video_job_request");
         assert!(video_message["data"]["fps"].is_null());
         assert_eq!(video_message["data"]["hdr_mode"], "tone_map");
+        let mut hdr_input = input("video");
+        hdr_input.video_hdr_mode = "preserve".into();
+        let hdr_message = build_job_message(
+            "hdr-job",
+            &video,
+            Path::new("/output/hdr.mp4"),
+            Path::new("/app-owned/work"),
+            &hdr_input,
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(hdr_message["data"]["hdr_mode"], "preserve");
+
         let temporal = ModelSelection::Temporal {
             model_id: "seedvr2_3b".into(),
             engine_kind: "seedvr2".into(),
@@ -1714,6 +1730,7 @@ mod tests {
             deflicker: None,
             deflicker_window: None,
             video_container: String::new(),
+            video_hdr_mode: "tone_map".into(),
             video_crf: None,
             enable_face_model: None,
             face_fidelity: None,

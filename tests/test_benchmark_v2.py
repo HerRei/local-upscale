@@ -347,3 +347,85 @@ def test_v2_constants_match_production_settings():
     assert PRECISION == "fp32"
     assert ENCODE_QUALITY == 90
     assert TARGET_CV == 0.05
+
+
+@pytest.mark.parametrize("requested", ["cpu", "mps"])
+def test_worker_runs_only_requested_device_and_never_falls_back(tmp_path, monkeypatch, requested):
+    from types import SimpleNamespace
+
+    from localsr.core import benchmark_v2 as core
+    from localsr.core import hardware
+    from localsr.worker import server as module
+
+    checkpoint = tmp_path / "trusted.pth"
+    checkpoint.write_bytes(b"test checkpoint")
+    events, calls = [], []
+    monkeypatch.setattr(
+        module, "send_message", lambda event: events.append(json.loads(event.to_json()))
+    )
+    monkeypatch.setattr(
+        hardware,
+        "get_capability_report",
+        lambda: {"devices": [{"id": "cpu", "type": "cpu"}, {"id": "mps", "type": "mps"}]},
+    )
+
+    def run(**kwargs):
+        calls.append(kwargs["device_id"])
+        return SimpleNamespace(
+            to_dict=lambda: {
+                "device": kwargs["device_id"],
+                "device_type": kwargs["device_type"],
+                "score": 3.5,
+                "stable": True,
+                "cv_percent": 1,
+                "scenes": [],
+            }
+        )
+
+    monkeypatch.setattr(core, "run_device_phase", run)
+    worker = SimpleNamespace(
+        cancel_event=threading.Event(),
+        engine=object(),
+        model_adapter=SimpleNamespace(inspect=lambda _: object()),
+        model_store=SimpleNamespace(path_for=lambda _: checkpoint, is_installed=lambda _: True),
+    )
+    data = {"device": requested, "model_id": core.WORKLOAD_MODEL_ID, "model_path": str(checkpoint)}
+    module.WorkerServer._run_benchmark_v2(worker, "test-benchmark", data)
+    assert calls == [requested]
+    result = events[-1]["data"]["result"]
+    assert [device["device"] for device in result["device_results"]] == [requested]
+    assert result["cpu_score" if requested == "cpu" else "system_score"] == 3.5
+    assert result["system_score" if requested == "cpu" else "cpu_score"] is None
+    calls.clear()
+    with pytest.raises(ValueError, match="unavailable"):
+        module.WorkerServer._run_benchmark_v2(worker, "test", {**data, "device": "cuda:9"})
+    assert calls == []
+
+
+def test_render_tiles_are_only_requested_for_unmeasured_warmup():
+    from types import SimpleNamespace
+
+    from localsr.core.benchmark_v2 import run_scene
+
+    calls, pixels = [], []
+
+    def process(**kwargs):
+        calls.append(kwargs)
+        output = np.full((3, 32, 32), 127, np.uint8)
+        if kwargs.get("tile_callback"):
+            kwargs["tile_callback"]("completed", None, output, 1, 1, 32, 32, 8)
+        return output
+
+    scene = SceneSpec("test", 8, 8, 8, "compute")
+    arguments = dict(
+        engine=SimpleNamespace(process_frame=process),
+        model_info=object(),
+        scene=scene,
+        device=torch.device("cpu"),
+        cancel_event=threading.Event(),
+        tile_callback=lambda *args: pixels.append(args[2]),
+    )
+    run_scene(**arguments, warm=True)
+    run_scene(**arguments, warm=False)
+    assert "tile_callback" in calls[0] and "tile_callback" not in calls[1]
+    assert len(pixels) == 1 and np.all(pixels[0] == 127)

@@ -50,7 +50,7 @@
             <div class="media-copy">
               <strong>{media.name}</strong>
               <span>{media.probe_status === 'pending' ? 'Preparing preview…' : media.probe_status === 'failed' ? media.error : media.width ? `${media.width} × ${media.height}${media.kind === 'video' ? ` · ${formatDuration(media.duration_seconds)}` : ` · ${((media.width * media.height) / 1_000_000).toFixed(1)} MP`}` : 'Preparing preview…'}</span>
-              {#if media.hdr_format}<small class="queue-state">{media.hdr_format} HDR → SDR</small>{/if}
+              {#if media.hdr_format}<small class="queue-state">{media.hdr_format} HDR</small>{/if}
               {#if inflightMediaIds.has(media.id)}<small class="queue-state">{jobs.find((job) => job.media_id === media.id && ['queued', 'starting', 'running', 'cancelling'].includes(job.status))?.status ?? 'queued'}</small>{/if}
             </div>
           </button>

@@ -47,6 +47,7 @@ from localsr.protocol.messages import (
     BenchmarkStageProgress,
     BenchmarkStageStarted,
     BenchmarkStarted,
+    BenchmarkTile,
     CapabilitiesInfo,
     EngineInfo,
     FaceDetectionUnavailable,
@@ -64,9 +65,11 @@ from localsr.protocol.messages import (
     PreviewFailed,
     PreviewReady,
     ProtocolError,
+    TileUpdate,
     VideoFrameCompleted,
     VideoFrameStarted,
     VideoJobCompleted,
+    VideoTileProgress,
     WarningMessage,
     WorkerReady,
 )
@@ -537,7 +540,7 @@ class WorkerServer:
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
     def _run_benchmark_v2(self, job_id: str, data: dict) -> None:
-        """Run the multi-device, multi-scene v2 benchmark (Blender-style)."""
+        """Run the fixed v2 scenes on exactly the requested device."""
         from localsr.core.benchmark_v2 import (
             SCENES as V2_SCENES,
         )
@@ -572,12 +575,10 @@ class WorkerServer:
             raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
 
         devices = get_capability_report()["devices"]
-        # CPU last: accelerators run first while the machine is coolest, and
-        # the CPU phase benefits from warming caches anyway. ``cpu`` always
-        # exists in a capability report.
-        ordered = [d for d in devices if d["id"] != "cpu"] + [
-            d for d in devices if d["id"] == "cpu"
-        ]
+        requested_device = str(data.get("device") or "cpu")
+        ordered = [device for device in devices if device["id"] == requested_device]
+        if not ordered:
+            raise ValueError(f"Benchmark device {requested_device!r} is unavailable.")
         stages_per_device = len(V2_SCENES) + 2
         total_phases = len(ordered) * stages_per_device
         send_message(
@@ -637,6 +638,28 @@ class WorkerServer:
                 else:
                     send_message(BenchmarkStageCompleted(**common))
 
+            def render_tile(scene, phase, tile, pixels, done, count, width, height, size):
+                # Only the untimed per-scene warm-up supplies this callback.
+                # Each square contains that tile's real model output.
+                send_message(
+                    BenchmarkTile(
+                        job_id=job_id,
+                        device=requested_device,
+                        scene_id=scene.scene_id,
+                        phase=phase,
+                        completed_tiles=done,
+                        total_tiles=count,
+                        output_x=tile.out_x if tile else 0,
+                        output_y=tile.out_y if tile else 0,
+                        output_width=tile.out_w if tile else 0,
+                        output_height=tile.out_h if tile else 0,
+                        image_width=width,
+                        image_height=height,
+                        active_tile_size=size,
+                        jpeg_base64=_encode_chw_jpeg(pixels, 192) if pixels is not None else "",
+                    )
+                )
+
             phase = run_device_phase(
                 engine=self.engine,
                 model_info=info,
@@ -650,6 +673,7 @@ class WorkerServer:
                 preview_callback=lambda render: send_message(
                     BenchmarkPreview(job_id=job_id, render=render)
                 ),
+                tile_callback=render_tile,
             )
             device_results.append(phase.to_dict())
 
@@ -682,6 +706,7 @@ class WorkerServer:
                 output_height=packet.output_height,
                 image_width=packet.image_width,
                 image_height=packet.image_height,
+                frame_index=packet.frame_index,
             )
         )
 
@@ -937,6 +962,8 @@ class WorkerServer:
         model_kind = str(data.get("model_kind", "spandrel_image"))
         engine_factory = resolve_video_engine(model_kind)
         if engine_factory is not None:
+            if data.get("hdr_mode") == "preserve":
+                raise ValueError("HDR preservation requires the frame-by-frame HAT engine (Labs).")
             self._verify_temporal_bundle(data)
             self._run_temporal_video_job(job_id, data, engine_factory)
             return
@@ -989,7 +1016,70 @@ class WorkerServer:
             max_dimension=int(data.get("preview_max_dimension", 320)),
         )
 
+        from localsr.core.hdr import tone_map_to_sdr
+        from localsr.core.video_io import probe_video
+
+        hdr_format = (
+            probe_video(config.video_path).hdr_format if config.hdr_mode == "preserve" else ""
+        )
+        hdr_transfer = 18 if hdr_format == "HLG" else 16
+        current_frame = -1
+
+        def display_pixels(pixels):
+            # Bound the display proxy before copying or tone mapping a 16K HDR
+            # output. The export continues to use the original float array.
+            stride = max(1, int(np.ceil(max(pixels.shape[:2]) / 640)))
+            proxy = pixels[::stride, ::stride]
+            return tone_map_to_sdr(proxy, hdr_transfer, 9) if hdr_format else proxy
+
+        def tile_preview(phase, tile, pixels, done, count, width, height, size):
+            geometry = dict(
+                output_x=tile.out_x if tile else 0,
+                output_y=tile.out_y if tile else 0,
+                output_width=tile.out_w if tile else 0,
+                output_height=tile.out_h if tile else 0,
+                image_width=width,
+                image_height=height,
+            )
+            send_message(
+                TileUpdate(
+                    job_id=job_id,
+                    frame_index=current_frame,
+                    phase=phase,
+                    completed_tiles=done,
+                    total_tiles=count,
+                    active_tile_size=size,
+                    **geometry,
+                )
+            )
+            if pixels is not None:
+                preview_encoder.submit(
+                    job_id=job_id,
+                    frame_index=current_frame,
+                    preview_kind="tile",
+                    pixels=display_pixels(pixels.transpose(1, 2, 0)),
+                    force=done >= count,
+                    **geometry,
+                )
+
+        def tile_progress(frame, total_frames, done, count, elapsed, remaining, size):
+            send_message(
+                VideoTileProgress(
+                    job_id,
+                    frame,
+                    total_frames,
+                    done,
+                    count,
+                    elapsed,
+                    remaining,
+                    size,
+                )
+            )
+
         def frame_started(frame_index: int, total_frames: int) -> None:
+            nonlocal current_frame
+            current_frame = frame_index
+            preview_encoder.clear()
             send_message(
                 VideoFrameStarted(
                     job_id=job_id,
@@ -1002,7 +1092,8 @@ class WorkerServer:
             preview_encoder.submit(
                 job_id=job_id,
                 preview_kind="video",
-                pixels=pixels,
+                frame_index=frame_index,
+                pixels=display_pixels(pixels),
                 force=bool(total_frames > 0 and frame_index + 1 >= total_frames),
                 output_width=int(pixels.shape[1]),
                 output_height=int(pixels.shape[0]),
@@ -1037,6 +1128,8 @@ class WorkerServer:
                 frame_started_cb=frame_started,
                 enhanced_frame_cb=enhanced_frame,
                 progress_cb=progress_cb,
+                tile_callback=tile_preview if bool(data.get("preview_enabled", True)) else None,
+                tile_progress_cb=tile_progress,
                 warning_callback=lambda message: send_message(
                     LogMessage(level="warning", message=message)
                 ),

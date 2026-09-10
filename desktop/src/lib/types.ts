@@ -166,6 +166,7 @@ export interface Recipe {
   jpeg_quality?: number;
   deflicker?: boolean;
   deflicker_window?: number;
+  video_hdr_mode?: 'tone_map' | 'preserve';
   video_container?: 'mp4' | 'mkv';
   video_crf?: number;
   enable_face_model?: boolean;
@@ -199,6 +200,7 @@ export interface UiSettings {
   safe_memory: boolean;
   deflicker: boolean;
   deflicker_window: number;
+  video_hdr_mode?: 'tone_map' | 'preserve';
   video_container: 'mp4' | 'mkv';
   video_crf: number;
   enable_face_model: boolean;
@@ -258,6 +260,7 @@ export interface BenchmarkSceneResult {
 }
 
 export interface BenchmarkDeviceResult {
+  completed_at_unix?: number;
   device: string;
   device_type: string;
   device_name: string;
@@ -290,6 +293,7 @@ export interface BenchmarkResult {
   peak_memory_bytes: number | null;
   score: number;
   device_results?: BenchmarkDeviceResult[];
+  device_history?: BenchmarkDeviceResult[];
   system_score?: number | null;
   cpu_score?: number | null;
   stable?: boolean;
@@ -344,6 +348,7 @@ export interface StartBatchInput {
   safe_memory: boolean;
   deflicker: boolean;
   deflicker_window: number;
+  video_hdr_mode?: 'tone_map' | 'preserve';
   video_container: string;
   video_crf: number;
   enable_face_model: boolean;

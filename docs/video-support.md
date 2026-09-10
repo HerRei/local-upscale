@@ -1,26 +1,69 @@
 # Video support and local acceptance
 
-Standard video is the frame-by-frame SDR path. SeedVR2, de-flicker, and video face processing retain individual Labs labels. The application remains alpha; installed-platform acceptance is still a blocking release gate.
+Standard video is the frame-by-frame SDR path. The isolated `codex/hdr-preservation` preview adds optional HLG/PQ preservation with HAT (Labs); this is not a v0.0.12 installer announcement. SeedVR2, de-flicker, and video face processing retain individual Labs labels. The application remains alpha; installed-platform acceptance is still a blocking release gate.
 
 ## Media contract
 
-- Decode supported SDR inputs and BT.2020 HLG/PQ HDR inputs through PyAV in the Next Preview desktop. Encode H.264, 8-bit YUV420P into MP4 or MKV. SDR sources with greater bit depth are reduced to 8-bit; this is not a high-bit-depth preservation workflow.
+- Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. SDR output is H.264 / 8-bit YUV420P; preserved HDR is HEVC Main 10 / YUV420P10LE, in MP4 or MKV. High-bit-depth SDR preservation is not implemented.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
 - Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
 - Copy compatible audio and subtitle streams. Compressed audio trims have packet-level precision, not sample-level precision. Unsupported subtitles produce a warning; unknown additional audio (for example an Apple spatial-audio track) is omitted with a visible import warning when a supported standard track exists. An unsupported sole audio track produces an actionable import error; other incompatible audio produces a remux error. There is no automatic audio transcoding.
 - An explicit API/CLI FPS override changes speed by assigning evenly spaced timestamps and omits audio/subtitles. Desktop jobs send no override. They preserve source timing.
-- The Next Preview desktop explicitly converts BT.2020 HLG/PQ HDR to SDR before enhancement and labels the conversion before Start. Its output is 8-bit BT.709 SDR, with matching colour tags. The source file is unchanged. Direct worker/API jobs retain `hdr_mode="reject"` by default; callers must opt in with `hdr_mode="tone_map"`.
+- The HDR control chooses **Preserve HLG/PQ · 10-bit HEVC · Labs** or **Convert to SDR · 8-bit H.264** before Start. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
 - Output creation is atomic. Cancellation checks extend through frame skipping and audio/subtitle remuxing; an existing destination survives failures or cancellation.
 
 The H.264 encoder disables B-frame reordering to keep packet durations consistent with variable presentation intervals and the last held frame. This trades some compression efficiency for predictable timing.
 
 ## HDR conversion and import feedback
 
-The existing enhancement models operate on SDR RGB. HDR import uses floating-point YUV-to-RGB decoding, the BT.2100 HLG or ST 2084 PQ inverse transfer, BT.2020-to-BT.709 gamut conversion and a fixed highlight-compression curve before final 8-bit quantization. HLG uses a 1000-nit reference display. The curve does not depend on frame histograms, so an exposure change is not introduced by a changing crop or neighbouring frame.
+The existing enhancement models were trained on SDR RGB. In conversion mode, HDR import uses floating-point YUV-to-RGB decoding, the BT.2100 HLG or ST 2084 PQ inverse transfer, BT.2020-to-BT.709 gamut conversion and a fixed highlight-compression curve before final 8-bit quantization. HLG uses a 1000-nit reference display. The curve does not depend on frame histograms, so an exposure change is not introduced by a changing crop or neighbouring frame.
 
-This is an SDR viewing/export conversion, not an HDR-preserving model or mastering workflow. Dolby Vision files with a supported HLG/PQ base layer use that layer; dynamic Dolby Vision metadata is not applied or carried into the SDR output. Other HDR colour primaries require an external SDR conversion. Aesthetic highlight/gamut choices are fixed, not a promise to match every player's tone mapping. HDR10/HLG output and 10-bit preservation remain unsupported.
+This is an SDR viewing/export conversion, not an HDR-preserving model or mastering workflow. Dolby Vision files with a supported HLG/PQ base layer use that layer; dynamic Dolby Vision metadata is not applied or carried into the SDR output. Other HDR colour primaries require an external SDR conversion. Aesthetic highlight/gamut choices are fixed, not a promise to match every player's tone mapping. This describes conversion mode; the optional preservation path below does not apply that curve to model/export pixels.
 
 Opening media reports actual worker phases (opening, image/first-frame decode, HDR conversion and thumbnail preparation). The canvas animates and shows elapsed time while waiting, including large images and cloud-backed files. It does not invent completion percentages. Failed previews report the cause and offer Try Again; pending or failed sources cannot be started. Video metadata and its thumbnail share one first-frame decode.
+
+## HLG/PQ preservation (HAT · Labs)
+
+Preservation decodes limited-range BT.2020 YUV into float32 RGB using the explicit
+BT.2020 matrix. The original HLG/PQ signal enters HAT in FP32. Tile inference,
+face blending and optional output resizing stay floating-point; no 8-bit image
+or SDR tone map is used in that processing path.
+
+An experimental source constraint adapts SDR-trained HAT detail: for each
+expanded input pixel, subtract the model block's mean in linear BT.2020, then add
+its remaining detail to the source's linear RGB. Reduce detail uniformly across
+channels when needed to remain in gamut. Each block retains the source's mean
+scene light (HLG) or display light (PQ). This conservative constraint can introduce
+block-boundary texture and is **not perceptual HDR validation or HDR training**.
+The two face forks keep their existing SDR training/selection claims and rights.
+
+Export quantizes once to 10-bit HEVC, tags BT.2020 primaries / non-constant-luminance
+matrix / limited range and the original HLG or PQ transfer, and uses `hvc1` in MP4.
+The worker checks for a Main 10 encoder before loading the model. No fabricated
+mastering-display, MaxCLL, or Dolby Vision metadata is added. Dolby Vision dynamic
+metadata is omitted; only a supported HLG/PQ base layer is processed. Other colour
+primaries/matrices are rejected. SeedVR2 and de-flicker do not support preservation.
+
+All desktop thumbnails and live tiles remain explicitly **SDR display previews**;
+they do not prove HDR display playback. Full HDR mastering, perceptual model quality,
+temporal stability and long-clip/platform acceptance remain unverified. FP32 HDR
+requires substantially more memory than the SDR byte-buffer path.
+
+Tests check >700 distinct encoded luma levels on a 1024-step ramp, reference
+transfer values, source linear-light block means, float tile/face output, metadata,
+VFR, trims and AAC. Local acceptance also uses the original rotated 4K HLG MOV and
+bounded real MPS inference with both exact HAT face checkpoints, for HLG and PQ.
+
+## Live video progress
+
+Each actual model tile emits progress within the current frame. ETA starts after
+the first completed tile; before that the UI says it is measuring. Estimates use
+measured fractional frames and update as work proceeds, including hours/days.
+Encoding, variable scene complexity and model warm-up can change the estimate.
+The active square follows actual model tile boundaries and completed squares show
+sampled real output, with a bounded off-thread JPEG encoder. Frame ownership keeps
+late previews from painting into a newer frame. An activity indicator also covers
+model preparation; it does not invent completed tiles.
 
 ## Optional processing
 

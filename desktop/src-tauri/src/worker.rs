@@ -86,7 +86,7 @@ impl WorkerEventGate {
                 false,
                 Duration::from_millis(150),
             ),
-            "video_frame_completed" => sampled(
+            "video_frame_completed" | "video_tile_progress" => sampled(
                 &mut self.last_video_progress,
                 now,
                 is_last_item(data, "frames_processed", "total_frames"),
@@ -574,9 +574,45 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = "Enhancing video · Labs".into();
             runtime.status_detail = format!(
-                "Frame {} of {}",
+                "Frame {} of {}{}",
                 integer(data, "frame_index") + 1,
-                integer(data, "total_frames")
+                integer(data, "total_frames"),
+                if runtime.estimated_remaining_seconds > 0.0 {
+                    eta_suffix(runtime.estimated_remaining_seconds)
+                } else {
+                    " · ETA: measuring first tile…".into()
+                }
+            );
+        }
+        "video_tile_progress" => {
+            let frame = integer(data, "frame_index") as f64;
+            let done = integer(data, "completed_tiles") as f64;
+            let count = integer(data, "total_tiles") as f64;
+            let total = integer(data, "total_frames") as f64;
+            let fraction = frame + if count > 0.0 { done / count } else { 0.0 };
+            let mut runtime = lock(&state.runtime)?;
+            runtime.progress = if total > 0.0 {
+                fraction / total * 100.0
+            } else {
+                0.0
+            };
+            runtime.status_title = "Enhancing video".into();
+            runtime.elapsed_seconds = number(data, "elapsed_seconds");
+            runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+            runtime.active_tile_size = integer(data, "active_tile_size") as u32;
+            runtime.status_detail = format!(
+                "Frame {} of {} · Tile {} / {}{}",
+                frame as u64 + 1,
+                total as u64,
+                done as u64,
+                count as u64,
+                if runtime.estimated_remaining_seconds > 0.0 {
+                    eta_suffix(runtime.estimated_remaining_seconds)
+                } else if fraction == 0.0 {
+                    " · ETA: measuring first tile…".into()
+                } else {
+                    " · Finishing frame".into()
+                }
             );
         }
         "video_frame_completed" => {
@@ -683,7 +719,14 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             };
         }
         "benchmark_completed" => {
-            let result: BenchmarkResult = serde_json::from_value(data["result"].clone())?;
+            let mut result: BenchmarkResult = serde_json::from_value(data["result"].clone())?;
+            result.retain_device_scores(
+                lock(&state.latest_benchmark)?.as_ref(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            );
             settings::save_benchmark(&state.paths, &result)?;
             *lock(&state.latest_benchmark)? = Some(result.clone());
             let mut runtime = lock(&state.runtime)?;
@@ -694,10 +737,8 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
                 if result.stable {
                     if let Some(system_score) = result.system_score {
                         format!(
-                            "System score {:.2} · CPU {:.2} output MP/s · stable ({:.1}% spread).",
-                            system_score,
-                            result.cpu_score.unwrap_or_default(),
-                            result.cv_percent
+                            "GPU score {:.2} output MP/s · stable ({:.1}% spread).",
+                            system_score, result.cv_percent
                         )
                     } else {
                         format!(
@@ -720,7 +761,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             };
             runtime.elapsed_seconds = result.total_elapsed_seconds;
             if result.is_v2() {
-                runtime.throughput = result.system_score.unwrap_or_default();
+                runtime.throughput = result.system_score.or(result.cpu_score).unwrap_or_default();
                 runtime.throughput_unit = "output MP/s".into();
                 runtime.thermal_status = result.thermal_state.clone();
             } else {
@@ -921,7 +962,11 @@ fn eta_suffix(seconds: f64) -> String {
         return String::new();
     }
     let total = seconds.round() as u64;
-    if total >= 60 {
+    if total >= 86400 {
+        format!(" · ETA ≈ {}d {}h", total / 86400, total % 86400 / 3600)
+    } else if total >= 3600 {
+        format!(" · ETA ≈ {}h {}m", total / 3600, total % 3600 / 60)
+    } else if total >= 60 {
         format!(" · ETA {}:{:02}", total / 60, total % 60)
     } else {
         format!(" · ETA {total}s")
@@ -965,6 +1010,9 @@ fn should_emit_state_changed(message_type: &str) -> bool {
             | "benchmark_stage_progress"
             | "benchmark_stage_completed"
             | "benchmark_preview"
+            | "benchmark_tile"
+            | "live_preview_frame"
+            | "video_tile_progress"
     )
 }
 

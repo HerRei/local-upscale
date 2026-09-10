@@ -74,6 +74,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
   // application state on every inference step.
   const next = [
     'progress',
+    'video_tile_progress',
     'video_frame_started',
     'video_frame_completed'
   ].includes(envelope.type)
@@ -174,9 +175,25 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.live_system_ram_available = Number(data.system_ram_available ?? 0);
       next.runtime.live_memory_pressure_percent = Number(data.system_memory_pressure_percent ?? 0);
       break;
+    case 'video_tile_progress': {
+      const frame = Number(data.frame_index ?? 0);
+      const done = Number(data.completed_tiles ?? 0);
+      const count = Number(data.total_tiles ?? 0);
+      const total = Number(data.total_frames ?? 0);
+      const fraction = frame + (count > 0 ? done / count : 0);
+      const remaining = Number(data.estimated_remaining_seconds ?? 0);
+      next.runtime.progress = total > 0 ? fraction / total * 100 : 0;
+      next.runtime.status_title = 'Enhancing video';
+      next.runtime.status_detail = `Frame ${frame + 1} of ${total || '?'} · Tile ${done} / ${count || '?'} · ${remaining > 0 ? `ETA ≈ ${formatDuration(remaining)}` : fraction > 0 ? 'Finishing frame' : 'ETA: measuring first tile…'}`;
+      next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
+      next.runtime.estimated_remaining_seconds = remaining;
+      next.runtime.active_tile_size = Number(data.active_tile_size ?? 0);
+      next.runtime.throughput_unit = 'frames/s';
+      break;
+    }
     case 'video_frame_started':
       next.runtime.status_title = 'Enhancing video';
-      next.runtime.status_detail = `Frame ${Number(data.frame_index ?? 0) + 1} of ${Number(data.total_frames ?? 0) || '?'}`;
+      next.runtime.status_detail = `Frame ${Number(data.frame_index ?? 0) + 1} of ${Number(data.total_frames ?? 0) || '?'} · ${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first tile…'}`;
       break;
     case 'video_frame_completed': {
       const done = Number(data.frames_processed ?? 0);
@@ -247,14 +264,19 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
         next.latest_benchmark = data.result as unknown as AppSnapshot['latest_benchmark'];
         const result = next.latest_benchmark;
         if (result?.workload_version.startsWith('localsr-benchmark-v2')) {
+          const old = snapshot.latest_benchmark;
+          const history = old?.workload_version === result.workload_version
+            ? old.device_history?.length ? old.device_history : old.device_results ?? [] : [];
+          const current = result.device_results ?? [];
+          result.device_history = [...history.filter(device => !current.some(item => item.device === device.device)), ...current];
           next.runtime.status_detail = result.stable
             ? result.system_score != null
-              ? `System score ${result.system_score.toFixed(2)} · CPU ${(result.cpu_score ?? 0).toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
+              ? `GPU score ${result.system_score.toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
               : `CPU score ${(result.cpu_score ?? 0).toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
             : `Unstable run (${(result.cv_percent ?? 0).toFixed(1)}% spread) — close background apps and retry`;
           next.runtime.elapsed_seconds =
             result.result_elapsed_seconds ?? result.total_elapsed_seconds;
-          next.runtime.throughput = result.system_score ?? 0;
+          next.runtime.throughput = result.system_score ?? result.cpu_score ?? 0;
           next.runtime.throughput_unit = 'output MP/s';
           next.runtime.thermal_status = result.thermal_state ?? next.runtime.thermal_status;
         } else {
@@ -334,8 +356,9 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatDuration(seconds: number): string {
-  if (!seconds || seconds < 0) return '—';
-  const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60);
-  return minutes ? `${minutes}:${rest.toString().padStart(2, '0')}` : `${rest}s`;
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—';
+  const total = Math.round(seconds);
+  if (total >= 86400) return `${Math.floor(total / 86400)}d ${Math.floor(total % 86400 / 3600)}h`;
+  if (total >= 3600) return `${Math.floor(total / 3600)}h ${Math.floor(total % 3600 / 60)}m`;
+  return total >= 60 ? `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}` : `${total}s`;
 }

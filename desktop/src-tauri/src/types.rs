@@ -201,6 +201,8 @@ pub struct Recipe {
     pub deflicker_window: Option<u32>,
     #[serde(default)]
     pub video_container: String,
+    #[serde(default = "default_hdr_mode")]
+    pub video_hdr_mode: String,
     #[serde(default)]
     pub video_crf: Option<u32>,
     #[serde(default)]
@@ -242,11 +244,17 @@ pub struct UiSettings {
     pub deflicker: bool,
     pub deflicker_window: u32,
     pub video_container: String,
+    #[serde(default = "default_hdr_mode")]
+    pub video_hdr_mode: String,
     pub video_crf: u32,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
+}
+
+fn default_hdr_mode() -> String {
+    "tone_map".into()
 }
 
 impl Default for UiSettings {
@@ -272,6 +280,7 @@ impl Default for UiSettings {
             deflicker: false,
             deflicker_window: 3,
             video_container: "mp4".into(),
+            video_hdr_mode: default_hdr_mode(),
             video_crf: 18,
             enable_face_model: false,
             face_fidelity: 70,
@@ -326,6 +335,8 @@ pub struct BenchmarkSceneResult {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BenchmarkDeviceResult {
+    #[serde(default)]
+    pub completed_at_unix: u64,
     pub device: String,
     pub device_type: String,
     pub device_name: String,
@@ -367,6 +378,9 @@ pub struct BenchmarkResult {
     // them with the fastest accelerator's headline scene for continuity.
     #[serde(default)]
     pub device_results: Vec<BenchmarkDeviceResult>,
+    /// Most recent completed run per device, from this same workload version.
+    #[serde(default)]
+    pub device_history: Vec<BenchmarkDeviceResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_score: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -388,6 +402,26 @@ pub struct BenchmarkResult {
 impl BenchmarkResult {
     pub fn is_v2(&self) -> bool {
         self.workload_version.starts_with("localsr-benchmark-v2")
+    }
+
+    pub fn retain_device_scores(&mut self, previous: Option<&Self>, completed_at: u64) {
+        let mut history = previous
+            .filter(|old| old.workload_version == self.workload_version)
+            .map(|old| {
+                if old.device_history.is_empty() {
+                    old.device_results.clone()
+                } else {
+                    old.device_history.clone()
+                }
+            })
+            .unwrap_or_default();
+        for device in &mut self.device_results {
+            device.completed_at_unix = completed_at;
+            history.retain(|old| old.device != device.device);
+            history.push(device.clone());
+        }
+        history.sort_by(|a, b| a.device.cmp(&b.device));
+        self.device_history = history;
     }
 }
 
@@ -465,6 +499,8 @@ pub struct StartBatchInput {
     pub deflicker: bool,
     pub deflicker_window: u32,
     pub video_container: String,
+    #[serde(default = "default_hdr_mode")]
+    pub video_hdr_mode: String,
     pub video_crf: u32,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
@@ -583,5 +619,26 @@ mod tests {
         );
         assert_eq!(result.reference_ratio, Some(1.08));
         assert!(result.stable);
+        let mut cpu = result.clone();
+        cpu.device_results[0].device = "cpu".into();
+        cpu.device_results[0].device_type = "cpu".into();
+        cpu.device_results[0].score = 0.25;
+        cpu.retain_device_scores(Some(&result), 1234);
+        assert_eq!(cpu.device_results.len(), 1);
+        assert_eq!(cpu.device_history.len(), 2);
+        let saved: BenchmarkResult =
+            serde_json::from_slice(&serde_json::to_vec(&cpu).unwrap()).unwrap();
+        let mut gpu = result.clone();
+        gpu.device_results[0].score = 2.0;
+        gpu.retain_device_scores(Some(&saved), 2345);
+        assert_eq!(gpu.device_history.len(), 2);
+        assert_eq!(gpu.device_history[0].device, "cpu");
+        assert_eq!(gpu.device_history[0].score, 0.25);
+        assert_eq!(gpu.device_history[0].completed_at_unix, 1234);
+        assert_eq!(gpu.device_history[1].score, 2.0);
+        assert_eq!(gpu.device_history[1].completed_at_unix, 2345);
+        gpu.workload_version = "future-incompatible-workload".into();
+        gpu.retain_device_scores(Some(&saved), 3456);
+        assert_eq!(gpu.device_history.len(), 1);
     }
 }

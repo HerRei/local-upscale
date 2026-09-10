@@ -368,9 +368,19 @@ class TileUpdate:
     image_height: int
     active_tile_size: int
     jpeg_base64: str = ""
+    frame_index: int = -1
 
     def to_json(self) -> str:
         return json.dumps({"type": "tile_update", "data": asdict(self)})
+
+
+@dataclass
+class BenchmarkTile(TileUpdate):
+    device: str = ""
+    scene_id: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "benchmark_tile", "data": asdict(self)})
 
 
 @dataclass
@@ -385,6 +395,7 @@ class LivePreviewFrame:
     output_height: int = 0
     image_width: int = 0
     image_height: int = 0
+    frame_index: int = -1
 
     def to_json(self) -> str:
         return json.dumps({"type": "live_preview_frame", "data": asdict(self)})
@@ -567,6 +578,21 @@ class VideoFrameCompleted:
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_frame_completed", "data": asdict(self)})
+
+
+@dataclass
+class VideoTileProgress:
+    job_id: str
+    frame_index: int
+    total_frames: int
+    completed_tiles: int
+    total_tiles: int
+    elapsed_seconds: float
+    estimated_remaining_seconds: float | None
+    active_tile_size: int
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_tile_progress", "data": asdict(self)})
 
 
 @dataclass

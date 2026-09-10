@@ -32,6 +32,11 @@
   let snapshot: AppSnapshot = demoSnapshot();
   let booting = true;
   let benchmarkRenders: BenchmarkRender[] = [];
+  let benchmarkDevice = '';
+  let benchmarkTile: WorkerEnvelope | undefined;
+  $: benchmarkScores = snapshot.latest_benchmark?.device_history?.length
+    ? snapshot.latest_benchmark.device_history : snapshot.latest_benchmark?.device_results ?? [];
+
   let page: 'media' | 'preview' | 'enhance' = 'preview';
   let recipeEditorOpen = false;
   let recipeName = '';
@@ -74,6 +79,8 @@
   $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
   $: faceEnabled = settings.enable_face_model && faceEngineAvailable;
   $: usingTemporalVideo = settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
+  $: preservingHdr = settings.task === 'video' && settings.video_hdr_mode === 'preserve' && Boolean(selectedMedia?.hdr_format);
+  $: hdrModelCompatible = !preservingHdr || (!usingTemporalVideo && (selectedModel?.architecture === 'HAT' || settings.selected_model_id === '__custom__'));
   $: activeDownload = snapshot.runtime.download_model_id;
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: customModelNeedsOptIn =
@@ -119,6 +126,7 @@
     queueSelection.length > 0 &&
     queueSelection.every((media) => media.probe_status === 'ready') &&
     modelReady &&
+    hdrModelCompatible &&
     faceReady &&
     preprocessReady &&
     snapshot.runtime.status_title !== 'Cancelling';
@@ -126,7 +134,7 @@
   $: canAppendToQueue = Boolean(snapshot.runtime.active_job_id) && canQueue;
   $: queuedCount = snapshot.jobs.filter((job) => job.status === 'queued').length;
   $: resultPreview = resultPreviewForSelectedMedia(snapshot);
-  $: completedVideoOutput = selectedMedia?.kind === 'video'
+  $: completedVideoOutput = selectedMedia?.kind === 'video' && selectedMedia.id !== activeJobMediaId
     ? snapshot.jobs.find(
         (job) =>
           job.media_id === selectedMedia.id &&
@@ -232,7 +240,11 @@
   }
 
   function handleWorkerMessage(message: WorkerEnvelope): void {
-    if (message.type === 'benchmark_started') benchmarkRenders = [];
+    if (message.type === 'benchmark_started') { benchmarkRenders = []; benchmarkTile = undefined; }
+    if (message.type === 'benchmark_tile') {
+      if (String(message.data.job_id ?? '') === snapshot.runtime.active_job_id) benchmarkTile = message;
+      return;
+    }
     if (['benchmark_completed', 'benchmark_cancelled', 'benchmark_failed'].includes(message.type)) benchmarkRenders = [];
     if (message.type === 'benchmark_preview') {
       if (String(message.data.job_id ?? '') !== snapshot.runtime.active_job_id) return;
@@ -260,7 +272,7 @@
         sequence <= lastLivePreviewSequence
       ) return;
       lastLivePreviewSequence = sequence;
-      if (String(message.data.preview_kind ?? '') === 'tile') {
+      if (['tile', 'video'].includes(String(message.data.preview_kind ?? ''))) {
         queueProgressiveTile({
           type: 'tile_update',
           data: { ...message.data, phase: 'completed' }
@@ -279,6 +291,7 @@
 
     if (
       message.type === 'progress' ||
+      message.type === 'video_tile_progress' ||
       message.type === 'video_frame_started' ||
       message.type === 'video_frame_completed' ||
       message.type === 'benchmark_progress'
@@ -525,6 +538,7 @@
       deflicker: settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
+      video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
@@ -563,6 +577,7 @@
       deflicker: settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
+      video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
@@ -624,6 +639,7 @@
       deflicker: recipe.deflicker ?? settings.deflicker,
       deflicker_window: recipe.deflicker_window ?? settings.deflicker_window,
       video_container: recipe.video_container || settings.video_container,
+      video_hdr_mode: recipe.video_hdr_mode ?? 'tone_map',
       video_crf: recipe.video_crf ?? settings.video_crf,
       enable_face_model: recipeFace ? true : recipe.enable_face_model ?? false,
       face_fidelity: recipeFace?.fidelity === undefined
@@ -757,6 +773,7 @@
       !snapshot.runtime.active_job_id &&
       Boolean(settings.task) &&
       modelReady &&
+    hdrModelCompatible &&
       faceReady &&
       preprocessReady;
     if (!ready) return;
@@ -829,6 +846,7 @@
   }
 
   function showPerformance(): void {
+    if (!benchmarkDevice) benchmarkDevice = snapshot.capabilities.devices.find(device => device.id !== 'cpu')?.id ?? 'cpu';
     showModal(
       'Performance & Diagnostics',
       'Live values come from the isolated inference worker. Temperature is shown only when a supported backend reports it.',
@@ -883,7 +901,7 @@
 
   async function runBenchmark(): Promise<void> {
     try {
-      await api.startBenchmark(settings.device_id);
+      await api.startBenchmark(benchmarkDevice || 'cpu');
       await refresh();
     } catch (error) {
       showModal('Benchmark could not start', String(error), 'performance');
@@ -983,6 +1001,8 @@
 
     <PreviewPane
       bind:this={previewPane}
+      modelLabel={usingTemporalVideo ? selectedVideoModel?.name ?? 'Video model' : selectedModel?.name ?? 'Model'}
+      processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
       {selectedMedia}
       {resultPreview}
       {completedVideoOutput}
@@ -998,14 +1018,25 @@
           <div class="task-grid">
             <button disabled={selectedMedia?.kind === 'video'} class:active={settings.task === 'upscale'} on:click={() => setTask('upscale')}><b>Upscale</b><span>Photos and artwork</span></button>
             <button disabled={selectedMedia?.kind === 'video'} class:active={settings.task === 'denoise'} on:click={() => setTask('denoise')}><b>Denoise</b><span>Noise and blur</span></button>
-            <button disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'} class="video-task" class:active={settings.task === 'video'} on:click={() => setTask('video')}><b>Upscale Video</b><span>Local video · SDR output</span></button>
+            <button disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'} class="video-task" class:active={settings.task === 'video'} on:click={() => setTask('video')}><b>Upscale Video</b><span>Local video · HLG / PQ / SDR</span></button>
           </div>
         </section>
 
         {#if settings.task === 'video' && selectedMedia?.hdr_format}
           <section class="control-section" aria-label="HDR conversion">
-            <span class="eyebrow">HDR INPUT · SDR OUTPUT</span>
-            <p class="model-description">This {selectedMedia.hdr_format} video is converted to SDR for preview and enhancement. Highlights and colours are tone-mapped before the model runs. The output is 8-bit SDR, not HDR; your original stays unchanged.</p>
+            <span class="eyebrow">{preservingHdr ? 'HDR INPUT · HDR OUTPUT · LABS' : 'HDR INPUT · SDR OUTPUT'}</span>
+            <label class="field-label" for="hdr-output">Colour output</label>
+            <select id="hdr-output" value={settings.video_hdr_mode ?? 'tone_map'} on:change={(event) => updateSettings({ video_hdr_mode: event.currentTarget.value as 'tone_map' | 'preserve', ...(event.currentTarget.value === 'preserve' ? { precision: 'fp32', deflicker: false } : {}) })}>
+              <option value="preserve">Preserve {selectedMedia.hdr_format} · 10-bit HEVC · Labs</option>
+              <option value="tone_map">Convert to SDR · 8-bit H.264</option>
+            </select>
+            {#if preservingHdr}
+              <p class="model-description">Keeps {selectedMedia.hdr_format} in float precision through HAT and exports 10-bit BT.2020 HEVC. Source light and colour constrain the model’s added detail. HAT models were trained on SDR; HDR detail quality is experimental.</p>
+              <p class="model-description">Thumbnails and live tiles use SDR tone mapping. Final playback depends on system HDR support. Dolby Vision dynamic metadata is not retained; compatible HLG/PQ base video is preserved.</p>
+              {#if !hdrModelCompatible}<p class="inline-warning">Select Frame-by-frame and a HAT model for HDR preservation.</p>{/if}
+            {:else}
+              <p class="model-description">This {selectedMedia.hdr_format} video is tone-mapped to SDR before enhancement and exported as 8-bit SDR. The preview uses the same conversion.</p>
+            {/if}
           </section>
         {/if}
 
@@ -1204,13 +1235,25 @@
           <div class="benchmark-heading">
             <div>
               <span class="eyebrow">BENCHMARK V2</span>
-              <h3 id="benchmark-title">LocalSR System Score</h3>
+              <h3 id="benchmark-title">CPU & GPU Benchmarks</h3>
             </div>
             <span class="benchmark-private">100% local</span>
           </div>
-          <p class="benchmark-intro">A repeatable real-inference test across the GPU, CPU, tiled processing, and image encoding.</p>
+          <p class="benchmark-intro">Choose one device for each run. CPU and GPU scores are saved separately, using the same fixed SPAN workload.</p>
+
+          <label class="field-label" for="benchmark-device">Benchmark device</label>
+          <select id="benchmark-device" bind:value={benchmarkDevice} disabled={benchmarkRunning}>
+            {#each snapshot.capabilities.devices as device}
+              <option value={device.id}>{device.id === 'cpu' ? 'CPU' : 'GPU'} · {device.name} ({device.id.toUpperCase()})</option>
+            {/each}
+          </select>
+          <div class="benchmark-actions">
+            <button class="button primary" disabled={Boolean(snapshot.runtime.active_job_id) && !benchmarkRunning} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : 'Run Benchmark'}</button>
+            {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
+          </div>
 
           <BenchmarkStudio
+            tileMessage={benchmarkTile}
             renders={benchmarkRenders.length ? benchmarkRenders : benchmarkRunning ? [] :
               (snapshot.latest_benchmark?.device_results ?? []).flatMap(device =>
                 device.scenes.flatMap(scene => scene.preview ? [scene.preview] : []))}
@@ -1230,7 +1273,7 @@
               <div class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-hero">
                 <div class="benchmark-score-block">
                   <div class="benchmark-score-label">
-                    <span>System score</span>
+                    <span>Latest {snapshot.latest_benchmark.device_results?.[0]?.device_type === 'cpu' ? 'CPU' : 'GPU'} score</span>
                     <span class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-status-pill">
                       {snapshot.latest_benchmark.stable ? '● Stable result' : '● Unstable result'}
                     </span>
@@ -1243,8 +1286,8 @@
                       </div>
                       <p>Higher is faster · GPU score across all three scenes</p>
                     {:else}
-                      <div class="benchmark-score-value text-score"><strong>CPU only</strong></div>
-                      <p>No supported accelerator was available for a system score.</p>
+                      <div class="benchmark-score-value"><strong>{(snapshot.latest_benchmark.cpu_score ?? 0).toFixed(2)}</strong><span>output MP/s</span></div>
+                      <p>CPU score across all three scenes</p>
                     {/if}
                   {:else}
                     <div class="benchmark-score-value text-score"><strong>Run varied too much</strong></div>
@@ -1279,20 +1322,21 @@
                 <div><dt>Workload</dt><dd>v2 · 3 fixed scenes</dd></div>
               </dl>
 
-              {#if snapshot.latest_benchmark.device_results?.length}
+              {#if benchmarkScores.length}
                 <div class="benchmark-section-title"><strong>Hardware results</strong><span>Relative throughput</span></div>
                 <div class="benchmark-devices" aria-label="Per-device benchmark results">
-                  {#each snapshot.latest_benchmark.device_results as device (device.device)}
+                  {#each benchmarkScores as device (device.device)}
                     <article class="benchmark-device" class:cpu={device.device_type === 'cpu'} aria-label={`${device.device_name} benchmark result`}>
                       <div class="benchmark-device-heading">
-                        <div><span>{device.device_type === 'cpu' ? 'CPU' : 'ACCELERATOR'}</span><strong>{device.device_name}</strong></div>
+                        <div><span>{device.device_type === 'cpu' ? 'CPU' : 'GPU'}</span><strong>{device.device_name}</strong></div>
                         <div class="benchmark-device-score"><strong>{device.score.toFixed(2)}</strong><span>output MP/s</span></div>
                       </div>
-                      <div class="benchmark-device-track" aria-hidden="true"><i style={`width:${benchmarkDeviceBarWidth(device.score, snapshot.latest_benchmark.device_results ?? [])}%`}></i></div>
+                      <div class="benchmark-device-track" aria-hidden="true"><i style={`width:${benchmarkDeviceBarWidth(device.score, benchmarkScores)}%`}></i></div>
                       <div class="benchmark-device-meta">
                         <span class:warning-value={!device.stable}>{device.stable ? '● Stable' : '● Unstable'}</span>
                         <span>{device.cv_percent.toFixed(1)}% spread</span>
                         <span>{device.thermal_state}</span>
+                        {#if device.completed_at_unix}<span>Saved {new Date(device.completed_at_unix * 1000).toLocaleString()}</span>{/if}
                       </div>
                       <details class="benchmark-scenes">
                         <summary>Scene breakdown</summary>
@@ -1309,7 +1353,7 @@
                   {/each}
                 </div>
               {/if}
-              <p class="benchmark-note">The system score is the geometric mean of output throughput across the GPU scenes. CPU is shown separately. Results over 5% timing spread are marked unstable.</p>
+              <p class="benchmark-note">Each score is the geometric mean of that device’s output throughput across three scenes. Running CPU preserves the last GPU result, and vice versa. Results over 5% timing spread are marked unstable.</p>
             {:else}
               <div class="benchmark-hero legacy-score">
                 <div class="benchmark-score-block">
@@ -1324,7 +1368,7 @@
                 <div><dt>Device</dt><dd>{snapshot.latest_benchmark.device} · {snapshot.latest_benchmark.model_name}</dd></div>
                 <div><dt>Peak process memory</dt><dd>{snapshot.latest_benchmark.peak_memory_bytes ? formatBytes(snapshot.latest_benchmark.peak_memory_bytes) : 'Not reliably available'}</dd></div>
               </dl>
-              <p class="benchmark-note">This is an older v1 result. Run the benchmark again to get the more stable multi-device v2 score.</p>
+              <p class="benchmark-note">This is an older v1 result. Run the benchmark again to get the separate CPU or GPU v2 score.</p>
             {/if}
           {:else if !benchmarkRunning}
             <div class="benchmark-empty">
@@ -1332,10 +1376,7 @@
               <div><strong>No benchmark result yet</strong><span>Run the fixed workload to measure this system and create a local score.</span></div>
             </div>
           {/if}
-          <div class="benchmark-actions">
-            <button class="button primary" disabled={Boolean(snapshot.runtime.active_job_id) && !benchmarkRunning} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : 'Run Benchmark'}</button>
-            {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
-          </div>
+
         </section>
 
         <div class="performance-section-heading"><strong>Live hardware</strong><span>Current worker state</span></div>

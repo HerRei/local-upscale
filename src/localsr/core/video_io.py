@@ -89,8 +89,8 @@ def _check_sdr(stream, frame) -> None:
     transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
     if transfer in (16, 18):
         raise ValueError(
-            "HDR (PQ/HLG) video needs an SDR conversion before enhancement. "
-            "LocalSR currently exports 8-bit SDR video."
+            "Choose HDR preservation with HAT (Labs), or explicit HDR-to-SDR conversion "
+            "before enhancing PQ/HLG video."
         )
 
 
@@ -174,14 +174,23 @@ def probe_video(path: str) -> VideoProbe:
 
 def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
     transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
-    if transfer in (16, 18) and hdr_mode == "tone_map":
+    if transfer in (16, 18) and hdr_mode in {"tone_map", "preserve"}:
         # Swscale expands the source's YUV matrix/range without dropping the
         # 10-bit signal to 8-bit before the transfer/gamut conversion.
-        rgb = tone_map_to_sdr(
-            frame.to_ndarray(format="gbrpf32le"),
-            transfer,
-            int(getattr(frame, "color_primaries", stream.codec_context.color_primaries)),
+        primaries = int(getattr(frame, "color_primaries", stream.codec_context.color_primaries))
+        if primaries != 9 or frame.colorspace != 9:
+            raise ValueError(
+                "HDR import requires BT.2020 HLG/PQ with a BT.2020 non-constant luminance matrix."
+            )
+        rgb = frame.to_ndarray(
+            format="gbrpf32le",
+            src_colorspace="BT2020",
+            dst_colorspace="BT2020",
+            src_color_range=frame.color_range,
+            dst_color_range=2,
         )
+        if hdr_mode == "tone_map":
+            rgb = tone_map_to_sdr(rgb, transfer, primaries)
     else:
         _check_sdr(stream, frame)
         rgb = frame.to_ndarray(format="rgb24")
@@ -240,8 +249,8 @@ def decode_timed_frames(
     hdr_mode: str = "reject",
 ):
     """Decode oriented SDR frames with exact source times and one-frame lookahead."""
-    if hdr_mode not in {"reject", "tone_map"}:
-        raise ValueError("HDR mode must be reject or tone_map (SDR output).")
+    if hdr_mode not in {"reject", "tone_map", "preserve"}:
+        raise ValueError("HDR mode must be reject, tone_map or preserve.")
     start = max(0, int(start_frame or 0))
     selected_frame_count(0, start, end_frame)
     with _video_decoder(path, frame_threads=True) as (container, stream):
@@ -274,6 +283,18 @@ def decode_timed_frames(
             yield pending
 
 
+def validate_hdr_encoder() -> None:
+    """Fail before inference if this installed worker cannot encode Main 10."""
+    try:
+        encoder = av.Codec("libx265", "w")
+        if not any(fmt.name == "yuv420p10le" for fmt in encoder.video_formats):
+            raise ValueError("Main 10 pixel format is unavailable")
+    except (av.FFmpegError, ValueError) as error:
+        raise VideoStageError(
+            "HDR encode", "This worker needs a 10-bit HEVC encoder to preserve HDR."
+        ) from error
+
+
 def encode_video(
     frames,
     destination_path: str,
@@ -291,6 +312,7 @@ def encode_video(
     cancel_event: threading.Event | None = None,
     warning_callback=None,
     sdr_bt709: bool = False,
+    hdr_format: str = "",
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -298,6 +320,11 @@ def encode_video(
     remuxed with compatible source audio/subtitles without re-encoding those
     streams. The final destination appears only through one atomic replace.
     """
+    if hdr_format:
+        if hdr_format not in {"HLG", "PQ"} or sdr_bt709:
+            raise ValueError("HDR output must be HLG or PQ, without SDR conversion.")
+        validate_hdr_encoder()
+        codec, pixel_format = "libx265", "yuv420p10le"
     destination = Path(destination_path)
     encoded_temporary = _owned_output_temporary(destination, "video")
     mux_temporary = _owned_output_temporary(destination, "mux")
@@ -330,6 +357,20 @@ def encode_video(
         # Keep decode and presentation order aligned so VFR packet durations
         # describe the displayed interval, including the final held frame.
         stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium", "bf": "0"}
+        if hdr_format:
+            transfer = 18 if hdr_format == "HLG" else 16
+            stream.codec_context.color_primaries = 9
+            stream.codec_context.color_trc = transfer
+            stream.codec_context.colorspace = 9
+            stream.codec_context.color_range = 1
+            if container_format == "mp4":
+                stream.codec_context.codec_tag = "hvc1"
+            stream.options.update(
+                {
+                    "profile": "main10",
+                    "x265-params": "log-level=error:pools=2:frame-threads=1:bframes=0",
+                }
+            )
         frame_count = 0
         durations = {}
         previous_pts = None
@@ -346,13 +387,34 @@ def encode_video(
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
             rgb = item.rgb if isinstance(item, TimedVideoFrame) else item
-            if rgb.dtype != np.uint8:
+            if hdr_format:
+                if rgb.dtype != np.float32 or not np.isfinite(rgb).all():
+                    raise ValueError(
+                        "HDR export requires finite float32 HDR RGB; 8-bit frames are refused."
+                    )
+            elif rgb.dtype != np.uint8:
                 rgb = np.clip(rgb, 0, 255).astype(np.uint8)
             if rgb.shape != (int(height), int(width), 3):
                 raise ValueError(
                     f"frame {frame_count} has shape {rgb.shape}; expected ({height}, {width}, 3)"
                 )
-            frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+            if hdr_format:
+                frame = av.VideoFrame.from_ndarray(np.clip(rgb, 0, 1), format="gbrpf32le")
+                frame = frame.reformat(
+                    format=pixel_format,
+                    src_colorspace="BT2020",
+                    dst_colorspace="BT2020",
+                    src_color_range=2,
+                    dst_color_range=1,
+                )
+                frame.color_primaries, frame.color_trc, frame.colorspace, frame.color_range = (
+                    9,
+                    transfer,
+                    9,
+                    1,
+                )
+            else:
+                frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
             if sdr_bt709:
                 frame = frame.reformat(
                     format=pixel_format, src_colorspace="ITU709", dst_colorspace="ITU709"

@@ -5,8 +5,8 @@ Design goals (workload ``localsr-benchmark-v2``):
 - **Fixed, versioned scenes** so two results are comparable only when the
   ``workload_version`` matches, in the spirit of Blender's BMW27: every
   machine renders the same procedural, license-safe content.
-- **Measure CPU and every detected accelerator**, each in its own phase, so
-  a single run produces a small device table instead of one number.
+- **Measure the selected CPU or accelerator**, with separate saved scores
+  for each device. A run never switches to another device silently.
 - **Repeatability over speed.** Warm-up runs until the rolling coefficient of
   variation settles (or a time cap), timings are taken around synchronized
   inferences, devices cool down between phases, and a result whose measured
@@ -422,6 +422,7 @@ def run_scene(
     warm: bool = False,
     tensor: torch.Tensor | None = None,
     render_callback: Callable[[np.ndarray], None] | None = None,
+    tile_callback: Callable[..., None] | None = None,
 ) -> tuple[list[float], float | None, int]:
     """Run one fixed scene; returns (timings, encode_ms, iterations)."""
     scene_tensor = tensor if tensor is not None else _scene_tensor(scene)
@@ -443,6 +444,7 @@ def run_scene(
             progress_callback=lambda *_args: None,
             safe_memory=False,
             device=device,
+            **({"tile_callback": tile_callback} if warm and tile_callback else {}),
         )
         _synchronize(device)
         if scene.scene_id == "s3-gallery-encode" and not warm:
@@ -470,6 +472,7 @@ def run_device_phase(
     progress_callback: StageCallback | None = None,
     clock: Callable[[], float] = time.perf_counter,
     preview_callback: Callable[[dict], None] | None = None,
+    tile_callback: Callable[..., None] | None = None,
 ) -> DeviceBenchmark:
     """Warm up, measure every scene, and gate the phase on timing stability."""
     if not scenes:
@@ -477,6 +480,11 @@ def run_device_phase(
 
     thermal_before = _thermal_state(device_id)
     torch_device, _ = engine.load_model(model_path, device_id, PRECISION, model_info)
+    expected_type = (
+        "privateuseone" if device_id.startswith("directml:") else device_id.split(":", 1)[0]
+    )
+    if torch_device.type != expected_type:
+        raise RuntimeError(f"Requested {device_id}, but the engine loaded on {torch_device}.")
     stage_count = len(scenes) + 2
 
     def emit(
@@ -596,6 +604,9 @@ def run_device_phase(
                 warm=True,
                 tensor=scene_tensor,
                 render_callback=capture_render,
+                tile_callback=(lambda *args, scene=scene: tile_callback(scene, *args))
+                if tile_callback
+                else None,
             )
             timings: list[float] = []
             encode_ms: float | None = None

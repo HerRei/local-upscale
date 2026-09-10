@@ -54,7 +54,7 @@ application actions. `MediaQueue` renders the imported media and queue state;
 `PreviewPane` owns comparison, pan/zoom, sampled tile rendering, video-comparison
 loading, and its observer lifetime. `AdvancedSettings` renders output and hardware
 settings and emits typed setting patches. Native persistence stays in the parent
-and Rust host. `BenchmarkStudio` retains the visual benchmark comparison.
+and Rust host. `BenchmarkStudio` draws real warm-up tiles for the selected CPU/GPU benchmark.
 
 Asynchronous native subscriptions are disposed even when registration completes
 after the component unmounts. Existing interface tests exercise the full workspace

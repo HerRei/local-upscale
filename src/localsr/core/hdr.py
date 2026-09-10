@@ -1,8 +1,7 @@
-"""Explicit HLG/PQ BT.2020 to SDR BT.709 conversion for SDR-trained models.
+"""BT.2100 transfer functions, SDR previews and experimental HDR detail adaptation.
 
-The BT.2100 transfer functions keep floating-point precision until the final
-SDR quantization. A fixed extended-Reinhard curve avoids frame-dependent
-exposure changes. This is SDR conversion, not HDR or Dolby Vision mastering.
+All HDR processing uses float32 BT.2020. Only the explicitly selected SDR
+conversion maps highlights/gamut and quantizes RGB to eight bits.
 """
 
 from __future__ import annotations
@@ -19,6 +18,77 @@ BT2020_TO_BT709 = np.array(
 )
 BT2020_LUMA = np.array([0.2627, 0.6780, 0.0593], dtype=np.float32)
 BT709_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+
+def hdr_to_working_linear(rgb: np.ndarray, transfer: int) -> np.ndarray:
+    """BT.2020 scene light for HLG, display light / 10000 nits for PQ."""
+    signal = np.clip(np.asarray(rgb, dtype=np.float32), 0, 1)
+    if transfer == 18:
+        a = 0.17883277
+        b = 1 - 4 * a
+        c = 0.5 - a * np.log(4 * a)
+        return np.where(signal <= 0.5, signal**2 / 3, (np.exp((signal - c) / a) + b) / 12)
+    if transfer == 16:
+        return hdr_to_linear_nits(signal, transfer) / 10000
+    raise ValueError("HDR preservation supports BT.2020 HLG/PQ only.")
+
+
+def working_linear_to_hdr(linear: np.ndarray, transfer: int) -> np.ndarray:
+    """Inverse of hdr_to_working_linear; no SDR tone mapping or quantization."""
+    light = np.clip(np.asarray(linear, dtype=np.float32), 0, 1)
+    if transfer == 18:
+        a = 0.17883277
+        b = 1 - 4 * a
+        c = 0.5 - a * np.log(4 * a)
+        return np.where(
+            light <= 1 / 12, np.sqrt(3 * light), a * np.log(np.maximum(12 * light - b, 1e-8)) + c
+        ).astype(np.float32)
+    if transfer == 16:
+        m1, m2 = 2610 / 16384, 2523 / 32
+        c1, c2, c3 = 3424 / 4096, 2413 / 128, 2392 / 128
+        power = light**m1
+        return ((c1 + c2 * power) / (1 + c3 * power)) ** m2
+    raise ValueError("HDR preservation supports BT.2020 HLG/PQ only.")
+
+
+def anchor_hdr_detail(source: np.ndarray, enhanced: np.ndarray, transfer: int) -> np.ndarray:
+    """Conservative adaptation of SDR-trained model detail to the source HDR.
+
+    Every expanded source pixel retains its mean linear BT.2020 RGB. Remove
+    the model's block-average exposure/colour change, then limit the remaining
+    detail uniformly across channels to fit the HDR signal range. This does
+    not validate perceptual HDR quality; block-boundary artefacts remain a
+    specific Labs acceptance concern. HLG is anchored in scene light, PQ in
+    display light. Only floating-point HDR samples enter or leave this path.
+    """
+    if source.dtype != np.float32 or enhanced.dtype != np.float32:
+        raise ValueError("HDR detail adaptation requires float32 RGB.")
+    if not np.isfinite(source).all() or not np.isfinite(enhanced).all():
+        raise ValueError("HDR model output contains non-finite samples.")
+    h, w, channels = source.shape
+    scale = enhanced.shape[0] // h
+    if channels != 3 or scale < 1 or enhanced.shape != (h * scale, w * scale, 3):
+        raise ValueError("HDR detail adaptation requires an integer RGB upscale.")
+    # Work in strips so 4K -> 16K does not allocate several whole HDR frames.
+    result = np.empty_like(enhanced)
+    for y in range(0, h, 16):
+        end = min(y + 16, h)
+        target = hdr_to_working_linear(source[y:end], transfer)[:, None, :, None, :]
+        blocks = hdr_to_working_linear(enhanced[y * scale : end * scale], transfer).reshape(
+            end - y, scale, w, scale, 3
+        )
+        detail = blocks - blocks.mean(axis=(1, 3), keepdims=True)
+        low = detail.min(axis=(1, 3), keepdims=True)
+        high = detail.max(axis=(1, 3), keepdims=True)
+        lower_limit = np.where(low < 0, target / np.maximum(-low, 1e-20), 1)
+        upper_limit = np.where(high > 0, (1 - target) / np.maximum(high, 1e-20), 1)
+        strength = np.minimum(1, np.minimum(lower_limit, upper_limit))
+        strength = strength.min(axis=-1, keepdims=True)
+        adapted = target + detail * strength
+        result[y * scale : end * scale] = working_linear_to_hdr(
+            adapted.reshape((end - y) * scale, w * scale, 3), transfer
+        )
+    return result
 
 
 def hdr_to_linear_nits(rgb: np.ndarray, transfer: int) -> np.ndarray:

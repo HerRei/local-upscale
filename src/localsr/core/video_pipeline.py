@@ -21,6 +21,7 @@ from PIL import Image
 
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
+from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine
 from .tiling import generate_tiles
 from .video_io import (
@@ -30,6 +31,7 @@ from .video_io import (
     probe_video,
     selected_frame_count,
     uint8_chw_to_rgb_hwc,
+    validate_hdr_encoder,
 )
 
 
@@ -145,6 +147,7 @@ def run_video_job(
     enhanced_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
     progress_cb: Callable[[int, int, float], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
+    tile_progress_cb: Callable[..., None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
@@ -158,6 +161,16 @@ def run_video_job(
     inference_started_at: float | None = None
 
     probe = probe_video(config.video_path)
+    preserve_hdr = bool(probe.hdr_format and config.hdr_mode == "preserve")
+    transfer = 18 if probe.hdr_format == "HLG" else 16
+    precision_str = "fp32" if preserve_hdr else config.precision_str
+    if preserve_hdr:
+        validate_hdr_encoder()
+        if config.deflicker:
+            raise ValueError("De-flicker is not yet supported with HDR preservation.")
+        for info in (config.model_info, config.face_model_info):
+            if info is not None and str(getattr(info, "architecture", "")).upper() != "HAT":
+                raise ValueError("HDR preservation currently supports HAT models only (Labs).")
     if config.fps_override is not None and (
         not np.isfinite(config.fps_override) or config.fps_override <= 0
     ):
@@ -182,7 +195,7 @@ def run_video_job(
     engine.load_model(
         config.model_path,
         config.device_str,
-        config.precision_str,
+        precision_str,
         # safe_memory is enforced at the engine level via model_info.
         _SafeModelInfo(model_info, config.safe_memory),
     )
@@ -192,7 +205,7 @@ def run_video_job(
         engine.load_model(
             config.face_model_path,
             config.device_str,
-            config.precision_str,
+            precision_str,
             _SafeModelInfo(config.face_model_info, config.safe_memory),
         )
 
@@ -222,7 +235,45 @@ def run_video_job(
             if frame_started_cb is not None:
                 frame_started_cb(output_frame_index, total_frames)
 
-            tensor = rgb_to_tensor(rgb)
+            tensor = torch.from_numpy(rgb).permute(2, 0, 1) if preserve_hdr else rgb_to_tensor(rgb)
+            float_options = {"float_output": True} if preserve_hdr else {}
+
+            def observed_tile(
+                phase,
+                tile,
+                pixels,
+                done,
+                count,
+                image_w,
+                image_h,
+                size,
+                *,
+                frame_index=output_frame_index,
+                source_rgb=rgb,
+                inference_start=inference_started_at,
+            ):
+                if tile_progress_cb is not None:
+                    fraction = frame_index + (done / count if count else 0)
+                    elapsed = time.monotonic() - job_started_at
+                    measured = time.monotonic() - (inference_start or job_started_at)
+                    remaining = (
+                        measured / fraction * max(0, total_frames - fraction)
+                        if fraction > 0 and total_frames > 0
+                        else None
+                    )
+                    tile_progress_cb(
+                        frame_index, total_frames, done, count, elapsed, remaining, size
+                    )
+                if tile_callback is not None:
+                    if pixels is not None and preserve_hdr:
+                        core = source_rgb[
+                            tile.core_y : tile.core_y + tile.core_h,
+                            tile.core_x : tile.core_x + tile.core_w,
+                        ]
+                        pixels = anchor_hdr_detail(
+                            core, pixels.transpose(1, 2, 0).copy(), transfer
+                        ).transpose(2, 0, 1)
+                    tile_callback(phase, tile, pixels, done, count, image_w, image_h, size)
 
             def tile_progress(completed: int, total: int, active_tile: int) -> None:
                 pass
@@ -234,7 +285,10 @@ def run_video_job(
                         cached_face_mask is None
                         or frames_since_detection >= config.face_detection_interval
                     ):
-                        cached_face_mask = detect_faces(rgb, cancel_event=cancel_event)
+                        cached_face_mask = detect_faces(
+                            tone_map_to_sdr(rgb, transfer, 9) if preserve_hdr else rgb,
+                            cancel_event=cancel_event,
+                        )
                         frames_since_detection = 0
                     else:
                         frames_since_detection += 1
@@ -249,12 +303,14 @@ def run_video_job(
                             general_model_info=model_info,
                             face_model_info=config.face_model_info,
                             device_str=config.device_str,
-                            precision_str=config.precision_str,
+                            precision_str=precision_str,
                             tile_size=config.tile_size,
                             halo=config.halo,
                             cancel_event=cancel_event,
                             safe_memory=config.safe_memory,
                             face_fidelity=config.face_fidelity,
+                            tile_callback=observed_tile,
+                            **float_options,
                         )
                     else:
                         # No faces detected — use the general model.
@@ -266,7 +322,8 @@ def run_video_job(
                             cancel_event=cancel_event,
                             progress_callback=tile_progress,
                             safe_memory=config.safe_memory,
-                            tile_callback=tile_callback,
+                            tile_callback=observed_tile,
+                            **float_options,
                         )
                 else:
                     out_chw = engine.process_frame(
@@ -277,20 +334,38 @@ def run_video_job(
                         cancel_event=cancel_event,
                         progress_callback=tile_progress,
                         safe_memory=config.safe_memory,
-                        tile_callback=tile_callback,
+                        tile_callback=observed_tile,
+                        **float_options,
                     )
             except InterruptedError:
                 raise
 
-            out_rgb = uint8_chw_to_rgb_hwc(out_chw)
-            if output_scale != native_scale:
-                out_rgb = np.array(
-                    Image.fromarray(out_rgb).resize(
-                        (output_width, output_height),
-                        Image.Resampling.LANCZOS,
-                    ),
-                    dtype=np.uint8,
-                )
+            if preserve_hdr:
+                out_rgb = out_chw.transpose(1, 2, 0)
+                if output_scale != native_scale:
+                    out_rgb = (
+                        torch.nn.functional.interpolate(
+                            torch.from_numpy(out_chw).unsqueeze(0),
+                            size=(output_height, output_width),
+                            mode="bicubic",
+                            align_corners=False,
+                            antialias=True,
+                        )[0]
+                        .permute(1, 2, 0)
+                        .clamp(0, 1)
+                        .numpy()
+                        .copy()
+                    )
+                out_rgb = anchor_hdr_detail(rgb, out_rgb, transfer)
+            else:
+                out_rgb = uint8_chw_to_rgb_hwc(out_chw)
+                if output_scale != native_scale:
+                    out_rgb = np.array(
+                        Image.fromarray(out_rgb).resize(
+                            (output_width, output_height), Image.Resampling.LANCZOS
+                        ),
+                        dtype=np.uint8,
+                    )
             frames_processed += 1
 
             if enhanced_frame_cb is not None:
@@ -334,6 +409,7 @@ def run_video_job(
         cancel_event=cancel_event,
         warning_callback=warning_callback,
         sdr_bt709=bool(probe.hdr_format and config.hdr_mode == "tone_map"),
+        hdr_format=probe.hdr_format if preserve_hdr else "",
     )
 
     completed_at = time.monotonic()
@@ -364,6 +440,7 @@ def process_frame_face_aware(
     face_threshold_low: float = 0.15,
     progress_callback: Callable[[int, int, int], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
+    float_output: bool = False,
 ) -> np.ndarray:
     """Process a single frame with per-tile model selection.
 
@@ -393,7 +470,8 @@ def process_frame_face_aware(
     scale = general_model_info.scale
     out_channels = general_model_info.out_channels
     out_shape = (out_channels, h * scale, w * scale)
-    out_array = np.zeros(out_shape, dtype=np.uint8)
+    out_array = np.zeros(out_shape, dtype=np.float32 if float_output else np.uint8)
+    float_options = {"float_output": True} if float_output else {}
 
     # Load both models once. Subsequent switching via switch_model is
     # instant — no torch reload, no VRAM spike.
@@ -424,6 +502,8 @@ def process_frame_face_aware(
             align_corners=False,
             antialias=True,
         )
+        if float_output:
+            return resized.squeeze(0).clamp(0, 1).cpu().numpy()
         return resized.squeeze(0).clamp(0, 1).mul(255).round().byte().cpu().numpy()
 
     for i, tile in enumerate(tiles):
@@ -449,6 +529,7 @@ def process_frame_face_aware(
                 precision,
                 halo,
                 engine.active_model,
+                **float_options,
             )
             identity_core = identity_core_for(tile)
             if face_fidelity <= 0.0:
@@ -462,7 +543,14 @@ def process_frame_face_aware(
             else:
                 engine.switch_model(face_model_path)
                 face_core = engine.run_tile(
-                    tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
+                    tile,
+                    img_tensor,
+                    face_model_info,
+                    device,
+                    precision,
+                    halo,
+                    engine.active_model,
+                    **float_options,
                 )
                 core_output = blend_tile_outputs(
                     face_core,
@@ -474,16 +562,37 @@ def process_frame_face_aware(
         elif tile_class == "general":
             engine.switch_model(general_model_path)
             core_output = engine.run_tile(
-                tile, img_tensor, general_model_info, device, precision, halo, engine.active_model
+                tile,
+                img_tensor,
+                general_model_info,
+                device,
+                precision,
+                halo,
+                engine.active_model,
+                **float_options,
             )
         else:  # boundary
             engine.switch_model(general_model_path)
             general_core = engine.run_tile(
-                tile, img_tensor, general_model_info, device, precision, halo, engine.active_model
+                tile,
+                img_tensor,
+                general_model_info,
+                device,
+                precision,
+                halo,
+                engine.active_model,
+                **float_options,
             )
             engine.switch_model(face_model_path)
             face_core = engine.run_tile(
-                tile, img_tensor, face_model_info, device, precision, halo, engine.active_model
+                tile,
+                img_tensor,
+                face_model_info,
+                device,
+                precision,
+                halo,
+                engine.active_model,
+                **float_options,
             )
             core_output = blend_tile_outputs(
                 face_core,

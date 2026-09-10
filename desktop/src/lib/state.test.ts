@@ -176,7 +176,7 @@ describe('desktop state', () => {
         }
       }
     });
-    expect(snapshot.runtime.status_detail).toContain('System score 21.35');
+    expect(snapshot.runtime.status_detail).toContain('GPU score 21.35');
     expect(snapshot.runtime.throughput).toBe(21.35);
     expect(snapshot.runtime.throughput_unit).toBe('output MP/s');
     expect(snapshot.runtime.thermal_status).toBe('nominal');
@@ -186,4 +186,18 @@ describe('desktop state', () => {
     expect(formatBytes(1024 ** 3)).toBe('1.0 GB');
     expect(formatDuration(125)).toBe('2:05');
   });
+});
+
+it('shows an honest first-tile wait, then a first-frame ETA including long durations', () => {
+  let snapshot = demoSnapshot();
+  snapshot.runtime.active_job_id = 'video-1';
+  const data = { job_id: 'video-1', frame_index: 0, total_frames: 1000, completed_tiles: 0, total_tiles: 20, elapsed_seconds: 1, estimated_remaining_seconds: null, active_tile_size: 256 };
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'video_tile_progress', data });
+  expect(snapshot.runtime.status_detail).toContain('ETA: measuring first tile');
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'video_tile_progress', data: { ...data, completed_tiles: 1, estimated_remaining_seconds: 180000 } });
+  expect(snapshot.runtime.status_detail).toContain('Tile 1 / 20 · ETA ≈ 2d 2h');
+  expect(snapshot.runtime.progress).toBeCloseTo(.005);
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'video_frame_started', data: { ...data, frame_index: 1 } });
+  expect(snapshot.runtime.status_detail).toContain('ETA ≈ 2d 2h');
+  expect(formatDuration(3599.9)).toBe('1h 0m');
 });

@@ -31,6 +31,7 @@ class PreviewPacket:
     output_height: int = 0
     image_width: int = 0
     image_height: int = 0
+    frame_index: int = -1
 
 
 @dataclass

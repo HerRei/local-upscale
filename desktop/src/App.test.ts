@@ -234,6 +234,15 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
   });
 
+  it('runs the selected CPU independently of the enhancement GPU', async () => {
+    const user = await mountWith(readySnapshot());
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Benchmark device' }), 'cpu');
+    await user.click(within(dialog).getByRole('button', { name: 'Run Benchmark' }));
+    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('cpu'));
+  });
+
   it('shows benchmark progress and keeps local results copyable and exportable', async () => {
     const user = await mountWith(readySnapshot());
     vi.stubGlobal('navigator', {
@@ -402,7 +411,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([media]);
     snapshot.settings.batch_mode = batch;
     const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale Video\s*Local video · SDR output/i);
+    await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
     expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
     expect(screen.getAllByText('Preparing preview…').length).toBe(2);
     expect(screen.queryByText('Inspecting…')).toBeNull();
@@ -441,7 +450,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'video';
     snapshot.settings.batch_mode = true;
     const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale Video\s*Local video · SDR output/i);
+    await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'decoding_video' } });
     expect(await screen.findByText('Reading the first video frame')).toBeTruthy();
@@ -458,7 +467,7 @@ describe('LocalSR desktop interface', () => {
     api.refreshSnapshot.mockResolvedValue(ready);
     callback({ type: 'media_info', data: { media_path: media.path, width: 2160, height: 3840, hdr_format: 'HLG', audio_warning: 'Standard audio will be kept. The extra track will be omitted.', jpeg_base64: 'test' } });
     expect(await screen.findByRole('region', { name: 'HDR conversion' })).toBeTruthy();
-    expect(screen.getByText(/The output is 8-bit SDR/)).toBeTruthy();
+    expect(screen.getByText(/exported as 8-bit SDR/)).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Audio compatibility' })).toBeTruthy();
     expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
     expect(screen.getByRole('button', { name: 'Start 1 item' }).hasAttribute('disabled')).toBe(false);
@@ -520,7 +529,7 @@ describe('LocalSR desktop interface', () => {
 
   it('labels experimental engines separately from standard video', async () => {
     const user = await mountWith(readySnapshot());
-    await chooseTask(user, /Upscale Video\s*Local video · SDR output/i);
+    await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
 
     const engine = screen.getByLabelText('Video engine');
     expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
@@ -700,7 +709,7 @@ describe('LocalSR desktop interface', () => {
         .disabled
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: /Upscale Video\s*Local video · SDR output/i }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i }) as HTMLButtonElement)
         .disabled
     ).toBe(false);
     await user.click(start);
@@ -783,7 +792,7 @@ describe('LocalSR desktop interface', () => {
     );
     expect(
       (screen.getByRole('button', {
-        name: /Upscale Video\s*Local video · SDR output/i
+        name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i
       }) as HTMLButtonElement).disabled
     ).toBe(true);
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
@@ -837,7 +846,7 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() =>
       expect(
         (screen.getByRole('button', {
-          name: /Upscale Video\s*Local video · SDR output/i
+          name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i
         }) as HTMLButtonElement).disabled
       ).toBe(false)
     );

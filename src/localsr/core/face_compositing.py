@@ -83,4 +83,6 @@ def blend_tile_outputs(
         + face_output.astype(np.float32) * fidelity
     )
     blended = face_mix * alpha_3d + general_output.astype(np.float32) * (1.0 - alpha_3d)
+    if face_output.dtype == np.float32 and general_output.dtype == np.float32:
+        return blended.clip(0, 1).astype(np.float32)
     return blended.clip(0, 255).astype(np.uint8)

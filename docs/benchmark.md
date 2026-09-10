@@ -1,19 +1,36 @@
 # LocalSR benchmark
 
-## Visual system benchmark (v2)
+## Separate CPU / GPU benchmark (v2 preview)
 
-The desktop's **Run Benchmark** opens a render viewer with real source/output captures for each
-device and scene. Select a captured study, move the comparison slider, or inspect its detail crop.
-The current v2 workload, input pixels, dimensions, repetition rules, and score formula are unchanged.
-The three procedural studies cover compute (512×512), tiled processing (3072×2048), and export
-(768×512). These are technical texture studies rather than photos or a perceptual quality ranking.
+On `codex/hdr-preservation`, **Run Benchmark** lets you select CPU or one detected
+GPU (MPS/Metal on Apple silicon). The worker runs exactly that device and rejects
+an unavailable selection. It does not automatically append a CPU phase. Each
+completed device score is retained locally, with its own confidence and timestamp;
+a CPU run preserves the previous GPU result and vice versa. JSON separates the
+current run's `device_results` from `device_history`, the most recent completed
+result for each device using the same workload version. Cancellation/failure
+preserves previous results. Older multi-device and v1 files remain readable.
 
-Each preview comes from the existing unmeasured per-scene warm-up. Thumbnail creation and transport
-occur before the measured loop, so preview work is excluded from inference timings. Captures are
-bounded to 640 pixels per side, emitted once per scene/device, and retained with the latest local
-result and JSON export. They are scaled previews, not full-resolution exports. Old saved results
-without captures remain readable. Cancellation discards the current captures and returns to the
-last completed result; an in-progress run does not display a previous run's score as its own.
+The score is each device's geometric mean of output megapixels/second across the
+three fixed SPAN scenes. CPU and GPU never contribute to a combined score. GPU
+reference comparisons apply only to GPU results. Results above 5% timing spread
+remain visibly unstable. Model, input pixels, scene dimensions, repetition rules,
+and score formulas retain `localsr-benchmark-v2` compatibility.
+
+The viewer renders actual model squares, with an outline on the active tile. It
+uses the same tile coordinates as HAT's production renderer, but the fixed model
+is **SPAN**, not HAT. Each square contains that tile's model output. The three
+procedural scenes cover compute (512×512), tiled processing (3072×2048), and export
+(768×512). They measure processing speed, not restoration quality.
+
+Tile JPEGs come only from the unmeasured per-scene warm-up. Scored iterations have
+no tile-preview callback or JPEG work. The viewer retains the warm-up render during
+measurement and labels it accordingly. Preview canvases are bounded; the saved
+full-scene proxy is at most 640 pixels per side. There is no simulated progress or
+before/after slider in this benchmark viewer.
+
+This is isolated preview work for a later release; it does not change the v0.0.12
+release branch, tag, workflow, or installer claims.
 
 The separate [video benchmark](video-support.md#visual-local-benchmark) renders actual video files
 through the local production pipeline and produces a browsable report with playback and timing

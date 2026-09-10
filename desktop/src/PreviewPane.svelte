@@ -13,6 +13,8 @@
   export let resultPreview: string;
   export let completedVideoOutput: string;
   export let compactHidden = false;
+  export let modelLabel = '';
+  export let processing = false;
   export let addFiles: () => Promise<void>;
 
   let compare = 50;
@@ -41,6 +43,7 @@
   let previewRetryMediaId = '';
   let progressiveVisible = false;
   let progressiveJobId = '';
+  let progressiveFrame = -1;
   let progressiveOutputWidth = 0;
   let progressiveOutputHeight = 0;
   let progressiveGeneration = 0;
@@ -145,6 +148,7 @@
   }
 
   export function resetProgressivePreview(jobId = ''): void {
+    progressiveFrame = -1;
     progressiveGeneration += 1;
     progressiveJobId = jobId;
     progressiveOutputWidth = 0;
@@ -166,7 +170,12 @@
     const jobId = String(data.job_id ?? '');
     if (!jobId || jobId !== activeJobId) return;
     const phase = String(data.phase ?? '');
-    if (phase === 'reset') resetProgressivePreview(jobId);
+    const frame = Number(data.frame_index ?? -1);
+    if (frame >= 0 && frame < progressiveFrame) return;
+    if (frame > progressiveFrame || phase === 'reset') {
+      resetProgressivePreview(jobId);
+      progressiveFrame = frame;
+    }
     if (!progressiveJobId) progressiveJobId = jobId;
     if (jobId !== progressiveJobId) return;
 
@@ -187,11 +196,14 @@
       return;
     }
     if (phase === 'completed') {
+      // Completion metadata has no pixels. It must not consume the display
+      // throttle before the asynchronous JPEG arrives a few milliseconds later.
+      if (!data.jpeg_base64) return;
       // Decoding every JPEG can monopolize WKWebView when a lightweight model
       // finishes many tiny tiles per second. A sampled live mosaic stays useful
       // while preserving input responsiveness; completion always loads the
       // authoritative full output image.
-      if (now - lastProgressivePaintAt < 75 || progressivePendingCount >= 3) {
+      if ((lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) || progressivePendingCount >= 3) {
         return;
       }
       lastProgressivePaintAt = now;
@@ -269,7 +281,12 @@
         destination.height
       );
     }
-    activeTileVisible = false;
+    // JPEG encoding is asynchronous: a previous tile can arrive after the
+    // next tile started. Keep that newer model tile's outline visible.
+    if (percentage && percentage.x === activeTileX && percentage.y === activeTileY &&
+        percentage.width === activeTileWidth && percentage.height === activeTileHeight) {
+      activeTileVisible = false;
+    }
   }
 
   async function ensureProgressiveCanvas(
@@ -296,9 +313,9 @@
     context.fillStyle = '#111722';
     context.fillRect(0, 0, size.width, size.height);
     try {
-      const source = await loadHtmlImage(sourcePreview);
+      const source = selectedMedia?.kind === 'video' ? null : await loadHtmlImage(sourcePreview);
       if (generation !== progressiveGeneration || jobId !== progressiveJobId) return false;
-      context.drawImage(source, 0, 0, size.width, size.height);
+      if (source) context.drawImage(source, 0, 0, size.width, size.height);
     } catch {
       // The bounded mosaic can still show completed tiles while the source
       // preview is being repaired independently.
@@ -569,6 +586,9 @@
     on:pointercancel={pointerUp}
   >
     {#if selectedMedia}
+      {#if processing}
+        <div class="model-activity" role="status"><i></i><span>{modelLabel} · {progressiveFrame >= 0 ? `Frame ${progressiveFrame + 1} · live tiles` : 'Preparing model output…'}{selectedMedia.hdr_format ? ' · SDR display preview' : ''}</span></div>
+      {/if}
       {#if videoComparison}
         {#key videoComparisonKey}
           <VideoComparison
@@ -644,3 +664,12 @@
     {/if}
   </div>
 </section>
+
+<style>
+  .model-activity { position: absolute; top: 12px; right: 12px; z-index: 8; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 8px 10px; background: #171e30ed; color: #c3d1fa; border: 1px solid #506da3; border-radius: 6px; font-size: 11px; pointer-events: none; }
+  .model-activity i { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #a6c0ff40; border-top-color: #b9ccff; animation: model-spin 1s linear infinite; }
+  .active-tile { animation: tile-pulse 1.2s ease-in-out infinite; }
+  @keyframes model-spin { to { transform: rotate(360deg); } }
+  @keyframes tile-pulse { 50% { border-color: #d5e0ff; background: #8cabff25; } }
+  @media (prefers-reduced-motion: reduce) { .model-activity i, .active-tile { animation: none; } }
+</style>

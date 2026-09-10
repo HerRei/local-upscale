@@ -359,6 +359,9 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
         def submit(self, **_kwargs):
             return True
 
+        def clear(self):
+            pass
+
         def close(self):
             pass
 
