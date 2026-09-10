@@ -920,6 +920,7 @@ enum ModelSelection {
         path: String,
         preprocess: Option<ResolvedImageStage>,
         face_path: Option<String>,
+        face_model_id: String,
         native_scale: u32,
     },
     Temporal {
@@ -1020,8 +1021,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             })?;
         if !face.installed {
             return Err(AppError::Validation(
-                "download and accept the face model terms before enabling face-aware processing"
-                    .into(),
+                "import the verified face checkpoint before enabling face-aware processing".into(),
             ));
         }
         if selected_model.is_some_and(|primary| primary.native_scale != face.native_scale) {
@@ -1071,6 +1071,9 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         path,
         preprocess,
         face_path,
+        face_model_id: selected_model
+            .map(|model| model.pair_with.clone())
+            .unwrap_or_default(),
         native_scale: selected_model
             .map(|model| model.native_scale)
             .unwrap_or(input.output_scale),
@@ -1109,6 +1112,7 @@ fn build_job_message(
             path,
             preprocess,
             face_path,
+            face_model_id,
             native_scale,
         } if input.task != "video" => Ok(json!({
             "type": "job_request",
@@ -1137,6 +1141,7 @@ fn build_job_message(
                     model_id,
                     path,
                     face_path.as_deref(),
+                    face_model_id,
                     input.face_fidelity,
                     &input.task,
                 ),
@@ -1233,6 +1238,7 @@ fn image_pipeline_stages(
     model_id: &str,
     model_path: &str,
     face_path: Option<&str>,
+    face_model_id: &str,
     face_fidelity: u32,
     task: &str,
 ) -> Vec<Value> {
@@ -1252,7 +1258,7 @@ fn image_pipeline_stages(
     if let Some(path) = face_path {
         stages.push(json!({
             "kind": "face_restore",
-            "model_id": "hat_s_x4_face",
+            "model_id": face_model_id,
             "model_path": path,
             "fidelity": f64::from(face_fidelity) / 100.0,
             "execution": "fused-with-upscale",
@@ -1551,6 +1557,7 @@ mod tests {
             path: "/models/upscaler.safetensors".into(),
             preprocess: None,
             face_path: None,
+            face_model_id: String::new(),
             native_scale: 4,
         };
 
@@ -1632,6 +1639,7 @@ mod tests {
                 path: "/models/fbcnn.pth".into(),
             }),
             face_path: Some("/models/face.pth".into()),
+            face_model_id: "hat_l_x4_face".into(),
             native_scale: 4,
         };
         let mut options = input("upscale");
@@ -1655,6 +1663,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["deblock", "upscale", "face_restore"]
         );
+        assert_eq!(stages[2]["model_id"], "hat_l_x4_face");
+        assert_eq!(stages[2]["model_path"], "/models/face.pth");
         assert_eq!(stages[2]["execution"], "fused-with-upscale");
         assert_eq!(stages[2]["fidelity"], 0.65);
     }

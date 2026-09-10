@@ -68,8 +68,8 @@ class CatalogModel:
     time_factor: float = 1.0
     speed_factor: float = 1.0
     vram_estimate_mb: int = 0
-    # For face fine-tunes: the model_id of the general model this face
-    # model pairs with. Empty string for non-face models.
+    # Reciprocal companion ID for general/face model pairs. Empty for
+    # models without a compatible companion.
     pair_with: str = ""
     commercial_use_status: str = "allowed"
 
@@ -194,6 +194,7 @@ MODEL_CATALOG = (
         time_factor=1.8,
         speed_factor=0.30,
         vram_estimate_mb=6000,
+        pair_with="hat_l_x4_face",
     ),
     CatalogModel(
         model_id="hat_l_x4_face",

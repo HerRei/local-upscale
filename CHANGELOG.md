@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — HAT face companions
+
+- Complete HAT-S/HAT-L companion pairing and include both exact checkpoints in the
+  generated Tauri catalog, retaining verified external import and Labs policies.
+- Preserve the chosen face model ID in desktop image recipes and job messages.
+- Document interpolation evidence, clean-image trade-offs, and pending HAT-L availability.
+- Keep v0.0.12-alpha version metadata, release workflow, tags, and installers unchanged.
+
+
 All notable changes will be documented here. The project follows semantic versioning once the first
 stable release is published.
 

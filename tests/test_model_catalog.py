@@ -122,11 +122,12 @@ def test_catalog_attributes_and_integrity():
         assert model.vram_estimate_mb >= 0
         assert model.commercial_use_status in {"allowed", "not-allowed", "unclear"}
 
-    face_model = get_model_by_id("hat_s_x4_face")
-    assert face_model is not None
-    assert face_model.commercial_use_status == "unclear"
-    assert face_model.license_name == "Checkpoint rights unverified"
-    assert "user-supplied" in face_model.description
+    for model_id in ("hat_s_x4_face", "hat_l_x4_face"):
+        face_model = get_model_by_id(model_id)
+        assert face_model is not None
+        assert face_model.commercial_use_status == "unclear"
+        assert face_model.license_name == "Checkpoint rights unverified"
+        assert "user-supplied" in face_model.description
 
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
         model = get_model_by_id(model_id)

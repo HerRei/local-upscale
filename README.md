@@ -105,6 +105,12 @@ Quick Start currently selects SPAN NomosUni. Best Quality selects RealPLKSR Nomo
 release preflight downloads both into a genuinely empty cache, validates their embedded checksums,
 loads them through Spandrel, and runs real CPU inference.
 
+Model cards: [HAT-S Face](docs/models/hat-s-face.md) · [HAT-L Face](docs/models/hat-l-face.md).
+The completed two-model desktop integration is on `codex/hat-face-models` for a later
+release; it does not alter the ongoing v0.0.12-alpha build. In Tauri, select stock
+HAT-S or HAT-L and enable its corresponding face-aware companion after importing
+an exact, verified checkpoint. A local face detector is required.
+
 The HAT-S Face implementation remains available for an exact user-supplied compatible checkpoint,
 but the current asset's independent training-data, redistribution, and use terms could not be
 verified. LocalSR does not automatically download it or make a commercial-use claim. The same

@@ -196,11 +196,16 @@ def test_desktop_catalog_fails_closed_for_unresolved_checkpoint_rights() -> None
     )
     models = {model["model_id"]: model for model in manifest["models"]}
 
-    face = models["hat_s_x4_face"]
-    assert face["automated_download_allowed"] is False
-    assert face["commercial_use_allowed"] is None
-    assert face["terms_acceptance_required"] is True
-    assert face["support_tier"] == "labs"
+    for model_id in ("hat_s_x4_face", "hat_l_x4_face"):
+        face = models[model_id]
+        assert face["automated_download_allowed"] is False
+        assert face["commercial_use_allowed"] is None
+        assert face["terms_acceptance_required"] is True
+        assert face["support_tier"] == "labs"
+        primary = models[face["pair_with"]]
+        assert primary["pair_with"] == face["model_id"]
+        assert primary["native_scale"] == face["native_scale"]
+        assert "face" not in primary["purposes"]
 
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
         assert models[model_id]["automated_download_allowed"] is False

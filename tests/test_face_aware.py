@@ -578,7 +578,11 @@ def test_video_job_request_includes_face_model_path():
     assert data["face_fidelity"] == 0.65
 
 
-def test_jobs_auto_pair_installed_face_companion(tmp_path):
+@pytest.mark.parametrize(
+    "general_id,face_id",
+    [("hat_s_x4", "hat_s_x4_face"), ("hat_l_x4_imagenet", "hat_l_x4_face")],
+)
+def test_jobs_auto_pair_installed_face_companion(tmp_path, general_id, face_id):
     """Face-aware restoration follows the model choice, not a button."""
     import subprocess
     import sys
@@ -597,7 +601,7 @@ def test_jobs_auto_pair_installed_face_companion(tmp_path):
         models = base / "models"
         models.mkdir(parents=True, exist_ok=True)
         catalog = {{m.model_id: m for m in MODEL_CATALOG}}
-        for model_id in ("hat_s_x4", "hat_s_x4_face"):
+        for model_id in ({general_id!r}, {face_id!r}):
             model = catalog[model_id]
             with open(models / model.filename, "wb") as handle:
                 handle.truncate(model.size_bytes)
@@ -621,18 +625,18 @@ def test_jobs_auto_pair_installed_face_companion(tmp_path):
             application.set_model_index(index)
 
         # General model with an installed FACE companion: jobs carry it.
-        select("hat_s_x4")
+        select({general_id!r})
         companion = application._face_companion_path()
         assert companion is not None
-        assert companion.endswith(catalog["hat_s_x4_face"].filename)
+        assert companion.endswith(catalog[{face_id!r}].filename)
 
         # The face model itself pairs back to a GENERAL model: no companion.
-        select("hat_s_x4_face")
+        select({face_id!r})
         assert application._face_companion_path() is None
 
         # Companion not installed: no pairing.
-        (models / catalog["hat_s_x4_face"].filename).unlink()
-        select("hat_s_x4")
+        (models / catalog[{face_id!r}].filename).unlink()
+        select({general_id!r})
         assert application._face_companion_path() is None
         application.shutdown()
         """

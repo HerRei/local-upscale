@@ -441,6 +441,26 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText(/disabled unless a supported local detector/i)).toBeTruthy();
   });
 
+  it.each([
+    ['hat_s_x4', 'hat_s_x4_face'],
+    ['hat_l_x4_imagenet', 'hat_l_x4_face']
+  ])('imports the matching face companion for %s without downloading', async (primaryId, faceId) => {
+    const snapshot = readySnapshot([image('portrait', true)]);
+    snapshot.engine!.features.push('face_aware');
+    const face = snapshot.catalog.models.find((model) => model.model_id === faceId)!;
+    face.installed = false;
+    api.chooseCustomModel.mockResolvedValueOnce(`/models/${face.filename}` as never);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /Upscale\s*Photos and artwork/i);
+    await user.selectOptions(screen.getByLabelText('Checkpoint'), primaryId);
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(`Face-aware pass with ${face.name}`) }));
+    expect(screen.getByRole('button', { name: 'Upscale selected' }).hasAttribute('disabled')).toBe(true);
+    await user.click(screen.getByRole('checkbox', { name: /I understand that the checkpoint rights are unresolved/i }));
+    await user.click(screen.getByRole('button', { name: 'Choose externally downloaded face checkpoint…' }));
+    await waitFor(() => expect(api.importCatalogModel).toHaveBeenCalledWith(faceId, `/models/${face.filename}`, true));
+    expect(api.downloadModel).not.toHaveBeenCalled();
+  });
+
   it('labels experimental engines separately from standard video', async () => {
     const user = await mountWith(readySnapshot());
     await chooseTask(user, /Upscale Video\s*Local SDR video/i);

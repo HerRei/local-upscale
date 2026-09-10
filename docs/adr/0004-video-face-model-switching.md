@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted and Implemented. Integrated with `hat_s_x4_face` (blended $\alpha=0.10$ checkpoint `base_95k_interp_a0p1.pth`).
+Accepted and Implemented. Integrated with `hat_s_x4_face` (α=0.10, `base_95k_interp_a0p1.pth`) and
+`hat_l_x4_face` (α=0.25, `hat_l_x4_face_task4.pth`) on the later-release
+`codex/hat-face-models` branch. Each pairs reciprocally with its own stock variant.
 
 Amended for v0.0.11-alpha: the processing design and fidelity-controlled spatial blend remain
 implemented, but independent rights for the exact checkpoint/training data are not verified. The

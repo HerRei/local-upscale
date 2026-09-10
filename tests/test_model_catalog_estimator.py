@@ -10,6 +10,7 @@ from localsr.core.model_catalog import (
     MODEL_CATALOG,
     CatalogModel,
     ModelDownloadError,
+    ModelPurpose,
     ModelStore,
     download_model,
 )
@@ -47,7 +48,7 @@ def test_catalog_has_pinned_optional_downloads():
     upstream_hat = [
         model
         for model in MODEL_CATALOG
-        if model.architecture == "HAT" and model.model_id != "hat_s_x4_face"
+        if model.architecture == "HAT" and ModelPurpose.FACE not in model.purposes
     ]
     assert all(CATALOG_REVISION in model.download_url for model in upstream_hat)
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)
