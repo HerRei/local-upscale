@@ -159,7 +159,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .benchmark-device-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#3f72cf,#6a9efe); }
 .benchmark-device.cpu .benchmark-device-track i { background: linear-gradient(90deg,#626871,#969da8); }
 .benchmark-device-meta { display: flex; gap: 7px; color: var(--tertiary); font-size: calc(9px * var(--ui-scale)); }
-.benchmark-device-meta span:first-child { color: #8fd09e; }
+.benchmark-device-meta span:first-child:not(.warning-value) { color: #8fd09e; }
 .benchmark-scenes { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.06); }
 .benchmark-scenes summary { cursor: pointer; color: var(--secondary); font-size: calc(9px * var(--ui-scale)); user-select: none; }
 .benchmark-scenes[open] summary { margin-bottom: 5px; }

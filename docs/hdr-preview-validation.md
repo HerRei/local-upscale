@@ -12,6 +12,11 @@ Local checks on Apple silicon, 10 September 2026:
   successive CPU/GPU runs, and forwarding HDR output mode.
 - Svelte: zero errors/warnings. Production frontend and native macOS debug app built.
 - Packaged native smoke: worker negotiation and ready state passed.
+- Native CPU-only and MPS-only benchmark runs completed independently. The saved
+  hardware cards retained CPU 3.81 output MP/s (stable, 1.15% timing spread) after
+  the MPS run recorded 19.31 output MP/s (unstable, 10.02% timing spread). The latter
+  is a diagnostic measurement, not a publishable stable score. Real render squares
+  were visible during warm-up; scored iterations excluded preview work.
 - Native HDR job: HAT-S on MPS, 216×384 → 432×768, two frames. The generated file is
   HEVC Main 10 / YUV420P10LE, HLG transfer, BT.2020 primaries and matrix, limited range.
   The app displayed real completed squares and an active model tile; frame 1 of 2
