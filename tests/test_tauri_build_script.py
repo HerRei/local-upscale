@@ -111,6 +111,7 @@ def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: P
     rocm_libraries = {
         "libamd_comgr.so": "libamd_comgr.so.3",
         "libamdhip64.so": "libamdhip64.so.7",
+        "libroctx64.so": "libroctx64.so.4",
     }
     for library_name in rocm_libraries:
         (torch_libraries / library_name).touch()
