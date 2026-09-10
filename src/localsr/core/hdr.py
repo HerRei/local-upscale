@@ -105,7 +105,9 @@ def hdr_to_linear_nits(rgb: np.ndarray, transfer: int) -> np.ndarray:
         )
         # Reference HLG OOTF: luminance-dependent system gamma 1.2. Applying
         # gamma independently to R/G/B would shift the source's hues.
-        luminance = scene @ BT2020_LUMA
+        # A three-channel contraction must not start thousands of threaded
+        # BLAS matrix/vector calls for a strided 4K decoder frame.
+        luminance = np.einsum("...c,c->...", scene, BT2020_LUMA, optimize=False)
         return scene * np.power(luminance, 0.2)[..., None] * 1000
     if transfer == 16:
         m1, m2 = 2610 / 16384, 2523 / 32
@@ -124,10 +126,12 @@ def tone_map_to_sdr(rgb: np.ndarray, transfer: int, primaries: int) -> np.ndarra
             "This HDR video's colour primaries are not supported. "
             "HDR import currently supports BT.2020 HLG/PQ; convert this file to SDR first."
         )
-    linear = hdr_to_linear_nits(rgb, transfer) @ BT2020_TO_BT709.T
+    linear = np.einsum(
+        "...c,dc->...d", hdr_to_linear_nits(rgb, transfer), BT2020_TO_BT709, optimize=False
+    )
     # Bring out-of-gamut negative channels toward neutral luminance before
     # compressing highlights, rather than independently clipping each channel.
-    luminance = np.maximum(linear @ BT709_LUMA, 0)
+    luminance = np.maximum(np.einsum("...c,c->...", linear, BT709_LUMA, optimize=False), 0)
     minimum = linear.min(axis=-1)
     saturation = np.minimum(1, luminance / np.maximum(luminance - minimum, 1e-6))
     linear = luminance[..., None] + saturation[..., None] * (linear - luminance[..., None])

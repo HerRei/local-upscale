@@ -15,7 +15,7 @@
   <button class="disclosure" on:click={() => (advanced = !advanced)}><span>Advanced</span><b>{advanced ? '⌃' : '⌄'}</b><small>Model, output, hardware</small></button>
   {#if advanced}
     <div class="advanced-controls">
-      {#if settings.task !== 'denoise'}
+      {#if settings.task !== 'denoise' && !(usingTemporalVideo && settings.video_target_resolution)}
         <div class="field-row"><label for="scale">Output scale</label><select id="scale" value={settings.output_scale} on:change={(event) => updateSettings({ output_scale: Number(event.currentTarget.value) })}>{#each Array.from({ length: Math.max(1, (selectedModel?.native_scale ?? 4) - 1) }, (_, index) => index + 2) as scale}<option value={scale}>{scale}×</option>{/each}</select></div>
       {/if}
       {#if settings.task !== 'video'}

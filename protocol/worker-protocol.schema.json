@@ -319,6 +319,7 @@
                 "job_cancelled",
                 "job_failed",
                 "video_frame_started",
+                "video_stage_progress",
                 "video_frame_completed",
                 "video_job_completed",
                 "benchmark_started",

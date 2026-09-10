@@ -73,14 +73,48 @@ export function canvasTileRect(tile: OutputTile, canvas: PixelSize): CanvasTileR
   };
 }
 
-/** Percentage geometry for the active-tile outline drawn above the canvas. */
-export function tilePercentages(tile: OutputTile): CanvasTileRect | null {
-  const rect = canvasTileRect(tile, { width: 100, height: 100 });
+/** Use the same canvas pixel boundaries as the JPEG, without whole-percent rounding. */
+export function tilePercentages(tile: OutputTile, canvas?: PixelSize): CanvasTileRect | null {
+  const size = canvas ?? { width: tile.image_width, height: tile.image_height };
+  const rect = canvasTileRect(tile, size);
   if (!rect) return null;
+  const left = Math.max(0, Math.min(size.width, rect.x));
+  const top = Math.max(0, Math.min(size.height, rect.y));
+  const right = Math.max(left, Math.min(size.width, rect.x + rect.width));
+  const bottom = Math.max(top, Math.min(size.height, rect.y + rect.height));
   return {
-    x: Math.max(0, Math.min(100, rect.x)),
-    y: Math.max(0, Math.min(100, rect.y)),
-    width: Math.max(0, Math.min(100 - rect.x, rect.width)),
-    height: Math.max(0, Math.min(100 - rect.y, rect.height))
+    x: left / size.width * 100,
+    y: top / size.height * 100,
+    width: (right - left) / size.width * 100,
+    height: (bottom - top) / size.height * 100
   };
+}
+
+/** Pending squares follow the worker's non-overlapping core tiles, including edge remainders. */
+export function paintTileGrid(
+  context: CanvasRenderingContext2D,
+  firstTile: OutputTile,
+  canvas: PixelSize
+): void {
+  if (firstTile.output_x !== 0 || firstTile.output_y !== 0 ||
+      !canvasTileRect(firstTile, canvas)) return;
+  // Below two preview pixels, a grid is unreadable; keep the plain pending surface.
+  if (firstTile.output_width / firstTile.image_width * canvas.width < 2 ||
+      firstTile.output_height / firstTile.image_height * canvas.height < 2) return;
+  let row = 0;
+  for (let y = 0; y < firstTile.image_height; y += firstTile.output_height, row += 1) {
+    let column = 0;
+    for (let x = 0; x < firstTile.image_width; x += firstTile.output_width, column += 1) {
+      const rect = canvasTileRect({
+        ...firstTile,
+        output_x: x,
+        output_y: y,
+        output_width: Math.min(firstTile.output_width, firstTile.image_width - x),
+        output_height: Math.min(firstTile.output_height, firstTile.image_height - y)
+      }, canvas);
+      if (!rect) continue;
+      context.fillStyle = (row + column) % 2 ? '#17202d' : '#101721';
+      context.fillRect(rect.x, rect.y, rect.width, rect.height);
+    }
+  }
 }

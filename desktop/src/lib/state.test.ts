@@ -81,6 +81,25 @@ describe('desktop state', () => {
     expect(snapshot.runtime.result_preview_data_url).toBe('');
   });
 
+  it('shows temporal phases without inventing a tile count or first-clip ETA', () => {
+    let snapshot = applyWorkerEnvelope(demoSnapshot(), { type: 'job_started', data: { job_id: 'seed' } });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'video_stage_progress', data: {
+      job_id: 'seed', stage: 'encoding', completed: 0, total: 1, frame_index: 0,
+      total_frames: 24, elapsed_seconds: 3
+    } });
+    expect(snapshot.runtime.status_title).toBe('Encoding clip');
+    expect(snapshot.runtime.status_detail).toBe('0 / 1 · From frame 1 of 24 · ETA: measuring first clip…');
+    expect(snapshot.runtime.progress).toBe(0);
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'video_stage_progress', data: {
+      job_id: 'seed', stage: 'enhancing', frame_index: 9, total_frames: 24,
+      frames_processed: 9, estimated_remaining_seconds: 120
+    } });
+    expect(snapshot.runtime.status_detail).toContain('ETA ≈ 2:00');
+    expect(snapshot.runtime.progress).toBe(37.5);
+    const late = applyWorkerEnvelope(snapshot, { type: 'video_stage_progress', data: { job_id: 'old', stage: 'decoding' } });
+    expect(late.runtime.status_title).toBe('Enhancing clip');
+  });
+
   it('keeps progressive tiles out of the completed comparison state', () => {
     let snapshot = demoSnapshot();
     snapshot.media = [

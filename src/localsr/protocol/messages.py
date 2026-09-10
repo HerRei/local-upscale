@@ -557,6 +557,22 @@ class BenchmarkCancelled:
 
 
 @dataclass
+class VideoStageProgress:
+    job_id: str
+    stage: str
+    completed: int = 0
+    total: int = 0
+    frame_index: int = 0
+    total_frames: int = 0
+    elapsed_seconds: float = 0.0
+    frames_processed: int = 0
+    estimated_remaining_seconds: float = 0.0
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_stage_progress", "data": asdict(self)})
+
+
+@dataclass
 class VideoFrameStarted:
     job_id: str
     frame_index: int

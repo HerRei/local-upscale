@@ -888,6 +888,10 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         || !(0..=51).contains(&settings.video_crf)
         || !(1..=100).contains(&settings.jpeg_quality)
         || settings.face_fidelity > 100
+        || !matches!(
+            settings.video_target_resolution,
+            0 | 256 | 512 | 720 | 1080 | 1440 | 2160
+        )
     {
         return Err(AppError::Validation(
             "one or more numeric settings are out of range".into(),
@@ -919,6 +923,7 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         deflicker_window: input.deflicker_window,
         video_container: input.video_container.clone(),
         video_hdr_mode: input.video_hdr_mode.clone(),
+        video_target_resolution: input.video_target_resolution,
         video_crf: input.video_crf,
         enable_face_model: input.enable_face_model,
         face_fidelity: input.face_fidelity,
@@ -1212,9 +1217,13 @@ fn build_job_message(
             temporal_overlap,
         } => {
             let shortest = u64::from(media.width.min(media.height));
-            let target = shortest
-                .saturating_mul(u64::from(input.output_scale))
-                .min(u64::from(u32::MAX));
+            let target = if input.video_target_resolution > 0 {
+                u64::from(input.video_target_resolution)
+            } else {
+                shortest
+                    .saturating_mul(u64::from(input.output_scale))
+                    .min(u64::from(u32::MAX))
+            };
             Ok(json!({
                 "type": "video_job_request",
                 "data": {
@@ -1316,6 +1325,11 @@ fn unique_output_path(
         .unwrap_or("output");
     let suffix = match input.task.as_str() {
         "denoise" => "_denoised".to_owned(),
+        "video"
+            if input.video_model_id != "frame_by_frame" && input.video_target_resolution > 0 =>
+        {
+            format!("_video_{}px", input.video_target_resolution)
+        }
         "video" => format!("_video_{}x", input.output_scale),
         _ => format!("_upscaled_{}x", input.output_scale),
     };
@@ -1462,6 +1476,7 @@ mod tests {
             deflicker_window: 3,
             video_container: "mp4".into(),
             video_hdr_mode: "tone_map".into(),
+            video_target_resolution: 0,
             video_crf: 18,
             enable_face_model: false,
             face_fidelity: 70,
@@ -1490,6 +1505,15 @@ mod tests {
         );
         assert_eq!(first.file_name().unwrap(), "photo_upscaled_4x_1.png");
         assert_eq!(second.file_name().unwrap(), "photo_upscaled_4x_2.png");
+        let mut video = input("video");
+        video.video_model_id = "seedvr2_3b".into();
+        video.video_target_resolution = 256;
+        let smaller =
+            unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
+        assert_eq!(smaller.file_name().unwrap(), "clip_video_256px.mp4");
+        video.video_model_id = "frame_by_frame".into();
+        let tiled = unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
+        assert_eq!(tiled.file_name().unwrap(), "clip_video_4x.mp4");
     }
 
     #[test]
@@ -1650,6 +1674,29 @@ mod tests {
         .unwrap();
         assert!(temporal_message["data"]["fps"].is_null());
         assert_eq!(temporal_message["data"]["hdr_mode"], "tone_map");
+        let mut smaller = input("video");
+        smaller.video_target_resolution = 512;
+        let smaller_message = build_job_message(
+            "small-job",
+            &video,
+            Path::new("/output/small.mp4"),
+            Path::new("/app-owned/work"),
+            &smaller,
+            &temporal,
+        )
+        .unwrap();
+        assert_eq!(smaller_message["data"]["target_resolution"], 512);
+        let mut old_settings = serde_json::to_value(UiSettings::default()).unwrap();
+        old_settings
+            .as_object_mut()
+            .unwrap()
+            .remove("video_target_resolution");
+        assert_eq!(
+            serde_json::from_value::<UiSettings>(old_settings)
+                .unwrap()
+                .video_target_resolution,
+            0
+        );
     }
 
     #[test]
@@ -1731,6 +1778,7 @@ mod tests {
             deflicker_window: None,
             video_container: String::new(),
             video_hdr_mode: "tone_map".into(),
+            video_target_resolution: 0,
             video_crf: None,
             enable_face_model: None,
             face_fidelity: None,

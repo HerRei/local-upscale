@@ -3,9 +3,12 @@ Unified debugging system for SeedVR2 generation pipeline
 
 Provides structured logging, memory tracking, and performance monitoring
 for all pipeline stages, including BlockSwap operations.
+
+Modified for LocalSR: write diagnostics to stderr; stdout is the worker protocol.
 """
 
 import time
+import sys
 import torch
 import gc
 from typing import Optional, List, Dict, Any, Union
@@ -139,7 +142,8 @@ class Debug:
         # Add indentation
         indent = " " * (indent_level * 2)
         
-        print(f"{prefix} {indent}{message}", flush=True)
+        # LocalSR reserves stdout for its JSON-lines worker protocol.
+        print(f"{prefix} {indent}{message}", file=sys.stderr, flush=True)
 
     def print_header(self, cli: bool = False) -> None:
         """Print the header with banner - always displayed"""

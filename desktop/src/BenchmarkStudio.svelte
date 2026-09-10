@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
-  import { boundedPreviewSize, canvasTileRect, tilePercentages, type OutputTile } from './lib/progressive-preview';
+  import { boundedPreviewSize, canvasTileRect, paintTileGrid, tilePercentages, type OutputTile } from './lib/progressive-preview';
   import type { BenchmarkRender, WorkerEnvelope } from './lib/types';
   export let renders: BenchmarkRender[] = [];
   export let running = false;
@@ -45,6 +45,7 @@
     const tile = Object.fromEntries(['output_x', 'output_y', 'output_width', 'output_height', 'image_width', 'image_height']
       .map(key => [key, Number(data[key] ?? 0)])) as unknown as OutputTile;
     if (tile.image_width <= 0 || tile.image_height <= 0) return;
+    if (data.phase === 'reset') return;
     const context = canvas.getContext('2d');
     if (!context) return;
     if (!visible) {
@@ -55,6 +56,7 @@
       canvas.height = size.height;
       context.fillStyle = '#10141d';
       context.fillRect(0, 0, canvas.width, canvas.height);
+      paintTileGrid(context, tile, canvas);
       visible = true;
     }
     sceneName = names[String(data.scene_id)] ?? String(data.scene_id);
@@ -62,7 +64,7 @@
     total = Number(data.total_tiles ?? 0);
     completed = Number(data.completed_tiles ?? 0);
     if (data.phase === 'started') {
-      active = tilePercentages(tile);
+      active = tilePercentages(tile, canvas);
     } else if (data.phase === 'completed') {
       if (data.jpeg_base64) {
         const image = new Image();

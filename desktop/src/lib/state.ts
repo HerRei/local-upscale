@@ -75,6 +75,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
   const next = [
     'progress',
     'video_tile_progress',
+    'video_stage_progress',
     'video_frame_started',
     'video_frame_completed'
   ].includes(envelope.type)
@@ -135,7 +136,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'job_started':
       next.runtime.active_job_id = String(data.job_id ?? '');
       next.runtime.status_title = 'Processing';
-      next.runtime.status_detail = 'The model is preparing the first tile.';
+      next.runtime.status_detail = 'Preparing the selected model.';
       next.runtime.progress = 0;
       next.runtime.elapsed_seconds = 0;
       next.runtime.estimated_remaining_seconds = 0;
@@ -188,6 +189,29 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = remaining;
       next.runtime.active_tile_size = Number(data.active_tile_size ?? 0);
+      next.runtime.throughput_unit = 'frames/s';
+      break;
+    }
+    case 'video_stage_progress': {
+      if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
+      const labels: Record<string, string> = {
+        verifying_model: 'Checking model files', loading_model: 'Loading video model',
+        reading_frames: 'Reading video frames', preparing_clip: 'Preparing clip',
+        encoding: 'Encoding clip', enhancing: 'Enhancing clip',
+        decoding: 'Decoding enhanced clip', finishing: 'Finishing clip', saving: 'Saving video'
+      };
+      next.runtime.status_title = labels[String(data.stage)] ?? 'Processing video';
+      const count = Number(data.total ?? 0);
+      const totalFrames = Number(data.total_frames ?? 0);
+      // A newer phase can coalesce away the preceding frame-completed pulse.
+      // Carry its measured ETA and frame count in every temporal phase event.
+      if (data.frames_processed !== undefined && totalFrames > 0) next.runtime.progress = Number(data.frames_processed) / totalFrames * 100;
+      if (data.estimated_remaining_seconds !== undefined) next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds);
+      const steps = count > 0 ? `${Number(data.completed ?? 0)} / ${count} · ` : '';
+      const frames = totalFrames > 0 ? `From frame ${Number(data.frame_index ?? 0) + 1} of ${totalFrames} · ` : '';
+      next.runtime.status_detail = `${steps}${frames}${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first clip…'}`;
+      if (data.stage === 'saving') next.runtime.status_detail = 'Finalizing video timing and audio…';
+      next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.throughput_unit = 'frames/s';
       break;
     }

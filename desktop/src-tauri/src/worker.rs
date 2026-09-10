@@ -515,7 +515,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id = id;
             runtime.status_title = "Processing".into();
-            runtime.status_detail = "The model is preparing the first tile.".into();
+            runtime.status_detail = "Preparing the selected model.".into();
             runtime.elapsed_seconds = 0.0;
             runtime.estimated_remaining_seconds = 0.0;
             runtime.throughput = 0.0;
@@ -570,6 +570,61 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         // webview composites them into its bounded live canvas just as the
         // released Slint image provider does.
         "tile_update" => {}
+        "video_stage_progress" => {
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.active_job_id == string(data, "job_id") {
+                runtime.status_title = match string(data, "stage").as_str() {
+                    "verifying_model" => "Checking model files",
+                    "loading_model" => "Loading video model",
+                    "reading_frames" => "Reading video frames",
+                    "preparing_clip" => "Preparing clip",
+                    "encoding" => "Encoding clip",
+                    "enhancing" => "Enhancing clip",
+                    "decoding" => "Decoding enhanced clip",
+                    "finishing" => "Finishing clip",
+                    "saving" => "Saving video",
+                    _ => "Processing video",
+                }
+                .into();
+                let frames_done = number(data, "frames_processed");
+                let frames_total = number(data, "total_frames");
+                if frames_total > 0.0 {
+                    runtime.progress = frames_done / frames_total * 100.0;
+                }
+                runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+                let steps = if integer(data, "total") > 0 {
+                    format!(
+                        "{} / {} · ",
+                        integer(data, "completed"),
+                        integer(data, "total")
+                    )
+                } else {
+                    String::new()
+                };
+                let frames = if integer(data, "total_frames") > 0 {
+                    format!(
+                        "From frame {} of {} · ",
+                        integer(data, "frame_index") + 1,
+                        integer(data, "total_frames")
+                    )
+                } else {
+                    String::new()
+                };
+                let eta = if runtime.estimated_remaining_seconds > 0.0 {
+                    eta_suffix(runtime.estimated_remaining_seconds)
+                        .trim_start_matches(" · ")
+                        .to_string()
+                } else {
+                    "ETA: measuring first clip…".into()
+                };
+                runtime.status_detail = format!("{steps}{frames}{eta}");
+                if string(data, "stage") == "saving" {
+                    runtime.status_detail = "Finalizing video timing and audio…".into();
+                }
+                runtime.elapsed_seconds = number(data, "elapsed_seconds");
+                runtime.throughput_unit = "frames/s".into();
+            }
+        }
         "video_frame_started" => {
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = "Enhancing video · Labs".into();
@@ -1004,6 +1059,7 @@ fn should_emit_state_changed(message_type: &str) -> bool {
             | "stage_progress"
             | "tile_update"
             | "video_frame_started"
+            | "video_stage_progress"
             | "video_frame_completed"
             | "benchmark_progress"
             | "benchmark_stage_started"

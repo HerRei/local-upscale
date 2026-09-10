@@ -204,6 +204,8 @@ pub struct Recipe {
     #[serde(default = "default_hdr_mode")]
     pub video_hdr_mode: String,
     #[serde(default)]
+    pub video_target_resolution: u32,
+    #[serde(default)]
     pub video_crf: Option<u32>,
     #[serde(default)]
     pub enable_face_model: Option<bool>,
@@ -246,6 +248,8 @@ pub struct UiSettings {
     pub video_container: String,
     #[serde(default = "default_hdr_mode")]
     pub video_hdr_mode: String,
+    #[serde(default)]
+    pub video_target_resolution: u32,
     pub video_crf: u32,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
@@ -281,6 +285,7 @@ impl Default for UiSettings {
             deflicker_window: 3,
             video_container: "mp4".into(),
             video_hdr_mode: default_hdr_mode(),
+            video_target_resolution: 0,
             video_crf: 18,
             enable_face_model: false,
             face_fidelity: 70,
@@ -501,6 +506,8 @@ pub struct StartBatchInput {
     pub video_container: String,
     #[serde(default = "default_hdr_mode")]
     pub video_hdr_mode: String,
+    #[serde(default)]
+    pub video_target_resolution: u32,
     pub video_crf: u32,
     pub enable_face_model: bool,
     pub face_fidelity: u32,

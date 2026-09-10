@@ -245,7 +245,7 @@ def test_temporal_worker_preserves_vfr_trim_and_audio(tmp_path, monkeypatch, sta
 
 
 def test_temporal_multiple_chunks_and_short_tail(tmp_path, monkeypatch):
-    source = make_vfr(tmp_path / "long.mp4", tuple(index * 40 for index in range(72)))
+    source = make_vfr(tmp_path / "long.mp4", tuple(index * 40 for index in range(73)))
     output = tmp_path / "out.mp4"
     monkeypatch.setattr("localsr.worker.server.send_message", lambda _: None)
     calls = []
@@ -266,7 +266,9 @@ def test_temporal_multiple_chunks_and_short_tail(tmp_path, monkeypatch):
         },
         lambda *_: Engine(),
     )
-    assert calls == [33, 35, 8]
+    assert max(calls) == 9  # one model window, including context
+    assert calls[-1] == 3  # one fresh frame plus two frames of context
+    assert sum(calls) - 2 * (len(calls) - 1) == 73
     assert timestamps(output) == pytest.approx(timestamps(source), abs=0.001)
 
 

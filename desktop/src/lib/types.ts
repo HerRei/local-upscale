@@ -167,6 +167,7 @@ export interface Recipe {
   deflicker?: boolean;
   deflicker_window?: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
+  video_target_resolution?: number;
   video_container?: 'mp4' | 'mkv';
   video_crf?: number;
   enable_face_model?: boolean;
@@ -201,6 +202,7 @@ export interface UiSettings {
   deflicker: boolean;
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
+  video_target_resolution?: number;
   video_container: 'mp4' | 'mkv';
   video_crf: number;
   enable_face_model: boolean;
@@ -349,6 +351,7 @@ export interface StartBatchInput {
   deflicker: boolean;
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
+  video_target_resolution?: number;
   video_container: string;
   video_crf: number;
   enable_face_model: boolean;

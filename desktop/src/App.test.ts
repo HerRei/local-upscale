@@ -473,6 +473,41 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Start 1 item' }).hasAttribute('disabled')).toBe(false);
   });
 
+  it('switches SeedVR2 to SDR, preserves the custom HDR option, and submits the chosen resolution', async () => {
+    const media = { ...video('hdr', true), width: 2160, height: 3840, hdr_format: 'HLG' as const };
+    const snapshot = readySnapshot([media]);
+    Object.assign(snapshot.settings, { task: 'video', selected_model_id: 'hat_s_x4',
+      selected_video_model_id: 'frame_by_frame', video_hdr_mode: 'preserve' });
+    const user = await mountWith(snapshot);
+    const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
+    expect(hdr.value).toBe('preserve');
+    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    expect(hdr.value).toBe('tone_map');
+    expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(true);
+    expect(screen.getByText('SDR output selected. This model cannot preserve HDR.')).toBeTruthy();
+    expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).selectedIndex).toBe(0);
+    await user.selectOptions(screen.getByLabelText('Output resolution'), '512');
+    expect(screen.getByText('512 × 910 · SDR')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({
+      video_model_id: 'seedvr2_3b', video_hdr_mode: 'tone_map', video_target_resolution: 512
+    }));
+    await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+    await user.selectOptions(screen.getByLabelText('Frame model'), '__custom__');
+    expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(false);
+    await user.selectOptions(hdr, 'preserve');
+    expect(hdr.value).toBe('preserve');
+    expect(screen.getByText(/The current adapter requires HAT/)).toBeTruthy();
+  });
+
+  it('normalizes a saved incompatible HDR setting when reopening SeedVR2', async () => {
+    const snapshot = readySnapshot([{ ...video('hdr', true), hdr_format: 'HLG' }]);
+    Object.assign(snapshot.settings, { task: 'video', selected_video_model_id: 'seedvr2_3b', video_hdr_mode: 'preserve' });
+    await mountWith(snapshot);
+    expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('tone_map');
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ video_hdr_mode: 'tone_map' })));
+  });
+
   it('saves the current setup as a named recipe beside the built-in recipes', async () => {
     const snapshot = readySnapshot([image('first', true)]);
     const user = await mountWith(snapshot);

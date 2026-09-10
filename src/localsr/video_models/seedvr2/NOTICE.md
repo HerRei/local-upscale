@@ -14,7 +14,8 @@ derive from the HuggingFace diffusers library.
   "Modified for LocalSR" comment (currently: `core/alpha_upscaling.py`,
   where OpenCV is imported lazily so RGB-only installs do not require it, and
   `core/generation_utils.py`, where the fixed text embeddings load from Safetensors,
-  and `utils/downloads.py`, where model downloads are restricted to HTTPS).
+  `utils/downloads.py`, where model downloads are restricted to HTTPS, and
+  `utils/debug.py`, where diagnostics go to stderr to preserve the JSON-lines protocol).
 - The ComfyUI interface layer (`src/interfaces/`) of the upstream project is
   not vendored. `pos_emb.safetensors` / `neg_emb.safetensors` are byte-for-byte
   tensor conversions of the precomputed text conditioning embeddings from the

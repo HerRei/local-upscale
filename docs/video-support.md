@@ -10,6 +10,7 @@ Standard video is the frame-by-frame SDR path. The isolated `codex/hdr-preservat
 - Copy compatible audio and subtitle streams. Compressed audio trims have packet-level precision, not sample-level precision. Unsupported subtitles produce a warning; unknown additional audio (for example an Apple spatial-audio track) is omitted with a visible import warning when a supported standard track exists. An unsupported sole audio track produces an actionable import error; other incompatible audio produces a remux error. There is no automatic audio transcoding.
 - An explicit API/CLI FPS override changes speed by assigning evenly spaced timestamps and omits audio/subtitles. Desktop jobs send no override. They preserve source timing.
 - The HDR control chooses **Preserve HLG/PQ · 10-bit HEVC · Labs** or **Convert to SDR · 8-bit H.264** before Start. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
+- Selecting SeedVR2 or another incompatible catalog model switches to SDR and disables the HDR preservation option. Custom image checkpoints retain that option; the worker checks that the loaded architecture is compatible with the HAT preservation adapter.
 - Output creation is atomic. Cancellation checks extend through frame skipping and audio/subtitle remuxing; an existing destination survives failures or cancellation.
 
 The H.264 encoder disables B-frame reordering to keep packet durations consistent with variable presentation intervals and the last held frame. This trades some compression efficiency for predictable timing.
@@ -64,12 +65,40 @@ The active square follows actual model tile boundaries and completed squares sho
 sampled real output, with a bounded off-thread JPEG encoder. Frame ownership keeps
 late previews from painting into a newer frame. An activity indicator also covers
 model preparation; it does not invent completed tiles.
+The pending checkerboard and active outline use the same rounded canvas pixels as
+the worker's output tile, including partial edge tiles. The decorative background
+grid is hidden while rendering so it cannot be mistaken for model tile boundaries.
 
 ## Optional processing
 
 De-flicker is off by default. It blends toward the local temporal median only where neighboring RGB samples differ by at most 12 levels, at half strength. Motion and scene cuts with larger differences bypass filtering. It is deliberately conservative, not optical-flow restoration, and remains Labs. Representative low-contrast motion still needs visual acceptance.
 
-SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Its actual model inference, memory behavior, and long-clip continuity still require hardware acceptance. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
+SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
+
+Its **Output resolution** control either follows the chosen scale or sets the
+shorter edge to 256, 512, 720, 1080, 1440 or 2160 pixels. A smaller requested output
+downsamples a large input on CPU before buffering or GPU upload; the summary shows
+the actual output dimensions. Existing settings keep their selected scale. The
+stream holds one model window including context instead of 33 fresh frames, and
+reuses models on CPU between clips so the VAE and diffusion weights do not both
+remain resident on the GPU. MPS checkpoint dtype conversion also happens on CPU
+to avoid retaining two full weight copies on the GPU during loading.
+On MPS, the adapter uses five-frame windows and 128-pixel VAE tiles with 16-pixel
+overlap. These reduce memory use, at the cost of more work and possible tile/window
+boundary effects; they are not a guarantee that large outputs fit.
+
+SeedVR2 reports real model verification, loading, frame reading, clip encoding,
+enhancement, decoding and finishing stages. Its animation indicates activity;
+it does not invent HAT tile output. ETA starts after the first completed clip.
+Memory failures suggest reducing the output resolution or using tiled HAT-S;
+the app does not disable MPS memory limits or silently reduce output resolution.
+Large outputs and long-clip quality still require hardware acceptance.
+Local functional acceptance on a 16 GB Apple-silicon Mac completed ten frames from
+a rotated 4K HLG source at 256×454 SDR, through three streamed clips, with source
+timing and stereo AAC retained. It took about 4½ minutes. This is a small-output
+test, not evidence that a full 4K/8K job is practical or that the restoration is
+perceptually faithful. Use the frame-by-frame engine when SeedVR2 exceeds the
+available memory or time budget.
 
 Video face processing remains Labs because reused masks are not motion tracking. Checkpoint distribution rights are a separate application gate.
 

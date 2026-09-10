@@ -69,6 +69,7 @@ from localsr.protocol.messages import (
     VideoFrameCompleted,
     VideoFrameStarted,
     VideoJobCompleted,
+    VideoStageProgress,
     VideoTileProgress,
     WarningMessage,
     WorkerReady,
@@ -743,20 +744,38 @@ class WorkerServer:
         total_frames = selected_frame_count(
             probe.frame_count, data.get("start_frame"), data.get("end_frame")
         )
-        window = int(data.get("temporal_window") or 9)
-        overlap = max(0, min(int(data.get("temporal_overlap") or 2), window - 1))
+        window = max(1, int(data.get("temporal_window") or 9))
+        overlap = max(0, min(int(data.get("temporal_overlap", 2)), window - 1))
         resolution = int(data.get("target_resolution") or 0)
         if resolution <= 0:
             resolution = min(probe.width, probe.height)
         bundle_dir = data.get("bundle_dir") or ""
 
-        send_message(LogMessage(level="info", message="Loading the temporal video engine..."))
+        started_at = _time.monotonic()
+        state = {"done": 0, "remaining": 0.0}
+
+        def report(stage: str, completed: int = 0, total: int = 0) -> None:
+            send_message(
+                VideoStageProgress(
+                    job_id=job_id,
+                    stage=stage,
+                    completed=completed,
+                    total=total,
+                    frame_index=state["done"],
+                    total_frames=int(total_frames),
+                    elapsed_seconds=_time.monotonic() - started_at,
+                    frames_processed=state["done"],
+                    estimated_remaining_seconds=state["remaining"],
+                )
+            )
+
+        report("loading_model")
         engine = engine_factory(
             bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
         )
+        window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
+        overlap = min(overlap, window - 1)
 
-        started_at = _time.monotonic()
-        chunk_new = 33  # 4n+1: fresh frames per streamed chunk
         decode_iter = decode_timed_frames(
             video_path,
             data.get("start_frame"),
@@ -764,7 +783,6 @@ class WorkerServer:
             self.cancel_event,
             hdr_mode=str(data.get("hdr_mode", "reject")),
         )
-        state = {"done": 0}
         preview_encoder = LatestPreviewEncoder(
             lambda packet: self._emit_live_preview(packet),
             lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
@@ -773,14 +791,24 @@ class WorkerServer:
             max_dimension=int(data.get("preview_max_dimension", 320)),
         )
 
-        def read_chunk() -> list:
+        def read_chunk(count: int) -> list:
             frames = []
-            for _ in range(chunk_new):
+            expected = min(count, total_frames - state["done"]) if total_frames > 0 else count
+            if expected > 0:
+                report("reading_frames", 0, expected)
+            for _ in range(count):
                 try:
                     frame = next(decode_iter)
                 except StopIteration:
                     break
+                # SeedVR2's explicit smaller output is prepared before a whole
+                # clip is buffered, so a 4K input does not occupy 4K GPU memory.
+                if hasattr(engine, "prepare_frame"):
+                    frame = frame.with_pixels(engine.prepare_frame(frame.rgb, resolution))
                 frames.append(frame)
+                report("reading_frames", len(frames), expected)
+            if not frames and state["done"]:
+                report("saving")
             return frames
 
         def process_chunk(chunk: list, context: list) -> list:
@@ -800,6 +828,7 @@ class WorkerServer:
                 temporal_overlap=overlap,
                 seed=42,
                 cancel_event=self.cancel_event,
+                progress_callback=report,
             )
             if self.cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
@@ -816,6 +845,7 @@ class WorkerServer:
             elapsed = _time.monotonic() - started_at
             per_frame = elapsed / max(1, state["done"])
             remaining = per_frame * max(0, int(total_frames) - state["done"])
+            state["remaining"] = float(remaining)
             send_message(
                 VideoFrameCompleted(
                     job_id=job_id,
@@ -830,7 +860,7 @@ class WorkerServer:
             return result
 
         try:
-            first_chunk = read_chunk()
+            first_chunk = read_chunk(window)
             if not first_chunk:
                 raise ValueError("No frames could be decoded from the video.")
             first_out = process_chunk(first_chunk, [])
@@ -840,6 +870,8 @@ class WorkerServer:
 
             def all_frames():
                 emitted = 0
+                previous_tail = first_chunk[-overlap:] if overlap > 0 else []
+                first_chunk.clear()
                 for frame in first_out:
                     if self.cancel_event.is_set():
                         raise InterruptedError("video job cancelled")
@@ -852,14 +884,16 @@ class WorkerServer:
                         output_height=int(frame.rgb.shape[0]),
                         image_width=int(frame.rgb.shape[1]),
                         image_height=int(frame.rgb.shape[0]),
+                        frame_index=emitted,
                     )
                     emitted += 1
                     yield frame
-                previous_tail = first_chunk[-overlap:] if overlap > 0 else []
+                first_out.clear()
                 while True:
                     if self.cancel_event.is_set():
                         raise InterruptedError()
-                    chunk = read_chunk()
+                    # Context plus new frames fits exactly one model window.
+                    chunk = read_chunk(window - len(previous_tail))
                     if not chunk:
                         return
                     output = process_chunk(chunk, list(previous_tail))
@@ -876,9 +910,11 @@ class WorkerServer:
                             output_height=int(frame.rgb.shape[0]),
                             image_width=int(frame.rgb.shape[1]),
                             image_height=int(frame.rgb.shape[0]),
+                            frame_index=emitted,
                         )
                         emitted += 1
                         yield frame
+                    output.clear()
 
             encode_video(
                 all_frames(),
@@ -899,7 +935,16 @@ class WorkerServer:
         except InterruptedError:
             send_message(JobCancelled(job_id=job_id))
             return
+        except RuntimeError as error:
+            if "out of memory" in str(error).lower():
+                raise RuntimeError(
+                    "SeedVR2 ran out of memory at the selected output resolution. "
+                    "Choose a smaller Output resolution (start with 256 or 512 px), "
+                    "or use Frame-by-frame with HAT-S and a small tile size."
+                ) from error
+            raise
         finally:
+            decode_iter.close()
             preview_encoder.close()
             engine = None  # noqa: F841 — releases the models
             try:
@@ -964,6 +1009,7 @@ class WorkerServer:
         if engine_factory is not None:
             if data.get("hdr_mode") == "preserve":
                 raise ValueError("HDR preservation requires the frame-by-frame HAT engine (Labs).")
+            send_message(VideoStageProgress(job_id=job_id, stage="verifying_model"))
             self._verify_temporal_bundle(data)
             self._run_temporal_video_job(job_id, data, engine_factory)
             return

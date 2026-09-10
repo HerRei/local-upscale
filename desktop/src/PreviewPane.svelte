@@ -5,7 +5,7 @@
   import PreviewActivity from './PreviewActivity.svelte';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
-  import { boundedPreviewSize, canvasTileRect, tilePercentages, type OutputTile } from './lib/progressive-preview';
+  import { boundedPreviewSize, canvasTileRect, paintTileGrid, tilePercentages, type OutputTile } from './lib/progressive-preview';
   import { clampPan, fitSize, panBounds, pointerCenteredPan, zoomLimits } from './lib/viewport';
   import type { MediaItem, VideoComparisonSources, WorkerEnvelope } from './lib/types';
 
@@ -14,6 +14,7 @@
   export let completedVideoOutput: string;
   export let compactHidden = false;
   export let modelLabel = '';
+  export let activityLabel = '';
   export let processing = false;
   export let addFiles: () => Promise<void>;
 
@@ -185,7 +186,7 @@
       // model at dozens of updates per second.
       if (now - lastActiveTileAt < 75) return;
       lastActiveTileAt = now;
-      const percentage = tilePercentages(tileFromData(data));
+      const percentage = tilePercentages(tileFromData(data), progressiveCanvas);
       if (percentage) {
         activeTileX = percentage.x;
         activeTileY = percentage.y;
@@ -249,11 +250,12 @@
       progressiveOutputHeight = 0;
       progressiveVisible = false;
       activeTileVisible = false;
+      return;
     }
     const ready = await ensureProgressiveCanvas(tile, jobId, generation);
     if (!ready || generation !== progressiveGeneration || jobId !== progressiveJobId) return;
 
-    const percentage = tilePercentages(tile);
+    const percentage = tilePercentages(tile, progressiveCanvas);
     if (phase === 'started' && percentage) {
       activeTileX = percentage.x;
       activeTileY = percentage.y;
@@ -322,6 +324,7 @@
     }
     context.fillStyle = 'rgba(5, 9, 15, 0.70)';
     context.fillRect(0, 0, size.width, size.height);
+    if (selectedMedia?.kind === 'video') paintTileGrid(context, tile, size);
     progressiveOutputWidth = tile.image_width;
     progressiveOutputHeight = tile.image_height;
     progressiveVisible = true;
@@ -575,6 +578,7 @@
   <div
     bind:this={canvasWell}
     class="canvas-well"
+    class:rendering={progressiveVisible && !resultPreview}
     class:panning={dragging}
     class:comparing={draggingComparison}
     role="application"
@@ -587,7 +591,7 @@
   >
     {#if selectedMedia}
       {#if processing}
-        <div class="model-activity" role="status"><i></i><span>{modelLabel} · {progressiveFrame >= 0 ? `Frame ${progressiveFrame + 1} · live tiles` : 'Preparing model output…'}{selectedMedia.hdr_format ? ' · SDR display preview' : ''}</span></div>
+        <div class="model-activity" role="status"><i></i><span>{modelLabel} · {activityLabel || (progressiveFrame >= 0 ? `Frame ${progressiveFrame + 1} · live tiles` : 'Preparing model output…')}{selectedMedia.hdr_format ? ' · SDR display preview' : ''}</span></div>
       {/if}
       {#if videoComparison}
         {#key videoComparisonKey}

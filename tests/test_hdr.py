@@ -52,6 +52,20 @@ def test_unsupported_hdr_colorimetry_is_actionable():
         tone_map_to_sdr(np.zeros((1, 1, 3)), 1, 9)
 
 
+@pytest.mark.parametrize("transfer", [16, 18])
+def test_planar_and_rotated_decoder_frames_match_interleaved_color_conversion(transfer):
+    planar = np.random.default_rng(42).random((3, 48, 64), dtype=np.float32)
+    strided = np.rot90(planar.transpose(1, 2, 0))
+    assert not strided.flags.c_contiguous
+    interleaved = np.ascontiguousarray(strided)
+    np.testing.assert_allclose(
+        hdr_to_linear_nits(strided, transfer), hdr_to_linear_nits(interleaved, transfer), rtol=1e-6
+    )
+    np.testing.assert_array_equal(
+        tone_map_to_sdr(strided, transfer, 9), tone_map_to_sdr(interleaved, transfer, 9)
+    )
+
+
 def make_hdr(path, transfer):
     # Encode a real ten-bit source with explicit BT.2020 matrix/range tags.
     untagged = make_vfr(path.with_suffix(".source.mp4"))

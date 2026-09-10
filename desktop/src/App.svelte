@@ -80,7 +80,8 @@
   $: faceEnabled = settings.enable_face_model && faceEngineAvailable;
   $: usingTemporalVideo = settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
   $: preservingHdr = settings.task === 'video' && settings.video_hdr_mode === 'preserve' && Boolean(selectedMedia?.hdr_format);
-  $: hdrModelCompatible = !preservingHdr || (!usingTemporalVideo && (selectedModel?.architecture === 'HAT' || settings.selected_model_id === '__custom__'));
+  $: hdrPreservationAvailable = supportsHdrPreservation(settings);
+  $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
   $: activeDownload = snapshot.runtime.download_model_id;
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: customModelNeedsOptIn =
@@ -145,7 +146,9 @@
   $: outputDimensions = selectedMedia
     ? settings.task === 'denoise'
       ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
-      : `${selectedMedia.width * settings.output_scale} × ${selectedMedia.height * settings.output_scale} · ${settings.output_scale}×`
+      : usingTemporalVideo && settings.video_target_resolution && selectedMedia.width > 0 && selectedMedia.height > 0
+        ? `${Math.floor(selectedMedia.width * settings.video_target_resolution / Math.min(selectedMedia.width, selectedMedia.height) / 2) * 2} × ${Math.floor(selectedMedia.height * settings.video_target_resolution / Math.min(selectedMedia.width, selectedMedia.height) / 2) * 2} · SDR`
+        : `${selectedMedia.width * settings.output_scale} × ${selectedMedia.height * settings.output_scale} · ${settings.output_scale}×`
     : '—';
   $: currentDownloadTarget = usingTemporalVideo ? selectedVideoModel : selectedModel;
   $: activeDevice = snapshot.capabilities.devices.find(
@@ -184,6 +187,9 @@
         if (disposed) return;
         ensureTaskMatchesSelection();
         chooseInitialModel();
+        if (settings.task === 'video' && settings.video_hdr_mode === 'preserve' && !supportsHdrPreservation(settings)) {
+          updateSettings({ video_hdr_mode: 'tone_map' });
+        }
         await subscribe(() => api.listenForWorker(handleWorkerMessage));
         await subscribe(() => api.listenForStateChange(scheduleRefresh));
         await subscribe(() => api.listenForNativeMenu((action) => void handleNativeMenuAction(action)));
@@ -292,6 +298,7 @@
     if (
       message.type === 'progress' ||
       message.type === 'video_tile_progress' ||
+      message.type === 'video_stage_progress' ||
       message.type === 'video_frame_started' ||
       message.type === 'video_frame_completed' ||
       message.type === 'benchmark_progress'
@@ -355,8 +362,21 @@
     if (first) updateSettings({ selected_model_id: first.model_id });
   }
 
+  function supportsHdrPreservation(candidate: UiSettings): boolean {
+    return candidate.selected_video_model_id === 'frame_by_frame' &&
+      (candidate.selected_model_id === '__custom__' || snapshot.catalog.models.some(
+        model => model.model_id === candidate.selected_model_id && model.architecture === 'HAT'
+      ));
+  }
+
   function updateSettings(patch: Partial<UiSettings>): void {
-    snapshot = { ...snapshot, settings: { ...snapshot.settings, ...patch } };
+    const next = { ...snapshot.settings, ...patch };
+    // Apply the model/output contract for selectors, saved recipes and launch presets.
+    if (next.task === 'video' && next.video_hdr_mode === 'preserve') {
+      if (!supportsHdrPreservation(next)) next.video_hdr_mode = 'tone_map';
+      else { next.precision = 'fp32'; next.deflicker = false; }
+    }
+    snapshot = { ...snapshot, settings: next };
     if (api.isTauri()) {
       void api.saveSettings(snapshot.settings).catch((error) =>
         showModal('Could not save settings', String(error))
@@ -539,6 +559,7 @@
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
       video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
+      video_target_resolution: settings.video_target_resolution ?? 0,
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
@@ -578,6 +599,7 @@
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
       video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
+      video_target_resolution: settings.video_target_resolution ?? 0,
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
@@ -640,6 +662,7 @@
       deflicker_window: recipe.deflicker_window ?? settings.deflicker_window,
       video_container: recipe.video_container || settings.video_container,
       video_hdr_mode: recipe.video_hdr_mode ?? 'tone_map',
+      video_target_resolution: recipe.video_target_resolution ?? 0,
       video_crf: recipe.video_crf ?? settings.video_crf,
       enable_face_model: recipeFace ? true : recipe.enable_face_model ?? false,
       face_fidelity: recipeFace?.fidelity === undefined
@@ -1002,6 +1025,7 @@
     <PreviewPane
       bind:this={previewPane}
       modelLabel={usingTemporalVideo ? selectedVideoModel?.name ?? 'Video model' : selectedModel?.name ?? 'Model'}
+      activityLabel={usingTemporalVideo ? snapshot.runtime.status_title : ''}
       processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
       {selectedMedia}
       {resultPreview}
@@ -1027,7 +1051,7 @@
             <span class="eyebrow">{preservingHdr ? 'HDR INPUT · HDR OUTPUT · LABS' : 'HDR INPUT · SDR OUTPUT'}</span>
             <label class="field-label" for="hdr-output">Colour output</label>
             <select id="hdr-output" value={settings.video_hdr_mode ?? 'tone_map'} on:change={(event) => updateSettings({ video_hdr_mode: event.currentTarget.value as 'tone_map' | 'preserve', ...(event.currentTarget.value === 'preserve' ? { precision: 'fp32', deflicker: false } : {}) })}>
-              <option value="preserve">Preserve {selectedMedia.hdr_format} · 10-bit HEVC · Labs</option>
+              <option value="preserve" disabled={!hdrPreservationAvailable}>Preserve {selectedMedia.hdr_format} · 10-bit HEVC · Labs{!hdrPreservationAvailable ? ' · unavailable for this model' : ''}</option>
               <option value="tone_map">Convert to SDR · 8-bit H.264</option>
             </select>
             {#if preservingHdr}
@@ -1037,6 +1061,7 @@
             {:else}
               <p class="model-description">This {selectedMedia.hdr_format} video is tone-mapped to SDR before enhancement and exported as 8-bit SDR. The preview uses the same conversion.</p>
             {/if}
+            {#if settings.selected_model_id === '__custom__' && !usingTemporalVideo}<p class="model-description">HDR preservation remains available for custom checkpoints. The current adapter requires HAT; compatibility is checked when the model loads.</p>{/if}
           </section>
         {/if}
 
@@ -1083,6 +1108,9 @@
                 <option value="__custom__">Use my own checkpoint…</option>
               </select>
             {/if}
+            {#if settings.task === 'video' && selectedMedia?.hdr_format && !hdrPreservationAvailable}
+              <p class="model-output-note" role="status">SDR output selected. This model cannot preserve HDR.</p>
+            {/if}
 
             {#if settings.selected_model_id === '__custom__' && !usingTemporalVideo}
               <button class="button full" on:click={chooseCustomModel}>{settings.custom_model_path ? 'Choose another checkpoint…' : 'Choose checkpoint…'}</button>
@@ -1107,6 +1135,10 @@
               {:else}
                 <div class="installed-badge">✓ Installed · integrity checked before use</div>
               {/if}
+            {/if}
+            {#if usingTemporalVideo}
+              <div class="field-row"><label for="video-resolution">Output resolution</label><select id="video-resolution" value={settings.video_target_resolution ?? 0} on:change={(event) => updateSettings({ video_target_resolution: Number(event.currentTarget.value) })}><option value={0}>Match {settings.output_scale}× scale</option>{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option value={resolution}>{resolution} px · shorter edge</option>{/each}</select></div>
+              <p class="model-description">Smaller output uses less memory. For a first test, try 256 or 512 px. This can reduce the size of a large source video.</p>
             {/if}
           </section>
 

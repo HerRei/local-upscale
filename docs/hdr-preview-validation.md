@@ -31,6 +31,36 @@ Local checks on Apple silicon, 10 September 2026:
 - Synthetic ten-bit gradients: >700 distinct encoded luma levels, plus decoded RGB
   checks. VFR, trim bounds, audio, transfer functions and float face blending passed.
 
+Follow-up for the reported SeedVR2 MPS failure and preview alignment:
+
+- Python: 552 passed, 2 skipped; the same meshgrid warning remains. Focused video,
+  HDR, adapter and timing tests also passed after the final phase/ETA changes.
+- Frontend: 65 passed. HDR preservation is disabled on SeedVR2 selection and restored
+  for a custom checkpoint; persisted incompatible choices normalize to SDR. Output
+  resolution reaches the worker, with legacy settings retaining their original scale.
+- Rust: 47 passed; the rebuilt native app and Svelte checks passed.
+- The packaged native app completed a separate five-frame SeedVR2 job from a 4K
+  HLG sample, producing five decoded 256×454 SDR frames with BT.709 tags. Its
+  overlay followed the real clip-processing phases. Custom resolution exports
+  use a resolution suffix instead of the unrelated image-scale setting.
+- The original 4K HLG MOV's first two frames decoded and converted to SDR in 2.16 s.
+  Small three-channel colour contractions now avoid threaded BLAS overhead on strided
+  decoder buffers. Planar/rotated and interleaved layouts give the same colour result.
+- Actual SeedVR2-3B FP16 checkpoint on MPS: ten frames of that original source, three
+  streamed clips, output 256×454 SDR in 266.5 s. Decoding the export confirmed ten
+  nonconstant frames, YUV420P / BT.709 tags, 0.169 s duration and stereo AAC. The
+  existing MPS high-watermark limit stayed at 0.62. No checkpoint or source was changed.
+- Weight loading via CPU, five-frame MPS windows, 128-pixel VAE tiles and phase
+  cleanup avoid the failures seen with the original loading/buffering path. The
+  sampler's real output is not a guarantee of perceptual quality or 4K/8K feasibility.
+- Geometry checks cover the original portrait video's 8640×15360 HAT output mapped
+  to a 900×1600 canvas. Pending cells, decoded tile pixels and the active outline
+  share the same boundaries, including the last partial column. The remove icon
+  is centered in the native app; the HDR option is visibly disabled for SeedVR2.
+- A native HAT-S job completed two frames at 216×384 → 864×1536. Completed image
+  squares, pending cells and the active outline matched visually, including the
+  partial edge column; frame 1 already displayed an ETA.
+
 Private clips, checkpoint files, screenshots and machine-specific paths are not
 included in this repository. These are functional checks on bounded samples,
 not perceptual HDR certification, a complete multi-minute 4K upscale, or acceptance

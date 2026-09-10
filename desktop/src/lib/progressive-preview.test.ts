@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   boundedPreviewSize,
   canvasTileRect,
+  paintTileGrid,
   tilePercentages
 } from './progressive-preview';
 
@@ -59,5 +60,27 @@ describe('progressive tiled preview', () => {
         image_height: 100
       })
     ).toEqual({ x: 80, y: 90, width: 20, height: 10 });
+  });
+
+  it('aligns the outline and pending squares with real portrait-video tile pixels', () => {
+    const canvas = { width: 900, height: 1600 };
+    const first = { output_x: 0, output_y: 0, output_width: 256, output_height: 256,
+      image_width: 8640, image_height: 15360 };
+    const cells: number[][] = [];
+    paintTileGrid({ fillRect: (...rect: number[]) => { cells.push(rect); } } as unknown as CanvasRenderingContext2D, first, canvas);
+    expect(cells.length).toBe(34 * 60);
+    for (const [column, row] of [[0, 0], [17, 32], [33, 59]]) {
+      const tile = { ...first, output_x: column * 256, output_y: row * 256,
+        output_width: Math.min(256, 8640 - column * 256) };
+      const rect = canvasTileRect(tile, canvas)!;
+      const outline = tilePercentages(tile, canvas)!;
+      expect(outline.x / 100 * canvas.width).toBeCloseTo(rect.x, 10);
+      expect(outline.width / 100 * canvas.width).toBeCloseTo(rect.width, 10);
+      expect(outline.y / 100 * canvas.height).toBeCloseTo(rect.y, 10);
+      expect(outline.height / 100 * canvas.height).toBeCloseTo(rect.height, 10);
+      expect(cells[row * 34 + column]).toEqual([rect.x, rect.y, rect.width, rect.height]);
+    }
+    expect(cells.at(-1)![0] + cells.at(-1)![2]).toBe(900);
+    expect(cells.at(-1)![1] + cells.at(-1)![3]).toBe(1600);
   });
 });
