@@ -12,6 +12,7 @@ import os
 import tempfile
 import threading
 import warnings
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from fractions import Fraction
@@ -20,6 +21,8 @@ from pathlib import Path
 import av
 import numpy as np
 from PIL import Image
+
+from .hdr import tone_map_to_sdr
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,8 @@ class VideoProbe:
     frame_count: int
     codec: str
     duration_seconds: float
+    hdr_format: str = ""
+    audio_warning: str = ""
 
 
 @dataclass(frozen=True)
@@ -50,7 +55,9 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
     """Return a right-angle rotation and horizontal reflection from FFmpeg's matrix.
 
     Pixels are normalized on decode so inference, thumbnails and exports agree.
-    Reject perspective/arbitrary transforms instead of silently changing framing.
+    Track translations only position the rotated image on a presentation canvas;
+    our standalone output is rebased to that image's bounds. Keep rejecting
+    perspective, scaling and arbitrary rotations instead of changing geometry.
     """
     for side_data in frame.side_data:
         if side_data.type.name != "DISPLAYMATRIX":
@@ -63,10 +70,12 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
             np.array([[-1, 0], [0, -1]]),
             np.array([[0, 1], [-1, 0]]),
         )
-        if matrix[0, 2] or matrix[1, 2] or matrix[2, 0] or matrix[2, 1]:
-            raise ValueError(
-                "Video display transform includes unsupported translation or perspective."
-            )
+        # FFmpeg/ISO BMFF stores [a b u; c d v; x y w]. The bottom-row
+        # x/y values are 16.16 translations, commonly used by iPhone MOVs to
+        # keep a rotated portrait in positive coordinates. They are not
+        # perspective terms (u/v), and do not change its normalized pixels.
+        if matrix[0, 2] or matrix[1, 2] or matrix[2, 2] != 1 << 30:
+            raise ValueError("Video display transform includes unsupported perspective or scale.")
         for turns, rotation in enumerate(rotations):
             for flipped in (False, True):
                 candidate = rotation @ np.diag([-1, 1]) if flipped else rotation
@@ -121,28 +130,88 @@ def _video_decoder(path: str, *, frame_threads: bool = False):
             stream.codec_context.flush_buffers()
 
 
+def _video_probe(container, stream, first: av.VideoFrame | None) -> VideoProbe:
+    fps = float(stream.average_rate) if stream.average_rate else 0.0
+    duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
+    count = int(stream.frames or 0) or (int(round(duration * fps)) if fps else 0)
+    turns, _ = _display_transform(first) if first is not None else (0, False)
+    width, height = int(stream.width or 0), int(stream.height or 0)
+    transfer = int(getattr(first, "color_trc", stream.codec_context.color_trc))
+    if turns % 2:
+        width, height = height, width
+    return VideoProbe(
+        width,
+        height,
+        fps,
+        count,
+        str(stream.codec_context.name or "unknown"),
+        duration,
+        {16: "PQ", 18: "HLG"}.get(transfer, ""),
+        _audio_compatibility_warning(container),
+    )
+
+
+def _audio_compatibility_warning(container) -> str:
+    audio = [stream for stream in container.streams if stream.type == "audio"]
+    if any(stream.codec_context is None for stream in audio):
+        if not any(stream.codec_context is not None for stream in audio):
+            raise VideoStageError(
+                "audio remux",
+                "This video's audio codec is unsupported. Convert its audio to AAC before importing.",
+            )
+        return (
+            "Standard audio will be kept. An unsupported additional audio track will be omitted; "
+            "spatial audio may not be preserved."
+        )
+    return ""
+
+
 def probe_video(path: str) -> VideoProbe:
     """Probe metadata and one frame to resolve its display orientation."""
     with _video_decoder(path) as (container, stream):
-        avg_fps = stream.average_rate
-        fps = float(avg_fps) if avg_fps else 0.0
-        frame_count = int(stream.frames or 0)
-        if frame_count == 0 and container.duration:
-            duration_sec = float(container.duration) / 1_000_000.0
-            frame_count = int(round(duration_sec * fps)) if fps else 0
-        duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
+        return _video_probe(container, stream, next(container.decode(stream), None))
+
+
+def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
+    transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
+    if transfer in (16, 18) and hdr_mode == "tone_map":
+        # Swscale expands the source's YUV matrix/range without dropping the
+        # 10-bit signal to 8-bit before the transfer/gamut conversion.
+        rgb = tone_map_to_sdr(
+            frame.to_ndarray(format="gbrpf32le"),
+            transfer,
+            int(getattr(frame, "color_primaries", stream.codec_context.color_primaries)),
+        )
+    else:
+        _check_sdr(stream, frame)
+        rgb = frame.to_ndarray(format="rgb24")
+    turns, flipped = _display_transform(frame)
+    rgb = np.rot90(rgb, turns)
+    if flipped:
+        rgb = np.fliplr(rgb)
+    return np.ascontiguousarray(rgb)
+
+
+def probe_video_preview(
+    path: str,
+    max_dimension: int = 1600,
+    progress: Callable[[str], None] | None = None,
+) -> tuple[VideoProbe, bytes]:
+    """Read one frame once; propagate failures instead of returning a blank preview."""
+    report = progress or (lambda _stage: None)
+    report("opening")
+    with _video_decoder(path) as (container, stream):
+        report("decoding_video")
         first = next(container.decode(stream), None)
-        turns, _ = _display_transform(first) if first is not None else (0, False)
-        width, height = int(stream.width or 0), int(stream.height or 0)
-        if turns % 2:
-            width, height = height, width
-        return VideoProbe(
-            width=width,
-            height=height,
-            fps=fps,
-            frame_count=frame_count,
-            codec=str(stream.codec_context.name or "unknown"),
-            duration_seconds=duration,
+        if first is None:
+            raise ValueError("This video contains no decodable picture frames.")
+        probe = _video_probe(container, stream, first)
+        if probe.hdr_format:
+            report("converting_hdr")
+        rgb = _frame_rgb(stream, first, "tone_map")
+        report("preparing_preview")
+        return probe, thumbnail_jpeg(
+            rgb, max_dimension=max(64, min(2048, max_dimension)), quality=82
         )
 
 
@@ -150,13 +219,15 @@ def decode_frames(
     path: str,
     start_frame: int | None = None,
     end_frame: int | None = None,
+    *,
+    hdr_mode: str = "reject",
 ):
     """Yield (frame_index, rgb_uint8_HxWx3) for every decoded frame.
 
     Frames are converted to RGB on decode. start_frame/end_frame are
     inclusive 0-indexed bounds; None means unbounded on that side.
     """
-    for frame in decode_timed_frames(path, start_frame, end_frame):
+    for frame in decode_timed_frames(path, start_frame, end_frame, hdr_mode=hdr_mode):
         yield frame.index, frame.rgb
 
 
@@ -165,8 +236,12 @@ def decode_timed_frames(
     start_frame: int | None = None,
     end_frame: int | None = None,
     cancel_event: threading.Event | None = None,
+    *,
+    hdr_mode: str = "reject",
 ):
     """Decode oriented SDR frames with exact source times and one-frame lookahead."""
+    if hdr_mode not in {"reject", "tone_map"}:
+        raise ValueError("HDR mode must be reject or tone_map (SDR output).")
     start = max(0, int(start_frame or 0))
     selected_frame_count(0, start, end_frame)
     with _video_decoder(path, frame_threads=True) as (container, stream):
@@ -189,13 +264,7 @@ def decode_timed_frames(
                 pending = None
             if end_frame is not None and index > end_frame:
                 return
-            _check_sdr(stream, frame)
-            rgb = frame.to_ndarray(format="rgb24")
-            turns, flipped = _display_transform(frame)
-            rgb = np.rot90(rgb, turns)
-            if flipped:
-                rgb = np.fliplr(rgb)
-            rgb = np.ascontiguousarray(rgb)
+            rgb = _frame_rgb(stream, frame, hdr_mode)
             duration = getattr(frame, "duration", 0) or 0
             interval = (
                 duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
@@ -221,6 +290,7 @@ def encode_video(
     preserve_timing: bool = True,
     cancel_event: threading.Event | None = None,
     warning_callback=None,
+    sdr_bt709: bool = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -252,6 +322,11 @@ def encode_video(
         stream.width = int(width)
         stream.height = int(height)
         stream.pix_fmt = pixel_format
+        if sdr_bt709:
+            stream.codec_context.color_primaries = 1
+            stream.codec_context.color_trc = 1
+            stream.codec_context.colorspace = 1
+            stream.codec_context.color_range = 1
         # Keep decode and presentation order aligned so VFR packet durations
         # describe the displayed interval, including the final held frame.
         stream.options = {"crf": str(max(0, min(51, int(crf)))), "preset": "medium", "bf": "0"}
@@ -278,6 +353,11 @@ def encode_video(
                     f"frame {frame_count} has shape {rgb.shape}; expected ({height}, {width}, 3)"
                 )
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+            if sdr_bt709:
+                frame = frame.reformat(
+                    format=pixel_format, src_colorspace="ITU709", dst_colorspace="ITU709"
+                )
+                frame.color_primaries = frame.color_trc = frame.colorspace = frame.color_range = 1
             frame.pts = round((item.timestamp - origin) / time_base) if timed else frame_count
             frame.time_base = time_base
             if previous_pts is not None and frame.pts <= previous_pts:
@@ -417,6 +497,17 @@ def _remux_source_streams(
         auxiliary_inputs = [
             stream for stream in source_container.streams if stream.type in {"audio", "subtitle"}
         ]
+        audio_warning = _audio_compatibility_warning(source_container)
+        if audio_warning:
+            if warning_callback:
+                warning_callback(audio_warning)
+            else:
+                warnings.warn(audio_warning, stacklevel=2)
+            auxiliary_inputs = [
+                stream
+                for stream in auxiliary_inputs
+                if stream.type != "audio" or stream.codec_context is not None
+            ]
         if not auxiliary_inputs:
             return False
 
@@ -439,7 +530,7 @@ def _remux_source_streams(
                     continue
                 raise VideoStageError(
                     "audio remux",
-                    f"{stream.codec_context.name or 'audio'} is incompatible with {container_format}: {error}",
+                    f"{getattr(stream.codec_context, 'name', 'audio')} is incompatible with {container_format}: {error}",
                 ) from error
 
         selected_aux = [stream for stream in auxiliary_inputs if stream.index in auxiliary_outputs]

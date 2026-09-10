@@ -485,6 +485,8 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
                 number(data, "fps"),
                 number(data, "duration_seconds"),
                 &preview,
+                &string(data, "hdr_format"),
+                &string(data, "audio_warning"),
             )?;
             if lock(&state.database)?.get_media_by_path(&path)?.is_none() && !preview.is_empty() {
                 let mut runtime = lock(&state.runtime)?;
@@ -953,6 +955,7 @@ fn should_emit_state_changed(message_type: &str) -> bool {
     !matches!(
         message_type,
         "progress"
+            | "media_probe_progress"
             | "stage_progress"
             | "tile_update"
             | "video_frame_started"

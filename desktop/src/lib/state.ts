@@ -93,6 +93,44 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'capabilities_info':
       next.capabilities = data as unknown as AppSnapshot['capabilities'];
       break;
+    case 'media_info': {
+      const media = next.media.find((item) => item.path === data.media_path);
+      if (media) {
+        media.width = Number(data.width ?? 0);
+        media.height = Number(data.height ?? 0);
+        media.frame_count = Number(data.frame_count ?? 0);
+        media.fps = Number(data.fps ?? 0);
+        media.duration_seconds = Number(data.duration_seconds ?? 0);
+        media.hdr_format = data.hdr_format === 'HLG' || data.hdr_format === 'PQ' ? data.hdr_format : '';
+        media.audio_warning = String(data.audio_warning ?? '');
+        media.preview_data_url = data.jpeg_base64 ? `data:image/jpeg;base64,${data.jpeg_base64}` : '';
+        media.probe_status = 'ready';
+        media.probe_stage = undefined;
+        media.probe_started_at = undefined;
+        media.error = '';
+      }
+      break;
+    }
+    case 'media_probe_progress': {
+      const media = next.media.find((item) => item.path === data.media_path);
+      if (media) {
+        media.probe_started_at ??= Date.now();
+        media.probe_stage = String(data.stage ?? 'opening');
+        media.probe_status = 'pending';
+        media.error = '';
+      }
+      break;
+    }
+    case 'media_probe_failed': {
+      const media = next.media.find((item) => item.path === data.media_path);
+      if (media) {
+        media.probe_status = 'failed';
+        media.probe_stage = undefined;
+        media.probe_started_at = undefined;
+        media.error = String(data.error_message ?? 'The media could not be opened.');
+      }
+      break;
+    }
     case 'job_started':
       next.runtime.active_job_id = String(data.job_id ?? '');
       next.runtime.status_title = 'Processing';

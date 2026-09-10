@@ -125,6 +125,7 @@ class VideoJobConfig:
     deflicker_window: int = 3
     output_scale: int | None = None
     face_fidelity: float = 0.7
+    hdr_mode: str = "reject"
 
 
 @dataclass
@@ -210,6 +211,7 @@ def run_video_job(
             start_frame=config.start_frame,
             end_frame=config.end_frame,
             cancel_event=cancel_event,
+            hdr_mode=config.hdr_mode,
         )
         for output_frame_index, source_frame in enumerate(decoded):
             rgb = source_frame.rgb
@@ -331,6 +333,7 @@ def run_video_job(
         preserve_timing=rate_unchanged,
         cancel_event=cancel_event,
         warning_callback=warning_callback,
+        sdr_bt709=bool(probe.hdr_format and config.hdr_mode == "tone_map"),
     )
 
     completed_at = time.monotonic()

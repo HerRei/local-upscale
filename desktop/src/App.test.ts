@@ -60,7 +60,7 @@ const api = vi.hoisted(() => ({
     async (_callback: (message: { type: string; data: Record<string, unknown> }) => void): Promise<() => void> =>
       () => undefined
   ),
-  listenForStateChange: vi.fn(async () => () => undefined),
+  listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async () => () => undefined),
   listenForLaunchIntent: vi.fn(async () => () => undefined)
 }));
@@ -216,7 +216,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Choose an image or video to enhance')).toBeTruthy();
     expect(screen.getByRole('button', { name: '＋ Add Media' })).toBeTruthy();
-    expect(document.querySelector('.canvas-icon svg .play-mark')).toBeTruthy();
+    expect(document.querySelector('.media-illustration svg .play-mark')).toBeTruthy();
   });
 
   it('makes the real benchmark discoverable and starts it from the toolbar', async () => {
@@ -394,6 +394,32 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
   });
 
+  it.each([false, true])('keeps pending and failed videos out of processing (batch=%s)', async (batch) => {
+    const media = video('portrait', true);
+    media.width = media.height = 0;
+    media.preview_data_url = '';
+    media.probe_status = 'pending';
+    const snapshot = readySnapshot([media]);
+    snapshot.settings.batch_mode = batch;
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /Upscale Video\s*Local video · SDR output/i);
+    expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
+    expect(screen.getAllByText('Preparing preview…').length).toBe(2);
+    expect(screen.queryByText('Inspecting…')).toBeNull();
+    const button = screen.getByRole('button', { name: batch ? 'Start 1 item' : 'Start selected video' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+
+    const failed = structuredClone(snapshot);
+    failed.media[0].probe_status = 'failed';
+    failed.media[0].error = 'Cannot decode this video.';
+    api.refreshSnapshot.mockResolvedValue(failed);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'media_probe_failed', data: { media_path: media.path, error_message: failed.media[0].error } });
+    expect(await screen.findByRole('heading', { name: 'Preview unavailable' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: batch ? 'Start 1 item' : 'Start selected video' }).hasAttribute('disabled')).toBe(true);
+    expect(api.startJobs).not.toHaveBeenCalled();
+  });
+
   it('shows preview encoding failures as non-fatal warnings', async () => {
     await mountWith(readySnapshot([image('first', true)]));
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
@@ -405,6 +431,37 @@ describe('LocalSR desktop interface', () => {
 
     expect(await screen.findByText(/Preview warning: JPEG encoder unavailable/)).toBeTruthy();
     expect(screen.getByText(/Processing continues normally/)).toBeTruthy();
+  });
+
+  it('shows real import phases, survives refresh and labels HDR output before Start', async () => {
+    const media = video('portrait', true);
+    media.probe_status = 'pending';
+    media.preview_data_url = '';
+    const snapshot = readySnapshot([media]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.batch_mode = true;
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /Upscale Video\s*Local video · SDR output/i);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'decoding_video' } });
+    expect(await screen.findByText('Reading the first video frame')).toBeTruthy();
+    expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
+    expect(await screen.findByText('1s elapsed', {}, { timeout: 2500 })).toBeTruthy();
+    callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'converting_hdr' } });
+    expect(await screen.findByText('Converting HDR to an SDR preview')).toBeTruthy();
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(api.refreshSnapshot).toHaveBeenCalled());
+    expect(screen.getByText('Converting HDR to an SDR preview')).toBeTruthy();
+    const ready = structuredClone(snapshot);
+    Object.assign(ready.media[0], { probe_status: 'ready', hdr_format: 'HLG', audio_warning: 'Standard audio will be kept. The extra track will be omitted.', preview_data_url: 'data:image/jpeg;base64,test' });
+    api.refreshSnapshot.mockResolvedValue(ready);
+    callback({ type: 'media_info', data: { media_path: media.path, width: 2160, height: 3840, hdr_format: 'HLG', audio_warning: 'Standard audio will be kept. The extra track will be omitted.', jpeg_base64: 'test' } });
+    expect(await screen.findByRole('region', { name: 'HDR conversion' })).toBeTruthy();
+    expect(screen.getByText(/The output is 8-bit SDR/)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Audio compatibility' })).toBeTruthy();
+    expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start 1 item' }).hasAttribute('disabled')).toBe(false);
   });
 
   it('saves the current setup as a named recipe beside the built-in recipes', async () => {
@@ -463,7 +520,7 @@ describe('LocalSR desktop interface', () => {
 
   it('labels experimental engines separately from standard video', async () => {
     const user = await mountWith(readySnapshot());
-    await chooseTask(user, /Upscale Video\s*Local SDR video/i);
+    await chooseTask(user, /Upscale Video\s*Local video · SDR output/i);
 
     const engine = screen.getByLabelText('Video engine');
     expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
@@ -643,7 +700,7 @@ describe('LocalSR desktop interface', () => {
         .disabled
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: /Upscale Video\s*Local SDR video/i }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: /Upscale Video\s*Local video · SDR output/i }) as HTMLButtonElement)
         .disabled
     ).toBe(false);
     await user.click(start);
@@ -726,7 +783,7 @@ describe('LocalSR desktop interface', () => {
     );
     expect(
       (screen.getByRole('button', {
-        name: /Upscale Video\s*Local SDR video/i
+        name: /Upscale Video\s*Local video · SDR output/i
       }) as HTMLButtonElement).disabled
     ).toBe(true);
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
@@ -780,7 +837,7 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() =>
       expect(
         (screen.getByRole('button', {
-          name: /Upscale Video\s*Local SDR video/i
+          name: /Upscale Video\s*Local video · SDR output/i
         }) as HTMLButtonElement).disabled
       ).toBe(false)
     );

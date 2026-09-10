@@ -100,6 +100,10 @@ pub struct MediaItem {
     pub duration_seconds: f64,
     pub preview_data_url: String,
     pub probe_status: String,
+    #[serde(default)]
+    pub hdr_format: String,
+    #[serde(default)]
+    pub audio_warning: String,
     pub error: String,
     pub selected: bool,
 }

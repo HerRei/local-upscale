@@ -4,15 +4,23 @@ Standard video is the frame-by-frame SDR path. SeedVR2, de-flicker, and video fa
 
 ## Media contract
 
-- Decode supported SDR inputs through PyAV. Encode H.264, 8-bit YUV420P into MP4 or MKV. SDR sources with greater bit depth are reduced to 8-bit; this is not a high-bit-depth preservation workflow.
+- Decode supported SDR inputs and BT.2020 HLG/PQ HDR inputs through PyAV in the Next Preview desktop. Encode H.264, 8-bit YUV420P into MP4 or MKV. SDR sources with greater bit depth are reduced to 8-bit; this is not a high-bit-depth preservation workflow.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
-- Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Other display transforms fail explicitly instead of silently changing framing.
-- Copy compatible audio and subtitle streams. Compressed audio trims have packet-level precision, not sample-level precision. Unsupported subtitles produce a warning; incompatible audio produces an actionable remux error. There is no automatic audio transcoding.
+- Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
+- Copy compatible audio and subtitle streams. Compressed audio trims have packet-level precision, not sample-level precision. Unsupported subtitles produce a warning; unknown additional audio (for example an Apple spatial-audio track) is omitted with a visible import warning when a supported standard track exists. An unsupported sole audio track produces an actionable import error; other incompatible audio produces a remux error. There is no automatic audio transcoding.
 - An explicit API/CLI FPS override changes speed by assigning evenly spaced timestamps and omits audio/subtitles. Desktop jobs send no override. They preserve source timing.
-- PQ/HLG HDR inputs require an SDR conversion first. LocalSR rejects them rather than silently treating HDR samples as SDR.
+- The Next Preview desktop explicitly converts BT.2020 HLG/PQ HDR to SDR before enhancement and labels the conversion before Start. Its output is 8-bit BT.709 SDR, with matching colour tags. The source file is unchanged. Direct worker/API jobs retain `hdr_mode="reject"` by default; callers must opt in with `hdr_mode="tone_map"`.
 - Output creation is atomic. Cancellation checks extend through frame skipping and audio/subtitle remuxing; an existing destination survives failures or cancellation.
 
 The H.264 encoder disables B-frame reordering to keep packet durations consistent with variable presentation intervals and the last held frame. This trades some compression efficiency for predictable timing.
+
+## HDR conversion and import feedback
+
+The existing enhancement models operate on SDR RGB. HDR import uses floating-point YUV-to-RGB decoding, the BT.2100 HLG or ST 2084 PQ inverse transfer, BT.2020-to-BT.709 gamut conversion and a fixed highlight-compression curve before final 8-bit quantization. HLG uses a 1000-nit reference display. The curve does not depend on frame histograms, so an exposure change is not introduced by a changing crop or neighbouring frame.
+
+This is an SDR viewing/export conversion, not an HDR-preserving model or mastering workflow. Dolby Vision files with a supported HLG/PQ base layer use that layer; dynamic Dolby Vision metadata is not applied or carried into the SDR output. Other HDR colour primaries require an external SDR conversion. Aesthetic highlight/gamut choices are fixed, not a promise to match every player's tone mapping. HDR10/HLG output and 10-bit preservation remain unsupported.
+
+Opening media reports actual worker phases (opening, image/first-frame decode, HDR conversion and thumbnail preparation). The canvas animates and shows elapsed time while waiting, including large images and cloud-backed files. It does not invent completion percentages. Failed previews report the cause and offer Try Again; pending or failed sources cannot be started. Video metadata and its thumbnail share one first-frame decode.
 
 ## Optional processing
 

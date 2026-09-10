@@ -200,6 +200,7 @@
                   ],
                   "properties": {
                     "video_path": { "type": "string", "minLength": 1 },
+                    "hdr_mode": { "enum": ["reject", "tone_map"], "default": "reject" },
                     "output_video_path": { "type": "string", "minLength": 1 },
                     "container": { "enum": ["mp4", "mkv"] },
                     "crf": { "type": "integer", "minimum": 0, "maximum": 51 },
@@ -303,6 +304,7 @@
                 "preview_failed",
                 "media_info",
                 "media_probe_failed",
+                "media_probe_progress",
                 "job_started",
                 "stage_started",
                 "stage_progress",

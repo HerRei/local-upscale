@@ -59,6 +59,7 @@ from localsr.protocol.messages import (
     LogMessage,
     MediaInfo,
     MediaProbeFailed,
+    MediaProbeProgress,
     ModelInfo,
     PreviewFailed,
     PreviewReady,
@@ -288,27 +289,16 @@ class WorkerServer:
                 elif req_type == "media_probe_request":
                     media_path = str(data.get("media_path", ""))
                     maximum = int(data.get("max_dimension", 1600))
+
+                    def report_probe(stage, path=media_path):
+                        send_message(MediaProbeProgress(media_path=path, stage=stage))
+
                     try:
                         if is_video_input(media_path):
-                            from localsr.core.video_io import (
-                                decode_frames,
-                                probe_video,
-                                thumbnail_jpeg,
-                            )
+                            from localsr.core.video_io import probe_video_preview
 
-                            probe = probe_video(media_path)
-                            preview_base64 = ""
-                            try:
-                                _, first_frame = next(decode_frames(media_path, end_frame=0))
-                                preview_base64 = base64.b64encode(
-                                    thumbnail_jpeg(
-                                        first_frame,
-                                        max_dimension=max(64, min(2048, maximum)),
-                                        quality=82,
-                                    )
-                                ).decode("ascii")
-                            except (OSError, StopIteration, ValueError):
-                                preview_base64 = ""
+                            probe, preview = probe_video_preview(media_path, maximum, report_probe)
+                            preview_base64 = base64.b64encode(preview).decode("ascii")
                             send_message(
                                 MediaInfo(
                                     media_path=media_path,
@@ -319,12 +309,16 @@ class WorkerServer:
                                     fps=float(probe.fps),
                                     duration_seconds=float(probe.duration_seconds),
                                     jpeg_base64=preview_base64,
+                                    hdr_format=probe.hdr_format,
+                                    audio_warning=probe.audio_warning,
                                 )
                             )
                         else:
+                            report_probe("decoding_image")
                             preview_data = ImageManager().load(media_path)
                             tensor = preview_data["tensor"]
                             _, height, width = tensor.shape
+                            report_probe("preparing_preview")
                             send_message(
                                 MediaInfo(
                                     media_path=media_path,
@@ -739,7 +733,11 @@ class WorkerServer:
         started_at = _time.monotonic()
         chunk_new = 33  # 4n+1: fresh frames per streamed chunk
         decode_iter = decode_timed_frames(
-            video_path, data.get("start_frame"), data.get("end_frame"), self.cancel_event
+            video_path,
+            data.get("start_frame"),
+            data.get("end_frame"),
+            self.cancel_event,
+            hdr_mode=str(data.get("hdr_mode", "reject")),
         )
         state = {"done": 0}
         preview_encoder = LatestPreviewEncoder(
@@ -871,6 +869,7 @@ class WorkerServer:
                 warning_callback=lambda message: send_message(
                     LogMessage(level="warning", message=message)
                 ),
+                sdr_bt709=bool(probe.hdr_format and data.get("hdr_mode") == "tone_map"),
             )
         except InterruptedError:
             send_message(JobCancelled(job_id=job_id))
@@ -979,6 +978,7 @@ class WorkerServer:
             deflicker=bool(data.get("deflicker", False)),
             deflicker_window=int(data.get("deflicker_window", 3)),
             output_scale=data.get("output_scale"),
+            hdr_mode=str(data.get("hdr_mode", "reject")),
         )
 
         preview_encoder = LatestPreviewEncoder(

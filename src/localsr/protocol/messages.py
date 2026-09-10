@@ -123,6 +123,8 @@ class VideoJobRequest:
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
 
+    hdr_mode: str = "reject"
+
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})
 
@@ -327,8 +329,20 @@ class MediaInfo:
     duration_seconds: float = 0.0
     jpeg_base64: str = ""
 
+    hdr_format: str = ""
+    audio_warning: str = ""
+
     def to_json(self) -> str:
         return json.dumps({"type": "media_info", "data": asdict(self)})
+
+
+@dataclass
+class MediaProbeProgress:
+    media_path: str
+    stage: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "media_probe_progress", "data": asdict(self)})
 
 
 @dataclass

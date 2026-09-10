@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
+  import MediaIllustration from './MediaIllustration.svelte';
+  import PreviewActivity from './PreviewActivity.svelte';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import { boundedPreviewSize, canvasTileRect, tilePercentages, type OutputTile } from './lib/progressive-preview';
@@ -620,33 +622,21 @@
         <button class:active={Math.abs(zoom - actualPixelZoom) < 0.001} title="One source pixel per screen pixel" on:click={() => setZoom(actualPixelZoom)}>1:1</button>
       </div>{/if}
       {:else}
-      <div class="canvas-empty preview-loading">
-        <div class="canvas-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 52" focusable="false">
-            <rect x="5" y="7" width="45" height="34" rx="5"></rect>
-            <circle cx="38" cy="17" r="4"></circle>
-            <path d="M10 35l11-10 8 7 6-5 10 8"></path>
-            <circle class="video-disc" cx="49" cy="37" r="10"></circle>
-            <path class="play-mark" d="M46 31.5v11l8-5.5z"></path>
-          </svg>
+      {#if selectedMedia.probe_status === 'pending'}
+        {#key selectedMedia.id}<PreviewActivity media={selectedMedia} />{/key}
+      {:else}
+        <div class="canvas-empty preview-error">
+          <MediaIllustration still />
+          <h2>Preview unavailable</h2>
+          <p role="alert">{selectedMedia.error || 'No preview could be created. Try again or choose another file.'}</p>
+          <button class="button" on:click={() => { previewRetryMediaId = ''; void repairSelectedPreview(); }}>Try Again</button>
         </div>
-        <h2>{selectedMedia.probe_status === 'failed' ? 'Preview unavailable' : 'Preparing preview…'}</h2>
-        <p>{selectedMedia.probe_status === 'failed' ? selectedMedia.error : `Loading ${selectedMedia.name} locally.`}</p>
-        {#if selectedMedia.probe_status === 'failed'}<button class="button" on:click={() => { previewRetryMediaId = ''; void repairSelectedPreview(); }}>Try Again</button>{/if}
-      </div>
+      {/if}
       {/if}
       {#if videoComparisonError}<p class="video-comparison-load-error" role="alert">{videoComparisonError}</p>{/if}
     {:else}
       <div class="canvas-empty">
-        <div class="canvas-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 52" focusable="false">
-            <rect x="5" y="7" width="45" height="34" rx="5"></rect>
-            <circle cx="38" cy="17" r="4"></circle>
-            <path d="M10 35l11-10 8 7 6-5 10 8"></path>
-            <circle class="video-disc" cx="49" cy="37" r="10"></circle>
-            <path class="play-mark" d="M46 31.5v11l8-5.5z"></path>
-          </svg>
-        </div>
+        <MediaIllustration />
         <h2>Choose an image or video to enhance</h2>
         <p>Upscale photos, artwork and video, or remove noise<br />with private local AI models.</p>
         <button class="button primary" on:click={() => addFiles()}>Add Media</button>

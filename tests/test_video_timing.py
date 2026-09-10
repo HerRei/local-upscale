@@ -1,6 +1,7 @@
 """Media-contract regressions: timestamps, transforms, motion and temporal routing."""
 
 import shutil
+import struct
 import subprocess
 import threading
 from fractions import Fraction
@@ -128,16 +129,31 @@ def ffmpeg(*args):
     subprocess.run([binary, "-hide_banner", "-loglevel", "error", *map(str, args)], check=True)
 
 
+@pytest.mark.parametrize("translated", [False, True])
 @pytest.mark.parametrize(
     "angle,flip", [(90, False), (180, False), (270, False), (0, True), (90, True)]
 )
-def test_display_transform_matches_ffmpeg_autorotate(tmp_path, angle, flip):
+def test_display_transform_matches_ffmpeg_autorotate(tmp_path, angle, flip, translated):
     source = make_vfr(tmp_path / "source.mp4")
-    rotated = tmp_path / "rotated.mp4"
+    rotated = tmp_path / "rotated.mov"
     args = ["-display_rotation", str(angle)]
     if flip:
         args += ["-display_hflip"]
     ffmpeg(*args, "-i", source, "-c", "copy", rotated)
+    if translated:
+        # A camera MOV rebases rotated track bounds with a bottom-row x/y
+        # translation. FFmpeg's rotation flag alone leaves these fields zero.
+        data = bytearray(rotated.read_bytes())
+        atom = data.index(b"tkhd")
+        assert data[atom + 4] == 0  # version-0 track header
+        offset = atom + 44
+        matrix = list(struct.unpack_from(">9i", data, offset))
+        basis = np.array([[matrix[0], matrix[1]], [matrix[3], matrix[4]]]) / 65536
+        corners = np.array([[0, 0], [48, 0], [0, 32], [48, 32]]) @ basis
+        translation = -corners.min(axis=0)
+        matrix[6:8] = [int(value * 65536) for value in translation]
+        struct.pack_into(">9i", data, offset, *matrix)
+        rotated.write_bytes(data)
     expected = tmp_path / "expected.png"
     ffmpeg("-i", rotated, "-frames:v", "1", expected)
     from PIL import Image
@@ -149,6 +165,21 @@ def test_display_transform_matches_ffmpeg_autorotate(tmp_path, angle, flip):
     output = tmp_path / "enhanced.mp4"
     run_standard(rotated, output)
     assert (probe_video(str(output)).height, probe_video(str(output)).width) == reference.shape[:2]
+
+
+@pytest.mark.parametrize("change", [(0, 2, 1), (1, 2, 1), (2, 2, 0), (0, 0, 2 << 16)])
+def test_display_transform_rejects_perspective_and_scaling(change):
+    from localsr.core.video_io import _display_transform
+
+    class MatrixData(bytes):
+        type = SimpleNamespace(name="DISPLAYMATRIX")
+
+    matrix = np.diag([1 << 16, 1 << 16, 1 << 30]).astype(np.int32)
+    row, col, value = change
+    matrix[row, col] = value
+    frame = SimpleNamespace(side_data=[MatrixData(matrix.tobytes())])
+    with pytest.raises(ValueError, match="display transform"):
+        _display_transform(frame)
 
 
 def test_motion_and_hard_cuts_survive_deflicker():

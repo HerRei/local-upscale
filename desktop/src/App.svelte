@@ -117,6 +117,7 @@
     snapshot.runtime.worker === 'ready' &&
     Boolean(settings.task) &&
     queueSelection.length > 0 &&
+    queueSelection.every((media) => media.probe_status === 'ready') &&
     modelReady &&
     faceReady &&
     preprocessReady &&
@@ -142,7 +143,12 @@
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id
   );
-  $: singleScopeMessage = settings.batch_mode
+  $: unreadyMedia = queueSelection.find((media) => media.probe_status !== 'ready');
+  $: singleScopeMessage = unreadyMedia
+    ? unreadyMedia.probe_status === 'failed'
+      ? `“${unreadyMedia.name}” cannot be processed: ${unreadyMedia.error}`
+      : `Preparing preview… Wait for “${unreadyMedia.name}” before starting.`
+    : settings.batch_mode
     ? queueableMedia.length === 0 && runnableMedia.length > 0
       ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
       : runnableMedia.length === snapshot.media.length
@@ -200,6 +206,13 @@
     if (!api.isTauri()) return;
     try {
       const latest = await api.refreshSnapshot();
+      for (const media of latest.media) {
+        const previous = snapshot.media.find((item) => item.id === media.id);
+        if (media.probe_status === 'pending' && previous?.probe_status === 'pending') {
+          media.probe_stage = previous.probe_stage;
+          media.probe_started_at = previous.probe_started_at;
+        }
+      }
       // Preserve a progressive worker preview only while the same active job
       // is being refreshed. Carrying it across media changes would compare a
       // newly selected source with an unrelated previous result.
@@ -290,7 +303,7 @@
       resetProgressivePreview();
     }
     if (message.type === 'media_info') {
-      if (String(message.data.media_path ?? '') === selectedMedia?.path) {
+      if (String(message.data.media_path ?? '') === selectedMedia?.path && message.data.jpeg_base64) {
         previewPane?.allowPreviewRetry();
       }
       scheduleRefresh();
@@ -985,9 +998,23 @@
           <div class="task-grid">
             <button disabled={selectedMedia?.kind === 'video'} class:active={settings.task === 'upscale'} on:click={() => setTask('upscale')}><b>Upscale</b><span>Photos and artwork</span></button>
             <button disabled={selectedMedia?.kind === 'video'} class:active={settings.task === 'denoise'} on:click={() => setTask('denoise')}><b>Denoise</b><span>Noise and blur</span></button>
-            <button disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'} class="video-task" class:active={settings.task === 'video'} on:click={() => setTask('video')}><b>Upscale Video</b><span>Local SDR video</span></button>
+            <button disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'} class="video-task" class:active={settings.task === 'video'} on:click={() => setTask('video')}><b>Upscale Video</b><span>Local video · SDR output</span></button>
           </div>
         </section>
+
+        {#if settings.task === 'video' && selectedMedia?.hdr_format}
+          <section class="control-section" aria-label="HDR conversion">
+            <span class="eyebrow">HDR INPUT · SDR OUTPUT</span>
+            <p class="model-description">This {selectedMedia.hdr_format} video is converted to SDR for preview and enhancement. Highlights and colours are tone-mapped before the model runs. The output is 8-bit SDR, not HDR; your original stays unchanged.</p>
+          </section>
+        {/if}
+
+        {#if settings.task === 'video' && selectedMedia?.audio_warning}
+          <section class="control-section" aria-label="Audio compatibility">
+            <span class="eyebrow">AUDIO COMPATIBILITY</span>
+            <p class="model-description">{selectedMedia.audio_warning}</p>
+          </section>
+        {/if}
 
         {#if settings.task}
           <section class="control-section recipes">

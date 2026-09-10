@@ -61,6 +61,20 @@ impl Database {
             CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, created_at);
             ",
         )?;
+        // Existing queues predate HDR metadata; preserve every media/job row.
+        for column in ["hdr_format", "audio_warning"] {
+            let present: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name=?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !present {
+                connection.execute(
+                    &format!("ALTER TABLE media ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
+                    [],
+                )?;
+            }
+        }
         let database = Self { connection };
         database.interrupt_stale_jobs()?;
         Ok(database)
@@ -76,7 +90,7 @@ impl Database {
 
     pub fn list_media(&self) -> AppResult<Vec<MediaItem>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected FROM media ORDER BY created_at, rowid",
+            "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning FROM media ORDER BY created_at, rowid",
         )?;
         let rows = statement.query_map([], media_from_row)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -86,7 +100,7 @@ impl Database {
         Ok(self
             .connection
             .query_row(
-                "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected FROM media WHERE id = ?1",
+                "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning FROM media WHERE id = ?1",
                 [id],
                 media_from_row,
             )
@@ -97,7 +111,7 @@ impl Database {
         Ok(self
             .connection
             .query_row(
-                "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected FROM media WHERE path = ?1",
+                "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning FROM media WHERE path = ?1",
                 [path],
                 media_from_row,
             )
@@ -176,9 +190,11 @@ impl Database {
         fps: f64,
         duration_seconds: f64,
         preview_data_url: &str,
+        hdr_format: &str,
+        audio_warning: &str,
     ) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE media SET kind=?2, width=?3, height=?4, frame_count=?5, fps=?6, duration_seconds=?7, preview_data_url=?8, probe_status='ready', error='' WHERE path=?1",
+            "UPDATE media SET kind=?2, width=?3, height=?4, frame_count=?5, fps=?6, duration_seconds=?7, preview_data_url=?8, hdr_format=?9, audio_warning=?10, probe_status='ready', error='' WHERE path=?1",
             params![
                 path,
                 kind,
@@ -187,8 +203,18 @@ impl Database {
                 i64::try_from(frame_count).unwrap_or(i64::MAX),
                 fps,
                 duration_seconds,
-                preview_data_url
+                preview_data_url,
+                hdr_format,
+                audio_warning
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn start_media_probe(&self, path: &str) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE media SET probe_status='pending', error='' WHERE path=?1",
+            [path],
         )?;
         Ok(())
     }
@@ -309,6 +335,8 @@ fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         probe_status: row.get(10)?,
         error: row.get(11)?,
         selected: row.get::<_, i64>(12)? != 0,
+        hdr_format: row.get(13)?,
+        audio_warning: row.get(14)?,
     })
 }
 
@@ -324,6 +352,66 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        let db = Database::open(&path).unwrap();
+        db.insert_media("m1", "/tmp/portrait.mov", "portrait.mov", "video")
+            .unwrap();
+        db.insert_job("j1", "m1", r#"{"type":"video_job_request"}"#)
+            .unwrap();
+        // Recreate the pre-HDR schema with a real queued job and selected source.
+        db.connection
+            .execute("ALTER TABLE media DROP COLUMN hdr_format", [])
+            .unwrap();
+        db.connection
+            .execute("ALTER TABLE media DROP COLUMN audio_warning", [])
+            .unwrap();
+        drop(db);
+        let migrated = Database::open(&path).unwrap();
+        assert_eq!(migrated.next_queued_job().unwrap().unwrap().id, "j1");
+        let old = migrated.get_media("m1").unwrap().unwrap();
+        assert!(old.selected);
+        assert_eq!(old.hdr_format, "");
+        migrated
+            .fail_media_probe(&old.path, "Previous import failed")
+            .unwrap();
+        migrated.start_media_probe(&old.path).unwrap();
+        let pending = migrated.get_media("m1").unwrap().unwrap();
+        assert_eq!(pending.probe_status, "pending");
+        assert!(pending.error.is_empty());
+        migrated
+            .update_media_probe(
+                &old.path,
+                "video",
+                2160,
+                3840,
+                14047,
+                59.94,
+                234.33,
+                "data:image/jpeg;base64,test",
+                "HLG",
+                "Standard audio will be kept.",
+            )
+            .unwrap();
+        drop(migrated);
+        let reopened = Database::open(&path).unwrap();
+        let media = reopened.list_media().unwrap().remove(0);
+        assert_eq!(media.hdr_format, "HLG");
+        assert_eq!(media.audio_warning, "Standard audio will be kept.");
+        assert_eq!(media.probe_status, "ready");
+        assert_eq!((media.width, media.height), (2160, 3840));
+        assert_eq!(
+            reopened
+                .get_media_by_path(&media.path)
+                .unwrap()
+                .unwrap()
+                .hdr_format,
+            "HLG"
+        );
+    }
 
     #[test]
     fn queue_is_fifo_and_interrupted_jobs_are_recoverable() {

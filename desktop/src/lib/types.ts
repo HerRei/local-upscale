@@ -97,6 +97,10 @@ export interface MediaItem {
   duration_seconds: number;
   preview_data_url: string;
   probe_status: 'pending' | 'ready' | 'failed';
+  hdr_format?: '' | 'HLG' | 'PQ';
+  audio_warning?: string;
+  probe_stage?: string;
+  probe_started_at?: number;
   error: string;
   selected: boolean;
 }

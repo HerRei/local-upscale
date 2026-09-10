@@ -321,9 +321,15 @@ pub fn start_jobs(
     let mut reserved = HashSet::new();
     let mut jobs = Vec::with_capacity(media.len());
     for item in &media {
+        if item.probe_status == "failed" {
+            return Err(AppError::Validation(format!(
+                "{} could not be opened: {}",
+                item.name, item.error
+            )));
+        }
         if item.probe_status != "ready" {
             return Err(AppError::Validation(format!(
-                "wait for {} to finish inspection",
+                "the preview for {} is still being prepared",
                 item.name
             )));
         }
@@ -590,7 +596,7 @@ pub fn refresh_capabilities(state: State<'_, Arc<AppState>>) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn probe_path(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
+pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String) -> AppResult<()> {
     let canonical = fs::canonicalize(path)?;
     let encoded = canonical.to_string_lossy().into_owned();
     let queued_media = lock(&state.database)?.get_media_by_path(&encoded)?;
@@ -607,7 +613,11 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()
     // A queued source must update its own persisted thumbnail. `preview_ready`
     // is reserved for the completed output comparison; using it for sources
     // previously left the center canvas empty while populating result state.
-    if queued_media.is_some() || media_kind(&canonical) == Some("video") {
+    if queued_media.is_some() {
+        lock(&state.database)?.start_media_probe(&encoded)?;
+        emit_state_changed(&app);
+    }
+    let result = if queued_media.is_some() || media_kind(&canonical) == Some("video") {
         worker::send(
             &state,
             &json!({
@@ -623,7 +633,14 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()
                 "data": {"image_path": encoded, "max_dimension": 2048}
             }),
         )
+    };
+    if let Err(error) = &result {
+        if queued_media.is_some() {
+            lock(&state.database)?.fail_media_probe(&encoded, &error.to_string())?;
+            emit_state_changed(&app);
+        }
     }
+    result
 }
 
 #[tauri::command]
@@ -1155,6 +1172,7 @@ fn build_job_message(
             "data": {
                 "job_id": job_id,
                 "video_path": media.path,
+                "hdr_mode": "tone_map",
                 "model_path": path,
                 "output_video_path": output,
                 "container": input.video_container,
@@ -1200,6 +1218,7 @@ fn build_job_message(
                 "data": {
                     "job_id": job_id,
                     "video_path": media.path,
+                    "hdr_mode": "tone_map",
                     "model_path": "",
                     "output_video_path": output,
                     "container": input.video_container,
@@ -1549,6 +1568,8 @@ mod tests {
             duration_seconds: 0.0,
             preview_data_url: String::new(),
             probe_status: "ready".into(),
+            hdr_format: String::new(),
+            audio_warning: String::new(),
             error: String::new(),
             selected: true,
         };
@@ -1594,6 +1615,7 @@ mod tests {
         .unwrap();
         assert_eq!(video_message["type"], "video_job_request");
         assert!(video_message["data"]["fps"].is_null());
+        assert_eq!(video_message["data"]["hdr_mode"], "tone_map");
         let temporal = ModelSelection::Temporal {
             model_id: "seedvr2_3b".into(),
             engine_kind: "seedvr2".into(),
@@ -1611,6 +1633,7 @@ mod tests {
         )
         .unwrap();
         assert!(temporal_message["data"]["fps"].is_null());
+        assert_eq!(temporal_message["data"]["hdr_mode"], "tone_map");
     }
 
     #[test]
@@ -1627,6 +1650,8 @@ mod tests {
             duration_seconds: 0.0,
             preview_data_url: String::new(),
             probe_status: "ready".into(),
+            hdr_format: String::new(),
+            audio_warning: String::new(),
             error: String::new(),
             selected: true,
         };

@@ -15,7 +15,7 @@ analytics. The current release candidate is **v0.0.12-alpha**.
 - Use Quick Start or Best Quality recipes, or choose a model and hardware settings manually.
 - Download curated models on demand with pinned sizes and SHA-256 verification.
 - Cancel cooperatively, estimate memory/disk/time, and preview completed tiles.
-- Upscale SDR video locally with source timing, rotation, and compatible audio preserved.
+- Upscale video locally with source timing, rotation, and compatible audio preserved. The Next Preview desktop also imports BT.2020 HLG/PQ HDR with a labelled conversion to 8-bit SDR ([video support](docs/video-support.md)).
   SeedVR2, de-flicker, and video face processing have individual **Labs** labels.
   See the [video support contract](docs/video-support.md) for acceptance boundaries.
 - Copy a privacy-filtered diagnostic summary from Advanced settings. Paths, media names, and image
