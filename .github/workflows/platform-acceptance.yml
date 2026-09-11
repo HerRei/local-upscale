@@ -37,13 +37,18 @@ jobs:
           node-version: '24'
       - name: Install CPU test environment
         run: |
+          # Required for the rotation, audio and subtitle fixture tests.
+          choco install ffmpeg --version=9.0.1 --yes --no-progress
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ffmpeg -version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check --no-cache-dir -e '.[dev,video,face,package]'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force build/acceptance | Out-Null
       - name: Python suite
-        run: python -m pytest tests -q --tb=short --junitxml=build/acceptance/windows-tests.xml
+        run: python -m pytest tests -q -ra --tb=short --junitxml=build/acceptance/windows-tests.xml
       - name: Frontend and native tests
         if: success() || failure()
         run: |
