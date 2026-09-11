@@ -22,8 +22,29 @@ CONFIG_PATH = BUILD_ROOT / "tauri-worker.conf.json"
 LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
 LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
 LINUXDEPLOY_PRIVATE_LIBRARY_ALIASES = {
+    "libMIOpen.so.1": "libMIOpen.so",
     "libamd_comgr.so.3": "libamd_comgr.so",
     "libamdhip64.so.7": "libamdhip64.so",
+    "libaotriton_v2.so.0.12.0": "libaotriton_v2.so",
+    "libhipblas.so.3": "libhipblas.so",
+    "libhipblaslt.so.1": "libhipblaslt.so",
+    "libhipfft.so.0": "libhipfft.so",
+    "libhiprand.so.1": "libhiprand.so",
+    "libhiprtc.so.7": "libhiprtc.so",
+    "libhipsolver.so.1": "libhipsolver.so",
+    "libhipsparse.so.4": "libhipsparse.so",
+    "libhipsparselt.so.0": "libhipsparselt.so",
+    "libhsa-amd-aqlprofile64.so.1": "libhsa-amd-aqlprofile64.so",
+    "libhsa-runtime64.so.1": "libhsa-runtime64.so",
+    "librocblas.so.5": "librocblas.so",
+    "librocfft.so.0": "librocfft.so",
+    "librocm-core.so.1": "librocm-core.so",
+    "librocm_smi64.so.1": "librocm_smi64.so",
+    "librocprofiler-register.so.0": "librocprofiler-register.so",
+    "librocprofiler-sdk.so.1": "librocprofiler-sdk.so",
+    "librocsolver.so.0": "librocsolver.so",
+    "librocsparse.so.1": "librocsparse.so",
+    "libroctracer64.so.4": "libroctracer64.so",
     "libroctx64.so.4": "libroctx64.so",
 }
 
