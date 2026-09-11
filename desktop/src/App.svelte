@@ -33,6 +33,8 @@
   let booting = true;
   let benchmarkRenders: BenchmarkRender[] = [];
   let benchmarkDevice = '';
+  let benchmarkSetup: 'idle' | 'downloading' | 'starting' = 'idle';
+  let benchmarkError = '';
   let benchmarkTile: WorkerEnvelope | undefined;
   $: benchmarkScores = snapshot.latest_benchmark?.device_history?.length
     ? snapshot.latest_benchmark.device_history : snapshot.latest_benchmark?.device_results ?? [];
@@ -84,6 +86,18 @@
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
   $: activeDownload = snapshot.runtime.download_model_id;
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
+  $: benchmarkModel = snapshot.catalog.models.find(model => model.model_id === 'span_photo_x4');
+  $: benchmarkStartBlockReason = snapshot.runtime.worker !== 'ready'
+    ? 'Waiting for the inference engine to become ready.'
+    : snapshot.runtime.active_job_id && !benchmarkRunning
+      ? 'Finish or cancel the current work before benchmarking.'
+      : activeDownload
+        ? 'Wait for the current model download to finish before benchmarking.'
+        : !benchmarkModel
+          ? 'The benchmark model is unavailable in this catalog.'
+          : !benchmarkModel.installed && (!benchmarkModel.automated_download_allowed || benchmarkModel.terms_acceptance_required)
+            ? 'Import the SPAN Quick model before benchmarking.'
+            : '';
   $: customModelNeedsOptIn =
     settings.selected_model_id === '__custom__' &&
     Boolean(settings.custom_model_path) &&
@@ -930,11 +944,21 @@
   }
 
   async function runBenchmark(): Promise<void> {
+    if (benchmarkSetup !== 'idle' || benchmarkRunning || benchmarkStartBlockReason) return;
+    const device = benchmarkDevice || 'cpu';
+    benchmarkError = '';
     try {
-      await api.startBenchmark(benchmarkDevice || 'cpu');
+      if (!benchmarkModel?.installed) {
+        benchmarkSetup = 'downloading';
+        await api.downloadModel('span_photo_x4', false);
+      }
+      benchmarkSetup = 'starting';
+      await api.startBenchmark(device);
       await refresh();
     } catch (error) {
-      showModal('Benchmark could not start', String(error), 'performance');
+      benchmarkError = `Benchmark could not start: ${String(error)}`;
+    } finally {
+      benchmarkSetup = 'idle';
     }
   }
 
@@ -1284,23 +1308,25 @@
           <p class="benchmark-intro">Choose one device for each run. CPU and GPU scores are saved separately, using the same fixed SPAN workload.</p>
 
           <label class="field-label" for="benchmark-device">Benchmark device</label>
-          <select id="benchmark-device" bind:value={benchmarkDevice} disabled={benchmarkRunning}>
+          <select id="benchmark-device" bind:value={benchmarkDevice} disabled={benchmarkRunning || benchmarkSetup !== 'idle'}>
             {#each snapshot.capabilities.devices as device}
               <option value={device.id}>{device.id === 'cpu' ? 'CPU' : 'GPU'} · {device.name} ({device.id.toUpperCase()})</option>
             {/each}
           </select>
+          {#if !benchmarkModel?.installed && benchmarkSetup === 'idle'}
+            <p class="benchmark-intro">The first run downloads and verifies SPAN Quick{benchmarkModel ? ` (${formatBytes(benchmarkModel.size_bytes)})` : ''}. It is reused for CPU and GPU benchmarks.</p>
+          {/if}
           <div class="benchmark-actions">
-            <button class="button primary" disabled={Boolean(snapshot.runtime.active_job_id) && !benchmarkRunning} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : 'Run Benchmark'}</button>
+            <button class="button primary" disabled={!benchmarkRunning && (benchmarkSetup !== 'idle' || Boolean(benchmarkStartBlockReason))} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : benchmarkSetup === 'downloading' ? `Downloading SPAN · ${Math.round(snapshot.runtime.download_progress)}%` : benchmarkSetup === 'starting' ? 'Starting benchmark…' : !benchmarkModel?.installed ? 'Download & run benchmark' : 'Run Benchmark'}</button>
+            {#if benchmarkSetup === 'downloading' && activeDownload === 'span_photo_x4'}<button class="button" on:click={() => api.cancelDownload('span_photo_x4')}>Cancel download</button>{/if}
             {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
           </div>
-
-          <BenchmarkStudio
-            tileMessage={benchmarkTile}
-            renders={benchmarkRenders.length ? benchmarkRenders : benchmarkRunning ? [] :
-              (snapshot.latest_benchmark?.device_results ?? []).flatMap(device =>
-                device.scenes.flatMap(scene => scene.preview ? [scene.preview] : []))}
-            running={benchmarkRunning}
-          />
+          {#if benchmarkError}<p class="error-message" role="alert">{benchmarkError}</p>{/if}
+          {#if benchmarkSetup !== 'idle'}
+            <p role="status">{benchmarkSetup === 'downloading' ? 'Downloading and verifying the benchmark model. The selected device will start automatically when it is ready.' : 'Starting the benchmark on the selected device…'}</p>
+          {:else if !benchmarkRunning && benchmarkStartBlockReason}
+            <p role="status">{benchmarkStartBlockReason}</p>
+          {/if}
 
           {#if benchmarkRunning}
             <div class="benchmark-running-card" role="status" aria-live="polite">
@@ -1309,6 +1335,14 @@
               <div class="download-track benchmark-progress" aria-label={`Benchmark ${Math.round(snapshot.runtime.progress)}%`}><i style={`width:${snapshot.runtime.progress}%`}></i></div>
             </div>
           {/if}
+
+          <BenchmarkStudio
+            tileMessage={benchmarkTile}
+            renders={benchmarkRenders.length ? benchmarkRenders : benchmarkRunning ? [] :
+              (snapshot.latest_benchmark?.device_results ?? []).flatMap(device =>
+                device.scenes.flatMap(scene => scene.preview ? [scene.preview] : []))}
+            running={benchmarkRunning}
+          />
 
           {#if snapshot.latest_benchmark && !benchmarkRunning}
             {#if snapshot.latest_benchmark.workload_version.startsWith('localsr-benchmark-v2')}

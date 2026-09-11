@@ -161,6 +161,8 @@ beforeEach(() => {
   api.selectMedia.mockResolvedValue(undefined);
   api.saveSettings.mockResolvedValue(undefined);
   api.startJobs.mockResolvedValue(undefined);
+  api.startBenchmark.mockReset().mockResolvedValue(undefined);
+  api.downloadModel.mockReset().mockResolvedValue(undefined);
   api.listenForWorker.mockResolvedValue(() => undefined);
   api.listenForStateChange.mockResolvedValue(() => undefined);
   api.listenForNativeMenu.mockResolvedValue(() => undefined);
@@ -240,6 +242,65 @@ describe('LocalSR desktop interface', () => {
     await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Benchmark device' }), 'cpu');
     await user.click(within(dialog).getByRole('button', { name: 'Run Benchmark' }));
     await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('cpu'));
+  });
+
+  it('downloads the missing benchmark model once before starting the selected device', async () => {
+    const snapshot = readySnapshot();
+    snapshot.catalog.models.find(model => model.model_id === 'span_photo_x4')!.installed = false;
+    let finishDownload!: () => void;
+    api.downloadModel.mockImplementationOnce(() => new Promise(resolve => { finishDownload = () => resolve(undefined); }));
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const dialog = within(screen.getByRole('dialog'));
+    const device = dialog.getByRole('combobox', { name: 'Benchmark device' });
+    await user.selectOptions(device, 'cpu');
+    await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
+    expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false);
+    expect(api.startBenchmark).not.toHaveBeenCalled();
+    expect((device as HTMLSelectElement).disabled).toBe(true);
+    await user.click(dialog.getByRole('button', { name: /Downloading SPAN/ }));
+    expect(api.downloadModel).toHaveBeenCalledOnce();
+    finishDownload();
+    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('cpu'));
+  });
+
+  it('shows a failed or cancelled model download beside the benchmark button and allows retry', async () => {
+    const snapshot = readySnapshot();
+    snapshot.catalog.models.find(model => model.model_id === 'span_photo_x4')!.installed = false;
+    api.downloadModel.mockRejectedValueOnce(new Error('download cancelled'));
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const dialog = within(screen.getByRole('dialog'));
+    await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
+    expect((await dialog.findByRole('alert')).textContent).toContain('download cancelled');
+    expect(api.startBenchmark).not.toHaveBeenCalled();
+    await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
+    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
+    expect(dialog.queryByRole('alert')).toBeNull();
+  });
+
+  it('explains why benchmark startup waits for another model download', async () => {
+    const snapshot = readySnapshot();
+    snapshot.runtime.download_model_id = 'seedvr2_3b_fp8';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByText('Wait for the current model download to finish before benchmarking.')).toBeTruthy();
+    await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
+    expect(api.startBenchmark).not.toHaveBeenCalled();
+    expect(api.downloadModel).not.toHaveBeenCalled();
+    expect(api.cancelDownload).not.toHaveBeenCalled();
+  });
+
+  it('keeps benchmark launch errors visible beside a retryable button', async () => {
+    api.startBenchmark.mockRejectedValueOnce(new Error('selected device unavailable'));
+    const user = await mountWith(readySnapshot());
+    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    const dialog = within(screen.getByRole('dialog'));
+    await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
+    expect((await dialog.findByRole('alert')).textContent).toContain('selected device unavailable');
+    expect((dialog.getByRole('button', { name: 'Run Benchmark' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(api.downloadModel).not.toHaveBeenCalled();
   });
 
   it('shows benchmark progress and keeps local results copyable and exportable', async () => {

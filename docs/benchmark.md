@@ -3,13 +3,19 @@
 ## Separate CPU / GPU benchmark (v2 preview)
 
 On `codex/hdr-preservation`, **Run Benchmark** lets you select CPU or one detected
-GPU (MPS/Metal on Apple silicon). The worker runs exactly that device and rejects
+GPU (MPS/Metal on Apple silicon, CUDA on NVIDIA, or ROCm on AMD). The worker runs exactly that device and rejects
 an unavailable selection. It does not automatically append a CPU phase. Each
 completed device score is retained locally, with its own confidence and timestamp;
 a CPU run preserves the previous GPU result and vice versa. JSON separates the
 current run's `device_results` from `device_history`, the most recent completed
 result for each device using the same workload version. Cancellation/failure
 preserves previous results. Older multi-device and v1 files remain readable.
+
+On a fresh installation, choose **Download & run benchmark** to download and
+verify the 4.3 MiB SPAN Quick checkpoint. The selected device starts once the
+download succeeds. Download progress, startup errors, and any work that must
+finish first are shown beside the button; failed or cancelled downloads do not
+start a benchmark. Subsequent runs reuse the installed checkpoint.
 
 The score is each device's geometric mean of output megapixels/second across the
 three fixed SPAN scenes. CPU and GPU never contribute to a combined score. GPU

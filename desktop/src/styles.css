@@ -142,6 +142,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .benchmark-facts dt { color: var(--secondary); font-size: calc(9px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .45px; }
 .benchmark-facts dd { margin: 3px 0 0; overflow: hidden; color: var(--text); font-size: calc(11px * var(--ui-scale)); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .benchmark-panel .warning-value { color: #efbd66; }
+.benchmark-panel .error-message { color: #ffc2c4; }
 .benchmark-section-title { margin: 2px 1px 8px; }
 .benchmark-section-title strong,.performance-section-heading strong { font-size: calc(11px * var(--ui-scale)); }
 .benchmark-section-title span,.performance-section-heading span { color: var(--tertiary); font-size: calc(9px * var(--ui-scale)); text-transform: uppercase; letter-spacing: .5px; }
