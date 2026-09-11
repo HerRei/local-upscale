@@ -1,0 +1,75 @@
+name: Isolated Windows acceptance
+
+# Deliberately uses a disposable hosted VM, never the shared release runners.
+on:
+  push:
+    branches: [codex/platform-acceptance]
+    paths-ignore: ['docs/**', 'README.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+      CARGO_BUILD_JOBS: '2'
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install CPU test environment
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip install --disable-pip-version-check --no-cache-dir -e '.[dev,video,face,package]'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force build/acceptance | Out-Null
+      - name: Python suite
+        run: python -m pytest tests -q --tb=short --junitxml=build/acceptance/windows-tests.xml
+      - name: Frontend and native tests
+        if: success() || failure()
+        run: |
+          npm --prefix desktop ci
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm --prefix desktop run check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm --prefix desktop test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm --prefix desktop run build:frontend
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --all-targets
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Freeze and exercise installed worker
+        if: success() || failure()
+        run: |
+          python -m PyInstaller --noconfirm --clean --distpath build/acceptance/dist --workpath build/acceptance/pyinstaller packaging/tauri_worker.spec
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python packaging/smoke_worker.py build/acceptance/dist/engine/localsr-worker.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Save reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-acceptance-${{ github.sha }}
+          path: |
+            build/acceptance/*.xml
+            build/acceptance/*.json
+          retention-days: 14
