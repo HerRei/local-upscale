@@ -64,12 +64,32 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python packaging/smoke_worker.py build/acceptance/dist/engine/localsr-worker.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Save reports
+          python scripts/acceptance_worker.py build/acceptance/dist/engine/localsr-worker.exe --device cpu --report build/acceptance/windows-worker.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Native host startup with bundled engine
+        if: success() || failure()
+        run: |
+          cargo build --manifest-path desktop/src-tauri/Cargo.toml --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item -Recurse build/acceptance/dist/engine desktop/src-tauri/target/debug/engine
+          $app = Resolve-Path desktop/src-tauri/target/debug/localsr-next.exe
+          foreach ($mode in @('headless-smoke-test', 'smoke-test')) {
+            $env:LOCALSR_SMOKE_REPORT = Join-Path $env:GITHUB_WORKSPACE "build/acceptance/windows-$mode.json"
+            $process = Start-Process -FilePath $app -ArgumentList "--$mode" -PassThru
+            if (-not $process.WaitForExit(180000)) {
+              Stop-Process -Id $process.Id -Force
+              throw "Native host timed out: $mode"
+            }
+            if ($process.ExitCode -ne 0) { throw "Native host failed: $mode" }
+            $report = Get-Content $env:LOCALSR_SMOKE_REPORT -Raw | ConvertFrom-Json
+            if (-not $report.passed) { throw "Native host handshake failed: $mode" }
+          }
+      - name: Save reports in the job log and summary
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: windows-acceptance-${{ github.sha }}
-          path: |
-            build/acceptance/*.xml
-            build/acceptance/*.json
-          retention-days: 14
+        run: |
+          foreach ($file in Get-ChildItem build/acceptance/*.json) {
+            $text = Get-Content $file.FullName -Raw
+            Write-Output $text
+            Add-Content $env:GITHUB_STEP_SUMMARY "### $($file.Name)"
+            Add-Content $env:GITHUB_STEP_SUMMARY ('```json' + "`n" + $text + "`n" + '```')
+          }

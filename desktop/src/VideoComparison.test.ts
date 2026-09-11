@@ -56,6 +56,9 @@ describe('video comparison player', () => {
     expect(divider.getAttribute('aria-valuenow')).toBe('100');
 
     expect(screen.getByRole('slider', { name: 'Video position' })).toBeTruthy();
+    const speed = screen.getByRole('combobox', { name: 'Playback speed' }) as HTMLSelectElement;
+    expect(speed.value).toBe('1');
+    expect(speed.selectedOptions[0].textContent).toBe('1×');
     expect(screen.getByText('Original')).toBeTruthy();
     expect(screen.getByText('Enhanced')).toBeTruthy();
     expect(screen.getByText('VIDEO · COMPARISON')).toBeTruthy();

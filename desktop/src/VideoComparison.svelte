@@ -182,7 +182,7 @@
     <button class="button" type="button" on:click={togglePlayback} aria-label={playing ? 'Pause comparison' : 'Play comparison'}>{playing ? 'Pause' : 'Play'}</button>
     <input aria-label="Video position" type="range" min="0" max={duration || 0} step="0.01" value={currentTime} on:input={(event) => seek(Number(event.currentTarget.value))} />
     <span>{formatMediaTime(currentTime, duration > 0 && duration < 1)} / {formatMediaTime(duration, duration > 0 && duration < 1)}</span>
-    <label>Speed <select aria-label="Playback speed" value={playbackRate} on:change={rateChanged}><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+    <label>Speed <select aria-label="Playback speed" value={String(playbackRate)} on:change={rateChanged}><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
   </div>
   {#if playbackError}
     <div class="video-error" role="alert"><p>{playbackError}</p><button class="button" type="button" on:click={retryPlayback}>Retry comparison</button></div>

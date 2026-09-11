@@ -492,6 +492,8 @@ pub struct StartBenchmarkInput {
 pub struct VideoComparisonSources {
     pub original_path: String,
     pub enhanced_path: String,
+    pub original_url: Option<String>,
+    pub enhanced_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

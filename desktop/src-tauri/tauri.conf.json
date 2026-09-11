@@ -11,8 +11,8 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; script-src 'self'",
-      "devCsp": "default-src 'self' http://localhost:*; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost http://localhost:*; script-src 'self' http://localhost:*",
+      "csp": "default-src 'self' customprotocol: asset:; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost http://127.0.0.1:* blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; script-src 'self'",
+      "devCsp": "default-src 'self' http://localhost:*; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost http://127.0.0.1:* blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost http://localhost:*; script-src 'self' http://localhost:*",
       "assetProtocol": {
         "enable": true,
         "scope": []

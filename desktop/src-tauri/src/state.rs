@@ -40,6 +40,8 @@ impl Default for WorkerControl {
 }
 
 pub struct AppState {
+    #[cfg(target_os = "linux")]
+    pub media_server: Mutex<Option<crate::media_server::MediaServer>>,
     pub paths: AppPaths,
     pub database: Mutex<Database>,
     pub catalog: Mutex<CatalogManifest>,
@@ -66,6 +68,8 @@ impl AppState {
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
         Ok(Self {
+            #[cfg(target_os = "linux")]
+            media_server: Mutex::new(None),
             paths,
             database: Mutex::new(database),
             catalog: Mutex::new(catalog),

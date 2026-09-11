@@ -90,13 +90,16 @@ export const exportBenchmark = async (): Promise<boolean> => {
   return true;
 };
 export const prepareVideoComparison = async (mediaId: string): Promise<VideoComparisonSources> => {
-  const paths = await invoke<{ original_path: string; enhanced_path: string }>(
+  const paths = await invoke<{
+    original_path: string; enhanced_path: string;
+    original_url?: string | null; enhanced_url?: string | null;
+  }>(
     'prepare_video_comparison',
     { mediaId }
   );
   return {
-    original_url: convertFileSrc(paths.original_path),
-    enhanced_url: convertFileSrc(paths.enhanced_path)
+    original_url: paths.original_url ?? convertFileSrc(paths.original_path),
+    enhanced_url: paths.enhanced_url ?? convertFileSrc(paths.enhanced_path)
   };
 };
 export const refreshCapabilities = (): Promise<void> => invoke('refresh_capabilities');

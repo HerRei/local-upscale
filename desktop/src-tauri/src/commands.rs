@@ -555,9 +555,27 @@ pub fn prepare_video_comparison(
         ));
     }
     allow_video_preview_pair(&app.asset_protocol_scope(), &original, &enhanced)?;
+    // WebKitGTK cannot reliably play media through a custom URI scheme.
+    // A private loopback stream provides normal HTTP byte-range seeking.
+    #[cfg(target_os = "linux")]
+    let (original_url, enhanced_url) = {
+        let mut server = lock(&state.media_server)?;
+        if server.is_none() {
+            *server = Some(crate::media_server::MediaServer::start()?);
+        }
+        let server = server.as_ref().expect("media server was initialized");
+        (
+            Some(server.url_for(&original)?),
+            Some(server.url_for(&enhanced)?),
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (original_url, enhanced_url) = (None, None);
     Ok(VideoComparisonSources {
         original_path: original.to_string_lossy().into_owned(),
         enhanced_path: enhanced.to_string_lossy().into_owned(),
+        original_url,
+        enhanced_url,
     })
 }
 
@@ -570,12 +588,12 @@ fn allow_video_preview_pair(
     // forbid_file is a permanent deny, not the inverse of allow_file: revoking
     // on selection change prevented every subsequent visit to the same video.
     // The unmounted player releases its media elements; no folder is authorized.
-    scope.allow_file(&original).map_err(|error| {
+    scope.allow_file(original).map_err(|error| {
         AppError::Config(format!(
             "could not authorize the original video preview: {error}"
         ))
     })?;
-    scope.allow_file(&enhanced).map_err(|error| {
+    scope.allow_file(enhanced).map_err(|error| {
         AppError::Config(format!(
             "could not authorize the enhanced video preview: {error}"
         ))

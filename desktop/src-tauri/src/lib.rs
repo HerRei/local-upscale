@@ -7,6 +7,8 @@ mod error;
 mod headless_smoke;
 mod integrations;
 mod launch;
+#[cfg(any(target_os = "linux", test))]
+mod media_server;
 mod native_menu;
 mod paths;
 mod settings;
@@ -118,6 +120,10 @@ pub fn run() {
         if matches!(&event, tauri::RunEvent::Exit) {
             let state = app.state::<Arc<AppState>>();
             worker::shutdown(&state);
+            #[cfg(target_os = "linux")]
+            if let Ok(mut server) = state.media_server.lock() {
+                server.take();
+            }
         }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { urls } = &event {
