@@ -123,7 +123,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             if let Ok(mut server) = state.media_server.lock() {
                 server.take();
-            }
+            };
         }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { urls } = &event {

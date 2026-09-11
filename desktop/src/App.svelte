@@ -171,6 +171,9 @@
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id
   );
+  $: benchmarkHardware = snapshot.capabilities.devices.find(
+    (device) => device.id === benchmarkDevice
+  );
   $: unreadyMedia = queueSelection.find((media) => media.probe_status !== 'ready');
   $: singleScopeMessage = unreadyMedia
     ? unreadyMedia.probe_status === 'failed'
@@ -1474,6 +1477,16 @@
 
         </section>
 
+        {#if benchmarkRunning}
+        <div class="performance-section-heading"><strong>Benchmark hardware</strong><span>Selected for this run</span></div>
+        <dl class="performance-grid">
+          <div><dt>Backend</dt><dd>{benchmarkHardware?.type?.toUpperCase() ?? 'Detecting'}</dd></div>
+          <div><dt>Device</dt><dd>{benchmarkHardware?.name ?? 'Detecting'}</dd></div>
+          <div><dt>Device capacity</dt><dd>{benchmarkHardware?.id === 'cpu' ? 'Uses system RAM' : benchmarkHardware?.total_memory ? formatBytes(benchmarkHardware.total_memory) : 'Not reported'}</dd></div>
+          <div><dt>Model</dt><dd>SPAN · fixed benchmark workload</dd></div>
+          <div><dt>Timing and memory</dt><dd>Measurements appear in the completed scene results.</dd></div>
+        </dl>
+        {:else}
         <div class="performance-section-heading"><strong>Live hardware</strong><span>Current worker state</span></div>
         <dl class="performance-grid">
           <div><dt>Backend</dt><dd>{activeDevice?.type?.toUpperCase() ?? 'Detecting'}</dd></div>
@@ -1487,6 +1500,7 @@
           <div><dt>Tile</dt><dd>{snapshot.runtime.active_tile_size || settings.tile_size}px · halo {settings.halo}px</dd></div>
           <div><dt>Thermals</dt><dd>{snapshot.runtime.thermal_status}</dd></div>
         </dl>
+        {/if}
       {:else if modalKind === 'integrations' && integration}
         <p class="integration-detail">Command: <code>{integration.command_name}</code><br />Platform: {integration.platform}</p>
       {:else if diagnostics}
