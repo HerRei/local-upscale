@@ -528,7 +528,8 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         name="SeedVR2-3B — Labs",
         description=(
             "Experimental one-step diffusion video restorer with temporal consistency "
-            "inside each clip window. Slow but strong; needs 16 GB of memory."
+            "inside each clip window. Supports NVIDIA CUDA, AMD ROCm and Apple Metal. "
+            "Needs at least 16 GB of memory; output resolution affects usage."
         ),
         family="seedvr2_3b",
         engine_kind="seedvr2",
@@ -554,8 +555,9 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         model_id="seedvr2_3b_fp8",
         name="SeedVR2-3B FP8 — Labs",
         description=(
-            "Experimental FP8 SeedVR2 build for NVIDIA GPUs: half the download "
-            "and memory of FP16 at nearly the same quality."
+            "Experimental FP8 SeedVR2 for NVIDIA CUDA and AMD ROCm GPUs. "
+            "Smaller model download and weight storage than FP16; working memory "
+            "depends on output resolution."
         ),
         family="seedvr2_3b",
         engine_kind="seedvr2",

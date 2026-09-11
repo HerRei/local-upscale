@@ -79,6 +79,26 @@ De-flicker is off by default. It blends toward the local temporal median only wh
 
 SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
 
+The 3B FP16 and FP8 variants support NVIDIA CUDA and AMD ROCm through the
+[vendored upstream implementation](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler).
+ROCm uses PyTorch's `cuda:0` device identifier internally; that identifier does not
+require an NVIDIA GPU. FP8 reduces weight storage and download size, while working
+memory still depends on the clip and output resolution. HDR preservation remains
+disabled for both variants.
+
+Packaged workers must include Diffusers' dependency metadata as well as its Python
+modules. A missing `requests` distribution record previously made SeedVR2 fail to
+load in the Linux package despite a healthy worker handshake. The preview package
+now includes Diffusers' transitive metadata and Torch/Torchvision version records.
+
+Local package acceptance on an RX 9060 XT (16 GB, ROCm 7.2 / Torch 2.13)
+completed one source frame with SeedVR2-3B FP8 at 128×226 SDR in 44 seconds;
+the H.264 output was decoded and visually checked. A six-frame 256×454 test
+completed encoding and diffusion but exceeded a five-minute wait for decoding
+progress, so it was stopped. This verifies the packaged ROCm path only at a tiny
+output size; longer clips, normal output sizes, and restoration quality remain
+unverified on this device.
+
 Its **Output resolution** control either follows the chosen scale or sets the
 shorter edge to 256, 512, 720, 1080, 1440 or 2160 pixels. The inspector explicitly
 warns when this reduces the source dimensions and loses fine detail. A smaller requested output

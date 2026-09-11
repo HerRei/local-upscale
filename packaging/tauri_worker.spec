@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 
 ROOT = Path(SPECPATH).parent
@@ -30,6 +30,10 @@ datas = spandrel_datas + [
         "localsr/video_models/seedvr2",
     ),
 ]
+# Diffusers checks installed distribution versions when SeedVR2 is imported.
+# Bundling importable modules alone leaves the packaged temporal engine broken.
+datas += copy_metadata("diffusers", recursive=True)
+datas += copy_metadata("torch") + copy_metadata("torchvision")
 hiddenimports = sorted(
     set(
         spandrel_hidden
