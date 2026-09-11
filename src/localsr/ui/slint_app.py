@@ -697,8 +697,7 @@ class SlintApplication:
                 self.ui.model_action_enabled = False
             else:
                 self.ui.model_status = (
-                    f"Not installed · {model.license_name} · needs about "
-                    f"{model.min_unified_memory_gb} GB of memory to run"
+                    f"Not installed · {model.license_name} · memory depends on output size"
                 )
                 self.ui.model_action_text = f"Download {gigabytes:.1f} GB"
                 self.ui.model_action_visible = True

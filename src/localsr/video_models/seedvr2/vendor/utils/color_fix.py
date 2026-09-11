@@ -365,6 +365,25 @@ def lab_color_transfer(
     return result
 
 
+# Modified for LocalSR: ROCm 7.2/gfx1200 corrupts tall [N,3] @ [3,3]
+# colour conversions after row 524288. Channel arithmetic avoids that GEMM
+# dispatch, preserves every pixel position and bounds temporary allocations.
+def _channel_color_matrix(pixels: Tensor, matrix: Tensor) -> Tensor:
+    result = torch.empty_like(pixels)
+    for channel in range(3):
+        out = result[:, channel]
+        out.copy_(pixels[:, 0]).mul_(matrix[channel, 0])
+        out.addcmul_(pixels[:, 1], matrix[channel, 1])
+        out.addcmul_(pixels[:, 2], matrix[channel, 2])
+    return result
+
+
+def _apply_color_matrix(pixels: Tensor, matrix: Tensor) -> Tensor:
+    if pixels.is_cuda and torch.version.hip:
+        return _channel_color_matrix(pixels, matrix)
+    return torch.matmul(pixels, matrix.T)
+
+
 def _rgb_to_lab_batch(rgb: Tensor, device: torch.device, matrix: Tensor, epsilon: float, kappa: float) -> Tensor:
     """Convert batch of RGB images to CIELAB color space using D65 illuminant."""
     # Apply sRGB gamma correction (linearize)
@@ -383,7 +402,7 @@ def _rgb_to_lab_batch(rgb: Tensor, device: torch.device, matrix: Tensor, epsilon
     
     # Ensure dtype consistency for matrix multiplication
     rgb_flat = rgb_flat.to(dtype=matrix.dtype)
-    xyz_flat = torch.matmul(rgb_flat, matrix.T)
+    xyz_flat = _apply_color_matrix(rgb_flat, matrix)
     del rgb_flat
     
     xyz = xyz_flat.reshape(B, H, W, 3).permute(0, 3, 1, 2)
@@ -456,7 +475,7 @@ def _lab_to_rgb_batch(lab: Tensor, device: torch.device, matrix_inv: Tensor, eps
     
     # Ensure dtype consistency for matrix multiplication
     xyz_flat = xyz_flat.to(dtype=matrix_inv.dtype)
-    rgb_linear_flat = torch.matmul(xyz_flat, matrix_inv.T)
+    rgb_linear_flat = _apply_color_matrix(xyz_flat, matrix_inv)
     del xyz_flat
     
     rgb_linear = rgb_linear_flat.reshape(B, H, W, 3).permute(0, 3, 1, 2)

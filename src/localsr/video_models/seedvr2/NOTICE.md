@@ -17,7 +17,9 @@ derive from the HuggingFace diffusers library.
   `utils/downloads.py`, where model downloads are restricted to HTTPS, and
   `utils/debug.py`, where diagnostics go to stderr to preserve the JSON-lines protocol,
   and `models/video_vae_v3/modules/attn_video_vae.py`, where optional preview callbacks
-  report the actual encoding/decoding regions without modifying model tensors).
+  report the actual encoding/decoding regions without modifying model tensors, and
+  `utils/color_fix.py`, where equivalent channel arithmetic avoids incorrect tall
+  colour-matrix GEMM results observed on ROCm 7.2/gfx1200).
 - The ComfyUI interface layer (`src/interfaces/`) of the upstream project is
   not vendored. `pos_emb.safetensors` / `neg_emb.safetensors` are byte-for-byte
   tensor conversions of the precomputed text conditioning embeddings from the

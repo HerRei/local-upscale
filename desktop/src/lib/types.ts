@@ -168,6 +168,7 @@ export interface Recipe {
   deflicker_window?: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
+  video_low_memory?: boolean;
   video_container?: 'mp4' | 'mkv';
   video_crf?: number;
   enable_face_model?: boolean;
@@ -203,6 +204,7 @@ export interface UiSettings {
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
+  video_low_memory?: boolean;
   video_container: 'mp4' | 'mkv';
   video_crf: number;
   enable_face_model: boolean;
@@ -211,7 +213,32 @@ export interface UiSettings {
   allow_unsafe_pickle_model: boolean;
 }
 
+export interface VideoMemoryStatus {
+  job_id: string;
+  device: string;
+  stage: string;
+  low_memory: boolean;
+  clip_frames: number;
+  vae_tile_size: number;
+  blocks_to_swap: number;
+  offload_tensors: boolean;
+  output_width: number;
+  output_height: number;
+  gpu_sample_available: boolean;
+  shared_memory: boolean;
+  device_total_memory: number;
+  device_free_memory: number;
+  device_allocated_memory: number;
+  device_reserved_memory: number;
+  device_peak_memory: number;
+  system_ram_available: number;
+  process_ram: number;
+  elapsed_seconds: number;
+  oom: boolean;
+}
+
 export interface RuntimeStatus {
+  video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
   active_job_id: string;
   status_title: string;
@@ -352,6 +379,7 @@ export interface StartBatchInput {
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
+  video_low_memory?: boolean;
   video_container: string;
   video_crf: number;
   enable_face_model: boolean;

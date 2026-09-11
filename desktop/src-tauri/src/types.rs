@@ -205,6 +205,8 @@ pub struct Recipe {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
+    #[serde(default = "default_low_memory")]
+    pub video_low_memory: bool,
     #[serde(default)]
     pub video_crf: Option<u32>,
     #[serde(default)]
@@ -250,11 +252,17 @@ pub struct UiSettings {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
+    #[serde(default = "default_low_memory")]
+    pub video_low_memory: bool,
     pub video_crf: u32,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
+}
+
+fn default_low_memory() -> bool {
+    true
 }
 
 fn default_hdr_mode() -> String {
@@ -286,6 +294,7 @@ impl Default for UiSettings {
             video_container: "mp4".into(),
             video_hdr_mode: default_hdr_mode(),
             video_target_resolution: 0,
+            video_low_memory: true,
             video_crf: 18,
             enable_face_model: false,
             face_fidelity: 70,
@@ -297,6 +306,8 @@ impl Default for UiSettings {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeStatus {
+    #[serde(default)]
+    pub video_memory: Option<serde_json::Value>,
     pub worker: String,
     pub active_job_id: String,
     pub status_title: String,
@@ -447,6 +458,7 @@ impl Default for RuntimeStatus {
             throughput: 0.0,
             throughput_unit: String::new(),
             active_tile_size: 0,
+            video_memory: None,
             device_free_memory: 0,
             device_allocated_memory: 0,
             live_system_ram_available: 0,
@@ -508,6 +520,8 @@ pub struct StartBatchInput {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
+    #[serde(default = "default_low_memory")]
+    pub video_low_memory: bool,
     pub video_crf: u32,
     pub enable_face_model: bool,
     pub face_fidelity: u32,

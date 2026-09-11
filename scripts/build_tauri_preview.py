@@ -245,10 +245,10 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
         "#include <unistd.h>\n"
         f"static const char *backup_path = {json.dumps(str(backup))};\n"
         "int main(int argc, char **argv) {\n"
-        "  FILE *log = fopen(getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") ? getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") : \"/tmp/localsr-linuxdeploy-wrapper.log\", \"a\");\n"
+        '  FILE *log = fopen(getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") ? getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") : "/tmp/localsr-linuxdeploy-wrapper.log", "a");\n'
         "  if (log) {\n"
-        "    fputs(\"wrapper argv:\", log);\n"
-        "    for (int i = 1; i < argc; ++i) fprintf(log, \" <%s>\", argv[i] ? argv[i] : \"\");\n"
+        '    fputs("wrapper argv:", log);\n'
+        '    for (int i = 1; i < argc; ++i) fprintf(log, " <%s>", argv[i] ? argv[i] : "");\n'
         "    fputc('\\n', log);\n"
         "    fclose(log);\n"
         "  }\n"
@@ -258,15 +258,15 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
         "  if (!next) return 127;\n"
         "  int out = 0;\n"
         "  next[out++] = (char *)backup_path;\n"
-        "  if (first < argc && strcmp(argv[first], \"--appimage-extract-and-run\") == 0) next[out++] = argv[first++];\n"
-        "  next[out++] = \"--exclude-library=libcuda.so.1\";\n"
-        "  next[out++] = \"--exclude-library=libnvidia-ml.so.1\";\n"
+        '  if (first < argc && strcmp(argv[first], "--appimage-extract-and-run") == 0) next[out++] = argv[first++];\n'
+        '  next[out++] = "--exclude-library=libcuda.so.1";\n'
+        '  next[out++] = "--exclude-library=libnvidia-ml.so.1";\n'
         "  for (int i = first; i < argc; ++i) next[out++] = argv[i];\n"
         "  next[out] = NULL;\n"
         "  execv(backup_path, next);\n"
-        "  log = fopen(getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") ? getenv(\"LOCALSR_LINUXDEPLOY_WRAPPER_LOG\") : \"/tmp/localsr-linuxdeploy-wrapper.log\", \"a\");\n"
-        "  if (log) { fprintf(log, \"execv failed: %s\\n\", strerror(errno)); fclose(log); }\n"
-        "  fprintf(stderr, \"localsr linuxdeploy wrapper execv failed: %s\\n\", strerror(errno));\n"
+        '  log = fopen(getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") ? getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") : "/tmp/localsr-linuxdeploy-wrapper.log", "a");\n'
+        '  if (log) { fprintf(log, "execv failed: %s\\n", strerror(errno)); fclose(log); }\n'
+        '  fprintf(stderr, "localsr linuxdeploy wrapper execv failed: %s\\n", strerror(errno));\n'
         "  return 127;\n"
         "}\n",
         encoding="utf-8",
@@ -519,7 +519,9 @@ def main() -> int:
                 removed_linuxdeploy_symlinks = True
             except OSError:
                 result = subprocess.run(["sudo", "rm", "-f", str(link)], capture_output=True)
-                removed_linuxdeploy_symlinks = removed_linuxdeploy_symlinks or result.returncode == 0
+                removed_linuxdeploy_symlinks = (
+                    removed_linuxdeploy_symlinks or result.returncode == 0
+                )
         if removed_linuxdeploy_symlinks:
             subprocess.run(["sudo", "ldconfig"], capture_output=True)
     print(

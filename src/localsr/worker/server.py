@@ -452,6 +452,17 @@ class WorkerServer:
                         self.model_adapter.release()
                         self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
                         self.engine.release_model()
+                        # Exception frames and model references have been released;
+                        # return their cached allocations to other applications too.
+                        try:
+                            import torch
+
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            elif torch.backends.mps.is_available():
+                                torch.mps.empty_cache()
+                        except RuntimeError:
+                            pass
 
                 elif req_type == "benchmark_request":
                     if self.active_job_id is not None:
@@ -712,6 +723,24 @@ class WorkerServer:
         )
 
     def _run_temporal_video_job(self, job_id, data, engine_factory):
+        from localsr.core.video_memory import VideoMemoryMonitor
+
+        with VideoMemoryMonitor(
+            job_id,
+            str(data.get("device", "cpu")),
+            bool(data.get("video_low_memory", True)),
+            send_message,
+        ) as memory:
+            try:
+                return WorkerServer._run_temporal_video_job_impl(
+                    self, job_id, data, engine_factory, memory
+                )
+            except RuntimeError as error:
+                if "out of memory" in str(error).lower():
+                    raise RuntimeError(memory.oom_message()) from error
+                raise
+
+    def _run_temporal_video_job_impl(self, job_id, data, engine_factory, memory):
         """Stream a video through a clip-based temporal engine.
 
         Frames are read in 4n+1 chunks; each chunk is conditioned on the
@@ -755,6 +784,7 @@ class WorkerServer:
         state = {"done": 0, "remaining": 0.0}
 
         def report(stage: str, completed: int = 0, total: int = 0) -> None:
+            memory.phase(stage)
             send_message(
                 VideoStageProgress(
                     job_id=job_id,
@@ -770,11 +800,17 @@ class WorkerServer:
             )
 
         report("loading_model")
+        memory.configure(
+            max(2, int(probe.width * resolution / min(probe.width, probe.height)) // 2 * 2),
+            max(2, int(probe.height * resolution / min(probe.width, probe.height)) // 2 * 2),
+            min(window, memory.latest.clip_frames),
+        )
         engine = engine_factory(
             bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
         )
         window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
         overlap = min(overlap, window - 1)
+        memory.configure(memory.latest.output_width, memory.latest.output_height, window)
 
         decode_iter = decode_timed_frames(
             video_path,
@@ -969,11 +1005,7 @@ class WorkerServer:
             return
         except RuntimeError as error:
             if "out of memory" in str(error).lower():
-                raise RuntimeError(
-                    "SeedVR2 ran out of memory at the selected output resolution. "
-                    "Choose a smaller Output resolution (start with 256 or 512 px), "
-                    "or use Frame-by-frame with HAT-S and a small tile size."
-                ) from error
+                memory.capture_oom()
             raise
         finally:
             decode_iter.close()
@@ -994,6 +1026,7 @@ class WorkerServer:
             send_message(JobCancelled(job_id=job_id))
             return
 
+        memory.sample()
         elapsed = _time.monotonic() - started_at
         send_message(
             VideoJobCompleted(
@@ -1044,6 +1077,14 @@ class WorkerServer:
                 raise ValueError("HDR preservation requires the frame-by-frame HAT engine (Labs).")
             send_message(VideoStageProgress(job_id=job_id, stage="verifying_model"))
             self._verify_temporal_bundle(data)
+            if model_kind == "seedvr2":
+                from functools import partial
+
+                engine_factory = partial(
+                    engine_factory,
+                    low_memory=bool(data.get("video_low_memory", True)),
+                    model_id=str(data.get("video_model_id") or ""),
+                )
             self._run_temporal_video_job(job_id, data, engine_factory)
             return
 

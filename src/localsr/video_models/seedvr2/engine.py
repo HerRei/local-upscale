@@ -19,6 +19,9 @@ import numpy as np
 import torch
 from PIL import Image
 
+from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID
+from localsr.core.video_memory import seed_memory_plan
+
 from .vendor.core.generation_phases import (
     decode_all_batches,
     encode_all_batches,
@@ -70,14 +73,25 @@ class SeedVR2Engine:
         precision: str,
         *,
         debug: bool = False,
+        low_memory: bool = True,
+        model_id: str = "",
     ) -> None:
         del precision  # The checkpoint's own dtype governs; MPS converts in-place.
         self.bundle_dir = Path(bundle_dir)
         self.device = "mps" if device.startswith("mps") else device
-        self.max_temporal_window = 5 if self.device == "mps" else 9
+        plan = seed_memory_plan(self.device, low_memory)
+        self.max_temporal_window = plan.clip_frames
         self.debug = Debug(enabled=debug)
-        self.dit_model = _select_dit(self.bundle_dir)
-        vae_tile = 128 if self.device == "mps" else 512
+        if model_id:
+            model = VIDEO_CATALOG_BY_ID[model_id]
+            self.dit_model = next(file.filename for file in model.files if file.role == "dit")
+            if not (self.bundle_dir / self.dit_model).is_file():
+                raise FileNotFoundError(
+                    f"The selected SeedVR2 checkpoint is missing: {self.dit_model}"
+                )
+        else:
+            self.dit_model = _select_dit(self.bundle_dir)
+        vae_tile = plan.vae_tile_size
 
         self.ctx = setup_generation_context(
             dit_device=self.device,
@@ -87,7 +101,7 @@ class SeedVR2Engine:
             dit_offload_device="cpu" if self.device != "cpu" else None,
             # Do not keep the VAE resident alongside the 3B diffusion model.
             vae_offload_device="cpu" if self.device != "cpu" else None,
-            tensor_offload_device=None,
+            tensor_offload_device="cpu" if plan.offload_tensors else None,
             debug=self.debug,
         )
         runner, cache_context = prepare_runner(
@@ -100,7 +114,9 @@ class SeedVR2Engine:
             vae_cache=False,
             dit_id=None,
             vae_id=None,
-            block_swap_config=None,
+            block_swap_config={"blocks_to_swap": plan.blocks_to_swap, "swap_io_components": True}
+            if plan.blocks_to_swap
+            else None,
             encode_tiled=True,
             encode_tile_size=(vae_tile, vae_tile),
             encode_tile_overlap=(vae_tile // 8, vae_tile // 8),

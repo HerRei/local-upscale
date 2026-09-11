@@ -91,13 +91,24 @@ modules. A missing `requests` distribution record previously made SeedVR2 fail t
 load in the Linux package despite a healthy worker handshake. The preview package
 now includes Diffusers' transitive metadata and Torch/Torchvision version records.
 
-Local package acceptance on an RX 9060 XT (16 GB, ROCm 7.2 / Torch 2.13)
-completed one source frame with SeedVR2-3B FP8 at 128×226 SDR in 44 seconds;
-the H.264 output was decoded and visually checked. A six-frame 256×454 test
-completed encoding and diffusion but exceeded a five-minute wait for decoding
-progress, so it was stopped. This verifies the packaged ROCm path only at a tiny
-output size; longer clips, normal output sizes, and restoration quality remain
-unverified on this device.
+Local acceptance on an RX 9060 XT (16 GB, ROCm 7.2 / Torch 2.13) with
+SeedVR2-3B FP8 and memory saving completed five frames from the original rotated
+4K HLG MOV at **2160×3840 SDR** in 277.6 seconds. Peak PyTorch allocation was
+9.93 GiB, minimum sampled free VRAM 1.33 GiB, and peak sampled worker RSS
+10.44 GiB. The output decoded successfully and was visually inspected. The
+installed frozen worker also completed eight source frames across two clips at
+720×1280 SDR in 64.7 seconds. These are short functional checks, not a completed
+four-minute export or a restoration-quality certification. Small VAE tiles can
+leave visible grid seams; substantial speed and image-quality tradeoffs remain.
+
+Visual acceptance also found corrupt colour conversion on ROCm 7.2/gfx1200:
+tall `[N,3] @ [3,3]` GEMM results diverged after pixel row 524,288, creating
+repeated image blocks. The decoded model output was intact before colour
+correction. LocalSR uses equivalent per-channel matrix arithmetic on ROCm;
+large-image tests compare it against CPU, and a LAB identity check on the AMD
+machine reduced mean absolute error from 0.51 to below 0.000001. CUDA/MPS retain
+their existing matrix path. This does not change model weights or manufacture
+additional image detail.
 
 Its **Output resolution** control either follows the chosen scale or sets the
 shorter edge to 256, 512, 720, 1080, 1440 or 2160 pixels. The inspector explicitly
@@ -108,9 +119,30 @@ stream holds one model window including context instead of 33 fresh frames, and
 reuses models on CPU between clips so the VAE and diffusion weights do not both
 remain resident on the GPU. MPS checkpoint dtype conversion also happens on CPU
 to avoid retaining two full weight copies on the GPU during loading.
-On MPS, the adapter uses five-frame windows and 128-pixel VAE tiles with 16-pixel
-overlap. These reduce memory use, at the cost of more work and possible tile/window
-boundary effects; they are not a guarantee that large outputs fit.
+**Reduce GPU memory** is enabled by default, including for existing settings and recipes.
+It uses five-frame windows and 128-pixel VAE tiles with 16-pixel overlap. On CUDA and
+ROCm, all 32 diffusion blocks, I/O components and intermediate tensors offload to CPU,
+using the vendored upstream BlockSwap and tensor-offloading controls. This trades
+system RAM and transfer time for lower GPU residency. MPS retains five-frame windows
+and 128-pixel tiles without block swapping because its GPU shares system memory.
+Disabling the option on CUDA/ROCm restores nine-frame windows and 512-pixel tiles.
+Smaller tiles and shorter windows can affect seams and temporal consistency; they
+are not a guarantee that large outputs fit. Output resolution never changes silently.
+
+The SeedVR2 inspector measures GPU allocated, reserved, peak allocated and free/total
+memory, worker RSS and available system RAM every second during processing. The
+current VAE/diffusion stage, output dimensions and clip limit accompany each sample.
+Reserved memory includes allocated tensors and PyTorch's cache. Free VRAM also reflects
+other applications and allocations outside the PyTorch allocator. These are separate
+measurements, not additive estimates. MPS shows allocation without inventing a separate
+VRAM pool; unavailable telemetry is labelled. OOM captures are retained before model
+cleanup and included in Copy diagnostics. Cached GPU allocations are released
+after video jobs, including failures, once exception frames and models are gone. A new job clears the previous sample.
+Selecting FP8 loads that exact checkpoint even when the FP16 bundle is also installed.
+
+These controls follow the [upstream memory guidance](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler#-limitations).
+LocalSR does not disable GPU safety limits or treat a model's weight size or nominal
+16 GB baseline as a workload fit guarantee.
 
 SeedVR2 reports real model verification, loading, frame reading, clip encoding,
 enhancement, decoding and finishing stages. Its source preview advances with each

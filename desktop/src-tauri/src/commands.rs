@@ -806,6 +806,7 @@ pub fn diagnostic_summary(state: State<'_, Arc<AppState>>) -> AppResult<String> 
         .collect();
     let summary = json!({
         "privacy": "File paths and media names omitted",
+        "video_memory": snapshot.runtime.video_memory,
         "app_version": snapshot.app_version,
         "protocol_version": snapshot.protocol_version,
         "platform": std::env::consts::OS,
@@ -916,6 +917,7 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         video_container: input.video_container.clone(),
         video_hdr_mode: input.video_hdr_mode.clone(),
         video_target_resolution: input.video_target_resolution,
+        video_low_memory: input.video_low_memory,
         video_crf: input.video_crf,
         enable_face_model: input.enable_face_model,
         face_fidelity: input.face_fidelity,
@@ -1244,6 +1246,7 @@ fn build_job_message(
                     "temporal_window": temporal_window,
                     "temporal_overlap": temporal_overlap,
                     "target_resolution": target,
+                    "video_low_memory": input.video_low_memory,
                     "output_scale": input.output_scale,
                     "allow_unverified_checkpoint": false,
                     "preview_enabled": input.enable_live_preview,
@@ -1502,6 +1505,7 @@ mod tests {
             video_container: "mp4".into(),
             video_hdr_mode: "tone_map".into(),
             video_target_resolution: 0,
+            video_low_memory: true,
             video_crf: 18,
             enable_face_model: false,
             face_fidelity: 70,
@@ -1698,9 +1702,11 @@ mod tests {
         )
         .unwrap();
         assert!(temporal_message["data"]["fps"].is_null());
+        assert_eq!(temporal_message["data"]["video_low_memory"], true);
         assert_eq!(temporal_message["data"]["hdr_mode"], "tone_map");
         let mut smaller = input("video");
         smaller.video_target_resolution = 512;
+        smaller.video_low_memory = false;
         let smaller_message = build_job_message(
             "small-job",
             &video,
@@ -1711,6 +1717,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(smaller_message["data"]["target_resolution"], 512);
+        assert_eq!(smaller_message["data"]["video_low_memory"], false);
+        let mut old_memory_settings = serde_json::to_value(UiSettings::default()).unwrap();
+        old_memory_settings
+            .as_object_mut()
+            .unwrap()
+            .remove("video_low_memory");
+        assert!(
+            serde_json::from_value::<UiSettings>(old_memory_settings)
+                .unwrap()
+                .video_low_memory
+        );
         let mut old_settings = serde_json::to_value(UiSettings::default()).unwrap();
         old_settings
             .as_object_mut()
@@ -1804,6 +1821,7 @@ mod tests {
             video_container: String::new(),
             video_hdr_mode: "tone_map".into(),
             video_target_resolution: 0,
+            video_low_memory: true,
             video_crf: None,
             enable_face_model: None,
             face_fidelity: None,

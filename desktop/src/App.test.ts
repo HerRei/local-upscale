@@ -547,10 +547,13 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText('SDR output selected. This model cannot preserve HDR.')).toBeTruthy();
     expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).selectedIndex).toBe(0);
     await user.selectOptions(screen.getByLabelText('Output resolution'), '512');
-    expect(screen.getByText('512 × 910 · SDR')).toBeTruthy();
+    expect(screen.getAllByText('512 × 910 · SDR').length).toBeGreaterThan(0);
+    const memory = screen.getByRole('checkbox', { name: 'Reduce GPU memory' }) as HTMLInputElement;
+    expect(memory.checked).toBe(true);
+    await user.click(memory);
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
     expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({
-      video_model_id: 'seedvr2_3b', video_hdr_mode: 'tone_map', video_target_resolution: 512
+      video_model_id: 'seedvr2_3b', video_hdr_mode: 'tone_map', video_target_resolution: 512, video_low_memory: false
     }));
     await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
     await user.selectOptions(screen.getByLabelText('Frame model'), '__custom__');

@@ -220,3 +220,20 @@ it('shows an honest first-tile wait, then a first-frame ETA including long durat
   expect(snapshot.runtime.status_detail).toContain('ETA ≈ 2d 2h');
   expect(formatDuration(3599.9)).toBe('1h 0m');
 });
+
+it('keeps temporal memory evidence separate from progress and rejects other jobs', () => {
+  let snapshot = applyWorkerEnvelope(demoSnapshot(), { type: 'job_started', data: { job_id: 'seed' } });
+  snapshot.runtime.status_title = 'Decoding enhanced clip';
+  snapshot.runtime.progress = 42;
+  const data = { job_id: 'seed', stage: 'decoding', gpu_sample_available: true, device_allocated_memory: 123, oom: true };
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'video_memory', data });
+  expect(snapshot.runtime.video_memory?.oom).toBe(true);
+  expect(snapshot.runtime.status_title).toBe('Decoding enhanced clip');
+  expect(snapshot.runtime.progress).toBe(42);
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'video_memory', data: { ...data, job_id: 'old', oom: false } });
+  expect(snapshot.runtime.video_memory?.job_id).toBe('seed');
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'job_failed', data: { job_id: 'seed', error_message: 'Out of memory' } });
+  expect(snapshot.runtime.video_memory?.oom).toBe(true);
+  snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'next' } });
+  expect(snapshot.runtime.video_memory).toBeUndefined();
+});

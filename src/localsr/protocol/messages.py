@@ -115,6 +115,7 @@ class VideoJobRequest:
     # Target shortest-edge in pixels for resolution-based engines (SeedVR2
     # has no fixed scale factor). 0 lets the engine keep the input size.
     target_resolution: int = 0
+    video_low_memory: bool = True
     # Frame-by-frame engines run at the checkpoint's native scale, then
     # downsample each restored frame when a smaller 2×/3× output is requested.
     output_scale: int | None = None
@@ -555,6 +556,34 @@ class BenchmarkCancelled:
 
     def to_json(self) -> str:
         return json.dumps({"type": "benchmark_cancelled", "data": asdict(self)})
+
+
+@dataclass
+class VideoMemoryStatus:
+    job_id: str
+    device: str
+    stage: str
+    low_memory: bool = True
+    clip_frames: int = 5
+    vae_tile_size: int = 128
+    blocks_to_swap: int = 0
+    offload_tensors: bool = False
+    output_width: int = 0
+    output_height: int = 0
+    gpu_sample_available: bool = False
+    shared_memory: bool = False
+    device_total_memory: int = 0
+    device_free_memory: int = 0
+    device_allocated_memory: int = 0
+    device_reserved_memory: int = 0
+    device_peak_memory: int = 0
+    system_ram_available: int = 0
+    process_ram: int = 0
+    elapsed_seconds: float = 0.0
+    oom: bool = False
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "video_memory", "data": asdict(self)})
 
 
 @dataclass

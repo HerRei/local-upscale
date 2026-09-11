@@ -76,6 +76,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     'progress',
     'video_tile_progress',
     'video_stage_progress',
+    'video_memory',
     'video_frame_started',
     'video_frame_completed'
   ].includes(envelope.type)
@@ -135,6 +136,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     }
     case 'job_started':
       next.runtime.active_job_id = String(data.job_id ?? '');
+      next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Processing';
       next.runtime.status_detail = 'Preparing the selected model.';
       next.runtime.progress = 0;
@@ -192,6 +194,15 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.throughput_unit = 'frames/s';
       break;
     }
+    case 'video_memory':
+      if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
+      next.runtime.video_memory = data as unknown as AppSnapshot['runtime']['video_memory'];
+      if (data.gpu_sample_available) {
+        next.runtime.device_free_memory = Number(data.device_free_memory ?? 0);
+        next.runtime.device_allocated_memory = Number(data.device_allocated_memory ?? 0);
+      }
+      next.runtime.live_system_ram_available = Number(data.system_ram_available ?? 0);
+      break;
     case 'video_stage_progress': {
       if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
       const labels: Record<string, string> = {
@@ -250,6 +261,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       break;
     case 'benchmark_started':
       next.runtime.active_job_id = String(data.job_id ?? '');
+      next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Benchmark running';
       next.runtime.status_detail = String(data.workload_version ?? '').startsWith(
         'localsr-benchmark-v2'

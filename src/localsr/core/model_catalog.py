@@ -529,7 +529,7 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         description=(
             "Experimental one-step diffusion video restorer with temporal consistency "
             "inside each clip window. Supports NVIDIA CUDA, AMD ROCm and Apple Metal. "
-            "Needs at least 16 GB of memory; output resolution affects usage."
+            "Memory use depends on output size, clip length and offloading; 16 GB does not guarantee a fit."
         ),
         family="seedvr2_3b",
         engine_kind="seedvr2",
@@ -557,7 +557,7 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         description=(
             "Experimental FP8 SeedVR2 for NVIDIA CUDA and AMD ROCm GPUs. "
             "Smaller model download and weight storage than FP16; working memory "
-            "depends on output resolution."
+            "depends on output size, clip length and offloading."
         ),
         family="seedvr2_3b",
         engine_kind="seedvr2",

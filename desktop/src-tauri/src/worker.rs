@@ -514,6 +514,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?.set_job_status(&id, "running")?;
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id = id;
+            runtime.video_memory = None;
             runtime.status_title = "Processing".into();
             runtime.status_detail = "Preparing the selected model.".into();
             runtime.elapsed_seconds = 0.0;
@@ -570,6 +571,21 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         // webview composites them into its bounded live canvas just as the
         // released Slint image provider does.
         "tile_update" => {}
+        "video_memory" => {
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.active_job_id == string(data, "job_id") {
+                runtime.video_memory = Some(data.clone());
+                if data
+                    .get("gpu_sample_available")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    runtime.device_free_memory = integer(data, "device_free_memory");
+                    runtime.device_allocated_memory = integer(data, "device_allocated_memory");
+                }
+                runtime.live_system_ram_available = integer(data, "system_ram_available");
+            }
+        }
         "video_stage_progress" => {
             let mut runtime = lock(&state.runtime)?;
             if runtime.active_job_id == string(data, "job_id") {
@@ -1060,6 +1076,7 @@ fn should_emit_state_changed(message_type: &str) -> bool {
             | "tile_update"
             | "video_frame_started"
             | "video_stage_progress"
+            | "video_memory"
             | "video_frame_completed"
             | "benchmark_progress"
             | "benchmark_stage_started"
@@ -1136,6 +1153,7 @@ mod tests {
             "tile_update",
             "video_frame_started",
             "video_frame_completed",
+            "video_memory",
         ] {
             assert!(!should_emit_state_changed(message_type));
         }

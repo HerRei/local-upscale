@@ -183,3 +183,68 @@ def test_vae_observer_clips_spatial_padding_and_cleans_up_on_failure():
             raise InterruptedError()
     assert regions[0][4:] == (224, 448, 32, 6, 256, 454)
     assert model.debug.tile_callback is previous
+
+
+def test_rocm_memory_saving_uses_upstream_offload_and_exact_selected_checkpoint(
+    tmp_path, monkeypatch
+):
+    for filename in adapter.DIT_PREFERENCE:
+        (tmp_path / filename).write_bytes(b"fixture")
+    configuration = {}
+
+    def setup(**kwargs):
+        configuration.update(kwargs)
+        return {"dit_device": "cpu", "compute_dtype": torch.float32}
+
+    def prepare(**kwargs):
+        configuration.update(kwargs)
+        return object(), {}
+
+    monkeypatch.setattr(adapter, "setup_generation_context", setup)
+    monkeypatch.setattr(adapter, "prepare_runner", prepare)
+    monkeypatch.setattr(adapter, "load_text_embeddings", lambda *args: {})
+    adapter.SeedVR2Engine(str(tmp_path), "cuda:0", "fp32", model_id="seedvr2_3b_fp8")
+    assert configuration["dit_model"] == "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+    assert configuration["tensor_offload_device"] == "cpu"
+    assert configuration["block_swap_config"] == {"blocks_to_swap": 32, "swap_io_components": True}
+    assert configuration["decode_tile_size"] == (128, 128)
+    adapter.SeedVR2Engine(str(tmp_path), "cuda:0", "fp32", low_memory=False, model_id="seedvr2_3b")
+    assert configuration["dit_model"] == "seedvr2_ema_3b_fp16.safetensors"
+    assert configuration["block_swap_config"] is None
+    assert configuration["tensor_offload_device"] is None
+    assert configuration["decode_tile_size"] == (512, 512)
+
+
+def test_color_matrix_preserves_large_portrait_pixel_positions():
+    from localsr.video_models.seedvr2.vendor.utils.color_fix import _channel_color_matrix
+
+    # Cross the exact row boundary at which gfx1200's tall GEMM corrupted pixels.
+    pixels = torch.linspace(0, 1, (524288 + 19) * 3).reshape(-1, 3)
+    matrix = torch.tensor(
+        [
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041],
+        ]
+    )
+    actual = _channel_color_matrix(pixels, matrix)
+    torch.testing.assert_close(actual, pixels @ matrix.T, atol=2e-7, rtol=1e-6)
+    assert actual.data_ptr() != pixels.data_ptr()
+
+
+@pytest.mark.skipif(
+    not torch.version.hip or not torch.cuda.is_available(), reason="ROCm hardware acceptance"
+)
+def test_rocm_large_color_matrix_matches_cpu_across_driver_boundary():
+    from localsr.video_models.seedvr2.vendor.utils.color_fix import _apply_color_matrix
+
+    pixels = torch.linspace(0, 1, 720 * 1280 * 3).reshape(-1, 3)
+    matrix = torch.tensor(
+        [
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041],
+        ]
+    )
+    actual = _apply_color_matrix(pixels.cuda(), matrix.cuda()).cpu()
+    torch.testing.assert_close(actual, pixels @ matrix.T, atol=2e-7, rtol=1e-6)

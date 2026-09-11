@@ -3,6 +3,7 @@
   import PreviewPane from './PreviewPane.svelte';
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
+  import VideoMemory from './VideoMemory.svelte';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import {
@@ -81,6 +82,8 @@
   $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
   $: faceEnabled = settings.enable_face_model && faceEngineAvailable;
   $: usingTemporalVideo = settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
+  $: seedMemory = snapshot.runtime.video_memory;
+  $: selectedMemory = snapshot.jobs.find(job => job.id === seedMemory?.job_id)?.media_id === selectedMedia?.id ? seedMemory : undefined;
   $: preservingHdr = settings.task === 'video' && settings.video_hdr_mode === 'preserve' && Boolean(selectedMedia?.hdr_format);
   $: hdrPreservationAvailable = supportsHdrPreservation(settings);
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
@@ -307,6 +310,10 @@
       } else {
         snapshot = applyWorkerEnvelope(snapshot, message);
       }
+      return;
+    }
+    if (message.type === 'video_memory') {
+      snapshot = applyWorkerEnvelope(snapshot, message);
       return;
     }
     if (message.type === 'live_preview_warning') {
@@ -581,6 +588,7 @@
       video_container: settings.video_container,
       video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
       video_target_resolution: settings.video_target_resolution ?? 0,
+      video_low_memory: settings.video_low_memory ?? true,
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
@@ -621,6 +629,7 @@
       video_container: settings.video_container,
       video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
       video_target_resolution: settings.video_target_resolution ?? 0,
+      video_low_memory: settings.video_low_memory ?? true,
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
@@ -684,6 +693,7 @@
       video_container: recipe.video_container || settings.video_container,
       video_hdr_mode: recipe.video_hdr_mode ?? 'tone_map',
       video_target_resolution: recipe.video_target_resolution ?? 0,
+      video_low_memory: recipe.video_low_memory ?? true,
       video_crf: recipe.video_crf ?? settings.video_crf,
       enable_face_model: recipeFace ? true : recipe.enable_face_model ?? false,
       face_fidelity: recipeFace?.fidelity === undefined
@@ -1168,6 +1178,15 @@
               {/if}
             {/if}
             {#if usingTemporalVideo}
+              <VideoMemory
+                lowMemory={settings.video_low_memory ?? true}
+                device={snapshot.capabilities.devices.find(device => device.id === settings.device_id)}
+                memory={selectedMemory}
+                running={Boolean(selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id)}
+                outputDimensions={outputDimensions}
+                disabled={Boolean(snapshot.runtime.active_job_id)}
+                on:change={(event) => updateSettings({ video_low_memory: event.detail })}
+              />
               <div class="field-row"><label for="video-resolution">Output resolution</label><select id="video-resolution" value={settings.video_target_resolution ?? 0} on:change={(event) => updateSettings({ video_target_resolution: Number(event.currentTarget.value) })}><option value={0}>Match {settings.output_scale}× scale</option>{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option value={resolution}>{resolution} px · shorter edge</option>{/each}</select></div>
               <p class="model-description">Smaller output uses less memory. For a first test, try 256 or 512 px. This can reduce the size of a large source video.</p>
               {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}

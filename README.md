@@ -129,7 +129,10 @@ before treating those checkpoints as commercially licensed.
 
 SeedVR2 model bundles are multi-gigabyte optional Labs downloads. Their code attribution, license,
 configuration YAML, and embeddings are included in wheels, source distributions, and standalone
-bundles; the model weights remain external.
+bundles; the model weights remain external. The isolated preview enables SeedVR2 memory
+saving by default (CPU offloading and smaller VAE tiles on CUDA/ROCm) and shows live
+allocation, reserved memory, free VRAM and system RAM. A 16 GB GPU is not a guarantee
+that 4K clips fit; see [SeedVR2 memory and hardware checks](docs/video-support.md).
 
 ## Install from source
 
