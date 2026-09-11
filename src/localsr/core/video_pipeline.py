@@ -158,7 +158,10 @@ def run_video_job(
     per frame. progress_cb(frames_done, total_frames, elapsed_seconds)
     is called after each frame. All callbacks are optional.
     """
-    job_started_at = time.monotonic()
+    # Python 3.11's Windows monotonic clock can tick more slowly than a tile.
+    # Measure short inference intervals with the highest-resolution clock so
+    # a completed tile does not incorrectly report zero elapsed time / ETA.
+    job_started_at = time.perf_counter()
     inference_started_at: float | None = None
 
     probe = probe_video(config.video_path)
@@ -232,7 +235,7 @@ def run_video_job(
             if cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
             if inference_started_at is None:
-                inference_started_at = time.monotonic()
+                inference_started_at = time.perf_counter()
             if frame_started_cb is not None:
                 frame_started_cb(output_frame_index, total_frames)
             if source_frame_cb is not None:
@@ -257,8 +260,8 @@ def run_video_job(
             ):
                 if tile_progress_cb is not None:
                     fraction = frame_index + (done / count if count else 0)
-                    elapsed = time.monotonic() - job_started_at
-                    measured = time.monotonic() - (inference_start or job_started_at)
+                    elapsed = time.perf_counter() - job_started_at
+                    measured = time.perf_counter() - (inference_start or job_started_at)
                     remaining = (
                         measured / fraction * max(0, total_frames - fraction)
                         if fraction > 0 and total_frames > 0
@@ -377,7 +380,7 @@ def run_video_job(
                 frame_completed_cb(output_frame_index, total_frames, "")
 
             if progress_cb is not None:
-                elapsed = time.monotonic() - job_started_at
+                elapsed = time.perf_counter() - job_started_at
                 progress_cb(frames_processed, total_frames, elapsed)
 
             yield source_frame.with_pixels(out_rgb)
@@ -415,7 +418,7 @@ def run_video_job(
         hdr_format=probe.hdr_format if preserve_hdr else "",
     )
 
-    completed_at = time.monotonic()
+    completed_at = time.perf_counter()
     return VideoJobResult(
         output_path=config.output_video_path,
         frames_processed=frames_processed,

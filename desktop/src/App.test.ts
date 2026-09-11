@@ -503,6 +503,7 @@ describe('LocalSR desktop interface', () => {
   });
 
   it('shows real import phases, survives refresh and labels HDR output before Start', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     const media = video('portrait', true);
     media.probe_status = 'pending';
     media.preview_data_url = '';
@@ -515,6 +516,8 @@ describe('LocalSR desktop interface', () => {
     callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'decoding_video' } });
     expect(await screen.findByText('Reading the first video frame')).toBeTruthy();
     expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
+    // Keep the display at a known second even if a busy CI VM renders slowly.
+    clock.mockReturnValue(1_001_250);
     expect(await screen.findByText('1s elapsed', {}, { timeout: 2500 })).toBeTruthy();
     callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'converting_hdr' } });
     expect(await screen.findByText('Converting HDR to an SDR preview')).toBeTruthy();
