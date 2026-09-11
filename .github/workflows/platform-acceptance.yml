@@ -69,7 +69,7 @@ jobs:
       - name: Native host startup with bundled engine
         if: success() || failure()
         run: |
-          cargo build --manifest-path desktop/src-tauri/Cargo.toml --locked
+          cargo build --manifest-path desktop/src-tauri/Cargo.toml --locked --features tauri/custom-protocol
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Copy-Item -Recurse build/acceptance/dist/engine desktop/src-tauri/target/debug/engine
           $app = Resolve-Path desktop/src-tauri/target/debug/localsr-next.exe
