@@ -97,7 +97,6 @@ pub fn run() {
             commands::start_benchmark,
             commands::export_benchmark,
             commands::prepare_video_comparison,
-            commands::clear_video_comparison,
             commands::cancel_jobs,
             commands::refresh_capabilities,
             commands::probe_path,

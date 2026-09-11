@@ -351,12 +351,14 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
 
     server = WorkerServer()
     server.model_adapter = DummyModelAdapter()
+    submitted = []
 
     class FakePreviewEncoder:
-        def __init__(self, *_args, **_kwargs):
-            pass
+        def __init__(self, *_args, **kwargs):
+            self.enabled = kwargs.get("enabled", True)
 
-        def submit(self, **_kwargs):
+        def submit(self, **kwargs):
+            submitted.append(kwargs)
             return True
 
         def clear(self):
@@ -367,6 +369,7 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
 
     def fake_video_job(**kwargs):
         kwargs["frame_started_cb"](2, 10)
+        kwargs["source_frame_cb"](2, 10, __import__("numpy").zeros((8, 8, 3), dtype="uint8"))
         kwargs["enhanced_frame_cb"](2, 10, __import__("numpy").zeros((8, 8, 3), dtype="uint8"))
         kwargs["progress_cb"](3, 10, 6.0)
         return SimpleNamespace(
@@ -404,6 +407,8 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
         "jpeg_base64": "",
     }
     assert {key: progress[0]["data"][key] for key in expected} == expected
+    assert [packet["preview_kind"] for packet in submitted] == ["source_video", "video"]
+    assert all(packet["frame_index"] == 2 for packet in submitted)
 
 
 def test_worker_memmap_cleanup_on_error(monkeypatch):

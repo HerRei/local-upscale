@@ -1311,10 +1311,17 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
         b, c, f, H, W = x.shape
         tile_h, tile_w = tile_size
+        # Modified for LocalSR: observe real tile work without changing model tensors.
+        observer = getattr(self.debug, 'tile_callback', None)
         
         # Only tile if input resolution requires multiple tiles
         if H <= tile_h and W <= tile_w:
-            return self.slicing_encode(x)
+            if observer:
+                observer('encoding', 'started', 0, 1, 0, 0, W, H, W, H)
+            encoded = self.slicing_encode(x)
+            if observer:
+                observer('encoding', 'completed', 1, 1, 0, 0, W, H, W, H)
+            return encoded
         else:
             if self.debug:
                 self.debug.log(f"Using VAE tiled encoding (Tile: {tile_size}, Overlap: {tile_overlap})", category="vae", force=True, indent_level=1)
@@ -1400,7 +1407,13 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                         end_tile = min(tile_id + 4, num_tiles)
                         self.debug.log(f"Encoding tiles {tile_id}-{end_tile} / {num_tiles}", category="vae", indent_level=1)
 
+                if observer:
+                    observer('encoding', 'started', tile_id - 1, num_tiles,
+                             x_out, y_out, x_out_end - x_out, y_out_end - y_out, W, H)
                 encoded_tile = self.slicing_encode(tile_sample)
+                if observer:
+                    observer('encoding', 'completed', tile_id, num_tiles,
+                             x_out, y_out, x_out_end - x_out, y_out_end - y_out, W, H)
 
                 # Initialize output size using first encoded tile
                 if result is None:
@@ -1475,6 +1488,8 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
             z = z.unsqueeze(2)
 
         b, c, f, H, W = z.shape
+        # Modified for LocalSR: the overlay follows these overlapping VAE regions.
+        observer = getattr(self.debug, 'tile_callback', None)
 
         # Spatial scale factor (output/latent)
         scale_factor = self.spatial_downsample_factor
@@ -1488,7 +1503,14 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         
         # Only tile if latent resolution requires multiple tiles
         if H <= latent_tile_h and W <= latent_tile_w:
-            return self.slicing_decode(z)
+            if observer:
+                observer('decoding', 'started', 0, 1, 0, 0,
+                         W * scale_factor, H * scale_factor, W * scale_factor, H * scale_factor)
+            decoded = self.slicing_decode(z)
+            if observer:
+                observer('decoding', 'completed', 1, 1, 0, 0,
+                         W * scale_factor, H * scale_factor, W * scale_factor, H * scale_factor)
+            return decoded
         else:
             if self.debug:
                 self.debug.log(f"Using VAE tiled decoding (Tile: {tile_size}, Overlap: {tile_overlap})", category="vae", force=True, indent_level=1)
@@ -1562,7 +1584,17 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                         end_tile = min(tile_id + 4, num_tiles)
                         self.debug.log(f"Decoding tiles {tile_id}-{end_tile} / {num_tiles}", category="vae", indent_level=1)
 
+                if observer:
+                    observer('decoding', 'started', tile_id - 1, num_tiles,
+                             x_lat * scale_factor, y_lat * scale_factor,
+                             (x_lat_end - x_lat) * scale_factor, (y_lat_end - y_lat) * scale_factor,
+                             W * scale_factor, H * scale_factor)
                 decoded_tile = self.slicing_decode(tile_latent)
+                if observer:
+                    observer('decoding', 'completed', tile_id, num_tiles,
+                             x_lat * scale_factor, y_lat * scale_factor,
+                             (x_lat_end - x_lat) * scale_factor, (y_lat_end - y_lat) * scale_factor,
+                             W * scale_factor, H * scale_factor)
 
                 # Initialize result tensors using actual decoded shapes on first tile
                 if result is None:
@@ -1730,4 +1762,3 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         for m in self.modules():
             if isinstance(m, InflatedCausalConv3d):
                 m.set_memory_limit(conv_max_mem if conv_max_mem is not None else float("inf"))
-                

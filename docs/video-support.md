@@ -68,6 +68,10 @@ model preparation; it does not invent completed tiles.
 The pending checkerboard and active outline use the same rounded canvas pixels as
 the worker's output tile, including partial edge tiles. The decorative background
 grid is hidden while rendering so it cannot be mistaken for model tile boundaries.
+The current decoded source frame remains visible underneath a translucent grid;
+completed HAT regions replace it with real model output. Source-frame JPEGs have
+their own bounded encoder and frame ownership, so a late source image cannot erase
+completed tiles or put an earlier frame beneath a newer frame's output.
 
 ## Optional processing
 
@@ -76,7 +80,8 @@ De-flicker is off by default. It blends toward the local temporal median only wh
 SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
 
 Its **Output resolution** control either follows the chosen scale or sets the
-shorter edge to 256, 512, 720, 1080, 1440 or 2160 pixels. A smaller requested output
+shorter edge to 256, 512, 720, 1080, 1440 or 2160 pixels. The inspector explicitly
+warns when this reduces the source dimensions and loses fine detail. A smaller requested output
 downsamples a large input on CPU before buffering or GPU upload; the summary shows
 the actual output dimensions. Existing settings keep their selected scale. The
 stream holds one model window including context instead of 33 fresh frames, and
@@ -88,8 +93,12 @@ overlap. These reduce memory use, at the cost of more work and possible tile/win
 boundary effects; they are not a guarantee that large outputs fit.
 
 SeedVR2 reports real model verification, loading, frame reading, clip encoding,
-enhancement, decoding and finishing stages. Its animation indicates activity;
-it does not invent HAT tile output. ETA starts after the first completed clip.
+enhancement, decoding and finishing stages. Its source preview advances with each
+model window. During VAE encoding and decoding, the outline follows the actual
+overlapping regions, clipped to the unpadded frame. During diffusion, the whole
+frame pulses because the model processes the clip together. It shows enhanced
+pixels after the clip finishes, without presenting intermediate latents as an
+enhanced picture. ETA starts after the first completed clip.
 Memory failures suggest reducing the output resolution or using tiled HAT-S;
 the app does not disable MPS memory limits or silently reduce output resolution.
 Large outputs and long-clip quality still require hardware acceptance.

@@ -35,7 +35,6 @@ const api = vi.hoisted(() => ({
     original_url: 'asset://localhost/original.mp4',
     enhanced_url: 'asset://localhost/enhanced.mp4'
   })),
-  clearVideoComparison: vi.fn(async () => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),

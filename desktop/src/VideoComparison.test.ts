@@ -17,6 +17,29 @@ afterEach(() => {
 });
 
 describe('video comparison player', () => {
+  it('loads both frames and retries a failed player without calling the file corrupt', async () => {
+    const { container } = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4'
+    });
+    const videos = container.querySelectorAll('video');
+    expect(screen.getByRole('status').textContent).toContain('Loading video comparison');
+    await fireEvent.loadedData(videos[0]);
+    expect(screen.getByRole('status')).toBeTruthy();
+    Object.defineProperty(videos[1], 'error', { configurable: true, value: { code: 4 } });
+    await fireEvent.error(videos[1]);
+    expect(screen.getByRole('alert').textContent).toContain('could not be loaded in this player');
+    expect(screen.getByRole('alert').textContent).not.toContain('codec');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry comparison' }));
+    expect(HTMLMediaElement.prototype.load).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+    await fireEvent.loadedData(videos[0]);
+    await fireEvent.loadedData(videos[1]);
+    expect(screen.queryByRole('status')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Play comparison' }));
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
+  });
+
   it('exposes one accessible comparison slider and one shared scrubber', async () => {
     render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',

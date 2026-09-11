@@ -69,6 +69,82 @@ def timestamps(path):
     return [float(frame.timestamp) for frame in decode_timed_frames(str(path))]
 
 
+def test_source_preview_is_the_current_decoded_frame_before_inference(tmp_path):
+    source = make_vfr(tmp_path / "source.mp4")
+    events = []
+    originals = [frame.rgb for frame in decode_timed_frames(str(source), 2, 5)]
+
+    class ObservedEngine(IdentityEngine):
+        def process_frame(self, *, img_tensor, **kwargs):
+            events.append("model")
+            return super().process_frame(img_tensor=img_tensor, **kwargs)
+
+    def preview(index, total, rgb):
+        assert total == 4
+        np.testing.assert_array_equal(rgb, originals[index])
+        events.append(f"source-{index}")
+
+    run_video_job(
+        VideoJobConfig(
+            str(source),
+            "test",
+            str(tmp_path / "output.mp4"),
+            SimpleNamespace(scale=1),
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+            start_frame=2,
+            end_frame=5,
+        ),
+        ObservedEngine(),
+        threading.Event(),
+        source_frame_cb=preview,
+    )
+    assert events == [
+        "source-0",
+        "model",
+        "source-1",
+        "model",
+        "source-2",
+        "model",
+        "source-3",
+        "model",
+    ]
+
+
+def test_temporal_source_preview_advances_with_each_model_window(tmp_path, monkeypatch):
+    source = make_vfr(tmp_path / "source.mp4")
+    originals = [frame.rgb for frame in decode_timed_frames(str(source))]
+    packets = []
+
+    class Encoder:
+        def __init__(self, *args, **kwargs):
+            self.enabled = True
+
+        def submit(self, **packet):
+            packets.append(packet)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("localsr.worker.server.LatestPreviewEncoder", Encoder)
+    monkeypatch.setattr("localsr.worker.server.send_message", lambda _: None)
+    engine = IdentityEngine()
+    engine.max_temporal_window = 5
+    WorkerServer._run_temporal_video_job(
+        SimpleNamespace(cancel_event=threading.Event(), _emit_live_preview=lambda _: None),
+        "source-test",
+        {"video_path": str(source), "output_video_path": str(tmp_path / "output.mp4")},
+        lambda *_: engine,
+    )
+    sources = [packet for packet in packets if packet["preview_kind"] == "source_video"]
+    assert [packet["frame_index"] for packet in sources] == [0, 5, 8]
+    for packet in sources:
+        np.testing.assert_array_equal(packet["pixels"], originals[packet["frame_index"]])
+
+
 @pytest.mark.parametrize("trim", [False, True])
 @pytest.mark.parametrize("deflicker", [False, True])
 def test_standard_preserves_vfr_and_selected_duration(tmp_path, trim, deflicker):

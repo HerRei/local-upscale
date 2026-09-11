@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64},
         Arc, Mutex, MutexGuard,
@@ -50,7 +49,6 @@ pub struct AppState {
     pub engine: Mutex<Option<EngineInfo>>,
     pub runtime: Mutex<RuntimeStatus>,
     pub latest_benchmark: Mutex<Option<BenchmarkResult>>,
-    pub video_preview_paths: Mutex<Vec<PathBuf>>,
     pub worker: WorkerControl,
     pub scheduler: Mutex<()>,
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -77,7 +75,6 @@ impl AppState {
             engine: Mutex::new(None),
             runtime: Mutex::new(RuntimeStatus::default()),
             latest_benchmark: Mutex::new(latest_benchmark),
-            video_preview_paths: Mutex::new(Vec::new()),
             worker: WorkerControl::default(),
             scheduler: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),

@@ -149,6 +149,7 @@ def run_video_job(
     tile_callback: Callable[..., None] | None = None,
     tile_progress_cb: Callable[..., None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    source_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
 
@@ -234,6 +235,8 @@ def run_video_job(
                 inference_started_at = time.monotonic()
             if frame_started_cb is not None:
                 frame_started_cb(output_frame_index, total_frames)
+            if source_frame_cb is not None:
+                source_frame_cb(output_frame_index, total_frames, rgb)
 
             tensor = torch.from_numpy(rgb).permute(2, 0, 1) if preserve_hdr else rgb_to_tensor(rgb)
             float_options = {"float_output": True} if preserve_hdr else {}

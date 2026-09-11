@@ -271,6 +271,13 @@
     }
     if (message.type === 'live_preview_frame') {
       const jobId = String(message.data.job_id ?? '');
+      if (message.data.preview_kind === 'source_video') {
+        if (jobId === snapshot.runtime.active_job_id &&
+            (!activeJobMediaId || selectedMedia?.id === activeJobMediaId)) {
+          previewPane?.queueVideoSource(message, jobId);
+        }
+        return;
+      }
       const sequence = Number(message.data.sequence ?? 0);
       if (
         jobId !== snapshot.runtime.active_job_id ||
@@ -1139,6 +1146,9 @@
             {#if usingTemporalVideo}
               <div class="field-row"><label for="video-resolution">Output resolution</label><select id="video-resolution" value={settings.video_target_resolution ?? 0} on:change={(event) => updateSettings({ video_target_resolution: Number(event.currentTarget.value) })}><option value={0}>Match {settings.output_scale}× scale</option>{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option value={resolution}>{resolution} px · shorter edge</option>{/each}</select></div>
               <p class="model-description">Smaller output uses less memory. For a first test, try 256 or 512 px. This can reduce the size of a large source video.</p>
+              {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}
+                <p class="notice">This setting reduces {selectedMedia.width} × {selectedMedia.height} to {outputDimensions}. Fine detail will be lost. Choose a larger output for a quality comparison.</p>
+              {/if}
             {/if}
           </section>
 

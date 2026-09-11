@@ -94,7 +94,8 @@ export function tilePercentages(tile: OutputTile, canvas?: PixelSize): CanvasTil
 export function paintTileGrid(
   context: CanvasRenderingContext2D,
   firstTile: OutputTile,
-  canvas: PixelSize
+  canvas: PixelSize,
+  overSource = false
 ): void {
   if (firstTile.output_x !== 0 || firstTile.output_y !== 0 ||
       !canvasTileRect(firstTile, canvas)) return;
@@ -113,7 +114,9 @@ export function paintTileGrid(
         output_height: Math.min(firstTile.output_height, firstTile.image_height - y)
       }, canvas);
       if (!rect) continue;
-      context.fillStyle = (row + column) % 2 ? '#17202d' : '#101721';
+      context.fillStyle = overSource
+        ? ((row + column) % 2 ? '#10172138' : '#10172160')
+        : ((row + column) % 2 ? '#17202d' : '#101721');
       context.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
   }

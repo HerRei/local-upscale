@@ -45,6 +45,8 @@
   let progressiveVisible = false;
   let progressiveJobId = '';
   let progressiveFrame = -1;
+  let videoSourceFrame = -1;
+  let videoSourcePreview = '';
   let progressiveOutputWidth = 0;
   let progressiveOutputHeight = 0;
   let progressiveGeneration = 0;
@@ -66,6 +68,9 @@
   // Keep the image mounted across transient WebKit decode errors so
   // re-probing cannot turn into an endless loading loop.
   $: renderableSourcePreview = sourcePreview;
+  $: displayedSourcePreview = videoSourcePreview || sourcePreview;
+  $: waitingForVideoFrame = processing && selectedMedia?.kind === 'video' &&
+    progressiveFrame > 0 && videoSourceFrame !== progressiveFrame;
   $: desiredVideoComparisonKey =
     selectedMedia?.kind === 'video' && completedVideoOutput
       ? `${selectedMedia.id}:${completedVideoOutput}`
@@ -107,7 +112,6 @@
       disposed = true;
       observer?.disconnect();
       progressiveGeneration += 1;
-      if (api.isTauri()) void api.clearVideoComparison();
     };
   });
 
@@ -148,8 +152,12 @@
     void repairSelectedPreview();
   }
 
-  export function resetProgressivePreview(jobId = ''): void {
-    progressiveFrame = -1;
+  export function resetProgressivePreview(jobId = '', frame = -1): void {
+    if (jobId !== progressiveJobId || frame !== videoSourceFrame) {
+      videoSourceFrame = -1;
+      videoSourcePreview = '';
+    }
+    progressiveFrame = frame;
     progressiveGeneration += 1;
     progressiveJobId = jobId;
     progressiveOutputWidth = 0;
@@ -166,6 +174,17 @@
     }
   }
 
+  export function queueVideoSource(message: WorkerEnvelope, activeJobId: string): void {
+    const data = message.data;
+    const jobId = String(data.job_id ?? '');
+    const frame = Number(data.frame_index ?? -1);
+    if (!jobId || jobId !== activeJobId || frame < 0 || frame < progressiveFrame ||
+        typeof data.jpeg_base64 !== 'string' || !data.jpeg_base64) return;
+    if (jobId !== progressiveJobId || frame > progressiveFrame) resetProgressivePreview(jobId, frame);
+    videoSourceFrame = frame;
+    videoSourcePreview = `data:image/jpeg;base64,${data.jpeg_base64}`;
+  }
+
   export function queueProgressiveTile(message: WorkerEnvelope, activeJobId: string): void {
     const data = message.data;
     const jobId = String(data.job_id ?? '');
@@ -174,8 +193,7 @@
     const frame = Number(data.frame_index ?? -1);
     if (frame >= 0 && frame < progressiveFrame) return;
     if (frame > progressiveFrame || phase === 'reset') {
-      resetProgressivePreview(jobId);
-      progressiveFrame = frame;
+      resetProgressivePreview(jobId, frame);
     }
     if (!progressiveJobId) progressiveJobId = jobId;
     if (jobId !== progressiveJobId) return;
@@ -199,7 +217,16 @@
     if (phase === 'completed') {
       // Completion metadata has no pixels. It must not consume the display
       // throttle before the asynchronous JPEG arrives a few milliseconds later.
-      if (!data.jpeg_base64) return;
+      if (!data.jpeg_base64) {
+        if (data.processing_stage) {
+          const percentage = tilePercentages(tileFromData(data), progressiveCanvas);
+          if (percentage && percentage.x === activeTileX && percentage.y === activeTileY &&
+              percentage.width === activeTileWidth && percentage.height === activeTileHeight) {
+            activeTileVisible = false;
+          }
+        }
+        return;
+      }
       // Decoding every JPEG can monopolize WKWebView when a lightweight model
       // finishes many tiny tiles per second. A sampled live mosaic stays useful
       // while preserving input responsiveness; completion always loads the
@@ -252,7 +279,7 @@
       activeTileVisible = false;
       return;
     }
-    const ready = await ensureProgressiveCanvas(tile, jobId, generation);
+    const ready = await ensureProgressiveCanvas(tile, jobId, generation, Boolean(data.processing_stage));
     if (!ready || generation !== progressiveGeneration || jobId !== progressiveJobId) return;
 
     const percentage = tilePercentages(tile, progressiveCanvas);
@@ -285,8 +312,8 @@
     }
     // JPEG encoding is asynchronous: a previous tile can arrive after the
     // next tile started. Keep that newer model tile's outline visible.
-    if (percentage && percentage.x === activeTileX && percentage.y === activeTileY &&
-        percentage.width === activeTileWidth && percentage.height === activeTileHeight) {
+    if (data.preview_kind === 'video' || (percentage && percentage.x === activeTileX && percentage.y === activeTileY &&
+        percentage.width === activeTileWidth && percentage.height === activeTileHeight)) {
       activeTileVisible = false;
     }
   }
@@ -294,7 +321,8 @@
   async function ensureProgressiveCanvas(
     tile: OutputTile,
     jobId: string,
-    generation: number
+    generation: number,
+    overlappingRegions = false
   ): Promise<boolean> {
     const canvas = progressiveCanvas;
     if (!canvas) return false;
@@ -310,12 +338,23 @@
     const size = boundedPreviewSize({ width: tile.image_width, height: tile.image_height });
     canvas.width = size.width;
     canvas.height = size.height;
-    const context = canvas.getContext('2d', { alpha: false });
+    const context = canvas.getContext('2d');
     if (!context) return false;
+    if (selectedMedia?.kind === 'video') {
+      // The current decoded frame stays in its own image layer. A late source
+      // JPEG must never erase completed model pixels in the canvas above it.
+      context.clearRect(0, 0, size.width, size.height);
+      // VAE regions overlap; a regular HAT grid would misrepresent their bounds.
+      if (!overlappingRegions) paintTileGrid(context, tile, size, true);
+      progressiveOutputWidth = tile.image_width;
+      progressiveOutputHeight = tile.image_height;
+      progressiveVisible = true;
+      return true;
+    }
     context.fillStyle = '#111722';
     context.fillRect(0, 0, size.width, size.height);
     try {
-      const source = selectedMedia?.kind === 'video' ? null : await loadHtmlImage(sourcePreview);
+      const source = await loadHtmlImage(sourcePreview);
       if (generation !== progressiveGeneration || jobId !== progressiveJobId) return false;
       if (source) context.drawImage(source, 0, 0, size.width, size.height);
     } catch {
@@ -324,7 +363,6 @@
     }
     context.fillStyle = 'rgba(5, 9, 15, 0.70)';
     context.fillRect(0, 0, size.width, size.height);
-    if (selectedMedia?.kind === 'video') paintTileGrid(context, tile, size);
     progressiveOutputWidth = tile.image_width;
     progressiveOutputHeight = tile.image_height;
     progressiveVisible = true;
@@ -459,16 +497,7 @@
     videoComparisonKey = key;
     videoComparison = null;
     videoComparisonError = '';
-    if (!key) {
-      if (api.isTauri()) {
-        try {
-          await api.clearVideoComparison();
-        } catch (error) {
-          console.warn('Could not clear the video preview scope', error);
-        }
-      }
-      return;
-    }
+    if (!key) return;
     if (!api.isTauri() || !selectedMedia) return;
     const mediaId = selectedMedia.id;
     try {
@@ -490,6 +519,7 @@
   }
 
   function onPreviewLoad(event: Event): void {
+    if (videoSourcePreview && selectedMedia?.kind === 'video') return;
     const image = event.currentTarget as HTMLImageElement;
     previewRetryMediaId = '';
     previewNaturalWidth = Math.max(1, image.naturalWidth);
@@ -591,7 +621,7 @@
   >
     {#if selectedMedia}
       {#if processing}
-        <div class="model-activity" role="status"><i></i><span>{modelLabel} · {activityLabel || (progressiveFrame >= 0 ? `Frame ${progressiveFrame + 1} · live tiles` : 'Preparing model output…')}{selectedMedia.hdr_format ? ' · SDR display preview' : ''}</span></div>
+        <div class="model-activity" role="status"><i></i><span>{modelLabel} · {activityLabel ? `${activityLabel}${progressiveFrame >= 0 ? ` · Frame ${progressiveFrame + 1}` : ''}` : (progressiveFrame >= 0 ? `Frame ${progressiveFrame + 1} · live tiles` : 'Preparing model output…')}{selectedMedia.hdr_format ? ' · SDR display preview' : ''}</span></div>
       {/if}
       {#if videoComparison}
         {#key videoComparisonKey}
@@ -603,7 +633,7 @@
         {/key}
       {:else if renderableSourcePreview}
       <div class="image-stage" style={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}>
-        <img class="source-image" src={renderableSourcePreview} alt={`Preview of ${selectedMedia?.name ?? 'source media'}`} draggable="false" on:load={onPreviewLoad} on:error={onSourcePreviewError} />
+        <img class="source-image" class:waiting-frame={waitingForVideoFrame} src={displayedSourcePreview} alt={videoSourcePreview ? `Source frame ${videoSourceFrame + 1} of ${selectedMedia.name}` : `Preview of ${selectedMedia.name}`} draggable="false" on:load={onPreviewLoad} on:error={onSourcePreviewError} />
         <canvas
           bind:this={progressiveCanvas}
           class="progressive-image"
@@ -673,6 +703,7 @@
   .model-activity { position: absolute; top: 12px; right: 12px; z-index: 8; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 8px 10px; background: #171e30ed; color: #c3d1fa; border: 1px solid #506da3; border-radius: 6px; font-size: 11px; pointer-events: none; }
   .model-activity i { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #a6c0ff40; border-top-color: #b9ccff; animation: model-spin 1s linear infinite; }
   .active-tile { animation: tile-pulse 1.2s ease-in-out infinite; }
+  .source-image.waiting-frame { visibility: hidden; }
   @keyframes model-spin { to { transform: rotate(360deg); } }
   @keyframes tile-pulse { 50% { border-color: #d5e0ff; background: #8cabff25; } }
   @media (prefers-reduced-motion: reduce) { .model-activity i, .active-tile { animation: none; } }

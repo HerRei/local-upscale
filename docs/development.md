@@ -56,6 +56,14 @@ loading, and its observer lifetime. `AdvancedSettings` renders output and hardwa
 settings and emits typed setting patches. Native persistence stays in the parent
 and Rust host. `BenchmarkStudio` draws real warm-up tiles for the selected CPU/GPU benchmark.
 
+Completed-video playback authorizes the canonical original and completed output
+files individually for the app session. It never authorizes their directories.
+Switching selection unloads both media elements but keeps those exact file grants
+until the app exits: Tauri's `forbid_file` is a permanent deny and cannot be undone
+by `allow_file`. Applying it on every switch made revisited comparisons fail with
+a misleading media/codec error. The scope regression test visits a shared output
+as the next input, switches back repeatedly, and checks unrelated files stay denied.
+
 Asynchronous native subscriptions are disposed even when registration completes
 after the component unmounts. Existing interface tests exercise the full workspace
 across these component boundaries.

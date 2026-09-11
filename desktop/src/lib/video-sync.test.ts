@@ -39,5 +39,6 @@ describe('video comparison synchronization', () => {
     expect(formatMediaTime(0)).toBe('0:00');
     expect(formatMediaTime(65.9)).toBe('1:05');
     expect(formatMediaTime(Number.NaN)).toBe('0:00');
+    expect(formatMediaTime(5 / 59.94, true)).toBe('0.08 s');
   });
 });

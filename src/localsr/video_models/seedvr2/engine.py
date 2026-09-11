@@ -12,6 +12,7 @@ from __future__ import annotations
 import gc
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -139,6 +140,31 @@ class SeedVR2Engine:
             gc.collect()
             torch.mps.empty_cache()
 
+    @contextmanager
+    def _observe_tiles(self, callback, report):
+        """Report actual VAE work, clipped to the unpadded exported frame."""
+        if callback is None:
+            yield
+            return
+        previous = getattr(self.debug, "tile_callback", None)
+
+        def observe(stage, phase, done, total, x, y, width, height, image_w, image_h):
+            if phase == "completed" and self.device == "mps":
+                torch.mps.synchronize()
+            elif phase == "completed" and self.device.startswith("cuda"):
+                torch.cuda.synchronize(self.device)
+            report(stage, done, total)
+            true_h, true_w = self.ctx.get("true_target_dims", (image_h, image_w))
+            width, height = min(width, true_w - x), min(height, true_h - y)
+            if width > 0 and height > 0:
+                callback(stage, phase, done, total, x, y, width, height, true_w, true_h)
+
+        self.debug.tile_callback = observe
+        try:
+            yield
+        finally:
+            self.debug.tile_callback = previous
+
     @torch.inference_mode()
     def process_frames(
         self,
@@ -150,6 +176,7 @@ class SeedVR2Engine:
         seed: int = 42,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[str, int, int], None] | None = None,
+        tile_callback: Callable[..., None] | None = None,
     ) -> list[np.ndarray]:
         """Upscale uint8 HxWx3 frames; returns uint8 frames at the target size.
 
@@ -203,23 +230,28 @@ class SeedVR2Engine:
             debug=self.debug,
         )
         report("encoding")
-        ctx = encode_all_batches(
-            self.runner,
-            ctx=self.ctx,
-            images=tensor,
-            debug=self.debug,
-            batch_size=batch_size,
-            uniform_batch_size=False,
-            seed=seed,
-            progress_callback=phase_callback("encoding"),
-            temporal_overlap=temporal_overlap,
-            resolution=resolution,
-            max_resolution=0,
-            input_noise_scale=0.0,
-            color_correction="lab",
-        )
+        with self._observe_tiles(tile_callback, report):
+            ctx = encode_all_batches(
+                self.runner,
+                ctx=self.ctx,
+                images=tensor,
+                debug=self.debug,
+                batch_size=batch_size,
+                uniform_batch_size=False,
+                seed=seed,
+                progress_callback=phase_callback("encoding"),
+                temporal_overlap=temporal_overlap,
+                resolution=resolution,
+                max_resolution=0,
+                input_noise_scale=0.0,
+                color_correction="lab",
+            )
         self._release_phase_cache()
         report("enhancing")
+        if tile_callback is not None:
+            height, width = ctx["true_target_dims"]
+            # DiT processes the whole clip, rather than independent image tiles.
+            tile_callback("enhancing", "started", 0, 1, 0, 0, width, height, width, height)
         ctx = upscale_all_batches(
             self.runner,
             ctx=ctx,
@@ -232,14 +264,17 @@ class SeedVR2Engine:
             cache_model=True,
         )
         self._release_phase_cache()
+        if tile_callback is not None:
+            tile_callback("enhancing", "completed", 1, 1, 0, 0, width, height, width, height)
         report("decoding")
-        ctx = decode_all_batches(
-            self.runner,
-            ctx=ctx,
-            debug=self.debug,
-            progress_callback=phase_callback("decoding"),
-            cache_model=True,
-        )
+        with self._observe_tiles(tile_callback, report):
+            ctx = decode_all_batches(
+                self.runner,
+                ctx=ctx,
+                debug=self.debug,
+                progress_callback=phase_callback("decoding"),
+                cache_model=True,
+            )
         self._release_phase_cache()
         report("finishing")
         ctx = postprocess_all_batches(

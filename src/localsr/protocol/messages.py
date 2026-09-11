@@ -369,6 +369,7 @@ class TileUpdate:
     active_tile_size: int
     jpeg_base64: str = ""
     frame_index: int = -1
+    processing_stage: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "tile_update", "data": asdict(self)})

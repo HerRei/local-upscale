@@ -790,6 +790,11 @@ class WorkerServer:
             max_fps=float(data.get("preview_max_fps", 2.0)),
             max_dimension=int(data.get("preview_max_dimension", 320)),
         )
+        source_encoder = LatestPreviewEncoder(
+            self._emit_live_preview,
+            enabled=bool(data.get("preview_enabled", True)),
+            max_dimension=640,
+        )
 
         def read_chunk(count: int) -> list:
             frames = []
@@ -821,6 +826,13 @@ class WorkerServer:
                     total_frames=int(total_frames),
                 )
             )
+            source_encoder.submit(
+                job_id=job_id,
+                preview_kind="source_video",
+                frame_index=state["done"],
+                pixels=chunk[0].rgb,
+                force=True,
+            )
             result = engine.process_frames(
                 [frame.rgb for frame in context + chunk],
                 resolution=resolution,
@@ -829,6 +841,7 @@ class WorkerServer:
                 seed=42,
                 cancel_event=self.cancel_event,
                 progress_callback=report,
+                tile_callback=temporal_tile if bool(data.get("preview_enabled", True)) else None,
             )
             if self.cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
@@ -858,6 +871,25 @@ class WorkerServer:
                 )
             )
             return result
+
+        def temporal_tile(stage, phase, done, total, x, y, width, height, image_w, image_h):
+            send_message(
+                TileUpdate(
+                    job_id=job_id,
+                    frame_index=state["done"],
+                    processing_stage=stage,
+                    phase=phase,
+                    completed_tiles=done,
+                    total_tiles=total,
+                    output_x=x,
+                    output_y=y,
+                    output_width=width,
+                    output_height=height,
+                    image_width=image_w,
+                    image_height=image_h,
+                    active_tile_size=max(width, height),
+                )
+            )
 
         try:
             first_chunk = read_chunk(window)
@@ -946,6 +978,7 @@ class WorkerServer:
         finally:
             decode_iter.close()
             preview_encoder.close()
+            source_encoder.close()
             engine = None  # noqa: F841 — releases the models
             try:
                 import torch
@@ -1061,6 +1094,11 @@ class WorkerServer:
             max_fps=float(data.get("preview_max_fps", 2.0)),
             max_dimension=int(data.get("preview_max_dimension", 320)),
         )
+        source_encoder = LatestPreviewEncoder(
+            self._emit_live_preview,
+            enabled=bool(data.get("preview_enabled", True)),
+            max_dimension=640,
+        )
 
         from localsr.core.hdr import tone_map_to_sdr
         from localsr.core.video_io import probe_video
@@ -1147,6 +1185,15 @@ class WorkerServer:
                 image_height=int(pixels.shape[0]),
             )
 
+        def source_frame(frame_index: int, total_frames: int, pixels: np.ndarray) -> None:
+            source_encoder.submit(
+                job_id=job_id,
+                preview_kind="source_video",
+                frame_index=frame_index,
+                pixels=display_pixels(pixels),
+                force=True,
+            )
+
         def progress_cb(frames_done: int, total_frames: int, elapsed: float) -> None:
             if total_frames > 0:
                 per_frame = elapsed / max(frames_done, 1)
@@ -1172,6 +1219,7 @@ class WorkerServer:
                 engine=self.engine,
                 cancel_event=self.cancel_event,
                 frame_started_cb=frame_started,
+                source_frame_cb=source_frame if source_encoder.enabled else None,
                 enhanced_frame_cb=enhanced_frame,
                 progress_cb=progress_cb,
                 tile_callback=tile_preview if bool(data.get("preview_enabled", True)) else None,
@@ -1186,6 +1234,7 @@ class WorkerServer:
             return
         finally:
             preview_encoder.close()
+            source_encoder.close()
 
         if self.cancel_event.is_set():
             send_message(JobCancelled(job_id=job_id))

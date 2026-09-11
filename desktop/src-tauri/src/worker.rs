@@ -63,7 +63,7 @@ impl WorkerEventGate {
                 "started" => sampled(
                     &mut self.last_tile_started,
                     now,
-                    false,
+                    data.get("completed_tiles").and_then(Value::as_u64) == Some(0),
                     Duration::from_millis(80),
                 ),
                 "completed" => sampled(
@@ -1175,6 +1175,15 @@ mod tests {
         assert!(gate.should_forward(&progress(1), started));
         assert!(!gate.should_forward(&progress(2), started + Duration::from_millis(10)));
         assert!(gate.should_forward(&progress(100), started + Duration::from_millis(11)));
+
+        let first_region = WorkerEnvelope {
+            message_type: "tile_update".into(),
+            data: json!({"job_id": "job-1", "phase": "started", "completed_tiles": 0}),
+        };
+        assert!(gate.should_forward(&first_region, started));
+        // A new frame or VAE/DiT stage must establish its geometry even when
+        // its first region arrives inside the normal animation throttle.
+        assert!(gate.should_forward(&first_region, started + Duration::from_millis(1)));
     }
 
     #[test]

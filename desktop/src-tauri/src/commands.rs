@@ -532,7 +532,6 @@ pub fn prepare_video_comparison(
     app: AppHandle,
     media_id: String,
 ) -> AppResult<VideoComparisonSources> {
-    clear_video_scope(&state, &app);
     let (original, enhanced) = {
         let database = lock(&state.database)?;
         let media = database
@@ -555,39 +554,32 @@ pub fn prepare_video_comparison(
             "the original or enhanced video is no longer available".into(),
         ));
     }
-    let scope = app.asset_protocol_scope();
-    scope.allow_file(&original).map_err(|error| {
-        AppError::Config(format!(
-            "could not authorize the original video preview: {error}"
-        ))
-    })?;
-    if let Err(error) = scope.allow_file(&enhanced) {
-        let _ = scope.forbid_file(&original);
-        return Err(AppError::Config(format!(
-            "could not authorize the enhanced video preview: {error}"
-        )));
-    }
-    *lock(&state.video_preview_paths)? = vec![original.clone(), enhanced.clone()];
+    allow_video_preview_pair(&app.asset_protocol_scope(), &original, &enhanced)?;
     Ok(VideoComparisonSources {
         original_path: original.to_string_lossy().into_owned(),
         enhanced_path: enhanced.to_string_lossy().into_owned(),
     })
 }
 
-#[tauri::command]
-pub fn clear_video_comparison(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
-    clear_video_scope(&state, &app);
-    Ok(())
-}
-
-fn clear_video_scope(state: &AppState, app: &AppHandle) {
-    let Ok(mut paths) = state.video_preview_paths.lock() else {
-        return;
-    };
-    let scope = app.asset_protocol_scope();
-    for path in paths.drain(..) {
-        let _ = scope.forbid_file(path);
-    }
+fn allow_video_preview_pair(
+    scope: &tauri::scope::fs::Scope,
+    original: &Path,
+    enhanced: &Path,
+) -> AppResult<()> {
+    // Authorize only these two canonical files for this app session. Tauri's
+    // forbid_file is a permanent deny, not the inverse of allow_file: revoking
+    // on selection change prevented every subsequent visit to the same video.
+    // The unmounted player releases its media elements; no folder is authorized.
+    scope.allow_file(&original).map_err(|error| {
+        AppError::Config(format!(
+            "could not authorize the original video preview: {error}"
+        ))
+    })?;
+    scope.allow_file(&enhanced).map_err(|error| {
+        AppError::Config(format!(
+            "could not authorize the enhanced video preview: {error}"
+        ))
+    })
 }
 
 #[tauri::command]
@@ -1452,6 +1444,39 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
 mod tests {
     use super::*;
     use crate::types::RecipeStage;
+
+    #[test]
+    fn revisiting_video_comparisons_keeps_only_explicit_files_authorized() {
+        let app = tauri::test::mock_app();
+        let scope = tauri::scope::fs::Scope::new(
+            &app,
+            &tauri::utils::config::FsScope::AllowedPaths(Vec::new()),
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let files: Vec<_> = [
+            "first.mov",
+            "first-output.mp4",
+            "second-output.mp4",
+            "private.mp4",
+        ]
+        .iter()
+        .map(|name| {
+            let path = directory.path().join(name);
+            fs::write(&path, b"test media").unwrap();
+            fs::canonicalize(path).unwrap()
+        })
+        .collect();
+        // Open A, start a job using A's output, inspect B, then return to A.
+        for (original, enhanced) in [(0, 1), (1, 2), (0, 1), (1, 2)] {
+            allow_video_preview_pair(&scope, &files[original], &files[enhanced]).unwrap();
+            assert!(scope.is_allowed(&files[original]));
+            assert!(scope.is_allowed(&files[enhanced]));
+            assert!(!scope.is_allowed(&files[3]));
+            assert!(!scope.is_allowed(directory.path()));
+        }
+        assert!(scope.forbidden_patterns().is_empty());
+    }
 
     fn input(task: &str) -> StartBatchInput {
         StartBatchInput {

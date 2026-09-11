@@ -99,7 +99,6 @@ export const prepareVideoComparison = async (mediaId: string): Promise<VideoComp
     enhanced_url: convertFileSrc(paths.enhanced_path)
   };
 };
-export const clearVideoComparison = (): Promise<void> => invoke('clear_video_comparison');
 export const refreshCapabilities = (): Promise<void> => invoke('refresh_capabilities');
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>

@@ -133,3 +133,53 @@ def test_worker_memory_error_offers_resolution_recovery_without_disabling_limits
     assert "HIGH_WATERMARK" not in str(failure.value)
     assert not output.exists()
     assert any(getattr(message, "stage", "") == "reading_frames" for message in messages)
+
+
+@pytest.mark.parametrize("tile_size", [16, 64])
+def test_vae_preview_regions_follow_actual_work_without_changing_tensors(tile_size):
+    from localsr.video_models.seedvr2.vendor.models.video_vae_v3.modules.attn_video_vae import (
+        VideoAutoencoderKL,
+    )
+
+    events = []
+    debug = SimpleNamespace(log=lambda *a, **k: None, tile_callback=lambda *e: events.append(e))
+    vae = SimpleNamespace(
+        debug=debug,
+        spatial_downsample_factor=2,
+        slicing_encode=lambda x: torch.nn.functional.avg_pool3d(x, (1, 2, 2)),
+        slicing_decode=lambda x: x.repeat_interleave(2, dim=-2).repeat_interleave(2, dim=-1),
+    )
+    source = torch.linspace(-1, 1, 3 * 3 * 32 * 48).reshape(1, 3, 3, 32, 48)
+
+    def roundtrip():
+        encoded = VideoAutoencoderKL.tiled_encode(vae, source, (tile_size, tile_size), (4, 4))
+        return VideoAutoencoderKL.tiled_decode(vae, encoded, (tile_size, tile_size), (4, 4))
+
+    observed = roundtrip()
+    debug.tile_callback = None
+    torch.testing.assert_close(observed, roundtrip(), rtol=0, atol=0)
+    count = 12 if tile_size == 16 else 1
+    for stage in ["encoding", "decoding"]:
+        regions = [event for event in events if event[0] == stage]
+        assert len(regions) == count * 2
+        assert [event[1] for event in regions] == ["started", "completed"] * count
+        assert regions[-1][2:4] == (count, count)
+        assert all(event[-2:] == (48, 32) for event in regions)
+        if count > 1:
+            assert regions[2][4:8] == (12, 0, 16, 16)  # actual overlap, not HAT's grid
+            assert regions[-1][4:8] == (36, 24, 12, 8)
+
+
+def test_vae_observer_clips_spatial_padding_and_cleans_up_on_failure():
+    model = adapter.SeedVR2Engine.__new__(adapter.SeedVR2Engine)
+    model.device = "cpu"
+    model.ctx = {"true_target_dims": (454, 256)}
+    previous = object()
+    model.debug = SimpleNamespace(tile_callback=previous)
+    regions = []
+    with pytest.raises(InterruptedError):
+        with model._observe_tiles(lambda *e: regions.append(e), lambda *e: None):
+            model.debug.tile_callback("decoding", "started", 14, 15, 224, 448, 32, 16, 256, 464)
+            raise InterruptedError()
+    assert regions[0][4:] == (224, 448, 32, 6, 256, 454)
+    assert model.debug.tile_callback is previous

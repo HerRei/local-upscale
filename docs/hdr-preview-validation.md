@@ -61,6 +61,32 @@ Follow-up for the reported SeedVR2 MPS failure and preview alignment:
   squares, pending cells and the active outline matched visually, including the
   partial edge column; frame 1 already displayed an ETA.
 
+Follow-up on 11 September 2026 for frame visibility and revisiting completed videos:
+
+- Python: 557 passed, 2 skipped; frontend: 68 passed; Rust: 48 passed.
+  Svelte reported zero errors/warnings and the native macOS debug bundle rebuilt.
+- A five-frame SeedVR2 MPS run completed from the 4K HLG sample at 256×454 SDR.
+  Native screenshots show the actual overlapping VAE encode/decode regions over
+  the current source frame. Export decoding confirmed five finite RGB frames,
+  H.264/YUV420P and BT.709 tags. The small export is visibly soft and is not a
+  full-resolution quality result; the inspector now warns when settings downsample.
+- The original 2160×3840 geometry was observed during a bounded HAT-S 2× run with
+  the face companion enabled. The source remains visible under the translucent
+  grid; completed primary-model tiles and the active outline agree with its
+  geometry. Frame 1 displayed a measured ETA. This run was cancelled before
+  completing the full frame or reaching the companion pass.
+- Source-frame tests cover advancing decoded frames, inclusive trims, late JPEGs,
+  cross-job rejection, and temporal windows. VAE observer tests execute the real
+  vendored tiling loops and verify identical tensors with observation on or off.
+- Native playback reproduced a permanent file-scope deny on leaving a comparison.
+  After the fix, the completed MOV/MP4 pair and the next job using that MP4 as input
+  could be opened, played, and revisited. The player requests its first decoded
+  frame automatically, shows loading/retry feedback, and displays 0.08 s for the
+  five-frame sample instead of rounding its duration to zero.
+- The real Tauri scope regression repeats the shared-output selection sequence
+  and verifies that unrelated files and parent directories remain unauthorized.
+  Only individual, explicitly opened comparison files stay allowed for the session.
+
 Private clips, checkpoint files, screenshots and machine-specific paths are not
 included in this repository. These are functional checks on bounded samples,
 not perceptual HDR certification, a complete multi-minute 4K upscale, or acceptance

@@ -15,7 +15,9 @@ derive from the HuggingFace diffusers library.
   where OpenCV is imported lazily so RGB-only installs do not require it, and
   `core/generation_utils.py`, where the fixed text embeddings load from Safetensors,
   `utils/downloads.py`, where model downloads are restricted to HTTPS, and
-  `utils/debug.py`, where diagnostics go to stderr to preserve the JSON-lines protocol).
+  `utils/debug.py`, where diagnostics go to stderr to preserve the JSON-lines protocol,
+  and `models/video_vae_v3/modules/attn_video_vae.py`, where optional preview callbacks
+  report the actual encoding/decoding regions without modifying model tensors).
 - The ComfyUI interface layer (`src/interfaces/`) of the upstream project is
   not vendored. `pos_emb.safetensors` / `neg_emb.safetensors` are byte-for-byte
   tensor conversions of the precomputed text conditioning embeddings from the

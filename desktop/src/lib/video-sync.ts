@@ -28,8 +28,9 @@ export function synchronizationDecision(
   };
 }
 
-export function formatMediaTime(seconds: number): string {
+export function formatMediaTime(seconds: number, fractional = false): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  if (fractional) return `${seconds.toFixed(2)} s`;
   const rounded = Math.floor(seconds);
   return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, '0')}`;
 }
