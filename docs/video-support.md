@@ -15,6 +15,23 @@ Standard video is the frame-by-frame SDR path. The isolated `codex/hdr-preservat
 
 The H.264 encoder disables B-frame reordering to keep packet durations consistent with variable presentation intervals and the last held frame. This trades some compression efficiency for predictable timing.
 
+## Installed Linux playback
+
+The platform-acceptance preview streams completed video comparisons to WebKitGTK
+through a private loopback HTTP listener. WebKitGTK could reject valid H.264
+files opened through the custom asset URI scheme, even when the same files
+decoded correctly outside the app. Ordinary HTTP byte ranges fix playback and
+seeking, including returning to a completed video while another job runs.
+Only the original and completed output authorized by the native queue receive
+random, session-lifetime URLs. The listener binds to `127.0.0.1`, serves no
+directory, streams with bounded buffers, and closes with the app. Processing and
+playback remain local. System codecs are still required; this transport does not
+add codecs or convert unsupported formats. Windows and macOS keep their existing
+asset transport.
+
+See the [September platform acceptance record](platform-acceptance-2026-09.md)
+for the installed AMD/CPU checks, Windows VM results and remaining limits.
+
 ## HDR conversion and import feedback
 
 The existing enhancement models were trained on SDR RGB. In conversion mode, HDR import uses floating-point YUV-to-RGB decoding, the BT.2100 HLG or ST 2084 PQ inverse transfer, BT.2020-to-BT.709 gamut conversion and a fixed highlight-compression curve before final 8-bit quantization. HLG uses a 1000-nit reference display. The curve does not depend on frame histograms, so an exposure change is not introduced by a changing crop or neighbouring frame.
