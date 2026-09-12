@@ -169,3 +169,5 @@ AppImage updates remain release-candidate acceptance work. The Linux test used
 an unchanged engine; a complete production engine replacement still needs target
 package acceptance. These local results do not close the beta readiness gates.
 See [local updater setup](local-updates.md) and the [beta checklist](beta-release-checklist.md).
+
+The final DDP host/worker hashes and compact test results are in [local-update-acceptance.json](local-update-acceptance.json). Disposable signing keys, test services/profiles, downloaded fixture archives and build caches were removed after verifying the installed preview.
