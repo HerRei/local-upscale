@@ -36,6 +36,14 @@
       "signing": "authenticode-valid"
     },
     {
+      "id": "linux-x86_64-rocm",
+      "filename": "LocalSR-v0.0.12-alpha-Linux-ROCm-x86_64.AppImage",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "AMD-ROCm",
+      "signing": "sha256"
+    },
+    {
       "id": "linux-x86_64-cpu",
       "filename": "LocalSR-v0.0.12-alpha-Linux-CPU-x86_64.AppImage",
       "platform": "linux",
@@ -57,14 +65,6 @@
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "Intel-XPU",
-      "signing": "sha256"
-    },
-    {
-      "id": "linux-x86_64-rocm",
-      "filename": "LocalSR-v0.0.12-alpha-Linux-ROCm-x86_64.AppImage",
-      "platform": "linux",
-      "architecture": "x86_64",
-      "backend": "AMD-ROCm",
       "signing": "sha256"
     }
   ]

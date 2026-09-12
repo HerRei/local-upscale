@@ -109,7 +109,10 @@ jobs:
 
   build-linux:
     name: Build Linux x86_64 ${{ matrix.backend }} alpha on Mac mini
-    needs: [build-windows, coordinate-heavy-work]
+    # Linux builds run first to test the recently fixed Linux AMD-ROCm target immediately,
+    # failing fast before the long macOS and Windows builds.
+    # The builds remain serialized to protect the shared Mac mini hardware concurrency.
+    needs: [preflight, coordinate-heavy-work]
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -369,10 +372,9 @@ jobs:
 
   build-macos-cross:
     name: Cross-build ad-hoc macOS ARM64 alpha on Mac mini
-    # macOS cross-build intentionally runs first to expose high-risk universal2 and
-    # cross-architecture issues early, failing fast before the long Windows/Linux builds.
+    # macOS cross-build runs after Linux targets complete.
     # The builds remain serialized to protect the shared Mac mini hardware concurrency.
-    needs: [preflight]
+    needs: [build-linux, coordinate-heavy-work]
     runs-on: [self-hosted, macOS, X64, localsr-macos-cross-builder]
     timeout-minutes: 360
     env:
@@ -505,7 +507,7 @@ jobs:
 
   verify-release-matrix:
     name: Verify complete v0.0.12 release matrix
-    needs: [build-linux]
+    needs: [build-linux, build-macos-cross, build-windows]
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 30
     steps:
