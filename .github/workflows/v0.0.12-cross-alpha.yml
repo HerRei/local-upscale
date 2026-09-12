@@ -24,7 +24,7 @@ env:
 jobs:
   coordinate-heavy-work:
     name: Require an idle Mac mini
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 10
     outputs:
       linux: ${{ steps.targets.outputs.linux }}
