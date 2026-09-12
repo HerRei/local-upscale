@@ -35,6 +35,9 @@
       {/if}
       <button class="directory-field" on:click={chooseOutput}><span><small>Save to</small>{settings.output_directory || 'Choose an output folder'}</span><b>Choose…</b></button>
       <div class="field-row"><label for="device">Hardware</label><select id="device" value={settings.device_id} on:change={(event) => updateSettings({ device_id: event.currentTarget.value })}>{#each capabilities.devices as device}<option value={device.id}>{device.name}</option>{/each}</select></div>
+      {#if !usingTemporalVideo && settings.device_id.startsWith('directml:')}
+        <p class="model-description">DirectML uses the selected Windows GPU, including compatible Intel integrated graphics. Start with smaller tiles if shared memory is tight.</p>
+      {/if}
       <div class="field-row"><label for="interface-scale">Interface text</label><select id="interface-scale" value={settings.interface_scale} on:change={(event) => updateSettings({ interface_scale: Number(event.currentTarget.value) as UiSettings['interface_scale'] })}><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option></select></div>
       {#if !usingTemporalVideo}
       <div class="field-grid"><label>Tile<select value={settings.tile_size} on:change={(event) => updateSettings({ tile_size: Number(event.currentTarget.value) })}>{#each [64, 128, 192, 256, 384, 512] as size}<option value={size}>{size}</option>{/each}</select></label><label>Halo<select value={settings.halo} on:change={(event) => updateSettings({ halo: Number(event.currentTarget.value) })}>{#each [8, 16, 32, 64] as halo}<option value={halo}>{halo}</option>{/each}</select></label><label>Precision<select disabled={settings.task === 'video' && settings.video_hdr_mode === 'preserve'} value={settings.precision} on:change={(event) => updateSettings({ precision: event.currentTarget.value })}><option value="fp32">FP32</option><option value="fp16">FP16</option></select></label></div>

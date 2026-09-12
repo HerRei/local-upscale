@@ -96,14 +96,29 @@ def test_directml_device_ids_use_the_backend_factory(monkeypatch):
     calls = []
     fake_directml = SimpleNamespace(
         is_available=lambda: True,
-        device=lambda index: calls.append(index) or torch.device("cpu"),
+        device_count=lambda: 3,
+        device=lambda index: calls.append(index) or torch.device(f"privateuseone:{index}"),
     )
     monkeypatch.setitem(sys.modules, "torch_directml", fake_directml)
 
     resolved = _resolve_torch_device("directml:2")
 
-    assert resolved == torch.device("cpu")
+    assert resolved == torch.device("privateuseone:2")
     assert calls == [2]
+
+
+def test_missing_directml_adapter_does_not_silently_select_cpu_or_another_gpu(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "torch_directml",
+        SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            device=lambda _index: pytest.fail("An unavailable adapter must not be used"),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="adapter 1 is no longer available"):
+        _resolve_torch_device("directml:1")
 
 
 def test_directml_resolution_fails_honestly_when_no_adapter_is_available(monkeypatch):

@@ -2,7 +2,10 @@ import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 
+import pytest
+
 from localsr.core import hardware
+from localsr.core.device_manager import DeviceManager
 
 
 def test_mps_and_cpu_capabilities_always_describe_shared_memory(monkeypatch):
@@ -50,7 +53,11 @@ def test_discovers_each_available_directml_adapter(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "torch_directml",
-        SimpleNamespace(is_available=lambda: True, device_count=lambda: 2),
+        SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 2,
+            device_name=lambda index: ["Intel(R) Iris(R) Xe Graphics", "NVIDIA GeForce RTX"][index],
+        ),
     )
     devices = []
 
@@ -59,6 +66,62 @@ def test_discovers_each_available_directml_adapter(monkeypatch):
     assert [device["id"] for device in devices] == ["directml:0", "directml:1"]
     assert all(device["type"] == "directml" for device in devices)
     assert all(device["is_integrated"] is True for device in devices)
+    assert devices[0]["name"] == "Intel(R) Iris(R) Xe Graphics (DirectML)"
+    assert devices[1]["name"] == "NVIDIA GeForce RTX (DirectML)"
+
+
+def test_directml_name_failure_keeps_adapter_ids_selectable(monkeypatch):
+    def name(index):
+        if index == 0:
+            raise RuntimeError("Driver name lookup failed")
+        return "Intel(R) UHD Graphics"
+
+    monkeypatch.delenv("LOCALSR_SKIP_DIRECTML_PROBE", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch_directml",
+        SimpleNamespace(is_available=lambda: True, device_count=lambda: 2, device_name=name),
+    )
+    devices = []
+    hardware._detect_directml(devices, 16 * 1024**3, 8 * 1024**3)
+    assert [(device["id"], device["name"]) for device in devices] == [
+        ("directml:0", "DirectML Device 0"),
+        ("directml:1", "Intel(R) UHD Graphics (DirectML)"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("DirectML.dll missing"), RuntimeError("Driver failed")]
+)
+def test_directml_driver_failure_preserves_cpu_capabilities(monkeypatch, failure):
+    def unavailable():
+        raise failure
+
+    monkeypatch.setattr(hardware.sys, "platform", "win32")
+    monkeypatch.setattr(hardware, "_system_memory", lambda: (16 * 1024**3, 8 * 1024**3))
+    monkeypatch.setattr(hardware, "_system_pressure_snapshot", lambda *_: {})
+    monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(hardware.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(hardware.torch, "xpu", SimpleNamespace(is_available=lambda: False))
+    monkeypatch.delenv("LOCALSR_SKIP_DIRECTML_PROBE", raising=False)
+    monkeypatch.setitem(sys.modules, "torch_directml", SimpleNamespace(is_available=unavailable))
+
+    assert [d["id"] for d in hardware.get_capability_report()["devices"]] == ["cpu"]
+
+
+@pytest.mark.parametrize(
+    ("devices", "expected"),
+    [
+        (["cpu", "directml:1"], "directml:1"),
+        (["cpu", "xpu:0"], "xpu:0"),
+        (["cpu", "cuda:1", "directml:0"], "cuda:1"),
+        (["cpu", "mps"], "mps"),
+        (["cpu"], "cpu"),
+    ],
+)
+def test_default_device_uses_discovered_gpu_identifier(monkeypatch, devices, expected):
+    monkeypatch.setattr(DeviceManager, "get_available_devices", lambda: devices)
+    assert DeviceManager.get_default_device() == expected
 
 
 def test_capability_report_does_not_advertise_unimplemented_qnn(monkeypatch):

@@ -1,4 +1,5 @@
 import ctypes
+import logging
 import os
 import re
 import subprocess
@@ -6,6 +7,8 @@ import sys
 from pathlib import Path
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def _system_memory() -> tuple[int, int]:
@@ -325,11 +328,21 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
 
         if torch_directml.is_available():
             for index in range(torch_directml.device_count()):
+                # DirectML includes Intel integrated GPUs as well as discrete
+                # adapters. Use its own enumeration/name pair so users can pick
+                # the intended GPU on hybrid laptops without changing its ID.
+                name = f"DirectML Device {index}"
+                try:
+                    adapter_name = torch_directml.device_name(index).strip()
+                    if adapter_name:
+                        name = f"{adapter_name} (DirectML)"
+                except (AttributeError, OSError, RuntimeError, ValueError):
+                    logger.warning("Could not read the name of DirectML adapter %s", index)
                 devices.append(
                     {
                         "id": f"directml:{index}",
                         "type": "directml",
-                        "name": f"DirectML Device {index}",
+                        "name": name,
                         "total_memory": total_ram,
                         "free_memory": available_ram,
                         "supports_fp16": True,
@@ -339,6 +352,11 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
                 )
     except ImportError:
         pass
+    except (OSError, RuntimeError):
+        # A missing DLL or driver must not prevent the worker from starting and
+        # offering CPU processing. Explicit DirectML jobs still fail with their
+        # backend error rather than silently switching their inference to CPU.
+        logger.warning("DirectML discovery failed; CPU processing remains available", exc_info=True)
 
 
 def _detect_qnn(devices: list[dict], total_ram: int, available_ram: int) -> None:

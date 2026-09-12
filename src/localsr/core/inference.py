@@ -18,6 +18,11 @@ def _resolve_torch_device(device_str: str) -> torch.device:
             raise RuntimeError(
                 "DirectML was selected, but this engine pack does not include torch-directml."
             ) from error
+        except (OSError, RuntimeError) as error:
+            raise RuntimeError(
+                "The DirectML runtime could not load. Check the installed DirectML engine "
+                "and graphics driver, or select CPU processing."
+            ) from error
         _, _, raw_index = device_str.partition(":")
         try:
             index = int(raw_index)
@@ -27,6 +32,12 @@ def _resolve_torch_device(device_str: str) -> torch.device:
             raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
         if not bool(getattr(torch_directml, "is_available", lambda: True)()):
             raise RuntimeError("DirectML was selected, but no compatible adapter is available.")
+        count = int(torch_directml.device_count())
+        if index >= count:
+            raise RuntimeError(
+                f"DirectML adapter {index} is no longer available. "
+                "Refresh Hardware and select an available GPU or CPU."
+            )
         return torch_directml.device(index)
     if device_str.startswith("qnn"):
         raise RuntimeError("QNN acceleration is not available in the PyTorch/Spandrel engine yet.")

@@ -711,7 +711,7 @@ describe('LocalSR desktop interface', () => {
       {
         id: 'directml:0',
         type: 'directml',
-        name: 'Windows GPU (DirectML)',
+        name: 'Intel(R) Iris(R) Xe Graphics (DirectML)',
         total_memory: 8,
         free_memory: 6,
         supports_fp16: true,
@@ -730,7 +730,7 @@ describe('LocalSR desktop interface', () => {
       'NVIDIA GPU (CUDA)',
       'AMD GPU (ROCm)',
       'Intel GPU (XPU)',
-      'Windows GPU (DirectML)'
+      'Intel(R) Iris(R) Xe Graphics (DirectML)'
     ]) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
@@ -741,10 +741,23 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'directml:0' })
       )
     );
+    expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
   });
 
-  it('submits one image with the selected native backend', async () => {
+  it.each(['mps', 'directml:1', 'xpu:0'])('submits one image with the selected %s backend', async (device) => {
     const snapshot = readySnapshot([image('first', true)]);
+    if (device !== 'mps') {
+      snapshot.capabilities.devices = [
+        snapshot.capabilities.devices[1],
+        {
+          ...snapshot.capabilities.devices[0],
+          id: device,
+          type: device.split(':')[0],
+          name: device.startsWith('directml') ? 'Intel(R) Iris(R) Xe Graphics (DirectML)' : 'Intel GPU (XPU)'
+        }
+      ];
+    }
+    snapshot.settings.device_id = device;
     const user = await mountWith(snapshot);
     await chooseTask(user, /Upscale\s*Photos and artwork/i);
 
@@ -758,7 +771,7 @@ describe('LocalSR desktop interface', () => {
         media_ids: ['first'],
         batch_mode: false,
         task: 'upscale',
-        device: 'mps'
+        device
       })
     );
   });

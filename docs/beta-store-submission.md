@@ -76,6 +76,15 @@ SeedVR2 as optional Labs. The hardware and duration warning above belongs in the
 Store description and website, and the individual SeedVR2 descriptions also show
 it in the application. This scope decision does not complete installed acceptance.
 
+The user also confirmed retaining all existing backend targets, using Labs for
+less-tested paths. Windows CPU, DirectML (including compatible Intel integrated
+graphics) and CUDA remain in scope. Main testing focus is Windows CPU/Intel
+iGPU; CUDA and other unverified adapters remain Labs. Record the actual Intel
+GPU/build evidence before advertising it as verified. Store engine delivery is
+still to implement; a CPU-only package does not include DirectML automatically.
+See the [platform coverage matrix](beta-platform-matrix.md) and
+[Intel GPU implementation notes](intel-gpu-support.md).
+
 Both 3B variants already exist in the local catalog; no new checkpoint is being
 introduced by this listing update. Their complete catalog downloads, including
 the VAE, are:
@@ -85,8 +94,9 @@ the VAE, are:
 | SeedVR2 3B FP16 | `seedvr2_3b` | About 7.28 GB | NVIDIA CUDA, AMD ROCm, Apple Metal |
 | SeedVR2 3B FP8 | `seedvr2_3b_fp8` | About 3.89 GB | NVIDIA CUDA, AMD ROCm |
 
-These decimal GB values are file sizes, not RAM/VRAM requirements. Only advertise
-backends that pass acceptance in the shipped package. FP8 reduces weight storage;
+These decimal GB values are file sizes, not RAM/VRAM requirements. Distinguish
+recorded testing from Labs availability and retain each model's backend
+compatibility limits. FP8 reduces weight storage;
 clip buffers, activations, output resolution and offloading still determine
 working memory. See the [catalog](../src/localsr/core/model_catalog.py) and
 [recorded short-clip results](video-support.md). CPU processing remains part of
@@ -146,6 +156,6 @@ SeedVR2 3B FP16/FP8 and HDR preservation are optional experimental features with
 ```
 
 These instructions assume a CPU-capable candidate with stock HAT-S and SDR video.
-The engine/scope decision and the installed procedure must pass before the notes
+Engine delivery and the installed procedure must be verified before the notes
 can represent the submitted package. They do not claim an MSIX or Store update
 has already been tested. See the [package guide](microsoft-store.md).

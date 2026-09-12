@@ -11,8 +11,10 @@ class DeviceManager:
         devices = DeviceManager.get_available_devices()
         if "mps" in devices:
             return "mps"
-        if "cuda" in devices:
-            return "cuda"
+        for backend in ("cuda", "xpu", "directml"):
+            for device in devices:
+                if device == backend or device.startswith(f"{backend}:"):
+                    return device
         return "cpu"
 
     @staticmethod

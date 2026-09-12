@@ -6,7 +6,7 @@ The existing `.12` release, its runners and the running Mac application stay unt
 
 **Where we are**
 
-- [x] Last recorded application regression suite: 568 Python, 83 frontend and 58 Rust tests passed; 3 Python tests skipped.
+- [x] Latest local regression suite after the Intel GPU fixes: 597 Python tests passed, 3 skipped; 49 focused frontend tests passed and Svelte checks were clean. The earlier full frontend/Rust results remain 83/58 in the [prior record](local-update-acceptance.json).
 - [x] CPU/ROCm worker inference, cancellation and subsequent processing checked on DDP.
 - [x] Linux portable signed update, restart and failed-startup rollback tested with a disposable key; recipes, settings, queue data and models survived.
 - [x] Both RealPLKSR downloads passed the two-acknowledgement UI flow, checksum verification and AMD inference. This establishes functionality; their license ambiguity remains unresolved.
@@ -18,9 +18,11 @@ The existing `.12` release, its runners and the running Mac application stay unt
 - [x] Prepared local [Store listing text, reviewer notes and screenshot plan](beta-store-submission.md), a [privacy/support draft](beta-privacy-and-support.md), and a [public feedback form](../packaging/beta-feedback/README.md). These drafts do not establish published pages, captured Windows screenshots or candidate acceptance.
 - [x] User confirmed public GitHub Issues for beta bug reports and `hermes.reisner@gmail.com` for contact/private requests. These details are now in the local Store/privacy/support drafts and prepared tracker configuration. Public tracker activation remains pending.
 - [x] User confirmed image processing/SDR video as core, with HDR preservation and SeedVR2 3B as optional Labs. Existing FP16/FP8 variants remain included where compatible. Explicit powerful-hardware, long-processing-time and memory-limit wording is included in local app descriptions and beta materials.
+- [x] User confirmed retaining all eight existing backend targets, using Labs for less-tested paths. Main testing focus: macOS MPS, Linux ROCm and Windows CPU/Intel iGPU. The [coverage matrix](beta-platform-matrix.md) records actual checks; Intel iGPU evidence still needs to be captured.
+- [x] Fixed local Intel GPU selection/discovery gaps and added regression coverage. Windows DirectML adapters now show actual GPU names; the Python automatic preset resolver includes DirectML ahead of CPU. Desktop selection/job submission retain the selected Intel adapter. [Implementation and test limits](intel-gpu-support.md).
 - [ ] Public beta acceptance completed. The existing readiness register still has **10 unresolved blocking requirements**, plus two optional Labs items. Its strict check currently exits with code 1. Production signing, actual installer upgrades and long-video acceptance are still open.
 
-The register predates the updater work and the Store route. Its count does not include every newly documented item below. When preparing the separate beta configuration, add the production updater and HDR acceptance requirements and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
+The register predates the updater work, the Store route and the confirmed platform/Labs decision. Its count does not include every newly documented item below. Prepare a separate beta configuration with common distribution/data checks and main-path functional acceptance; track missing broad Labs hardware and quality coverage as experimental follow-up. Add production updater and HDR compatibility/output checks and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
 
 **Current step: finish preparation before candidate builds**
 
@@ -28,7 +30,7 @@ The user asked to keep the Mac candidate build, signing, notarization and instal
 
 Work through the following preparation first:
 
-1. Confirm advertised platforms, Windows engine delivery and the remaining checkpoint offering. The core/Labs split and SeedVR2 3B inclusion are now confirmed; each advertised package/backend still needs installed acceptance.
+1. Prepare Windows engine delivery for the retained CPU/CUDA/DirectML targets and settle the remaining checkpoint offering. Platform scope, the Labs approach and SeedVR2 3B inclusion are confirmed. Follow the [coverage matrix](beta-platform-matrix.md) for main-path acceptance, Intel iGPU evidence and Labs package checks.
 2. Complete publisher details in the privacy/support draft and agree the support expectations and private-message retention during university. The contact is confirmed as `hermes.reisner@gmail.com`.
 3. Prepare the selected public GitHub issue tracker using the [local repository files](../packaging/beta-feedback/README.md), then publish and test access when remote work is authorized. Contact and tracker type do not need reconfirmation.
 4. Review the prepared Store text and reviewer procedure against that scope. Capture the planned screenshots from the exact Windows candidate later.
@@ -43,11 +45,11 @@ There is no additional Apple certificate or notarization password to obtain at t
 | 1 | Beta audience | **Confirmed:** friends and voluntary testers reached through Reddit. Prepare public access for those testers; no announcement or publication is authorized yet. |
 | 2 | Publisher and account setup | Store identity supplied; Apple signing identity and notarization authentication verified for team `Z2TU844D84`, certificate subject country `CH`. Publisher account type remains to record. Candidate build/signing acceptance is scheduled after the other preparation. |
 | 3 | Windows distribution | The user created a Store MSIX draft and supplied its identity. Local package preparation is implemented; the native Windows package and installed acceptance remain to do. Keeping a direct EXE download is a separate choice. |
-| 4 | Which operating systems and GPUs ship in beta 1? | Prepare Apple Silicon and the Linux CPU/AMD paths first; include Windows CPU and other GPU packages only when their exact installers pass on matching hardware. Defer unverified targets explicitly. |
+| 4 | Which operating systems and GPUs ship in beta 1? | **Confirmed:** retain all eight existing Tauri targets, with less-tested paths labelled Labs. Main testing focus: macOS MPS, Linux ROCm and Windows CPU/Intel iGPU. Capture the Intel GPU evidence before marking it verified; see the [coverage matrix](beta-platform-matrix.md). |
 | 5 | What counts as supported versus experimental? | **Confirmed:** image processing and SDR video as core; HDR preservation and SeedVR2 3B FP16/FP8 as optional Labs where compatible. De-flicker and video-face processing retain existing Labs status. State the need for powerful hardware and potentially very long processing times clearly. |
 | 6 | Which model checkpoints can be offered publicly? | Prefer documented checkpoint rights for the main catalog. Review your face forks and the two ambiguous RealPLKSR checkpoints together before deciding their beta availability. |
 | 7 | Downloads, source visibility and feedback? | **Confirmed:** public GitHub Issues for bugs; `hermes.reisner@gmail.com` for contact/private requests. A separate feedback repository is prepared locally. Final download destination and public access testing remain pending. |
-| 8 | Budget, build capacity and release timing? | **Confirmed constraint:** limited maintenance time during university for roughly the next six months. Recommend a small, well-tested beta without a promised update schedule; confirm costs and isolated build capacity before setting a date. |
+| 8 | Budget, build capacity and release timing? | **Confirmed constraint:** limited maintenance time during university for roughly the next six months. Keep the agreed feature/backend scope and clear Labs labels; discuss update expectations, costs and isolated build capacity before setting a date. |
 
 Only the entries explicitly marked confirmed record user decisions. The remaining entries are proposals. No models have been removed and no platform has been dropped by this checklist.
 
@@ -72,16 +74,16 @@ If we retain direct installer downloads, choose their signing provider separatel
 
 You complete identity verification, account agreements and purchases directly with the provider. Passwords, private signing keys and identity documents stay out of chat and the repository.
 
-**2. Agree the beta scope — we decide together**
+**2. Apply the confirmed beta scope — retain features and show testing coverage**
 
-- [ ] Name the exact OS versions, architectures and GPU backends we will advertise.
-- [ ] Assign one real test machine/tester for every advertised GPU package. A CPU-only VM does not establish GPU support.
-- [ ] Decide whether Intel Mac, DirectML and Intel XPU wait for a later beta. Their current release/runtime questions need resolution or explicit deferral.
+- [x] Retain all eight existing Tauri targets with main-path/Labs coverage recorded in the [platform matrix](beta-platform-matrix.md). Broader Labs hardware testing is not required before those paths can be included as experimental.
+- [ ] Record exact OS versions, GPU models and drivers for the main tested paths; capture the Windows Intel iGPU result. A CPU-only VM does not establish GPU inference.
+- [ ] Resolve packaging/runtime issues for retained targets and record known Labs compatibility gaps. Intel macOS is a separate legacy target, absent from the current Tauri registry.
 - [x] Record the confirmed core/Labs split and optional SeedVR2 3B FP16/FP8 inclusion, with clear hardware and processing-time warnings.
 - [ ] Finalize tested minimum requirements for the advertised packages. SeedVR2's weight size or a 16 GB baseline is not a guarantee that a particular resolution fits.
-- [ ] Give each retained Labs feature specific limitations and acceptance criteria. A broken core video path remains blocking even if SeedVR2 is experimental.
+- [ ] Give each retained Labs feature/backend specific limitations. Keep common package, cancellation/recovery and data-preservation checks; track unverified hardware, performance and experimental model quality as Labs follow-up. A broken core video path remains blocking even if SeedVR2 is experimental.
 
-The current target registry contains eight Tauri targets; changing beta scope requires corresponding changes to the future beta target registry, artifact manifest, readiness register, release notes and website. We make those changes after the scope decision, separately from `.12`.
+The current target registry contains eight Tauri targets, all retained by this decision. Carry their coverage labels into the future beta manifest, readiness configuration, release notes and website separately from `.12`. A backend being available as Labs does not make every model compatible with it.
 
 **3. Resolve model distribution — we decide; I prepare the evidence**
 
@@ -111,7 +113,7 @@ The current Windows workflow builds an EXE and expects PFX input. A future Store
 
 **Microsoft Store: current preview to publication, in order**
 
-- [ ] **1. Choose Windows engines.** Keep CPU processing available and decide which GPU backends the first Store candidate includes. Test each advertised backend on matching hardware. One x64 Store identity does not choose between separate CPU/CUDA/DirectML packages by GPU vendor; settle engine delivery before creating alternative packages.
+- [ ] **1. Prepare Windows engine delivery.** Retain CPU, CUDA and DirectML targets with the agreed main-path/Labs labels. Record real Intel iGPU evidence for its tested claim. One x64 Store identity does not choose between separate CPU/CUDA/DirectML packages by GPU vendor; settle engine delivery before creating alternative packages.
 - [ ] **2. Finish Store integration.** Make update controls use Store-managed updates and prevent a cached direct-distribution engine override from replacing the packaged engine. Verify writable data paths, WebView2 availability and preservation of existing preferences, recipes, queue data and downloaded models.
 - [ ] **3. Build the native MSIX.** Use the reserved identity, a documented Store package version and the complete frozen engine/runtime dependencies. Build in an isolated Windows environment, run MakeAppx schema validation and the Windows App Certification Kit, and retain package hashes and reports. The [Store preparation guide](microsoft-store.md) has the commands; its 18 layout tests do not replace these checks.
 - [ ] **4. Test the installed candidate.** Complete section 7 on the exact MSIX: fresh install, downloads/imports, image enhancement, representative long MOV export, media switching/playback, aligned render tiles, ETA, separate CPU/GPU benchmarks, cancellation/restart and resource-pressure recovery. Test an upgrade between two package versions and data preservation; check reinstall/uninstall separately. The last recorded Windows rerun still needs completion on the current candidate.
@@ -143,7 +145,7 @@ For direct-distribution editions, the updater's signature is separate from Apple
 
 **7. Test the exact candidate — I run tests; you/testers assess real use**
 
-- [ ] Fresh install and first launch on every advertised OS/backend, using the downloadable package without a development environment.
+- [ ] Check installation and first launch for every distributed package without a development environment. Run main-path inference on the matching devices; disclose missing Labs GPU coverage instead of treating a CPU smoke check as a GPU pass.
 - [ ] Download/import a model, change settings, save a recipe, restart and verify persistence.
 - [ ] Test photos, faces, anime/text, transparency, DNG and a large image; verify valid exports and unchanged sources.
 - [ ] Complete a representative long MOV export. Fully decode it and inspect orientation, audio, timing, motion and visual integrity. Earlier short-clip results do not establish a full four-minute 4K export.
@@ -154,7 +156,7 @@ For direct-distribution editions, the updater's signature is separate from Apple
 - [ ] Inspect SeedVR2 multi-window continuity and tile seams before making a quality claim; retain explicit Labs limitations if unresolved.
 - [ ] Repeat update/reinstall/uninstall and record results for each shipped artifact.
 
-Use [platform acceptance evidence](platform-acceptance-2026-09.md) as prior evidence, then update the [candidate acceptance template](acceptance-record.example.json) for the actual beta version and scope. The previous Windows fixes still need final platform verification; they are not certified by the local Linux updater test.
+Use [platform acceptance evidence](platform-acceptance-2026-09.md) as prior evidence, then update the [candidate acceptance template](acceptance-record.example.json) for the actual beta version and [coverage matrix](beta-platform-matrix.md). Complete core functional acceptance on the main tested paths and package/data checks for all distributed artifacts. Broader Labs hardware and quality validation can continue during beta. The previous Windows fixes still need final platform verification; they are not certified by the local Linux updater test.
 
 **8. Release to the agreed audience — final decision together**
 
@@ -174,8 +176,8 @@ Today that command correctly fails because beta requirements are unresolved. Thi
 
 **Our next conversation step**
 
-Contact, bug-report routing, core/Labs scope and SeedVR2 3B inclusion are confirmed.
-Next finish platform/engine, remaining checkpoint and publisher details using the
+Contact, bug-report routing, full backend scope with Labs labels and SeedVR2 3B
+inclusion are confirmed. Next finish engine delivery, remaining checkpoint and publisher details using the
 prepared drafts. The user explicitly deferred the Mac candidate build, signing,
 notarization and installed/update acceptance until after this preparation. The
 audience remains friends and Reddit volunteers, with limited maintenance capacity

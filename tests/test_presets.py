@@ -382,6 +382,45 @@ class TestEdgeCases:
 
 
 class TestDevicePriorityAndSettingsResolution:
+    @pytest.mark.parametrize("mode", [PresetMode.QUICK_UPSCALE, PresetMode.BEST_UPSCALE])
+    def test_presets_use_an_available_intel_igpu_before_cpu(self, mode):
+        gib = 1024**3
+        model = _make_dummy_model("m1")
+        settings = resolve_settings_for_model(
+            model=model,
+            mode=mode,
+            devices=[
+                {
+                    "id": "cpu",
+                    "type": "cpu",
+                    "name": "CPU",
+                    "free_memory": 8 * gib,
+                    "supports_fp16": False,
+                    "recommended_tile_sizes": [64, 128],
+                },
+                {
+                    "id": "directml:1",
+                    "type": "directml",
+                    "name": "Intel(R) Iris(R) Xe Graphics (DirectML)",
+                    "free_memory": 2 * gib,
+                    "supports_fp16": True,
+                    "recommended_tile_sizes": [64, 128],
+                    "is_integrated": True,
+                },
+            ],
+            image_width=128,
+            image_height=96,
+            output_scale=4,
+            available_system_memory=8 * gib,
+            available_disk=10 * gib,
+            model_half_supported=True,
+        )
+        assert settings.device_id == "directml:1"
+        assert settings.device_type == "directml"
+        assert settings.safe_memory is True
+        assert not settings.estimate.blocking
+        assert settings.precision == ("fp16" if mode == PresetMode.QUICK_UPSCALE else "fp32")
+
     def test_device_priority_ordering(self):
         cuda_dev = {"id": "cuda:0", "type": "cuda", "free_memory": 4 * 1024**3}
         rocm_dev = {"id": "rocm:0", "type": "rocm", "free_memory": 4 * 1024**3}

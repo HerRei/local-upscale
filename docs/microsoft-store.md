@@ -85,8 +85,12 @@ MakeAppx.exe pack /d C:\LocalSR-Store\candidate-1\layout /p C:\LocalSR-Store\can
 
 `--backend` records which worker was supplied; static PE checks do not prove that
 its PyTorch backend works. A single x64 Store identity does not automatically
-select CPU versus CUDA/DirectML packages according to GPU vendor. Decide the
-engine delivery strategy before uploading alternative x64 builds of this product.
+select CPU versus CUDA/DirectML packages according to GPU vendor. CPU, DirectML
+(including compatible Intel integrated graphics) and CUDA are retained in the
+agreed beta scope, with [testing coverage/Labs labels](beta-platform-matrix.md).
+Implement the engine delivery strategy before uploading alternative x64 builds
+of this product. The CPU example above is one worker layout; it does not add
+DirectML to a CPU engine. [Intel GPU support](intel-gpu-support.md).
 
 **Acceptance still required**
 
@@ -109,7 +113,7 @@ The remaining work is tracked in the [beta checklist](beta-release-checklist.md)
 Local [listing text, reviewer instructions and the Windows screenshot plan](beta-store-submission.md)
 are now prepared, along with a [privacy/support draft](beta-privacy-and-support.md).
 The contact is confirmed as `hermes.reisner@gmail.com`, with GitHub Issues for bug
-reports. The drafts still need publisher details and package-scope decisions; no Store field,
+reports. The drafts still need publisher details and engine delivery; no Store field,
 public website or installed package was changed by preparing these materials.
 Sources: [Microsoft manual packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion),
 [MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool),

@@ -116,8 +116,12 @@ long job; the ETA is measured from the actual work and can change.
 The confirmed beta scope keeps image processing and SDR video as the core,
 with HDR preservation and SeedVR2 3B as optional Labs. The existing FP16 variant
 supports NVIDIA CUDA, AMD ROCm and Apple Metal; the FP8 variant is for CUDA/ROCm.
-Only the backends verified in the eventual package will be advertised. A smaller
-FP8 download does not guarantee that the working buffers fit in RAM/VRAM.
+All eight existing backend targets remain in the planned beta, with less-tested
+paths labelled Labs and model compatibility stated separately. Recorded preview
+checks cover macOS MPS, Linux CPU/ROCm and Windows CPU; the Intel iGPU path is
+included, with its hardware/build evidence still to capture. See the
+[coverage matrix](beta-platform-matrix.md). A smaller FP8 download does not
+guarantee that the working buffers fit in RAM/VRAM.
 
 Known beta limits to confirm against the release candidate:
 

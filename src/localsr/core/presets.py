@@ -187,7 +187,7 @@ def get_preset_model(
 
 def _device_priority(device: Mapping) -> tuple[int, int]:
     backend = str(device.get("type", "cpu"))
-    order = {"cuda": 5, "rocm": 5, "mps": 4, "xpu": 3, "cpu": 1}
+    order = {"cuda": 5, "rocm": 5, "mps": 4, "xpu": 3, "directml": 2, "cpu": 1}
     return order.get(backend, 0), int(device.get("free_memory", 0))
 
 
