@@ -1,0 +1,54 @@
+name: Beta bug report
+description: Report a reproducible problem with LocalSR.
+title: "[Beta bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Reports and attachments on this tracker will be public. Share only media
+        you are permitted to post, and remove personal details from screenshots
+        and error messages. Do not attach credentials, settings files or the queue
+        database. Diagnostics and sample media are optional.
+  - type: input
+    id: version
+    attributes:
+      label: LocalSR version
+      description: Use the version shown in the application.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: What happened, and how can we reproduce it?
+      description: Include the steps, what you expected, and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: processing
+    attributes:
+      label: Model, hardware and media
+      description: >-
+        Include the selected model/device, RAM and GPU memory if known, input and
+        output dimensions, and relevant settings. For video, add its format,
+        duration, HDR/SDR status, and whether Reduce GPU memory was enabled.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Copy diagnostics or error message
+      description: Optional. Review the text for personal information before posting.
+      render: text
+  - type: textarea
+    id: recovery
+    attributes:
+      label: What happened after cancelling or trying again?
+      description: Optional. Say whether another job could run and whether the output played correctly.

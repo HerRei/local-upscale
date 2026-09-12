@@ -11,6 +11,7 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | Leave the current Mac GUI alone; use isolated environments for GUI acceptance | Explicit user instruction; confirmed |
 | Preserve media, recipes, settings and downloaded models; clean disposable test artifacts | Explicit user instruction; confirmed |
 | Decide beta scope and signing/account choices with the user | Current request; confirmed |
+| Finish other prerequisites before the Mac candidate build/signing/notarization tests | User instruction on 12 September 2026; candidate work remains on the to-do list |
 | Limited maintenance capacity during university for roughly the next six months | Explicit user statement on 12 September 2026; account for this in scope and release expectations |
 
 **Decisions and pending choices**
@@ -24,13 +25,14 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | B5 | Included platforms and GPUs | Start with testable Apple-Silicon/Linux paths; advertise each Windows/other GPU package only after its actual installer passes | Proposed; not approved |
 | B6 | Core versus Labs features | Image/SDR video core; HDR/SeedVR2/deflicker/video faces remain opt-in Labs until their quality evidence supports promotion | Proposed; not approved |
 | B7 | Public model catalog and defaults | Review face-fork/training rights and RealPLKSR ambiguity; preserve local research models during that decision | Pending; no catalog changes authorized by this plan |
-| B8 | Download destination, source visibility and feedback | A separate public distribution/issues repository is an option for later public beta; source can remain private | Proposed; not approved |
+| B8 | Download destination, source visibility and feedback | A separate public distribution/issues repository is an option for later public beta; source can remain private. Public GitHub tracker versus support email choice requested; a local report form is prepared | Asked; awaiting choice. No repository created or feedback route activated |
 | B9 | Production update feed, key custody and channel policy | Direct editions: separate Stable/Beta feeds, protected key and matching engine packages. If selected, Store MSIX edition: Store-managed application updates with tested data preservation | Pending; depends on B11 |
 | B10 | Beta version, release date and expansion to public access | Select after account readiness, scope and an initial signed candidate test cycle | Pending |
 | B11 | Windows Store MSIX, direct installer, or both | User created an MSIX Store draft and supplied its reserved identity; prepare the Store package locally. Direct installer distribution and engine delivery strategy remain open | Local Store preparation in progress; no submission/publication approved |
 | B12 | Maintenance and feedback expectations | Recommend a small, well-tested beta, one feedback channel, clear known issues and no promised update cadence during the next six months | Proposed; user confirmed limited time, not this exact operating plan |
-| B13 | Next Apple build task | Developer ID certificate/private-key setup, real timestamped native signing and notarization authentication passed; next prepare the native signing path, sign/notarize and test an isolated candidate | Local account setup complete; complete application signing/notarization and candidate acceptance remain pending |
+| B13 | Deferred Apple build task | Developer ID certificate/private-key setup, real timestamped native signing and notarization authentication passed. Keep the native candidate build, signing, notarization and installed/update tests on the to-do list while other prerequisites are completed first | Order confirmed by user; candidate work remains pending |
 | B14 | Microsoft Store remaining work | Track engine selection, Store integration, native MSIX build, installed acceptance, public beta content and listing/upload/certification in order | Added to the beta to-do list at the user's request; no upload or publication authorized |
+| B15 | Preparation before candidate builds | English Store text, reviewer procedure, four-shot Windows capture plan, privacy/support text and a feedback form are drafted locally. Finish contact/scope decisions, then prepare the actual destinations and packages | Draft materials prepared; final content and publication remain pending |
 
 **Current evidence**
 
@@ -43,6 +45,14 @@ The user created a Developer ID Application certificate and authorized local ins
 The user completed the notarization helper. An authenticated `notarytool history` request using `LocalSR-Z2TU844D84-notary` succeeded on 12 September 2026; verification did not export or log the stored credentials. The completed Desktop helper was removed after checking its contents. Local Apple account setup is complete. A complete signed/notarized LocalSR candidate and installed Gatekeeper/update acceptance remain open. This setup does not configure production release jobs or authorize publication. [Next build steps](apple-signing.md).
 
 The latest Partner Center screenshot marks pricing/availability, properties and age ratings complete. Packages are incomplete, Store listings are not started and submission options are recommended; the product remains a draft. The local MSIX layout helper, identity and artwork have 18 packaging tests, but no finished Windows MSIX has been built or certified. The six remaining Store stages are now explicit tasks in the [beta checklist](beta-release-checklist.md).
+
+Following the user's request to do other prerequisites first, local [listing and
+certification notes](beta-store-submission.md), [privacy/support text](beta-privacy-and-support.md)
+and a [feedback form](../packaging/beta-feedback/README.md) are prepared. The privacy
+draft records local queue thumbnails/backups, external model/update requests and
+user-initiated diagnostic sharing. Publisher/contact details, the support route
+and final installed-package behavior remain to confirm. No public page, Store
+entry, active issue template, model catalog or release gate was changed.
 
 The Store package identity is now recorded in [microsoft-store.md](microsoft-store.md).
 The display name `HerRei` does not establish whether the account is Individual or
