@@ -198,6 +198,7 @@ def test_repacks_linux_appimage_payload_with_system_gzip(
             "-noappend",
             "-comp",
             "gzip",
+            "-no-duplicates",
         ]
     ]
 

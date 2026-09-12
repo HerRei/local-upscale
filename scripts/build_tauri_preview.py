@@ -393,6 +393,7 @@ def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Pa
                 "-noappend",
                 "-comp",
                 LINUX_APPIMAGE_PAYLOAD_COMPRESSOR,
+                "-no-duplicates",
             ]
         )
         _copy_bytes(image, replacement, limit=offset)
