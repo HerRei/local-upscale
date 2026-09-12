@@ -16,6 +16,8 @@ The existing `.12` release, its runners and the running Mac application stay unt
 - [x] Apple Developer account reported ready; the downloaded Developer ID Application certificate is installed, matches the CSR/private key and is trusted with Apple's G2 intermediate. A disposable native executable passed signing with an Apple timestamp, hardened runtime, signature verification and execution. [Evidence](apple-signing-acceptance-2026-09.json).
 - [x] Apple notarization authentication verified using the saved `LocalSR-Z2TU844D84-notary` login Keychain profile. An authenticated request to Apple's notarization history succeeded; the completed setup helper was removed. No application has been submitted by this setup check.
 - [x] Prepared local [Store listing text, reviewer notes and screenshot plan](beta-store-submission.md), a [privacy/support draft](beta-privacy-and-support.md), and a [public feedback form](../packaging/beta-feedback/README.md). These drafts do not establish published pages, captured Windows screenshots or candidate acceptance.
+- [x] User confirmed public GitHub Issues for beta bug reports and `hermes.reisner@gmail.com` for contact/private requests. These details are now in the local Store/privacy/support drafts and prepared tracker configuration. Public tracker activation remains pending.
+- [x] User confirmed image processing/SDR video as core, with HDR preservation and SeedVR2 3B as optional Labs. Existing FP16/FP8 variants remain included where compatible. Explicit powerful-hardware, long-processing-time and memory-limit wording is included in local app descriptions and beta materials.
 - [ ] Public beta acceptance completed. The existing readiness register still has **10 unresolved blocking requirements**, plus two optional Labs items. Its strict check currently exits with code 1. Production signing, actual installer upgrades and long-video acceptance are still open.
 
 The register predates the updater work and the Store route. Its count does not include every newly documented item below. When preparing the separate beta configuration, add the production updater and HDR acceptance requirements and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
@@ -26,9 +28,9 @@ The user asked to keep the Mac candidate build, signing, notarization and instal
 
 Work through the following preparation first:
 
-1. Choose the tester feedback route and confirm a private privacy/contact mechanism. The public GitHub tracker versus support email choice has been asked; no destination has been created.
-2. Complete publisher/contact details in the privacy/support draft and agree the support expectations during university.
-3. Confirm the advertised platforms, Windows engine delivery, core/Labs split and checkpoint offering. The choices below remain proposals until answered.
+1. Confirm advertised platforms, Windows engine delivery and the remaining checkpoint offering. The core/Labs split and SeedVR2 3B inclusion are now confirmed; each advertised package/backend still needs installed acceptance.
+2. Complete publisher details in the privacy/support draft and agree the support expectations and private-message retention during university. The contact is confirmed as `hermes.reisner@gmail.com`.
+3. Prepare the selected public GitHub issue tracker using the [local repository files](../packaging/beta-feedback/README.md), then publish and test access when remote work is authorized. Contact and tracker type do not need reconfirmation.
 4. Review the prepared Store text and reviewer procedure against that scope. Capture the planned screenshots from the exact Windows candidate later.
 5. Prepare the website/privacy/support destinations and production update configuration locally; verify public access after publication is authorized.
 
@@ -42,9 +44,9 @@ There is no additional Apple certificate or notarization password to obtain at t
 | 2 | Publisher and account setup | Store identity supplied; Apple signing identity and notarization authentication verified for team `Z2TU844D84`, certificate subject country `CH`. Publisher account type remains to record. Candidate build/signing acceptance is scheduled after the other preparation. |
 | 3 | Windows distribution | The user created a Store MSIX draft and supplied its identity. Local package preparation is implemented; the native Windows package and installed acceptance remain to do. Keeping a direct EXE download is a separate choice. |
 | 4 | Which operating systems and GPUs ship in beta 1? | Prepare Apple Silicon and the Linux CPU/AMD paths first; include Windows CPU and other GPU packages only when their exact installers pass on matching hardware. Defer unverified targets explicitly. |
-| 5 | What counts as supported versus experimental? | Make image upscaling and SDR video the core. Keep HDR preservation, SeedVR2, deflicker and video-face processing opt-in Labs until their quality evidence supports promotion. |
+| 5 | What counts as supported versus experimental? | **Confirmed:** image processing and SDR video as core; HDR preservation and SeedVR2 3B FP16/FP8 as optional Labs where compatible. De-flicker and video-face processing retain existing Labs status. State the need for powerful hardware and potentially very long processing times clearly. |
 | 6 | Which model checkpoints can be offered publicly? | Prefer documented checkpoint rights for the main catalog. Review your face forks and the two ambiguous RealPLKSR checkpoints together before deciding their beta availability. |
-| 7 | Downloads, source visibility and feedback? | A separate public downloads/issues repository can preserve the current source repository's privacy. Confirm the destination and access requirements first. |
+| 7 | Downloads, source visibility and feedback? | **Confirmed:** public GitHub Issues for bugs; `hermes.reisner@gmail.com` for contact/private requests. A separate feedback repository is prepared locally. Final download destination and public access testing remain pending. |
 | 8 | Budget, build capacity and release timing? | **Confirmed constraint:** limited maintenance time during university for roughly the next six months. Recommend a small, well-tested beta without a promised update schedule; confirm costs and isolated build capacity before setting a date. |
 
 Only the entries explicitly marked confirmed record user decisions. The remaining entries are proposals. No models have been removed and no platform has been dropped by this checklist.
@@ -56,7 +58,8 @@ Only the entries explicitly marked confirmed record user decisions. The remainin
 - [ ] Confirm publisher type in the decision log.
 - [x] Record Apple Team ID `Z2TU844D84` and certificate subject country `CH` from the issued certificate. The publisher account type is still a separate pending decision.
 - [ ] Agree a signing/build budget before purchasing anything.
-- [ ] Choose a tester contact/feedback route. If distribution is invited-only, test that intended testers can access it; for public distribution, test signed out.
+- [x] Choose the tester contact/feedback route: public GitHub Issues for bugs and `hermes.reisner@gmail.com` for contact/private requests.
+- [ ] Publish the prepared tracker when remote work is authorized, then verify public reading while signed out and issue creation as an ordinary tester. Do not use the private source repository's issue URL as the public support destination.
 - [ ] Agree maintenance expectations: recommend one feedback channel, clear known issues and no promised release cadence during university. Decide how to pause downloads or notify testers if a serious issue is found while maintenance capacity is limited.
 
 The Developer ID Application certificate and notarization authentication are verified locally. The complete application still needs signing, notarization and installed acceptance. [Apple setup and verification record](apple-signing.md).
@@ -74,7 +77,8 @@ You complete identity verification, account agreements and purchases directly wi
 - [ ] Name the exact OS versions, architectures and GPU backends we will advertise.
 - [ ] Assign one real test machine/tester for every advertised GPU package. A CPU-only VM does not establish GPU support.
 - [ ] Decide whether Intel Mac, DirectML and Intel XPU wait for a later beta. Their current release/runtime questions need resolution or explicit deferral.
-- [ ] Record the core/Labs feature split and minimum requirements. SeedVR2's weight size or a 16 GB baseline is not a guarantee that a particular resolution fits.
+- [x] Record the confirmed core/Labs split and optional SeedVR2 3B FP16/FP8 inclusion, with clear hardware and processing-time warnings.
+- [ ] Finalize tested minimum requirements for the advertised packages. SeedVR2's weight size or a 16 GB baseline is not a guarantee that a particular resolution fits.
 - [ ] Give each retained Labs feature specific limitations and acceptance criteria. A broken core video path remains blocking even if SeedVR2 is experimental.
 
 The current target registry contains eight Tauri targets; changing beta scope requires corresponding changes to the future beta target registry, artifact manifest, readiness register, release notes and website. We make those changes after the scope decision, separately from `.12`.
@@ -111,7 +115,7 @@ The current Windows workflow builds an EXE and expects PFX input. A future Store
 - [ ] **2. Finish Store integration.** Make update controls use Store-managed updates and prevent a cached direct-distribution engine override from replacing the packaged engine. Verify writable data paths, WebView2 availability and preservation of existing preferences, recipes, queue data and downloaded models.
 - [ ] **3. Build the native MSIX.** Use the reserved identity, a documented Store package version and the complete frozen engine/runtime dependencies. Build in an isolated Windows environment, run MakeAppx schema validation and the Windows App Certification Kit, and retain package hashes and reports. The [Store preparation guide](microsoft-store.md) has the commands; its 18 layout tests do not replace these checks.
 - [ ] **4. Test the installed candidate.** Complete section 7 on the exact MSIX: fresh install, downloads/imports, image enhancement, representative long MOV export, media switching/playback, aligned render tiles, ETA, separate CPU/GPU benchmarks, cancellation/restart and resource-pressure recovery. Test an upgrade between two package versions and data preservation; check reinstall/uninstall separately. The last recorded Windows rerun still needs completion on the current candidate.
-- [ ] **5. Finalize the public beta offering.** Complete the checkpoint decisions in section 3, state the supported/Labs limits, and provide working privacy/support information and a feedback route accessible to friends and Reddit testers. The [privacy/support text](beta-privacy-and-support.md) is drafted locally; publisher/contact choices and public hosting remain open.
+- [ ] **5. Finalize the public beta offering.** Complete the checkpoint decisions in section 3, state the supported/Labs limits, and provide working privacy/support information and a feedback route accessible to friends and Reddit testers. The [privacy/support text](beta-privacy-and-support.md) includes the confirmed Gmail contact and GitHub Issues route; publisher details and public hosting remain open.
 - [ ] **6. Complete listing, upload and certification.** Review the prepared [English listing and reviewer notes](beta-store-submission.md) against the installed candidate, then capture its four planned Windows screenshots (1920 × 1080 PNG recommended; one is the minimum). Upload the tested MSIX. Review the release timing/visibility before submitting; after certification, release according to the approved settings and verify installation and updates through the Store. Microsoft provides the Store MSIX signature; a paid Windows certificate is not required for this route.
 
 The user asked to add this work to the beta to-do list on 12 September 2026. This records pending work, not authorization to upload or publish. Package and listing requirements are documented by [Microsoft](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/create-app-submission); see also [MSIX signing](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements) and [screenshot specifications](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images).
@@ -170,4 +174,9 @@ Today that command correctly fails because beta requirements are unresolved. Thi
 
 **Our next conversation step**
 
-First choose the tester feedback route, then finish the remaining publisher/contact and platform/model decisions using the prepared drafts. The user explicitly deferred the Mac candidate build, signing, notarization and installed/update acceptance until after this preparation. The audience remains friends and Reddit volunteers, with limited maintenance capacity during university.
+Contact, bug-report routing, core/Labs scope and SeedVR2 3B inclusion are confirmed.
+Next finish platform/engine, remaining checkpoint and publisher details using the
+prepared drafts. The user explicitly deferred the Mac candidate build, signing,
+notarization and installed/update acceptance until after this preparation. The
+audience remains friends and Reddit volunteers, with limited maintenance capacity
+during university.

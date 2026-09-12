@@ -7,7 +7,7 @@ using this text. Package construction, screenshots, upload and certification
 remain on the [beta checklist](beta-release-checklist.md).
 
 Local checks passed: the short description is 175 characters, the description
-1,363 characters, all eight features and four planned captions fit their field
+1,947 characters, all nine features and four planned captions fit their field
 limits, and local documentation links resolve. These checks do not validate the
 future package or replace review of the captured screenshots.
 
@@ -31,9 +31,11 @@ Choose your media, select a model and inspect the result before saving a separat
 
 Processing stays local. LocalSR has no account requirement, advertising or automatic upload of your media. An internet connection is needed to download models and receive software updates. Once the required model files are installed, enhancement can run offline.
 
-This beta is intended for people who want to try LocalSR and report problems. Processing speed and memory use depend on the model, your hardware and the input and output dimensions. AI enhancement can introduce artifacts or change fine details; inspect the result and keep your originals.
+This beta is intended for people who want to try LocalSR on capable hardware and report problems. Demanding video work, especially high-resolution output and SeedVR2, needs a powerful compatible GPU and substantial memory. Processing is not real-time: a short video can take hours, and long or high-resolution jobs can take days or longer. CPU processing can be much slower. Speed and memory use depend on the model, hardware and input and output dimensions. Test a short clip at a modest output size first.
 
-Video processing includes an SDR output option. Experimental options are labelled Labs. HDR preservation is limited to compatible models and input formats; SDR-trained model quality on HDR remains unverified. SeedVR2 cannot preserve HDR and can require substantial system and GPU memory.
+Image processing and SDR video are the core beta features. Optional SeedVR2 3B video restoration is included as Labs, with FP16 and FP8 variants where supported by the installed backend. FP8 has a smaller download and lower weight storage, but working memory can still be large. Even 16 GB of GPU memory is not a guarantee that a particular video will fit. SeedVR2 exports SDR and cannot preserve HDR.
+
+HDR preservation is also experimental and limited to compatible models and input formats. SDR-trained model quality on HDR remains unverified. AI enhancement can introduce artifacts or change fine details; inspect the result and keep your originals.
 
 Models have their own licenses and download requirements. Some models require a user-supplied checkpoint. The application's license does not grant rights to every model or to media you choose to process.
 ```
@@ -49,6 +51,7 @@ Reusable recipes and queued processing
 Separate CPU and GPU benchmark results where the installed backend is available
 Local diagnostics that you choose whether to share
 Model integrity verification and visible license information
+Optional SeedVR2 3B FP16 and FP8 video restoration with explicit Labs limitations
 ```
 
 Leave **What's new in this version** empty for the first Store submission. Put
@@ -62,9 +65,32 @@ are 10,000 characters for the description, 1,000 for the short description
 | Field | Preparation |
 | --- | --- |
 | Website | Existing LocalSR homepage: `https://herrei.github.io/localsr/`; recheck its release links before submission. |
-| Support contact info | Awaiting the user's choice of public issue tracker or support email. The private source repository's issue URL is unsuitable for general testers. |
-| Privacy policy | Use the [privacy draft](beta-privacy-and-support.md) after confirming publisher/contact details and hosting it at an accessible URL. No new privacy page is live yet. |
+| Support contact info | `hermes.reisner@gmail.com` — confirmed by the user. Use GitHub Issues for bug reports; add its public URL to the support page once the tracker is published. |
+| Privacy policy | Use the [privacy draft](beta-privacy-and-support.md) after confirming publisher details and hosting it at an accessible URL. No new privacy page is live yet. |
 | Additional system requirements | Finalize from the exact Windows engine and installed acceptance. The earlier 16 GB minimum / 32 GB recommended RAM values are provisional planning choices. |
+
+**Confirmed beta scope and hardware message**
+
+The user selected image processing/SDR video as the core and HDR preservation/
+SeedVR2 as optional Labs. The hardware and duration warning above belongs in the
+Store description and website, and the individual SeedVR2 descriptions also show
+it in the application. This scope decision does not complete installed acceptance.
+
+Both 3B variants already exist in the local catalog; no new checkpoint is being
+introduced by this listing update. Their complete catalog downloads, including
+the VAE, are:
+
+| Optional Labs model | Catalog ID | Download | Backend described by the current catalog |
+| --- | --- | --- | --- |
+| SeedVR2 3B FP16 | `seedvr2_3b` | About 7.28 GB | NVIDIA CUDA, AMD ROCm, Apple Metal |
+| SeedVR2 3B FP8 | `seedvr2_3b_fp8` | About 3.89 GB | NVIDIA CUDA, AMD ROCm |
+
+These decimal GB values are file sizes, not RAM/VRAM requirements. Only advertise
+backends that pass acceptance in the shipped package. FP8 reduces weight storage;
+clip buffers, activations, output resolution and offloading still determine
+working memory. See the [catalog](../src/localsr/core/model_catalog.py) and
+[recorded short-clip results](video-support.md). CPU processing remains part of
+the core path; it is not a practical-performance promise for SeedVR2.
 
 LocalSR accesses user-selected photos and videos, which can contain personal
 information even when processing stays on-device. The proposed answer to the
@@ -116,7 +142,7 @@ Suggested review procedure:
 5. Add the supplied short SDR clip, select frame-by-frame processing and stock HAT-S, and export an MP4 result.
 6. Start another job, cancel it, wait for cancellation to finish, and confirm that another job can start.
 
-SeedVR2 and HDR preservation are experimental options with model-specific limitations. They are not required for the basic image/SDR-video procedure. Do not select an unsupported GPU backend; only the backends documented for this exact package are included.
+SeedVR2 3B FP16/FP8 and HDR preservation are optional experimental features with model-specific limitations. They are not required for the basic image/SDR-video procedure. SeedVR2 outputs SDR, needs capable hardware and may take hours or days on demanding video. Use a short sample and modest output resolution for functional review. Do not select an unsupported GPU backend; only the backends documented for this exact package are included.
 ```
 
 These instructions assume a CPU-capable candidate with stock HAT-S and SDR video.

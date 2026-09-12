@@ -8,7 +8,8 @@ body:
         Reports and attachments on this tracker will be public. Share only media
         you are permitted to post, and remove personal details from screenshots
         and error messages. Do not attach credentials, settings files or the queue
-        database. Diagnostics and sample media are optional.
+        database. Diagnostics and sample media are optional. For contact or
+        confidential reports, email hermes.reisner@gmail.com.
   - type: input
     id: version
     attributes:

@@ -23,16 +23,17 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | B3 | Publisher country and existing developer/signing accounts | Store identity supplied; Apple Developer ID Application certificate verified for team `Z2TU844D84`, subject country `CH`, expiring 13 September 2031; notarization authentication verified using the local Keychain profile | Store identity and local Apple signing/notarization setup verified; publisher account type remains pending |
 | B4 | Budget and build capacity | Assess the free Store MSIX route before buying a Windows certificate; confirm available isolated runners and plan for limited maintenance during university | Capacity constraint confirmed; budget and implementation choices pending |
 | B5 | Included platforms and GPUs | Start with testable Apple-Silicon/Linux paths; advertise each Windows/other GPU package only after its actual installer passes | Proposed; not approved |
-| B6 | Core versus Labs features | Image/SDR video core; HDR/SeedVR2/deflicker/video faces remain opt-in Labs until their quality evidence supports promotion | Proposed; not approved |
-| B7 | Public model catalog and defaults | Review face-fork/training rights and RealPLKSR ambiguity; preserve local research models during that decision | Pending; no catalog changes authorized by this plan |
-| B8 | Download destination, source visibility and feedback | A separate public distribution/issues repository is an option for later public beta; source can remain private. Public GitHub tracker versus support email choice requested; a local report form is prepared | Asked; awaiting choice. No repository created or feedback route activated |
+| B6 | Core versus Labs features | Image processing/SDR video core; HDR preservation and SeedVR2 3B remain optional Labs. Retain FP16 and FP8 variants where the shipped backend supports them. De-flicker/video faces keep their existing Labs status | Core plus experimental HDR/SeedVR2 and 3B inclusion confirmed by user; exact package/backends still require acceptance |
+| B7 | Public model catalog and defaults | Review face-fork/training rights and RealPLKSR ambiguity; preserve local research models during that decision. SeedVR2 3B retention and its clearer descriptions are covered by B6/B16 | Remaining checkpoint/default choices pending; no removal or change to checkpoint permissions has been approved |
+| B8 | Download destination, source visibility and feedback | Public GitHub Issues for bug reports; `hermes.reisner@gmail.com` for contact/private requests. Prepare a separate feedback repository locally, keeping source visibility unchanged | Contact and tracker type confirmed by user. Public activation, access testing and download destination remain pending |
 | B9 | Production update feed, key custody and channel policy | Direct editions: separate Stable/Beta feeds, protected key and matching engine packages. If selected, Store MSIX edition: Store-managed application updates with tested data preservation | Pending; depends on B11 |
 | B10 | Beta version, release date and expansion to public access | Select after account readiness, scope and an initial signed candidate test cycle | Pending |
 | B11 | Windows Store MSIX, direct installer, or both | User created an MSIX Store draft and supplied its reserved identity; prepare the Store package locally. Direct installer distribution and engine delivery strategy remain open | Local Store preparation in progress; no submission/publication approved |
 | B12 | Maintenance and feedback expectations | Recommend a small, well-tested beta, one feedback channel, clear known issues and no promised update cadence during the next six months | Proposed; user confirmed limited time, not this exact operating plan |
 | B13 | Deferred Apple build task | Developer ID certificate/private-key setup, real timestamped native signing and notarization authentication passed. Keep the native candidate build, signing, notarization and installed/update tests on the to-do list while other prerequisites are completed first | Order confirmed by user; candidate work remains pending |
 | B14 | Microsoft Store remaining work | Track engine selection, Store integration, native MSIX build, installed acceptance, public beta content and listing/upload/certification in order | Added to the beta to-do list at the user's request; no upload or publication authorized |
-| B15 | Preparation before candidate builds | English Store text, reviewer procedure, four-shot Windows capture plan, privacy/support text and a feedback form are drafted locally. Finish contact/scope decisions, then prepare the actual destinations and packages | Draft materials prepared; final content and publication remain pending |
+| B15 | Preparation before candidate builds | English Store text, reviewer procedure, four-shot Windows capture plan, privacy/support text and tracker files are prepared locally, including the confirmed contact. Finish publisher/scope decisions, then prepare the actual destinations and packages | Contact choice incorporated; final content and publication remain pending |
+| B16 | Hardware and processing-time expectations | State that demanding video needs powerful compatible hardware and substantial memory, can take hours/days or longer, and should first be tried on a short clip. FP8 download size and a nominal 16 GB are not workload-fit guarantees | Explicit user request; included in local app descriptions, Store/support/tracker text and website preview notes |
 
 **Current evidence**
 
@@ -50,9 +51,17 @@ Following the user's request to do other prerequisites first, local [listing and
 certification notes](beta-store-submission.md), [privacy/support text](beta-privacy-and-support.md)
 and a [feedback form](../packaging/beta-feedback/README.md) are prepared. The privacy
 draft records local queue thumbnails/backups, external model/update requests and
-user-initiated diagnostic sharing. Publisher/contact details, the support route
-and final installed-package behavior remain to confirm. No public page, Store
-entry, active issue template, model catalog or release gate was changed.
+user-initiated diagnostic sharing. The user confirmed `hermes.reisner@gmail.com`
+as contact and public GitHub Issues for bugs. Publisher details, private-message
+retention and final installed-package behavior remain to confirm. No public page, Store
+entry, active issue template, checkpoint download or release gate was changed.
+
+The user then confirmed the core/Labs split, requested clear capable-hardware and
+long-processing-time warnings, and asked to include the 3B model. Both SeedVR2
+3B FP16 and FP8 were already present in the catalog. Their descriptions now make
+the hardware, duration and SDR-only output explicit; checkpoint IDs, files,
+hashes, requirements and model behavior are unchanged. Website preview wording
+and the prepared Store/support/tracker text carry the same warning locally.
 
 The Store package identity is now recorded in [microsoft-store.md](microsoft-store.md).
 The display name `HerRei` does not establish whether the account is Individual or

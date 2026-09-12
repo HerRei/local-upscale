@@ -108,7 +108,8 @@ engine delivery strategy before uploading alternative x64 builds of this product
 The remaining work is tracked in the [beta checklist](beta-release-checklist.md).
 Local [listing text, reviewer instructions and the Windows screenshot plan](beta-store-submission.md)
 are now prepared, along with a [privacy/support draft](beta-privacy-and-support.md).
-They still need the publisher/contact and package-scope decisions; no Store field,
+The contact is confirmed as `hermes.reisner@gmail.com`, with GitHub Issues for bug
+reports. The drafts still need publisher details and package-scope decisions; no Store field,
 public website or installed package was changed by preparing these materials.
 Sources: [Microsoft manual packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion),
 [MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool),

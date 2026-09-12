@@ -527,9 +527,10 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         model_id="seedvr2_3b",
         name="SeedVR2-3B — Labs",
         description=(
-            "Experimental one-step diffusion video restorer with temporal consistency "
-            "inside each clip window. Supports NVIDIA CUDA, AMD ROCm and Apple Metal. "
-            "Memory use depends on output size, clip length and offloading; 16 GB does not guarantee a fit."
+            "Experimental 3B FP16 video restoration for powerful hardware. Supports "
+            "NVIDIA CUDA, AMD ROCm and Apple Metal. Video jobs can take hours or days. "
+            "Memory use depends on output size, clip length and offloading; "
+            "16 GB does not guarantee a fit. SDR output only."
         ),
         family="seedvr2_3b",
         engine_kind="seedvr2",
@@ -555,9 +556,10 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         model_id="seedvr2_3b_fp8",
         name="SeedVR2-3B FP8 — Labs",
         description=(
-            "Experimental FP8 SeedVR2 for NVIDIA CUDA and AMD ROCm GPUs. "
-            "Smaller model download and weight storage than FP16; working memory "
-            "depends on output size, clip length and offloading."
+            "Experimental 3B FP8 video restoration for powerful NVIDIA CUDA or AMD ROCm GPUs. "
+            "Smaller download and weight storage than FP16, but video jobs can still take "
+            "hours or days. Working memory depends on output size, clip length and "
+            "offloading; a smaller download does not guarantee a fit. SDR output only."
         ),
         family="seedvr2_3b",
         engine_kind="seedvr2",

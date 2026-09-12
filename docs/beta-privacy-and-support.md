@@ -2,9 +2,10 @@
 
 Prepared locally on 12 September 2026 from the desktop implementation. This file
 is preparation for the website and Store submission, not a published policy.
-Confirm the publisher's legal name/entity, a private contact for privacy requests,
-the general feedback route and the final package behavior before publication.
-No contact address has been inferred from signing credentials or account screens.
+The user confirmed GitHub Issues for bug reports and
+[hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com) for contact and private
+privacy requests. Confirm the publisher's legal name/entity and the final package
+behavior before publication. The contact was supplied explicitly by the user.
 
 **Privacy text**
 
@@ -44,12 +45,15 @@ report, error text or screenshot before sharing it; manually added screenshots
 and logs can contain personal information. Clipboard synchronization and operating
 system backup or crash-reporting services follow your system settings.
 
-If you choose to submit a bug report, the selected support service receives the
-information you send. Reports on a public GitHub issue tracker, including your
-account name and attachments, are public. Use the confirmed private contact for
-privacy requests or confidential information. The support route, contact and
-support-record retention arrangements must be completed before this draft is
-published.
+If you choose to submit a bug report through GitHub Issues, GitHub receives the
+information you send. Reports on the public issue tracker, including your
+account name and attachments, are public. For contact, privacy requests or
+confidential information, email
+[hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com). Email messages are
+handled by the email providers involved and received in the project's Gmail
+inbox. They are not automatically posted to GitHub. The public tracker address
+and support-record retention arrangements must be completed before this draft
+is published.
 
 The LocalSR website is hosted on GitHub Pages. GitHub records visitor IP addresses
 for security. The current LocalSR website uses locally hosted fonts and assets
@@ -86,7 +90,9 @@ Storage providers or operating system backups may retain their own copies.
 
 LocalSR beta feedback helps identify problems with different media, models and
 hardware. Check the known limitations below, then report a reproducible problem
-through the selected feedback route.
+through GitHub Issues. For contact or private matters, email
+[hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com). The tracker files are
+prepared locally; add its working public URL when it is published.
 
 Include the LocalSR version, your operating system, processing device, model,
 input dimensions and the steps that caused the problem. Copy diagnostics can
@@ -98,12 +104,27 @@ Before posting, remove personal paths, private images and unrelated information
 from screenshots or error logs. Do not attach credentials, your settings file or
 your full queue database. Ordinary bug reports do not require those files.
 
+**Hardware and experimental video**
+
+LocalSR is intended for capable computers. Demanding video processing, especially
+SeedVR2 or large output dimensions, needs powerful compatible hardware and
+substantial memory. Processing is not real-time: a short clip can take hours,
+and long or high-resolution video can take days or longer. CPU processing can be
+much slower. Try a short clip at a modest output resolution before starting a
+long job; the ETA is measured from the actual work and can change.
+
+The confirmed beta scope keeps image processing and SDR video as the core,
+with HDR preservation and SeedVR2 3B as optional Labs. The existing FP16 variant
+supports NVIDIA CUDA, AMD ROCm and Apple Metal; the FP8 variant is for CUDA/ROCm.
+Only the backends verified in the eventual package will be advertised. A smaller
+FP8 download does not guarantee that the working buffers fit in RAM/VRAM.
+
 Known beta limits to confirm against the release candidate:
 
 - A large model or high output resolution may exceed available memory. With
   SeedVR2, reduce the requested output size or use frame-by-frame HAT-S; memory
   saving trades speed and sometimes image quality for lower memory use.
-- SeedVR2 cannot preserve HDR. HAT HDR preservation is experimental, and its
+- Both SeedVR2 3B variants export SDR and cannot preserve HDR. HAT HDR preservation is experimental, and its
   output quality has not been established by model training on HDR.
 - A MOV extension alone does not determine compatibility. The codec, colour
   metadata, transform and audio tracks also matter. Unsupported media should
@@ -122,8 +143,8 @@ This operating plan still needs the user's agreement.
 | Item | Status |
 | --- | --- |
 | Publisher legal name and individual/entity status | Awaiting confirmation; Store display name is HerRei. |
-| Private privacy/contact route | Awaiting a user-selected address or private contact mechanism. |
-| General support destination | Public GitHub tracker or email choice requested. No new repository exists. |
+| Private privacy/contact route | Confirmed by user: `hermes.reisner@gmail.com`. No test email has been sent. |
+| General support destination | Confirmed by user: public GitHub Issues. Tracker files are prepared locally; repository publication and access testing remain pending. |
 | Support information retention | Confirm how long private support messages are kept and how deletion requests are handled. Public reports should remain useful without retaining unnecessary personal information. |
 | Public page addresses | Proposed `/localsr/privacy/` and `/localsr/support/`; neither has been created or published by this work. |
 | Store edition data/update behavior | Awaiting exact MSIX acceptance; do not reuse unpackaged assumptions as verification. |
@@ -140,5 +161,5 @@ This operating plan still needs the user's agreement.
 | Local video playback and HDR/model limits | [Video support](video-support.md) |
 
 This review establishes what the current code and documentation say. A network
-observation of the final installed candidate and the remaining publisher/contact
-details are still needed before the final privacy text is approved and published.
+observation of the final installed candidate, publisher details and support-record
+retention are still needed before the final privacy text is approved and published.
