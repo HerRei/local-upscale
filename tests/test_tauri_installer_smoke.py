@@ -261,3 +261,33 @@ def test_linux_smoke_uses_unsquashfs_extraction_for_rocm_backend(
     assert calls[0][0][0].endswith("/AppRun")
     assert calls[0][0][1:] == ["--headless-smoke-test"]
     assert calls[0][1]["APPIMAGE"] == str(artifact.resolve())
+
+
+def test_extract_appimage_payload_falls_back_when_unsquashfs_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "LocalSR.AppImage"
+    artifact.write_bytes(b"appimage")
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(command, **kwargs):
+        calls.append(command)
+        if command[0] == "/usr/bin/unsquashfs":
+            raise subprocess.CalledProcessError(1, command)
+        cwd = Path(kwargs.get("cwd", tmp_path))
+        root = cwd / "squashfs-root"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "AppRun").write_text("#!/bin/sh\nexit 0\n")
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(smoke.shutil, "which", lambda cmd: "/usr/bin/unsquashfs" if cmd == "unsquashfs" else None)
+    monkeypatch.setattr(smoke.subprocess, "run", fake_subprocess_run)
+
+    dest = tmp_path / "destination"
+    res = smoke.extract_appimage_payload(artifact, dest, 60)
+    assert res == dest
+    assert (dest / "AppRun").is_file()
+    assert len(calls) == 3
+    assert calls[0][1] == "--appimage-offset"
+    assert calls[1][0] == "/usr/bin/unsquashfs"
+    assert calls[2][1] == "--appimage-extract"

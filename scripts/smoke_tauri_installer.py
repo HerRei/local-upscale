@@ -256,8 +256,14 @@ def extract_appimage_payload(artifact: Path, destination: Path, timeout: float) 
         offset = find_appimage_offset(artifact)
         offset_args = ["-o", str(offset)] if offset is not None else []
         cmd = [unsquashfs, "-f", "-q", "-d", str(destination)] + offset_args + [str(artifact)]
-        subprocess.run(cmd, check=True, timeout=timeout)
-        return destination
+        try:
+            subprocess.run(cmd, check=True, timeout=timeout)
+            return destination
+        except subprocess.CalledProcessError as error:
+            print(
+                f"unsquashfs failed (exit {error.returncode}); falling back to --appimage-extract",
+                flush=True,
+            )
 
     with tempfile.TemporaryDirectory(prefix="localsr-appimage-extract-") as temporary:
         subprocess.run(

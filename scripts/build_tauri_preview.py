@@ -99,6 +99,8 @@ def tauri_build_environment() -> dict[str, str]:
         return env
 
     env["NO_STRIP"] = "true"
+    env["LDAI_COMP"] = "gzip"
+    env["APPIMAGE_COMP"] = "gzip"
     library_dirs = sorted(
         {str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()}
     )

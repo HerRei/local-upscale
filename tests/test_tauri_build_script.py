@@ -89,6 +89,8 @@ def test_exposes_private_worker_libraries_only_to_linux_packager(
         str(torch_libraries),
         "/system/libraries",
     ]
+    assert environment["LDAI_COMP"] == "gzip"
+    assert environment["APPIMAGE_COMP"] == "gzip"
 
 
 def test_does_not_change_library_lookup_outside_linux(monkeypatch, tmp_path: Path) -> None:
