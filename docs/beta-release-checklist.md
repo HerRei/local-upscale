@@ -17,28 +17,35 @@ The register predates the updater work. Its count does not include every newly d
 
 **The decisions, in the order we will make them**
 
-| Step | Decision | Starting recommendation — awaiting your choice |
+| Step | Decision | Choice or starting recommendation |
 | --- | --- | --- |
-| 1 | Invited testers or immediate public beta? | Start with 5–10 invited testers, then expand after one complete test cycle. Signing and data-preservation checks still apply. |
-| 2 | Individual or company publisher? | Use your actual legal identity/entity. Confirm the publisher's country before choosing a Windows signing service. |
-| 3 | Which operating systems and GPUs ship in beta 1? | Prepare Apple Silicon and the Linux CPU/AMD paths first; include Windows CPU and other GPU packages only when their exact installers pass on matching hardware. Defer unverified targets explicitly. |
-| 4 | What counts as supported versus experimental? | Make image upscaling and SDR video the core. Keep HDR preservation, SeedVR2, deflicker and video-face processing opt-in Labs until their quality evidence supports promotion. |
-| 5 | Which model checkpoints can be offered publicly? | Prefer documented checkpoint rights for the main catalog. Review your face forks and the two ambiguous RealPLKSR checkpoints together before deciding their beta availability. |
-| 6 | Downloads, source visibility and feedback? | For a later public beta, a separate public downloads/issues repository can preserve the current source repository's privacy. Confirm the destination and access requirements first. |
-| 7 | Budget, build capacity and release timing? | Confirm signing costs and isolated build capacity before choosing a date. Set a date after the first complete signed candidate passes. |
+| 1 | Beta audience | **Confirmed:** friends and voluntary testers reached through Reddit. Prepare public access for those testers; no announcement or publication is authorized yet. |
+| 2 | Individual or company publisher? | Use your actual legal identity/entity. Confirm the publisher's country and existing accounts. |
+| 3 | Windows distribution | Evaluate Microsoft Store MSIX before buying a certificate. Store MSIX signing is free; the current Windows EXE needs different packaging and acceptance tests. Keeping a direct EXE download is a separate choice. |
+| 4 | Which operating systems and GPUs ship in beta 1? | Prepare Apple Silicon and the Linux CPU/AMD paths first; include Windows CPU and other GPU packages only when their exact installers pass on matching hardware. Defer unverified targets explicitly. |
+| 5 | What counts as supported versus experimental? | Make image upscaling and SDR video the core. Keep HDR preservation, SeedVR2, deflicker and video-face processing opt-in Labs until their quality evidence supports promotion. |
+| 6 | Which model checkpoints can be offered publicly? | Prefer documented checkpoint rights for the main catalog. Review your face forks and the two ambiguous RealPLKSR checkpoints together before deciding their beta availability. |
+| 7 | Downloads, source visibility and feedback? | A separate public downloads/issues repository can preserve the current source repository's privacy. Confirm the destination and access requirements first. |
+| 8 | Budget, build capacity and release timing? | **Confirmed constraint:** limited maintenance time during university for roughly the next six months. Recommend a small, well-tested beta without a promised update schedule; confirm costs and isolated build capacity before setting a date. |
 
-These are proposals, not accepted changes. In particular, no models have been removed and no platform has been dropped by this checklist.
+Only the entries explicitly marked confirmed record user decisions. The remaining entries are proposals. No models have been removed and no platform has been dropped by this checklist.
 
 **1. Confirm audience, publisher and accounts — you decide; I guide**
 
-- [ ] Record invited/public audience and publisher type in the decision log.
+- [x] Record friends and Reddit volunteers as the intended beta audience.
+- [ ] Confirm publisher type in the decision log.
 - [ ] Confirm the publisher country and whether you already have an Apple Developer membership or Windows signing account. We do not infer enrollment status from repository secrets.
 - [ ] Agree a signing/build budget before purchasing anything.
 - [ ] Choose a tester contact/feedback route. If distribution is invited-only, test that intended testers can access it; for public distribution, test signed out.
+- [ ] Agree maintenance expectations: recommend one feedback channel, clear known issues and no promised release cadence during university. Decide how to pause downloads or notify testers if a serious issue is found while maintenance capacity is limited.
 
 For Apple, individuals and eligible organizations can enroll. Individual enrollment uses a legal name and an Apple Account with two-factor authentication; organizations have additional verification requirements, normally including D-U-N-S. Membership is **USD 99 per year**, with regional pricing shown during enrollment. [Apple enrollment](https://developer.apple.com/programs/enroll/).
 
-For Windows, publisher country and entity type affect provider eligibility. Microsoft currently lists Switzerland for **organizations**, while **individual developers must be in the US or Canada** for its Public Trust service. If you publish as a Swiss individual, we need a different eligible provider; a Swiss Azure region alone does not establish individual eligibility. We will compare suitable providers after confirming your identity type and budget. [Microsoft requirements](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart).
+For Windows, **Microsoft Store registration is free through the new onboarding flow**, for both [individuals](https://learn.microsoft.com/en-us/windows/apps/publish/whats-new-individual-developer) and [companies](https://blogs.windows.com/windowsdeveloper/2026/05/07/publish-to-microsoft-store-as-a-company-now-with-free-registration-and-faster-onboarding/). Use [the Store developer entry point](https://storedeveloper.microsoft.com/) for that flow. Identity/account verification still applies.
+
+**An MSIX package distributed through the Store receives free Microsoft signing after certification.** It does not require purchasing a signing certificate. A Store listing for an MSI/EXE installer does require the publisher's own trusted Authenticode signature. LocalSR currently builds a Windows EXE installer; Store MSIX compatibility has not been established. [Microsoft signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options).
+
+If we retain direct installer downloads, choose their signing provider separately. Microsoft's Artifact Signing Public Trust service currently supports Swiss **organizations**, but only US/Canadian **individuals**. That restriction applies to this direct-signing service, not to the free Store MSIX signing route. [Artifact Signing requirements](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart).
 
 You complete identity verification, account agreements and purchases directly with the provider. Passwords, private signing keys and identity documents stay out of chat and the repository.
 
@@ -65,22 +72,25 @@ The existing [model-license evidence](model-licenses.md) is the starting point. 
 **4. Sign the application — you provide account access; I implement and verify**
 
 - [ ] **Mac:** obtain a Developer ID Application certificate, configure signing/notarization credentials securely, sign the app and bundled executables, notarize, staple and verify the downloaded distribution on a separate Mac. Developer ID Application signs the app; Developer ID Installer is for an Installer Package if we use one. [Apple certificate guide](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
-- [ ] **Windows:** choose a provider that supports your identity/country and unattended signing, adapt the pipeline to its key-storage method, then sign and timestamp the app and installer and verify Authenticode trust.
+- [ ] **Windows distribution:** decide Store MSIX, direct installer, or both before buying a certificate.
+- [ ] **Windows Store, if selected:** prepare an MSIX package with the required identity and capabilities; test the bundled Python/GPU engine, model downloads, writable data locations and upgrades on Windows. Complete Store certification and verify installation of the Microsoft-signed package. Free signing does not establish LocalSR package compatibility or certification in advance.
+- [ ] **Windows direct installer, if retained:** choose a provider that supports your identity/country and unattended signing, adapt the pipeline to its key-storage method, then sign and timestamp the app and installer and verify Authenticode trust. This also applies to submitting an EXE/MSI installer to the Store.
 - [ ] **Linux:** create the selected distributable package, retain its checksums and provide signed updater artifacts. Test the package on the advertised distributions.
 - [ ] Document certificate/key renewal and a recovery contact. Store secrets in the chosen protected signing environment.
 
-The current Windows workflow expects PFX input. That is an existing implementation detail, not a reason to buy a certificate that does not fit your needs. The pipeline must follow the selected provider's supported signing method. The current Mac workflow also requires a native ARM64 runner but is still routed to the old X64 label; both routing and actual build capacity need correction in the future beta workflow.
+The current Windows workflow builds an EXE and expects PFX input. A future Store edition needs a separate MSIX packaging and acceptance path; a retained direct installer must follow its selected provider's supported signing method. Record the chosen trust path and its actual acceptance evidence in the future beta readiness register. The current trust requirement remains unresolved. The current Mac workflow also requires a native ARM64 runner but is still routed to the old X64 label; both routing and actual build capacity need correction in the future beta workflow.
 
 **5. Enable production updates — I prepare; we verify together**
 
-- [ ] Choose the final updater feed/download URLs and Stable/Beta policy.
-- [ ] Generate a production updater key in the chosen secure environment and arrange its backup; embed only the public key in the initial beta.
-- [ ] Include the correct backend and engine identity in every build and generate the matching signed artifacts/manifests.
+- [ ] For a selected Store MSIX edition, use Store-managed application updates and adapt the update control accordingly. Verify the engine/backend packaging and data preservation through a real Store package upgrade.
+- [ ] For direct-distribution editions, choose the final updater feed/download URLs and Stable/Beta policy.
+- [ ] Generate a production updater key for those direct editions in the chosen secure environment and arrange its backup; embed only the public key in their initial beta.
+- [ ] Include the correct backend and engine identity in every build and generate the artifacts/manifests required by its distribution path.
 - [ ] Test actual upgrades from an older installed candidate on macOS, Windows and the selected Linux package format. Repeat split-engine and changed-engine cases, not only an unchanged engine.
 - [ ] Verify interrupted downloads, invalid signatures, low disk space, busy/cancelling queues, unreadable settings and failed-startup recovery.
 - [ ] Check that recipes, preferences, queue history and downloaded models survive; confirm uninstall behavior separately.
 
-The updater's signature is separate from Apple's or Windows' application signing. Tauri requires signatures for updates. Production feeds are currently disabled; the first beta must include the correct public key from its initial installation. [Tauri updater documentation](https://v2.tauri.app/plugin/updater/). Build and manifest details are in [local-updates.md](local-updates.md).
+For direct-distribution editions, the updater's signature is separate from Apple's or Windows' application signing. Tauri requires signatures for updates. Production feeds are currently disabled; their first beta must include the correct public key from its initial installation. [Tauri updater documentation](https://v2.tauri.app/plugin/updater/). Build and manifest details are in [local-updates.md](local-updates.md). A Store MSIX edition would instead use Microsoft's hosting and automatic application updates; its packaging and upgrade behavior still require implementation and testing. [Microsoft Store MSIX benefits](https://blogs.windows.com/windowsdeveloper/2026/05/07/publish-to-microsoft-store-as-a-company-now-with-free-registration-and-faster-onboarding/).
 
 **6. Prepare a separate beta build — I handle implementation**
 
@@ -123,4 +133,4 @@ Today that command correctly fails because beta requirements are unresolved. Thi
 
 **Our next conversation step**
 
-Start with audience and publisher identity. Once you answer those, I will record the choices and take you through the matching enrollment/signing path, including what you already have, what needs buying and what I can configure. We will make platform and model choices next, then turn the agreed scope into a build/test plan.
+The audience is now friends and Reddit volunteers, and maintenance capacity during university is limited. Publisher identity is still pending. Next, confirm that identity and assess Store MSIX feasibility before deciding whether any paid Windows certificate is needed. Then agree a beta scope that can be maintained with the available time and turn it into a build/test plan.
