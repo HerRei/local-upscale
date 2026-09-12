@@ -192,3 +192,72 @@ def test_linux_smoke_runs_the_appimage_host_without_a_webview(tmp_path: Path, mo
     assert Path(environment["TMPDIR"]).name.startswith("localsr-appimage-runtime-")
     if smoke.os.name != "nt":
         assert artifact.stat().st_mode & 0o111
+
+
+def test_linux_smoke_falls_back_to_extracted_apprun_on_direct_launch_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "LocalSR.AppImage"
+    artifact.write_bytes(b"appimage")
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(command, *, env, **_kwargs):
+        calls.append((command, env.copy()))
+        if command == [str(artifact), "--headless-smoke-test"]:
+            raise subprocess.CalledProcessError(127, command)
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    def fake_extract(art, dest, timeout):
+        dest.mkdir(parents=True, exist_ok=True)
+        apprun = dest / "AppRun"
+        apprun.write_text("#!/bin/sh\nexit 0\n")
+        apprun.chmod(0o755)
+        return dest
+
+    monkeypatch.setattr(smoke, "run", fake_run)
+    monkeypatch.setattr(smoke, "extract_appimage_payload", fake_extract)
+
+    smoke.smoke_linux(artifact, tmp_path / "report.json", {}, 240)
+
+    assert len(calls) == 2
+    assert calls[0][0] == [str(artifact), "--headless-smoke-test"]
+    assert calls[1][0][0].endswith("/AppRun")
+    assert calls[1][0][1:] == ["--headless-smoke-test"]
+    assert "APPDIR" in calls[1][1]
+    assert calls[1][1]["APPIMAGE"] == str(artifact.resolve())
+
+
+def test_linux_smoke_uses_unsquashfs_extraction_for_rocm_backend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "LocalSR-ROCm.AppImage"
+    artifact.write_bytes(b"appimage")
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(command, *, env, **_kwargs):
+        calls.append((command, env.copy()))
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    def fake_extract(art, dest, timeout):
+        dest.mkdir(parents=True, exist_ok=True)
+        apprun = dest / "AppRun"
+        apprun.write_text("#!/bin/sh\nexit 0\n")
+        apprun.chmod(0o755)
+        worker = dest / "engine" / "localsr-worker"
+        worker.parent.mkdir(parents=True, exist_ok=True)
+        worker.write_text("#!/bin/sh\nexit 0\n")
+        worker.chmod(0o755)
+        return dest
+
+    monkeypatch.setattr(smoke.shutil, "which", lambda cmd: "/usr/bin/unsquashfs" if cmd == "unsquashfs" else None)
+    monkeypatch.setattr(smoke, "run", fake_run)
+    monkeypatch.setattr(smoke, "extract_appimage_payload", fake_extract)
+    monkeypatch.setattr(smoke, "verify_backend", lambda *args, **kwargs: None)
+
+    smoke.smoke_linux(artifact, tmp_path / "report.json", {"LOCALSR_SMOKE_BACKEND": "AMD-ROCm"}, 240)
+
+    # When ROCm is detected with unsquashfs, direct smoke is skipped; AppRun is invoked directly
+    assert len(calls) == 1
+    assert calls[0][0][0].endswith("/AppRun")
+    assert calls[0][0][1:] == ["--headless-smoke-test"]
+    assert calls[0][1]["APPIMAGE"] == str(artifact.resolve())

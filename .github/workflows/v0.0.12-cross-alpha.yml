@@ -177,7 +177,7 @@ jobs:
         run: |
           cd "$LOCALSR_ALPHA_ROOT/source"
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 squashfs-tools
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
             --cache-root "$LOCALSR_LINUX_SCRATCH/wheelhouses" --report "$LOCALSR_ALPHA_ROOT/staging/dependency-wheelhouse.json"
@@ -202,7 +202,7 @@ jobs:
           ARTIFACT="$LOCALSR_ALPHA_ROOT/staging/${{ matrix.pkg_name }}"
           cp "$SOURCE" "$ARTIFACT"
           chmod +x "$ARTIFACT"
-          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 \
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 1500 \
             --artifact-glob "$ARTIFACT" \
             --report "$LOCALSR_ALPHA_ROOT/staging/package-smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \

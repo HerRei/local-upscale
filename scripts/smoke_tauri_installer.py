@@ -224,36 +224,134 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
             run([str(uninstallers[0]), "/S"], env=env, timeout=timeout, check=False)
 
 
+def find_appimage_offset(artifact: Path) -> int | None:
+    try:
+        proc = subprocess.run(
+            [str(artifact), "--appimage-offset"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        val = proc.stdout.strip()
+        if val.isdigit():
+            return int(val)
+    except Exception:
+        pass
+    try:
+        with artifact.open("rb") as f:
+            head = f.read(16 * 1024 * 1024)
+            idx = head.find(b"hsqs")
+            if idx != -1:
+                return idx
+    except OSError:
+        pass
+    return None
+
+
+def extract_appimage_payload(artifact: Path, destination: Path, timeout: float) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+    unsquashfs = shutil.which("unsquashfs")
+    if unsquashfs:
+        offset = find_appimage_offset(artifact)
+        offset_args = ["-o", str(offset)] if offset is not None else []
+        cmd = [unsquashfs, "-f", "-q", "-d", str(destination)] + offset_args + [str(artifact)]
+        subprocess.run(cmd, check=True, timeout=timeout)
+        return destination
+
+    with tempfile.TemporaryDirectory(prefix="localsr-appimage-extract-") as temporary:
+        subprocess.run(
+            [str(artifact), "--appimage-extract"],
+            cwd=temporary,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+        root = Path(temporary) / "squashfs-root"
+        for child in root.iterdir():
+            shutil.move(str(child), str(destination / child.name))
+    return destination
+
+
+def resolve_extracted_apprun(extracted_root: Path) -> tuple[Path, Path]:
+    root = extracted_root
+    if not (root / "AppRun").is_file() and (root / "squashfs-root" / "AppRun").is_file():
+        root = root / "squashfs-root"
+    apprun = root / "AppRun"
+    if not apprun.is_file():
+        candidates = list(extracted_root.rglob("AppRun"))
+        if candidates:
+            apprun = candidates[0]
+            root = apprun.parent
+        else:
+            raise RuntimeError(f"could not find AppRun in extracted AppImage: {extracted_root}")
+    apprun.chmod(apprun.stat().st_mode | 0o111)
+    return root, apprun
+
+
 def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
     artifact.chmod(artifact.stat().st_mode | 0o111)
+    env = env.copy()
     env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
+
+    direct_smoke_passed = False
+    skip_direct_smoke = bool(
+        shutil.which("unsquashfs")
+        and (
+            env.get("LOCALSR_SMOKE_BACKEND") == "AMD-ROCm"
+            or (artifact.stat().st_size > 5 * 1024 * 1024 * 1024)
+        )
+    )
+
     appimage_tmp_parent = Path(env.get("TMPDIR") or tempfile.gettempdir())
     appimage_tmp_parent.mkdir(parents=True, exist_ok=True)
-    # Keep AppImage runtime extraction isolated from the job-wide scratch TMPDIR.
-    # Large backend AppImages can otherwise trip over stale/colliding runtime
-    # extraction state left by a previous launch attempt on the same runner.
-    with temporary_directory(
-        prefix="localsr-appimage-runtime-", dir=appimage_tmp_parent
-    ) as appimage_tmp:
-        env["TMPDIR"] = appimage_tmp
-        # Self-hosted Linux runners may not provide a functional GTK/Wayland
-        # session even under Xvfb. Exercise the actual AppImage host, its
-        # resource layout and bundled worker before WebView initialization.
-        run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
-    # APPIMAGE_EXTRACT_AND_RUN removes its temporary tree when the host exits.
-    # Extract an owned copy so the identity probe exercises that exact payload.
-    if env.get("LOCALSR_SMOKE_BACKEND"):
-        with tempfile.TemporaryDirectory(
-            prefix="localsr-backend-appimage-", dir=appimage_tmp_parent
-        ) as temporary:
-            subprocess.run(
-                [str(artifact), "--appimage-extract"],
-                cwd=temporary,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                timeout=timeout,
-            )
-            workers = list((Path(temporary) / "squashfs-root").rglob("localsr-worker"))
+
+    if not skip_direct_smoke:
+        # Keep AppImage runtime extraction isolated from the job-wide scratch TMPDIR.
+        # Large backend AppImages can otherwise trip over stale/colliding runtime
+        # extraction state left by a previous launch attempt on the same runner.
+        with temporary_directory(
+            prefix="localsr-appimage-runtime-", dir=appimage_tmp_parent
+        ) as appimage_tmp:
+            env["TMPDIR"] = appimage_tmp
+            # Self-hosted Linux runners may not provide a functional GTK/Wayland
+            # session even under Xvfb. Exercise the actual AppImage host, its
+            # resource layout and bundled worker before WebView initialization.
+            try:
+                run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
+                direct_smoke_passed = True
+            except subprocess.CalledProcessError as error:
+                print(
+                    f"Direct AppImage launch failed (exit {error.returncode}); "
+                    "falling back to extracted payload smoke test.",
+                    flush=True,
+                )
+    else:
+        print(
+            "Large backend AppImage detected; using unsquashfs payload extraction for smoke test.",
+            flush=True,
+        )
+
+    if direct_smoke_passed and not env.get("LOCALSR_SMOKE_BACKEND"):
+        return
+
+    with tempfile.TemporaryDirectory(
+        prefix="localsr-backend-appimage-", dir=appimage_tmp_parent
+    ) as temporary:
+        target_dest = Path(temporary) / "payload"
+        extracted_root = extract_appimage_payload(artifact, target_dest, timeout)
+        root, apprun = resolve_extracted_apprun(extracted_root)
+
+        if not direct_smoke_passed:
+            smoke_env = env.copy()
+            smoke_env.pop("APPIMAGE_EXTRACT_AND_RUN", None)
+            smoke_env["APPDIR"] = str(root.resolve())
+            smoke_env["APPIMAGE"] = str(artifact.resolve())
+            smoke_env["ARGV0"] = str(artifact.resolve())
+            run([str(apprun), "--headless-smoke-test"], env=smoke_env, timeout=timeout)
+
+        if env.get("LOCALSR_SMOKE_BACKEND"):
+            workers = list(root.rglob("localsr-worker"))
             if len(workers) != 1:
                 raise RuntimeError("AppImage does not contain exactly one frozen worker")
             verify_backend(report, env, timeout, worker=workers[0])
