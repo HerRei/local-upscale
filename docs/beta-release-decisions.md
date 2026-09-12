@@ -7,7 +7,7 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | Constraint | Source/status |
 | --- | --- |
 | Preserve the active `.12` release, its checkouts, jobs and runners | Explicit user instruction; confirmed |
-| Keep current work local; no publication or remote changes | Explicit user instruction; confirmed |
+| Keep code/release work local; no publication | Explicit user instruction; confirmed. The user separately authorized setup and testing of the native Windows Intel device, including SSH, Tailscale and GUI access. |
 | Leave the current Mac GUI alone; use isolated environments for GUI acceptance | Explicit user instruction; confirmed |
 | Preserve media, recipes, settings and downloaded models; clean disposable test artifacts | Explicit user instruction; confirmed |
 | Decide beta scope and signing/account choices with the user | Current request; confirmed |
@@ -35,6 +35,7 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | B15 | Preparation before candidate builds | English Store text, reviewer procedure, four-shot Windows capture plan, privacy/support text and tracker files are prepared locally, including the confirmed contact. Feature/backend scope is recorded; finish publisher and delivery details, then prepare the actual destinations and packages | Contact and scope choices incorporated; final content and publication remain pending |
 | B16 | Hardware and processing-time expectations | State that demanding video needs powerful compatible hardware and substantial memory, can take hours/days or longer, and should first be tried on a short clip. FP8 download size and a nominal 16 GB are not workload-fit guarantees | Explicit user request; included in local app descriptions, Store/support/tracker text and website preview notes |
 | B17 | Intel integrated graphics | User explicitly requested local implementation/verification before the next beta decision. Retain Windows DirectML and compatible Linux XPU paths; distinguish runtime support from actual device test evidence | Local selection, naming and discovery-error fixes passed regression checks; [Intel GPU notes](intel-gpu-support.md). Physical Intel GPU acceptance remains to record |
+| B18 | Native Windows Intel test device | User authorized SSH, Tailscale and full GUI access for native Intel/iGPU and Store/MSIX testing; the device must not become a build runner | SSH, desktop input and secure-desktop UAC handling verified over LAN; Tailscale installed, account login pending. [Setup and hardware evidence](windows-intel-test-host.md). LocalSR GPU/MSIX acceptance remains pending |
 
 **Current evidence**
 

@@ -1,0 +1,101 @@
+{
+  "captured_utc": "2026-09-12T17:01:15.0801630Z",
+  "computer": "LAPTOP-G3M0MOM5",
+  "os": "Microsoft Windows 11 Home",
+  "version": "10.0.26200",
+  "model": "Swift SF514-52T",
+  "ram_gib": 15.89,
+  "cpu": "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
+  "graphics": [
+    {
+      "CardName": "Intel(R) UHD Graphics 620",
+      "DriverVersion": "24.20.100.6286",
+      "DriverDate": "8/15/2018 2:00:00 AM",
+      "DDIVersion": "12",
+      "FeatureLevels": "12_1,12_0,11_1,11_0,10_1,10_0,9_3,9_2,9_1,1_0_CORE",
+      "DriverModel": "WDDM 2.4",
+      "DeviceProblemCode": "No Problem"
+    }
+  ],
+  "ssh": {
+    "account": "agenttest",
+    "administrator": true,
+    "key_login_verified": true,
+    "service": "Running",
+    "startup": "Automatic"
+  },
+  "gui": {
+    "version": "2, 8, 88, 0",
+    "service": "Running",
+    "startup": "Automatic",
+    "loopback_only": true,
+    "vnc_authentication": true,
+    "http_enabled": false,
+    "input_test": {
+      "Success": true,
+      "Text": "LOCALSR-REMOTE-OK",
+      "Computer": "LAPTOP-G3M0MOM5",
+      "SessionId": 1,
+      "TimeUTC": "2026-09-12T16:53:56.2776847Z"
+    },
+    "uac_test": {
+      "NativeCode": null,
+      "TimeUTC": "2026-09-12T16:58:00.4445737Z",
+      "Result": "ElevationCancelled"
+    }
+  },
+  "tailscale": {
+    "version": "1.102.4",
+    "state": "NeedsLogin",
+    "dns_name": "",
+    "ips": null,
+    "service": "Running",
+    "startup": "Automatic",
+    "last_checked_utc": "2026-09-12T17:10:17.2068179Z"
+  },
+  "localsr_inference_tested": false,
+  "msix_tested": false,
+  "build_runner_registered": false,
+  "power_policy": {
+    "verified_utc": "2026-09-12T17:08:23.9612537Z",
+    "active_scheme": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)",
+    "standby": {
+      "ac_seconds": 0,
+      "dc_seconds": 0
+    },
+    "hibernate": {
+      "ac_seconds": 0,
+      "dc_seconds": 0
+    },
+    "unattended_sleep": {
+      "ac_seconds": 0,
+      "dc_seconds": 0
+    },
+    "original_standby": {
+      "ac_seconds": 18000,
+      "dc_seconds": 600
+    },
+    "original_hibernate": {
+      "ac_seconds": 43200,
+      "dc_seconds": 10800
+    },
+    "original_unattended_sleep": "Not captured; hidden powercfg setting required /qh.",
+    "display_lid_power_button_critical_battery_changed": false
+  },
+  "windows_cleanup": {
+    "verified_utc": "2026-09-12T17:10:17.2068179Z",
+    "temporary_tasks_removed": true,
+    "temporary_folders_removed": true,
+    "removed_task_names": [
+      "LocalSR-Remote-Access-Check-20260912",
+      "LocalSR-Remote-UAC-Check-20260912",
+      "LocalSR-Remote-DxDiag-Check-20260912"
+    ]
+  },
+  "mac_cleanup": {
+    "verified_utc": "2026-09-12T17:12:02.405591+00:00",
+    "temporary_scripts_screenshots_and_duplicate_venv_removed": true,
+    "temporary_ssh_tunnels_remaining": 0,
+    "persistent_desktop_client_retained": true
+  }
+}

@@ -51,9 +51,16 @@ execute a Windows DirectML driver or establish Intel GPU model quality.
 Verification completed locally: **597 Python tests passed, 3 skipped; 49 focused
 frontend tests passed** (`App.test.ts` and `VideoMemory.test.ts`). Svelte checks
 reported zero errors/warnings. Python lint/format checks and website validation
-passed. No Windows or Linux machine was changed during this task.
+passed. These code checks did not modify a Windows or Linux machine. The later
+native-device setup is recorded below.
 
 **Actual Intel GPU acceptance still to record**
+
+A native Windows 11 Home laptop with Intel UHD 620 is now available for the
+next test stage. SSH and desktop input/UAC access passed LAN checks; Tailscale
+login is pending. The installed Intel driver is `24.20.100.6286` from 2018,
+with DirectX DDI 12 / WDDM 2.4. This is hardware/access evidence, not a DirectML
+inference pass. See the [device record](windows-intel-test-host.md).
 
 Use an isolated Windows installation of the DirectML candidate. Record the app
 and engine versions/hashes, Windows version, Intel GPU model and driver. Check
