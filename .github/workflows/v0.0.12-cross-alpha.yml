@@ -150,7 +150,7 @@ jobs:
           ROOT=$(python3 scripts/release_scratch.py start --root "$LOCALSR_LINUX_SCRATCH" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor v0.0.12-alpha-${{ matrix.id }})
-          mkdir -p "$PIP_CACHE_DIR" "$ROOT/source"
+          mkdir -p "$PIP_CACHE_DIR" "$ROOT/source" "$ROOT/tmp"
           python3 scripts/storage_preflight.py \
             --ssd-path / --ssd-min-percent 15 --ssd-min-gib 6 --ssd-peak-gib 8 \
             --hdd-path "$LOCALSR_LINUX_SCRATCH" --hdd-peak-gib "${{ matrix.scratch_peak_gib }}"

@@ -22,8 +22,8 @@ PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
 @contextmanager
-def temporary_directory(prefix: str) -> Iterator[str]:
-    path = tempfile.mkdtemp(prefix=prefix)
+def temporary_directory(prefix: str, dir: Path | str | None = None) -> Iterator[str]:
+    path = tempfile.mkdtemp(prefix=prefix, dir=dir)
     try:
         yield path
     finally:
@@ -227,10 +227,14 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
 def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
     artifact.chmod(artifact.stat().st_mode | 0o111)
     env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
+    appimage_tmp_parent = Path(env.get("TMPDIR") or tempfile.gettempdir())
+    appimage_tmp_parent.mkdir(parents=True, exist_ok=True)
     # Keep AppImage runtime extraction isolated from the job-wide scratch TMPDIR.
     # Large backend AppImages can otherwise trip over stale/colliding runtime
     # extraction state left by a previous launch attempt on the same runner.
-    with temporary_directory(prefix="localsr-appimage-runtime-") as appimage_tmp:
+    with temporary_directory(
+        prefix="localsr-appimage-runtime-", dir=appimage_tmp_parent
+    ) as appimage_tmp:
         env["TMPDIR"] = appimage_tmp
         # Self-hosted Linux runners may not provide a functional GTK/Wayland
         # session even under Xvfb. Exercise the actual AppImage host, its
@@ -239,7 +243,9 @@ def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: floa
     # APPIMAGE_EXTRACT_AND_RUN removes its temporary tree when the host exits.
     # Extract an owned copy so the identity probe exercises that exact payload.
     if env.get("LOCALSR_SMOKE_BACKEND"):
-        with tempfile.TemporaryDirectory(prefix="localsr-backend-appimage-") as temporary:
+        with tempfile.TemporaryDirectory(
+            prefix="localsr-backend-appimage-", dir=appimage_tmp_parent
+        ) as temporary:
             subprocess.run(
                 [str(artifact), "--appimage-extract"],
                 cwd=temporary,
