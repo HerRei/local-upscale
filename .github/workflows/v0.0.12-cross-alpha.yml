@@ -72,6 +72,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mountpoint -q /mnt/hdd
+          python3 scripts/release_scratch.py init --root /mnt/hdd/ci-scratch
+          python3 scripts/release_scratch.py cleanup --root /mnt/hdd/ci-scratch --force --include-unretained --include-legacy-runs --include-orphaned-runs
           python3 scripts/release_runner_preflight.py \
             --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /mnt/hdd \
             --scratch-min-free-gib 200 --require-tool python3 --require-tool curl --require-tool git
