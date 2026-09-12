@@ -125,3 +125,47 @@ This is bounded functional acceptance. It does **not** certify a full four-minut
 4K export, SeedVR2 restoration quality or seam-free output, Windows GPU drivers,
 HDR display quality, signed installation/update/uninstall, or beta readiness.
 The [readiness register](../ci/beta-readiness.json) still governs those gates.
+
+
+## Local cancellation, licensing and updater follow-up — 12 September
+
+The follow-up remains in the isolated preview checkout; nothing was published and
+no `.12` release job or current-Mac GUI was changed.
+
+- Full Python suite: **568 passed, 3 skipped**. Frontend: **83 passed**, with
+  Svelte checks clean. Linux native host: **58 passed**, Clippy clean with
+  warnings denied. The frozen worker passed all six real acceptance cases on
+  both CPU and ROCm.
+- Real SeedVR2 FP8 on the 480p five-minute input, requesting 1920-pixel output:
+  cancellation during encoding with memory reduction **off** and previews
+  **off** completed in **0.26 seconds**. The same worker then completed a real
+  SPAN inference. This checks cancellation, not completion of that large export.
+- A deliberately unresponsive worker tested the installed native host fallback:
+  cancellation completed in **8.31 seconds**, the old process exited, a new worker
+  started, its partial file disappeared and an existing finished export survived.
+  Processing model controls stayed disabled until cancellation completed.
+- Both RealPLKSR photo/anime checkpoints were downloaded through two separate
+  native UI acknowledgement steps. Buttons were disabled before each acknowledgement;
+  both files matched their catalog SHA-256. Both then completed actual ROCm
+  inference from 32×32 to 128×128 and remain installed on DDP. Their commercial
+  rights remain unverified; the reminder remains visible when installed.
+- A loopback-only signed updater fixture upgraded **0.0.13-beta.1 → beta.2**,
+  using a disposable test identity and profile. The application restarted through
+  systemd, its binary matched the new artifact, and recipes, nondefault settings,
+  queue entries and the model checksum survived. The unchanged engine was reused.
+- A correctly signed beta.3 fixture with a broken startup was rejected after the
+  startup check. The beta.2 executable was restored and the worker restarted;
+  profile and model checks still passed. A CUDA contract offered to this ROCm
+  installation was rejected before download, and the check button recovered.
+- Unit regressions additionally cover corrupt signatures despite recomputed
+  checksums, interrupted/cancelled downloads, low disk space, unreadable settings,
+  WAL-aware backups and incompatible channels/protocols/engine IDs.
+- The locally edited website passed link/release validation and **70 tests**
+  (6 comparison, 30 site, 34 interaction assertions). No deployment was performed.
+
+The current preview deliberately has no production update key or enabled feed.
+Actual signed macOS/Windows upgrades, Windows split-engine upgrades and native
+AppImage updates remain release-candidate acceptance work. The Linux test used
+an unchanged engine; a complete production engine replacement still needs target
+package acceptance. These local results do not close the beta readiness gates.
+See [local updater setup](local-updates.md) and the [beta checklist](beta-release-checklist.md).

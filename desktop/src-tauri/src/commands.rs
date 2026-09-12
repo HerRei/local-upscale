@@ -68,6 +68,9 @@ pub fn add_media(
     paths: Vec<String>,
     replace: bool,
 ) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     if paths.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation(
             "too many media files were selected".into(),
@@ -112,6 +115,9 @@ pub fn add_media(
 
 #[tauri::command]
 pub fn select_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     lock(&state.database)?.select_media(&id)?;
     emit_state_changed(&app);
     Ok(())
@@ -119,6 +125,9 @@ pub fn select_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
 
 #[tauri::command]
 pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     ensure_queue_idle(&state)?;
     lock(&state.database)?.remove_media(&id)?;
     emit_state_changed(&app);
@@ -127,6 +136,9 @@ pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
 
 #[tauri::command]
 pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     ensure_queue_idle(&state)?;
     lock(&state.database)?.clear_media()?;
     clear_completed_result(&state)?;
@@ -136,6 +148,14 @@ pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
 
 #[tauri::command]
 pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Err(AppError::Validation(
+            "Finish or cancel the current queue before changing settings.".into(),
+        ));
+    }
     validate_settings(&settings)?;
     *lock(&state.settings)? = settings;
     state.persist_settings()
@@ -147,6 +167,9 @@ pub fn save_recipe(
     app: AppHandle,
     mut recipe: Recipe,
 ) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     recipe.name = recipe.name.trim().chars().take(60).collect();
     if recipe.name.is_empty() || !matches!(recipe.task.as_str(), "upscale" | "denoise" | "video") {
         return Err(AppError::Validation(
@@ -250,6 +273,9 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
 
 #[tauri::command]
 pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     lock(&state.recipes)?.retain(|recipe| recipe.id != id);
     state.persist_settings()?;
     native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
@@ -267,6 +293,21 @@ pub fn start_jobs(
     app: AppHandle,
     input: StartBatchInput,
 ) -> AppResult<()> {
+    if state
+        .updates
+        .installing
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(AppError::Validation("An update is being installed".into()));
+    }
+    let _scheduler = lock(&state.scheduler)?;
+    if state
+        .updates
+        .installing
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(AppError::Validation("An update is being installed".into()));
+    }
     validate_start_input(&input)?;
 
     // Do not hash the complete model library on the UI command path. A
@@ -361,21 +402,24 @@ pub fn start_jobs(
     for (id, media_id, request) in jobs {
         lock(&state.database)?.insert_job(&id, &media_id, &request)?;
     }
-    worker::dispatch_next(&state, &app)?;
+    worker::dispatch_next_locked(&state, &app)?;
     emit_state_changed(&app);
     Ok(())
 }
 
 #[tauri::command]
 pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let mut cancellation = lock(&state.worker.cancellation)?;
     lock(&state.database)?.cancel_queued_jobs()?;
     let active = lock(&state.runtime)?.active_job_id.clone();
     if !active.is_empty() {
+        cancellation.request(&active, std::time::Instant::now());
         lock(&state.database)?.set_job_status(&active, "cancelling")?;
         {
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = "Cancelling".into();
-            runtime.status_detail = "The worker will stop at a safe boundary.".into();
+            runtime.status_detail = "Stopping at the next model step. A stalled video engine will restart automatically.".into();
         }
         worker::send(
             &state,
@@ -392,6 +436,15 @@ pub fn start_benchmark(
     app: AppHandle,
     input: StartBenchmarkInput,
 ) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    if state
+        .updates
+        .installing
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(AppError::Validation("An update is being installed".into()));
+    }
+
     ensure_queue_idle(&state)?;
     if lock(&state.runtime)?.worker != "ready" {
         return Err(AppError::Validation(
@@ -676,6 +729,9 @@ pub fn import_catalog_model(
     source_path: String,
     accepted_terms: bool,
 ) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
     let (filename, size_bytes, sha256, terms_required) = {
         let catalog = lock(&state.catalog)?;
         let model = catalog
@@ -1907,4 +1963,26 @@ mod tests {
         assert!(import_verified_catalog_file(&source, &destination, 18, &digest).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"conflicting bytes");
     }
+}
+
+#[tauri::command]
+pub fn open_model_license(state: State<'_, Arc<AppState>>, model_id: String) -> AppResult<()> {
+    let catalog = lock(&state.catalog)?;
+    let model = catalog
+        .models
+        .iter()
+        .find(|model| model.model_id == model_id)
+        .ok_or_else(|| AppError::Validation("Unknown model".into()))?;
+    let url = if model.license_url.is_empty() {
+        &model.source_url
+    } else {
+        &model.license_url
+    };
+    if !url.starts_with("https://") {
+        return Err(AppError::Validation(
+            "No HTTPS license link is available".into(),
+        ));
+    }
+    open::that(url)?;
+    Ok(())
 }

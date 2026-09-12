@@ -145,3 +145,22 @@ export async function listenForLaunchIntent(handler: () => void): Promise<Unlist
   if (!isTauri()) return () => {};
   return listen('launch-intent-available', handler);
 }
+
+export async function openModelLicense(modelId: string): Promise<void> {
+  if (isTauri()) await invoke('open_model_license', { modelId });
+}
+
+export interface UpdateStatus {
+  configured: boolean; channel: string; target: string; stage: string;
+  version: string; notes: string; size: number; downloaded: number;
+  message: string; settings_recovery: boolean;
+}
+export const updateStatus = (): Promise<UpdateStatus> => invoke('update_status');
+export const checkUpdate = (channel: string): Promise<UpdateStatus> => invoke('check_update', { channel });
+export const downloadUpdate = (): Promise<void> => invoke('download_update');
+export const installUpdate = (): Promise<void> => invoke('install_update');
+export const cancelUpdate = (): Promise<void> => invoke('cancel_update');
+export const discardUpdate = (): Promise<void> => invoke('discard_update');
+export const recoverUpdateSettings = (): Promise<void> => invoke('recover_update_settings');
+export const listenForUpdates = (callback: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
+  listen<UpdateStatus>('update-status', event => callback(event.payload));

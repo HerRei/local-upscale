@@ -73,7 +73,7 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
         .map_err(|error| invalid(error.to_string()))?;
     if manifest.schema_version != 1
         || manifest.format != "tar.gz.parts"
-        || manifest.backend != "CUDA"
+        || !matches!(manifest.backend.as_str(), "CUDA" | "ROCM" | "CPU" | "MPS")
         || manifest.parts.is_empty()
         || manifest.parts.len() > 64
         || manifest.file_count == 0
@@ -90,7 +90,9 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
         return Err(invalid("engine destination must be an engine directory"));
     }
     if fs2::available_space(parent)? < manifest.unpacked_bytes + 16 * 1024 * 1024 {
-        return Err(invalid("not enough free space to install the CUDA engine"));
+        return Err(invalid(
+            "not enough free space to install the inference engine",
+        ));
     }
     let mut names = HashSet::new();
     let mut files = Vec::new();
@@ -183,7 +185,8 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
         }
         if count != manifest.file_count
             || bytes != manifest.unpacked_bytes
-            || !staging.join("localsr-worker.exe").is_file()
+            || !(staging.join("localsr-worker.exe").is_file()
+                || staging.join("localsr-worker").is_file())
         {
             return Err(invalid("engine archive is incomplete"));
         }

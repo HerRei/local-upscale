@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    error::AppResult,
+    error::{AppError, AppResult},
     paths::AppPaths,
     types::{BenchmarkResult, Recipe, UiSettings},
 };
@@ -35,7 +35,8 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
 
 fn read_document(path: &Path) -> Option<SettingsDocument> {
     let contents = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&contents).ok()
+    let document: SettingsDocument = serde_json::from_str(&contents).ok()?;
+    (document.schema_version == 1).then_some(document)
 }
 
 fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
@@ -85,6 +86,10 @@ fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
 }
 
 pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppResult<()> {
+    // Never overwrite an unreadable or future-version document with defaults.
+    if paths.settings.exists() && read_document(&paths.settings).is_none() {
+        return Err(AppError::Config("Settings need recovery. The original file has been preserved; use Update LocalSR → Recover settings before saving changes.".into()));
+    }
     fs::create_dir_all(&paths.next_root)?;
     let document = SettingsDocument {
         schema_version: 1,
@@ -95,6 +100,21 @@ pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppR
     let temporary = paths.settings.with_extension("json.tmp");
     fs::write(&temporary, bytes)?;
     replace_settings_file(&temporary, &paths.settings)?;
+    Ok(())
+}
+
+pub fn needs_recovery(paths: &AppPaths) -> bool {
+    paths.settings.exists() && read_document(&paths.settings).is_none()
+}
+
+pub fn recover_defaults(paths: &AppPaths) -> AppResult<()> {
+    if !needs_recovery(paths) {
+        return Ok(());
+    }
+    let backup = paths
+        .next_root
+        .join(format!("settings.recovery-{}.json", uuid::Uuid::new_v4()));
+    fs::rename(&paths.settings, backup)?;
     Ok(())
 }
 
@@ -183,5 +203,33 @@ mod tests {
         assert!(recipe.custom_model_path.is_empty());
         assert_eq!(recipe.preserve_metadata, None);
         assert_eq!(recipe.video_crf, None);
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn unreadable_settings_are_preserved_until_explicit_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(&paths.settings, b"{broken recipes").unwrap();
+        let (settings, recipes) = load(&paths);
+        assert!(save(&paths, &settings, &recipes).is_err());
+        assert_eq!(fs::read(&paths.settings).unwrap(), b"{broken recipes");
+        recover_defaults(&paths).unwrap();
+        save(&paths, &settings, &recipes).unwrap();
+        let copies: Vec<_> = fs::read_dir(&paths.next_root)
+            .unwrap()
+            .flatten()
+            .filter(|p| {
+                p.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.recovery-")
+            })
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(fs::read(copies[0].path()).unwrap(), b"{broken recipes");
     }
 }

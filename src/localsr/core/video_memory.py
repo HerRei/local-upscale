@@ -20,7 +20,8 @@ class SeedMemoryPlan:
 
 def seed_memory_plan(device: str, low_memory: bool) -> SeedMemoryPlan:
     separate_gpu = device.startswith("cuda")  # Also PyTorch's ROCm device API.
-    shared_gpu = device.startswith("mps")
+    shared_gpu = device.startswith("mps") or device == "cpu"
+    low_memory = low_memory and separate_gpu
     return SeedMemoryPlan(
         low_memory=low_memory,
         clip_frames=5 if low_memory or shared_gpu else 9,
@@ -74,7 +75,7 @@ class VideoMemoryMonitor:
         self.latest = VideoMemoryStatus(
             job_id=job_id,
             device=device,
-            low_memory=low_memory,
+            low_memory=plan.low_memory,
             stage="loading_model",
             clip_frames=plan.clip_frames,
             vae_tile_size=plan.vae_tile_size,
@@ -151,9 +152,13 @@ class VideoMemoryMonitor:
                 else ""
             )
             recovery = (
-                "Enable Reduce GPU memory (CPU block/tensor offload and smaller VAE tiles). "
-                if not info.low_memory
-                else "Memory saving is already enabled. "
+                "Apple GPU memory management is already active. "
+                if info.device.startswith("mps")
+                else (
+                    "Enable Reduce GPU memory (CPU block/tensor offload and smaller VAE tiles). "
+                    if not info.low_memory and info.device.startswith("cuda")
+                    else "Memory saving is already enabled. "
+                )
             )
             return (
                 f"SeedVR2 ran out of memory during {stage}: "

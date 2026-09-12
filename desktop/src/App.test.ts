@@ -42,6 +42,9 @@ const api = vi.hoisted(() => ({
   importCatalogModel: vi.fn(async () => undefined),
   saveRecipe: vi.fn(async () => undefined),
   deleteRecipe: vi.fn(async () => undefined),
+  updateStatus: vi.fn(async () => ({ configured:false,channel:'beta',target:'',stage:'idle',version:'',notes:'',size:0,downloaded:0,message:'',settings_recovery:false })),
+  listenForUpdates: vi.fn(async () => () => {}),
+  openModelLicense: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
@@ -541,6 +544,8 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([media]);
     Object.assign(snapshot.settings, { task: 'video', selected_model_id: 'hat_s_x4',
       selected_video_model_id: 'frame_by_frame', video_hdr_mode: 'preserve' });
+    snapshot.settings.device_id = 'cuda:0';
+    snapshot.capabilities.devices[0] = { ...snapshot.capabilities.devices[0], id: 'cuda:0', type: 'rocm', name: 'AMD GPU' };
     const user = await mountWith(snapshot);
     const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
     expect(hdr.value).toBe('preserve');
@@ -646,37 +651,17 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
-  it('queues a video with its own settings while an image job is running', async () => {
-    const activeImage = image('active-image');
-    const nextVideo = video('next-video', true);
-    const snapshot = readySnapshot([activeImage, nextVideo]);
+  it('keeps processing settings locked while another media item is selected', async () => {
+    const snapshot = readySnapshot([image('active-image'), video('next-video', true)]);
+    snapshot.settings.task = 'upscale';
     snapshot.runtime.active_job_id = 'image-job';
-    snapshot.runtime.status_title = 'Enhancing';
-    snapshot.jobs = [
-      {
-        id: 'image-job',
-        media_id: activeImage.id,
-        media_name: activeImage.name,
-        media_kind: 'image',
-        status: 'running',
-        progress: 20,
-        output_path: '',
-        error: '',
-        created_at: 1
-      }
-    ];
-
     const user = await mountWith(snapshot);
-    const addMedia = screen.getByRole('button', { name: '＋ Add Media' });
-    expect((addMedia as HTMLButtonElement).disabled).toBe(false);
-    const queue = await screen.findByRole('button', { name: 'Add selected to queue' });
-    expect((queue as HTMLButtonElement).disabled).toBe(false);
-    await user.click(queue);
-
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['next-video'], task: 'video' })
-    );
+    expect(screen.getByRole('group', { name: 'Processing settings' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: '＋ Add Media' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(true);
+    await user.click(screen.getByRole('button', { name: /BestMaximum quality/ }));
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(api.startJobs).not.toHaveBeenCalled();
   });
 
   it('disables media-incompatible task cards', async () => {
@@ -909,61 +894,26 @@ describe('LocalSR desktop interface', () => {
     expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('appends a differently configured video behind a running image job', async () => {
-    const current = readySnapshot([image('photo', true), video('clip')]);
-    current.settings.task = 'upscale';
-    current.runtime.active_job_id = 'running-image';
-    current.runtime.status_title = 'Enhancing';
-    current.jobs = [
-      {
-        id: 'running-image',
-        media_id: 'photo',
-        media_name: 'photo.png',
-        media_kind: 'image',
-        status: 'running',
-        progress: 25,
-        output_path: '',
-        error: '',
-        created_at: 1
-      }
-    ];
+  it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {
+    const current = readySnapshot([video('clip', true)]);
+    current.settings.task = 'video';
+    current.runtime.active_job_id = 'running-video';
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
-    api.selectMedia.mockImplementation(async (id: string) => {
-      current.media.forEach((item) => (item.selected = item.id === id));
-    });
-    api.saveSettings.mockImplementation(async (settings: UiSettings) => {
-      current.settings = structuredClone(settings);
-    });
-
+    api.cancelJobs.mockImplementation(async () => { current.runtime.status_title = 'Cancelling'; });
     render(App);
-    await screen.findByText(/The isolated inference engine is ready/i);
     const user = userEvent.setup();
-
-    expect(
-      (screen.getByRole('button', { name: 'Add selected to queue' }) as HTMLButtonElement).disabled
-    ).toBe(true);
-    await user.click(screen.getByRole('button', { name: /^▶ clip\.mp4/i }));
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', {
-          name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i
-        }) as HTMLButtonElement).disabled
-      ).toBe(false)
-    );
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
-    const append = screen.getByRole('button', { name: 'Add selected to queue' }) as HTMLButtonElement;
-    await waitFor(() => expect(append.disabled).toBe(false));
-    await user.click(append);
-
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        media_ids: ['clip'],
-        task: 'video',
-        video_model_id: 'seedvr2_3b'
-      })
-    );
+    const cancel = await screen.findByRole('button', { name: 'Cancel queue' });
+    await user.click(cancel);
+    expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
+    expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Run Benchmark' }).matches(':disabled')).toBe(false);
+    current.runtime.active_job_id = '';
+    current.runtime.status_title = 'Cancelled';
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false));
+    expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });
 
   it('appends from the main Add Media action even in single mode', async () => {

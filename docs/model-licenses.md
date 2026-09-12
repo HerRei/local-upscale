@@ -87,5 +87,8 @@ trusted auto-download catalog. This avoids presenting source-code licensing as i
 checkpoint rights.
 
 The Best/anime release pages still use the nonstandard identifier `CC-BY-0.4`; those entries remain
-Labs, require terms acknowledgement and manual upstream acquisition until the publisher clarifies
-the intended license.
+Labs with unverified commercial permission. The desktop preview allows a direct publisher download
+after two separate acknowledgements: read the ambiguous terms, then restrict use to personal,
+non-commercial research until rights are clarified. A reminder appears whenever either checkpoint
+is selected; stock HAT-S (Apache-2.0) is offered as the alternative. The download does not resolve
+license ambiguity or authorize redistribution. Face checkpoints still require verified manual import.

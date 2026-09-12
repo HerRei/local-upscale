@@ -61,8 +61,8 @@
   {/if}
 
   <div class="media-actions">
-    <button class="button" disabled={benchmarkRunning} on:click={() => addFiles(false)}>{items.length ? 'Add More…' : 'Choose…'}</button>
-    <button class="button" disabled={benchmarkRunning} on:click={addFolder}>Add Folder…</button>
+    <button class="button" disabled={benchmarkRunning || Boolean(activeJobId)} on:click={() => addFiles(false)}>{items.length ? 'Add More…' : 'Choose…'}</button>
+    <button class="button" disabled={benchmarkRunning || Boolean(activeJobId)} on:click={addFolder}>Add Folder…</button>
     {#if items.length}<button class="button danger ghost" disabled={Boolean(activeJobId)} on:click={clearMedia}>Clear</button>{/if}
   </div>
 </aside>

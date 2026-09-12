@@ -73,6 +73,11 @@ pub fn run() -> i32 {
 }
 
 fn packaged_worker_path() -> Result<PathBuf, String> {
+    if let Ok(paths) = crate::paths::AppPaths::discover() {
+        if let Some(path) = crate::updates::active_engine(&paths) {
+            return Ok(path);
+        }
+    }
     let executable = env::current_exe()
         .map_err(|error| format!("could not locate the installed desktop host: {error}"))?;
     let worker_name = if cfg!(windows) {
@@ -137,7 +142,7 @@ fn worker_candidates(executable: &Path, worker_name: &str, appdir: Option<&Path>
     candidates
 }
 
-fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<EngineInfo, String> {
+pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<EngineInfo, String> {
     let mut command = Command::new(path);
     #[cfg(windows)]
     {

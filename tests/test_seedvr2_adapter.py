@@ -47,7 +47,7 @@ def test_each_streamed_clip_reloads_embeddings_reports_real_phases_and_releases_
     model = adapter.SeedVR2Engine.__new__(adapter.SeedVR2Engine)
     model.device = "cpu"
     model.ctx = {"dit_device": "cpu", "compute_dtype": torch.float32, "text_embeds": None}
-    model.runner, model.debug = object(), None
+    model.runner, model.debug = object(), SimpleNamespace()
     loads = []
     monkeypatch.setattr(
         adapter, "load_text_embeddings", lambda *args: loads.append(True) or {"loaded": True}
@@ -248,3 +248,24 @@ def test_rocm_large_color_matrix_matches_cpu_across_driver_boundary():
     )
     actual = _apply_color_matrix(pixels.cuda(), matrix.cuda()).cpu()
     torch.testing.assert_close(actual, pixels @ matrix.T, atol=2e-7, rtol=1e-6)
+
+
+def test_cancellation_interrupts_inside_a_clip_with_previews_disabled_and_removes_hook(monkeypatch):
+    model = adapter.SeedVR2Engine.__new__(adapter.SeedVR2Engine)
+    event = threading.Event()
+    calls = []
+
+    class Step(torch.nn.Module):
+        def forward(self, value):
+            calls.append(True)
+            event.set()
+            return value + 1
+
+    network = torch.nn.Sequential(Step(), Step(), Step())
+    monkeypatch.setattr(model, "_process_frames", lambda frames, **kwargs: network(torch.zeros(1)))
+    with pytest.raises(adapter.SeedVR2CancelledError):
+        model.process_frames([], cancel_event=event, tile_callback=None)
+    assert len(calls) == 1  # stopped before the rest of the clip, not after it
+    # The job hook is gone even after an exception. Other models still run.
+    network(torch.zeros(1))
+    assert len(calls) == 4

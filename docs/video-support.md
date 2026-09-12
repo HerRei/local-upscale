@@ -201,3 +201,9 @@ This suite is a regression and visual-inspection aid, not a perceptual quality s
 ## Release gate schema
 
 `ci/beta-readiness.json` uses schema 2. Every gate has an explicit `blocking` boolean and a `scope`. A manual pass requires an evidence reference. `standard-video-acceptance` remains blocking and pending; optional temporal and processing Labs gates are nonblocking. Signing, runtime support, licensing, public downloads, and other existing application requirements remain independent blockers.
+
+**Cancellation and memory controls in the local follow-up**
+
+Processing settings lock from Start until processing or cancellation finishes. Media selection and diagnostics remain available. SeedVR2 checks cancellation between model modules even when live previews are disabled. If a video worker does not stop within eight seconds, the host resets that worker, removes its own partial-output directory and starts a fresh worker. Existing finished exports are preserved.
+
+Reduce GPU memory is available for NVIDIA CUDA and AMD ROCm. Apple Metal and CPU use the smaller clip/tile plan automatically; Metal does not use the CUDA block-offload option. Intel backends do not expose an unimplemented offload switch. HAT’s Safe memory control remains a separate image-pipeline option.

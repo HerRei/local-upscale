@@ -181,6 +181,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             "could not start the LocalSR inference engine: {error}"
         ))
     })?;
+    state.worker.pid.store(child.id(), Ordering::SeqCst);
     let stdin = child
         .stdin
         .take()
@@ -227,8 +228,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             };
             match serde_json::from_str::<WorkerEnvelope>(&line) {
                 Ok(envelope) => {
+                    if reader_state.worker.generation.load(Ordering::SeqCst) != generation {
+                        break;
+                    }
                     if event_gate.should_forward(&envelope, Instant::now()) {
-                        handle_worker_envelope(&reader_state, &reader_app, envelope);
+                        handle_worker_envelope(&reader_state, &reader_app, envelope, generation);
                     }
                 }
                 Err(_) => {
@@ -251,15 +255,48 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     });
 
     thread::spawn(move || {
-        let status = child.wait();
+        let mut forced_job = String::new();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => break Err(error),
+                Ok(None) => {}
+            }
+            if state.worker.shutting_down.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                break child.wait();
+            }
+            if let Ok(mut cancellation) = state.worker.cancellation.lock() {
+                if cancellation.expired(Instant::now()) {
+                    // This lock also protects terminal envelopes: a completion
+                    // cannot dispatch another job while its process is killed.
+                    cancellation.resetting = true;
+                    forced_job = cancellation.job_id.clone();
+                    if let Ok(mut runtime) = state.runtime.lock() {
+                        runtime.status_title = "Cancelling".into();
+                        runtime.status_detail =
+                            "Stopping the video engine and releasing GPU memory…".into();
+                    }
+                    emit_state_changed(&app);
+                    let _ = child.kill();
+                    break child.wait();
+                }
+            }
+            thread::sleep(Duration::from_millis(100));
+        };
+        state.worker.pid.store(0, Ordering::SeqCst);
         if state.worker.generation.load(Ordering::SeqCst) != generation
             || state.worker.shutting_down.load(Ordering::SeqCst)
         {
             return;
         }
+        state.worker.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut sender) = state.worker.sender.lock() {
             *sender = None;
         }
+        let cleanup_error = lock(&state.worker.cancellation)
+            .and_then(|mut cancellation| cancellation.finish())
+            .err();
         if let Ok(mut runtime) = state.runtime.lock() {
             let active = std::mem::take(&mut runtime.active_job_id);
             let last_confirmed_stage = runtime.status_title.clone();
@@ -271,17 +308,42 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             };
             let interruption = worker_interruption_detail(&exit_summary, &last_confirmed_stage);
             runtime.worker = "unavailable".into();
-            runtime.status_title = "Engine stopped".into();
-            runtime.status_detail = format!("{interruption} Restarting…");
+            runtime.status_title = if forced_job.is_empty() {
+                "Engine stopped"
+            } else {
+                "Cancelled"
+            }
+            .into();
+            runtime.status_detail = if forced_job.is_empty() {
+                format!("{interruption} Restarting…")
+            } else if let Some(error) = cleanup_error {
+                format!("Video stopped. Could not remove its temporary directory: {error}. Restarting engine…")
+            } else {
+                "Video stopped; temporary output removed. Restarting engine…".into()
+            };
+            runtime.estimated_remaining_seconds = 0.0;
             if !active.is_empty() {
                 if let Ok(database) = state.database.lock() {
-                    let _ = database.interrupt_active_job(&active, &interruption);
+                    if active == forced_job {
+                        let _ = database.finish_job(
+                            &active,
+                            "cancelled",
+                            "",
+                            "Cancelled by the user; video engine restarted.",
+                        );
+                    } else {
+                        let _ = database.interrupt_active_job(&active, &interruption);
+                    }
                 }
             }
         }
         emit_state_changed(&app);
 
-        let attempt = state.worker.restart_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let attempt = if forced_job.is_empty() {
+            state.worker.restart_count.fetch_add(1, Ordering::SeqCst) + 1
+        } else {
+            1
+        };
         if attempt <= 3 {
             thread::sleep(Duration::from_secs(u64::from(attempt)));
             if let Err(error) = start_worker(state.clone(), app.clone()) {
@@ -312,6 +374,10 @@ pub fn send(state: &AppState, message: &Value) -> AppResult<()> {
 
 pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    dispatch_next_locked(state, app)
+}
+
+pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Ok(());
     }
@@ -319,7 +385,11 @@ pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     let Some(pending) = pending else {
         return Ok(());
     };
-    let message: Value = serde_json::from_str(&pending.request_json)?;
+    let mut message: Value = serde_json::from_str(&pending.request_json)?;
+    if lock(&state.runtime)?.worker != "ready" {
+        return Ok(());
+    }
+    lock(&state.worker.cancellation)?.prepare(&pending.id, &mut message)?;
     {
         let mut runtime = lock(&state.runtime)?;
         if runtime.worker != "ready" {
@@ -333,6 +403,7 @@ pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     }
     lock(&state.database)?.set_job_status(&pending.id, "starting")?;
     if let Err(error) = send(state, &message) {
+        lock(&state.worker.cancellation)?.finish()?;
         lock(&state.database)?.finish_job(&pending.id, "failed", "", &error.to_string())?;
         lock(&state.runtime)?.active_job_id.clear();
         return Err(error);
@@ -349,8 +420,42 @@ pub fn shutdown(state: &AppState) {
     }
 }
 
-fn handle_worker_envelope(state: &Arc<AppState>, app: &AppHandle, envelope: WorkerEnvelope) {
+fn handle_worker_envelope(
+    state: &Arc<AppState>,
+    app: &AppHandle,
+    envelope: WorkerEnvelope,
+    generation: u64,
+) {
+    let Ok(mut cancellation) = state.worker.cancellation.lock() else {
+        return;
+    };
+    if cancellation.resetting || state.worker.generation.load(Ordering::SeqCst) != generation {
+        return;
+    }
+    let job_id = string(&envelope.data, "job_id");
+    let terminal = matches!(
+        envelope.message_type.as_str(),
+        "job_completed" | "video_job_completed" | "job_cancelled" | "job_failed"
+    );
+    // Once cancelling, late progress must not restore "Enhancing" or enable
+    // controls. Measurements may still update while the GPU drains.
+    if cancellation.requested_at.is_some()
+        && job_id == cancellation.job_id
+        && !terminal
+        && envelope.message_type != "video_memory"
+    {
+        return;
+    }
     let result = apply_worker_envelope(state, &envelope);
+    if terminal && job_id == cancellation.job_id {
+        if let Err(error) = cancellation.finish() {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_detail =
+                    format!("Work stopped. Temporary output cleanup failed: {error}");
+            }
+        }
+    }
+    drop(cancellation);
     if let Err(error) = result {
         set_worker_failure(state, app, error.to_string());
         return;
@@ -902,7 +1007,19 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
     Ok(())
 }
 
+pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(resolve_worker_command(state, app)?.program)
+}
+
 fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
+    if let Some(path) = crate::updates::active_engine(&_state.paths) {
+        return Ok(WorkerCommand {
+            program: path,
+            arguments: Vec::new(),
+            working_directory: None,
+            python_path: None,
+        });
+    }
     #[cfg(debug_assertions)]
     {
         if let Some(path) = env::var_os("LOCALSR_WORKER") {

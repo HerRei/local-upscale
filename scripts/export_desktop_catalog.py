@@ -62,6 +62,13 @@ def build_manifest() -> dict:
         entry["quality_tier"] = int(model.quality_tier)
         entry["speed_tier"] = int(model.speed_tier)
         entry.update(_license_policy(model.license_name, model.commercial_use_status))
+        # Explicit opt-in downloads from the publisher for these two public
+        # checkpoints. Their ambiguous license and commercial status stay
+        # unresolved; the UI requires two acknowledgements before downloading.
+        if model.model_id in {"realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"}:
+            entry["automated_download_allowed"] = True
+            tag = model.download_url.split("/download/", 1)[1].split("/", 1)[0]
+            entry["license_url"] = f"https://github.com/Phhofm/models/releases/tag/{tag}"
         entry["engine_id"] = "localsr.pytorch-spandrel"
         entry["support_tier"] = "labs" if model.commercial_use_status != "allowed" else "supported"
         models.append(entry)

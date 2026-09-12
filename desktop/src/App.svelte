@@ -4,6 +4,8 @@
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
   import VideoMemory from './VideoMemory.svelte';
+  import LicenseDownload from './LicenseDownload.svelte';
+  import UpdatePanel from './UpdatePanel.svelte';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import {
@@ -62,6 +64,11 @@
   let handlingLaunchIntents = false;
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
   let livePreviewWarning = '';
+  let startingJob = false;
+  let requestingCancel = false;
+  $: settingsLocked = startingJob || Boolean(snapshot.runtime.active_job_id);
+  $: cancelling = requestingCancel || snapshot.runtime.status_title === 'Cancelling' ||
+    snapshot.jobs.some(job => job.id === snapshot.runtime.active_job_id && job.status === 'cancelling');
 
   $: settings = snapshot.settings;
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
@@ -87,6 +94,7 @@
   $: preservingHdr = settings.task === 'video' && settings.video_hdr_mode === 'preserve' && Boolean(selectedMedia?.hdr_format);
   $: hdrPreservationAvailable = supportsHdrPreservation(settings);
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
+  $: licenseReviewModel = !usingTemporalVideo && selectedModel && ['realplksr_hfa2k_anime_x4', 'realplksr_nomoswebphoto_x4'].includes(selectedModel.model_id) ? selectedModel : undefined;
   $: activeDownload = snapshot.runtime.download_model_id;
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkModel = snapshot.catalog.models.find(model => model.model_id === 'span_photo_x4');
@@ -139,6 +147,7 @@
       ? [selectedMedia]
       : [];
   $: canQueue =
+    !startingJob && !cancelling &&
     snapshot.runtime.worker === 'ready' &&
     Boolean(settings.task) &&
     queueSelection.length > 0 &&
@@ -266,6 +275,7 @@
   }
 
   function handleWorkerMessage(message: WorkerEnvelope): void {
+    if (cancelling && ['progress','video_tile_progress','video_stage_progress','video_frame_started','video_frame_completed','benchmark_progress','tile_update','live_preview_frame'].includes(message.type)) return;
     if (message.type === 'benchmark_started') { benchmarkRenders = []; benchmarkTile = undefined; }
     if (message.type === 'benchmark_tile') {
       if (String(message.data.job_id ?? '') === snapshot.runtime.active_job_id) benchmarkTile = message;
@@ -401,6 +411,7 @@
   }
 
   function updateSettings(patch: Partial<UiSettings>): void {
+    if (settingsLocked) return;
     const next = { ...snapshot.settings, ...patch };
     // Apply the model/output contract for selectors, saved recipes and launch presets.
     if (next.task === 'video' && next.video_hdr_mode === 'preserve') {
@@ -598,11 +609,28 @@
       enable_live_preview: settings.enable_live_preview,
       allow_unsafe_pickle_model: settings.allow_unsafe_pickle_model
     };
+    startingJob = true;
     try {
       await api.startJobs(input);
       await refresh();
     } catch (error) {
       showModal('Could not start', String(error));
+    } finally {
+      startingJob = false;
+    }
+  }
+
+  async function cancelWork(): Promise<void> {
+    if (cancelling) return;
+    requestingCancel = true;
+    discardRuntimePulse();
+    try {
+      await api.cancelJobs();
+      await refresh();
+    } catch (error) {
+      showModal('Could not cancel', String(error));
+    } finally {
+      requestingCancel = false;
     }
   }
 
@@ -1043,7 +1071,7 @@
     <button class="brand-mark" type="button" aria-label="Performance & diagnostics" title="Performance & diagnostics" on:click={showPerformance}><i></i><i></i><i></i></button>
     <div class="toolbar-actions">
       <button class="button compact benchmark-shortcut" type="button" on:click={showPerformance}>Run Benchmark</button>
-      <button class="button primary compact add-media" disabled={benchmarkRunning} on:click={() => addFiles()}>＋ Add Media</button>
+      <button class="button primary compact add-media" disabled={settingsLocked} on:click={() => addFiles()}>＋ Add Media</button>
     </div>
   </header>
 
@@ -1079,8 +1107,10 @@
     />
 
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>
-      <div class="pane-heading"><h1>Enhance</h1><span>{settings.task ? 'Manual' : 'Choose a task'}</span></div>
+      <div class="pane-heading"><h1>Enhance</h1><span>{settingsLocked ? 'Locked during processing' : settings.task ? 'Manual' : 'Choose a task'}</span></div>
       <div bind:this={inspectorScroll} class="inspector-scroll" role="region" aria-label="Enhancement settings">
+        {#if settingsLocked}<div class="settings-lock" role="status"><strong>{cancelling ? 'Stopping your queue…' : startingJob ? 'Starting your job…' : 'Settings locked'}</strong><p>{cancelling ? 'Controls unlock when processing has stopped and temporary output is removed.' : 'Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.'}</p></div>{/if}
+        <fieldset class="processing-settings" disabled={settingsLocked} aria-label="Processing settings">
         <section class="control-section">
           <span class="eyebrow">TASK</span>
           <div class="task-grid">
@@ -1168,15 +1198,18 @@
                 <span>{currentDownloadTarget.license_name}</span>
                 <span>{currentDownloadTarget.commercial_use_allowed === false ? 'Non-commercial only' : currentDownloadTarget.commercial_use_allowed === null ? 'Commercial terms unclear' : currentDownloadTarget.author}</span>
               </div>
-              {#if currentDownloadTarget.terms_acceptance_required && !currentDownloadTarget.installed}
+              {#if licenseReviewModel}
+                {#key licenseReviewModel.model_id}<LicenseDownload model={licenseReviewModel} disabled={settingsLocked || Boolean(activeDownload) && activeDownload !== licenseReviewModel.model_id} downloading={activeDownload === licenseReviewModel.model_id} download={() => runDownload(licenseReviewModel, true)} openLicense={() => api.openModelLicense(licenseReviewModel!.model_id)} chooseAlternative={() => selectPrimaryModel('hat_s_x4')} />{/key}
+              {/if}
+              {#if !licenseReviewModel && currentDownloadTarget.terms_acceptance_required && !currentDownloadTarget.installed}
                 <label class="terms"><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model license and restrictions.</label>
               {/if}
-              {#if !currentDownloadTarget.installed}
+              {#if !currentDownloadTarget.installed && !licenseReviewModel}
                 <button class="button full" class:primary={currentDownloadTarget.automated_download_allowed} disabled={Boolean(activeDownload) && activeDownload !== currentDownloadTarget.model_id} on:click={() => runDownload()}>
                   {activeDownload === currentDownloadTarget.model_id ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel` : currentDownloadTarget.automated_download_allowed ? `Download ${formatBytes('size_bytes' in currentDownloadTarget ? currentDownloadTarget.size_bytes : currentDownloadTarget.total_size_bytes)}` : 'Choose externally downloaded checkpoint…'}
                 </button>
                 {#if activeDownload === currentDownloadTarget.model_id}<div class="download-track"><i style={`width:${snapshot.runtime.download_progress}%`}></i></div>{/if}
-              {:else}
+              {:else if currentDownloadTarget.installed}
                 <div class="installed-badge">✓ Installed · integrity checked before use</div>
               {/if}
             {/if}
@@ -1293,7 +1326,8 @@
 
         {/if}
 
-        <section class="about-block"><div><b>LocalSR</b><span>{snapshot.app_version}</span></div><button on:click={showPerformance}>Performance</button><button on:click={copyDiagnostics}>Copy diagnostics</button><button on:click={showIntegrations}>System integrations</button><p>Local processing · no media uploads<br />Models retain their own licenses.</p></section>
+        </fieldset>
+        <section class="about-block"><div><b>LocalSR</b><span>{snapshot.app_version}</span></div><button on:click={showPerformance}>Performance</button><button on:click={copyDiagnostics}>Copy diagnostics</button><button on:click={showIntegrations}>System integrations</button><UpdatePanel processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)} /><p>Local processing · no media uploads<br />Models retain their own licenses.</p></section>
       </div>
     </aside>
   </main>
@@ -1306,7 +1340,7 @@
       {#if snapshot.runtime.last_output_path}<button class="button" on:click={() => api.revealResult(snapshot.runtime.last_output_path)}>Reveal</button><button class="button" on:click={() => api.openResult(snapshot.runtime.last_output_path)}>Open</button>{/if}
       {#if snapshot.runtime.active_job_id}
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}>{settings.batch_mode ? `Add ${queueSelection.length} to queue` : 'Add selected to queue'}</button>
-        <button class="button danger" on:click={() => api.cancelJobs()}>Cancel queue</button>
+        <button class="button danger" disabled={cancelling} on:click={cancelWork}>{cancelling ? 'Cancelling…' : 'Cancel queue'}</button>
       {:else}
         <button class="button primary start" disabled={!canStart} on:click={() => start()}>{settings.batch_mode ? `Start ${queueSelection.length} item${queueSelection.length === 1 ? '' : 's'}` : settings.task === 'video' ? 'Start selected video' : settings.task === 'denoise' ? 'Denoise selected' : 'Upscale selected'}</button>
       {/if}
@@ -1339,7 +1373,7 @@
             <p class="benchmark-intro">The first run downloads and verifies SPAN Quick{benchmarkModel ? ` (${formatBytes(benchmarkModel.size_bytes)})` : ''}. It is reused for CPU and GPU benchmarks.</p>
           {/if}
           <div class="benchmark-actions">
-            <button class="button primary" disabled={!benchmarkRunning && (benchmarkSetup !== 'idle' || Boolean(benchmarkStartBlockReason))} on:click={benchmarkRunning ? () => api.cancelJobs() : runBenchmark}>{benchmarkRunning ? 'Cancel Benchmark' : benchmarkSetup === 'downloading' ? `Downloading SPAN · ${Math.round(snapshot.runtime.download_progress)}%` : benchmarkSetup === 'starting' ? 'Starting benchmark…' : !benchmarkModel?.installed ? 'Download & run benchmark' : 'Run Benchmark'}</button>
+            <button class="button primary" disabled={cancelling || !benchmarkRunning && (benchmarkSetup !== 'idle' || Boolean(benchmarkStartBlockReason))} on:click={benchmarkRunning ? cancelWork : runBenchmark}>{cancelling && benchmarkRunning ? 'Cancelling…' : benchmarkRunning ? 'Cancel Benchmark' : benchmarkSetup === 'downloading' ? `Downloading SPAN · ${Math.round(snapshot.runtime.download_progress)}%` : benchmarkSetup === 'starting' ? 'Starting benchmark…' : !benchmarkModel?.installed ? 'Download & run benchmark' : 'Run Benchmark'}</button>
             {#if benchmarkSetup === 'downloading' && activeDownload === 'span_photo_x4'}<button class="button" on:click={() => api.cancelDownload('span_photo_x4')}>Cancel download</button>{/if}
             {#if snapshot.latest_benchmark}<button class="button" disabled={benchmarkRunning} on:click={copyBenchmark}>Copy JSON</button><button class="button" disabled={benchmarkRunning} on:click={exportBenchmark}>Export JSON…</button>{/if}
           </div>

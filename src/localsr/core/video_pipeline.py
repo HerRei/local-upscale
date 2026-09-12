@@ -128,6 +128,7 @@ class VideoJobConfig:
     output_scale: int | None = None
     face_fidelity: float = 0.7
     hdr_mode: str = "reject"
+    temporary_directory: str | None = None
 
 
 @dataclass
@@ -416,6 +417,7 @@ def run_video_job(
         warning_callback=warning_callback,
         sdr_bt709=bool(probe.hdr_format and config.hdr_mode == "tone_map"),
         hdr_format=probe.hdr_format if preserve_hdr else "",
+        temporary_directory=config.temporary_directory,
     )
 
     completed_at = time.perf_counter()

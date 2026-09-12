@@ -38,7 +38,7 @@ def test_oom_freezes_pre_cleanup_evidence_and_emits_independent_packets():
         device_peak_memory=13 * 2**30,
     )
     monitor = VideoMemoryMonitor(
-        "test", "cpu", False, packets.append, sampler=lambda _: measurements
+        "test", "cuda:0", False, packets.append, sampler=lambda _: measurements
     )
     monitor.configure(2160, 3840, 9)
     monitor.phase("decoding")

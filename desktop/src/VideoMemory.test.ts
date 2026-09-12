@@ -23,3 +23,12 @@ it('shows the failed stage and captured GPU evidence independently of changed se
   expect(screen.getByText(/2160 × 3840 · up to 9 frames\/clip · standard/)).toBeTruthy();
   expect(screen.getByText(/Readings captured at failure/)).toBeTruthy();
 });
+
+it.each(['mps', 'cpu', 'xpu:0', 'directml:0'])('does not offer ineffective GPU offload on %s', id => {
+  render(VideoMemory, { device: { id } as never });
+  expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
+});
+it.each(['cuda:0', 'cuda:1'])('offers the real CPU offload control on CUDA/ROCm %s', id => {
+  render(VideoMemory, { device: { id } as never });
+  expect(screen.getByRole('checkbox', { name: 'Reduce GPU memory' })).toBeTruthy();
+});

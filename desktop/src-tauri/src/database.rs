@@ -80,6 +80,14 @@ impl Database {
         Ok(database)
     }
 
+    pub fn close_for_update(&mut self) -> AppResult<()> {
+        self.connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+        let old = std::mem::replace(&mut self.connection, Connection::open_in_memory()?);
+        old.close().map_err(|(_, error)| error)?;
+        Ok(())
+    }
+
     fn interrupt_stale_jobs(&self) -> AppResult<()> {
         self.connection.execute(
             "UPDATE jobs SET status = 'interrupted', error = 'The desktop host stopped before the job finished.', updated_at = ?1 WHERE status IN ('starting', 'running', 'cancelling')",

@@ -1,3 +1,4 @@
+mod cancellation;
 mod catalog;
 mod commands;
 mod database;
@@ -14,6 +15,8 @@ mod paths;
 mod settings;
 mod state;
 mod types;
+mod update_storage;
+mod updates;
 mod worker;
 
 use std::{
@@ -63,6 +66,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| native_menu::dispatch(app, event.id().as_ref()))
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
@@ -84,8 +88,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            updates::update_status,
+            updates::check_update,
+            updates::download_update,
+            updates::install_update,
+            updates::cancel_update,
+            updates::discard_update,
+            updates::recover_update_settings,
             commands::bootstrap,
             commands::get_snapshot,
+            commands::open_model_license,
             commands::take_launch_intents,
             commands::scan_media_folder,
             commands::add_media,

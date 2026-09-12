@@ -125,7 +125,9 @@ The upstream [Best release](https://github.com/Phhofm/models/releases/tag/4xNomo
 and [anime release](https://github.com/Phhofm/models/releases/tag/4xHFA2k_ludvae_realplksr_dysample)
 spell their license `CC-BY-0.4`, which is not a standard Creative Commons identifier. LocalSR labels
 their commercial terms unclear instead of assuming the author meant CC BY 4.0. Obtain clarification
-before treating those checkpoints as commercially licensed.
+before treating those checkpoints as commercially licensed. The desktop preview provides a two-step
+publisher download acknowledgement and a reminder whenever selected, with stock HAT-S as the
+commercially documented alternative.
 
 SeedVR2 model bundles are multi-gigabyte optional Labs downloads. Their code attribution, license,
 configuration YAML, and embeddings are included in wheels, source distributions, and standalone
@@ -221,3 +223,6 @@ PyTorch, Spandrel, the retained legacy Slint host, vendored SeedVR2 code, and ex
 checkpoints retain their own licenses. Model files are not relicensed or bundled merely because the
 app offers a verified download. See [third-party notices](THIRD_PARTY_NOTICES.md) before
 redistributing a build.
+
+The local preview also includes **Update LocalSR** with signed downloads, backend/channel
+matching and profile backups. Public feeds remain disabled; see [local update setup and acceptance](docs/local-updates.md).

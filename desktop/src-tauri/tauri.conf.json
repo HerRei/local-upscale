@@ -36,16 +36,36 @@
     "targets": "all",
     "fileAssociations": [
       {
-        "ext": ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "dng"],
-        "contentTypes": ["public.image"],
+        "ext": [
+          "png",
+          "jpg",
+          "jpeg",
+          "webp",
+          "bmp",
+          "tif",
+          "tiff",
+          "dng"
+        ],
+        "contentTypes": [
+          "public.image"
+        ],
         "name": "LocalSR image input",
         "description": "Image that can be enhanced by LocalSR",
         "role": "Editor",
         "rank": "Alternate"
       },
       {
-        "ext": ["mp4", "mov", "m4v", "avi", "mkv", "webm"],
-        "contentTypes": ["public.movie"],
+        "ext": [
+          "mp4",
+          "mov",
+          "m4v",
+          "avi",
+          "mkv",
+          "webm"
+        ],
+        "contentTypes": [
+          "public.movie"
+        ],
         "name": "LocalSR video input",
         "description": "Video that can be enhanced by LocalSR Labs",
         "role": "Editor",
@@ -63,5 +83,11 @@
     "shortDescription": "Private local image and video restoration",
     "longDescription": "LocalSR enhances images and video locally with externally downloaded AI models.",
     "copyright": "Copyright 2026 Hermes Reisner"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
   }
 }

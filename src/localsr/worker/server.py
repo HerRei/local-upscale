@@ -999,10 +999,12 @@ class WorkerServer:
                     LogMessage(level="warning", message=message)
                 ),
                 sdr_bt709=bool(probe.hdr_format and data.get("hdr_mode") == "tone_map"),
+                temporary_directory=data.get("temporary_directory"),
             )
         except InterruptedError:
-            send_message(JobCancelled(job_id=job_id))
-            return
+            # Report cancellation only after the decoder, encoder and model
+            # cleanup below. The host must not start the next job too early.
+            self.cancel_event.set()
         except RuntimeError as error:
             if "out of memory" in str(error).lower():
                 memory.capture_oom()
@@ -1114,6 +1116,7 @@ class WorkerServer:
             tile_size=int(data["tile_size"]),
             halo=int(data["halo"]),
             safe_memory=bool(data.get("safe_memory", True)),
+            temporary_directory=data.get("temporary_directory"),
             container=str(data.get("container", "mp4")),
             crf=int(data.get("crf", 18)),
             start_frame=data.get("start_frame"),

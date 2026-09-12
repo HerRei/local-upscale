@@ -22,8 +22,10 @@ use crate::{
 };
 
 pub struct WorkerControl {
+    pub cancellation: Mutex<crate::cancellation::Cancellation>,
     pub sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub generation: AtomicU64,
+    pub pid: AtomicU32,
     pub restart_count: AtomicU32,
     pub shutting_down: AtomicBool,
 }
@@ -31,8 +33,10 @@ pub struct WorkerControl {
 impl Default for WorkerControl {
     fn default() -> Self {
         Self {
+            cancellation: Mutex::new(crate::cancellation::Cancellation::default()),
             sender: Mutex::new(None),
             generation: AtomicU64::new(0),
+            pid: AtomicU32::new(0),
             restart_count: AtomicU32::new(0),
             shutting_down: AtomicBool::new(false),
         }
@@ -40,6 +44,7 @@ impl Default for WorkerControl {
 }
 
 pub struct AppState {
+    pub updates: crate::updates::UpdateControl,
     #[cfg(target_os = "linux")]
     pub media_server: Mutex<Option<crate::media_server::MediaServer>>,
     pub paths: AppPaths,
@@ -63,11 +68,13 @@ impl AppState {
     }
 
     fn from_paths(paths: AppPaths) -> AppResult<Self> {
+        crate::update_storage::before_version(&paths, env!("CARGO_PKG_VERSION"))?;
         let database = Database::open(&paths.database)?;
         let catalog = load_catalog(&paths)?;
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
         Ok(Self {
+            updates: crate::updates::UpdateControl::default(),
             #[cfg(target_os = "linux")]
             media_server: Mutex::new(None),
             paths,

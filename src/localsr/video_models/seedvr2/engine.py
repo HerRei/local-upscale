@@ -159,9 +159,6 @@ class SeedVR2Engine:
     @contextmanager
     def _observe_tiles(self, callback, report):
         """Report actual VAE work, clipped to the unpadded exported frame."""
-        if callback is None:
-            yield
-            return
         previous = getattr(self.debug, "tile_callback", None)
 
         def observe(stage, phase, done, total, x, y, width, height, image_w, image_h):
@@ -172,7 +169,7 @@ class SeedVR2Engine:
             report(stage, done, total)
             true_h, true_w = self.ctx.get("true_target_dims", (image_h, image_w))
             width, height = min(width, true_w - x), min(height, true_h - y)
-            if width > 0 and height > 0:
+            if callback is not None and width > 0 and height > 0:
                 callback(stage, phase, done, total, x, y, width, height, true_w, true_h)
 
         self.debug.tile_callback = observe
@@ -183,6 +180,33 @@ class SeedVR2Engine:
 
     @torch.inference_mode()
     def process_frames(
+        self,
+        frames: list[np.ndarray],
+        **kwargs,
+    ) -> list[np.ndarray]:
+        # Upstream's clip-level interrupt checks can be minutes apart with
+        # large VAE tiles. Check before each torch module, including DiT blocks
+        # and VAE layers, even when visual previews are disabled. Global hooks
+        # also cover modules loaded lazily by the upstream phase runner.
+        cancel_event = kwargs.get("cancel_event")
+        owner_thread = threading.get_ident()
+
+        def interrupt(_module=None, _inputs=None):
+            if (
+                threading.get_ident() == owner_thread
+                and cancel_event is not None
+                and cancel_event.is_set()
+            ):
+                raise SeedVR2CancelledError("Video cancelled")
+
+        interrupt()
+        handle = torch.nn.modules.module.register_module_forward_pre_hook(interrupt)
+        try:
+            return self._process_frames(frames, **kwargs)
+        finally:
+            handle.remove()
+
+    def _process_frames(
         self,
         frames: list[np.ndarray],
         *,

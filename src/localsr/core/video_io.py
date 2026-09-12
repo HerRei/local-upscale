@@ -313,6 +313,7 @@ def encode_video(
     warning_callback=None,
     sdr_bt709: bool = False,
     hdr_format: str = "",
+    temporary_directory: str | None = None,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -326,8 +327,8 @@ def encode_video(
         validate_hdr_encoder()
         codec, pixel_format = "libx265", "yuv420p10le"
     destination = Path(destination_path)
-    encoded_temporary = _owned_output_temporary(destination, "video")
-    mux_temporary = _owned_output_temporary(destination, "mux")
+    encoded_temporary = _owned_output_temporary(destination, "video", temporary_directory)
+    mux_temporary = _owned_output_temporary(destination, "mux", temporary_directory)
     output_container = None
     try:
         fps_fraction = (
@@ -473,12 +474,12 @@ def encode_video(
                 pass
 
 
-def _owned_output_temporary(destination: Path, phase: str) -> Path:
+def _owned_output_temporary(destination: Path, phase: str, directory: str | None = None) -> Path:
     """Reserve one unique LocalSR-owned sibling for an atomic final replace."""
     descriptor, name = tempfile.mkstemp(
         prefix=f".{destination.name}.localsr-{phase}-",
         suffix=".tmp",
-        dir=destination.parent,
+        dir=directory or destination.parent,
     )
     os.close(descriptor)
     return Path(name)

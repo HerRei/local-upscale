@@ -208,7 +208,8 @@ def test_desktop_catalog_fails_closed_for_unresolved_checkpoint_rights() -> None
         assert "face" not in primary["purposes"]
 
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
-        assert models[model_id]["automated_download_allowed"] is False
+        assert models[model_id]["automated_download_allowed"] is True
+        assert models[model_id]["terms_acceptance_required"] is True
         assert models[model_id]["commercial_use_allowed"] is None
 
 

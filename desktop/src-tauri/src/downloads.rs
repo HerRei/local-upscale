@@ -48,6 +48,9 @@ pub async fn download_model(
 
     let cancellation = Arc::new(AtomicBool::new(false));
     {
+        crate::updates::ensure_not_installing(&state)?;
+        let _scheduler = lock(&state.scheduler)?;
+        crate::updates::ensure_not_installing(&state)?;
         let mut downloads = lock(&state.downloads)?;
         if !downloads.is_empty() {
             return Err(AppError::Download(
