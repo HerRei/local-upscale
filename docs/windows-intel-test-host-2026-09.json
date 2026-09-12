@@ -42,16 +42,37 @@
       "NativeCode": null,
       "TimeUTC": "2026-09-12T16:58:00.4445737Z",
       "Result": "ElevationCancelled"
-    }
+    },
+    "tailscale_input_test": {
+      "success": true,
+      "typed_text": "LOCALSR-TAILSCALE-OK-12",
+      "computer": "LAPTOP-G3M0MOM5",
+      "session_id": 1,
+      "time_utc": "2026-09-12T17:30:42.4821109Z"
+    },
+    "transports_verified": [
+      "LAN SSH tunnel",
+      "Tailscale SSH tunnel"
+    ],
+    "client_waits_for_server_round_trip_before_disconnect": true
   },
   "tailscale": {
     "version": "1.102.4",
-    "state": "NeedsLogin",
-    "dns_name": "",
-    "ips": null,
+    "state": "Running",
+    "dns_name": "localsr-intel-test.tail34a4e0.ts.net.",
+    "ips": [
+      "100.103.31.7",
+      "fd7a:115c:a1e0::8638:1f08"
+    ],
     "service": "Running",
     "startup": "Automatic",
-    "last_checked_utc": "2026-09-12T17:10:17.2068179Z"
+    "last_checked_utc": "2026-09-12T17:31:58.7234917Z",
+    "unattended": true,
+    "ssh_verified": true,
+    "sftp_verified": true,
+    "host_key_verified_against_lan": true,
+    "mac_ssh_alias": "localsr-intel-test",
+    "mac_transport": "existing Tailscale userspace socket via SSH ProxyCommand"
   },
   "localsr_inference_tested": false,
   "msix_tested": false,
@@ -83,19 +104,21 @@
     "display_lid_power_button_critical_battery_changed": false
   },
   "windows_cleanup": {
-    "verified_utc": "2026-09-12T17:10:17.2068179Z",
+    "verified_utc": "2026-09-12T17:31:58.7234917Z",
     "temporary_tasks_removed": true,
     "temporary_folders_removed": true,
     "removed_task_names": [
       "LocalSR-Remote-Access-Check-20260912",
       "LocalSR-Remote-UAC-Check-20260912",
-      "LocalSR-Remote-DxDiag-Check-20260912"
+      "LocalSR-Remote-DxDiag-Check-20260912",
+      "LocalSR-Tailscale-GUI-Check-20260912"
     ]
   },
   "mac_cleanup": {
-    "verified_utc": "2026-09-12T17:12:02.405591+00:00",
+    "verified_utc": "2026-09-12T17:34:16.616028+00:00",
     "temporary_scripts_screenshots_and_duplicate_venv_removed": true,
     "temporary_ssh_tunnels_remaining": 0,
-    "persistent_desktop_client_retained": true
+    "persistent_desktop_client_retained": true,
+    "tailscale_check_scripts_and_screenshots_removed": true
   }
 }

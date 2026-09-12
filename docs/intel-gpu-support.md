@@ -57,8 +57,8 @@ native-device setup is recorded below.
 **Actual Intel GPU acceptance still to record**
 
 A native Windows 11 Home laptop with Intel UHD 620 is now available for the
-next test stage. SSH and desktop input/UAC access passed LAN checks; Tailscale
-login is pending. The installed Intel driver is `24.20.100.6286` from 2018,
+next test stage. SSH, file transfer and desktop input passed LAN and Tailscale
+checks; UAC handling was verified over LAN. The installed Intel driver is `24.20.100.6286` from 2018,
 with DirectX DDI 12 / WDDM 2.4. This is hardware/access evidence, not a DirectML
 inference pass. See the [device record](windows-intel-test-host.md).
 

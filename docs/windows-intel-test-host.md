@@ -15,30 +15,41 @@ Machine-readable observations: [access and hardware record](windows-intel-test-h
 | Graphics | Intel UHD Graphics 620 |
 | Driver | `24.20.100.6286`, dated 15 August 2018; WDDM 2.4 |
 | DirectX capability | DDI 12; feature levels include `12_1` and `12_0` |
-| SSH | `agenttest`, administrator; public-key login verified on `192.168.9.157` |
+| SSH | `agenttest`, administrator; public-key login verified over LAN and Tailscale |
 | Desktop | TightVNC `2.8.88`, automatic Windows service |
-| Tailscale | `1.102.4` installed; unattended mode configured; account login pending |
+| Tailscale | `1.102.4`, running in unattended mode; `100.103.31.7` |
+| Remote hostname | `localsr-intel-test.tail34a4e0.ts.net` |
 
 **Verified remote access**
 
-- SSH commands and SFTP transfer work using the existing Mac SSH identity.
+- SSH commands and SFTP transfer work using the existing Mac SSH identity over
+  LAN and Tailscale. The Tailscale transfer was checked against its SHA-256.
 - TightVNC listens on **127.0.0.1:5900 only**, requires VNC authentication and
   is reached through an authenticated SSH tunnel. HTTP access is off; no VNC
   firewall exception was added.
 - A temporary native Windows form displayed successfully. Remote keyboard input
   entered `LOCALSR-REMOTE-OK`; a remote mouse click produced a successful result
   in the interactive Windows session.
+- The same type of test passed through the Tailscale SSH tunnel: remote input
+  entered `LOCALSR-TAILSCALE-OK-12`, and a remote click verified the text and closed
+  only the test window. The result is recorded with its timestamp and session ID.
 - A Windows elevation prompt displayed on the secure desktop with UAC and
-  `PromptOnSecureDesktop` enabled. A remote click cancelled the prompt.
+  `PromptOnSecureDesktop` enabled. A remote click cancelled the prompt during the
+  LAN check; that secure-desktop check was not repeated over Tailscale.
 - The Mac desktop-control helper refreshes the initial framebuffer before
   returning its first screenshot; the initial server frame can otherwise be blank.
+- The client now also waits for a server round trip before input and before
+  disconnecting. Input-only calls can otherwise finish before the last queued
+  write reaches the desktop. The corrected client passed keyboard and mouse
+  verification, including a final click without a subsequent screenshot action.
 
-These checks establish access over the LAN. Tailscale enrollment and an actual
-SSH/desktop connection over its assigned address remain pending until the user
-completes the one-time login. No signed-in browser was available to the agent.
-The login link is supplied in the conversation, not stored in this repository.
-A transient DNS failure during setup was followed by successful DNS resolution
-and an HTTP 200 response from the Tailscale login site.
+The user completed enrollment in the existing Tailscale account. Windows reports
+Running and unattended mode enabled; the Mac sees the device online in the same
+tailnet as DDP. SSH through `100.103.31.7` verified the same host key as the LAN
+connection. The persistent Mac SSH aliases `localsr-intel-test` and
+`localsr-intel-test-remote` use the existing Tailscale userspace socket and that
+verified host key. Desktop control was verified through the alias. No enrollment
+link, password or private key is stored in this repository.
 
 The services start automatically. At the user's explicit request, automatic
 standby, timed hibernation and sleep after unattended wake are disabled on both
@@ -57,9 +68,10 @@ desktop actions and tunnel lifecycle. The generated VNC credential is in a
 mode-0600 file inside a mode-0700 directory; no credential or private SSH key is
 included here. The client closes its SSH tunnel after each invocation.
 
-The three temporary Windows GUI/UAC/DxDiag tasks, their test folder and the
-downloaded installers were removed after verification. The installed access
-services and persistent Mac client remain available for subsequent tests.
+The four temporary Windows GUI/UAC/DxDiag/Tailscale test tasks, their test folders,
+the transfer probe and downloaded installers were removed after verification.
+The installed access services and persistent Mac client remain available for
+subsequent tests.
 
 Both installers were obtained from the vendor and passed Windows Authenticode
 validation before installation:

@@ -22,7 +22,6 @@ The existing `.12` release, its runners and the running Mac application stay unt
 - [x] Fixed local Intel GPU selection/discovery gaps and added regression coverage. Windows DirectML adapters now show actual GPU names; the Python automatic preset resolver includes DirectML ahead of CPU. Desktop selection/job submission retain the selected Intel adapter. [Implementation and test limits](intel-gpu-support.md).
 - [x] Prepared the user-authorized native Windows Intel test device: administrator SSH, desktop viewing, keyboard/mouse input and UAC prompt handling verified over LAN. Windows 11 Home / UHD 620 hardware recorded. [Device setup](windows-intel-test-host.md).
 - [x] Disabled automatic standby, timed hibernation and unattended-wake sleep on that device for AC and battery, as requested. Read back all six timeout values; removed temporary setup files and test tasks.
-- [ ] Complete that device's Tailscale account login and verify SSH/desktop access through the assigned Tailscale address. Tailscale is installed in unattended mode; native LocalSR/DirectML and MSIX acceptance remain separate pending checks.
 - [ ] Public beta acceptance completed. The existing readiness register still has **10 unresolved blocking requirements**, plus two optional Labs items. Its strict check currently exits with code 1. Production signing, actual installer upgrades and long-video acceptance are still open.
 
 The register predates the updater work, the Store route and the confirmed platform/Labs decision. Its count does not include every newly documented item below. Prepare a separate beta configuration with common distribution/data checks and main-path functional acceptance; track missing broad Labs hardware and quality coverage as experimental follow-up. Add production updater and HDR compatibility/output checks and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
@@ -31,10 +30,17 @@ The register predates the updater work, the Store route and the confirmed platfo
 
 The user asked to keep the Mac candidate build, signing, notarization and installed/update tests on the to-do list and complete other prerequisites first. Those tasks remain unchecked in sections 4–7. The verified identity and Keychain profile are ready for that later stage. [Apple setup evidence](apple-signing.md).
 
+The Windows follow-up is also queued at the user's request. Access setup and the
+always-on settings are verified; track the remaining application tests here:
+
+- [x] User completed Tailscale enrollment. SSH, checksum-verified file transfer, desktop viewing and keyboard/mouse input passed through the Tailscale connection with the existing host key verified. The persistent Mac access alias is `localsr-intel-test`; temporary test artifacts were removed. [Access record](windows-intel-test-host.md).
+- [ ] Test the actual LocalSR candidate on the physical Intel UHD 620: bounded CPU/DirectML inference, a HAT-S image, a short SDR video, cancellation followed by another job, and separate CPU/GPU benchmark scores. Record the exact driver, app and engine versions. [Test procedure](intel-gpu-support.md).
+- [ ] Build the Windows MSIX on isolated build infrastructure after engine delivery and Store integration are ready; use this laptop to test installation, first launch, update and preservation of models, recipes, settings and queue data. It remains a test device and must not become a build runner. [Store preparation](microsoft-store.md).
+
 Work through the following preparation first:
 
-1. Prepare Windows engine delivery for the retained CPU/CUDA/DirectML targets and settle the remaining checkpoint offering. Platform scope, the Labs approach and SeedVR2 3B inclusion are confirmed. Follow the [coverage matrix](beta-platform-matrix.md) for main-path acceptance, Intel iGPU evidence and Labs package checks.
-2. Complete publisher details in the privacy/support draft and agree the support expectations and private-message retention during university. The contact is confirmed as `hermes.reisner@gmail.com`.
+1. Record whether the publisher is the individual Hermes Reisner (display name HerRei) or a registered company, then complete the corresponding publisher details in the privacy/support draft. Agree support expectations and private-message retention during university afterward. The contact is confirmed as `hermes.reisner@gmail.com`.
+2. Prepare Windows engine delivery for the retained CPU/CUDA/DirectML targets and settle the remaining checkpoint offering. Platform scope, the Labs approach and SeedVR2 3B inclusion are confirmed. Follow the [coverage matrix](beta-platform-matrix.md) for main-path acceptance, Intel iGPU evidence and Labs package checks.
 3. Prepare the selected public GitHub issue tracker using the [local repository files](../packaging/beta-feedback/README.md), then publish and test access when remote work is authorized. Contact and tracker type do not need reconfirmation.
 4. Review the prepared Store text and reviewer procedure against that scope. Capture the planned screenshots from the exact Windows candidate later.
 5. Prepare the website/privacy/support destinations and production update configuration locally; verify public access after publication is authorized.
@@ -180,8 +186,11 @@ Today that command correctly fails because beta requirements are unresolved. Thi
 **Our next conversation step**
 
 Contact, bug-report routing, full backend scope with Labs labels and SeedVR2 3B
-inclusion are confirmed. Next finish engine delivery, remaining checkpoint and publisher details using the
-prepared drafts. The user explicitly deferred the Mac candidate build, signing,
-notarization and installed/update acceptance until after this preparation. The
-audience remains friends and Reddit volunteers, with limited maintenance capacity
-during university.
+inclusion are confirmed. Tailscale access is verified; native Intel tests and MSIX
+acceptance remain on the to-do list. The next question is the remaining publisher
+identity: individual Hermes Reisner / HerRei, or a registered company. Complete
+that field in the prepared Store/privacy/support material once answered, then
+continue with support expectations, engine delivery and checkpoint details.
+The Mac candidate build, signing, notarization and installed/update acceptance
+remain scheduled after this preparation. The audience remains friends and
+Reddit volunteers, with limited maintenance capacity during university.
