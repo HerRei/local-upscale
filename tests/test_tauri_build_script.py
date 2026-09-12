@@ -89,8 +89,8 @@ def test_exposes_private_worker_libraries_only_to_linux_packager(
         str(torch_libraries),
         "/system/libraries",
     ]
-    assert environment["LDAI_COMP"] == "gzip"
-    assert environment["APPIMAGE_COMP"] == "gzip"
+    assert "LDAI_COMP" not in environment
+    assert "APPIMAGE_COMP" not in environment
 
 
 def test_does_not_change_library_lookup_outside_linux(monkeypatch, tmp_path: Path) -> None:
@@ -156,6 +156,50 @@ def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
     )
 
     assert build.npm_executable() == npm
+
+
+def test_repacks_linux_appimage_payload_with_system_gzip(
+    monkeypatch, tmp_path: Path
+) -> None:
+    appimage_dir = tmp_path / "bundle" / "appimage"
+    appdir = appimage_dir / "LocalSR Next Preview.AppDir"
+    appdir.mkdir(parents=True)
+    (appdir / "AppRun").write_text("#!/bin/sh\n", encoding="utf-8")
+    image = appimage_dir / "LocalSR.AppImage"
+    runtime = b"ELF-runtime-prefix"
+    image.write_bytes(runtime + b"hsqs-old-zstd-payload")
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        if command[0] == str(image):
+            return SimpleNamespace(returncode=0, stdout=f"{len(runtime)}\n")
+        commands.append(command)
+        Path(command[2]).write_bytes(b"hsqs-gzip-payload")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(build.sys, "platform", "linux")
+    monkeypatch.setattr(
+        build.shutil,
+        "which",
+        lambda name: "/usr/bin/mksquashfs" if name == "mksquashfs" else None,
+    )
+    monkeypatch.setattr(build.subprocess, "run", fake_run)
+
+    repacked = build._repack_linux_appimages_with_system_mksquashfs(tmp_path / "bundle")
+
+    assert repacked == [image]
+    assert image.read_bytes() == runtime + b"hsqs-gzip-payload"
+    assert image.stat().st_mode & 0o111
+    assert commands == [
+        [
+            "/usr/bin/mksquashfs",
+            str(appdir),
+            str(image) + ".localsr-repacked.squashfs",
+            "-noappend",
+            "-comp",
+            "gzip",
+        ]
+    ]
 
 
 def test_worker_target_arch_matches_pyinstaller_names() -> None:

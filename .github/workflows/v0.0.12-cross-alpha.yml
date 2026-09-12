@@ -20,8 +20,6 @@ env:
   PYTORCH_VERSION: "2.13.0"
   TORCHVISION_VERSION: "0.28.0"
   PYINSTALLER_VERSION: "6.22.2"
-  LDAI_COMP: "gzip"
-  APPIMAGE_COMP: "gzip"
 
 jobs:
   coordinate-heavy-work:
@@ -126,8 +124,6 @@ jobs:
       # environments, frozen workers and AppImages need the separate HDD.
       LOCALSR_LINUX_SCRATCH: /mnt/hdd/ci-scratch
       PIP_CACHE_DIR: /mnt/hdd/ci-scratch/cache/pip
-      LDAI_COMP: "gzip"
-      APPIMAGE_COMP: "gzip"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

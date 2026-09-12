@@ -21,6 +21,7 @@ ENGINE_DIR = WORKER_DIST / "engine"
 CONFIG_PATH = BUILD_ROOT / "tauri-worker.conf.json"
 LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
 LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
+LINUX_APPIMAGE_PAYLOAD_COMPRESSOR = "gzip"
 LINUXDEPLOY_PRIVATE_LIBRARY_ALIASES = {
     "libMIOpen.so.1": "libMIOpen.so",
     "libamd_comgr.so.3": "libamd_comgr.so",
@@ -99,8 +100,6 @@ def tauri_build_environment() -> dict[str, str]:
         return env
 
     env["NO_STRIP"] = "true"
-    env["LDAI_COMP"] = "gzip"
-    env["APPIMAGE_COMP"] = "gzip"
     library_dirs = sorted(
         {str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()}
     )
@@ -319,6 +318,97 @@ def _restore_linuxdeploy_wrapper(backup: Path | None) -> None:
         raise RuntimeError(f"could not restore linuxdeploy wrapper: {error}") from error
 
 
+def _find_appimage_squashfs_offset(artifact: Path) -> int:
+    result = subprocess.run(
+        [str(artifact), "--appimage-offset"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode == 0 and result.stdout.strip().isdigit():
+        return int(result.stdout.strip())
+
+    with artifact.open("rb") as stream:
+        header = stream.read(64 * 1024 * 1024)
+    offset = header.find(b"hsqs")
+    if offset != -1:
+        return offset
+    raise RuntimeError(f"could not locate SquashFS payload offset in {artifact}")
+
+
+def _copy_bytes(source: Path, destination: Path, *, limit: int | None = None) -> None:
+    remaining = limit
+    with source.open("rb") as src, destination.open("ab") as dst:
+        while remaining is None or remaining > 0:
+            chunk_size = 1024 * 1024 if remaining is None else min(1024 * 1024, remaining)
+            chunk = src.read(chunk_size)
+            if not chunk:
+                break
+            dst.write(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+
+
+def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Path]:
+    """Rebuild Linux AppImage payloads with system gzip-capable mksquashfs.
+
+    Current appimagetool builds bundle a zstd-only mksquashfs.  Large ROCm
+    payloads have hit zstd squashfs corruption during extraction, so let Tauri
+    create the AppDir/runtime and replace only the SquashFS image with the
+    distro-provided mksquashfs from the release runner.
+    """
+    if not sys.platform.startswith("linux"):
+        return []
+
+    appimage_dir = bundle_root / "appimage"
+    if not appimage_dir.is_dir():
+        return []
+
+    mksquashfs = shutil.which("mksquashfs")
+    if mksquashfs is None:
+        raise SystemExit("mksquashfs is required to repack Linux AppImage payloads")
+
+    appdirs = sorted(path for path in appimage_dir.glob("*.AppDir") if path.is_dir())
+    images = sorted(path for path in appimage_dir.glob("*.AppImage") if path.is_file())
+    if images and len(appdirs) != 1:
+        raise RuntimeError(
+            f"expected one AppDir next to AppImage output, found {len(appdirs)} in {appimage_dir}"
+        )
+    if not images:
+        return []
+
+    appdir = appdirs[0]
+    repacked: list[Path] = []
+    for image in images:
+        offset = _find_appimage_squashfs_offset(image)
+        squashfs = image.with_name(f"{image.name}.localsr-repacked.squashfs")
+        replacement = image.with_name(f"{image.name}.localsr-repacked")
+        squashfs.unlink(missing_ok=True)
+        replacement.unlink(missing_ok=True)
+        run(
+            [
+                mksquashfs,
+                str(appdir),
+                str(squashfs),
+                "-noappend",
+                "-comp",
+                LINUX_APPIMAGE_PAYLOAD_COMPRESSOR,
+            ]
+        )
+        _copy_bytes(image, replacement, limit=offset)
+        _copy_bytes(squashfs, replacement)
+        replacement.chmod(image.stat().st_mode | 0o111)
+        replacement.replace(image)
+        squashfs.unlink(missing_ok=True)
+        repacked.append(image)
+        print(
+            f"Repacked {image.name} AppImage payload with "
+            f"{LINUX_APPIMAGE_PAYLOAD_COMPRESSOR} via system mksquashfs.",
+            flush=True,
+        )
+    return repacked
+
+
 def npm_executable() -> str:
     """Resolve npm to a directly executable path on every supported host."""
 
@@ -534,6 +624,8 @@ def main() -> int:
     linuxdeploy_backup = _wrap_linuxdeploy_for_appimage() if args.bundles == "appimage" else None
     try:
         run(command, cwd=DESKTOP, env=environment)
+        if args.bundles == "appimage":
+            _repack_linux_appimages_with_system_mksquashfs(bundles)
     finally:
         _restore_linuxdeploy_wrapper(linuxdeploy_backup)
         removed_linuxdeploy_symlinks = False
