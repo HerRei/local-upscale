@@ -28,10 +28,14 @@
     "temporary_files_removed": true
   },
   "notarization_profile": "LocalSR-Z2TU844D84-notary",
-  "notarization_profile_present": false,
-  "notarization_profile_check": "notarytool history reported no Keychain password item for this profile",
+  "notarization_profile_present": true,
+  "notarization_profile_check": "Authenticated notarytool history request to Apple succeeded using the named login Keychain profile.",
   "localsr_candidate_signed": false,
   "localsr_candidate_notarized": false,
   "downloaded_candidate_gatekeeper_tested": false,
-  "release_12_modified": false
+  "release_12_modified": false,
+  "notarization_authentication_verified": true,
+  "notarization_verified_at_utc": "2026-09-12T14:40:59.622553+00:00",
+  "notarization_build_submitted": false,
+  "setup_helper_cleanup": "removed_completed_helper"
 }
