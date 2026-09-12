@@ -227,10 +227,15 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
 def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
     artifact.chmod(artifact.stat().st_mode | 0o111)
     env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
-    # Self-hosted Linux runners may not provide a functional GTK/Wayland
-    # session even under Xvfb. Exercise the actual AppImage host, its resource
-    # layout and bundled worker before WebView initialization instead.
-    run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
+    # Keep AppImage runtime extraction isolated from the job-wide scratch TMPDIR.
+    # Large backend AppImages can otherwise trip over stale/colliding runtime
+    # extraction state left by a previous launch attempt on the same runner.
+    with temporary_directory(prefix="localsr-appimage-runtime-") as appimage_tmp:
+        env["TMPDIR"] = appimage_tmp
+        # Self-hosted Linux runners may not provide a functional GTK/Wayland
+        # session even under Xvfb. Exercise the actual AppImage host, its
+        # resource layout and bundled worker before WebView initialization.
+        run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
     # APPIMAGE_EXTRACT_AND_RUN removes its temporary tree when the host exits.
     # Extract an owned copy so the identity probe exercises that exact payload.
     if env.get("LOCALSR_SMOKE_BACKEND"):

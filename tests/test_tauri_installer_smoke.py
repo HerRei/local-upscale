@@ -189,5 +189,6 @@ def test_linux_smoke_runs_the_appimage_host_without_a_webview(tmp_path: Path, mo
     command, environment = calls[0]
     assert command == [str(artifact), "--headless-smoke-test"]
     assert environment["APPIMAGE_EXTRACT_AND_RUN"] == "1"
+    assert Path(environment["TMPDIR"]).name.startswith("localsr-appimage-runtime-")
     if smoke.os.name != "nt":
         assert artifact.stat().st_mode & 0o111
