@@ -1,8 +1,8 @@
 **LocalSR beta release checklist and walkthrough**
 
-Updated 12 September 2026 from local preview commit `f74048d`, the current release configuration, the [latest verification record](local-update-acceptance.json) and the user's account/submission updates. This is the working checklist for our decisions together. Approved choices and pending questions belong in the [decision log](beta-release-decisions.md).
+Updated 12 September 2026 from the local preview, the current release configuration, the [application verification record](local-update-acceptance.json), the [Apple signing check](apple-signing-acceptance-2026-09.json) and the user's account/submission updates. This is the working checklist for our decisions together. Approved choices and pending questions belong in the [decision log](beta-release-decisions.md).
 
-The existing `.12` release, its runners and the current Mac GUI stay untouched. This planning work is local. No account purchase, repository visibility change, production key creation or publication has been performed.
+The existing `.12` release, its runners and the running Mac application stay untouched. This work is local. The user created the Apple signing key/certificate and authorized its local installation; no private key was exported, account purchase made, repository visibility changed or release published by the agent.
 
 **Where we are**
 
@@ -13,21 +13,21 @@ The existing `.12` release, its runners and the current Mac GUI stay untouched. 
 - [x] Test keys, profiles, services and build caches cleaned up; current DDP preview left open.
 - [x] Store identity, package artwork and local MSIX layout helper prepared; 18 packaging tests passed. A complete Windows MSIX has not yet been built or tested.
 - [x] Partner Center pricing/availability, properties and age ratings marked complete in the user's screenshot. Packages remain incomplete, Store listings are not started and the submission remains a draft.
-- [x] Apple Developer account reported ready by the user on 12 September 2026. Signing certificates, notarization credentials and a signed candidate remain to verify.
+- [x] Apple Developer account reported ready; the downloaded Developer ID Application certificate is installed, matches the CSR/private key and is trusted with Apple's G2 intermediate. A disposable native executable passed signing with an Apple timestamp, hardened runtime, signature verification and execution. [Evidence](apple-signing-acceptance-2026-09.json).
 - [ ] Public beta acceptance completed. The existing readiness register still has **10 unresolved blocking requirements**, plus two optional Labs items. Its strict check currently exits with code 1. Production signing, actual installer upgrades and long-video acceptance are still open.
 
 The register predates the updater work and the Store route. Its count does not include every newly documented item below. When preparing the separate beta configuration, add the production updater and HDR acceptance requirements and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
 
-**Next setup task: Apple signing**
+**Next setup task: Apple notarization credentials**
 
-For the planned Mac download, use or create a **Developer ID Application** certificate on the chosen signing Mac, then configure notarization access. The detailed sequence is in section 4. Work from an isolated beta candidate; the current Mac app and `.12` build infrastructure remain in place. The Windows Store work is recorded below and can proceed independently.
+The Developer ID Application certificate and private key are usable on this Mac for team `Z2TU844D84`. Next, configure notarization access using the [local setup guide](apple-signing.md) and the prepared Desktop helper. This requires the user's app-specific password at Apple's secure prompt. Then prepare an isolated beta candidate for signing, notarization and installed acceptance. The Windows Store work is recorded below and can proceed independently.
 
 **The decisions, in the order we will make them**
 
 | Step | Decision | Choice or starting recommendation |
 | --- | --- | --- |
 | 1 | Beta audience | **Confirmed:** friends and voluntary testers reached through Reddit. Prepare public access for those testers; no announcement or publication is authorized yet. |
-| 2 | Publisher and account setup | Store identity supplied; Apple Developer account reported ready. Publisher type/country and Apple Team ID/signing credentials remain to record. Next setup task: Apple signing for the Mac download. |
+| 2 | Publisher and account setup | Store identity supplied; Apple signing identity verified for team `Z2TU844D84`, certificate subject country `CH`. Publisher account type remains to record. Next setup task: notarization authentication for the Mac download. |
 | 3 | Windows distribution | The user created a Store MSIX draft and supplied its identity. Local package preparation is implemented; the native Windows package and installed acceptance remain to do. Keeping a direct EXE download is a separate choice. |
 | 4 | Which operating systems and GPUs ship in beta 1? | Prepare Apple Silicon and the Linux CPU/AMD paths first; include Windows CPU and other GPU packages only when their exact installers pass on matching hardware. Defer unverified targets explicitly. |
 | 5 | What counts as supported versus experimental? | Make image upscaling and SDR video the core. Keep HDR preservation, SeedVR2, deflicker and video-face processing opt-in Labs until their quality evidence supports promotion. |
@@ -40,14 +40,14 @@ Only the entries explicitly marked confirmed record user decisions. The remainin
 **1. Confirm audience, publisher and accounts — you decide; I guide**
 
 - [x] Record friends and Reddit volunteers as the intended beta audience.
-- [x] Record the user's Apple Developer account as ready. This is user-reported account status; no certificate or credential inspection has been performed.
+- [x] Record the user's Apple Developer account as ready and verify the downloaded signing certificate against the local CSR/private key.
 - [ ] Confirm publisher type in the decision log.
-- [ ] Record the publisher country and Apple Team ID when configuring signing. Confirm access to Developer ID certificate creation on the selected team; do not infer legal identity or credentials from display names or repository secrets.
+- [x] Record Apple Team ID `Z2TU844D84` and certificate subject country `CH` from the issued certificate. The publisher account type is still a separate pending decision.
 - [ ] Agree a signing/build budget before purchasing anything.
 - [ ] Choose a tester contact/feedback route. If distribution is invited-only, test that intended testers can access it; for public distribution, test signed out.
 - [ ] Agree maintenance expectations: recommend one feedback channel, clear known issues and no promised release cadence during university. Decide how to pause downloads or notify testers if a serious issue is found while maintenance capacity is limited.
 
-The user reports the Apple Developer account is ready, so enrollment is no longer the next task. The next setup work is the Developer ID Application certificate and notarization access for the chosen signing environment. Account Holder access is required for the manual Developer ID certificate flow. [Apple certificate guide](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
+The user has created the Developer ID Application certificate, and local signing verification passed. The remaining account setup is notarization authentication. [Apple setup and verification record](apple-signing.md).
 
 For Windows, **Microsoft Store registration is free through the new onboarding flow**, for both [individuals](https://learn.microsoft.com/en-us/windows/apps/publish/whats-new-individual-developer) and [companies](https://blogs.windows.com/windowsdeveloper/2026/05/07/publish-to-microsoft-store-as-a-company-now-with-free-registration-and-faster-onboarding/). Use [the Store developer entry point](https://storedeveloper.microsoft.com/) for that flow. Identity/account verification still applies.
 
@@ -80,7 +80,7 @@ The existing [model-license evidence](model-licenses.md) is the starting point. 
 **4. Sign the application — you provide account access; I implement and verify**
 
 - [x] **Mac account:** user reports the Apple Developer account is ready.
-- [ ] **Mac certificate — next setup step:** inspect the chosen signing environment for an existing valid Developer ID Application identity with its private key. Reuse it where appropriate; create a certificate if needed. Record the Apple Team ID and keep the private key in the protected signing environment. Developer ID Application signs the app; Developer ID Installer is only needed if we choose an Installer Package. [Apple certificate guide](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
+- [x] **Mac certificate:** installed the user-created Developer ID Application certificate and verified the matching private key, trust chain and real native signing with an Apple secure timestamp. Team ID `Z2TU844D84`; certificate expires 13 September 2031. The private key remains in this Mac's login Keychain. [Verification record](apple-signing.md).
 - [ ] **Mac notarization access:** configure the chosen team's notarization credentials securely on the isolated signing machine. The current pipeline accepts an Apple ID, app-specific password and Team ID; verify access without putting credentials in chat or the repository. Record renewal/recovery arrangements.
 - [ ] **Mac candidate signing:** prepare a maintained native Apple-Silicon build in isolated directories, sign the app and embedded worker/native libraries with the required runtime options and entitlements, and retain the signature verification report. This depends on the build work in section 6.
 - [ ] **Mac notarization and distribution:** submit the signed candidate to Apple's notarization service, inspect the result, attach the notarization ticket and validate it for the app and final DMG. Verify Gatekeeper acceptance and real inference from that downloaded candidate on a separate Mac, followed by the update/data tests in sections 5 and 7. [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
@@ -157,4 +157,4 @@ Today that command correctly fails because beta requirements are unresolved. Thi
 
 **Our next conversation step**
 
-Apple account setup is reported ready. Next, prepare the Developer ID Application certificate and notarization access for the planned Mac download, then build and verify a signed candidate on isolated infrastructure. The ordered Microsoft Store work remains on this list. Record the remaining publisher/team details during signing setup and agree the supported platform/model scope before candidate builds. The audience remains friends and Reddit volunteers, with limited maintenance capacity during university.
+Apple certificate setup and the local signing probe passed. Next, the user creates an app-specific password and runs the prepared notarization helper, which validates and saves credentials in the login Keychain. Then build and verify a signed/notarized candidate on isolated infrastructure. The ordered Microsoft Store work remains on this list. Record the remaining publisher account type and agree the supported platform/model scope before candidate builds. The audience remains friends and Reddit volunteers, with limited maintenance capacity during university.
