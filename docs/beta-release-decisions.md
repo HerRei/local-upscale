@@ -19,7 +19,7 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | --- | --- | --- | --- |
 | B1 | Beta audience | Friends and voluntary testers reached through Reddit; prepare access for that audience while retaining signing and acceptance requirements | Confirmed by user; no publication or Reddit post authorized |
 | B2 | Individual or registered-company publisher | Use the actual legal identity/entity; this controls signing eligibility | Asked; awaiting answer |
-| B3 | Publisher country and existing developer/signing accounts | Store developer account and reserved LocalSR identity supplied; legal publisher type/country and Apple enrollment remain to confirm | Store identity confirmed; other details pending |
+| B3 | Publisher country and existing developer/signing accounts | Store developer account and reserved LocalSR identity supplied; Apple Developer account reported ready by the user on 12 September 2026. Record legal publisher type/country and Apple Team ID during signing setup | Store identity confirmed; Apple account readiness reported; signing credentials not inspected |
 | B4 | Budget and build capacity | Assess the free Store MSIX route before buying a Windows certificate; confirm available isolated runners and plan for limited maintenance during university | Capacity constraint confirmed; budget and implementation choices pending |
 | B5 | Included platforms and GPUs | Start with testable Apple-Silicon/Linux paths; advertise each Windows/other GPU package only after its actual installer passes | Proposed; not approved |
 | B6 | Core versus Labs features | Image/SDR video core; HDR/SeedVR2/deflicker/video faces remain opt-in Labs until their quality evidence supports promotion | Proposed; not approved |
@@ -29,12 +29,18 @@ Started 12 September 2026. Companion to the [beta checklist](beta-release-checkl
 | B10 | Beta version, release date and expansion to public access | Select after account readiness, scope and an initial signed candidate test cycle | Pending |
 | B11 | Windows Store MSIX, direct installer, or both | User created an MSIX Store draft and supplied its reserved identity; prepare the Store package locally. Direct installer distribution and engine delivery strategy remain open | Local Store preparation in progress; no submission/publication approved |
 | B12 | Maintenance and feedback expectations | Recommend a small, well-tested beta, one feedback channel, clear known issues and no promised update cadence during the next six months | Proposed; user confirmed limited time, not this exact operating plan |
+| B13 | Next Apple setup task | For the planned Mac download, use or create a Developer ID Application certificate, configure notarization access, then sign, notarize and test an isolated candidate | Added after the user's Apple account update; certificate, notarization and candidate acceptance remain pending |
+| B14 | Microsoft Store remaining work | Track engine selection, Store integration, native MSIX build, installed acceptance, public beta content and listing/upload/certification in order | Added to the beta to-do list at the user's request; no upload or publication authorized |
 
 **Current evidence**
 
 Local preview evidence is recorded at [local-update-acceptance.json](local-update-acceptance.json). Source repository `HerRei/local-upscale` was confirmed private, with issues enabled, via the GitHub API on 12 September 2026. This does not give general testers access. The strict beta readiness check still reports ten unresolved blocking requirements; no gate has been relaxed or marked passed by this planning work.
 
 The audience question is answered: friends and Reddit volunteers. The legal publisher account type remains unanswered. Public access is a planning requirement for this audience, not authorization to publish or contact testers.
+
+The user reports the Apple Developer account is ready. This completes the account-readiness entry based on their statement, not a new inspection of membership, certificates or credentials. Apple Team ID, access to a Developer ID Application identity/private key, notarization authentication and a signed native candidate remain to verify. The next setup task is signing/notarization for the planned Mac download; no Apple certificate, account or release configuration was changed by this documentation update.
+
+The latest Partner Center screenshot marks pricing/availability, properties and age ratings complete. Packages are incomplete, Store listings are not started and submission options are recommended; the product remains a draft. The local MSIX layout helper, identity and artwork have 18 packaging tests, but no finished Windows MSIX has been built or certified. The six remaining Store stages are now explicit tasks in the [beta checklist](beta-release-checklist.md).
 
 The Store package identity is now recorded in [microsoft-store.md](microsoft-store.md).
 The display name `HerRei` does not establish whether the account is Individual or

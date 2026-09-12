@@ -1,26 +1,33 @@
 **LocalSR beta release checklist and walkthrough**
 
-Updated 12 September 2026 from local preview commit `9dd57a1`, the current release configuration and the [latest verification record](local-update-acceptance.json). This is the working checklist for our decisions together. Approved choices and pending questions belong in the [decision log](beta-release-decisions.md).
+Updated 12 September 2026 from local preview commit `f74048d`, the current release configuration, the [latest verification record](local-update-acceptance.json) and the user's account/submission updates. This is the working checklist for our decisions together. Approved choices and pending questions belong in the [decision log](beta-release-decisions.md).
 
 The existing `.12` release, its runners and the current Mac GUI stay untouched. This planning work is local. No account purchase, repository visibility change, production key creation or publication has been performed.
 
 **Where we are**
 
-- [x] Local application changes and regression suite verified: 568 Python, 83 frontend and 58 Rust tests passed; 3 Python tests skipped.
+- [x] Last recorded application regression suite: 568 Python, 83 frontend and 58 Rust tests passed; 3 Python tests skipped.
 - [x] CPU/ROCm worker inference, cancellation and subsequent processing checked on DDP.
 - [x] Linux portable signed update, restart and failed-startup rollback tested with a disposable key; recipes, settings, queue data and models survived.
 - [x] Both RealPLKSR downloads passed the two-acknowledgement UI flow, checksum verification and AMD inference. This establishes functionality; their license ambiguity remains unresolved.
 - [x] Test keys, profiles, services and build caches cleaned up; current DDP preview left open.
+- [x] Store identity, package artwork and local MSIX layout helper prepared; 18 packaging tests passed. A complete Windows MSIX has not yet been built or tested.
+- [x] Partner Center pricing/availability, properties and age ratings marked complete in the user's screenshot. Packages remain incomplete, Store listings are not started and the submission remains a draft.
+- [x] Apple Developer account reported ready by the user on 12 September 2026. Signing certificates, notarization credentials and a signed candidate remain to verify.
 - [ ] Public beta acceptance completed. The existing readiness register still has **10 unresolved blocking requirements**, plus two optional Labs items. Its strict check currently exits with code 1. Production signing, actual installer upgrades and long-video acceptance are still open.
 
-The register predates the updater work. Its count does not include every newly documented item below. We must add the production updater and HDR acceptance requirements when preparing the separate beta configuration, without weakening or silently marking existing requirements passed.
+The register predates the updater work and the Store route. Its count does not include every newly documented item below. When preparing the separate beta configuration, add the production updater and HDR acceptance requirements and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
+
+**Next setup task: Apple signing**
+
+For the planned Mac download, use or create a **Developer ID Application** certificate on the chosen signing Mac, then configure notarization access. The detailed sequence is in section 4. Work from an isolated beta candidate; the current Mac app and `.12` build infrastructure remain in place. The Windows Store work is recorded below and can proceed independently.
 
 **The decisions, in the order we will make them**
 
 | Step | Decision | Choice or starting recommendation |
 | --- | --- | --- |
 | 1 | Beta audience | **Confirmed:** friends and voluntary testers reached through Reddit. Prepare public access for those testers; no announcement or publication is authorized yet. |
-| 2 | Individual or company publisher? | Use your actual legal identity/entity. Confirm the publisher's country and existing accounts. |
+| 2 | Publisher and account setup | Store identity supplied; Apple Developer account reported ready. Publisher type/country and Apple Team ID/signing credentials remain to record. Next setup task: Apple signing for the Mac download. |
 | 3 | Windows distribution | The user created a Store MSIX draft and supplied its identity. Local package preparation is implemented; the native Windows package and installed acceptance remain to do. Keeping a direct EXE download is a separate choice. |
 | 4 | Which operating systems and GPUs ship in beta 1? | Prepare Apple Silicon and the Linux CPU/AMD paths first; include Windows CPU and other GPU packages only when their exact installers pass on matching hardware. Defer unverified targets explicitly. |
 | 5 | What counts as supported versus experimental? | Make image upscaling and SDR video the core. Keep HDR preservation, SeedVR2, deflicker and video-face processing opt-in Labs until their quality evidence supports promotion. |
@@ -33,13 +40,14 @@ Only the entries explicitly marked confirmed record user decisions. The remainin
 **1. Confirm audience, publisher and accounts — you decide; I guide**
 
 - [x] Record friends and Reddit volunteers as the intended beta audience.
+- [x] Record the user's Apple Developer account as ready. This is user-reported account status; no certificate or credential inspection has been performed.
 - [ ] Confirm publisher type in the decision log.
-- [ ] Confirm the publisher country and whether you already have an Apple Developer membership or Windows signing account. We do not infer enrollment status from repository secrets.
+- [ ] Record the publisher country and Apple Team ID when configuring signing. Confirm access to Developer ID certificate creation on the selected team; do not infer legal identity or credentials from display names or repository secrets.
 - [ ] Agree a signing/build budget before purchasing anything.
 - [ ] Choose a tester contact/feedback route. If distribution is invited-only, test that intended testers can access it; for public distribution, test signed out.
 - [ ] Agree maintenance expectations: recommend one feedback channel, clear known issues and no promised release cadence during university. Decide how to pause downloads or notify testers if a serious issue is found while maintenance capacity is limited.
 
-For Apple, individuals and eligible organizations can enroll. Individual enrollment uses a legal name and an Apple Account with two-factor authentication; organizations have additional verification requirements, normally including D-U-N-S. Membership is **USD 99 per year**, with regional pricing shown during enrollment. [Apple enrollment](https://developer.apple.com/programs/enroll/).
+The user reports the Apple Developer account is ready, so enrollment is no longer the next task. The next setup work is the Developer ID Application certificate and notarization access for the chosen signing environment. Account Holder access is required for the manual Developer ID certificate flow. [Apple certificate guide](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
 
 For Windows, **Microsoft Store registration is free through the new onboarding flow**, for both [individuals](https://learn.microsoft.com/en-us/windows/apps/publish/whats-new-individual-developer) and [companies](https://blogs.windows.com/windowsdeveloper/2026/05/07/publish-to-microsoft-store-as-a-company-now-with-free-registration-and-faster-onboarding/). Use [the Store developer entry point](https://storedeveloper.microsoft.com/) for that flow. Identity/account verification still applies.
 
@@ -71,15 +79,30 @@ The existing [model-license evidence](model-licenses.md) is the starting point. 
 
 **4. Sign the application — you provide account access; I implement and verify**
 
-- [ ] **Mac:** obtain a Developer ID Application certificate, configure signing/notarization credentials securely, sign the app and bundled executables, notarize, staple and verify the downloaded distribution on a separate Mac. Developer ID Application signs the app; Developer ID Installer is for an Installer Package if we use one. [Apple certificate guide](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
+- [x] **Mac account:** user reports the Apple Developer account is ready.
+- [ ] **Mac certificate — next setup step:** inspect the chosen signing environment for an existing valid Developer ID Application identity with its private key. Reuse it where appropriate; create a certificate if needed. Record the Apple Team ID and keep the private key in the protected signing environment. Developer ID Application signs the app; Developer ID Installer is only needed if we choose an Installer Package. [Apple certificate guide](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
+- [ ] **Mac notarization access:** configure the chosen team's notarization credentials securely on the isolated signing machine. The current pipeline accepts an Apple ID, app-specific password and Team ID; verify access without putting credentials in chat or the repository. Record renewal/recovery arrangements.
+- [ ] **Mac candidate signing:** prepare a maintained native Apple-Silicon build in isolated directories, sign the app and embedded worker/native libraries with the required runtime options and entitlements, and retain the signature verification report. This depends on the build work in section 6.
+- [ ] **Mac notarization and distribution:** submit the signed candidate to Apple's notarization service, inspect the result, attach the notarization ticket and validate it for the app and final DMG. Verify Gatekeeper acceptance and real inference from that downloaded candidate on a separate Mac, followed by the update/data tests in sections 5 and 7. [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
 - [ ] **Windows distribution:** decide Store MSIX, direct installer, or both before buying a certificate.
 - [x] **Store identity:** reserved LocalSR product supplied by the user and recorded in the [local MSIX preparation guide](microsoft-store.md). The layout tool and Store artwork are prepared locally; Windows packaging and installed acceptance remain open.
-- [ ] **Windows Store, if selected:** prepare an MSIX package with the required identity and capabilities; test the bundled Python/GPU engine, model downloads, writable data locations and upgrades on Windows. Complete Store certification and verify installation of the Microsoft-signed package. Free signing does not establish LocalSR package compatibility or certification in advance.
+- [ ] **Windows Store:** complete the ordered Store checklist below, including installation of the Microsoft-signed package after certification. Local layout preparation does not establish installed compatibility or certification.
 - [ ] **Windows direct installer, if retained:** choose a provider that supports your identity/country and unattended signing, adapt the pipeline to its key-storage method, then sign and timestamp the app and installer and verify Authenticode trust. This also applies to submitting an EXE/MSI installer to the Store.
 - [ ] **Linux:** create the selected distributable package, retain its checksums and provide signed updater artifacts. Test the package on the advertised distributions.
 - [ ] Document certificate/key renewal and a recovery contact. Store secrets in the chosen protected signing environment.
 
 The current Windows workflow builds an EXE and expects PFX input. A future Store edition needs a separate MSIX packaging and acceptance path; a retained direct installer must follow its selected provider's supported signing method. Record the chosen trust path and its actual acceptance evidence in the future beta readiness register. The current trust requirement remains unresolved. The current Mac workflow also requires a native ARM64 runner but is still routed to the old X64 label; both routing and actual build capacity need correction in the future beta workflow.
+
+**Microsoft Store: current preview to publication, in order**
+
+- [ ] **1. Choose Windows engines.** Keep CPU processing available and decide which GPU backends the first Store candidate includes. Test each advertised backend on matching hardware. One x64 Store identity does not choose between separate CPU/CUDA/DirectML packages by GPU vendor; settle engine delivery before creating alternative packages.
+- [ ] **2. Finish Store integration.** Make update controls use Store-managed updates and prevent a cached direct-distribution engine override from replacing the packaged engine. Verify writable data paths, WebView2 availability and preservation of existing preferences, recipes, queue data and downloaded models.
+- [ ] **3. Build the native MSIX.** Use the reserved identity, a documented Store package version and the complete frozen engine/runtime dependencies. Build in an isolated Windows environment, run MakeAppx schema validation and the Windows App Certification Kit, and retain package hashes and reports. The [Store preparation guide](microsoft-store.md) has the commands; its 18 layout tests do not replace these checks.
+- [ ] **4. Test the installed candidate.** Complete section 7 on the exact MSIX: fresh install, downloads/imports, image enhancement, representative long MOV export, media switching/playback, aligned render tiles, ETA, separate CPU/GPU benchmarks, cancellation/restart and resource-pressure recovery. Test an upgrade between two package versions and data preservation; check reinstall/uninstall separately. The last recorded Windows rerun still needs completion on the current candidate.
+- [ ] **5. Finalize the public beta offering.** Complete the checkpoint decisions in section 3, state the supported/Labs limits, and provide working privacy/support information and a feedback route accessible to friends and Reddit testers.
+- [ ] **6. Complete listing, upload and certification.** Write the English listing and capture four real Windows screenshots (1920 × 1080 PNG recommended; one is the minimum). Add reviewer instructions for the local worker, model downloads and `runFullTrust`, then upload the tested MSIX. Review the release timing/visibility before submitting; after certification, release according to the approved settings and verify installation and updates through the Store. Microsoft provides the Store MSIX signature; a paid Windows certificate is not required for this route.
+
+The user asked to add this work to the beta to-do list on 12 September 2026. This records pending work, not authorization to upload or publish. Package and listing requirements are documented by [Microsoft](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/create-app-submission); see also [MSIX signing](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements) and [screenshot specifications](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images).
 
 **5. Enable production updates — I prepare; we verify together**
 
@@ -134,4 +157,4 @@ Today that command correctly fails because beta requirements are unresolved. Thi
 
 **Our next conversation step**
 
-The audience is now friends and Reddit volunteers, and maintenance capacity during university is limited. Publisher identity is still pending. Next, confirm that identity and assess Store MSIX feasibility before deciding whether any paid Windows certificate is needed. Then agree a beta scope that can be maintained with the available time and turn it into a build/test plan.
+Apple account setup is reported ready. Next, prepare the Developer ID Application certificate and notarization access for the planned Mac download, then build and verify a signed candidate on isolated infrastructure. The ordered Microsoft Store work remains on this list. Record the remaining publisher/team details during signing setup and agree the supported platform/model scope before candidate builds. The audience remains friends and Reddit volunteers, with limited maintenance capacity during university.
