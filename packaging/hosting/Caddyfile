@@ -2,7 +2,7 @@
     admin off
     auto_https off
 }
-http://127.0.0.1:8788 {
+http://:8788 {
     bind 127.0.0.1
     root * /mnt/hdd/localsr-downloads/public
     @write not method GET HEAD
