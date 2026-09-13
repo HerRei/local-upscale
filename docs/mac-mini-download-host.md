@@ -26,6 +26,12 @@ Loopback checks passed: full download SHA-256, HEAD, byte ranges, resumed conten
 
 No public endpoint or Funnel is enabled. The public root contains only a status marker. The public address still needs selecting. A free Tailscale Funnel address avoids a new domain but has non-configurable bandwidth limits. A custom domain needs DNS and reachable HTTPS. [Funnel requirements](https://tailscale.com/docs/features/tailscale-funnel#requirements-and-limitations).
 
+## Automatic recovery evidence
+
+On 13 September a controlled SIGKILL targeted only the new Caddy process. Systemd restarted it automatically and HTTP access recovered. Boot enablement and the HDD mount dependency were verified. The host boot ID and existing CI receiver PID were unchanged; no host, VM or runner restart occurred. Full host reboot/power-loss recovery remains untested.
+
+The dedicated [macmini-infra documentation](https://github.com/HerRei/macmini-infra/blob/main/docs/localsr-downloads.md) and its dated snapshot contain the recorded configuration and recovery results.
+
 ## Artifacts and publication blockers
 
 The website's `v0.0.11-alpha` links point into private `HerRei/local-upscale`; unauthenticated requests return 404. Recovered copies of all three assets match the published hashes:
