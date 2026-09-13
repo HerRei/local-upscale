@@ -1,0 +1,39 @@
+[Unit]
+Description=LocalSR isolated read-only downloads
+After=network.target
+RequiresMountsFor=/mnt/hdd/localsr-downloads/public
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/opt/localsr-downloads/caddy run --config /opt/localsr-downloads/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+Nice=15
+CPUWeight=10
+CPUQuota=20%
+IOWeight=10
+MemoryMax=128M
+TasksMax=64
+LimitNOFILE=1024
+Environment=GOMAXPROCS=1
+
+[Install]
+WantedBy=multi-user.target

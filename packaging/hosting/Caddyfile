@@ -1,0 +1,26 @@
+{
+    admin off
+    auto_https off
+}
+http://127.0.0.1:8788 {
+    bind 127.0.0.1
+    root * /mnt/hdd/localsr-downloads/public
+    @write not method GET HEAD
+    respond @write 405
+    @hidden path_regexp hidden (^|/)\.
+    respond @hidden 404
+    @incomplete path *.partial *.tmp
+    respond @incomplete 404
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+    @immutable path /releases/*
+    header @immutable Cache-Control "public, max-age=31536000, immutable"
+    file_server
+    handle_errors {
+        header Cache-Control no-store
+        respond "{err.status_text}" {err.status_code}
+    }
+}

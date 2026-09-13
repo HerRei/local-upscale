@@ -208,3 +208,7 @@ PyTorch, Spandrel, the retained legacy Slint host, vendored SeedVR2 code, and ex
 checkpoints retain their own licenses. Model files are not relicensed or bundled merely because the
 app offers a verified download. See [third-party notices](THIRD_PARTY_NOTICES.md) before
 redistributing a build.
+
+## Build and download host
+
+See [Mac mini operations and download-host status](docs/mac-mini-download-host.md) for the separate CI and release-file services, verified behavior and publication blockers.
