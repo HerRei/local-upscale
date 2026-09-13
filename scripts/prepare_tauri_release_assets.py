@@ -30,6 +30,17 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def lock_sha256_candidates(lock: Path) -> set[str]:
+    content = lock.read_bytes()
+    normalized = content.replace(b"\r\n", b"\n")
+    crlf = normalized.replace(b"\n", b"\r\n")
+    return {
+        sha256(lock),
+        hashlib.sha256(normalized).hexdigest(),
+        hashlib.sha256(crlf).hexdigest(),
+    }
+
+
 def locate_exact(root: Path, filename: str) -> Path:
     if PurePath(filename).name != filename:
         raise ValueError(f"unsafe release filename: {filename!r}")
@@ -418,7 +429,7 @@ def prepare(
                 not isinstance(dependencies, dict)
                 or dependencies.get("schema_version") != 1
                 or dependencies.get("target") != entry["id"]
-                or dependencies.get("source_lock_sha256") != sha256(lock)
+                or dependencies.get("source_lock_sha256") not in lock_sha256_candidates(lock)
                 or not dependencies.get("wheels")
             ):
                 raise ValueError(f"{filename} has no matching locked wheelhouse provenance")

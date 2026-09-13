@@ -27,10 +27,15 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def lock_bytes(lock: Path) -> bytes:
+    return lock.read_bytes().replace(b"\r\n", b"\n")
+
+
 def cache_key(lock: Path) -> str:
     digest = hashlib.sha256()
     for source in (lock, Path(__file__), ROOT / "requirements/build-tools.txt"):
-        digest.update(source.read_bytes())
+        data = lock_bytes(source) if source == lock else source.read_bytes()
+        digest.update(data)
     digest.update(
         f"{sys.implementation.name}:{sys.version}:{sys.platform}:{platform.machine()}".encode()
     )
@@ -150,7 +155,7 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
             "schema_version": 1,
             "key": key,
             "target": target,
-            "source_lock_sha256": sha256(lock),
+            "source_lock_sha256": hashlib.sha256(lock_bytes(lock)).hexdigest(),
             "wheels": records,
         }
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

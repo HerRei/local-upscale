@@ -565,3 +565,16 @@ def test_release_matrix_rejects_cross_attempt_commit_mixing(tmp_path: Path) -> N
         source.rename(destination / source.name)
     with pytest.raises(ValueError, match="mixes commits"):
         prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
+
+
+def test_release_matrix_accepts_crlf_and_lf_wheelhouse_locks(tmp_path: Path) -> None:
+    staging, manifest, output, readiness = release_fixture(tmp_path)
+    path = next(staging.rglob("*Windows-CUDA*.metadata.json"))
+    data = json.loads(path.read_text())
+    from release_targets import ROOT
+    lock = ROOT / "requirements/locks/windows-x86_64-cuda.txt"
+    crlf_hash = hashlib.sha256(lock.read_bytes().replace(b"\n", b"\r\n")).hexdigest()
+    data["dependency_wheelhouse"]["source_lock_sha256"] = crlf_hash
+    path.write_text(json.dumps(data))
+    index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
+    assert index_path.is_file()
