@@ -660,7 +660,7 @@ fn video_comparison_sources(
     let (original, enhanced) = {
         let database = lock(&state.database)?;
         let media = database
-            .get_media(&media_id)?
+            .get_media(media_id)?
             .ok_or_else(|| AppError::Validation("the selected video is no longer queued".into()))?;
         if media.kind != "video" {
             return Err(AppError::Validation(
@@ -668,7 +668,7 @@ fn video_comparison_sources(
             ));
         }
         let output = database
-            .latest_completed_output_for_media(&media_id)?
+            .latest_completed_output_for_media(media_id)?
             .ok_or_else(|| AppError::Validation("this video has no completed output".into()))?;
         (PathBuf::from(media.path), PathBuf::from(output))
     };
@@ -689,7 +689,7 @@ fn video_comparison_sources(
             state.video_preview.convert(
                 &path,
                 &state.paths.work_root,
-                worker::codec_helper_command(&state, &app)?,
+                worker::codec_helper_command(state, app)?,
                 Arc::clone(&cancel),
                 move |mut data| {
                     data["request_id"] = json!(request);
