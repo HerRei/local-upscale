@@ -221,7 +221,7 @@ def test_linux_smoke_falls_back_to_extracted_apprun_on_direct_launch_failure(
 
     assert len(calls) == 2
     assert calls[0][0] == [str(artifact), "--headless-smoke-test"]
-    assert calls[1][0][0].endswith("/AppRun")
+    assert Path(calls[1][0][0]).name == "AppRun"
     assert calls[1][0][1:] == ["--headless-smoke-test"]
     assert "APPDIR" in calls[1][1]
     assert calls[1][1]["APPIMAGE"] == str(artifact.resolve())
@@ -262,7 +262,7 @@ def test_linux_smoke_uses_unsquashfs_extraction_for_rocm_backend(
 
     # When ROCm is detected with unsquashfs, direct smoke is skipped; AppRun is invoked directly
     assert len(calls) == 1
-    assert calls[0][0][0].endswith("/AppRun")
+    assert Path(calls[0][0][0]).name == "AppRun"
     assert calls[0][0][1:] == ["--headless-smoke-test"]
     assert calls[0][1]["APPIMAGE"] == str(artifact.resolve())
 

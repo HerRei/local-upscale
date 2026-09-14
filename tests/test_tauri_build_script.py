@@ -266,6 +266,7 @@ def test_linuxdeploy_removes_plugin_copied_host_libraries_before_packaging(
     assert tool.read_text() == original
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux packaging specific")
 def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: Path) -> None:
     appimage_dir = tmp_path / "bundle" / "appimage"
     appdir = appimage_dir / "LocalSR Next Preview.AppDir"

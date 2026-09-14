@@ -585,7 +585,8 @@ def test_release_matrix_accepts_crlf_and_lf_wheelhouse_locks(tmp_path: Path) -> 
     from release_targets import ROOT
 
     lock = ROOT / "requirements/locks/windows-x86_64-cuda.txt"
-    crlf_hash = hashlib.sha256(lock.read_bytes().replace(b"\n", b"\r\n")).hexdigest()
+    normalized = lock.read_bytes().replace(b"\r\n", b"\n")
+    crlf_hash = hashlib.sha256(normalized.replace(b"\n", b"\r\n")).hexdigest()
     data["dependency_wheelhouse"]["source_lock_sha256"] = crlf_hash
     path.write_text(json.dumps(data))
     index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
