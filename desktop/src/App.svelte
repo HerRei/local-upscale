@@ -1457,22 +1457,21 @@
       <button class:active={page === 'preview'} on:click={() => (page = 'preview')}>Preview</button>
       <button class:active={page === 'enhance'} on:click={() => (page = 'enhance')}>Enhance</button>
     </nav>
-    <button
-      class="brand-mark"
-      type="button"
-      aria-label="Performance & diagnostics"
-      title="Performance & diagnostics"
-      on:click={showPerformance}><i></i><i></i><i></i></button
-    >
+    <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
     <div class="toolbar-actions">
-      <button class="button compact benchmark-shortcut" type="button" on:click={showPerformance}
-        >Run Benchmark</button
-      >
       <button
-        class="button primary compact add-media"
-        disabled={settingsLocked}
-        on:click={() => addFiles()}>＋ Add Media</button
+        class="button compact benchmark-shortcut"
+        type="button"
+        title="Benchmark this computer, watch live memory, copy diagnostics"
+        on:click={showPerformance}>Performance</button
       >
+      {#if snapshot.media.length}
+        <button
+          class="button primary compact add-media"
+          disabled={settingsLocked}
+          on:click={() => addFiles()}>＋ Add Media</button
+        >
+      {/if}
     </div>
   </header>
 
@@ -1489,7 +1488,6 @@
       {inflightMediaIds}
       {setBatchMode}
       {selectQueueMedia}
-      {addFiles}
       {addFolder}
       removeMedia={async (id) => {
         await api.removeMedia(id);
@@ -2113,10 +2111,9 @@
         </fieldset>
         <section class="about-block">
           <div class="about-heading"><b>LocalSR</b><span>{snapshot.app_version}</span></div>
-          <button class="about-link" on:click={showPerformance}>Performance</button><button
+          <button class="about-link" on:click={copyDiagnostics}>Copy diagnostics</button><button
             class="about-link"
-            on:click={copyDiagnostics}>Copy diagnostics</button
-          ><button class="about-link" on:click={showIntegrations}>System integrations</button
+            on:click={showIntegrations}>System integrations</button
           ><UpdatePanel
             processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
           />

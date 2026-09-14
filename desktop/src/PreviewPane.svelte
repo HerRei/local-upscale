@@ -879,7 +879,8 @@
         <MediaIllustration />
         <h2>Choose an image or video to enhance</h2>
         <p>Upscale photos, artwork and video, or remove noise<br />with private local AI models.</p>
-        <button class="button primary" on:click={() => addFiles()}>Add Media</button>
+        <button class="button primary" on:click={() => addFiles()}>＋ Add Media</button>
+        <p class="canvas-hint">Or add a whole folder from the Media pane.</p>
       </div>
     {/if}
   </div>

@@ -13,7 +13,6 @@
   export let inflightMediaIds: Set<string>;
   export let setBatchMode: (value: boolean) => void;
   export let selectQueueMedia: (id: string) => Promise<void>;
-  export let addFiles: (replace?: boolean) => Promise<void>;
   export let addFolder: () => Promise<void>;
   export let removeMedia: (id: string) => Promise<void>;
   export let clearMedia: () => Promise<void>;
@@ -43,9 +42,8 @@
   {#if items.length === 0}
     <div class="empty-card">
       <div class="empty-plus">＋</div>
-      <strong>Add media</strong>
-      <p>Images, camera RAW, or video clips</p>
-      <button class="button" on:click={() => addFiles(false)}>Choose…</button>
+      <strong>No media yet</strong>
+      <p>Use <b>＋ Add Media</b> in the toolbar for images, camera RAW, or video clips.</p>
     </div>
   {:else}
     <div class="media-list">
@@ -110,11 +108,9 @@
   <div class="media-actions">
     <button
       class="button"
+      title="Add every image in a folder as a batch"
       disabled={benchmarkRunning || Boolean(activeJobId)}
-      on:click={() => addFiles(false)}>{items.length ? 'Add More…' : 'Choose…'}</button
-    >
-    <button class="button" disabled={benchmarkRunning || Boolean(activeJobId)} on:click={addFolder}
-      >Add Folder…</button
+      on:click={addFolder}>Add Folder…</button
     >
     {#if items.length}<button
         class="button danger ghost"

@@ -336,14 +336,14 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('heading', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Choose an image or video to enhance')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '＋ Add Media' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '＋ Add Media' })).toHaveLength(1);
     expect(document.querySelector('.media-illustration svg .play-mark')).toBeTruthy();
   });
 
   it('makes the real benchmark discoverable and starts it from the toolbar', async () => {
     const user = await mountWith(readySnapshot());
 
-    const shortcut = screen.getByRole('button', { name: 'Run Benchmark' });
+    const shortcut = screen.getByRole('button', { name: 'Performance' });
     shortcut.focus();
     await user.keyboard('{Enter}');
 
@@ -357,7 +357,7 @@ describe('LocalSR desktop interface', () => {
 
   it('runs the selected CPU independently of the enhancement GPU', async () => {
     const user = await mountWith(readySnapshot());
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const dialog = await screen.findByRole('dialog');
     await user.selectOptions(
       within(dialog).getByRole('combobox', { name: 'Benchmark device' }),
@@ -378,7 +378,7 @@ describe('LocalSR desktop interface', () => {
         }),
     );
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const dialog = within(screen.getByRole('dialog'));
     const device = dialog.getByRole('combobox', { name: 'Benchmark device' });
     await user.selectOptions(device, 'cpu');
@@ -397,7 +397,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
     api.downloadModel.mockRejectedValueOnce(new Error('download cancelled'));
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const dialog = within(screen.getByRole('dialog'));
     await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
     expect((await dialog.findByRole('alert')).textContent).toContain('download cancelled');
@@ -411,7 +411,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot();
     snapshot.runtime.download_model_id = 'seedvr2_3b_fp8';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const dialog = within(screen.getByRole('dialog'));
     expect(
       dialog.getByText('Wait for the current model download to finish before benchmarking.'),
@@ -425,7 +425,7 @@ describe('LocalSR desktop interface', () => {
   it('keeps benchmark launch errors visible beside a retryable button', async () => {
     api.startBenchmark.mockRejectedValueOnce(new Error('selected device unavailable'));
     const user = await mountWith(readySnapshot());
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const dialog = within(screen.getByRole('dialog'));
     await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
     expect((await dialog.findByRole('alert')).textContent).toContain('selected device unavailable');
@@ -441,7 +441,7 @@ describe('LocalSR desktop interface', () => {
       ...navigator,
       clipboard: { writeText: vi.fn(async () => undefined) },
     });
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
 
     callback({
@@ -572,7 +572,7 @@ describe('LocalSR desktop interface', () => {
     };
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
     const dialog = await screen.findByRole('dialog');
 
     expect(dialog.classList.contains('performance-modal')).toBe(true);
@@ -1190,7 +1190,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Run Benchmark' }).matches(':disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Performance' }).matches(':disabled')).toBe(false);
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;

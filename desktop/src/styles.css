@@ -668,6 +668,11 @@ input:focus-visible {
   margin: 14px 0 8px;
   font-size: calc(16px * var(--ui-scale));
 }
+.canvas-hint {
+  margin-top: 14px;
+  color: var(--tertiary);
+  font-size: calc(11px * var(--ui-scale));
+}
 .canvas-empty p {
   margin: 0 0 18px;
   color: var(--tertiary);
