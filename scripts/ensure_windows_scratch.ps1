@@ -13,3 +13,7 @@ Write-Host "Windows C: size=$sizeGiB GiB free=$freeGiB GiB required-free=$Minimu
 if ($volume.SizeRemaining -lt ($MinimumFreeGiB * 1GB)) {
     throw "Windows scratch has less than $MinimumFreeGiB GiB free"
 }
+
+try {
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -ErrorAction SilentlyContinue
+} catch {}
