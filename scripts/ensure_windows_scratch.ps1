@@ -17,3 +17,16 @@ if ($volume.SizeRemaining -lt ($MinimumFreeGiB * 1GB)) {
 try {
     Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -ErrorAction SilentlyContinue
 } catch {}
+
+try {
+    # Prevent Windows sleep, hibernation, and screen/disk turn-off during long builds
+    powercfg /change standby-timeout-ac 0
+    powercfg /change standby-timeout-dc 0
+    powercfg /change monitor-timeout-ac 0
+    powercfg /change monitor-timeout-dc 0
+    powercfg /change hibernate-timeout-ac 0
+    powercfg /change hibernate-timeout-dc 0
+    powercfg /change disk-timeout-ac 0
+    powercfg /change disk-timeout-dc 0
+} catch {}
+
