@@ -411,6 +411,12 @@ def prepare(
                 or probe != smoke.get("backend_probe")
             ):
                 raise ValueError(f"{filename} has no verified installed backend identity")
+            if entry["backend"] == "Intel-XPU" and (
+                probe.get("xpu_runtime_files_verified") is not True
+                or not isinstance(probe.get("xpu_runtime_library_count"), int)
+                or probe["xpu_runtime_library_count"] < 5
+            ):
+                raise ValueError(f"{filename} has no verified bundled Intel runtime files")
         if entry["platform"] != "macos":
             dependencies = metadata.get("dependency_wheelhouse")
             lock = ROOT / "requirements/locks" / f"{entry['id']}.txt"

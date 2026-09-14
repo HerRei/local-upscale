@@ -61,6 +61,13 @@ Missing or corrupted files abort installation. The installed frozen worker recei
 identity/CPU-inference probe as the other variants. This does not change worker packaging to
 portable Python and does not claim GPU execution on the packaging VM.
 
+Linux XPU packaging collects Intel SYCL/UR/oneMKL native libraries and device data from their
+installed wheel records, including dynamically loaded adapters that ELF dependency scanning
+cannot discover. It preserves distribution metadata and licenses. The frozen worker checks the
+recorded inventory, Torch version, and each native library's x86-64 ELF header during the installed
+backend probe. Publication requires that evidence in addition to CPU inference; it does not
+substitute for execution on a physical Intel GPU.
+
 Oversized Linux AppImages are published as verified parts plus a generated shell helper that
 reconstructs and verifies the original executable. `release-index.json` lists the exact files for
 each logical distribution; public file counts therefore vary with payload size.

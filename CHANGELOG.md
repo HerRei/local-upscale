@@ -30,6 +30,7 @@ Release history and changes in the next beta candidate.
 - Preserve all eight Tauri backend variants with a generated release matrix and per-backend validation.
 - Deliver Windows CUDA through the installer plus verified external engine payloads.
 - Reuse locked dependency wheelhouses and persist platform build caches.
+- Include dynamically loaded Intel SYCL/UR adapters and device libraries in XPU packages, and verify their installed inventory before publication.
 - This remains a testing alpha: Windows is unsigned and the Mac ARM cross-build has static validation only.
 
 ## [0.0.11-alpha] - 2026-09-03
