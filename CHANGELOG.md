@@ -20,6 +20,15 @@ Release history and changes in the next beta candidate.
 - Select beta release metadata and readiness checks automatically in local CI while preserving the alpha checks.
 - Final dependency/source distribution, packaging and publication checks remain on the beta checklist.
 
+## [0.0.13-alpha] - 2026-09-14
+
+- Intel XPU runtime bundling and device selection updates for Linux/Windows.
+- Streamlined noninteractive automation CLI with deferred heavy module imports and sub-second `--help` response.
+- Windows CI test reliability hardening for subprocess execution timeouts.
+- Robust Linux AppImage packaging using system gzip repacking and unsquashfs payload extraction for smoke tests on AMD ROCm.
+- Prioritized Windows-first release matrix ordering across CUDA, CPU, and DirectML targets.
+- Retain all 8 cross-platform backend variants across macOS (Apple Silicon MPS), Windows (CUDA, CPU, DirectML), and Linux (AMD-ROCm, CPU, CUDA, Intel-XPU).
+
 ## [0.0.12-alpha] - 2026-09-06
 
 - Separate image-job execution and progress reporting; release previews and temporary outputs on failures.
