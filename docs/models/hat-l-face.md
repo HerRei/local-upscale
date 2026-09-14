@@ -71,7 +71,6 @@ becomes available as a companion. In the Tauri desktop, select stock HAT-L as th
 primary checkpoint, enable its face-aware pass, acknowledge the checkpoint terms,
 and choose the exact external file. Face-aware processing requires the local OpenCV
 detector runtime. Face checkpoints are companions, not primary choices in Tauri.
-The legacy Slint picker also supports selecting a face checkpoint directly.
 
 ## Limitations and trade-offs
 

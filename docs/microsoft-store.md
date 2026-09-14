@@ -29,7 +29,16 @@ Local verification: **18 packaging tests passed**, plus a real command-line
 manifest preview and checks of the generated XML, identity and Store icon sizes.
 Architecture/error-path tests use binary fixtures; they do not execute a Windows
 worker. Temporary verification files were removed. No native MSIX binary was
-built, installed, uploaded or certified by these local checks.
+built by that initial layout-only check.
+
+The subsequent [native acceptance](beta-acceptance-2026-09-12.md) built a complete
+CPU/DirectML MSIX, installed it on Windows 11 / Intel UHD 620 and successfully
+upgraded through test versions 1.0.0.0–1.0.5.0. Settings, recipes, downloaded
+models and logical queue data survived, with version backups. Installed HAT,
+SPAN, CPU restoration, comparison switching, cancellation/recovery and separate
+CPU/iGPU benchmarks have real evidence. These packages are locally test-signed;
+the unsigned Store upload package is retained separately. WACK, final public
+content and actual Store certification remain open. No Store upload was made.
 
 To inspect the manifest without Windows binaries:
 
@@ -56,8 +65,9 @@ EXE/MSI installers, so an MSIX requires the separate Microsoft SDK packaging ste
 2. Build the Tauri host with `npm run tauri -- build --no-bundle --config
    <absolute-path-to-tauri-store.conf.json>`, from `desktop`. Set a dedicated
    `CARGO_TARGET_DIR`. Explicitly clear `LOCALSR_UPDATE_PUBLIC_KEY` before compiling
-   this candidate. The Store overlay disables Tauri updater artifacts; the runtime
-   update controls still need adaptation for Store-managed updates before release.
+   this candidate. Build with the `microsoft-store` Cargo feature. The Store overlay
+   disables Tauri updater artifacts; runtime controls use Microsoft Store and
+   reject direct updater or cached engine overrides for this distribution.
 3. Stage those exact binaries. For example, from the repository root in PowerShell:
 
 ```powershell
@@ -94,11 +104,11 @@ DirectML to a CPU engine. [Intel GPU support](intel-gpu-support.md).
 
 **Acceptance still required**
 
-- Fresh installation with the complete engine and a usable WebView2 runtime.
-- App launch, CPU inference and any advertised GPU backend on the actual package.
-- Model download/import, video import/export, cancellation and benchmarks.
-- Store-managed updates and the corresponding update UI; prevent direct updater
-  or cached engine overrides from replacing the Store-managed engine.
+- Finish final-package WACK, video-switching acceptance and public screenshots.
+- Preserve the successful fresh installation, engine startup, model, video,
+  CPU/DirectML benchmark and cancellation/recovery evidence.
+- Verify the Microsoft-signed Store installation/update after certification;
+  local MSIX upgrade evidence does not establish that Store transaction.
 - Existing settings/recipes/models when moving from the unpackaged app, plus
   persistence across a Store update. Verify MSIX data virtualization and uninstall
   behavior explicitly; the staging tool does not change data locations.
@@ -113,8 +123,9 @@ The remaining work is tracked in the [beta checklist](beta-release-checklist.md)
 Local [listing text, reviewer instructions and the Windows screenshot plan](beta-store-submission.md)
 are now prepared, along with a [privacy/support draft](beta-privacy-and-support.md).
 The contact is confirmed as `hermes.reisner@gmail.com`, with GitHub Issues for bug
-reports. The drafts still need publisher details and engine delivery; no Store field,
-public website or installed package was changed by preparing these materials.
+reports. The drafts still need publisher details and the final retained-engine
+delivery decision. Public pages and Store fields remain unchanged; the isolated
+Windows acceptance installation is documented separately.
 Sources: [Microsoft manual packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion),
 [MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool),
 [Store package requirements and signing](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements),

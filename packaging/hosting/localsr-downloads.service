@@ -1,0 +1,37 @@
+# Review template. Do not install/enable during the .12 build pause.
+[Unit]
+Description=LocalSR release downloads
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/mnt/hdd/localsr-releases/public
+ConditionPathExists=/mnt/hdd/localsr-releases/public/health.txt
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=notify
+User=localsr-downloads
+Group=localsr-downloads
+EnvironmentFile=/etc/localsr-downloads/environment
+Environment=XDG_DATA_HOME=/var/lib/localsr-downloads
+Environment=XDG_CONFIG_HOME=/var/lib/localsr-downloads/config
+ExecStart=/usr/bin/caddy run --config /etc/localsr-downloads/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+StateDirectory=localsr-downloads
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/mnt/hdd/localsr-releases/public
+ReadWritePaths=/var/lib/localsr-downloads
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+MemoryMax=512M
+TasksMax=128
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

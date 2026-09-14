@@ -324,6 +324,30 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
     if os.environ.get("LOCALSR_SKIP_DIRECTML_PROBE") == "1":
         return
     try:
+        from .onnx_runtime import directml_available
+
+        if directml_available():
+            from .windows_adapters import directml_adapters
+
+            for adapter in directml_adapters():
+                dedicated = adapter["dedicated_memory"]
+                integrated = dedicated < 512 * 1024**2
+                budget = (
+                    min(available_ram // 2, dedicated) if not integrated else available_ram // 2
+                )
+                devices.append(
+                    {
+                        "id": f"directml:{adapter['index']}",
+                        "type": "directml",
+                        "name": f"{adapter['name']} (DirectML)",
+                        "total_memory": total_ram if integrated else dedicated,
+                        "free_memory": budget,
+                        "supports_fp16": False,
+                        "recommended_tile_sizes": _recommended_tiles(budget),
+                        "is_integrated": integrated,
+                    }
+                )
+            return
         import torch_directml
 
         if torch_directml.is_available():
@@ -333,7 +357,7 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
                 # the intended GPU on hybrid laptops without changing its ID.
                 name = f"DirectML Device {index}"
                 try:
-                    adapter_name = torch_directml.device_name(index).strip()
+                    adapter_name = torch_directml.device_name(index).split("\x00", 1)[0].strip()
                     if adapter_name:
                         name = f"{adapter_name} (DirectML)"
                 except (AttributeError, OSError, RuntimeError, ValueError):

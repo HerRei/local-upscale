@@ -38,9 +38,7 @@ on:
       - "tests/test_worker_protocol_contract.py"
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
-      - "packaging/localsr.spec"
       - "pyproject.toml"
-      - ".github/workflows/release.yml"
       - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   pull_request:
@@ -80,9 +78,7 @@ on:
       - "tests/test_worker_protocol_contract.py"
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
-      - "packaging/localsr.spec"
       - "pyproject.toml"
-      - ".github/workflows/release.yml"
       - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   workflow_dispatch:
@@ -125,8 +121,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
             --blocked-workflow "v0.0.12 Mac mini Cross Alpha" \
-            --blocked-workflow "Signed Tauri Alpha Release" \
-            --blocked-workflow "Legacy Slint Build (manual)"
+            --blocked-workflow "Signed Tauri Alpha Release"
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \

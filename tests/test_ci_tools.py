@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import struct
 import subprocess
 import sys
@@ -46,6 +47,7 @@ scratch = None if sys.platform == "win32" else load_script(ROOT / "scripts" / "c
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
 frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 release_version = load_script(ROOT / "scripts" / "check_release_version.py")
+public_beta = load_script(ROOT / "scripts" / "check_public_beta.py")
 beta_readiness = load_script(ROOT / "scripts" / "check_beta_readiness.py")
 runner_preflight = load_script(ROOT / "scripts" / "release_runner_preflight.py")
 release_scratch = load_script(ROOT / "scripts" / "release_scratch.py")
@@ -165,27 +167,104 @@ def test_release_verifier_rejects_duplicate_archive_digests():
 
 
 def test_release_metadata_is_synchronized():
-    assert release_version.check("v0.0.12-alpha", ROOT) == "0.0.12-alpha"
+    assert public_beta.check("v0.0.13-beta.1", ROOT) == "0.0.13-beta.1"
+    assert release_version.check("v0.0.13-beta.1", ROOT) == "0.0.13-beta.1"
+
+
+@pytest.mark.parametrize("require_ready, expected_code", [(False, 0), (True, 1)])
+def test_readiness_cli_uses_beta_register_and_keeps_publication_blocked(
+    require_ready, expected_code
+):
+    command = [sys.executable, "-B", str(ROOT / "scripts/check_beta_readiness.py")]
+    if require_ready:
+        command.append("--require-beta-ready")
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == expected_code, result.stderr
+    assert "register valid for v0.0.13-beta.1" in result.stdout
+    assert "publication-and-certification" in result.stdout
+
+
+def copy_release_metadata(destination: Path) -> None:
+    paths = [
+        "pyproject.toml",
+        "src/localsr/__init__.py",
+        "README.md",
+        "CHANGELOG.md",
+        "docs/releasing.md",
+        "desktop/package.json",
+        "desktop/package-lock.json",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/Cargo.lock",
+        "desktop/src-tauri/tauri.conf.json",
+        "ci/tauri-targets.json",
+        "ci/tauri-release-artifacts.json",
+        "ci/v0.0.12-cross-alpha-artifacts.json",
+        "ci/beta-readiness.json",
+        "ci/public-beta-release.json",
+        "ci/public-beta-readiness.json",
+        "packaging/updates/production.pub",
+        "docs/releases/v0.0.12-alpha.md",
+        "docs/releases/v0.0.13-beta.1.md",
+        ".github/workflows/desktop-release.yml",
+        ".github/workflows/v0.0.12-cross-alpha.yml",
+    ]
+    for relative in paths:
+        path = destination / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, path)
+
+
+def test_preserved_alpha_metadata_still_satisfies_its_unchanged_gates(tmp_path):
+    copy_release_metadata(tmp_path)
+    for relative in (
+        "README.md",
+        "pyproject.toml",
+        "src/localsr/__init__.py",
+        "desktop/package.json",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/tauri.conf.json",
+    ):
+        path = tmp_path / relative
+        path.write_text(path.read_text().replace("0.0.13-beta.1", "0.0.12-alpha"))
+    assert release_version.check("v0.0.12-alpha", tmp_path) == "0.0.12-alpha"
+    assert not beta_readiness.validate(tmp_path / "ci/beta-readiness.json", tmp_path)["beta_ready"]
+
+
+def test_public_beta_rejects_wrong_tag_missing_backend_and_stale_lock(tmp_path):
+    copy_release_metadata(tmp_path)
+    with pytest.raises(ValueError, match="tag"):
+        public_beta.check("v0.0.12-alpha", tmp_path)
+    plan_path = tmp_path / "ci/public-beta-release.json"
+    original = plan_path.read_text()
+    plan = json.loads(original)
+    plan["targets"].pop()
+    plan_path.write_text(json.dumps(plan))
+    with pytest.raises(ValueError, match="every agreed backend"):
+        public_beta.check(root=tmp_path)
+    plan_path.write_text(original)
+    lock_path = tmp_path / "desktop/package-lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["packages"][""]["version"] = "0.0.12-alpha"
+    lock_path.write_text(json.dumps(lock))
+    with pytest.raises(ValueError, match="versions disagree"):
+        public_beta.check(root=tmp_path)
 
 
 def test_beta_readiness_register_is_valid_and_honest():
-    data = beta_readiness.validate(ROOT / "ci" / "beta-readiness.json", ROOT)
-    assert data["release"] == "0.0.12-alpha"
+    data = beta_readiness.validate(ROOT / "ci" / "public-beta-readiness.json", ROOT)
+    assert data["release"] == "0.0.13-beta.1"
     assert data["beta_ready"] is False
     statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
-    assert statuses["automated-release-integrity"] == "automated-pass"
-    assert statuses["macos-production-trust"] == "waiting-credentials"
-    assert statuses["legacy-runtime-support"] == "decision-required"
-    assert statuses["security-monitoring"] == "decision-required"
-    assert statuses["standard-video-acceptance"] == "manual-required"
-    assert statuses["temporal-video-labs"] == "labs"
-    assert not next(gate for gate in data["gates"] if gate["id"] == "temporal-video-labs")[
+    assert statuses["batch-rendering-and-comparison"] == "manual-pass"
+    assert statuses["publication-and-certification"] == "decision-required"
+    assert statuses["hdr-and-temporal-quality"] == "labs"
+    assert not next(gate for gate in data["gates"] if gate["id"] == "hdr-and-temporal-quality")[
         "blocking"
     ]
 
 
 def test_optional_labs_do_not_block_an_otherwise_ready_release(tmp_path):
-    data = json.loads((ROOT / "ci/beta-readiness.json").read_text())
+    data = json.loads((ROOT / "ci/public-beta-readiness.json").read_text())
     for gate in data["gates"]:
         if gate["blocking"]:
             gate["status"] = "automated-pass"
@@ -193,15 +272,19 @@ def test_optional_labs_do_not_block_an_otherwise_ready_release(tmp_path):
     path = tmp_path / "readiness.json"
     path.write_text(json.dumps(data))
     assert beta_readiness.validate(path, ROOT)["beta_ready"]
-    data["gates"][-1]["blocking"] = True
+    optional_lab = next(
+        gate for gate in data["gates"] if not gate["blocking"] and gate["status"] == "labs"
+    )
+    optional_lab["blocking"] = True
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="disagrees"):
         beta_readiness.validate(path, ROOT)
 
 
 def test_manual_acceptance_requires_evidence(tmp_path):
-    data = json.loads((ROOT / "ci/beta-readiness.json").read_text())
+    data = json.loads((ROOT / "ci/public-beta-readiness.json").read_text())
     data["gates"][0]["status"] = "manual-pass"
+    data["gates"][0].pop("evidence", None)
     path = tmp_path / "readiness.json"
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="evidence"):
@@ -334,18 +417,6 @@ def test_release_asset_confirmation_requires_exact_set():
     }
 
 
-def test_release_workflow_publishes_compact_verified_asset_set():
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    publish = workflow.split("  publish-release:", 1)[1].split("  retention-maintenance:", 1)[0]
-    assert '--tag "$GITHUB_REF_NAME"' in publish
-    assert "--shell-installer install.sh" in publish
-    assert "--powershell-installer install.ps1" in publish
-    assert "--allow-unexpected" in publish
-    assert "--unexpected-output" in publish
-    assert 'gh release delete-asset "$TAG" "$stale_asset" --yes' in publish
-    assert publish.count("scripts/confirm_release_assets.py") == 2
-
-
 def test_release_installer_templates_have_one_tag_marker_and_compact_manifest_support():
     shell = (ROOT / "install.sh").read_text(encoding="utf-8")
     powershell = (ROOT / "install.ps1").read_text(encoding="utf-8")
@@ -435,25 +506,13 @@ def test_scratch_prune_removes_only_allowed_active_run_components(tmp_path: Path
     assert (directory / ".active").is_file()
 
 
-def test_linux_release_bounds_cache_before_pruning_build_inputs():
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    linux_job = workflow.split("  build-linux-flavors:", 1)[1].split("  build-windows-flavors:", 1)[
-        0
-    ]
-    cache_trim = "ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2"
-    prune = "ci_scratch.py prune"
-    assert cache_trim in linux_job
-    assert prune in linux_job
-    assert linux_job.index(cache_trim) < linux_job.index(prune)
-
-
 def test_macos_signing_secrets_are_not_job_scoped():
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    macos_job = workflow.split("  build-macos-flavors:", 1)[1].split("  verify-artifacts:", 1)[0]
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(encoding="utf-8")
+    macos_job = workflow.split("  build-macos-arm64:", 1)[1].split("  verify-release-matrix:", 1)[0]
     job_configuration = macos_job.split("    steps:", 1)[0]
-    signing_step = macos_job.split("      - name: Sign, notarize, and archive the verified app", 1)[
-        1
-    ].split("      - name:", 1)[0]
+    signing_step = macos_job.split(
+        "      - name: Build, sign, notarize, staple, and smoke-test the DMG", 1
+    )[1].split("      - name:", 1)[0]
     secret_names = (
         "MACOS_CERTIFICATE_P12_BASE64",
         "MACOS_CERTIFICATE_PASSWORD",
@@ -464,7 +523,7 @@ def test_macos_signing_secrets_are_not_job_scoped():
     )
     assert "secrets." not in job_configuration
     for name in secret_names:
-        assert f"{name}: ${{{{ secrets.{name} }}}}" in signing_step
+        assert f"secrets.{name}" in signing_step
 
 
 def test_arm_verifier_rejects_x86_member(tmp_path: Path):

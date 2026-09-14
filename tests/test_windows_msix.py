@@ -54,6 +54,9 @@ def test_store_identity_and_manifest_preview(tmp_path: Path) -> None:
         root.find("m:Applications/m:Application", ns).get("EntryPoint")
         == "Windows.FullTrustApplication"
     )
+    application = root.find("m:Applications/m:Application", ns)
+    assert application.get(f"{{{msix.UAP10}}}RuntimeBehavior") == "packagedClassicApp"
+    assert application.get(f"{{{msix.UAP10}}}TrustLevel") == "mediumIL"
     assert [node.get("Name") for node in root.findall("m:Capabilities/r:Capability", ns)] == [
         "runFullTrust"
     ]
@@ -120,6 +123,21 @@ def test_checkpoint_is_not_silently_redistributed(tmp_path: Path) -> None:
     (engine / "face.pth").write_bytes(b"user model")
     with pytest.raises(ValueError, match="checkpoints"):
         msix.prepare(tmp_path / "store", "1.0.0.0", app=app, engine=engine, backend="cpu")
+
+
+def test_only_exact_reviewed_text_embeddings_are_allowed(tmp_path: Path) -> None:
+    app, engine = artifacts(tmp_path)
+    relative = "_internal/localsr/video_models/seedvr2/pos_emb.safetensors"
+    conditioning = engine / relative
+    conditioning.parent.mkdir(parents=True)
+    source = ROOT / "src/localsr/video_models/seedvr2/pos_emb.safetensors"
+    conditioning.write_bytes(source.read_bytes())
+    assert msix.is_bundled_conditioning(relative, conditioning)
+    assert not msix.is_bundled_conditioning("_internal/other.safetensors", conditioning)
+    msix.prepare(tmp_path / "valid", "1.0.0.0", app=app, engine=engine, backend="directml")
+    conditioning.write_bytes(b"different model under the same name")
+    with pytest.raises(ValueError, match="checkpoints"):
+        msix.prepare(tmp_path / "invalid", "1.0.0.0", app=app, engine=engine, backend="directml")
 
 
 def test_existing_output_is_preserved(tmp_path: Path) -> None:

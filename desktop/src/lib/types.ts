@@ -115,6 +115,9 @@ export interface JobRecord {
   output_path: string;
   error: string;
   created_at: number;
+  work_key?: string;
+  work_units?: number;
+  elapsed_seconds?: number;
 }
 
 export interface DeviceInfo {
@@ -246,6 +249,10 @@ export interface RuntimeStatus {
   progress: number;
   last_output_path: string;
   result_preview_data_url: string;
+  comparison_media_id?: string;
+  comparison_output_path?: string;
+  comparison_preview_data_url?: string;
+  comparison_error?: string;
   download_model_id: string;
   download_progress: number;
   elapsed_seconds: number;
@@ -282,7 +289,7 @@ export interface BenchmarkSceneResult {
   median_ms: number;
   p05_ms: number;
   p95_ms: number;
-  cv_percent: number;
+  cv_percent: number | null;
   megapixels_per_second: number;
   encode_ms?: number | null;
   preview?: BenchmarkRender | null;
@@ -298,7 +305,7 @@ export interface BenchmarkDeviceResult {
   peak_memory_bytes?: number | null;
   peak_device_memory_bytes?: number | null;
   stable: boolean;
-  cv_percent: number;
+  cv_percent: number | null;
   score: number;
   scenes: BenchmarkSceneResult[];
 }
@@ -326,14 +333,24 @@ export interface BenchmarkResult {
   system_score?: number | null;
   cpu_score?: number | null;
   stable?: boolean;
-  cv_percent?: number;
+  cv_percent?: number | null;
   result_elapsed_seconds?: number;
   thermal_state?: string;
   reference_label?: string | null;
   reference_ratio?: number | null;
 }
 
+export interface VideoComparisonProgress {
+  request_id: string;
+  media_id: string;
+  stage: string;
+  frame: number;
+  total: number;
+  elapsed_seconds: number;
+}
+
 export interface VideoComparisonSources {
+  playback_note?: string;
   original_url: string;
   enhanced_url: string;
 }

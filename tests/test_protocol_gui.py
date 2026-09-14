@@ -145,7 +145,7 @@ def test_packaged_worker_command_prefers_sibling_executable(monkeypatch, tmp_pat
     assert worker_command() == (str(worker), [])
 
 
-def test_main_window_button_states_and_signals(tmp_path):
+def test_main_window_button_states_and_signals(qtbot, tmp_path):
     """
     F2.3 & F2.4 & F3.3: Verify MainWindow connects all WorkerClient signals,
     updates button states correctly on job_completed or job_cancelled, and
@@ -153,6 +153,7 @@ def test_main_window_button_states_and_signals(tmp_path):
     """
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
     window = MainWindow(start_worker=False, settings=settings)
+    qtbot.addWidget(window)
     window.image_path = str(tmp_path / "input.png")
     window.model_path = str(tmp_path / "model.pth")
     window.image_w = 100

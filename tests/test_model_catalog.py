@@ -79,6 +79,34 @@ def test_catalog_has_all_curated_models():
     assert len({model.filename for model in MODEL_CATALOG}) == 12
 
 
+def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
+    import time
+
+    model = _synthetic_test_model(content=b"good")
+    path = tmp_path / model.filename
+    path.write_bytes(b"good")
+    original_stat = path.stat()
+    real_stat = Path.stat
+    # Reproduce Windows returning identical inode/size/timestamps for rapid writes.
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda self, *args, **kwargs: (
+            original_stat if self == path else real_stat(self, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(time, "time_ns", lambda: original_stat.st_mtime_ns + 100_000_000)
+    store = ModelStore(tmp_path)
+    assert store.is_installed(model)
+    path.write_bytes(b"evil")
+    assert not store.is_installed(model)
+    path.write_bytes(b"good")
+    assert store.is_installed(model)
+    path.write_bytes(b"evil")
+    monkeypatch.setattr(time, "time_ns", lambda: original_stat.st_mtime_ns + 3_000_000_000)
+    assert not store.is_installed(model)
+
+
 def test_face_detector_is_pinned_but_not_exposed_as_a_restoration_model():
     assert FACE_DETECTOR_MODEL not in MODEL_CATALOG
     assert FACE_DETECTOR_MODEL.filename == "face_detection_yunet_2023mar.onnx"
@@ -109,7 +137,6 @@ def test_catalog_attributes_and_integrity():
             "Apache-2.0",
             "CC-BY-4.0",
             "CC BY 4.0",
-            "CC-BY-0.4 (upstream; clarify)",
             "CC BY-NC-SA 4.0",
             "Checkpoint rights unverified",
             "BSD-3-Clause",
@@ -132,8 +159,9 @@ def test_catalog_attributes_and_integrity():
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
         model = get_model_by_id(model_id)
         assert model is not None
-        assert model.commercial_use_status == "unclear"
-        assert "clarify" in model.license_name
+        assert model.commercial_use_status == "allowed"
+        assert model.license_name == "CC BY 4.0"
+        assert model.source_url.startswith("https://huggingface.co/Phips/")
 
     native_x2 = get_model_by_id("realesrgan_x2plus")
     assert native_x2 is not None

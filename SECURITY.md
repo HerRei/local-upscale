@@ -1,31 +1,35 @@
-# Security Policy
+# Security policy
 
-## Reporting a vulnerability
+## Report a vulnerability
 
-Use the repository's private GitHub Security Advisory form. Do not open a public issue for a
-checkpoint-loading, arbitrary-code-execution, path traversal, unsafe file replacement, or download
-integrity vulnerability. While the repository remains private, that route is limited to people
-with repository access; a general-public security contact is still a required beta decision.
+Email [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com), or use the
+repository's private security advisory form if available to you. Include the
+version, platform and steps needed to reproduce the issue. Send reports about
+code execution, checkpoint loading, file access or download integrity privately.
 
-## Model checkpoint warning
+Do not include credentials, signing keys, private media or a full queue database.
 
-PyTorch pickle and TorchScript checkpoints may execute code while loading. LocalSR accepts custom
-`.safetensors` normally, but blocks unverified `.pth`, `.pt`, and `.ckpt` files by default. Curated
-downloads must match their pinned byte size and SHA-256 immediately before Spandrel sees them. The
-`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` override is not a sandbox; use it only when you have
-independently authenticated and trust the checkpoint as executable code.
+## Checkpoint trust
 
-SeedVR2's bundled text-conditioning embeddings are Safetensors and their expected tensor keys,
-shapes, and dtype are validated before use. Normal Labs execution does not load bundled `.pt`
-objects.
+LocalSR accepts custom `.safetensors` files and blocks unverified pickle or
+TorchScript checkpoints by default. Curated downloads must match the catalog's
+byte size and SHA-256 immediately before loading.
 
-## Alpha download trust
+`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` explicitly allows unverified `.pth`, `.pt`
+and `.ckpt` files. Such files can execute code while loading; only enable it for
+checkpoints whose publisher and contents you trust. The worker is isolated from
+the interface for recovery, but is not a security sandbox.
 
-Verify every portable archive against its release `.sha256` sidecar. Checksums detect corruption
-but do not replace platform code signing: current alpha downloads are not Developer ID notarized or
-Authenticode signed and must not be represented as public-beta builds.
+SeedVR2's bundled conditioning assets use Safetensors. Their tensor keys, shapes
+and dtype are validated before use.
 
-## Supported versions
+## Release trust
 
-Security fixes currently target the latest commit on `main`; there is not yet a stable release
-branch.
+Checksums detect changed or corrupted files. Public direct-download packages also
+require signature verification; Store application updates are managed by Microsoft
+Store. Earlier unsigned alpha packages are not substitutes for a signed beta.
+
+The current beta is still under review. Known dependency issues and uncompleted
+release checks are documented in the [limitations](KNOWN_LIMITATIONS.md) and
+[dependency review](docs/beta-dependency-review.md). No stable release branch or
+long-term security support period has been established.

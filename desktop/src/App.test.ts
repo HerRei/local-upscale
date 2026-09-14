@@ -6,20 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type {
-  AppSnapshot,
-  LaunchIntent,
-  MediaItem,
-  UiSettings,
-  WorkerEnvelope
-} from './lib/types';
+import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings, WorkerEnvelope } from './lib/types';
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
   bootstrap: vi.fn(),
   refreshSnapshot: vi.fn(),
   chooseMediaFiles: vi.fn(async (): Promise<string[]> => []),
-  chooseMediaFolder: vi.fn(async (): Promise<string[]> => []),
+  chooseMediaFolder: vi.fn(
+    async (): Promise<{ paths: string[]; outputDirectory: string } | null> => null,
+  ),
   chooseOutputDirectory: vi.fn(async () => null),
   chooseCustomModel: vi.fn(async () => null),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
@@ -31,10 +27,13 @@ const api = vi.hoisted(() => ({
   cancelJobs: vi.fn(async () => undefined),
   startBenchmark: vi.fn(async () => undefined),
   exportBenchmark: vi.fn(async () => true),
+  cancelVideoComparison: vi.fn(async () => {}),
+  listenVideoComparisonProgress: vi.fn(async () => () => {}),
   prepareVideoComparison: vi.fn(async () => ({
     original_url: 'asset://localhost/original.mp4',
-    enhanced_url: 'asset://localhost/enhanced.mp4'
+    enhanced_url: 'asset://localhost/enhanced.mp4',
   })),
+  requestImageComparison: vi.fn(async (_mediaId: string): Promise<void> => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
@@ -42,9 +41,21 @@ const api = vi.hoisted(() => ({
   importCatalogModel: vi.fn(async () => undefined),
   saveRecipe: vi.fn(async () => undefined),
   deleteRecipe: vi.fn(async () => undefined),
-  updateStatus: vi.fn(async () => ({ configured:false,channel:'beta',target:'',stage:'idle',version:'',notes:'',size:0,downloaded:0,message:'',settings_recovery:false })),
+  updateStatus: vi.fn(async () => ({
+    configured: false,
+    channel: 'beta',
+    target: '',
+    stage: 'idle',
+    version: '',
+    notes: '',
+    size: 0,
+    downloaded: 0,
+    message: '',
+    settings_recovery: false,
+  })),
   listenForUpdates: vi.fn(async () => () => {}),
   openModelLicense: vi.fn(async () => undefined),
+  openModelSource: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
@@ -54,17 +65,20 @@ const api = vi.hoisted(() => ({
     platform: 'macos',
     installed: false,
     summary: 'Optional file-manager actions are not installed.',
-    command_name: 'localsr-next'
+    command_name: 'localsr-next',
   })),
   installIntegrations: vi.fn(),
   uninstallIntegrations: vi.fn(),
   listenForWorker: vi.fn(
-    async (_callback: (message: { type: string; data: Record<string, unknown> }) => void): Promise<() => void> =>
-      () => undefined
+    async (
+      _callback: (message: { type: string; data: Record<string, unknown> }) => void,
+    ): Promise<() => void> =>
+      () =>
+        undefined,
   ),
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async () => () => undefined),
-  listenForLaunchIntent: vi.fn(async () => () => undefined)
+  listenForLaunchIntent: vi.fn(async () => () => undefined),
 }));
 
 vi.mock('./lib/api', () => api);
@@ -83,7 +97,7 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
       free_memory: 8 * 1024 ** 3,
       supports_fp16: true,
       is_integrated: true,
-      recommended_tile_sizes: [64, 128, 192]
+      recommended_tile_sizes: [64, 128, 192],
     },
     {
       id: 'cpu',
@@ -93,8 +107,8 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
       free_memory: 8 * 1024 ** 3,
       supports_fp16: false,
       is_integrated: false,
-      recommended_tile_sizes: [64, 128]
-    }
+      recommended_tile_sizes: [64, 128],
+    },
   ];
   snapshot.settings.device_id = 'mps';
   snapshot.engine = {
@@ -104,13 +118,13 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     engine_version: '0.0.11-alpha',
     features: ['image', 'video_frame', 'video_seedvr2'],
     model_formats: ['.safetensors'],
-    video_engines: ['spandrel_image', 'seedvr2']
+    video_engines: ['spandrel_image', 'seedvr2'],
   };
   snapshot.runtime = {
     ...snapshot.runtime,
     worker: 'ready',
     status_title: 'Ready',
-    status_detail: 'The isolated inference engine is ready.'
+    status_detail: 'The isolated inference engine is ready.',
   };
   return snapshot;
 }
@@ -129,7 +143,7 @@ function image(id: string, selected = false): MediaItem {
     preview_data_url: 'data:image/png;base64,iVBORw0KGgo=',
     probe_status: 'ready',
     error: '',
-    selected
+    selected,
   };
 }
 
@@ -141,7 +155,7 @@ function video(id: string, selected = false): MediaItem {
     kind: 'video',
     frame_count: 24,
     fps: 24,
-    duration_seconds: 1
+    duration_seconds: 1,
   };
 }
 
@@ -157,6 +171,26 @@ async function chooseTask(user: ReturnType<typeof userEvent.setup>, name: RegExp
   await user.click(screen.getByRole('button', { name }));
 }
 
+it.each(['realplksr_nomoswebphoto_x4', 'realplksr_hfa2k_anime_x4'])(
+  'downloads %s using its declared license and the selected model identity',
+  async (modelId) => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.selected_model_id = modelId;
+    snapshot.catalog.models.find((model) => model.model_id === modelId)!.installed = false;
+    const user = await mountWith(snapshot);
+    expect(screen.getByRole('note', { name: 'Model license' }).textContent).toContain('CC BY 4.0');
+    await user.click(screen.getByRole('button', { name: /Model source/ }));
+    await user.click(screen.getByRole('button', { name: /License terms/ }));
+    expect(api.openModelSource).toHaveBeenCalledWith(modelId);
+    expect(api.openModelLicense).toHaveBeenCalledWith(modelId);
+    await user.click(screen.getByRole('button', { name: /Download .* MB/ }));
+    expect(api.downloadModel).toHaveBeenCalledWith(modelId, false);
+    expect(api.importCatalogModel).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  },
+);
+
 beforeEach(() => {
   vi.clearAllMocks();
   api.isTauri.mockReturnValue(true);
@@ -171,11 +205,13 @@ beforeEach(() => {
   api.listenForNativeMenu.mockResolvedValue(() => undefined);
   api.listenForLaunchIntent.mockResolvedValue(() => undefined);
   api.takeLaunchIntents.mockResolvedValue([]);
+  api.chooseMediaFolder.mockReset().mockResolvedValue(null);
+  api.requestImageComparison.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
     fillRect: vi.fn(),
-    fillStyle: ''
+    fillStyle: '',
   } as unknown as CanvasRenderingContext2D);
 });
 
@@ -186,13 +222,88 @@ afterEach(() => {
 });
 
 describe('LocalSR desktop interface', () => {
+  it('puts an imported folder batch in a LocalSR Results subfolder', async () => {
+    const snapshot = readySnapshot();
+    const user = await mountWith(snapshot);
+    api.chooseMediaFolder.mockResolvedValueOnce({
+      paths: ['/Scans/a.png', '/Scans/b.png'],
+      outputDirectory: '/Scans/LocalSR Results',
+    });
+    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await waitFor(() =>
+      expect(api.addMedia).toHaveBeenCalledWith(['/Scans/a.png', '/Scans/b.png'], false),
+    );
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ batch_mode: true, output_directory: '/Scans/LocalSR Results' }),
+      ),
+    );
+  });
+
+  it('keeps the current destination when the folder picker is cancelled', async () => {
+    const snapshot = readySnapshot();
+    const user = await mountWith(snapshot);
+    api.saveSettings.mockClear();
+    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    expect(api.addMedia).not.toHaveBeenCalled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('loads an earlier batch result and keeps its slider while a different image runs', async () => {
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.jobs = [
+      {
+        id: 'later-job',
+        media_id: 'second',
+        media_name: 'second.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 20,
+        output_path: '',
+        error: '',
+        created_at: 2,
+      },
+      {
+        id: 'earlier-job',
+        media_id: 'first',
+        media_name: 'first.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/results/first-denoised.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    snapshot.runtime.active_job_id = 'later-job';
+    api.requestImageComparison.mockImplementationOnce(async () => {
+      snapshot.runtime.comparison_media_id = 'first';
+      snapshot.runtime.comparison_output_path = '/results/first-denoised.png';
+      snapshot.runtime.comparison_preview_data_url = 'data:image/jpeg;base64,denoised-first';
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.requestImageComparison).toHaveBeenCalledWith('first'));
+    const slider = await screen.findByRole('slider', { name: 'Before and after comparison' });
+    await fireEvent.keyDown(slider, { key: 'End' });
+    expect(slider.getAttribute('aria-valuenow')).toBe('100');
+    expect(document.querySelector('.result-image')?.getAttribute('src')).toContain(
+      'denoised-first',
+    );
+  });
+
   it('does not register native listeners if bootstrap finishes after the window closes', async () => {
     let finishBootstrap!: (snapshot: AppSnapshot) => void;
-    api.bootstrap.mockImplementationOnce(() => new Promise(resolve => { finishBootstrap = resolve; }));
+    api.bootstrap.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    );
     const app = render(App);
     app.unmount();
     finishBootstrap(readySnapshot());
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(api.listenForWorker).not.toHaveBeenCalled();
     expect(api.listenForStateChange).not.toHaveBeenCalled();
     expect(api.takeLaunchIntents).not.toHaveBeenCalled();
@@ -202,7 +313,12 @@ describe('LocalSR desktop interface', () => {
     let finishRegistration!: (unlisten: () => void) => void;
     const unlisten = vi.fn();
     api.bootstrap.mockResolvedValue(readySnapshot());
-    api.listenForWorker.mockImplementationOnce(() => new Promise(resolve => { finishRegistration = resolve; }));
+    api.listenForWorker.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRegistration = resolve;
+        }),
+    );
     const app = render(App);
     await waitFor(() => expect(api.listenForWorker).toHaveBeenCalledOnce());
     app.unmount();
@@ -233,7 +349,7 @@ describe('LocalSR desktop interface', () => {
     expect(await screen.findByRole('heading', { name: 'Performance & Diagnostics' })).toBeTruthy();
     expect(screen.getByText('Apple GPU (Metal)')).toBeTruthy();
     await user.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Run Benchmark' })
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Run Benchmark' }),
     );
     await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
   });
@@ -242,16 +358,24 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(readySnapshot());
     await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
     const dialog = await screen.findByRole('dialog');
-    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Benchmark device' }), 'cpu');
+    await user.selectOptions(
+      within(dialog).getByRole('combobox', { name: 'Benchmark device' }),
+      'cpu',
+    );
     await user.click(within(dialog).getByRole('button', { name: 'Run Benchmark' }));
     await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('cpu'));
   });
 
   it('downloads the missing benchmark model once before starting the selected device', async () => {
     const snapshot = readySnapshot();
-    snapshot.catalog.models.find(model => model.model_id === 'span_photo_x4')!.installed = false;
+    snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
     let finishDownload!: () => void;
-    api.downloadModel.mockImplementationOnce(() => new Promise(resolve => { finishDownload = () => resolve(undefined); }));
+    api.downloadModel.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishDownload = () => resolve(undefined);
+        }),
+    );
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
     const dialog = within(screen.getByRole('dialog'));
@@ -269,7 +393,7 @@ describe('LocalSR desktop interface', () => {
 
   it('shows a failed or cancelled model download beside the benchmark button and allows retry', async () => {
     const snapshot = readySnapshot();
-    snapshot.catalog.models.find(model => model.model_id === 'span_photo_x4')!.installed = false;
+    snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
     api.downloadModel.mockRejectedValueOnce(new Error('download cancelled'));
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
@@ -288,7 +412,9 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
     const dialog = within(screen.getByRole('dialog'));
-    expect(dialog.getByText('Wait for the current model download to finish before benchmarking.')).toBeTruthy();
+    expect(
+      dialog.getByText('Wait for the current model download to finish before benchmarking.'),
+    ).toBeTruthy();
     await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
     expect(api.startBenchmark).not.toHaveBeenCalled();
     expect(api.downloadModel).not.toHaveBeenCalled();
@@ -302,7 +428,9 @@ describe('LocalSR desktop interface', () => {
     const dialog = within(screen.getByRole('dialog'));
     await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
     expect((await dialog.findByRole('alert')).textContent).toContain('selected device unavailable');
-    expect((dialog.getByRole('button', { name: 'Run Benchmark' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (dialog.getByRole('button', { name: 'Run Benchmark' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     expect(api.downloadModel).not.toHaveBeenCalled();
   });
 
@@ -310,28 +438,28 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(readySnapshot());
     vi.stubGlobal('navigator', {
       ...navigator,
-      clipboard: { writeText: vi.fn(async () => undefined) }
+      clipboard: { writeText: vi.fn(async () => undefined) },
     });
     await user.click(screen.getByRole('button', { name: 'Run Benchmark' }));
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
 
     callback({
       type: 'benchmark_started',
-      data: { job_id: 'benchmark-1', warmup_count: 1, measured_frame_count: 5 }
+      data: { job_id: 'benchmark-1', warmup_count: 1, measured_frame_count: 5 },
     });
     expect(
       await within(screen.getByRole('dialog')).findByText(
-        'Warming up 1 iteration · then measuring 5 frames'
-      )
+        'Warming up 1 iteration · then measuring 5 frames',
+      ),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Cancel Benchmark' })).toBeTruthy();
 
     callback({
       type: 'benchmark_progress',
-      data: { job_id: 'benchmark-1', completed_frames: 3, total_frames: 5, percentage: 60 }
+      data: { job_id: 'benchmark-1', completed_frames: 3, total_frames: 5, percentage: 60 },
     });
     expect(
-      await within(screen.getByRole('dialog')).findByText('Measured 3 of 5 frames')
+      await within(screen.getByRole('dialog')).findByText('Measured 3 of 5 frames'),
     ).toBeTruthy();
 
     callback({
@@ -355,14 +483,14 @@ describe('LocalSR desktop interface', () => {
           processed_megapixels_per_second: 0.8689,
           total_elapsed_seconds: 0.0943,
           peak_memory_bytes: 448413696,
-          score: 868.86
-        }
-      }
+          score: 868.86,
+        },
+      },
     });
     expect(await screen.findByText('868.86')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Copy JSON' }));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      expect.stringContaining('"workload_version": "localsr-benchmark-v1"')
+      expect.stringContaining('"workload_version": "localsr-benchmark-v1"'),
     );
     await user.click(screen.getByRole('button', { name: 'Export JSON…' }));
     expect(api.exportBenchmark).toHaveBeenCalledTimes(1);
@@ -422,9 +550,9 @@ describe('LocalSR desktop interface', () => {
               p95_ms: 170.3,
               cv_percent: 2.1,
               megapixels_per_second: 25.4,
-              encode_ms: null
-            }
-          ]
+              encode_ms: null,
+            },
+          ],
         },
         {
           device: 'cpu',
@@ -437,9 +565,9 @@ describe('LocalSR desktop interface', () => {
           stable: true,
           cv_percent: 2.2,
           score: 4.07,
-          scenes: []
-        }
-      ]
+          scenes: [],
+        },
+      ],
     };
     const user = await mountWith(snapshot);
 
@@ -451,7 +579,9 @@ describe('LocalSR desktop interface', () => {
     expect(within(dialog).getByText('● Stable result')).toBeTruthy();
     expect(within(dialog).getByText('1.07×')).toBeTruthy();
     expect(within(dialog).getByText('Apple M1 Pro (16-core GPU)')).toBeTruthy();
-    expect(within(dialog).getByRole('article', { name: 'Apple GPU (Metal) benchmark result' })).toBeTruthy();
+    expect(
+      within(dialog).getByRole('article', { name: 'Apple GPU (Metal) benchmark result' }),
+    ).toBeTruthy();
     expect(within(dialog).getByRole('article', { name: 'CPU benchmark result' })).toBeTruthy();
     expect(within(dialog).getByText('Hardware results')).toBeTruthy();
   });
@@ -466,31 +596,43 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
   });
 
-  it.each([false, true])('keeps pending and failed videos out of processing (batch=%s)', async (batch) => {
-    const media = video('portrait', true);
-    media.width = media.height = 0;
-    media.preview_data_url = '';
-    media.probe_status = 'pending';
-    const snapshot = readySnapshot([media]);
-    snapshot.settings.batch_mode = batch;
-    const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
-    expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
-    expect(screen.getAllByText('Preparing preview…').length).toBe(2);
-    expect(screen.queryByText('Inspecting…')).toBeNull();
-    const button = screen.getByRole('button', { name: batch ? 'Start 1 item' : 'Start selected video' });
-    expect(button.hasAttribute('disabled')).toBe(true);
+  it.each([false, true])(
+    'keeps pending and failed videos out of processing (batch=%s)',
+    async (batch) => {
+      const media = video('portrait', true);
+      media.width = media.height = 0;
+      media.preview_data_url = '';
+      media.probe_status = 'pending';
+      const snapshot = readySnapshot([media]);
+      snapshot.settings.batch_mode = batch;
+      const user = await mountWith(snapshot);
+      await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
+      expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
+      expect(screen.getAllByText('Preparing preview…').length).toBe(2);
+      expect(screen.queryByText('Inspecting…')).toBeNull();
+      const button = screen.getByRole('button', {
+        name: batch ? 'Start 1 item' : 'Start selected video',
+      });
+      expect(button.hasAttribute('disabled')).toBe(true);
 
-    const failed = structuredClone(snapshot);
-    failed.media[0].probe_status = 'failed';
-    failed.media[0].error = 'Cannot decode this video.';
-    api.refreshSnapshot.mockResolvedValue(failed);
-    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
-    callback({ type: 'media_probe_failed', data: { media_path: media.path, error_message: failed.media[0].error } });
-    expect(await screen.findByRole('heading', { name: 'Preview unavailable' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: batch ? 'Start 1 item' : 'Start selected video' }).hasAttribute('disabled')).toBe(true);
-    expect(api.startJobs).not.toHaveBeenCalled();
-  });
+      const failed = structuredClone(snapshot);
+      failed.media[0].probe_status = 'failed';
+      failed.media[0].error = 'Cannot decode this video.';
+      api.refreshSnapshot.mockResolvedValue(failed);
+      const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+      callback({
+        type: 'media_probe_failed',
+        data: { media_path: media.path, error_message: failed.media[0].error },
+      });
+      expect(await screen.findByRole('heading', { name: 'Preview unavailable' })).toBeTruthy();
+      expect(
+        screen
+          .getByRole('button', { name: batch ? 'Start 1 item' : 'Start selected video' })
+          .hasAttribute('disabled'),
+      ).toBe(true);
+      expect(api.startJobs).not.toHaveBeenCalled();
+    },
+  );
 
   it('shows preview encoding failures as non-fatal warnings', async () => {
     await mountWith(readySnapshot([image('first', true)]));
@@ -498,7 +640,7 @@ describe('LocalSR desktop interface', () => {
 
     callback({
       type: 'live_preview_warning',
-      data: { job_id: 'job-1', message: 'JPEG encoder unavailable' }
+      data: { job_id: 'job-1', message: 'JPEG encoder unavailable' },
     });
 
     expect(await screen.findByText(/Preview warning: JPEG encoder unavailable/)).toBeTruthy();
@@ -516,36 +658,68 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
-    callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'decoding_video' } });
+    callback({
+      type: 'media_probe_progress',
+      data: { media_path: media.path, stage: 'decoding_video' },
+    });
     expect(await screen.findByText('Reading the first video frame')).toBeTruthy();
     expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
     // Keep the display at a known second even if a busy CI VM renders slowly.
     clock.mockReturnValue(1_001_250);
     expect(await screen.findByText('1s elapsed', {}, { timeout: 2500 })).toBeTruthy();
-    callback({ type: 'media_probe_progress', data: { media_path: media.path, stage: 'converting_hdr' } });
+    callback({
+      type: 'media_probe_progress',
+      data: { media_path: media.path, stage: 'converting_hdr' },
+    });
     expect(await screen.findByText('Converting HDR to an SDR preview')).toBeTruthy();
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
     refresh();
     await waitFor(() => expect(api.refreshSnapshot).toHaveBeenCalled());
     expect(screen.getByText('Converting HDR to an SDR preview')).toBeTruthy();
     const ready = structuredClone(snapshot);
-    Object.assign(ready.media[0], { probe_status: 'ready', hdr_format: 'HLG', audio_warning: 'Standard audio will be kept. The extra track will be omitted.', preview_data_url: 'data:image/jpeg;base64,test' });
+    Object.assign(ready.media[0], {
+      probe_status: 'ready',
+      hdr_format: 'HLG',
+      audio_warning: 'Standard audio will be kept. The extra track will be omitted.',
+      preview_data_url: 'data:image/jpeg;base64,test',
+    });
     api.refreshSnapshot.mockResolvedValue(ready);
-    callback({ type: 'media_info', data: { media_path: media.path, width: 2160, height: 3840, hdr_format: 'HLG', audio_warning: 'Standard audio will be kept. The extra track will be omitted.', jpeg_base64: 'test' } });
+    callback({
+      type: 'media_info',
+      data: {
+        media_path: media.path,
+        width: 2160,
+        height: 3840,
+        hdr_format: 'HLG',
+        audio_warning: 'Standard audio will be kept. The extra track will be omitted.',
+        jpeg_base64: 'test',
+      },
+    });
     expect(await screen.findByRole('region', { name: 'HDR conversion' })).toBeTruthy();
     expect(screen.getByText(/exported as 8-bit SDR/)).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Audio compatibility' })).toBeTruthy();
     expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Start 1 item' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Start 1 item' }).hasAttribute('disabled')).toBe(
+      false,
+    );
   });
 
   it('switches SeedVR2 to SDR, preserves the custom HDR option, and submits the chosen resolution', async () => {
     const media = { ...video('hdr', true), width: 2160, height: 3840, hdr_format: 'HLG' as const };
     const snapshot = readySnapshot([media]);
-    Object.assign(snapshot.settings, { task: 'video', selected_model_id: 'hat_s_x4',
-      selected_video_model_id: 'frame_by_frame', video_hdr_mode: 'preserve' });
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      selected_model_id: 'hat_s_x4',
+      selected_video_model_id: 'frame_by_frame',
+      video_hdr_mode: 'preserve',
+    });
     snapshot.settings.device_id = 'cuda:0';
-    snapshot.capabilities.devices[0] = { ...snapshot.capabilities.devices[0], id: 'cuda:0', type: 'rocm', name: 'AMD GPU' };
+    snapshot.capabilities.devices[0] = {
+      ...snapshot.capabilities.devices[0],
+      id: 'cuda:0',
+      type: 'rocm',
+      name: 'AMD GPU',
+    };
     const user = await mountWith(snapshot);
     const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
     expect(hdr.value).toBe('preserve');
@@ -560,9 +734,14 @@ describe('LocalSR desktop interface', () => {
     expect(memory.checked).toBe(true);
     await user.click(memory);
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
-    expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({
-      video_model_id: 'seedvr2_3b', video_hdr_mode: 'tone_map', video_target_resolution: 512, video_low_memory: false
-    }));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video_model_id: 'seedvr2_3b',
+        video_hdr_mode: 'tone_map',
+        video_target_resolution: 512,
+        video_low_memory: false,
+      }),
+    );
     await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
     await user.selectOptions(screen.getByLabelText('Frame model'), '__custom__');
     expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(false);
@@ -573,10 +752,18 @@ describe('LocalSR desktop interface', () => {
 
   it('normalizes a saved incompatible HDR setting when reopening SeedVR2', async () => {
     const snapshot = readySnapshot([{ ...video('hdr', true), hdr_format: 'HLG' }]);
-    Object.assign(snapshot.settings, { task: 'video', selected_video_model_id: 'seedvr2_3b', video_hdr_mode: 'preserve' });
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      selected_video_model_id: 'seedvr2_3b',
+      video_hdr_mode: 'preserve',
+    });
     await mountWith(snapshot);
     expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('tone_map');
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ video_hdr_mode: 'tone_map' })));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ video_hdr_mode: 'tone_map' }),
+      ),
+    );
   });
 
   it('saves the current setup as a named recipe beside the built-in recipes', async () => {
@@ -591,11 +778,11 @@ describe('LocalSR desktop interface', () => {
 
     await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
     expect(api.saveRecipe).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Portrait cleanup', task: 'upscale' })
+      expect.objectContaining({ name: 'Portrait cleanup', task: 'upscale' }),
     );
   }, 20_000);
 
-  it('exposes image recipes, hardware controls, and honest face availability', async () => {
+  it('exposes image recipes, hardware controls, and installed face companions', async () => {
     const user = await mountWith(readySnapshot());
     await chooseTask(user, /Upscale\s*Photos and artwork/i);
 
@@ -615,23 +802,42 @@ describe('LocalSR desktop interface', () => {
 
   it.each([
     ['hat_s_x4', 'hat_s_x4_face'],
-    ['hat_l_x4_imagenet', 'hat_l_x4_face']
-  ])('imports the matching face companion for %s without downloading', async (primaryId, faceId) => {
-    const snapshot = readySnapshot([image('portrait', true)]);
-    snapshot.engine!.features.push('face_aware');
-    const face = snapshot.catalog.models.find((model) => model.model_id === faceId)!;
-    face.installed = false;
-    api.chooseCustomModel.mockResolvedValueOnce(`/models/${face.filename}` as never);
-    const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale\s*Photos and artwork/i);
-    await user.selectOptions(screen.getByLabelText('Checkpoint'), primaryId);
-    await user.click(screen.getByRole('checkbox', { name: new RegExp(`Face-aware pass with ${face.name}`) }));
-    expect(screen.getByRole('button', { name: 'Upscale selected' }).hasAttribute('disabled')).toBe(true);
-    await user.click(screen.getByRole('checkbox', { name: /I understand that the checkpoint rights are unresolved/i }));
-    await user.click(screen.getByRole('button', { name: 'Choose externally downloaded face checkpoint…' }));
-    await waitFor(() => expect(api.importCatalogModel).toHaveBeenCalledWith(faceId, `/models/${face.filename}`, true));
-    expect(api.downloadModel).not.toHaveBeenCalled();
-  });
+    ['hat_l_x4_imagenet', 'hat_l_x4_face'],
+  ])(
+    'imports the matching face companion for %s without downloading',
+    async (primaryId, faceId) => {
+      const snapshot = readySnapshot([image('portrait', true)]);
+      snapshot.engine!.features.push('face_aware');
+      const face = snapshot.catalog.models.find((model) => model.model_id === faceId)!;
+      face.installed = false;
+      api.chooseCustomModel.mockResolvedValueOnce(`/models/${face.filename}` as never);
+      const user = await mountWith(snapshot);
+      await chooseTask(user, /Upscale\s*Photos and artwork/i);
+      await user.selectOptions(screen.getByLabelText('Checkpoint'), primaryId);
+      await user.click(
+        screen.getByRole('checkbox', { name: new RegExp(`Face-aware pass with ${face.name}`) }),
+      );
+      expect(
+        screen.getByRole('button', { name: 'Upscale selected' }).hasAttribute('disabled'),
+      ).toBe(true);
+      await user.click(
+        screen.getByRole('checkbox', {
+          name: /I understand that the checkpoint rights are unresolved/i,
+        }),
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Choose externally downloaded face checkpoint…' }),
+      );
+      await waitFor(() =>
+        expect(api.importCatalogModel).toHaveBeenCalledWith(
+          faceId,
+          `/models/${face.filename}`,
+          true,
+        ),
+      );
+      expect(api.downloadModel).not.toHaveBeenCalled();
+    },
+  );
 
   it('labels experimental engines separately from standard video', async () => {
     const user = await mountWith(readySnapshot());
@@ -651,14 +857,44 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
+  it.each(['incompatible-runtime', 'directml:0', 'xpu:0'])(
+    'blocks unavailable SeedVR2 recipes and downloads on %s',
+    async (backend) => {
+      const snapshot = readySnapshot([video('clip', true)]);
+      snapshot.settings.task = 'video';
+      snapshot.settings.selected_video_model_id = 'seedvr2_3b';
+      if (backend === 'incompatible-runtime') snapshot.engine!.video_engines = ['spandrel_image'];
+      else snapshot.settings.device_id = backend;
+      snapshot.catalog.video_models.forEach((model) => {
+        model.installed = false;
+      });
+      const user = await mountWith(snapshot);
+      const option = screen.getByRole('option', { name: /SeedVR2-3B — Labs.*Unavailable/ });
+      expect((option as HTMLOptionElement).disabled).toBe(true);
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(true);
+      expect(screen.getByRole('button', { name: /^Download / }).matches(':disabled')).toBe(true);
+      await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(false);
+      expect(api.downloadModel).not.toHaveBeenCalled();
+    },
+  );
+
   it('keeps processing settings locked while another media item is selected', async () => {
     const snapshot = readySnapshot([image('active-image'), video('next-video', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.runtime.active_job_id = 'image-job';
     const user = await mountWith(snapshot);
-    expect(screen.getByRole('group', { name: 'Processing settings' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('group', { name: 'Processing settings' }).matches(':disabled')).toBe(
+      true,
+    );
     expect(screen.getByRole('button', { name: '＋ Add Media' }).matches(':disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(
+      true,
+    );
     await user.click(screen.getByRole('button', { name: /BestMaximum quality/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
@@ -666,12 +902,20 @@ describe('LocalSR desktop interface', () => {
 
   it('disables media-incompatible task cards', async () => {
     await mountWith(readySnapshot([image('photo', true)]));
-    expect((screen.getByRole('button', { name: /Upscale Video/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: /Upscale Video/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     cleanup();
     await mountWith(readySnapshot([video('clip', true)]));
-    expect((screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: /Denoise\s*Noise and blur/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: /Denoise\s*Noise and blur/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it('preserves every executable backend id from worker discovery to job settings', async () => {
@@ -686,7 +930,7 @@ describe('LocalSR desktop interface', () => {
         free_memory: 8,
         supports_fp16: true,
         is_integrated: false,
-        recommended_tile_sizes: [64, 128]
+        recommended_tile_sizes: [64, 128],
       },
       {
         id: 'cuda:1',
@@ -696,7 +940,7 @@ describe('LocalSR desktop interface', () => {
         free_memory: 8,
         supports_fp16: true,
         is_integrated: false,
-        recommended_tile_sizes: [64, 128]
+        recommended_tile_sizes: [64, 128],
       },
       {
         id: 'xpu:0',
@@ -706,7 +950,7 @@ describe('LocalSR desktop interface', () => {
         free_memory: 6,
         supports_fp16: true,
         is_integrated: true,
-        recommended_tile_sizes: [64, 128]
+        recommended_tile_sizes: [64, 128],
       },
       {
         id: 'directml:0',
@@ -716,8 +960,8 @@ describe('LocalSR desktop interface', () => {
         free_memory: 6,
         supports_fp16: true,
         is_integrated: true,
-        recommended_tile_sizes: [64, 128]
-      }
+        recommended_tile_sizes: [64, 128],
+      },
     ];
     const user = await mountWith(snapshot);
     await chooseTask(user, /Upscale\s*Photos and artwork/i);
@@ -730,7 +974,7 @@ describe('LocalSR desktop interface', () => {
       'NVIDIA GPU (CUDA)',
       'AMD GPU (ROCm)',
       'Intel GPU (XPU)',
-      'Intel(R) Iris(R) Xe Graphics (DirectML)'
+      'Intel(R) Iris(R) Xe Graphics (DirectML)',
     ]) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
@@ -738,43 +982,48 @@ describe('LocalSR desktop interface', () => {
     await user.selectOptions(hardware, 'directml:0');
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ device_id: 'directml:0' })
-      )
+        expect.objectContaining({ device_id: 'directml:0' }),
+      ),
     );
     expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
   });
 
-  it.each(['mps', 'directml:1', 'xpu:0'])('submits one image with the selected %s backend', async (device) => {
-    const snapshot = readySnapshot([image('first', true)]);
-    if (device !== 'mps') {
-      snapshot.capabilities.devices = [
-        snapshot.capabilities.devices[1],
-        {
-          ...snapshot.capabilities.devices[0],
-          id: device,
-          type: device.split(':')[0],
-          name: device.startsWith('directml') ? 'Intel(R) Iris(R) Xe Graphics (DirectML)' : 'Intel GPU (XPU)'
-        }
-      ];
-    }
-    snapshot.settings.device_id = device;
-    const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale\s*Photos and artwork/i);
+  it.each(['mps', 'directml:1', 'xpu:0'])(
+    'submits one image with the selected %s backend',
+    async (device) => {
+      const snapshot = readySnapshot([image('first', true)]);
+      if (device !== 'mps') {
+        snapshot.capabilities.devices = [
+          snapshot.capabilities.devices[1],
+          {
+            ...snapshot.capabilities.devices[0],
+            id: device,
+            type: device.split(':')[0],
+            name: device.startsWith('directml')
+              ? 'Intel(R) Iris(R) Xe Graphics (DirectML)'
+              : 'Intel GPU (XPU)',
+          },
+        ];
+      }
+      snapshot.settings.device_id = device;
+      const user = await mountWith(snapshot);
+      await chooseTask(user, /Upscale\s*Photos and artwork/i);
 
-    const start = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
-    expect(start.disabled).toBe(false);
-    await user.click(start);
+      const start = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
+      expect(start.disabled).toBe(false);
+      await user.click(start);
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        media_ids: ['first'],
-        batch_mode: false,
-        task: 'upscale',
-        device
-      })
-    );
-  });
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          media_ids: ['first'],
+          batch_mode: false,
+          task: 'upscale',
+          device,
+        }),
+      );
+    },
+  );
 
   it('submits every compatible item when batch mode is selected', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
@@ -787,7 +1036,7 @@ describe('LocalSR desktop interface', () => {
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['first', 'second'], batch_mode: true })
+      expect.objectContaining({ media_ids: ['first', 'second'], batch_mode: true }),
     );
   });
 
@@ -795,7 +1044,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([
       video('selected-video', true),
       image('first-image'),
-      image('second-image')
+      image('second-image'),
     ]);
     snapshot.settings.batch_mode = true;
     snapshot.settings.task = 'upscale';
@@ -805,11 +1054,14 @@ describe('LocalSR desktop interface', () => {
     expect(start.disabled).toBe(false);
     expect(
       (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
-        .disabled
+        .disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i }) as HTMLButtonElement)
-        .disabled
+      (
+        screen.getByRole('button', {
+          name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i,
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(false);
     await user.click(start);
 
@@ -818,8 +1070,8 @@ describe('LocalSR desktop interface', () => {
       expect.objectContaining({
         media_ids: ['selected-video'],
         batch_mode: true,
-        task: 'video'
-      })
+        task: 'video',
+      }),
     );
   });
 
@@ -838,7 +1090,7 @@ describe('LocalSR desktop interface', () => {
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['first'], batch_mode: false })
+      expect.objectContaining({ media_ids: ['first'], batch_mode: false }),
     );
   });
 
@@ -853,11 +1105,10 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText(/Single processes only “selected-video.mp4”/i)).toBeTruthy();
     expect(
       (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
-        .disabled
+        .disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement)
-        .disabled
+      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -877,7 +1128,7 @@ describe('LocalSR desktop interface', () => {
     });
     api.takeLaunchIntents
       .mockResolvedValueOnce([
-        { files: ['/private/opened-photo.png'], preset: null, recipe: null, auto_start: false }
+        { files: ['/private/opened-photo.png'], preset: null, recipe: null, auto_start: false },
       ])
       .mockResolvedValueOnce([]);
 
@@ -886,13 +1137,15 @@ describe('LocalSR desktop interface', () => {
     await screen.findAllByText('opened-photo.png');
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }).classList
-      ).toContain('active')
+        screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }).classList,
+      ).toContain('active'),
     );
     expect(
-      (screen.getByRole('button', {
-        name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i
-      }) as HTMLButtonElement).disabled
+      (
+        screen.getByRole('button', {
+          name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i,
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
   });
@@ -903,8 +1156,12 @@ describe('LocalSR desktop interface', () => {
     snapshot.runtime.active_job_id = 'running-job';
     await mountWith(snapshot);
 
-    expect((screen.getByRole('button', { name: 'Single' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Single' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {
@@ -913,7 +1170,9 @@ describe('LocalSR desktop interface', () => {
     current.runtime.active_job_id = 'running-video';
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
-    api.cancelJobs.mockImplementation(async () => { current.runtime.status_title = 'Cancelling'; });
+    api.cancelJobs.mockImplementation(async () => {
+      current.runtime.status_title = 'Cancelling';
+    });
     render(App);
     const user = userEvent.setup();
     const cancel = await screen.findByRole('button', { name: 'Cancel queue' });
@@ -925,7 +1184,9 @@ describe('LocalSR desktop interface', () => {
     current.runtime.status_title = 'Cancelled';
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
     refresh();
-    await waitFor(() => expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false),
+    );
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });
 
@@ -943,7 +1204,7 @@ describe('LocalSR desktop interface', () => {
     const current = readySnapshot();
     current.settings.task = 'upscale';
     current.settings.selected_model_id = current.catalog.models.find(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face')
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
     )!.model_id;
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
@@ -962,7 +1223,7 @@ describe('LocalSR desktop interface', () => {
     api.takeLaunchIntents
       .mockResolvedValueOnce([
         { files: ['/private/first.png'], preset: null, recipe: null, auto_start: true },
-        { files: ['/private/second.png'], preset: null, recipe: null, auto_start: true }
+        { files: ['/private/second.png'], preset: null, recipe: null, auto_start: true },
       ])
       .mockResolvedValueOnce([]);
 
@@ -973,19 +1234,17 @@ describe('LocalSR desktop interface', () => {
       expect.objectContaining({
         media_ids: ['first', 'second'],
         batch_mode: true,
-        task: 'upscale'
-      })
+        task: 'upscale',
+      }),
     );
-    expect(api.saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ batch_mode: true })
-    );
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ batch_mode: true }));
   });
 
   it('keeps separately forwarded mixed media but cancels automatic processing', async () => {
     const current = readySnapshot();
     current.settings.task = 'upscale';
     current.settings.selected_model_id = current.catalog.models.find(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face')
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
     )!.model_id;
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
@@ -996,7 +1255,7 @@ describe('LocalSR desktop interface', () => {
         current.media.push(
           filename.endsWith('.mp4')
             ? video(id, current.media.length === 0)
-            : image(id, current.media.length === 0)
+            : image(id, current.media.length === 0),
         );
       }
     });
@@ -1009,7 +1268,7 @@ describe('LocalSR desktop interface', () => {
     api.takeLaunchIntents
       .mockResolvedValueOnce([
         { files: ['/private/photo.png'], preset: null, recipe: null, auto_start: true },
-        { files: ['/private/clip.mp4'], preset: null, recipe: null, auto_start: true }
+        { files: ['/private/clip.mp4'], preset: null, recipe: null, auto_start: true },
       ])
       .mockResolvedValueOnce([]);
 
@@ -1043,7 +1302,7 @@ describe('LocalSR desktop interface', () => {
       bottom: 600,
       x: 0,
       y: 0,
-      toJSON: () => ({})
+      toJSON: () => ({}),
     } as DOMRect);
     const snapshot = readySnapshot([image('first', true)]);
     snapshot.runtime.last_output_path = '/private/first-output.png';
@@ -1058,8 +1317,8 @@ describe('LocalSR desktop interface', () => {
         progress: 100,
         output_path: '/private/first-output.png',
         error: '',
-        created_at: 1
-      }
+        created_at: 1,
+      },
     ];
 
     await mountWith(snapshot);
@@ -1068,14 +1327,16 @@ describe('LocalSR desktop interface', () => {
     const divider = screen.getByRole('slider', { name: 'Before and after comparison' });
     await fireEvent.load(screen.getByAltText('Preview of first.png'));
     await waitFor(() =>
-      expect(Number.parseFloat(document.querySelector<HTMLElement>('.image-stage')?.style.width ?? '0')).toBeGreaterThan(700)
+      expect(
+        Number.parseFloat(document.querySelector<HTMLElement>('.image-stage')?.style.width ?? '0'),
+      ).toBeGreaterThan(700),
     );
 
     await fireEvent.pointerDown(divider, {
       button: 0,
       pointerId: 1,
       clientX: 400,
-      clientY: 300
+      clientY: 300,
     });
     await fireEvent.pointerMove(divider, { pointerId: 1, clientX: 600, clientY: 300 });
     await fireEvent.pointerUp(divider, { pointerId: 1, clientX: 600, clientY: 300 });
@@ -1110,7 +1371,7 @@ describe('LocalSR desktop interface', () => {
       bottom: 600,
       x: 0,
       y: 0,
-      toJSON: () => ({})
+      toJSON: () => ({}),
     } as DOMRect);
 
     const source = image('large', true);
@@ -1129,8 +1390,7 @@ describe('LocalSR desktop interface', () => {
     expect(stage?.style.transform).toBe('translate(calc(-50% + 0px), calc(-50% + 0px)) scale(1)');
 
     const listener = api.listenForWorker.mock.calls[0]?.[0] as
-      | ((message: WorkerEnvelope) => void)
-      | undefined;
+      ((message: WorkerEnvelope) => void) | undefined;
     expect(listener).toBeTypeOf('function');
     listener?.({ type: 'job_started', data: { job_id: 'job-progressive' } });
     listener?.({
@@ -1143,8 +1403,8 @@ describe('LocalSR desktop interface', () => {
         output_width: 256,
         output_height: 256,
         image_width: 12096,
-        image_height: 7856
-      }
+        image_height: 7856,
+      },
     });
     listener?.({
       type: 'tile_update',
@@ -1157,8 +1417,8 @@ describe('LocalSR desktop interface', () => {
         output_height: 256,
         image_width: 12096,
         image_height: 7856,
-        jpeg_base64: 'completed-tile'
-      }
+        jpeg_base64: 'completed-tile',
+      },
     });
 
     const canvas = screen.getByLabelText('Progressive tiled preview');
@@ -1166,13 +1426,7 @@ describe('LocalSR desktop interface', () => {
     const context = (canvas as HTMLCanvasElement).getContext('2d')!;
     const drawImage = vi.mocked(context.drawImage);
     await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
-    expect(drawImage).toHaveBeenLastCalledWith(
-      expect.any(DecodedImage),
-      0,
-      0,
-      34,
-      34
-    );
+    expect(drawImage).toHaveBeenLastCalledWith(expect.any(DecodedImage), 0, 0, 34, 34);
     expect(screen.queryByText('Enhanced')).toBeNull();
     expect(screen.queryByLabelText('Before and after comparison')).toBeNull();
 
@@ -1183,8 +1437,8 @@ describe('LocalSR desktop interface', () => {
           job_id: 'job-progressive',
           completed_tiles: completed,
           total_tiles: 100,
-          percentage: completed
-        }
+          percentage: completed,
+        },
       });
     }
     expect(await screen.findByText('100 of 100 tiles')).toBeTruthy();
@@ -1202,8 +1456,8 @@ describe('LocalSR desktop interface', () => {
           output_height: 256,
           image_width: 12096,
           image_height: 7856,
-          jpeg_base64: `completed-tile-${tileIndex}`
-        }
+          jpeg_base64: `completed-tile-${tileIndex}`,
+        },
       });
     }
     await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(3));
@@ -1212,10 +1466,12 @@ describe('LocalSR desktop interface', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '1:1' }));
     expect(screen.getByTitle(/Dynamic maximum/).textContent).toMatch(/^40[67]%$/);
-    expect(screen.getByLabelText('Media comparison canvas').classList.contains('panning')).toBe(false);
+    expect(screen.getByLabelText('Media comparison canvas').classList.contains('panning')).toBe(
+      false,
+    );
     listener?.({
       type: 'job_completed',
-      data: { job_id: 'job-progressive', output_path: '/output/complete.png' }
+      data: { job_id: 'job-progressive', output_path: '/output/complete.png' },
     });
     await waitFor(() => expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe('100%'));
     expect(stage?.style.left).toBe('50%');

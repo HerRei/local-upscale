@@ -22,19 +22,61 @@ from PIL import Image
 from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID
 from localsr.core.video_memory import seed_memory_plan
 
-from .vendor.core.generation_phases import (
-    decode_all_batches,
-    encode_all_batches,
-    postprocess_all_batches,
-    upscale_all_batches,
-)
-from .vendor.core.generation_utils import (
-    compute_generation_info,
-    load_text_embeddings,
-    prepare_runner,
-    setup_generation_context,
-)
 from .vendor.utils.debug import Debug
+
+
+def _generation_utils():
+    # Keep configuration/frame preparation available without importing the
+    # optional diffusion runtime. DirectML's Torch 2.4 cannot import Diffusers
+    # 0.38's custom operators; it still supports the image/video frame engine.
+    from localsr.core.video_engines import TemporalEngineUnavailable, seedvr2_runtime_issue
+
+    if issue := seedvr2_runtime_issue():
+        raise TemporalEngineUnavailable(issue)
+    from .vendor.core import generation_utils
+
+    return generation_utils
+
+
+def setup_generation_context(*args, **kwargs):
+    return _generation_utils().setup_generation_context(*args, **kwargs)
+
+
+def prepare_runner(*args, **kwargs):
+    return _generation_utils().prepare_runner(*args, **kwargs)
+
+
+def load_text_embeddings(*args, **kwargs):
+    return _generation_utils().load_text_embeddings(*args, **kwargs)
+
+
+def compute_generation_info(*args, **kwargs):
+    return _generation_utils().compute_generation_info(*args, **kwargs)
+
+
+def encode_all_batches(*args, **kwargs):
+    from .vendor.core.generation_phases import encode_all_batches as run
+
+    return run(*args, **kwargs)
+
+
+def upscale_all_batches(*args, **kwargs):
+    from .vendor.core.generation_phases import upscale_all_batches as run
+
+    return run(*args, **kwargs)
+
+
+def decode_all_batches(*args, **kwargs):
+    from .vendor.core.generation_phases import decode_all_batches as run
+
+    return run(*args, **kwargs)
+
+
+def postprocess_all_batches(*args, **kwargs):
+    from .vendor.core.generation_phases import postprocess_all_batches as run
+
+    return run(*args, **kwargs)
+
 
 # The vendored tree computes its "repo root" three directory levels above
 # vendor/utils/constants.py, which is this package directory: configs_3b/,

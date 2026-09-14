@@ -115,7 +115,11 @@ class WorkerSubprocessHarness:
 
     def wait_for_ready(self) -> dict[str, Any]:
         """Waits for and returns the worker_ready message."""
-        msg = self.read_message(timeout=_ipc_timeout())
+        # The native Intel acceptance PC measured ~11 seconds for a clean
+        # PyTorch import. Give Windows cold startup its own bounded allowance;
+        # keep the stricter running-job IPC and cancellation deadlines intact.
+        startup_timeout = max(_ipc_timeout(), 60.0 if sys.platform == "win32" else 0.0)
+        msg = self.read_message(timeout=startup_timeout)
         assert msg.get("type") == "worker_ready", f"Expected worker_ready, got {msg}"
         return msg
 

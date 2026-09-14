@@ -436,7 +436,7 @@ fn macos_workflow(app: &Path) -> String {
 fn linux_desktop_entry(executable: &Path) -> String {
     let executable = desktop_exec_quote(executable);
     format!(
-        "[Desktop Entry]\nVersion=1.0\nType=Application\nName={DISPLAY_NAME}\nGenericName=Local AI Image and Video Restoration\nComment=Enhance media locally with external AI models\nExec={executable} %F\nIcon=localsr-next\nTerminal=false\nCategories=Graphics;Photography;AudioVideo;Video;\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/x-msvideo;inode/directory;\nStartupNotify=true\nStartupWMClass=LocalSR Next Preview\nActions=QuickUpscale;BestQuality;\n\n[Desktop Action QuickUpscale]\nName=Quick Upscale\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action BestQuality]\nName=Best Quality Upscale\nExec={executable} --preset best --auto-start %F\n"
+        "[Desktop Entry]\nVersion=1.0\nType=Application\nName={DISPLAY_NAME}\nGenericName=Local AI Image and Video Restoration\nComment=Enhance media locally with external AI models\nExec={executable} %F\nIcon=localsr-next\nTerminal=false\nCategories=Graphics;Photography;AudioVideo;Video;\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-ms-asf;video/x-flv;video/3gpp;video/3gpp2;video/ogg;video/x-msvideo;inode/directory;\nStartupNotify=true\nStartupWMClass=LocalSR Next Preview\nActions=QuickUpscale;BestQuality;\n\n[Desktop Action QuickUpscale]\nName=Quick Upscale\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action BestQuality]\nName=Best Quality Upscale\nExec={executable} --preset best --auto-start %F\n"
     )
 }
 
@@ -445,7 +445,7 @@ fn linux_kde_service_menu(executable: &Path, picker: &Path) -> String {
     let executable = desktop_exec_quote(executable);
     let picker = desktop_exec_quote(picker);
     format!(
-        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;inode/directory;\nActions=LocalSRNextActive;LocalSRNextQuick;LocalSRNextBest;LocalSRNextPicker;\nX-KDE-Submenu=Enhance with LocalSR Next Preview\nX-KDE-Icon=localsr-next\n\n[Desktop Action LocalSRNextActive]\nName=Active App Settings\nExec={executable} --auto-start %F\n\n[Desktop Action LocalSRNextQuick]\nName=Quick Preset (Fast)\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action LocalSRNextBest]\nName=Best Quality Preset\nExec={executable} --preset best --auto-start %F\n\n[Desktop Action LocalSRNextPicker]\nName=Choose Recipe…\nExec={picker} %F\n"
+        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-ms-asf;video/x-flv;video/3gpp;video/3gpp2;video/ogg;inode/directory;\nActions=LocalSRNextActive;LocalSRNextQuick;LocalSRNextBest;LocalSRNextPicker;\nX-KDE-Submenu=Enhance with LocalSR Next Preview\nX-KDE-Icon=localsr-next\n\n[Desktop Action LocalSRNextActive]\nName=Active App Settings\nExec={executable} --auto-start %F\n\n[Desktop Action LocalSRNextQuick]\nName=Quick Preset (Fast)\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action LocalSRNextBest]\nName=Best Quality Preset\nExec={executable} --preset best --auto-start %F\n\n[Desktop Action LocalSRNextPicker]\nName=Choose Recipe…\nExec={picker} %F\n"
     )
 }
 
@@ -534,7 +534,7 @@ fn windows_registry_entries(executable: &Path, picker: &Path) -> Vec<RegistryEnt
         RegistryEntry {
             key: file_menu_root.into(),
             name: Some("AppliesTo".into()),
-            value: "System.FileExtension:=.png OR System.FileExtension:=.jpg OR System.FileExtension:=.jpeg OR System.FileExtension:=.webp OR System.FileExtension:=.bmp OR System.FileExtension:=.tif OR System.FileExtension:=.tiff OR System.FileExtension:=.dng OR System.FileExtension:=.mp4 OR System.FileExtension:=.mov OR System.FileExtension:=.m4v OR System.FileExtension:=.avi OR System.FileExtension:=.mkv OR System.FileExtension:=.webm".into(),
+            value: "System.FileExtension:=.png OR System.FileExtension:=.jpg OR System.FileExtension:=.jpeg OR System.FileExtension:=.webp OR System.FileExtension:=.bmp OR System.FileExtension:=.tif OR System.FileExtension:=.tiff OR System.FileExtension:=.dng OR System.FileExtension:=.mp4 OR System.FileExtension:=.mov OR System.FileExtension:=.m4v OR System.FileExtension:=.avi OR System.FileExtension:=.mkv OR System.FileExtension:=.webm OR System.FileExtension:=.mpg OR System.FileExtension:=.mpeg OR System.FileExtension:=.mpe OR System.FileExtension:=.vob OR System.FileExtension:=.ts OR System.FileExtension:=.mts OR System.FileExtension:=.m2ts OR System.FileExtension:=.wmv OR System.FileExtension:=.asf OR System.FileExtension:=.flv OR System.FileExtension:=.f4v OR System.FileExtension:=.3gp OR System.FileExtension:=.3g2 OR System.FileExtension:=.ogv OR System.FileExtension:=.divx".into(),
         },
     ]);
     for (id, title, arguments) in [

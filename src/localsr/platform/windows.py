@@ -177,7 +177,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                     "MUIVerb": "Upscale with LocalSR",
                     "Icon": f'"{clean_exe}",0',
                     "SubCommands": "LocalSR.Active;LocalSR.Quick;LocalSR.Best;LocalSR.Picker",
-                    "AppliesTo": "System.ItemType:=.png OR System.ItemType:=.jpg OR System.ItemType:=.jpeg OR System.ItemType:=.webp OR System.ItemType:=.tiff OR System.ItemType:=.dng OR System.ItemType:=.mp4 OR System.ItemType:=.mov OR System.ItemType:=.mkv OR System.ItemType:=.webm",
+                    "AppliesTo": "System.ItemType:=.png OR System.ItemType:=.jpg OR System.ItemType:=.jpeg OR System.ItemType:=.webp OR System.ItemType:=.tiff OR System.ItemType:=.dng OR System.ItemType:=.mp4 OR System.ItemType:=.mov OR System.ItemType:=.mkv OR System.ItemType:=.webm OR System.ItemType:=.avi OR System.ItemType:=.m4v OR System.ItemType:=.mpg OR System.ItemType:=.mpeg OR System.ItemType:=.mpe OR System.ItemType:=.vob OR System.ItemType:=.ts OR System.ItemType:=.mts OR System.ItemType:=.m2ts OR System.ItemType:=.wmv OR System.ItemType:=.asf OR System.ItemType:=.flv OR System.ItemType:=.f4v OR System.ItemType:=.3gp OR System.ItemType:=.3g2 OR System.ItemType:=.ogv OR System.ItemType:=.divx",
                 },
             },
             {

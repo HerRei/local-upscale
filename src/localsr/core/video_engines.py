@@ -9,11 +9,31 @@ the status bar, so an engine missing from a build degrades gracefully.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 SPANDREL_IMAGE_KIND = "spandrel_image"
 
 
 class TemporalEngineUnavailable(RuntimeError):
     pass
+
+
+def seedvr2_runtime_issue() -> str | None:
+    """The pinned DirectML Torch cannot register modern Diffusers custom ops."""
+    try:
+        torch_version = tuple(int(part) for part in version("torch").split(".")[:2])
+        diffusers_version = tuple(int(part) for part in version("diffusers").split(".")[:2])
+    except PackageNotFoundError:
+        return (
+            "SeedVR2 requires the optional video runtime. Frame-by-frame video remains available."
+        )
+    if torch_version < (2, 5) and diffusers_version >= (0, 38):
+        return (
+            "SeedVR2 is unavailable with this engine's PyTorch version. "
+            "Use a compatible CUDA, ROCm or Metal engine for SeedVR2. "
+            "Frame-by-frame video remains available."
+        )
+    return None
 
 
 def resolve_video_engine(kind: str):

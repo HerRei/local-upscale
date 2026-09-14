@@ -43,3 +43,4 @@ desktop/src-tauri/gen/
 .agents/
 .gemini/
 .codex/
+publish/

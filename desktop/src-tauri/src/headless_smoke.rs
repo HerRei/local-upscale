@@ -16,7 +16,6 @@ const START_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_SHUTDOWN_TIMEOUT: u64 = 15;
 const MAX_SHUTDOWN_TIMEOUT: u64 = 120;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const PRODUCT_NAME: &str = "LocalSR Next Preview";
 
 pub fn run() -> i32 {
     let timeout = smoke_timeout();
@@ -49,6 +48,8 @@ pub fn run() -> i32 {
         "platform": env::consts::OS,
         "architecture": env::consts::ARCH,
         "mode": "headless-installed-host",
+        "managed_by_store": crate::distribution::managed_by_store(),
+        "package_identity": crate::distribution::package_identity(),
         "worker": worker,
         "worker_path": worker_path.ok().map(|path| path.to_string_lossy().into_owned()),
         "passed": passed,
@@ -86,7 +87,11 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
         "localsr-worker"
     };
     let appdir = trusted_appimage_dir(&executable);
-    worker_candidates(&executable, worker_name, appdir.as_deref())
+    // The beta, preview and stable bundle overlays can use different product
+    // names. Use the same compiled configuration as Tauri's resource resolver.
+    let context = crate::compiled_context();
+    let product_name = &context.package_info().name;
+    worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
@@ -103,7 +108,12 @@ fn trusted_appimage_dir(executable: &Path) -> Option<PathBuf> {
         .then_some(canonical_appdir)
 }
 
-fn worker_candidates(executable: &Path, worker_name: &str, appdir: Option<&Path>) -> Vec<PathBuf> {
+fn worker_candidates(
+    executable: &Path,
+    worker_name: &str,
+    appdir: Option<&Path>,
+    product_name: &str,
+) -> Vec<PathBuf> {
     let Some(parent) = executable.parent() else {
         return Vec::new();
     };
@@ -126,7 +136,7 @@ fn worker_candidates(executable: &Path, worker_name: &str, appdir: Option<&Path>
             appdir
                 .join("usr")
                 .join("lib")
-                .join(PRODUCT_NAME)
+                .join(product_name)
                 .join("engine")
                 .join(worker_name),
         );
@@ -379,6 +389,7 @@ mod tests {
             Path::new("/install/LocalSR Next Preview.exe"),
             "localsr-worker.exe",
             None,
+            "LocalSR Beta",
         );
         assert_eq!(
             candidates[0],
@@ -389,6 +400,7 @@ mod tests {
             Path::new("/Applications/LocalSR.app/Contents/MacOS/localsr-next"),
             "localsr-worker",
             None,
+            "LocalSR Beta",
         );
         assert!(candidates.contains(&PathBuf::from(
             "/Applications/LocalSR.app/Contents/Resources/engine/localsr-worker"
@@ -401,9 +413,10 @@ mod tests {
             Path::new("/tmp/.mount_LocalSR/usr/bin/localsr-next"),
             "localsr-worker",
             Some(Path::new("/tmp/.mount_LocalSR")),
+            "LocalSR Beta",
         );
         assert!(candidates.contains(&PathBuf::from(
-            "/tmp/.mount_LocalSR/usr/lib/LocalSR Next Preview/engine/localsr-worker"
+            "/tmp/.mount_LocalSR/usr/lib/LocalSR Beta/engine/localsr-worker"
         )));
         assert!(candidates.contains(&PathBuf::from(
             "/tmp/.mount_LocalSR/usr/lib/localsr-next/engine/localsr-worker"

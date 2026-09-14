@@ -21,9 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = ROOT / "packaging/windows/msix/identity.json"
 FOUNDATION = "http://schemas.microsoft.com/appx/manifest/foundation/windows10"
 UAP = "http://schemas.microsoft.com/appx/manifest/uap/windows10"
+UAP10 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
 RESCAP = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
 LOGOS = {"StoreLogo.png": 50, "Square44x44Logo.png": 44, "Square150x150Logo.png": 150}
-for prefix, namespace in (("", FOUNDATION), ("uap", UAP), ("rescap", RESCAP)):
+for prefix, namespace in (("", FOUNDATION), ("uap", UAP), ("uap10", UAP10), ("rescap", RESCAP)):
     ET.register_namespace(prefix, namespace)
 
 
@@ -79,7 +80,7 @@ def manifest(identity: dict, version: str) -> bytes:
         element.text = text
         return element
 
-    package = ET.Element(f"{{{FOUNDATION}}}Package", {"IgnorableNamespaces": "uap rescap"})
+    package = ET.Element(f"{{{FOUNDATION}}}Package", {"IgnorableNamespaces": "uap uap10 rescap"})
     node(
         package,
         "Identity",
@@ -115,6 +116,8 @@ def manifest(identity: dict, version: str) -> bytes:
             "Id": "LocalSR",
             "Executable": "localsr-next.exe",
             "EntryPoint": "Windows.FullTrustApplication",
+            f"{{{UAP10}}}RuntimeBehavior": "packagedClassicApp",
+            f"{{{UAP10}}}TrustLevel": "mediumIL",
         },
     )
     node(
@@ -147,6 +150,20 @@ def require_x64(path: Path) -> None:
         or struct.unpack_from("<H", header, offset + 4)[0] != 0x8664
     ):
         raise ValueError(f"Expected an x64 Windows binary: {path.name}")
+
+
+def is_bundled_conditioning(relative: str, path: Path) -> bool:
+    """Only the two reviewed SeedVR2 text embeddings are runtime assets.
+
+    They are tracked source files used by the temporal engine, not downloadable
+    restoration checkpoints. Pin both path and content; never exempt a suffix.
+    """
+    pins = {
+        "_internal/localsr/video_models/seedvr2/pos_emb.safetensors": "92050149101b153c78e9d33395cdd1c7e8bf152429491714018629e0823a757a",
+        "_internal/localsr/video_models/seedvr2/neg_emb.safetensors": "2524a75d93571c99df202cab935a7c0128d374e173886b518be7808a4ad35a3f",
+    }
+    expected = pins.get(relative)
+    return expected is not None and hashlib.sha256(path.read_bytes()).hexdigest() == expected
 
 
 def prepare(
@@ -190,7 +207,11 @@ def prepare(
             seen.add(relative.lower())
             if file.suffix.lower() in {".exe", ".dll", ".pyd"}:
                 require_x64(file)
-            if file.suffix.lower() in {".pth", ".safetensors", ".gguf"}:
+            if file.suffix.lower() in {
+                ".pth",
+                ".safetensors",
+                ".gguf",
+            } and not is_bundled_conditioning(relative, file):
                 raise ValueError("Model checkpoints must stay outside the application package")
     output.mkdir(parents=True)
     layout = output / "layout"

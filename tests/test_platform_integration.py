@@ -1,7 +1,5 @@
 import os
-import subprocess
 import sys
-import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,22 +15,6 @@ from localsr.platform.macos import MacOSPlatformService
 from localsr.platform.windows import WindowsPlatformService
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def run_isolated_script(source: str) -> None:
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(ROOT / "src")
-    timeout = 120 if environment.get("CI") and sys.platform == "darwin" else 30
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(source)],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_platform_service_dispatch():
@@ -125,103 +107,6 @@ def test_macos_integration_install_and_uninstall(tmp_path):
         assert not symlink.exists()
 
 
-def test_add_images_flattens_folder_media(tmp_path):
-    run_isolated_script(
-        f"""
-        from pathlib import Path
-        from PIL import Image
-        from localsr.ui.slint_app import create_slint_application
-
-        root = Path({str(tmp_path)!r})
-        folder = root / "media_folder"
-        folder.mkdir()
-        img1 = folder / "test1.png"
-        img2 = folder / "test2.jpg"
-        txt = folder / "notes.txt"
-        Image.new("RGB", (32, 32), "red").save(img1)
-        Image.new("RGB", (32, 32), "blue").save(img2)
-        txt.write_text("not an image")
-
-        app = create_slint_application(
-            start_worker=False,
-            settings_path=root / "settings.json",
-            model_root=root / "models",
-        )
-        app.add_images([str(folder)])
-        assert len(app.images) == 2
-        paths = {{item.path for item in app.images}}
-        assert str(img1.resolve()) in paths
-        assert str(img2.resolve()) in paths
-        app.shutdown()
-        """
-    )
-
-
-def test_initial_preset_and_recipe_application(tmp_path):
-    run_isolated_script(
-        f"""
-        from pathlib import Path
-        from PIL import Image
-        from localsr.ui.slint_app import create_slint_application
-
-        root = Path({str(tmp_path)!r})
-        img = root / "input.png"
-        Image.new("RGB", (48, 48), "green").save(img)
-
-        app = create_slint_application(
-            start_worker=False,
-            settings_path=root / "settings.json",
-            model_root=root / "models",
-            initial_files=[str(img)],
-            initial_preset="quick",
-        )
-        assert len(app.images) == 1
-        assert app.task_selected is True
-        assert app.profile_label == "Quick"
-
-        applied_best = app.apply_recipe_by_name("best quality")
-        assert applied_best is True
-        assert app.profile_label == "Best"
-
-        app.shutdown()
-        """
-    )
-
-
-def test_open_output_folder_dispatch(tmp_path):
-    run_isolated_script(
-        f"""
-        import sys
-        from pathlib import Path
-        from unittest.mock import patch
-        from localsr.ui.slint_app import create_slint_application
-
-        root = Path({str(tmp_path)!r})
-        out_dir = root / "custom_output"
-        app = create_slint_application(
-            start_worker=False,
-            settings_path=root / "settings.json",
-            model_root=root / "models",
-        )
-        app.output_directory = str(out_dir)
-
-        with patch("subprocess.Popen") as mock_popen, patch("os.startfile", create=True) as mock_startfile:
-            app.open_output_folder()
-            assert out_dir.is_dir()
-            if sys.platform == "darwin":
-                assert mock_popen.called
-                assert mock_popen.call_args[0][0] == ["open", str(out_dir)]
-            elif sys.platform == "win32":
-                assert mock_startfile.called
-            else:
-                assert mock_popen.called
-                assert mock_popen.call_args[0][0] == ["xdg-open", str(out_dir)]
-
-        app.shutdown()
-        """
-    )
-
-
 def test_cli_intermixed_arguments():
     parsed, unknown = _parse_cli_args(
         ["file1.png", "--preset", "quick", "file2.png", "--auto-start", "file3.jpg"]
@@ -236,32 +121,6 @@ def test_cli_intermixed_arguments():
     assert parsed.auto_start is True
 
 
-def test_initial_files_multi_enables_batch_mode(tmp_path):
-    run_isolated_script(
-        f"""
-        from pathlib import Path
-        from PIL import Image
-        from localsr.ui.slint_app import create_slint_application
-
-        root = Path({str(tmp_path)!r})
-        img1 = root / "img1.png"
-        img2 = root / "img2.png"
-        Image.new("RGB", (32, 32), "red").save(img1)
-        Image.new("RGB", (32, 32), "blue").save(img2)
-
-        app = create_slint_application(
-            start_worker=False,
-            settings_path=root / "settings.json",
-            model_root=root / "models",
-            initial_files=[str(img1), str(img2)],
-        )
-        assert len(app.images) == 2
-        assert app.ui.batch_mode is True
-        app.shutdown()
-        """
-    )
-
-
 def test_quick_action_escaping_and_custom_app_path(tmp_path):
     service = MacOSPlatformService()
     custom_app = tmp_path / "CustomLocalSR.app"
@@ -272,75 +131,8 @@ def test_quick_action_escaping_and_custom_app_path(tmp_path):
     assert "sed 's/\\\\/\\\\\\\\/g; s/\"/\\\\\"/g'" in script
 
 
-def test_recipe_with_auto_start_triggers_job_start(tmp_path):
-    run_isolated_script(
-        f"""
-        import json
-        from pathlib import Path
-        from PIL import Image
-        from unittest.mock import patch
-        from localsr.core.model_catalog import ModelStore
-        from localsr.ui.slint_app import create_slint_application
-
-        root = Path({str(tmp_path)!r})
-        settings_file = root / "settings.json"
-        settings_file.write_text(json.dumps({{
-            "custom_recipes": [{{
-                "name": "FastEnhance",
-                "task_index": 0,
-                "model_id": "hat_s_x4_face",
-                "output_scale": 4,
-                "format_index": 0,
-                "preserve_metadata": True,
-                "jpeg_quality": 98,
-                "device_id": "cpu",
-                "tile_size": 256,
-                "halo": 32,
-                "precision": "fp32",
-                "safe_memory": False,
-            }}]
-        }}))
-        img = root / "photo.png"
-        Image.new("RGB", (64, 64), "cyan").save(img)
-
-        model_dir = root / "models"
-        model_dir.mkdir(parents=True, exist_ok=True)
-        with (model_dir / "base_95k_interp_a0p1.pth").open("wb") as f:
-            f.truncate(40_484_805)
-
-        # This fixture tests recipe sequencing, not checkpoint bytes.
-        ModelStore.is_installed = lambda self, model: self.path_for(model).is_file()
-
-        app = create_slint_application(
-            start_worker=False,
-            settings_path=settings_file,
-            model_root=model_dir,
-            initial_files=[str(img)],
-            initial_recipe="FastEnhance",
-            auto_start=True,
-        )
-
-        app.ui.image_ready = True
-        assert app.pending_auto_start is True
-        assert app.profile_label == "FastEnhance"
-
-        with patch.object(app, "start_jobs") as mock_start:
-            app._on_model_info({{
-                "filename": "base_95k_interp_a0p1.pth",
-                "architecture": "HAT",
-                "scale": 4,
-                "parameter_count": 1000000,
-            }})
-            assert mock_start.called
-            assert app.pending_auto_start is False
-
-        app.shutdown()
-        """
-    )
-
-
 def test_spec_document_types_includes_video_extensions():
-    spec_path = ROOT / "packaging" / "localsr.spec"
+    spec_path = ROOT / "desktop" / "src-tauri" / "tauri.conf.json"
     spec_text = spec_path.read_text(encoding="utf-8")
     assert '"m4v"' in spec_text
     assert '"mp4"' in spec_text
@@ -360,36 +152,6 @@ def test_windows_notification_escaping():
         assert "``Backtick``" in ps_cmd
         assert '`"Quotes`"' in ps_cmd
         assert "\r" not in ps_cmd
-
-
-def test_open_and_reveal_result_safe_against_os_error(tmp_path):
-    run_isolated_script(
-        f"""
-        from pathlib import Path
-        from unittest.mock import patch
-        from localsr.ui.slint_app import create_slint_application
-
-        root = Path({str(tmp_path)!r})
-        dummy = root / "output.png"
-        dummy.write_text("dummy")
-
-        app = create_slint_application(
-            start_worker=False,
-            settings_path=root / "settings.json",
-            model_root=root / "models",
-        )
-        app.last_output_path = str(dummy)
-
-        # Confirm OSError during Popen / startfile is handled gracefully without crashing
-        with patch("subprocess.Popen", side_effect=OSError("Process spawn failed")), \
-             patch("os.startfile", side_effect=OSError("Startfile failed"), create=True):
-            app.open_result()
-            app.reveal_result()
-            app.open_output_folder()
-
-        app.shutdown()
-        """
-    )
 
 
 def test_static_ast_no_top_level_foreign_imports():
@@ -413,7 +175,6 @@ def test_static_ast_no_top_level_foreign_imports():
     # Platform-specific isolation rules within platform modules
     platform_forbidden = {
         "macos.py": {"winreg", "msvcrt", "pydbus", "gi", "win32api", "win32con", "win32gui"},
-        "macos_menu.py": {"winreg", "msvcrt", "pydbus", "gi", "win32api", "win32con", "win32gui"},
         "windows.py": {"osascript", "AppKit", "Foundation", "pydbus", "gi"},
         "linux.py": {
             "winreg",
@@ -561,13 +322,3 @@ def test_linux_desktop_entry_and_script_generation(tmp_path):
         uninstalled = service.uninstall_system_integrations()
         assert uninstalled is True
         assert not app_desktop.exists()
-
-
-def test_macos_native_menu_setup():
-    if sys.platform == "darwin":
-        from localsr.platform.macos_menu import setup_macos_native_menu
-
-        mock_app = MagicMock()
-        mock_app.custom_recipes = [{"name": "Test Recipe"}]
-        res = setup_macos_native_menu(mock_app)
-        assert res is True

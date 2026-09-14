@@ -42,8 +42,6 @@ def test_additive_desktop_metadata_uses_one_version():
     )
     assert npm["version"] == tauri["version"] == cargo["package"]["version"] == __version__
     assert tauri["identifier"] == "com.localsr.desktop.next"
-    legacy_bundle = (ROOT / "packaging" / "localsr.spec").read_text(encoding="utf-8")
-    assert 'bundle_identifier="com.localsr.desktop"' in legacy_bundle
     assert tauri["identifier"] != "com.localsr.desktop"
 
 

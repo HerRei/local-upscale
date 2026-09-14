@@ -1,6 +1,11 @@
-torch-directml==0.2.5.dev240914
-torch==2.4.1
-torchvision==0.19.1
+# The verified checkpoint is converted locally. ONNX Runtime owns DirectML
+# execution; maintained CPU Torch handles loading, conversion and CPU jobs.
+torch==2.13.0
+torchvision==0.28.0
+onnx==1.22.0
+onnxruntime-directml==1.24.4
+# ml_dtypes 0.6 requires NumPy 2; the retained engine uses NumPy 1.26.
+ml_dtypes==0.5.4
 pyinstaller==6.22.2
-setuptools==78.1.0
-wheel==0.45.1
+setuptools==83.0.0
+wheel==0.46.2

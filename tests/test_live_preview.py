@@ -87,3 +87,48 @@ def test_close_discards_an_in_flight_preview_without_emitting(monkeypatch):
         encoder._thread.join(timeout=1)
     assert emitted == []
     assert encoder._queue.empty()
+
+
+def test_late_first_tile_keeps_grid_and_pipeline_stage_through_worker_protocol():
+    import json
+    from unittest.mock import patch
+
+    import localsr.worker.server as server_module
+    from localsr.worker.server import WorkerServer
+
+    events = []
+    received = threading.Event()
+
+    def emit(packet):
+        with patch.object(
+            server_module,
+            "send_message",
+            lambda message: events.append(json.loads(message.to_json())),
+        ):
+            WorkerServer._emit_live_preview(packet)
+        received.set()
+
+    encoder = LatestPreviewEncoder(emit)
+    try:
+        encoder.submit(
+            job_id="late-hat",
+            preview_kind="tile",
+            pixels=np.zeros((3, 1024, 760), dtype=np.uint8),
+            output_x=7168,
+            output_y=4096,
+            output_width=760,
+            output_height=1024,
+            image_width=7928,
+            image_height=5444,
+            active_tile_size=256,
+            stage_index=1,
+            force=True,
+        )
+        assert received.wait(timeout=2)
+        data = events[0]["data"]
+        assert data["active_tile_size"] == 256
+        assert data["stage_index"] == 1
+        assert data["output_width"] == 760 and data["image_width"] == 7928
+        assert data["jpeg_base64"]
+    finally:
+        encoder.close()

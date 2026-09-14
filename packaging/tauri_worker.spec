@@ -1,16 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller onedir worker used by the additive Tauri desktop preview.
 
-This intentionally excludes both Slint and PySide. The resulting engine is a
+This excludes the optional PySide client. The resulting engine is a
 private subprocess resource, not a second user-facing application.
 """
 
 import os
 import sys
+from importlib.metadata import PackageNotFoundError
+from importlib.util import find_spec
 from pathlib import Path
 
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 
 
 ROOT = Path(SPECPATH).parent
@@ -33,10 +35,37 @@ datas = spandrel_datas + [
 # Diffusers checks installed distribution versions when SeedVR2 is imported.
 # Bundling importable modules alone leaves the packaged temporal engine broken.
 datas += copy_metadata("diffusers", recursive=True)
-datas += copy_metadata("torch") + copy_metadata("torchvision")
+datas += copy_metadata("torch", recursive=True) + copy_metadata("torchvision", recursive=True)
+# These native media modules are explicit imports below, but not dependencies
+# of Diffusers. Keep their wheel licenses and version metadata in the bundle.
+for distribution in (
+    "av", "opencv-python-headless", "rawpy", "psutil", "tifffile",
+    "spandrel", "einops", "rotary-embedding-torch", "omegaconf", "gguf",
+):
+    datas += copy_metadata(distribution, recursive=True)
+onnx_hidden = []
+if find_spec("onnxruntime") is not None:
+    # Runtime graph conversion is part of the Windows DirectML worker. Provider
+    # DLLs are collected by PyInstaller's onnxruntime hook.
+    onnx_datas, onnx_binaries, onnx_hidden = collect_all("onnx")
+    datas += onnx_datas + copy_metadata("onnx", recursive=True)
+    runtime_notices = collect_data_files(
+        "onnxruntime", includes=["LICENSE", "ThirdPartyNotices.txt"]
+    )
+    if len(runtime_notices) != 2:
+        raise RuntimeError("The ONNX Runtime license and third-party notices must be bundled")
+    datas += runtime_notices
+    spandrel_binaries += onnx_binaries
+    for distribution in ("onnxruntime-directml", "onnxruntime"):
+        try:
+            datas += copy_metadata(distribution)
+        except PackageNotFoundError:
+            continue
+    onnx_hidden += ["onnxruntime", "torch.onnx"]
 hiddenimports = sorted(
     set(
         spandrel_hidden
+        + onnx_hidden
         + collect_submodules("spandrel")
         + [
             "PIL._tkinter_finder",
@@ -65,7 +94,6 @@ analysis = Analysis(
         "matplotlib",
         "notebook",
         "pytest",
-        "slint",
         "tkinter",
         # Triton is only required for torch.compile/inductor. The packaged
         # worker does not enable that path, and linuxdeploy cannot patch
@@ -81,7 +109,10 @@ if sys.platform == "darwin" and target_arch in ("arm64", "x86_64"):
     import filter_macho_architecture
     from PyInstaller.building.datastruct import TOC
     
-    report_path = ROOT / "staging" / "architecture-pruning-report.json"
+    report_path = Path(os.environ.get(
+        "LOCALSR_ARCHITECTURE_REPORT",
+        str(ROOT / "staging" / "architecture-pruning-report.json"),
+    ))
     analysis.binaries = TOC(
         filter_macho_architecture.filter_binaries(
             analysis.binaries, target_arch, report_path

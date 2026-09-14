@@ -1,9 +1,28 @@
+**Separate public beta candidate: v0.0.13-beta.1 (provisional)**
+
+The current beta work uses `ci/public-beta-release.json` and
+`ci/public-beta-readiness.json`. Run `python scripts/check_public_beta.py` and
+`python scripts/check_beta_readiness.py ci/public-beta-readiness.json` for this
+candidate. A valid register does not mean the beta is ready: use
+`--require-beta-ready` to enforce its remaining publication gates.
+
+The alpha manifests and workflows below remain historical inputs for the
+active `.12` release. Do not rewrite them or start their jobs to prepare this
+beta. Retain package hashes and the exact installed acceptance reports before
+reviewing any publication. [Beta checklist](beta-release-checklist.md).
+
+Current beta package builds are paused pending the user’s explicit .12-complete
+build authorization. Use [the isolated Windows handoff](windows-beta-build-handoff.md)
+and [new ONNX source runtime review](windows-inference-runtime-review.md); the
+older runtime/caches below belong to the historical alpha process and must not
+be reused or altered for beta preparation.
+
 # Native release process
 
 `v0.0.12 Mac mini Cross Alpha` (`.github/workflows/v0.0.12-cross-alpha.yml`) is a one-release
 exception that accepts only the exact `v0.0.12-alpha` tag. The normal
 `Signed Tauri Alpha Release` pipeline explicitly skips that tag and continues to fail closed for
-later signed releases. The former Slint matrix remains manual-only and cannot publish a `v*` tag.
+later signed releases. The former Slint build has been retired from the beta checkout.
 
 ## v0.0.12-alpha artifact matrix
 
@@ -89,7 +108,7 @@ For v0.0.12-alpha, all of these must agree:
 - GitHub release title: `LocalSR v0.0.12-alpha`.
 
 `scripts/check_release_version.py --tag v0.0.12-alpha` enforces this. Hyphenated tags are published
-with `--prerelease`. The old Slint workflow is manual-only, so one tag cannot accidentally publish
+with `--prerelease`. The retired Slint workflow is absent from the beta, so one tag cannot publish
 both application architectures.
 
 ## Signing and notarization

@@ -32,6 +32,8 @@ class PreviewPacket:
     image_width: int = 0
     image_height: int = 0
     frame_index: int = -1
+    active_tile_size: int = 0
+    stage_index: int = 0
 
 
 @dataclass

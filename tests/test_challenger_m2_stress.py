@@ -201,10 +201,11 @@ class TestWorkerClientProtocolStress:
 
 
 class TestMainWindowButtonStatesAndResets:
-    def test_button_states_during_lifecycle(self, qapp, tmp_path):
+    def test_button_states_during_lifecycle(self, qtbot, tmp_path):
         """Verify button states throughout upscale, cancel, complete, and fail cycles."""
         settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
         win = MainWindow(start_worker=False, settings=settings)
+        qtbot.addWidget(win)
 
         # Initial states
         assert not win.btn_upscale.isEnabled()
@@ -258,10 +259,11 @@ class TestMainWindowButtonStatesAndResets:
         assert win.btn_upscale.isEnabled()
         assert not win.btn_cancel.isEnabled()
 
-    def test_cancellation_button_resets_when_output_file_exists(self, qapp, tmp_path):
+    def test_cancellation_button_resets_when_output_file_exists(self, qtbot, tmp_path):
         """Verify button states on job cancellation when a partial/previous output file exists."""
         settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
         win = MainWindow(start_worker=False, settings=settings)
+        qtbot.addWidget(win)
 
         out_file = tmp_path / "test_upscaled.png"
         out_file.write_text("dummy output")

@@ -76,6 +76,7 @@
                 "model_path": { "type": "string" },
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
+                "comparison": { "type": "boolean" },
                 "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 }
               },
               "minProperties": 1,
@@ -121,6 +122,7 @@
         "precision": { "enum": ["fp32", "fp16", "bf16"] },
         "safe_memory": { "type": "boolean" },
         "scratch_directory": { "type": ["string", "null"], "minLength": 1 },
+        "output_temporary_directory": { "type": ["string", "null"], "minLength": 1 },
         "face_model_path": { "type": ["string", "null"] },
         "face_fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
         "allow_unverified_checkpoint": { "type": ["boolean", "null"] },

@@ -1,0 +1,36 @@
+{
+    admin off
+    auto_https disable_redirects
+    email hermes.reisner@gmail.com
+}
+
+# REVIEW TEMPLATE ONLY. Nothing installs or activates this configuration.
+# The default is loopback HTTP; public HTTPS needs an approved domain/address.
+{$LOCALSR_RELEASE_ADDRESS:http://127.0.0.1:8788} {
+    root * {$LOCALSR_RELEASE_ROOT:/mnt/hdd/localsr-releases/public}
+
+    @write not method GET HEAD
+    respond @write 405
+    @hidden path_regexp hidden (^|/)\.
+    respond @hidden 404
+    @incomplete path *.partial *.tmp
+    respond @incomplete 404
+
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+    @immutable path /releases/*
+    header @immutable Cache-Control "public, max-age=31536000, immutable"
+    @feeds path /updates/*
+    header @feeds Cache-Control "public, max-age=60, must-revalidate"
+
+    # No directory listing, upload endpoint, proxy, CGI or access log.
+    # Caddy's static handler provides Content-Length, ETag and byte ranges.
+    file_server
+    handle_errors {
+        header Cache-Control no-store
+        respond "{err.status_text}" {err.status_code}
+    }
+}

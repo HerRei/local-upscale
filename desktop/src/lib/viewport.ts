@@ -28,7 +28,7 @@ export function fitSize(canvas: Size, image: Size, padding = 56): Size {
 
   return {
     width: Math.max(MIN_DIMENSION, imageWidth * scale),
-    height: Math.max(MIN_DIMENSION, imageHeight * scale)
+    height: Math.max(MIN_DIMENSION, imageHeight * scale),
   };
 }
 
@@ -39,31 +39,34 @@ export function fitSize(canvas: Size, image: Size, padding = 56): Size {
  * for inspecting reconstruction artifacts without allowing unbounded CSS
  * transforms.
  */
-export function zoomLimits(image: Size, fitted: Size): { min: number; max: number; actual: number } {
+export function zoomLimits(
+  image: Size,
+  fitted: Size,
+): { min: number; max: number; actual: number } {
   const actual = Math.max(
     positive(image.width) / positive(fitted.width),
-    positive(image.height) / positive(fitted.height)
+    positive(image.height) / positive(fitted.height),
   );
   return {
     // Fit is 1. A tiny source is enlarged at Fit, so its true 1:1 view is
     // below 1 and must remain reachable from the dedicated control.
     min: Math.min(1, actual),
     max: Math.min(64, Math.max(8, actual * 2)),
-    actual
+    actual,
   };
 }
 
 export function panBounds(canvas: Size, fitted: Size, zoom: number): PanBounds {
   return {
     x: Math.max(0, (positive(fitted.width) * zoom - positive(canvas.width)) / 2),
-    y: Math.max(0, (positive(fitted.height) * zoom - positive(canvas.height)) / 2)
+    y: Math.max(0, (positive(fitted.height) * zoom - positive(canvas.height)) / 2),
   };
 }
 
 export function clampPan(point: Point, bounds: PanBounds): Point {
   return {
     x: Math.max(-bounds.x, Math.min(bounds.x, point.x)),
-    y: Math.max(-bounds.y, Math.min(bounds.y, point.y))
+    y: Math.max(-bounds.y, Math.min(bounds.y, point.y)),
   };
 }
 
@@ -73,14 +76,14 @@ export function pointerCenteredPan(
   pointerFromCanvasCenter: Point,
   currentZoom: number,
   nextZoom: number,
-  bounds: PanBounds
+  bounds: PanBounds,
 ): Point {
   const ratio = nextZoom / Math.max(currentZoom, Number.EPSILON);
   return clampPan(
     {
       x: pointerFromCanvasCenter.x - (pointerFromCanvasCenter.x - current.x) * ratio,
-      y: pointerFromCanvasCenter.y - (pointerFromCanvasCenter.y - current.y) * ratio
+      y: pointerFromCanvasCenter.y - (pointerFromCanvasCenter.y - current.y) * ratio,
     },
-    bounds
+    bounds,
   );
 }

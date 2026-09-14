@@ -266,8 +266,8 @@ class ImageJobRunner:
         writer.mmap.flush()
         return writer
 
-    @staticmethod
     def _save(
+        self,
         manager: ImageManager,
         writer: OutputWriter,
         image: dict[str, Any],
@@ -284,6 +284,8 @@ class ImageJobRunner:
             safe_exif=image.get("safe_exif", {}),
             scale=info.scale,
             output_scale=int(data.get("output_scale") or info.scale),
+            temporary_directory=data.get("output_temporary_directory"),
+            cancel_event=self.cancel_event,
         )
 
     def _check_cancelled(self) -> None:

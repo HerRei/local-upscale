@@ -155,10 +155,13 @@ class ImageJobProgress:
                 output_height=int(tile.out_h),
                 image_width=int(output_width),
                 image_height=int(output_height),
+                active_tile_size=int(active_tile_size),
+                stage_index=self.active_index,
             )
         self.emit(
             TileUpdate(
                 job_id=self.job_id,
+                stage_index=self.active_index,
                 phase=phase,
                 completed_tiles=completed,
                 total_tiles=total,

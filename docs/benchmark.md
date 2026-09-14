@@ -1,9 +1,9 @@
 # LocalSR benchmark
 
-## Separate CPU / GPU benchmark (v2 preview)
+## Separate CPU / GPU benchmark (v2.1 beta candidate)
 
-On `codex/hdr-preservation`, **Run Benchmark** lets you select CPU or one detected
-GPU (MPS/Metal on Apple silicon, CUDA on NVIDIA, or ROCm on AMD). The worker runs exactly that device and rejects
+**Run Benchmark** lets you select CPU or one detected GPU, including the tested
+Intel DirectML adapter. The worker runs exactly that device and rejects
 an unavailable selection. It does not automatically append a CPU phase. Each
 completed device score is retained locally, with its own confidence and timestamp;
 a CPU run preserves the previous GPU result and vice versa. JSON separates the
@@ -20,12 +20,24 @@ start a benchmark. Subsequent runs reuse the installed checkpoint.
 The score is each device's geometric mean of output megapixels/second across the
 three fixed SPAN scenes. CPU and GPU never contribute to a combined score. GPU
 reference comparisons apply only to GPU results. Results above 5% timing spread
-remain visibly unstable. Model, input pixels, scene dimensions, repetition rules,
-and score formulas retain `localsr-benchmark-v2` compatibility.
+remain visibly unstable. Workload `localsr-benchmark-v2.1` retains the model,
+scene dimensions and score formulas, but uses bounded sensor
+noise in its third image region. The earlier full-range RGB noise made SPAN
+produce extreme raw values that its descriptor hid by clipping. The revised
+scenes complete through the same stability checks as normal image processing.
+
+Each scene normally collects at least six measurements over 20 seconds. After
+45 seconds it may finish with three complete measurements. The time budget is
+soft: slower hardware must still collect those three samples, even when one
+render exceeds 45 seconds. A single render cannot establish consistency. This
+means a full benchmark can take several minutes; cancellation remains available.
+
+The changed input pixels require a new workload identity. Earlier results remain
+readable but are not merged with v2.1 CPU/GPU results or used as reference scores.
 
 The viewer renders actual model squares, with an outline on the active tile. It
 uses the same tile coordinates as HAT's production renderer, but the fixed model
-is **SPAN**, not HAT. Each square contains that tile's model output. The three
+is **SPAN**. Each square contains that tile's model output. The three
 procedural scenes cover compute (512×512), tiled processing (3072×2048), and export
 (768×512). They measure processing speed, not restoration quality.
 

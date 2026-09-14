@@ -1,13 +1,12 @@
 # LocalSR worker protocol
 
 The desktop host and inference engine exchange one JSON object per line over
-stdin/stdout. Protocol version 1 preserves every message used by the Slint app
-and adds an explicit handshake plus media probing for the Tauri host.
+stdin/stdout. Protocol version 1 includes a host/worker handshake, media probing,
+job progress and results. The optional Qt client uses the same worker.
 
 Compatibility rules:
 
-- Workers always emit `worker_ready` first, so the released Slint client keeps
-  working.
+- Workers always emit `worker_ready` first, preserving the version 1 startup contract.
 - New hosts send `handshake_request` and refuse incompatible engine versions.
 - Job IDs are host-generated UUIDs. Only one worker job runs at a time; queueing
   and crash recovery belong to the host.

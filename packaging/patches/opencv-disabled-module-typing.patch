@@ -1,0 +1,25 @@
+--- a/opencv/modules/python/src2/typing_stubs_generation/generation.py
++++ b/opencv/modules/python/src2/typing_stubs_generation/generation.py
+@@ -791,6 +791,12 @@
+     # Resolve each node and register aliases
+     TypeNode.compatible_to_runtime_usage = True
+     for node in PREDEFINED_TYPES.values():
++        # Do not emit G-API aliases when that optional module is disabled.
++        if "gapi" not in root.namespaces and (
++                node.ctype_name.startswith("G") or node.ctype_name in (
++                    "Prim", "Prims", "detail_ExtractArgsCallback",
++                    "detail_ExtractMetaCallback")):
++            continue
+         node.resolve(root)
+         if isinstance(node, AliasTypeNode):
+             register_alias(node)
+--- a/setup.py
++++ b/setup.py
+@@ -118,6 +118,7 @@
+         (
+             [r"lib/libOrbbecSDK.dylib", r"lib/libOrbbecSDK.\d.\d.dylib", r"lib/libOrbbecSDK.\d.\d.\d.dylib"]
+             if platform.system() == "Darwin" and platform.machine() == "arm64"
++            and "-DWITH_OBSENSOR=OFF" not in os.environ.get("CMAKE_ARGS", "")
+             else []
+         )
+         +

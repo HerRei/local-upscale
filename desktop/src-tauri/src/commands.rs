@@ -7,7 +7,7 @@ use std::{
 };
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::{
@@ -25,7 +25,10 @@ use crate::{
 };
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "dng"];
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mkv", "webm", "avi"];
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mov", "m4v", "mkv", "webm", "avi", "mpg", "mpeg", "mpe", "vob", "ts", "mts", "m2ts",
+    "wmv", "asf", "flv", "f4v", "3gp", "3g2", "ogv", "divx",
+];
 const MAX_MEDIA_ITEMS: usize = 10_000;
 
 #[tauri::command]
@@ -419,7 +422,9 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
         {
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = "Cancelling".into();
-            runtime.status_detail = "Stopping at the next model step. A stalled video engine will restart automatically.".into();
+            runtime.status_detail =
+                "Stopping at the next model step. A stalled engine will restart automatically."
+                    .into();
         }
         worker::send(
             &state,
@@ -480,6 +485,11 @@ pub fn start_benchmark(
         ));
     }
     let job_id = format!("benchmark-{}", Uuid::new_v4());
+    let mut message = json!({"type":"benchmark_request", "data": {
+        "job_id": job_id, "model_path": model_path, "model_id":"span_photo_x4",
+        "model_name": model_name, "workload":"v2", "device": input.device
+    }});
+    lock(&state.worker.cancellation)?.prepare(&job_id, &mut message)?;
     {
         let mut runtime = lock(&state.runtime)?;
         if !runtime.active_job_id.is_empty() {
@@ -492,20 +502,8 @@ pub fn start_benchmark(
         runtime.status_detail = "Loading the fixed LocalSR benchmark workload.".into();
         runtime.progress = 0.0;
     }
-    if let Err(error) = worker::send(
-        &state,
-        &json!({
-            "type": "benchmark_request",
-            "data": {
-                "job_id": job_id,
-                "model_path": model_path,
-                "model_id": "span_photo_x4",
-                "model_name": model_name,
-                "workload": "v2",
-                "device": input.device
-            }
-        }),
-    ) {
+    if let Err(error) = worker::send(&state, &message) {
+        lock(&state.worker.cancellation)?.finish()?;
         lock(&state.runtime)?.active_job_id.clear();
         return Err(error);
     }
@@ -580,10 +578,84 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn prepare_video_comparison(
+pub fn request_image_comparison(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+) -> AppResult<()> {
+    let output = {
+        let database = lock(&state.database)?;
+        let media = database
+            .get_media(&media_id)?
+            .ok_or_else(|| AppError::Validation("the selected image is no longer queued".into()))?;
+        if media.kind != "image" {
+            return Err(AppError::Validation(
+                "select an image for this comparison".into(),
+            ));
+        }
+        database
+            .latest_completed_output_for_media(&media_id)?
+            .ok_or_else(|| AppError::Validation("this image has no completed output".into()))?
+    };
+    if !Path::new(&output).is_file() {
+        return Err(AppError::Validation(
+            "the completed image is no longer available".into(),
+        ));
+    }
+    {
+        let mut runtime = lock(&state.runtime)?;
+        if runtime.comparison_media_id == media_id
+            && runtime.comparison_output_path == output
+            && !runtime.comparison_preview_data_url.is_empty()
+        {
+            return Ok(());
+        }
+        runtime.comparison_media_id = media_id;
+        runtime.comparison_output_path = output.clone();
+        runtime.comparison_preview_data_url.clear();
+        runtime.comparison_error.clear();
+    }
+    // A single bounded comparison is retained independently of the active
+    // job. The worker response carries its path, so a late response from a
+    // previously selected result cannot replace the current comparison.
+    worker::send(
+        &state,
+        &json!({
+            "type": "preview_request", "data": {"image_path": output, "max_dimension": 2048, "comparison": true}
+        }),
+    )
+}
+
+#[tauri::command]
+pub async fn prepare_video_comparison(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     media_id: String,
+    request_id: String,
+    force_compatible: bool,
+) -> AppResult<VideoComparisonSources> {
+    let cancel = state.video_preview.begin(&request_id)?;
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        video_comparison_sources(
+            &state,
+            &app,
+            &media_id,
+            &request_id,
+            force_compatible,
+            cancel,
+        )
+    })
+    .await
+    .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
+}
+
+fn video_comparison_sources(
+    state: &AppState,
+    app: &AppHandle,
+    media_id: &str,
+    request_id: &str,
+    force_compatible: bool,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
 ) -> AppResult<VideoComparisonSources> {
     let (original, enhanced) = {
         let database = lock(&state.database)?;
@@ -605,6 +677,35 @@ pub fn prepare_video_comparison(
     if !original.is_file() || !enhanced.is_file() {
         return Err(AppError::Validation(
             "the original or enhanced video is no longer available".into(),
+        ));
+    }
+    let mut converted = false;
+    let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
+        if force_compatible || crate::video_preview::needs_conversion(&path) {
+            converted = true;
+            let reporter = app.clone();
+            let request = request_id.to_owned();
+            let media = media_id.to_owned();
+            state.video_preview.convert(
+                &path,
+                &state.paths.work_root,
+                worker::codec_helper_command(&state, &app)?,
+                Arc::clone(&cancel),
+                move |mut data| {
+                    data["request_id"] = json!(request);
+                    data["media_id"] = json!(media);
+                    let _ = reporter.emit("video-comparison-progress", data);
+                },
+            )
+        } else {
+            Ok(path)
+        }
+    };
+    let original = playback(original)?;
+    let enhanced = playback(enhanced)?;
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(AppError::Validation(
+            "Playback conversion cancelled.".into(),
         ));
     }
     allow_video_preview_pair(&app.asset_protocol_scope(), &original, &enhanced)?;
@@ -629,7 +730,21 @@ pub fn prepare_video_comparison(
         enhanced_path: enhanced.to_string_lossy().into_owned(),
         original_url,
         enhanced_url,
+        playback_note: if converted {
+            "Compatible SDR playback copy · up to 1280 px. Source and saved export are unchanged."
+                .into()
+        } else {
+            String::new()
+        },
     })
+}
+
+#[tauri::command]
+pub fn cancel_video_comparison(
+    state: State<'_, Arc<AppState>>,
+    request_id: String,
+) -> AppResult<()> {
+    state.video_preview.cancel(&request_id)
 }
 
 fn allow_video_preview_pair(
@@ -1523,6 +1638,66 @@ mod tests {
     use crate::types::RecipeStage;
 
     #[test]
+    fn face_companions_require_the_matching_installed_model_and_explicit_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::create_dir_all(&paths.model_root).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        for (primary_id, face_id) in [
+            ("hat_s_x4", "hat_s_x4_face"),
+            ("hat_l_x4_imagenet", "hat_l_x4_face"),
+        ] {
+            {
+                let mut catalog = lock(&state.catalog).unwrap();
+                for model in &mut catalog.models {
+                    model.installed = model.model_id == primary_id || model.model_id == face_id;
+                    model.installed_path = model
+                        .installed
+                        .then(|| format!("/models/{}", model.filename));
+                }
+            }
+            let mut options = input("upscale");
+            options.model_id = primary_id.into();
+            options.enable_face_model = false;
+            assert!(matches!(
+                resolve_model_selection(&state, &options).unwrap(),
+                ModelSelection::Image {
+                    face_path: None,
+                    ..
+                }
+            ));
+            options.enable_face_model = true;
+            match resolve_model_selection(&state, &options).unwrap() {
+                ModelSelection::Image {
+                    face_path,
+                    face_model_id,
+                    ..
+                } => {
+                    assert_eq!(face_model_id, face_id);
+                    assert!(face_path.unwrap().starts_with("/models/"));
+                }
+                _ => panic!("expected an image model"),
+            }
+            {
+                let mut catalog = lock(&state.catalog).unwrap();
+                catalog
+                    .models
+                    .iter_mut()
+                    .find(|model| model.model_id == face_id)
+                    .unwrap()
+                    .installed = false;
+            }
+            let missing = resolve_model_selection(&state, &options).err().unwrap();
+            assert!(missing
+                .to_string()
+                .contains("import the verified face checkpoint"));
+            options.model_id = face_id.into();
+            assert!(resolve_model_selection(&state, &options).is_err());
+        }
+    }
+
+    #[test]
     fn revisiting_video_comparisons_keeps_only_explicit_files_authorized() {
         let app = tauri::test::mock_app();
         let scope = tauri::scope::fs::Scope::new(
@@ -1966,14 +2141,18 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn open_model_license(state: State<'_, Arc<AppState>>, model_id: String) -> AppResult<()> {
+pub fn open_model_license(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+    source: Option<bool>,
+) -> AppResult<()> {
     let catalog = lock(&state.catalog)?;
     let model = catalog
         .models
         .iter()
         .find(|model| model.model_id == model_id)
         .ok_or_else(|| AppError::Validation("Unknown model".into()))?;
-    let url = if model.license_url.is_empty() {
+    let url = if source.unwrap_or(false) || model.license_url.is_empty() {
         &model.source_url
     } else {
         &model.license_url

@@ -4,25 +4,59 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import LicenseDownload from './LicenseDownload.svelte';
 import { demoSnapshot } from './lib/demo';
+
 afterEach(cleanup);
-it('requires two distinct acknowledgements and resets after cancelling', async () => {
-  const model = demoSnapshot().catalog.models.find(m => m.model_id === 'realplksr_nomoswebphoto_x4')!;
-  const download = vi.fn(async () => {});
+
+function props() {
+  const model = demoSnapshot().catalog.models.find(
+    (m) => m.model_id === 'realplksr_nomoswebphoto_x4',
+  )!;
+  return {
+    model: { ...model, installed: false },
+    download: vi.fn(async () => {}),
+    openLicense: vi.fn(async () => {}),
+    openSource: vi.fn(async () => {}),
+  };
+}
+
+it('shows the author and license with source and terms actions, without imposing non-commercial terms', async () => {
+  const p = props();
   const user = userEvent.setup();
-  render(LicenseDownload, { model: { ...model, installed: false }, download, openLicense: vi.fn(), chooseAlternative: vi.fn() });
-  await user.click(screen.getByRole('button', { name: /Review terms & download/ }));
-  expect(screen.getByRole('button', { name: 'Continue' }).matches(':disabled')).toBe(true);
-  await user.click(screen.getByRole('checkbox'));
-  await user.click(screen.getByRole('button', { name: 'Continue' }));
-  expect(screen.getByRole('button', { name: 'Confirm & download' }).matches(':disabled')).toBe(true);
-  expect(download).not.toHaveBeenCalled();
-  await user.click(screen.getByRole('button', { name: 'Cancel' }));
-  await user.click(screen.getByRole('button', { name: /Review terms & download/ }));
-  expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
-  await user.click(screen.getByRole('checkbox'));
-  await user.click(screen.getByRole('button', { name: 'Continue' }));
-  await user.click(screen.getByRole('checkbox'));
-  await user.click(screen.getByRole('button', { name: 'Confirm & download' }));
-  expect(download).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole('note', { name: 'Model license reminder' }).textContent).toContain('CC-BY-0.4');
+  render(LicenseDownload, p);
+  const notice = screen.getByRole('note', { name: 'Model license' });
+  expect(notice.textContent).toContain('CC BY 4.0');
+  expect(notice.textContent).toContain('Philip Hofmann');
+  expect(notice.textContent).toContain('unchanged');
+  expect(notice.textContent).not.toMatch(/non-commercial|clarification|unverified/);
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  await user.click(screen.getByRole('button', { name: /Model source/ }));
+  await user.click(screen.getByRole('button', { name: /License terms/ }));
+  expect(p.openSource).toHaveBeenCalledTimes(1);
+  expect(p.openLicense).toHaveBeenCalledTimes(1);
+  expect(p.download).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: /Download .* MB/ }));
+  expect(p.download).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('keeps cancellation available during a download and exposes real progress', async () => {
+  const p = props();
+  render(LicenseDownload, { ...p, downloading: true, progress: 42 });
+  expect(screen.getByRole('progressbar').getAttribute('value')).toBe('42');
+  await userEvent.click(screen.getByRole('button', { name: 'Downloading 42% · Cancel' }));
+  expect(p.download).toHaveBeenCalledTimes(1);
+});
+
+it('keeps attribution visible after installation without offering another download', () => {
+  const p = props();
+  render(LicenseDownload, { ...p, model: { ...p.model, installed: true } });
+  expect(screen.getByRole('note', { name: 'Model license' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Download/ })).toBeNull();
+});
+
+it('blocks downloads while processing controls are locked', async () => {
+  const p = props();
+  render(LicenseDownload, { ...p, disabled: true });
+  await userEvent.click(screen.getByRole('button', { name: /Download .* MB/ }));
+  expect(p.download).not.toHaveBeenCalled();
 });

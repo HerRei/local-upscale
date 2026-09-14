@@ -13,7 +13,7 @@ export function comparisonFromKey(current: number, key: string): number | null {
     ArrowRight: 1,
     ArrowUp: 1,
     PageDown: -10,
-    PageUp: 10
+    PageUp: 10,
   };
   if (key === 'Home') return 0;
   if (key === 'End') return 100;

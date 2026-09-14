@@ -1,4 +1,4 @@
-//! Video work has a host-owned scratch directory so a stalled GPU worker can
+//! Image/video work has a host-owned scratch directory so a stalled GPU worker can
 //! be stopped without leaving a partial export or touching an existing result.
 use std::{
     fs,
@@ -27,14 +27,28 @@ impl Cancellation {
         self.job_id = id.into();
         self.requested_at = None;
         self.resetting = false;
-        if message["type"] == "video_job_request" {
-            if let Some(output) = message["data"]["output_video_path"].as_str() {
+        let video = message["type"] == "video_job_request";
+        if video || message["type"] == "job_request" {
+            if let Some(output) = message["data"][if video {
+                "output_video_path"
+            } else {
+                "output_path"
+            }]
+            .as_str()
+            {
                 let output = PathBuf::from(output);
                 if let Some(parent) = output.parent() {
                     let scratch = parent.join(format!(".localsr-job-{}", Uuid::new_v4()));
                     fs::create_dir(&scratch)?;
-                    message["data"]["temporary_directory"] =
-                        scratch.to_string_lossy().into_owned().into();
+                    if video {
+                        message["data"]["temporary_directory"] =
+                            scratch.to_string_lossy().into_owned().into();
+                    } else {
+                        message["data"]["scratch_directory"] =
+                            scratch.to_string_lossy().into_owned().into();
+                        message["data"]["output_temporary_directory"] =
+                            scratch.to_string_lossy().into_owned().into();
+                    }
                     self.scratch = Some(scratch);
                 }
             }
@@ -49,7 +63,7 @@ impl Cancellation {
     }
 
     pub fn expired(&self, now: Instant) -> bool {
-        self.scratch.is_some()
+        !self.job_id.is_empty()
             && self
                 .requested_at
                 .is_some_and(|at| now.duration_since(at) >= CANCEL_GRACE)
@@ -102,5 +116,37 @@ mod tests {
         control.prepare("second", &mut message).unwrap();
         assert!(!control.expired(now + CANCEL_GRACE * 2));
         control.finish().unwrap();
+    }
+
+    #[test]
+    fn image_and_benchmark_cancellation_have_a_bounded_deadline_too() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("existing.png");
+        fs::write(&output, b"original result").unwrap();
+        let mut message = json!({"type":"job_request","data":{"output_path":output}});
+        let mut control = Cancellation::default();
+        control.prepare("image", &mut message).unwrap();
+        let scratch = PathBuf::from(message["data"]["scratch_directory"].as_str().unwrap());
+        assert_eq!(
+            message["data"]["scratch_directory"],
+            message["data"]["output_temporary_directory"]
+        );
+        fs::write(scratch.join("partial.tmp"), b"partial").unwrap();
+        let now = Instant::now();
+        control.request("image", now);
+        assert!(control.expired(now + CANCEL_GRACE));
+        control.finish().unwrap();
+        assert!(!scratch.exists());
+        assert_eq!(fs::read(output).unwrap(), b"original result");
+        control
+            .prepare(
+                "benchmark",
+                &mut json!({"type":"benchmark_request","data":{}}),
+            )
+            .unwrap();
+        control.request("benchmark", now);
+        assert!(control.expired(now + CANCEL_GRACE));
+        control.finish().unwrap();
+        assert!(!control.expired(now + CANCEL_GRACE));
     }
 }

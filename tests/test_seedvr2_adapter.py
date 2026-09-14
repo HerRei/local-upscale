@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+from localsr.core.video_engines import seedvr2_runtime_issue
 from localsr.video_models.seedvr2 import engine as adapter
 
 
@@ -136,6 +137,7 @@ def test_worker_memory_error_offers_resolution_recovery_without_disabling_limits
 
 
 @pytest.mark.parametrize("tile_size", [16, 64])
+@pytest.mark.skipif(seedvr2_runtime_issue() is not None, reason=seedvr2_runtime_issue() or "")
 def test_vae_preview_regions_follow_actual_work_without_changing_tensors(tile_size):
     from localsr.video_models.seedvr2.vendor.models.video_vae_v3.modules.attn_video_vae import (
         VideoAutoencoderKL,

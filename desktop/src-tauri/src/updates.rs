@@ -104,6 +104,7 @@ pub struct ReleaseContract {
 #[derive(Clone, Default, Serialize)]
 pub struct UpdateStatus {
     pub configured: bool,
+    pub managed_by_store: bool,
     pub channel: String,
     pub target: String,
     pub stage: String,
@@ -224,6 +225,17 @@ fn publish(state: &AppState, app: &AppHandle, status: UpdateStatus) {
 }
 #[tauri::command]
 pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus> {
+    if crate::distribution::managed_by_store() {
+        return Ok(UpdateStatus {
+            managed_by_store: true,
+            stage: "store".into(),
+            message:
+                "App and inference engine updates are provided together through Microsoft Store."
+                    .into(),
+            settings_recovery: crate::settings::needs_recovery(&state.paths),
+            ..Default::default()
+        });
+    }
     let config = UpdateConfig::load();
     let mut status = lock(&state.updates.status)?.clone();
     status.configured = config.enabled();
@@ -238,12 +250,29 @@ pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus>
     }
     Ok(status)
 }
+
+#[tauri::command]
+pub fn open_store_updates(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    if !crate::distribution::managed_by_store() {
+        return Err(invalid(
+            "This installation is not managed by Microsoft Store",
+        ));
+    }
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Err(invalid(
+            "Finish or cancel processing before opening Store updates",
+        ));
+    }
+    open::that_detached("ms-windows-store://downloadsandupdates")?;
+    Ok(())
+}
 #[tauri::command]
 pub async fn check_update(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     channel: String,
 ) -> AppResult<UpdateStatus> {
+    crate::distribution::require_direct_updates()?;
     let _busy = acquire(&state.updates.busy)?;
     if !matches!(channel.as_str(), "stable" | "beta") {
         return Err(invalid("Unknown update channel"));
@@ -456,6 +485,7 @@ async fn download_file(
 }
 #[tauri::command]
 pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    crate::distribution::require_direct_updates()?;
     let _busy = acquire(&state.updates.busy)?;
     state.updates.cancel.store(false, Ordering::SeqCst);
     let (file, config, contract) = {
@@ -546,6 +576,7 @@ pub fn cancel_update(state: State<'_, Arc<AppState>>) {
 }
 #[tauri::command]
 pub fn discard_update(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    crate::distribution::require_direct_updates()?;
     let _busy = acquire(&state.updates.busy)?;
     let directory = state.paths.next_root.join("updates");
     if directory.exists() {
@@ -592,6 +623,15 @@ fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 pub fn active_engine(paths: &crate::paths::AppPaths) -> Option<PathBuf> {
+    active_engine_for_distribution(paths, crate::distribution::managed_by_store())
+}
+fn active_engine_for_distribution(
+    paths: &crate::paths::AppPaths,
+    managed_by_store: bool,
+) -> Option<PathBuf> {
+    if managed_by_store {
+        return None;
+    }
     let id = fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?;
     if !safe_id(&id) {
         return None;
@@ -623,6 +663,7 @@ fn copy_tree(source: &Path, destination: &Path) -> AppResult<()> {
 }
 #[tauri::command]
 pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    crate::distribution::require_direct_updates()?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = install_checked(&state, &app);
@@ -841,6 +882,29 @@ fn restart_application(app: &AppHandle) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn store_install_ignores_a_previous_direct_install_engine() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let engine = paths
+            .next_root
+            .join("engines/previous/engine")
+            .join(if cfg!(windows) {
+                "localsr-worker.exe"
+            } else {
+                "localsr-worker"
+            });
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        fs::write(&engine, b"previous engine").unwrap();
+        fs::write(paths.next_root.join("active-engine.txt"), b"previous").unwrap();
+        assert_eq!(
+            active_engine_for_distribution(&paths, false),
+            Some(engine.clone())
+        );
+        assert_eq!(active_engine_for_distribution(&paths, true), None);
+        assert_eq!(fs::read(engine).unwrap(), b"previous engine");
+    }
+
     fn fixture() -> (Vec<u8>, DownloadFile, UpdateConfig) {
         let value: serde_json::Value =
             serde_json::from_str(include_str!("../tests/fixtures/update-signature.json")).unwrap();
@@ -956,6 +1020,122 @@ mod tests {
             assert!(!root.path().join(&file.name).exists());
             assert!(!root.path().join(format!("{}.partial", file.name)).exists());
             server.join().unwrap();
+        }
+    }
+
+    /// Run explicitly against the retained, production-signed CPU AppImage.
+    /// Uses the app's actual downloader/verifier without replacing an installed app.
+    #[test]
+    #[ignore = "requires LOCALSR_SIGNED_ACCEPTANCE_ARTIFACT and its production signature"]
+    fn production_candidate_download_and_tamper_rejection() {
+        let artifact =
+            PathBuf::from(std::env::var_os("LOCALSR_SIGNED_ACCEPTANCE_ARTIFACT").unwrap());
+        let public_key = include_str!("../../../packaging/updates/production.pub").trim();
+        let signature = fs::read_to_string(format!("{}.sig", artifact.display())).unwrap();
+        let size = fs::metadata(&artifact).unwrap().len();
+        let mut hasher = Sha256::new();
+        let mut input = fs::File::open(&artifact).unwrap();
+        let mut buffer = vec![0; 1024 * 1024];
+        loop {
+            let count = input.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        let digest: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        for interrupted in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut file = DownloadFile {
+                name: "candidate.AppImage".into(),
+                url: format!("http://{}/candidate", listener.local_addr().unwrap()),
+                size,
+                sha256: digest.clone(),
+                signature: signature.trim().into(),
+            };
+            let config = UpdateConfig {
+                public_key: public_key.into(),
+                feed: file.url.clone(),
+                backend: "cpu".into(),
+                engine_id: "linux-x86_64-cpu-beta1-20260913".into(),
+                kind: "native".into(),
+            };
+            let source = artifact.clone();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let mut received = 0;
+                while !request[..received]
+                    .windows(4)
+                    .any(|bytes| bytes == b"\r\n\r\n")
+                {
+                    assert!(
+                        received < request.len(),
+                        "HTTP request headers exceed test limit"
+                    );
+                    let count = socket.read(&mut request[received..]).unwrap();
+                    assert!(
+                        count > 0,
+                        "HTTP client closed before sending complete headers"
+                    );
+                    received += count;
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                let input = fs::File::open(source).unwrap();
+                if interrupted {
+                    std::io::copy(&mut input.take(1024), &mut socket).unwrap();
+                } else {
+                    std::io::copy(&mut std::io::BufReader::new(input), &mut socket).unwrap();
+                }
+            });
+            let root = tempfile::tempdir().unwrap();
+            let cancel = AtomicBool::new(false);
+            let mut downloaded = 0;
+            let result = tauri::async_runtime::block_on(download_file(
+                &file,
+                root.path(),
+                &config,
+                &cancel,
+                &mut |bytes| downloaded += bytes,
+            ));
+            server.join().unwrap();
+            if interrupted {
+                assert!(result.is_err());
+                assert!(!root.path().join(&file.name).exists());
+                assert!(!root.path().join(format!("{}.partial", file.name)).exists());
+            } else {
+                result.unwrap();
+                assert_eq!(downloaded, size);
+                let path = root.path().join(&file.name);
+                verify_file(&path, &file, public_key).unwrap();
+                // Recompute the digest of substituted data; the production
+                // signature must still prevent treating it as an update.
+                let replacement = b"substituted update";
+                fs::write(&path, replacement).unwrap();
+                file.size = replacement.len() as u64;
+                file.sha256 = Sha256::digest(replacement)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                assert!(verify_file(&path, &file, public_key)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("signature"));
+            }
         }
     }
 }

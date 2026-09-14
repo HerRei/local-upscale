@@ -1,47 +1,67 @@
-# Known limitations — v0.0.12-alpha
+# Known limitations
 
-- The desktop matrix includes all eight backend variants, but v0.0.12-alpha is a
-  testing-only unsigned exception: macOS is ad-hoc sealed and Windows lacks Authenticode. Production
-  signing, notarization, stapling, and trust validation remain mandatory before beta.
-- The Apple-Silicon DMG is Intel→ARM cross-built on the Mac mini with PyTorch 2.2.2, the last line
-  with paired Intel/ARM wheels. It is known security debt and the paired Labs video runtime also
-  carries Diffusers 0.35.2 advisories. LocalSR never enables Diffusers remote custom pipelines,
-  but this package may not be promoted to beta. A native maintained ARM runtime and the long-term
-  Intel-support decision remain open.
-- The v0.0.12 matrix packages Windows CPU/CUDA/DirectML, Linux CPU/CUDA/Intel XPU/AMD ROCm,
-  and Apple-Silicon MPS. Each download selects one backend. Installed-worker checks establish
-  runtime identity and CPU inference; they do not establish GPU performance or driver compatibility.
-  Physical acceptance remains required for each GPU backend.
-- There is no supported Homebrew formula. Add one only after signed assets have stable public URLs
-  and real checksums.
-- The Windows DirectML archive is constrained by Microsoft's preview `torch-directml` package to
-  PyTorch 2.4.1, which also has checkpoint-loading advisories. LocalSR's default checkpoint policy
-  prevents unverified pickle/TorchScript models from reaching that runtime, but DirectML remains an
-  alpha-only backend until a maintained runtime or replacement backend is selected.
-- Standard video supports SDR input and H.264 output in MP4/MKV, preserving source presentation
-  timing and normalizing right-angle rotation and mirrors. HDR PQ/HLG requires prior SDR conversion.
-  Source audio/subtitles are copied when compatible; trims have compressed-packet precision.
-  SeedVR2, de-flicker, and video face processing remain individually Labs. Installed-platform
-  playback, longer clips, codec combinations, and resource pressure still require recorded acceptance.
-- The HAT-S Face code path supports fidelity-controlled blending, but the current checkpoint's
-  independent weight/training-data rights are unresolved. It is excluded from trusted automatic
-  downloads and commercial recommendations; only a hash-matching user-supplied copy is accepted.
-  The separate MIT-licensed YuNet detector is downloaded and hash-verified on first use.
-- The Best and anime checkpoint release pages use the non-standard string `CC-BY-0.4`; their author
-  should clarify the intended license before public-beta or commercial use.
-- CI proves package contents, startup, worker IPC, model download/inference, and static backend
-  provenance. It does not replace physical GPU/driver acceptance on every advertised device.
-- GPU distributions require compatible hardware and drivers. Windows CUDA uses adjacent verified
-  engine payloads; large Linux AppImages use verified parts. Packaging success is not physical GPU acceptance.
-- Tauri's current Linux WebKit/GTK3 stack transitively pins `glib` 0.18, which has the
-  `GHSA-wrw7-89jp-8q8g` iterator-soundness advisory. The patched `glib` 0.20 line requires the
-  upstream GTK4 migration rather than a safe lockfile-only update; this remains a beta blocker.
-- The repository and its Issues are private. General-public feedback intake is not available yet.
-- Custom `.safetensors` models are accepted by default. Unverified `.pth`, `.pt`, and `.ckpt`
-  models are blocked unless `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` is explicitly set; that escape
-  hatch is not a sandbox and should be treated as permission to execute the model publisher's code.
-- Model downloads require network access and enough free disk space; models are not bundled.
+These notes describe the **v0.0.13-beta.1 candidate**, which is not yet publicly
+released. Older alpha packages have different dependencies and trust properties;
+see their [release notes](docs/releases/).
 
-The [acceptance checklist](docs/acceptance.md) separates automated evidence from remaining physical
-hardware testing. The release index embeds the versioned beta-readiness register in a form CI can
-validate without pretending that product decisions or manual tests are complete.
+## Hardware and processing time
+
+Recorded beta workloads cover Apple Silicon/MPS, Linux CPU and RX 9060 XT/ROCm,
+and Windows CPU and Intel UHD 620/DirectML. Other CUDA, XPU and DirectML devices
+remain available targets with Labs coverage. A successful build or worker startup
+does not establish physical GPU compatibility. See the [platform matrix](docs/beta-platform-matrix.md).
+
+High-resolution video can take hours or days and may exceed available RAM, GPU
+memory or disk space. A nominal 16 GB GPU is not a guarantee that SeedVR2 fits.
+Five-minute 480p export has been exercised; a complete four-minute 4K export has
+not. Try a short clip before committing to a long job.
+
+## Restoration quality
+
+- HAT HDR preservation uses floating-point processing and 10-bit HLG/PQ export,
+  but the models were trained on SDR. HDR perceptual quality and temporal stability
+  remain unverified. Live previews are SDR display conversions.
+- SeedVR2 exports SDR and requires a compatible engine. Its FP8 download size
+  does not describe total working memory. De-flicker and video face processing
+  are also Labs features.
+- NAFNet can produce unstable results on some scanned documents. The current
+  guard rejects two of eleven reproduced inputs after bounded retries and writes
+  no output for those failures. Always inspect text, faces and fine detail.
+- MOV compatibility depends on codecs, colour metadata, transforms and audio
+  tracks. Compatible audio is retained; spatial audio and unsupported tracks may
+  be omitted. Compressed audio trims have packet-level precision.
+
+See [video support](docs/video-support.md) and [metadata handling](docs/metadata.md).
+
+## Models and runtime dependencies
+
+Both HAT face checkpoints require verified user imports because their independent
+checkpoint rights remain unresolved. NomosWebPhoto/HFA2k use the author's declared
+CC BY 4.0 terms with attribution. No restoration checkpoints are bundled.
+
+The retained Windows MSIX uses torch-directml / Torch 2.4.1. The prepared source
+replacement uses Torch 2.13.0 CPU and ONNX Runtime DirectML 1.24.4, but no package
+containing it has been built. NAFNet SIDD photo comparisons still exceed the
+fixed GPU numerical tolerance; no temporary CPU restriction is approved or
+applied. SPAN can also diverge on some periodic high-contrast inputs; detected
+unstable output is rejected before export. The Linux GTK dependency chain has a
+recorded glib advisory. The native dependency/codec redistribution review and
+final installed acceptance must finish before publication.
+[Dependency review](docs/beta-dependency-review.md) · [Model licenses](docs/model-licenses.md).
+
+Custom `.safetensors` models are accepted by default. The explicit override for
+unverified `.pth`, `.pt` and `.ckpt` files treats them as executable code; it is
+not a sandbox. Read the [security policy](SECURITY.md).
+
+## Installation and updates
+
+The macOS review candidate is signed, notarized and stapled. Native installed
+upgrade/recovery checks remain incomplete. Windows WACK still reports a warning;
+Microsoft Store certification is pending. MSIX upgrades preserve user data in
+recorded tests, but uninstall can delete the profile; explicit backup restoration
+has been verified.
+
+Direct-update signature and download checks pass. Public feeds, native install/
+restart/recovery and final package rebuilding remain release requirements.
+The public download and issue-tracker destinations are still being prepared.
+Current blockers are recorded in the [beta checklist](docs/beta-release-checklist.md).

@@ -71,10 +71,15 @@ def validate(path: Path, root: Path = ROOT) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", nargs="?", type=Path, default=ROOT / "ci" / "beta-readiness.json")
+    parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--require-beta-ready", action="store_true")
     args = parser.parse_args()
-    data = validate(args.path)
+    path = args.path
+    if path is None:
+        version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+        register = "public-beta-readiness.json" if "-beta." in version else "beta-readiness.json"
+        path = ROOT / "ci" / register
+    data = validate(path)
     gates = data["gates"]
     unresolved = [gate for gate in gates if blocks_release(gate)]
     optional = [

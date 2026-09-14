@@ -9,6 +9,7 @@ import re
 import tomllib
 from pathlib import Path
 
+from check_public_beta import check as check_public_beta
 from release_targets import validate_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,16 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 def check(tag: str | None = None, root: Path = ROOT) -> str:
     with (root / "pyproject.toml").open("rb") as stream:
         version = str(tomllib.load(stream)["project"]["version"])
+    if re.fullmatch(r"\d+\.\d+\.\d+-beta\.\d+", version):
+        return check_public_beta(tag, root)
     expected_tag = f"v{version}"
     failures: list[str] = []
 
     if tag and tag != expected_tag:
         failures.append(f"tag {tag!r} does not match {expected_tag!r}")
-
-    iss = (root / "packaging/windows/LocalSR.iss").read_text(encoding="utf-8")
-    match = re.search(r'^#define MyAppVersion "([^"]+)"$', iss, re.MULTILINE)
-    if not match or match.group(1) != version:
-        failures.append("Inno Setup MyAppVersion does not match pyproject.toml")
 
     package_init = (root / "src/localsr/__init__.py").read_text(encoding="utf-8")
     package_match = re.search(r'^__version__ = "([^"]+)"$', package_init, re.MULTILINE)
@@ -63,16 +61,6 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
             validate_manifest(manifest)
         except ValueError as error:
             failures.append(f"{label}: {error}")
-
-    spec = (root / "packaging/localsr.spec").read_text(encoding="utf-8")
-    expected_bundle_fields = {
-        "CFBundleShortVersionString": "APP_BUNDLE_VERSION",
-        "CFBundleVersion": "APP_BUILD_NUMBER",
-        "LocalSRReleaseVersion": "APP_VERSION",
-    }
-    for field, variable in expected_bundle_fields.items():
-        if f'"{field}": {variable}' not in spec:
-            failures.append(f"macOS bundle field {field} is not derived from {variable}")
 
     for relative, label in (
         (".github/workflows/desktop-release.yml", "signed release workflow"),

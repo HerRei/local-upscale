@@ -44,6 +44,7 @@ impl Default for WorkerControl {
 }
 
 pub struct AppState {
+    pub video_preview: crate::video_preview::VideoPreviewControl,
     pub updates: crate::updates::UpdateControl,
     #[cfg(target_os = "linux")]
     pub media_server: Mutex<Option<crate::media_server::MediaServer>>,
@@ -67,13 +68,14 @@ impl AppState {
         Self::from_paths(AppPaths::discover()?)
     }
 
-    fn from_paths(paths: AppPaths) -> AppResult<Self> {
-        crate::update_storage::before_version(&paths, env!("CARGO_PKG_VERSION"))?;
+    pub(crate) fn from_paths(paths: AppPaths) -> AppResult<Self> {
+        crate::update_storage::before_version(&paths, &crate::distribution::profile_version())?;
         let database = Database::open(&paths.database)?;
         let catalog = load_catalog(&paths)?;
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
         Ok(Self {
+            video_preview: crate::video_preview::VideoPreviewControl::default(),
             updates: crate::updates::UpdateControl::default(),
             #[cfg(target_os = "linux")]
             media_server: Mutex::new(None),

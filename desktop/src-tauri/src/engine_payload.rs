@@ -217,6 +217,10 @@ pub fn run_arguments(arguments: &[std::ffi::OsString]) -> Option<i32> {
     {
         return None;
     }
+    if let Err(error) = crate::distribution::require_direct_updates() {
+        eprintln!("{error}");
+        return Some(1);
+    }
     if arguments.len() != 5 {
         eprintln!("expected --install-engine MANIFEST PAYLOAD_DIRECTORY ENGINE_DIRECTORY");
         return Some(1);

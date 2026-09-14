@@ -7,13 +7,27 @@ afterEach(cleanup);
 
 it('shows the failed stage and captured GPU evidence independently of changed settings', () => {
   const memory: VideoMemoryStatus = {
-    job_id: 'failed-job', device: 'cuda:0', stage: 'decoding', low_memory: false,
-    clip_frames: 9, vae_tile_size: 512, blocks_to_swap: 0, offload_tensors: false,
-    output_width: 2160, output_height: 3840, gpu_sample_available: true, shared_memory: false,
-    device_total_memory: 16 * 1024 ** 3, device_free_memory: 1024 ** 3,
-    device_allocated_memory: 12 * 1024 ** 3, device_reserved_memory: 14 * 1024 ** 3,
-    device_peak_memory: 13 * 1024 ** 3, system_ram_available: 10 * 1024 ** 3,
-    process_ram: 6 * 1024 ** 3, elapsed_seconds: 30, oom: true
+    job_id: 'failed-job',
+    device: 'cuda:0',
+    stage: 'decoding',
+    low_memory: false,
+    clip_frames: 9,
+    vae_tile_size: 512,
+    blocks_to_swap: 0,
+    offload_tensors: false,
+    output_width: 2160,
+    output_height: 3840,
+    gpu_sample_available: true,
+    shared_memory: false,
+    device_total_memory: 16 * 1024 ** 3,
+    device_free_memory: 1024 ** 3,
+    device_allocated_memory: 12 * 1024 ** 3,
+    device_reserved_memory: 14 * 1024 ** 3,
+    device_peak_memory: 13 * 1024 ** 3,
+    system_ram_available: 10 * 1024 ** 3,
+    process_ram: 6 * 1024 ** 3,
+    elapsed_seconds: 30,
+    oom: true,
   };
   render(VideoMemory, { memory, lowMemory: true, outputDimensions: '720 × 1280' });
   expect(screen.getByText('Out of memory')).toBeTruthy();
@@ -24,11 +38,14 @@ it('shows the failed stage and captured GPU evidence independently of changed se
   expect(screen.getByText(/Readings captured at failure/)).toBeTruthy();
 });
 
-it.each(['mps', 'cpu', 'xpu:0', 'directml:0'])('does not offer ineffective GPU offload on %s', id => {
-  render(VideoMemory, { device: { id } as never });
-  expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
-});
-it.each(['cuda:0', 'cuda:1'])('offers the real CPU offload control on CUDA/ROCm %s', id => {
+it.each(['mps', 'cpu', 'xpu:0', 'directml:0'])(
+  'does not offer ineffective GPU offload on %s',
+  (id) => {
+    render(VideoMemory, { device: { id } as never });
+    expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
+  },
+);
+it.each(['cuda:0', 'cuda:1'])('offers the real CPU offload control on CUDA/ROCm %s', (id) => {
   render(VideoMemory, { device: { id } as never });
   expect(screen.getByRole('checkbox', { name: 'Reduce GPU memory' })).toBeTruthy();
 });

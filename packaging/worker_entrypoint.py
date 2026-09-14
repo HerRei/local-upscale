@@ -1,4 +1,4 @@
-from localsr.worker.server import main
+from localsr.worker.cli import main
 
 if __name__ == "__main__":
     main()

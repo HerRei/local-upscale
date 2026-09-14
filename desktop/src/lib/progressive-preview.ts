@@ -10,6 +10,8 @@ export interface OutputTile {
   output_height: number;
   image_width: number;
   image_height: number;
+  grid_width?: number;
+  grid_height?: number;
 }
 
 export interface CanvasTileRect {
@@ -33,7 +35,7 @@ function positive(value: number): number {
  */
 export function boundedPreviewSize(
   output: PixelSize,
-  maximumDimension = MAXIMUM_PROGRESSIVE_DIMENSION
+  maximumDimension = MAXIMUM_PROGRESSIVE_DIMENSION,
 ): PixelSize {
   const width = positive(output.width);
   const height = positive(output.height);
@@ -41,7 +43,7 @@ export function boundedPreviewSize(
   const scale = Math.min(1, maximum / Math.max(width, height));
   return {
     width: Math.max(MINIMUM_DIMENSION, Math.round(width * scale)),
-    height: Math.max(MINIMUM_DIMENSION, Math.round(height * scale))
+    height: Math.max(MINIMUM_DIMENSION, Math.round(height * scale)),
   };
 }
 
@@ -58,18 +60,16 @@ export function canvasTileRect(tile: OutputTile, canvas: PixelSize): CanvasTileR
 
   const left = Math.round((tile.output_x / tile.image_width) * canvas.width);
   const top = Math.round((tile.output_y / tile.image_height) * canvas.height);
-  const right = Math.round(
-    ((tile.output_x + tile.output_width) / tile.image_width) * canvas.width
-  );
+  const right = Math.round(((tile.output_x + tile.output_width) / tile.image_width) * canvas.width);
   const bottom = Math.round(
-    ((tile.output_y + tile.output_height) / tile.image_height) * canvas.height
+    ((tile.output_y + tile.output_height) / tile.image_height) * canvas.height,
   );
 
   return {
     x: left,
     y: top,
     width: Math.max(MINIMUM_DIMENSION, right - left),
-    height: Math.max(MINIMUM_DIMENSION, bottom - top)
+    height: Math.max(MINIMUM_DIMENSION, bottom - top),
   };
 }
 
@@ -83,10 +83,10 @@ export function tilePercentages(tile: OutputTile, canvas?: PixelSize): CanvasTil
   const right = Math.max(left, Math.min(size.width, rect.x + rect.width));
   const bottom = Math.max(top, Math.min(size.height, rect.y + rect.height));
   return {
-    x: left / size.width * 100,
-    y: top / size.height * 100,
-    width: (right - left) / size.width * 100,
-    height: (bottom - top) / size.height * 100
+    x: (left / size.width) * 100,
+    y: (top / size.height) * 100,
+    width: ((right - left) / size.width) * 100,
+    height: ((bottom - top) / size.height) * 100,
   };
 }
 
@@ -95,28 +95,51 @@ export function paintTileGrid(
   context: CanvasRenderingContext2D,
   firstTile: OutputTile,
   canvas: PixelSize,
-  overSource = false
+  overSource = false,
 ): void {
-  if (firstTile.output_x !== 0 || firstTile.output_y !== 0 ||
-      !canvasTileRect(firstTile, canvas)) return;
+  const gridWidth = firstTile.grid_width || firstTile.output_width;
+  const gridHeight = firstTile.grid_height || firstTile.output_height;
+  if (
+    !Number.isFinite(gridWidth) ||
+    !Number.isFinite(gridHeight) ||
+    gridWidth <= 0 ||
+    gridHeight <= 0 ||
+    !canvasTileRect(firstTile, canvas)
+  )
+    return;
+  if (
+    (firstTile.output_x !== 0 || firstTile.output_y !== 0) &&
+    (!firstTile.grid_width || !firstTile.grid_height)
+  )
+    return;
   // Below two preview pixels, a grid is unreadable; keep the plain pending surface.
-  if (firstTile.output_width / firstTile.image_width * canvas.width < 2 ||
-      firstTile.output_height / firstTile.image_height * canvas.height < 2) return;
+  if (
+    (gridWidth / firstTile.image_width) * canvas.width < 2 ||
+    (gridHeight / firstTile.image_height) * canvas.height < 2
+  )
+    return;
   let row = 0;
-  for (let y = 0; y < firstTile.image_height; y += firstTile.output_height, row += 1) {
+  for (let y = 0; y < firstTile.image_height; y += gridHeight, row += 1) {
     let column = 0;
-    for (let x = 0; x < firstTile.image_width; x += firstTile.output_width, column += 1) {
-      const rect = canvasTileRect({
-        ...firstTile,
-        output_x: x,
-        output_y: y,
-        output_width: Math.min(firstTile.output_width, firstTile.image_width - x),
-        output_height: Math.min(firstTile.output_height, firstTile.image_height - y)
-      }, canvas);
+    for (let x = 0; x < firstTile.image_width; x += gridWidth, column += 1) {
+      const rect = canvasTileRect(
+        {
+          ...firstTile,
+          output_x: x,
+          output_y: y,
+          output_width: Math.min(gridWidth, firstTile.image_width - x),
+          output_height: Math.min(gridHeight, firstTile.image_height - y),
+        },
+        canvas,
+      );
       if (!rect) continue;
       context.fillStyle = overSource
-        ? ((row + column) % 2 ? '#10172138' : '#10172160')
-        : ((row + column) % 2 ? '#17202d' : '#101721');
+        ? (row + column) % 2
+          ? '#10172138'
+          : '#10172160'
+        : (row + column) % 2
+          ? '#17202d'
+          : '#101721';
       context.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
   }

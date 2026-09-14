@@ -25,13 +25,17 @@ from localsr.protocol.messages import JobRequest, VideoJobRequest
 
 
 class Worker:
-    def __init__(self, executable: Path, root: Path):
+    def __init__(self, executable: Path, root: Path, *, source_root: Path | None = None):
         env = dict(os.environ, LOCALSR_WORK_DIR=str(root / "scratch"), PYTHONUTF8="1")
         env.pop("PYTHONPATH", None)
         env.pop("PYTHONHOME", None)
+        command = [str(executable.resolve())]
+        if source_root is not None:
+            env["PYTHONPATH"] = str(source_root.resolve() / "src")
+            command.extend(["-m", "localsr.worker.server"])
         self.errors = (root / "worker.log").open("w", encoding="utf-8")
         self.process = subprocess.Popen(
-            [str(executable.resolve())],
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self.errors,
@@ -73,11 +77,24 @@ class Worker:
 
     def close(self):
         if self.process.poll() is None:
-            self.send("shutdown_request", {})
+            try:
+                self.send("shutdown_request", {})
+            except (BrokenPipeError, OSError):
+                pass
             try:
                 self.process.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                self.process.kill()
+                if os.name == "nt":
+                    # A Windows venv launcher can own a second interpreter.
+                    # Stop only this worker's tree, including that child.
+                    subprocess.run(
+                        ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                        check=True,
+                        capture_output=True,
+                        timeout=15,
+                    )
+                else:
+                    self.process.kill()
                 self.process.wait(timeout=15)
         self.reader.join(timeout=5)
         self.process.stdin.close()
@@ -219,8 +236,13 @@ def main():
     parser.add_argument("worker", type=Path)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        help="Test source through the supplied Python executable; does not count as packaged acceptance",
+    )
     args = parser.parse_args()
-    report = {"passed": False}
+    report = {"passed": False, "packaged_worker": args.source_root is None}
     with tempfile.TemporaryDirectory(prefix="localsr-acceptance-") as directory:
         root = Path(directory)
         model = CATALOG_BY_ID["span_photo_x4"]
@@ -228,7 +250,7 @@ def main():
         model_path = store.path_for(model)
         if not store.is_installed(model):
             model_path = download_model(model, root / model.filename)
-        worker = Worker(args.worker, root)
+        worker = Worker(args.worker, root, source_root=args.source_root)
         try:
             report.update(run(worker, root, model_path, args.device), passed=True)
         except Exception as error:

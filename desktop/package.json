@@ -1,7 +1,7 @@
 {
   "name": "localsr-desktop",
   "private": true,
-  "version": "0.0.12-alpha",
+  "version": "0.0.13-beta.1",
   "type": "module",
   "scripts": {
     "dev": "npm run build:frontend && vite preview --host localhost --port 1420 --strictPort",
@@ -10,7 +10,9 @@
     "build": "svelte-check --tsconfig ./tsconfig.json && npm run build:frontend",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run --testTimeout=20000",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "format": "prettier --write \"src/**/*.{svelte,ts,css}\"",
+    "format:check": "prettier --check \"src/**/*.{svelte,ts,css}\""
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -25,6 +27,8 @@
     "@types/node": "26.4.0",
     "esbuild": "0.28.2",
     "jsdom": "^30.0.1",
+    "prettier": "3.9.6",
+    "prettier-plugin-svelte": "4.1.1",
     "svelte-check": "4.7.6",
     "typescript": "6.0.3",
     "vite": "8.2.2",

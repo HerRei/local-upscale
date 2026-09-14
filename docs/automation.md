@@ -1,7 +1,8 @@
 # Noninteractive processing and watch folders
 
-The Python `localsr` entry point keeps its normal GUI launch behavior. The following explicit
-subcommands run without a GUI and use the same model adapter, tiled inference, image writer, and
+Without a subcommand, the Python `localsr` entry point launches the separately installed
+Tauri desktop; see the [launcher setup](../desktop/README.md#application-data). These explicit
+subcommands run without a desktop installation and use the same model adapter, tiled inference, image writer, and
 video pipeline as the worker.
 
 Process one or more files sequentially and emit newline-delimited JSON progress/results:

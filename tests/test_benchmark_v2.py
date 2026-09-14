@@ -13,6 +13,7 @@ from localsr.core.benchmark_v2 import (
     ENCODE_QUALITY,
     HALO,
     MEASURE_MIN_ITERATIONS,
+    MEASURE_MIN_SLOW_ITERATIONS,
     OUTPUT_SCALE,
     PRECISION,
     REFERENCE_SCORES,
@@ -35,7 +36,7 @@ from localsr.core.benchmark_v2 import (
 
 
 def test_scene_specs_are_fixed_and_versioned():
-    assert WORKLOAD_VERSION == "localsr-benchmark-v2"
+    assert WORKLOAD_VERSION == "localsr-benchmark-v2.1"
     assert WORKLOAD_MODEL_ID == "span_photo_x4"
     assert [scene.scene_id for scene in SCENES] == [
         "s1-classroom",
@@ -205,9 +206,12 @@ def test_reference_comparison_prefers_closest_faster_reference():
 def test_bundled_references_have_physical_run_provenance():
     path = Path(__file__).parents[1] / "src/localsr/core/benchmark_references.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["workload_version"] == WORKLOAD_VERSION
+    # Historical measurements keep the workload they actually ran. The changed
+    # v2.1 input must not inherit a score from the original v2 scene.
+    assert payload["workload_version"] == "localsr-benchmark-v2"
+    assert payload["workload_version"] != WORKLOAD_VERSION
     assert payload["metric"] == "output_megapixels_per_second"
-    assert REFERENCE_SCORES
+    assert not REFERENCE_SCORES
     for entry in payload["entries"]:
         assert entry["source"] == "physical-local-run"
         assert entry["sample_count"] == len(entry["samples"])
@@ -322,6 +326,38 @@ def test_empty_aggregate_is_unstable_and_safe():
     assert result.system_score is None
     assert result.cpu_score is None
     assert result.thermal_state == "unknown"
+
+
+def test_slow_device_collects_enough_samples_for_consistency_and_strict_json():
+    from localsr.protocol.messages import BenchmarkCompleted
+
+    ticks = iter(range(0, 100_000, 60))
+    phase = run_device_phase(
+        engine=_FakeEngine(),
+        model_info=_FakeModelInfo(),
+        model_path="test.pth",
+        device_id="cpu",
+        device_name="Slow CPU",
+        device_type="cpu",
+        scenes=(SceneSpec("test-slow", 256, 256, 256, "compute"),),
+        cancel_event=threading.Event(),
+        progress_callback=None,
+        clock=lambda: next(ticks),
+    )
+    assert phase.scenes[0]["iterations"] == MEASURE_MIN_SLOW_ITERATIONS == 3
+    assert phase.scenes[0]["cv_percent"] == 0
+    assert phase.cv_percent == 0 and phase.stable
+    payload = aggregate_v2([phase.to_dict()], 600).to_dict()
+    message = BenchmarkCompleted(job_id="slow-device", result=payload).to_json()
+    decoded = json.loads(
+        message, parse_constant=lambda value: pytest.fail(f"Invalid JSON: {value}")
+    )
+    assert decoded["type"] == "benchmark_completed"
+    assert decoded["data"]["result"]["cv_percent"] == 0
+    assert decoded["data"]["result"]["cpu_score"] > 0
+    assert decoded["data"]["result"]["device_results"][0]["scenes"][0]["median_ms"] > 0
+    with pytest.raises(ValueError, match="JSON compliant"):
+        BenchmarkCompleted(job_id="invalid", result={"score": float("inf")}).to_json()
 
 
 def test_run_device_phase_stops_on_cancel():

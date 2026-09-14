@@ -2335,9 +2335,10 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "localsr-next"
-version = "0.0.12-alpha"
+version = "0.0.13-beta.1"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "directories",
  "flate2",
  "fs2",
@@ -2806,6 +2807,7 @@ version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ade3be4664bc1ef537ce133015f04c176b737815c2ba9fd60edf212d6e90dd55"
 dependencies = [
+ "dunce",
  "is-wsl",
  "libc",
 ]

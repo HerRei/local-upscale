@@ -1,21 +1,15 @@
 import argparse
 import importlib
-import os
 import sys
-import threading
-from pathlib import Path
-
-
-def _record_smoke_stage(stage: str) -> None:
-    report_path = os.environ.get("LOCALSR_SMOKE_REPORT")
-    if report_path:
-        Path(report_path).write_text(stage, encoding="utf-8")
 
 
 def _parse_cli_args(args: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
         prog="localsr",
-        description="LocalSR: Cross-platform local image and video super-resolution.",
+        description=(
+            "LocalSR: local image and video restoration. Launches the separately installed "
+            "Tauri desktop by default. Use process, watch or benchmark for the Python CLI."
+        ),
         add_help=False,
     )
     parser.add_argument("--worker", action="store_true", help="Launch inference worker process.")
@@ -62,9 +56,9 @@ def main():
         from localsr.automation import run_automation_cli
 
         raise SystemExit(run_automation_cli(filtered_args))
-    parsed, unknown = _parse_cli_args(filtered_args)
+    parsed, _unknown = _parse_cli_args(filtered_args)
 
-    if parsed.install_integrations:
+    if parsed.legacy and parsed.install_integrations:
         from localsr.platform import install_system_integrations
 
         success = install_system_integrations()
@@ -75,7 +69,7 @@ def main():
         )
         return
 
-    if parsed.uninstall_integrations:
+    if parsed.legacy and parsed.uninstall_integrations:
         from localsr.platform import uninstall_system_integrations
 
         success = uninstall_system_integrations()
@@ -118,38 +112,13 @@ def main():
             return
         raise SystemExit(app.exec())
 
-    # Auto-register integrations in the background on normal launch
-    if not smoke_test:
+    from localsr.desktop_launcher import launch_desktop
 
-        def _bg_install():
-            try:
-                from localsr.platform import install_system_integrations
-
-                install_system_integrations()
-            except Exception:
-                pass
-
-        threading.Thread(target=_bg_install, daemon=True).start()
-
-    from localsr.ui.slint_app import create_slint_application
-
-    initial_files = list(parsed.files)
-    for extra in unknown:
-        if not extra.startswith("-"):
-            initial_files.append(extra)
-
-    application = create_slint_application(
-        start_worker=not smoke_test,
-        initial_files=initial_files if initial_files else None,
-        initial_recipe=parsed.recipe,
-        initial_preset=parsed.preset,
-        auto_start=parsed.auto_start,
-    )
-    if smoke_test:
-        _record_smoke_stage("package-ready")
-        application.shutdown()
-        return
-    application.run()
+    try:
+        result = launch_desktop(filtered_args)
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
+    raise SystemExit(result)
 
 
 if __name__ == "__main__":

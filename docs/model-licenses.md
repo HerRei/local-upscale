@@ -4,7 +4,7 @@ LocalSR is an MIT application harness. It does not bundle or relicense model wei
 offers pinned upstream downloads only where the repository records a defensible checkpoint path;
 otherwise it accepts an exact user-supplied file after size and SHA-256 verification.
 
-## v0.0.11 additions
+## Detector and restoration checkpoints
 
 ### YuNet face detector (`yunet_face_detector_2023mar`)
 
@@ -86,9 +86,22 @@ redistribution and training-data terms was established for this release. It is t
 trusted auto-download catalog. This avoids presenting source-code licensing as if it also proved
 checkpoint rights.
 
-The Best/anime release pages still use the nonstandard identifier `CC-BY-0.4`; those entries remain
-Labs with unverified commercial permission. The desktop preview allows a direct publisher download
-after two separate acknowledgements: read the ambiguous terms, then restrict use to personal,
-non-commercial research until rights are clarified. A reminder appears whenever either checkpoint
-is selected; stock HAT-S (Apache-2.0) is offered as the alternative. The download does not resolve
-license ambiguity or authorize redistribution. Face checkpoints still require verified manual import.
+**NomosWebPhoto / HFA2k — approved beta policy, 13 September 2026:** Philip Hofmann
+(Phips / Phhofm) declares both checkpoints under **CC BY 4.0** on his
+[NomosWebPhoto card](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR) and
+[HFA2k card](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample).
+His [repository README](https://github.com/Phhofm/models#models) expressly supports
+application downloads. The explicit metadata and verified provenance supersede
+the earlier assessment based solely on the transposed `CC-BY-0.4` description.
+HFA2k's exact `.pth` hash matches the catalog; all 340 NomosWebPhoto tensors match
+the author's licensed conversion. See the [pinned evidence](beta-model-license-choices.md).
+
+The beta source retains direct downloads of the author's unchanged checkpoint
+files, with the same size/SHA-256 verification, author credit and source/license
+links. Both remain Labs. The [CC BY 4.0 terms](https://creativecommons.org/licenses/by/4.0/)
+allow sharing and commercial use with attribution, retained notices, a license
+reference and disclosure of changes; they do not imply endorsement or warrant
+rights the licensor cannot grant. No additional non-commercial restriction is
+imposed. Face checkpoints still require verified manual import under their
+separate unresolved-rights policy. No restoration weights are bundled. Retained
+native review binaries predate this source change and require final rebuilding.

@@ -119,6 +119,12 @@ pub struct JobRecord {
     pub output_path: String,
     pub error: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub work_key: String,
+    #[serde(default)]
+    pub work_units: f64,
+    #[serde(default)]
+    pub elapsed_seconds: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -315,6 +321,14 @@ pub struct RuntimeStatus {
     pub progress: f64,
     pub last_output_path: String,
     pub result_preview_data_url: String,
+    #[serde(default)]
+    pub comparison_media_id: String,
+    #[serde(default)]
+    pub comparison_output_path: String,
+    #[serde(default)]
+    pub comparison_preview_data_url: String,
+    #[serde(default)]
+    pub comparison_error: String,
     pub download_model_id: String,
     pub download_progress: f64,
     pub elapsed_seconds: f64,
@@ -341,7 +355,7 @@ pub struct BenchmarkSceneResult {
     pub median_ms: f64,
     pub p05_ms: f64,
     pub p95_ms: f64,
-    pub cv_percent: f64,
+    pub cv_percent: Option<f64>,
     pub megapixels_per_second: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encode_ms: Option<f64>,
@@ -363,7 +377,7 @@ pub struct BenchmarkDeviceResult {
     #[serde(default)]
     pub peak_device_memory_bytes: Option<u64>,
     pub stable: bool,
-    pub cv_percent: f64,
+    pub cv_percent: Option<f64>,
     #[serde(default)]
     pub score: f64,
     pub scenes: Vec<BenchmarkSceneResult>,
@@ -404,7 +418,7 @@ pub struct BenchmarkResult {
     #[serde(default)]
     pub stable: bool,
     #[serde(default)]
-    pub cv_percent: f64,
+    pub cv_percent: Option<f64>,
     #[serde(default)]
     pub result_elapsed_seconds: f64,
     #[serde(default)]
@@ -451,6 +465,10 @@ impl Default for RuntimeStatus {
             progress: 0.0,
             last_output_path: String::new(),
             result_preview_data_url: String::new(),
+            comparison_media_id: String::new(),
+            comparison_output_path: String::new(),
+            comparison_preview_data_url: String::new(),
+            comparison_error: String::new(),
             download_model_id: String::new(),
             download_progress: 0.0,
             elapsed_seconds: 0.0,
@@ -490,6 +508,7 @@ pub struct StartBenchmarkInput {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct VideoComparisonSources {
+    pub playback_note: String,
     pub original_path: String,
     pub enhanced_path: String,
     pub original_url: Option<String>,

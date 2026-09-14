@@ -41,6 +41,31 @@ class NormalizedModelInfo:
     model_file_size: int = 0
 
 
+class _DirectMLDescriptor:
+    """Keep Spandrel's image contract while using DirectML-compatible no-grad.
+
+    Spandrel 0.4.2 decorates __call__ with inference_mode. Torch-DirectML 0.2.5
+    cannot execute convolutions with those tensors (version_counter error).
+    Unwrap that decorator per instance, retaining padding, call_fn adaptation,
+    cropping and range clamping. Other devices keep the original descriptor.
+    """
+
+    def __init__(self, descriptor):
+        self.descriptor = descriptor
+        self._call = getattr(type(descriptor).__call__, "__wrapped__", None)
+        if self._call is None:
+            raise RuntimeError("This Spandrel descriptor has no compatible DirectML call path")
+
+    def __getattr__(self, name):
+        return getattr(self.descriptor, name)
+
+    def __call__(self, image):
+        with torch.inference_mode(False), torch.no_grad():
+            if torch.is_inference(image):
+                image = image.clone()
+            return self._call(self.descriptor, image)
+
+
 class ModelAdapter:
     def __init__(self, *, allow_unverified_checkpoints: bool | None = None):
         self.loader = spandrel.ModelLoader()
@@ -148,7 +173,9 @@ class ModelAdapter:
             model_file_size=os.path.getsize(normalized_path),
         )
 
-    def load(self, path: str, device: torch.device, precision: torch.dtype):
+    def load(
+        self, path: str, device: torch.device, precision: torch.dtype, *, onnx_device_index=None
+    ):
         normalized_path = os.path.abspath(path)
         if self.parsed is None or self.parsed_path != normalized_path:
             self._checkpoint_trust(normalized_path)
@@ -161,6 +188,12 @@ class ModelAdapter:
         # the single-image tensor contract used by LocalSR.
         descriptor = self.parsed.to(device).to(precision)
         descriptor.eval()
+        if onnx_device_index is not None:
+            from .onnx_runtime import OnnxImageDescriptor
+
+            return OnnxImageDescriptor(descriptor, device_index=onnx_device_index), self.parsed
+        if device.type == "privateuseone":
+            return _DirectMLDescriptor(descriptor), self.parsed
         return descriptor, self.parsed
 
     def release(self):

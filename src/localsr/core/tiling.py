@@ -41,43 +41,41 @@ def generate_tiles(
         for x in range(0, width, tile_size):
             core_w = min(tile_size, width - x)
             core_h = min(tile_size, height - y)
+            yield make_tile(width, height, x, y, core_w, core_h, halo, scale)
 
-            # Theoretical halo bounds
-            halo_x = x - halo
-            halo_y = y - halo
-            halo_w = core_w + 2 * halo
-            halo_h = core_h + 2 * halo
 
-            # Actual bounds and padding
-            pad_left = max(0, -halo_x)
-            pad_top = max(0, -halo_y)
-            pad_right = max(0, (halo_x + halo_w) - width)
-            pad_bottom = max(0, (halo_y + halo_h) - height)
+def make_tile(
+    width: int, height: int, x: int, y: int, core_w: int, core_h: int, halo: int, scale: int
+) -> TileCoordinates:
+    """Construct a bounded image region with the same edge padding as the grid."""
+    halo_x = x - halo
+    halo_y = y - halo
+    halo_w = core_w + 2 * halo
+    halo_h = core_h + 2 * halo
 
-            # The out_ bounds are simply the core bounds multiplied by the scale
-            out_x = x * scale
-            out_y = y * scale
-            out_w = core_w * scale
-            out_h = core_h * scale
+    pad_left = max(0, -halo_x)
+    pad_top = max(0, -halo_y)
+    pad_right = max(0, (halo_x + halo_w) - width)
+    pad_bottom = max(0, (halo_y + halo_h) - height)
 
-            yield TileCoordinates(
-                core_x=x,
-                core_y=y,
-                core_w=core_w,
-                core_h=core_h,
-                halo_x=halo_x + pad_left,
-                halo_y=halo_y + pad_top,
-                halo_w=halo_w - pad_left - pad_right,
-                halo_h=halo_h - pad_top - pad_bottom,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                pad_top=pad_top,
-                pad_bottom=pad_bottom,
-                out_x=out_x,
-                out_y=out_y,
-                out_w=out_w,
-                out_h=out_h,
-            )
+    return TileCoordinates(
+        core_x=x,
+        core_y=y,
+        core_w=core_w,
+        core_h=core_h,
+        halo_x=halo_x + pad_left,
+        halo_y=halo_y + pad_top,
+        halo_w=halo_w - pad_left - pad_right,
+        halo_h=halo_h - pad_top - pad_bottom,
+        pad_left=pad_left,
+        pad_right=pad_right,
+        pad_top=pad_top,
+        pad_bottom=pad_bottom,
+        out_x=x * scale,
+        out_y=y * scale,
+        out_w=core_w * scale,
+        out_h=core_h * scale,
+    )
 
 
 def tile_face_overlap(

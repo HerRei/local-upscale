@@ -7,6 +7,8 @@ cd "$REPO_DIR"
 VENV_DIR="${VENV_DIR:-.venv}"
 PYTHON="${PYTHON:-python3}"
 VENV_PYTHON="$VENV_DIR/bin/python"
+# A reused virtualenv may have an editable install of another checkout.
+export PYTHONPATH="$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
 usage() {
     cat <<'HELP'
@@ -67,11 +69,11 @@ run_typecheck() {
 run_tests() {
     require_python
     QT_QPA_PLATFORM=offscreen "$VENV_PYTHON" -m pytest tests/ -q --tb=short
-    QT_QPA_PLATFORM=offscreen "$VENV_PYTHON" -m localsr.ui.slint_check
 }
 
 run_frontend() {
     require npm
+    npm --prefix desktop run format:check
     npm --prefix desktop run check
     npm --prefix desktop test
     npm --prefix desktop run build:frontend

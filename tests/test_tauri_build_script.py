@@ -4,6 +4,9 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,6 +114,9 @@ def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: P
     rocm_libraries = {
         "libamd_comgr.so": "libamd_comgr.so.3",
         "libamdhip64.so": "libamdhip64.so.7",
+        "libhsa-runtime64.so": "libhsa-runtime64.so.1",
+        "libMIOpen.so": "libMIOpen.so.1",
+        "librocblas.so": "librocblas.so.5",
     }
     for library_name in rocm_libraries:
         (torch_libraries / library_name).touch()
@@ -141,6 +147,11 @@ def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: P
         assert direct_link.resolve() == rocm_library
         assert alias_link.resolve() == rocm_library
     assert commands == [["sudo", "ldconfig"]]
+    # Returning every link lets the caller clean up the isolated build host.
+    for link in created:
+        link.unlink()
+    assert list(system_lib.iterdir()) == []
+    assert all((torch_libraries / name).is_file() for name in rocm_libraries)
 
 
 def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
@@ -152,6 +163,101 @@ def test_resolves_windows_npm_command_wrapper(monkeypatch) -> None:
     )
 
     assert build.npm_executable() == npm
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("cc"), reason="native Unix launcher")
+def test_linuxdeploy_launcher_passes_graphics_exclusions_and_restores_tool(
+    monkeypatch, tmp_path: Path
+) -> None:
+    tool = tmp_path / ".cache/tauri/linuxdeploy-x86_64.AppImage"
+    tool.parent.mkdir(parents=True)
+    capture = tmp_path / "arguments.txt"
+    original = "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shlex.quote(str(capture)) + "\n"
+    tool.write_text(original)
+    tool.chmod(0o755)
+    monkeypatch.setattr(build.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(build.sys, "platform", "linux")
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path / "build")
+    monkeypatch.setenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG", str(tmp_path / "wrapper.log"))
+
+    backup = build._wrap_linuxdeploy_for_appimage()
+    try:
+        subprocess.run(
+            [
+                str(tool),
+                "--appimage-extract-and-run",
+                "--appdir",
+                "App Dir",
+                "--output",
+                "appimage",
+            ],
+            check=True,
+        )
+        arguments = capture.read_text().splitlines()
+        assert arguments[0] == "--appimage-extract-and-run"
+        assert arguments[-4:] == ["--appdir", "App Dir", "--output", "appimage"]
+        assert "--exclude-library=libwayland-client.so.0" in arguments
+        assert "--exclude-library=libwayland-egl.so.1" in arguments
+        assert "--exclude-library=libcuda.so.1" in arguments
+        assert "--exclude-library=libnvidia-ml.so.1" in arguments
+        assert len(arguments) == len(set(arguments))
+    finally:
+        build._restore_linuxdeploy_wrapper(backup)
+    assert tool.read_text() == original
+    assert not backup.exists()
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("cc"), reason="native Unix launcher")
+def test_linuxdeploy_removes_plugin_copied_host_libraries_before_packaging(
+    monkeypatch, tmp_path: Path
+) -> None:
+    tool = tmp_path / ".cache/tauri/linuxdeploy-x86_64.AppImage"
+    tool.parent.mkdir(parents=True)
+    appdir = tmp_path / "App Dir"
+    libs = appdir / "usr/lib"
+    libs.mkdir(parents=True)
+    (libs / "libkeep.so").write_text("application library")
+    calls = tmp_path / "calls"
+    original = "#!/bin/sh\n" + (
+        "printf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) + "\n"
+        'case " $* " in\n'
+        " *' --plugin gstreamer '*) touch "
+        + shlex.quote(str(libs / "libwayland-client.so.0"))
+        + " ;;\n"
+        " *' --output appimage '*) test ! -e "
+        + shlex.quote(str(libs / "libwayland-client.so.0"))
+        + " || exit 24 ;;\n"
+        "esac\n"
+    )
+    tool.write_text(original)
+    tool.chmod(0o755)
+    monkeypatch.setattr(build.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(build.sys, "platform", "linux")
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path / "build")
+    monkeypatch.setenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG", str(tmp_path / "wrapper.log"))
+    backup = build._wrap_linuxdeploy_for_appimage()
+    try:
+        subprocess.run(
+            [
+                str(tool),
+                "--appimage-extract-and-run",
+                "--appdir",
+                str(appdir),
+                "--plugin",
+                "gstreamer",
+                "--output",
+                "appimage",
+            ],
+            check=True,
+        )
+        deploy, package = calls.read_text().splitlines()
+        assert "--plugin gstreamer" in deploy and "--output" not in deploy
+        assert "--output appimage" in package and "--plugin" not in package
+        assert not (libs / "libwayland-client.so.0").exists()
+        assert (libs / "libkeep.so").read_text() == "application library"
+    finally:
+        build._restore_linuxdeploy_wrapper(backup)
+    assert tool.read_text() == original
 
 
 def test_worker_target_arch_matches_pyinstaller_names() -> None:

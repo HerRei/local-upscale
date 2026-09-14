@@ -16,13 +16,19 @@ upgrade dependencies. Set `VENV_DIR` to use another existing virtual environment
 
 The default command runs Python lint/format checks, workflow syntax validation,
 lock/version/catalog/architecture/readiness checks, gradual Python type checking,
-the offline Python suite, legacy Slint compilation, Svelte checks/tests/build,
+the offline Python suite, Svelte checks/tests/build,
 Rust formatting/Clippy/tests, and Python wheel/source package verification. Each
 step fails the command immediately on error. Fresh Python package artifacts remain
 under `build/local-ci/` for inspection.
 
 Use `./local-ci.sh --help` for individual checks. `lint` and `test` remain aliases
 for `lint-only` and `test-only`. Help and invalid commands never install packages.
+
+The release-metadata check selects the beta register for beta versions and keeps
+the earlier alpha manifests separate. Frontend formatting uses the pinned
+Prettier/Svelte plugin; run `npm --prefix desktop run format` to apply it. Python
+uses Ruff and Rust uses rustfmt. Vendored third-party source is excluded from
+application formatting.
 
 These checks cover the development host. They do not run foreign OS installers,
 certify GPU/driver compatibility, supply signing credentials, or clear the existing

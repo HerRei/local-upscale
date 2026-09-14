@@ -244,6 +244,8 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
         safe_exif=None,
         scale=1,
         output_scale=None,
+        temporary_directory=None,
+        cancel_event=None,
     ):
         save_kwargs_captured["output_writer"] = output_writer
         save_kwargs_captured["icc_profile"] = icc_profile

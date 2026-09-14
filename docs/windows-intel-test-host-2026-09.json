@@ -1,6 +1,5 @@
 {
   "captured_utc": "2026-09-12T17:01:15.0801630Z",
-  "computer": "LAPTOP-G3M0MOM5",
   "os": "Microsoft Windows 11 Home",
   "version": "10.0.26200",
   "model": "Swift SF514-52T",
@@ -17,108 +16,7 @@
       "DeviceProblemCode": "No Problem"
     }
   ],
-  "ssh": {
-    "account": "agenttest",
-    "administrator": true,
-    "key_login_verified": true,
-    "service": "Running",
-    "startup": "Automatic"
-  },
-  "gui": {
-    "version": "2, 8, 88, 0",
-    "service": "Running",
-    "startup": "Automatic",
-    "loopback_only": true,
-    "vnc_authentication": true,
-    "http_enabled": false,
-    "input_test": {
-      "Success": true,
-      "Text": "LOCALSR-REMOTE-OK",
-      "Computer": "LAPTOP-G3M0MOM5",
-      "SessionId": 1,
-      "TimeUTC": "2026-09-12T16:53:56.2776847Z"
-    },
-    "uac_test": {
-      "NativeCode": null,
-      "TimeUTC": "2026-09-12T16:58:00.4445737Z",
-      "Result": "ElevationCancelled"
-    },
-    "tailscale_input_test": {
-      "success": true,
-      "typed_text": "LOCALSR-TAILSCALE-OK-12",
-      "computer": "LAPTOP-G3M0MOM5",
-      "session_id": 1,
-      "time_utc": "2026-09-12T17:30:42.4821109Z"
-    },
-    "transports_verified": [
-      "LAN SSH tunnel",
-      "Tailscale SSH tunnel"
-    ],
-    "client_waits_for_server_round_trip_before_disconnect": true
-  },
-  "tailscale": {
-    "version": "1.102.4",
-    "state": "Running",
-    "dns_name": "localsr-intel-test.tail34a4e0.ts.net.",
-    "ips": [
-      "100.103.31.7",
-      "fd7a:115c:a1e0::8638:1f08"
-    ],
-    "service": "Running",
-    "startup": "Automatic",
-    "last_checked_utc": "2026-09-12T17:31:58.7234917Z",
-    "unattended": true,
-    "ssh_verified": true,
-    "sftp_verified": true,
-    "host_key_verified_against_lan": true,
-    "mac_ssh_alias": "localsr-intel-test",
-    "mac_transport": "existing Tailscale userspace socket via SSH ProxyCommand"
-  },
-  "localsr_inference_tested": false,
-  "msix_tested": false,
   "build_runner_registered": false,
-  "power_policy": {
-    "verified_utc": "2026-09-12T17:08:23.9612537Z",
-    "active_scheme": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)",
-    "standby": {
-      "ac_seconds": 0,
-      "dc_seconds": 0
-    },
-    "hibernate": {
-      "ac_seconds": 0,
-      "dc_seconds": 0
-    },
-    "unattended_sleep": {
-      "ac_seconds": 0,
-      "dc_seconds": 0
-    },
-    "original_standby": {
-      "ac_seconds": 18000,
-      "dc_seconds": 600
-    },
-    "original_hibernate": {
-      "ac_seconds": 43200,
-      "dc_seconds": 10800
-    },
-    "original_unattended_sleep": "Not captured; hidden powercfg setting required /qh.",
-    "display_lid_power_button_critical_battery_changed": false
-  },
-  "windows_cleanup": {
-    "verified_utc": "2026-09-12T17:31:58.7234917Z",
-    "temporary_tasks_removed": true,
-    "temporary_folders_removed": true,
-    "removed_task_names": [
-      "LocalSR-Remote-Access-Check-20260912",
-      "LocalSR-Remote-UAC-Check-20260912",
-      "LocalSR-Remote-DxDiag-Check-20260912",
-      "LocalSR-Tailscale-GUI-Check-20260912"
-    ]
-  },
-  "mac_cleanup": {
-    "verified_utc": "2026-09-12T17:34:16.616028+00:00",
-    "temporary_scripts_screenshots_and_duplicate_venv_removed": true,
-    "temporary_ssh_tunnels_remaining": 0,
-    "persistent_desktop_client_retained": true,
-    "tailscale_check_scripts_and_screenshots_removed": true
-  }
+  "scope": "Public hardware snapshot captured before application acceptance. Follow-up results are in windows-intel-test-host.md and beta-acceptance-2026-09-12.md.",
+  "operator_details_omitted": true
 }

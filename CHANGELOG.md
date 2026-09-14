@@ -1,18 +1,24 @@
 # Changelog
 
-## Unreleased — HAT face companions
+Release history and changes in the next beta candidate.
 
-- Complete HAT-S/HAT-L companion pairing and include both exact checkpoints in the
-  generated Tauri catalog, retaining verified external import and Labs policies.
-- Preserve the chosen face model ID in desktop image recipes and job messages.
-- Document interpolation evidence, clean-image trade-offs, and pending HAT-L availability.
-- Keep v0.0.12-alpha version metadata, release workflow, tags, and installers unchanged.
+## [0.0.13-beta.1] - Candidate for review, not published
 
+- Retire Slint and its installer. The Python launcher opens the separately installed
+  Tauri app; the engine, automation CLI and optional Qt Widgets client remain.
 
-All notable changes will be documented here. The project follows semantic versioning once the first
-stable release is published.
-
-## [Unreleased]
+- Correct live tile geometry when first selecting an already-running image, at partial edges and across denoise/upscale stages; apply the same geometry to benchmarks.
+- Keep completed-image comparison responsive while another queued job is running, and preserve video comparison ownership when switching results.
+- Group folder exports in `LocalSR Results`; show current, next-item and whole-queue timing estimates.
+- Complete bounded cancellation recovery and reject unstable NAFNet scan output before saving it.
+- Complete HAT-S/HAT-L face pairing in the desktop catalog, recipes and job messages; retain verified external imports, Labs labels and documented interpolation trade-offs.
+- Retain all existing backend/Labs features with exact checkpoint and hardware limits.
+- Correct NomosWebPhoto/HFA2k to the author's CC BY 4.0 terms; keep attribution and verified in-app downloads.
+- Add the Store-managed CPU/DirectML MSIX route with recorded installed upgrades; prepare separate signed direct-download updates and protected data recovery.
+- Build a maintained native Apple Silicon worker and use Developer ID signing through the existing Keychain.
+- Refresh the project and developer guides, add an actual desktop screenshot and model guide, and check source formatting in local CI.
+- Select beta release metadata and readiness checks automatically in local CI while preserving the alpha checks.
+- Final dependency/source distribution, packaging and publication checks remain on the beta checklist.
 
 ## [0.0.12-alpha] - 2026-09-06
 

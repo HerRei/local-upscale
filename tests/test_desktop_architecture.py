@@ -43,11 +43,9 @@ def test_rejects_native_authority_inside_the_webview() -> None:
 
 def test_rejects_preview_release_coupling() -> None:
     violations = architecture.workflow_isolation_violations(
-        "name: Build & Release\nsteps:\n  - run: python scripts/build_tauri_preview.py\n",
         "permissions:\n  contents: write\nsteps:\n  - run: gh release create v1\n",
     )
 
-    assert any("release.yml" in violation for violation in violations)
     assert any("release-write" in violation for violation in violations)
     assert any("publish GitHub releases" in violation for violation in violations)
     assert any("explicit manual build" in violation for violation in violations)
@@ -55,11 +53,9 @@ def test_rejects_preview_release_coupling() -> None:
 
 def test_rejects_unsigned_or_overwriting_desktop_release() -> None:
     violations = architecture.signed_release_violations(
-        "on:\n  push:\n    tags:\n",
         "permissions:\n  contents: write\n  contents: write\nrun: gh release upload --clobber\n",
     )
 
-    assert any("legacy Slint" in violation for violation in violations)
     assert any("fail-closed Tauri signing" in violation for violation in violations)
     assert any("must not overwrite" in violation for violation in violations)
     assert any("only the signed desktop publishing job" in violation for violation in violations)
@@ -98,7 +94,6 @@ def test_v0012_tag_has_one_exclusive_unsigned_publisher() -> None:
     assert "github.ref == 'refs/tags/v0.0.12-alpha'" in cross
     assert '      - "!v0.0.12-alpha"' in signed
     assert signed.count("github.ref_name != 'v0.0.12-alpha'") >= 4
-    assert "v0.0.12-alpha" not in (ROOT / ".github/workflows/release.yml").read_text()
 
 
 def test_cross_build_pair_is_exact_and_excluded_from_dependabot() -> None:
@@ -209,8 +204,12 @@ def test_desktop_catalog_fails_closed_for_unresolved_checkpoint_rights() -> None
 
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
         assert models[model_id]["automated_download_allowed"] is True
-        assert models[model_id]["terms_acceptance_required"] is True
-        assert models[model_id]["commercial_use_allowed"] is None
+        assert models[model_id]["terms_acceptance_required"] is False
+        assert models[model_id]["commercial_use_allowed"] is True
+        assert models[model_id]["license_name"] == "CC BY 4.0"
+        assert models[model_id]["attribution_required"] is True
+        assert models[model_id]["redistribution_allowed"] is True
+        assert models[model_id]["support_tier"] == "labs"
 
 
 def test_tauri_preview_keeps_the_linux_cargo_cache_off_the_small_root_ssd() -> None:
@@ -252,7 +251,7 @@ def test_macmini_heavy_workflows_and_preview_guests_are_serialized() -> None:
 
 
 def test_isolated_workflow_copies_preserve_github_for_actionlint() -> None:
-    for workflow_name in ("ci.yml", "release.yml", "v0.0.12-cross-alpha.yml"):
+    for workflow_name in ("ci.yml", "v0.0.12-cross-alpha.yml"):
         workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
         assert "--exclude .git " not in workflow
         if "rsync -a" in workflow:

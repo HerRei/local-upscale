@@ -1,6 +1,6 @@
 **LocalSR Apple signing setup**
 
-Verified locally on 12 September 2026. The user created a Developer ID Application
+Updated locally on 13 September 2026. The user created a Developer ID Application
 certificate and authorized installation after downloading it. Public verification
 results are in [apple-signing-acceptance-2026-09.json](apple-signing-acceptance-2026-09.json).
 
@@ -14,7 +14,7 @@ results are in [apple-signing-acceptance-2026-09.json](apple-signing-acceptance-
 | Certificate chain | Apple Developer ID Certification Authority G2; valid without a custom trust override |
 | Native signing check | ARM64 executable signed with hardened runtime and an Apple secure timestamp; signature verification and execution passed |
 | Notarization profile | `LocalSR-Z2TU844D84-notary` in this Mac's login Keychain; authenticated request to Apple passed |
-| LocalSR beta candidate | Not yet signed, notarized or tested through Gatekeeper |
+| LocalSR beta candidate | ARM64 beta app and DMG signed, notarized, stapled and accepted by Gatekeeper; mounted bundled-worker check passed |
 
 The downloaded certificate's public key matches the user's CSR, whose signature
 also verified. Apple's G2 intermediate was initially absent from the login
@@ -53,14 +53,29 @@ xcrun notarytool store-credentials LocalSR-Z2TU844D84-notary \
 
 Omitting `--password` makes Apple's tool prompt securely. Keep validation enabled.
 
-**Next: sign and notarize an isolated LocalSR candidate**
+**Isolated candidate completed — 13 September 2026**
+
+Developer ID signing covered 317 native files and the outer application with
+hardened runtime and secure timestamps. The app notarization submission
+`04821633-8a94-4fbc-add5-4d6b6944b1f2` and DMG submission
+`0139f0ff-5005-4081-b93a-0e84e14ae186` are both **Accepted**. Their tickets were
+stapled and validated. Strict codesign and Gatekeeper checks passed for the DMG
+and its mounted app. The mounted host started the bundled worker and completed
+its handshake. Six signed-worker MPS image/video/recovery cases also passed.
+
+The retained review DMG is
+`build/beta-review/macos/LocalSR_0.0.13-beta.1_macos-arm64-mps.dmg`, SHA-256
+`c24f964a722ba5a35d7045bacf45881e28aea2d50eb94ca904418a01ab8f628a`.
+Reports and Apple's submission logs are retained under `build/beta-review/`.
+This Mac's GUI was not used. No credential or private key was exported or logged.
 
 The current release workflow still expects its documented P12/notarization
 secrets. This local Keychain profile does not configure those release jobs.
-Prepare the separate beta signing/notarization path to use the local identity
-and profile, then sign the complete native application, notarize the distribution,
-attach and validate its tickets, and test the downloaded package and upgrades on
-a separate Mac. These remain open in the [beta checklist](beta-release-checklist.md).
+The isolated beta path now uses the local identity/profile. Native installed
+upgrades and GUI acceptance on a separate authorized Mac remain open. The current
+binary is a review candidate: final source/notices/dependency changes require a
+new build and fresh signing/notarization before publication. These remain in the
+[beta checklist](beta-release-checklist.md).
 
 Sources: [Apple Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/),
 [Apple's official certificate authorities](https://www.apple.com/certificateauthority/),

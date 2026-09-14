@@ -1,0 +1,4 @@
+# Replace only after the domain/network/hosting review and explicit approval.
+# This example intentionally cannot expose a public listener.
+LOCALSR_RELEASE_ADDRESS=http://127.0.0.1:8788
+LOCALSR_RELEASE_ROOT=/mnt/hdd/localsr-releases/public

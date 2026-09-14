@@ -12,26 +12,26 @@ describe('video comparison synchronization', () => {
   it('seeks only for meaningful drift', () => {
     expect(synchronizationDecision(3, 2.8, false, 1)).toEqual({
       seekTo: 3,
-      playbackRate: 1
+      playbackRate: 1,
     });
     expect(synchronizationDecision(3, 2.99, false, 1)).toEqual({
       seekTo: null,
-      playbackRate: 1
+      playbackRate: 1,
     });
   });
 
   it('uses a bounded rate correction without oscillating in the dead band', () => {
     expect(synchronizationDecision(3, 2.95, false, 1)).toEqual({
       seekTo: null,
-      playbackRate: 1.03
+      playbackRate: 1.03,
     });
     expect(synchronizationDecision(3, 3.05, false, 1)).toEqual({
       seekTo: null,
-      playbackRate: 0.97
+      playbackRate: 0.97,
     });
     expect(synchronizationDecision(3, 2.95, true, 1)).toEqual({
       seekTo: null,
-      playbackRate: 1
+      playbackRate: 1,
     });
   });
 

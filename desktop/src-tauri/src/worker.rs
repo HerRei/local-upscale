@@ -30,7 +30,6 @@ struct WorkerCommand {
 struct WorkerEventGate {
     job_id: String,
     last_progress: Option<Instant>,
-    last_tile_started: Option<Instant>,
     last_tile_completed: Option<Instant>,
     last_video_started: Option<Instant>,
     last_video_progress: Option<Instant>,
@@ -60,12 +59,10 @@ impl WorkerEventGate {
             ),
             "tile_update" => match string(data, "phase").as_str() {
                 "reset" => true,
-                "started" => sampled(
-                    &mut self.last_tile_started,
-                    now,
-                    data.get("completed_tiles").and_then(Value::as_u64) == Some(0),
-                    Duration::from_millis(80),
-                ),
+                // Position and completion metadata must stay paired even for
+                // fast models. Only expensive JPEG payloads are sampled.
+                "started" => true,
+                "completed" if string(data, "jpeg_base64").is_empty() => true,
                 "completed" => sampled(
                     &mut self.last_tile_completed,
                     now,
@@ -116,7 +113,6 @@ impl WorkerEventGate {
     fn reset_for(&mut self, job_id: String) {
         self.job_id = job_id;
         self.last_progress = None;
-        self.last_tile_started = None;
         self.last_tile_completed = None;
         self.last_video_started = None;
         self.last_video_progress = None;
@@ -275,7 +271,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     if let Ok(mut runtime) = state.runtime.lock() {
                         runtime.status_title = "Cancelling".into();
                         runtime.status_detail =
-                            "Stopping the video engine and releasing GPU memory…".into();
+                            "Stopping the inference engine and releasing memory…".into();
                     }
                     emit_state_changed(&app);
                     let _ = child.kill();
@@ -317,9 +313,9 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             runtime.status_detail = if forced_job.is_empty() {
                 format!("{interruption} Restarting…")
             } else if let Some(error) = cleanup_error {
-                format!("Video stopped. Could not remove its temporary directory: {error}. Restarting engine…")
+                format!("Work stopped. Could not remove its temporary directory: {error}. Restarting engine…")
             } else {
-                "Video stopped; temporary output removed. Restarting engine…".into()
+                "Work stopped; temporary output removed. Restarting engine…".into()
             };
             runtime.estimated_remaining_seconds = 0.0;
             if !active.is_empty() {
@@ -329,7 +325,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                             &active,
                             "cancelled",
                             "",
-                            "Cancelled by the user; video engine restarted.",
+                            "Cancelled by the user; inference engine restarted.",
                         );
                     } else {
                         let _ = database.interrupt_active_job(&active, &interruption);
@@ -413,6 +409,7 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
 }
 
 pub fn shutdown(state: &AppState) {
+    state.video_preview.shutdown();
     state.worker.shutting_down.store(true, Ordering::SeqCst);
     let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
     if let Ok(mut sender) = state.worker.sender.lock() {
@@ -435,7 +432,13 @@ fn handle_worker_envelope(
     let job_id = string(&envelope.data, "job_id");
     let terminal = matches!(
         envelope.message_type.as_str(),
-        "job_completed" | "video_job_completed" | "job_cancelled" | "job_failed"
+        "job_completed"
+            | "video_job_completed"
+            | "job_cancelled"
+            | "job_failed"
+            | "benchmark_completed"
+            | "benchmark_cancelled"
+            | "benchmark_failed"
     );
     // Once cancelling, late progress must not restore "Enhancing" or enable
     // controls. Measurements may still update while the GPU drains.
@@ -609,9 +612,21 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let encoded = string(data, "jpeg_base64");
             if !encoded.is_empty() {
                 let mut runtime = lock(&state.runtime)?;
+                if runtime.comparison_output_path == path {
+                    runtime.comparison_preview_data_url =
+                        format!("data:image/jpeg;base64,{encoded}");
+                    runtime.comparison_error.clear();
+                }
                 if runtime.active_job_id.is_empty() && runtime.last_output_path == path {
                     runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
                 }
+            }
+        }
+        "preview_failed" => {
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.comparison_output_path == string(data, "image_path") {
+                runtime.comparison_preview_data_url.clear();
+                runtime.comparison_error = string(data, "error_message");
             }
         }
         "job_started" => {
@@ -673,8 +688,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.live_memory_pressure_percent = number(data, "system_memory_pressure_percent");
         }
         // Tile JPEGs are coordinates plus pixels, not complete images. The
-        // webview composites them into its bounded live canvas just as the
-        // released Slint image provider does.
+        // webview composites them into its bounded live canvas.
         "tile_update" => {}
         "video_memory" => {
             let mut runtime = lock(&state.runtime)?;
@@ -842,7 +856,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.status_title = "Benchmark running".into();
             runtime.status_detail = if is_v2 {
                 format!(
-                    "Multi-device benchmark · {} phase(s) · warming up each device.",
+                    "Benchmark · {} stages · warming up.",
                     integer(data, "measured_frame_count")
                 )
             } else {
@@ -910,23 +924,27 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.progress = 100.0;
             runtime.status_title = "Benchmark complete".into();
             runtime.status_detail = if result.is_v2() {
-                if result.stable {
+                if result.cv_percent.is_none() {
+                    "Measurements saved. Too few repetitions to assess consistency on this device."
+                        .into()
+                } else if result.stable {
                     if let Some(system_score) = result.system_score {
                         format!(
                             "GPU score {:.2} output MP/s · stable ({:.1}% spread).",
-                            system_score, result.cv_percent
+                            system_score,
+                            result.cv_percent.unwrap_or_default()
                         )
                     } else {
                         format!(
                             "CPU score {:.2} output MP/s · stable ({:.1}% spread).",
                             result.cpu_score.unwrap_or_default(),
-                            result.cv_percent
+                            result.cv_percent.unwrap_or_default()
                         )
                     }
                 } else {
                     format!(
                         "Unstable run ({:.1}% spread) — close background apps and retry.",
-                        result.cv_percent
+                        result.cv_percent.unwrap_or_default()
                     )
                 }
             } else {
@@ -963,6 +981,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let id = string(data, "job_id");
             let output = string(data, "output_path");
             lock(&state.database)?.finish_job(&id, "completed", &output, "")?;
+            lock(&state.database)?.record_job_duration(&id, number(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id.clear();
             // A video frame thumbnail is a live preview, not a completed
@@ -1007,6 +1026,25 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
     Ok(())
 }
 
+pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResult<Command> {
+    let specification = resolve_worker_command(state, app)?;
+    let mut command = Command::new(specification.program);
+    command.args(specification.arguments);
+    if let Some(directory) = specification.working_directory {
+        command.current_dir(directory);
+    }
+    if let Some(path) = specification.python_path {
+        command.env("PYTHONPATH", path);
+    }
+    command.env("PYTHONUNBUFFERED", "1");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    Ok(command)
+}
+
 pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<PathBuf> {
     Ok(resolve_worker_command(state, app)?.program)
 }
@@ -1022,7 +1060,9 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
     }
     #[cfg(debug_assertions)]
     {
-        if let Some(path) = env::var_os("LOCALSR_WORKER") {
+        if let Some(path) =
+            env::var_os("LOCALSR_WORKER").filter(|_| !crate::distribution::managed_by_store())
+        {
             let path = PathBuf::from(path);
             if path.is_file() {
                 return Ok(WorkerCommand {
@@ -1070,6 +1110,11 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
 
     #[cfg(debug_assertions)]
     {
+        if crate::distribution::managed_by_store() {
+            return Err(AppError::Worker(
+                "the Store application is missing its bundled inference engine".into(),
+            ));
+        }
         let python_candidates = if cfg!(windows) {
             vec![
                 _state
@@ -1319,6 +1364,59 @@ mod tests {
         // A new frame or VAE/DiT stage must establish its geometry even when
         // its first region arrives inside the normal animation throttle.
         assert!(gate.should_forward(&first_region, started + Duration::from_millis(1)));
+        for index in 1..20 {
+            for phase in ["started", "completed"] {
+                let position = WorkerEnvelope {
+                    message_type: "tile_update".into(),
+                    data: json!({"job_id": "job-1", "phase": phase, "completed_tiles": index,
+                        "output_x": index * 256, "jpeg_base64": ""}),
+                };
+                assert!(gate.should_forward(&position, started + Duration::from_millis(index)));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_image_comparison_ignores_late_results_while_another_job_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        {
+            let mut runtime = lock(&state.runtime).unwrap();
+            runtime.active_job_id = "running-third".into();
+            runtime.comparison_media_id = "second".into();
+            runtime.comparison_output_path = "/results/second.png".into();
+        }
+        for (path, encoded) in [
+            ("/results/first.png", "old"),
+            ("/results/second.png", "correct"),
+        ] {
+            apply_worker_envelope(
+                &state,
+                &WorkerEnvelope {
+                    message_type: "preview_ready".into(),
+                    data: json!({"image_path": path, "jpeg_base64": encoded}),
+                },
+            )
+            .unwrap();
+        }
+        apply_worker_envelope(
+            &state,
+            &WorkerEnvelope {
+                message_type: "preview_ready".into(),
+                data: json!({"image_path": "/results/first.png", "jpeg_base64": "late"}),
+            },
+        )
+        .unwrap();
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(
+            runtime.comparison_preview_data_url,
+            "data:image/jpeg;base64,correct"
+        );
+        assert_eq!(runtime.comparison_media_id, "second");
+        assert!(runtime.result_preview_data_url.is_empty());
+        assert_eq!(runtime.active_job_id, "running-third");
     }
 
     #[test]

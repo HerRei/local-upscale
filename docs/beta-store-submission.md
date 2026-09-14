@@ -1,161 +1,82 @@
-**LocalSR Store listing and certification preparation**
+# LocalSR Store submission materials
 
-Prepared locally on 12 September 2026. These are drafts for the future beta,
-based on the current desktop source. The Store draft has not been changed.
-Confirm the advertised features against the installed Windows candidate before
-using this text. Package construction, screenshots, upload and certification
-remain on the [beta checklist](beta-release-checklist.md).
+Prepared 13 September 2026. The retained **1.0.7.0 CPU/DirectML MSIX** is an
+earlier accepted baseline. [Updated listing/reviewer drafts](../build/beta-review/rollout-20260913/store-final-draft/)
+await the next package; no new build or Store submission is authorized.
+The app version **0.0.13-beta.1 remains provisional**. No Store submission or
+website publication has occurred. The actual copyable files and four installed
+screenshots are in `build/beta-review/store/`; the package and hashes are in
+`build/beta-review/windows/`.
 
-Local checks passed: the short description is 175 characters, the description
-1,947 characters, all nine features and four planned captions fit their field
-limits, and local documentation links resolve. These checks do not validate the
-future package or replace review of the captured screenshots.
+The listing explicitly distinguishes the shipped CPU/DirectML engine from
+SeedVR2's CUDA/ROCm/Metal editions. All agreed backends remain in the project;
+the Store package is not advertised as containing all of them.
 
-**Listing fields — English (United States)**
+## Rollout and capture refresh
 
-Select the reserved product name **LocalSR**. The following plain-text blocks
-can be copied into the corresponding Partner Center fields.
+The approved order is website/GitHub beta first, then Store submission. The four
+existing captures are retained evidence from 1.0.7.0; recapture affected views,
+especially benchmark v2.1 and final model-policy wording, from the next installed
+MSIX. No screenshot of an unbuilt candidate has been created. WACK and final
+listing/runtime claims must refer to the same package uploaded for certification.
+
+## Copyable listing
 
 Short description:
 
-```text
-Give photos and videos more detail with AI models running on your own computer. Compare results, save recipes and process a queue without uploading your media for enhancement.
-```
+> Enlarge images, reduce noise and enhance videos with AI on your computer. Compare results, save recipes and process a queue without uploading media for enhancement.
 
 Description:
 
-```text
-LocalSR is a desktop app for enlarging images, reducing noise and enhancing video with AI models that run on your computer.
+LocalSR enlarges images, reduces noise and enhances video with AI models running on your computer.
 
-Choose your media, select a model and inspect the result before saving a separate output. Reuse your settings with recipes, process a queue and compare the original with the enhanced result.
+Add your media, choose a compatible model and compare the original with its enhanced result. Save recipes for repeat work. Process individual files or a queue, with grouped results for imported folders. Watch actual model tiles and processing stages, with estimates for the current job, next job and whole queue once enough work has been measured.
 
-Processing stays local. LocalSR has no account requirement, advertising or automatic upload of your media. An internet connection is needed to download models and receive software updates. Once the required model files are installed, enhancement can run offline.
+Processing stays local. LocalSR has no account requirement, advertising or automatic media uploads. Internet access is needed for model downloads and Store updates. After compatible models are installed, enhancement can run offline.
 
-This beta is intended for people who want to try LocalSR on capable hardware and report problems. Demanding video work, especially high-resolution output and SeedVR2, needs a powerful compatible GPU and substantial memory. Processing is not real-time: a short video can take hours, and long or high-resolution jobs can take days or longer. CPU processing can be much slower. Speed and memory use depend on the model, hardware and input and output dimensions. Test a short clip at a modest output size first.
+This public beta is intended for capable computers and patient testers. AI processing is not real-time. Video can take hours or days, depending on duration, model and output dimensions. Try a short clip first. A GPU's memory capacity alone does not guarantee that a job will fit.
 
-Image processing and SDR video are the core beta features. Optional SeedVR2 3B video restoration is included as Labs, with FP16 and FP8 variants where supported by the installed backend. FP8 has a smaller download and lower weight storage, but working memory can still be large. Even 16 GB of GPU memory is not a guarantee that a particular video will fit. SeedVR2 exports SDR and cannot preserve HDR.
+This Microsoft Store package includes CPU processing and DirectML for compatible graphics adapters. Installed acceptance covered Windows 11, an Intel Core i7-8550U, 16 GB system RAM and Intel UHD 620 integrated graphics. Performance varies; on this test PC the CPU benchmark was faster than the iGPU benchmark. Other adapters are not claimed as physically tested.
 
-HDR preservation is also experimental and limited to compatible models and input formats. SDR-trained model quality on HDR remains unverified. AI enhancement can introduce artifacts or change fine details; inspect the result and keep your originals.
+Image processing and SDR video are the core beta features. Compatible HAT models also offer experimental 10-bit HLG/PQ preservation. They were trained on SDR; HDR image quality is unverified. In-app live previews use an SDR display conversion.
 
-Models have their own licenses and download requirements. Some models require a user-supplied checkpoint. The application's license does not grant rights to every model or to media you choose to process.
-```
+SeedVR2 3B is retained in the wider LocalSR project for compatible CUDA, ROCm and Metal editions. It cannot run on this CPU/DirectML Store package. HDR preservation is disabled for SeedVR2.
 
-Product features — enter each line as a separate feature:
+AI enhancement can alter faces, text and fine detail. Inspect outputs and retain originals. The denoiser can reject unstable results; two of eleven challenging scanned documents remained unsupported in testing. SeedVR2 can produce tile seams in memory-saving configurations on supported editions.
 
-```text
-Image upscaling and noise reduction with selectable local AI models
-Video enhancement with explicit SDR output and model compatibility information
-Original and enhanced comparison views
-Live processing stages, model output previews and measured time estimates
-Reusable recipes and queued processing
-Separate CPU and GPU benchmark results where the installed backend is available
-Local diagnostics that you choose whether to share
-Model integrity verification and visible license information
-Optional SeedVR2 3B FP16 and FP8 video restoration with explicit Labs limitations
-```
+Models retain their own licenses. Some checkpoints require user import or additional license acknowledgements. The application's license does not grant rights to every model or to your input media.
 
-Leave **What's new in this version** empty for the first Store submission. Put
-website, privacy and support links in their dedicated fields. Microsoft's limits
-are 10,000 characters for the description, 1,000 for the short description
-(under 270 recommended), and 20 features of at most 200 characters each.
-[Microsoft listing fields](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/add-and-edit-store-listing-info).
+## Actual screenshots
 
-**Support and privacy fields**
+1. `01-image-comparison.png`: actual installed HAT-S Earth image comparison.
+2. `02-video-comparison.png`: completed video comparison in the installed app.
+3. `03-live-video-tiles.png`: real HAT-S video tiles and timing while processing.
+4. `04-separate-cpu-gpu-scores.png`: separate measured CPU and UHD 620 results.
 
-| Field | Preparation |
-| --- | --- |
-| Website | Existing LocalSR homepage: `https://herrei.github.io/localsr/`; recheck its release links before submission. |
-| Support contact info | `hermes.reisner@gmail.com` — confirmed by the user. Use GitHub Issues for bug reports; add its public URL to the support page once the tracker is published. |
-| Privacy policy | Use the [privacy draft](beta-privacy-and-support.md) after confirming publisher details and hosting it at an accessible URL. No new privacy page is live yet. |
-| Additional system requirements | Finalize from the exact Windows engine and installed acceptance. The earlier 16 GB minimum / 32 GB recommended RAM values are provisional planning choices. |
+All are unedited 1725×1030 PNG captures from installed Windows 1.0.7.0.
+Captions, image hashes and NASA provenance are in `store/screenshots.json` and
+`store/samples/source-permission.json`. These are public demonstration fixtures,
+not the user's private scan acceptance material. Microsoft requires desktop
+screenshots of at least 1366×768; four are recommended.
+[Microsoft screenshot requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images).
 
-**Confirmed beta scope and hardware message**
+## Reviewer and submission
 
-The user selected image processing/SDR video as the core and HDR preservation/
-SeedVR2 as optional Labs. The hardware and duration warning above belongs in the
-Store description and website, and the individual SeedVR2 descriptions also show
-it in the application. This scope decision does not complete installed acceptance.
+The exact reviewer procedure is `store/reviewer-instructions.txt`. It includes
+no-account startup, stock-model download, images, folder queue, video switching,
+real tiles/ETA, cancellation/recovery, separate benchmarks and preservation.
+It discloses the retained WACK warning and independent native DPI evidence.
 
-The user also confirmed retaining all existing backend targets, using Labs for
-less-tested paths. Windows CPU, DirectML (including compatible Intel integrated
-graphics) and CUDA remain in scope. Main testing focus is Windows CPU/Intel
-iGPU; CUDA and other unverified adapters remain Labs. Record the actual Intel
-GPU/build evidence before advertising it as verified. Store engine delivery is
-still to implement; a CPU-only package does not include DirectML automatically.
-See the [platform coverage matrix](beta-platform-matrix.md) and
-[Intel GPU implementation notes](intel-gpu-support.md).
+The reserved identity is `HerRei.LocalSR`; Store ID `9NTG848ZQTCQ`.
+The upload candidate SHA-256 is
+`bf4f748d95cfea976e05ca394ee13e53b3c3cd2dfecc675ab6cb6b3525f7bf9c`.
+This is a review candidate, not a claim of certification readiness.
 
-Both 3B variants already exist in the local catalog; no new checkpoint is being
-introduced by this listing update. Their complete catalog downloads, including
-the VAE, are:
-
-| Optional Labs model | Catalog ID | Download | Backend described by the current catalog |
-| --- | --- | --- | --- |
-| SeedVR2 3B FP16 | `seedvr2_3b` | About 7.28 GB | NVIDIA CUDA, AMD ROCm, Apple Metal |
-| SeedVR2 3B FP8 | `seedvr2_3b_fp8` | About 3.89 GB | NVIDIA CUDA, AMD ROCm |
-
-These decimal GB values are file sizes, not RAM/VRAM requirements. Distinguish
-recorded testing from Labs availability and retain each model's backend
-compatibility limits. FP8 reduces weight storage;
-clip buffers, activations, output resolution and offloading still determine
-working memory. See the [catalog](../src/localsr/core/model_catalog.py) and
-[recorded short-clip results](video-support.md). CPU processing remains part of
-the core path; it is not a practical-performance promise for SeedVR2.
-
-LocalSR accesses user-selected photos and videos, which can contain personal
-information even when processing stays on-device. The proposed answer to the
-privacy access question is **Yes**, with a privacy policy. Microsoft asks about
-access as well as collection and transmission. [Microsoft privacy and support
-fields](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/support-info).
-
-**Four Windows screenshots to capture later**
-
-Use the actual installed Windows beta and media whose use in the public listing
-is permitted. Capture the application window with readable controls and no
-personal desktop or unrelated applications. Keep the original captures and
-record the build, model and source permission with them.
-
-| File to capture | Show | Caption |
-| --- | --- | --- |
-| `01-image-comparison.png` | A completed photo result with the original/enhanced comparison and actual selected model. | Compare the original with the enhanced result. |
-| `02-video-processing.png` | A permitted SDR clip during real processing, with actual model output and ETA once measured. | Follow video enhancement with real processing progress. |
-| `03-recipes-and-queue.png` | A saved recipe and a small queue using the candidate's real controls. | Reuse settings and process a queue of media. |
-| `04-performance.png` | A completed benchmark on the hardware actually available to the Windows candidate. | Check local performance for the selected processing device. |
-
-Target **1920 × 1080 PNG**, at most 50 MB each. The desktop minimum is
-1366 × 768; one screenshot is required and four are recommended. Captions must
-fit within 200 characters. Do not fabricate output, progress or GPU scores, and
-do not use the Mac screenshots as Windows captures. Optional Store artwork can
-wait; the package icons are already prepared. [Microsoft screenshot
-specifications](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images).
-
-**Notes for certification — draft instructions**
-
-Complete the candidate-specific facts below before pasting the reviewer notes:
-
-- App version, four-part Store package version and package SHA-256.
-- Included engine/backend, tested Windows version and WebView2 setup behavior.
-- A small distributable sample image and SDR clip with documented permission.
-- Exact download size and name of the model used in the reviewer procedure.
-- Installed Store update and data-preservation results.
-
-```text
-LocalSR is a desktop image and video enhancement application. It processes user-selected media locally and launches a bundled inference worker as the signed-in user. The runFullTrust capability is needed for this desktop host and its local worker. The application does not require a LocalSR account or a subscription.
-
-An internet connection is needed for the initial model download. Model files are not bundled with the application. The model's license information is shown in the application, and the downloaded file is checked against the catalog's expected size and checksum before use.
-
-Suggested review procedure:
-1. Launch LocalSR and add the supplied sample image.
-2. Select stock HAT-S x4 and use the application's download control if the model is not installed. Review the displayed license information.
-3. Choose CPU processing and an output directory that is writable by the current user. Start enhancement and verify the resulting image.
-4. Save a recipe, close the application, reopen it and verify that the recipe and downloaded model remain available.
-5. Add the supplied short SDR clip, select frame-by-frame processing and stock HAT-S, and export an MP4 result.
-6. Start another job, cancel it, wait for cancellation to finish, and confirm that another job can start.
-
-SeedVR2 3B FP16/FP8 and HDR preservation are optional experimental features with model-specific limitations. They are not required for the basic image/SDR-video procedure. SeedVR2 outputs SDR, needs capable hardware and may take hours or days on demanding video. Use a short sample and modest output resolution for functional review. Do not select an unsupported GPU backend; only the backends documented for this exact package are included.
-```
-
-These instructions assume a CPU-capable candidate with stock HAT-S and SDR video.
-Engine delivery and the installed procedure must be verified before the notes
-can represent the submitted package. They do not claim an MSIX or Store update
-has already been tested. See the [package guide](microsoft-store.md).
+Privacy/support pages are prepared at `/localsr/privacy/` and
+`/localsr/support/` in the isolated website clone. They must be published,
+anonymously accessible and approved before their URLs go into Partner Center.
+Contact is **hermes.reisner@gmail.com**. Personal publisher **Hermes Reisner**,
+branding **HerRei** and the beta's hobby purpose were confirmed on 13 September
+2026. Public tracker activation, any remaining account-holder/trader declarations,
+final dependency/source-license delivery, remaining native
+acceptance, upload and certification remain on the beta checklist.

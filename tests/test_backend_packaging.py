@@ -143,11 +143,13 @@ def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
             continue
         lock = (ROOT / "requirements/locks" / f"{target['id']}.txt").read_text()
         flavor = "cpu" if target["backend"] == "DirectML" else target["index"]
-        version = "2.4.1" if target["backend"] == "DirectML" else "2.13.0"
+        version = "2.13.0"
         assert f"torch=={version}+{flavor}" in lock
         assert "--hash=sha256:" in lock
         if target["backend"] == "DirectML":
-            assert "torch-directml==0.2.5.dev240914" in lock
+            assert "onnxruntime-directml==1.24.4" in lock
+            assert "onnx==1.22.0" in lock
+            assert "torch-directml==" not in lock
         if target["id"] == "linux-x86_64-cuda":
             assert "nvidia-cublas-cu12==" in lock
         if target["id"] == "linux-x86_64-xpu":

@@ -40,12 +40,18 @@ def probe(backend: str) -> dict[str, object]:
         if not xpu_build:
             raise RuntimeError(f"Intel artifact lacks an XPU torch runtime: {result}")
     elif normalized == "directml":
-        import torch_directml
+        import onnx
+        import onnxruntime as ort
 
-        result["directml_module"] = str(Path(torch_directml.__file__).resolve())
-        result["directml_device_factory_present"] = hasattr(torch_directml, "device")
-        if not result["directml_device_factory_present"]:
-            raise RuntimeError(f"DirectML module lacks its device factory: {result}")
+        ort.disable_telemetry_events()
+        result["onnx_version"] = onnx.__version__
+        result["onnxruntime_version"] = ort.__version__
+        result["onnxruntime_module"] = str(Path(ort.__file__).resolve())
+        result["onnx_providers"] = ort.get_available_providers()
+        if "DmlExecutionProvider" not in result["onnx_providers"]:
+            raise RuntimeError(f"DirectML artifact lacks its ONNX execution provider: {result}")
+        if torch.version.cuda is not None or torch.version.hip is not None:
+            raise RuntimeError(f"DirectML artifact must include CPU Torch: {result}")
     elif normalized == "mps":
         result["mps_backend_module_present"] = hasattr(torch.backends, "mps")
         if not result["mps_backend_module_present"] or not result["mps_is_built"]:

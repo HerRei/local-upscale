@@ -12,19 +12,22 @@ export function synchronizationDecision(
   primaryTime: number,
   secondaryTime: number,
   paused: boolean,
-  basePlaybackRate: number
+  basePlaybackRate: number,
 ): SyncDecision {
   const base = Math.max(0.25, Math.min(4, basePlaybackRate));
   const drift = primaryTime - secondaryTime;
   if (!Number.isFinite(drift) || Math.abs(drift) > 0.09) {
-    return { seekTo: Number.isFinite(primaryTime) ? Math.max(0, primaryTime) : 0, playbackRate: base };
+    return {
+      seekTo: Number.isFinite(primaryTime) ? Math.max(0, primaryTime) : 0,
+      playbackRate: base,
+    };
   }
   if (paused || Math.abs(drift) < 0.025) return { seekTo: null, playbackRate: base };
   // A small one-way rate correction avoids visible seek oscillation. Once
   // drift falls inside the dead band the exact user-selected rate is restored.
   return {
     seekTo: null,
-    playbackRate: Math.max(0.25, Math.min(4, base + (drift > 0 ? 0.03 : -0.03)))
+    playbackRate: Math.max(0.25, Math.min(4, base + (drift > 0 ? 0.03 : -0.03))),
   };
 }
 

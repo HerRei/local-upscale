@@ -91,5 +91,5 @@
     }
   ],
   "legacy_manifest": "ci/release-artifacts.json",
-  "legacy_note": "The independent legacy Slint workflow retains all nine targets, including Intel macOS CPU."
+  "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets."
 }

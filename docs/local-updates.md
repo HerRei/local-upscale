@@ -2,7 +2,11 @@
 
 The About area now has **Update LocalSR**: choose Stable or Beta, check for a compatible release, review its version, notes and total download size, download, then install and restart. Downloads may run during processing. Installation waits for the queue, cancellation and model downloads to finish. The native host enforces this as well as the interface.
 
-Public updates remain disabled in this checkout. No release workflow, published manifest, signing credential or `.12` release was changed. The first beta still requires an initial installation containing the verification key and correct build identity.
+The beta candidates embed the production verification key and their backend
+identity. No public feed has been deployed; the active `.12` release and its
+workflows are untouched. The first beta requires an initial installation with
+that key and the correct build identity. The Store edition keeps application
+and bundled-worker updates managed by Microsoft Store.
 
 **Build identity and release preparation**
 
@@ -18,7 +22,11 @@ Build the application with these compile-time variables (rebuild the Rust host w
 
 The target key is `<os>-<architecture>-<backend>-<kind>`, for example `linux-x86_64-rocm-portable` or `darwin-aarch64-mps-native`. Stable rejects prereleases. Both channels reject backend, package-kind and worker-protocol mismatches. Keep all application version files synchronized for a real release.
 
-Enable Tauri's `bundle.createUpdaterArtifacts` in a **separate future beta build configuration** and provide its signing key through a protected environment/secret store. macOS uses signed updater app archives, Windows uses updater installers, and Linux native packages use AppImages. Updater signatures and platform code signing/notarization are separate requirements. See the [official Tauri updater documentation](https://v2.tauri.app/plugin/updater/).
+The separate beta build produces macOS app archives and Linux AppImages, signed
+with the production key retained in Keychain through the signed local helper.
+Windows direct editions require compatible updater installers. Updater signatures
+and platform code signing/notarization are separate requirements. See the
+[official Tauri updater documentation](https://v2.tauri.app/plugin/updater/).
 
 A portable Linux update is a signed `.tar.gz` containing `localsr-next`, built with the embedded frontend (`tauri/custom-protocol`). It replaces that executable only. Native libraries and the inference worker must be provided through a compatible installation or an engine package; this archive cannot silently update arbitrary application files.
 
@@ -47,7 +55,11 @@ A static feed uses Tauri's manifest format with an additional `localsr` contract
 }
 ```
 
-The example is deliberately not an enabled feed. Sign the actual archive using `tauri signer sign -f <private-key-file> <archive>` and copy the generated signature into the manifest. Do not commit private keys. Serve immutable files over HTTPS and publish only after testing those exact files.
+The example is deliberately not an enabled feed. For the existing beta key, use
+`python scripts/beta_update_signing.py sign <archive>`; it obtains the key through
+the local Keychain helper. Do not create an additional key or put its private
+material in the repository. Serve immutable files over HTTPS and publish only
+after testing those exact files.
 
 **Separate inference engine**
 
@@ -80,3 +92,20 @@ The Linux portable rollback check does not establish automatic rollback after ev
 Debug builds alone allow `LOCALSR_TEST_UPDATE_CONFIG` with a loopback-only feed, public key, backend, engine ID and kind. A disposable key and two local versioned builds exercise the complete UI flow without enabling a public updater. Release builds ignore that runtime override and require HTTPS.
 
 Regression tests cover backend/channel/protocol matching, missing engine payloads, invalid signatures (even with a recomputed checksum), interrupted/cancelled transfers, insufficient disk space, settings preservation and startup rollback. Exact native upgrade results belong in the accompanying platform acceptance report. No private test signing key is retained after acceptance.
+
+**Production-signature acceptance — 13 September 2026**
+
+Four final Linux AppImages and the notarized/stapled macOS app archive have
+verified production signatures. `production_candidate_download_and_tamper_rejection`
+uses the application's downloader with the actual 493,681,144-byte signed CPU
+AppImage: complete transfer passes; truncation removes partial output; substituted
+content fails signature verification even when its checksum is recomputed.
+The test uses the public key only and is explicitly ignored in routine suites
+unless the signed artifact path is supplied.
+
+`build/beta-review/manifests/beta.draft.json` contains the exact contracts and
+signatures, with intentionally invalid placeholder URLs. ROCm/CUDA AppImages
+exceed GitHub's single-asset limit; hosting or the complete split-engine route
+must be selected before deployment. Full native production-key upgrades and
+recovery on the final binary set remain unverified. Passing the downloader or
+the older disposable-key portable rollback test does not establish those results.

@@ -75,6 +75,17 @@ impl Database {
                 )?;
             }
         }
+        let has_duration: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='elapsed_seconds')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_duration {
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN elapsed_seconds REAL NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         let database = Self { connection };
         database.interrupt_stale_jobs()?;
         Ok(database)
@@ -246,9 +257,20 @@ impl Database {
 
     pub fn list_jobs(&self) -> AppResult<Vec<JobRecord>> {
         let mut statement = self.connection.prepare(
-            "SELECT jobs.id, jobs.media_id, media.name, media.kind, jobs.status, jobs.progress, jobs.output_path, jobs.error, jobs.created_at FROM jobs JOIN media ON media.id = jobs.media_id ORDER BY jobs.created_at DESC LIMIT 200",
+            "SELECT jobs.id, jobs.media_id, media.name, media.kind, jobs.status, jobs.progress, jobs.output_path, jobs.error, jobs.created_at, jobs.request_json, media.width, media.height, media.frame_count, media.hdr_format, jobs.elapsed_seconds FROM jobs JOIN media ON media.id = jobs.media_id
+             WHERE jobs.status IN ('queued','starting','running','cancelling')
+                OR jobs.rowid IN (SELECT rowid FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT 200)
+                OR jobs.rowid IN (SELECT MAX(rowid) FROM jobs WHERE status='completed' GROUP BY media_id)
+             ORDER BY jobs.created_at DESC, jobs.rowid DESC",
         )?;
         let rows = statement.query_map([], |row| {
+            let (work_key, work_units) = crate::queue_timing::work_profile(
+                &row.get::<_, String>(9)?,
+                row.get(10)?,
+                row.get(11)?,
+                u64::try_from(row.get::<_, i64>(12)?).unwrap_or_default(),
+                &row.get::<_, String>(13)?,
+            );
             Ok(JobRecord {
                 id: row.get(0)?,
                 media_id: row.get(1)?,
@@ -259,6 +281,9 @@ impl Database {
                 output_path: row.get(6)?,
                 error: row.get(7)?,
                 created_at: row.get(8)?,
+                work_key,
+                work_units,
+                elapsed_seconds: row.get(14)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -308,6 +333,16 @@ impl Database {
             "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1",
             params![id, status, progress, output, error, now_millis()],
         )?;
+        Ok(())
+    }
+
+    pub fn record_job_duration(&self, id: &str, seconds: f64) -> AppResult<()> {
+        if seconds.is_finite() && seconds > 0.0 {
+            self.connection.execute(
+                "UPDATE jobs SET elapsed_seconds=?2 WHERE id=?1 AND status='completed'",
+                params![id, seconds],
+            )?;
+        }
         Ok(())
     }
 
@@ -445,5 +480,61 @@ mod tests {
             "interrupted"
         );
         assert_eq!(reopened.next_queued_job().unwrap().unwrap().id, "j2");
+    }
+
+    #[test]
+    fn queue_timings_migrate_and_large_batches_keep_all_pending_and_owned_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        let db = Database::open(&path).unwrap();
+        db.insert_media("old", "/tmp/old.png", "old.png", "image")
+            .unwrap();
+        db.insert_media("batch", "/tmp/batch.png", "batch.png", "image")
+            .unwrap();
+        db.insert_job("finished", "old", r#"{"type":"job_request","data":{}}"#)
+            .unwrap();
+        db.finish_job("finished", "completed", "/tmp/result.png", "")
+            .unwrap();
+        for index in 0..250 {
+            db.insert_job(
+                &format!("pending-{index}"),
+                "batch",
+                r#"{"type":"job_request","data":{}}"#,
+            )
+            .unwrap();
+        }
+        db.connection
+            .execute("ALTER TABLE jobs DROP COLUMN elapsed_seconds", [])
+            .unwrap();
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        let jobs = db.list_jobs().unwrap();
+        assert_eq!(
+            jobs.iter().filter(|job| job.status == "queued").count(),
+            250
+        );
+        assert!(jobs
+            .iter()
+            .any(|job| job.id == "finished" && job.output_path == "/tmp/result.png"));
+        assert_eq!(db.next_queued_job().unwrap().unwrap().id, "pending-0");
+        db.record_job_duration("finished", 24.5).unwrap();
+        db.record_job_duration("finished", f64::NAN).unwrap();
+        db.record_job_duration("pending-0", 3.0).unwrap();
+        drop(db);
+        let jobs = Database::open(&path).unwrap().list_jobs().unwrap();
+        assert_eq!(
+            jobs.iter()
+                .find(|job| job.id == "finished")
+                .unwrap()
+                .elapsed_seconds,
+            24.5
+        );
+        assert_eq!(
+            jobs.iter()
+                .find(|job| job.id == "pending-0")
+                .unwrap()
+                .elapsed_seconds,
+            0.0
+        );
     }
 }

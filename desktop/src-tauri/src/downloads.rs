@@ -574,6 +574,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn declared_cc_by_downloads_do_not_unlock_unresolved_face_weights() {
+        let manifest: crate::types::CatalogManifest =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        for id in ["realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"] {
+            let model = manifest.models.iter().find(|m| m.model_id == id).unwrap();
+            assert_eq!(model.commercial_use_allowed, Some(true));
+            assert_eq!(
+                model.license_url,
+                "https://creativecommons.org/licenses/by/4.0/"
+            );
+            assert!(model
+                .source_url
+                .starts_with("https://huggingface.co/Phips/"));
+            assert!(DownloadTarget::Image(model.clone())
+                .validate_policy(false)
+                .is_ok());
+        }
+        for id in ["hat_s_x4_face", "hat_l_x4_face"] {
+            let model = manifest.models.iter().find(|m| m.model_id == id).unwrap();
+            assert_eq!(model.commercial_use_allowed, None);
+            assert!(DownloadTarget::Image(model.clone())
+                .validate_policy(true)
+                .is_err());
+        }
+    }
+
+    #[test]
     fn rejects_unpinned_or_insecure_downloads() {
         let digest = "a".repeat(64);
         assert!(validate_artifact_metadata("http://example.com/model", 1, &digest).is_err());

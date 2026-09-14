@@ -1,48 +1,59 @@
 # Contributing to LocalSR
 
-LocalSR is intentionally focused: one image, one local super-resolution model, and a safe,
-understandable inference path. Changes should preserve that clarity.
+LocalSR restores images and video on the user's computer. Changes should keep
+processing observable, cancellation reliable and source files intact.
 
-## Development setup
+## Get started
 
-Use Python 3.11:
+The current interface is in [`desktop/`](desktop/README.md). It uses Svelte/Tauri
+and a Python worker. The optional Qt Widgets client remains available with `--legacy`.
+Use Python 3.11 and install the native dependencies listed in the desktop guide.
 
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+From the repository root:
+
+```sh
+./local-ci.sh setup
+./local-ci.sh
 ```
 
-Run the checks used by CI:
+See [development checks](docs/development.md) for individual commands and the
+current type-checking boundary. The default Python suite runs headlessly.
+Real-model downloads, physical GPU tests and installed-package checks are
+separate acceptance steps.
 
-```bash
-ruff check src tests smoke_test_gui.py
-ruff format --check src tests smoke_test_gui.py
-QT_QPA_PLATFORM=offscreen pytest -q  # PowerShell: $env:QT_QPA_PLATFORM="offscreen"
-pyside6-qmllint --unqualified disable --max-warnings 0 src/localsr/ui/qml/*.qml
-```
+## Working on a change
 
-Run `localsr` for any interface or end-to-end change. Do not commit model checkpoints, generated
-outputs, virtual environments, or application preferences.
+Keep a change focused enough to review. Describe the problem, resulting behavior
+and the checks you ran. Add a regression test for a reproducible bug; visual-only
+changes can use a checked screenshot and a short explanation.
 
-Open `src/localsr/ui/qml/LocalSR.qmlproject` in Qt Design Studio for visual interface work.
-`DesignMock.qml` is design-time data only; production values come from `LocalSRController`. Preserve
-that boundary so QML stays previewable without importing the inference stack.
+Run the desktop app for interface changes and test the relevant installed package
+when changing native integration, worker startup or bundled dependencies. Report
+which operating system, device and driver you actually tested. Do not infer broad
+GPU support from a CPU smoke test.
 
-## Engineering boundaries
+## Code boundaries
 
-- Keep PyTorch and Spandrel inside the worker process. The GUI must remain alive if inference dies.
-- Keep stdout machine-readable JSON; diagnostics belong on stderr.
-- Preserve cooperative cancellation, atomic output replacement, and memmap cleanup.
-- Never silently disable PyTorch memory safety limits or bypass hardware checks.
-- Treat `.pth` and `.pt` files as untrusted pickle input. Curated downloads require pinned hashes.
-- Resource figures are estimates. Display uncertainty and prefer measured local calibration.
-- Avoid adding generative image synthesis; LocalSR is a conventional super-resolution harness.
-- Keep behavior portable across Windows, macOS, and Linux.
-- Keep curated model downloads optional, license-attributed, size-pinned, and SHA-256 verified.
-- Run a packaged `--smoke-test` after changing PyInstaller hooks, QML imports, or worker startup.
+- Keep PyTorch and Spandrel in the inference worker. Worker failure must not take down the GUI.
+- Keep worker stdout as JSON Lines; diagnostics belong on stderr.
+- Route native operations through Rust, with access limited to the requested files.
+- Preserve cancellation, atomic output replacement and temporary-file cleanup.
+- Validate model sizes and SHA-256 hashes before deserialization.
+- Keep resource limits enabled and display uncertainty in estimates.
+- Keep model downloads optional and preserve each author's terms and attribution.
 
-## Pull requests
+Prefer names and comments that explain a constraint or a non-obvious choice.
+Remove obsolete branches and unused code when their replacements are verified.
+Avoid broad refactors in a bug fix. Third-party vendored code and its modification
+notices must retain their provenance; do not reformat it with application code.
 
-Keep changes small enough to review, add regression tests, explain user-facing tradeoffs, and note
-platform-specific behavior. CI must pass on all three operating systems before merging.
+Do not commit checkpoints, private media, runtime profiles, signing material,
+virtual environments or local acceptance artifacts. Required, fixed SeedVR2
+conditioning assets are explicitly listed in the package configuration.
+
+## Reports and proposals
+
+Use [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com) while the public
+beta tracker is being prepared. Send security reports privately as described in
+[SECURITY.md](SECURITY.md). For a proposal, explain the use case and the effect on
+processing time, memory, output quality and platform support where relevant.

@@ -1,19 +1,33 @@
 # Video support and local acceptance
 
-Standard video is the frame-by-frame SDR path. The isolated `codex/hdr-preservation` preview adds optional HLG/PQ preservation with HAT (Labs); this is not a v0.0.12 installer announcement. SeedVR2, de-flicker, and video face processing retain individual Labs labels. The application remains alpha; installed-platform acceptance is still a blocking release gate.
+Standard video processes each frame and exports SDR. The beta also offers
+HLG/PQ preservation with HAT as a Labs option. SeedVR2, de-flicker and video face
+processing have their own Labs limits. These notes describe the beta source;
+package-specific checks and open requirements are in the
+[platform matrix](beta-platform-matrix.md) and [beta checklist](beta-release-checklist.md).
 
 ## Media contract
 
 - Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. SDR output is H.264 / 8-bit YUV420P; preserved HDR is HEVC Main 10 / YUV420P10LE, in MP4 or MKV. High-bit-depth SDR preservation is not implemented.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
 - Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
-- Copy compatible audio and subtitle streams. Compressed audio trims have packet-level precision, not sample-level precision. Unsupported subtitles produce a warning; unknown additional audio (for example an Apple spatial-audio track) is omitted with a visible import warning when a supported standard track exists. An unsupported sole audio track produces an actionable import error; other incompatible audio produces a remux error. There is no automatic audio transcoding.
+- MP4 copies AAC/MP3 and converts other decodable audio to 48 kHz AAC, preserving timing and channel layout. Copied audio has packet-level trim precision; converted audio has sample-level trimming plus AAC encoder padding. MKV retains compatible source audio. Unsupported subtitles and unknown additional audio produce a warning; an undecodable sole audio track produces an actionable error.
 - An explicit API/CLI FPS override changes speed by assigning evenly spaced timestamps and omits audio/subtitles. Desktop jobs send no override. They preserve source timing.
 - The HDR control chooses **Preserve HLG/PQ · 10-bit HEVC · Labs** or **Convert to SDR · 8-bit H.264** before Start. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
 - Selecting SeedVR2 or another incompatible catalog model switches to SDR and disables the HDR preservation option. Custom image checkpoints retain that option; the worker checks that the loaded architecture is compatible with the HAT preservation adapter.
 - Output creation is atomic. Cancellation checks extend through frame skipping and audio/subtitle remuxing; an existing destination survives failures or cancellation.
 
 The H.264 encoder disables B-frame reordering to keep packet durations consistent with variable presentation intervals and the last held frame. This trades some compression efficiency for predictable timing.
+
+## Legacy recordings
+
+The prepared beta accepts AVI/DivX, MPEG/VOB, camcorder transport streams,
+WMV/ASF, FLV/F4V, 3GP/3G2 and OGV, alongside MP4/MOV/M4V and MKV/WebM.
+It normalizes flagged interlacing and non-square pixels before enhancement,
+converts legacy audio to AAC for MP4, and prepares labelled SDR playback copies
+when the comparison player needs them. Originals and saved exports are preserved.
+See [supported extensions, conversion limits and actual source tests](beta-legacy-video-2026-09-13.md).
+These additions await the next authorized packages and installed acceptance.
 
 ## Installed Linux playback
 
@@ -25,9 +39,10 @@ seeking, including returning to a completed video while another job runs.
 Only the original and completed output authorized by the native queue receive
 random, session-lifetime URLs. The listener binds to `127.0.0.1`, serves no
 directory, streams with bounded buffers, and closes with the app. Processing and
-playback remain local. System codecs are still required; this transport does not
-add codecs or convert unsupported formats. Windows and macOS keep their existing
-asset transport.
+playback remain local. Prepared legacy playback conversion now creates compatible
+copies before this transport; it still awaits new installed-package acceptance.
+System H.264/AAC playback support is required. Windows and macOS keep their asset
+transport.
 
 See the [September platform acceptance record](platform-acceptance-2026-09.md)
 for the installed AMD/CPU checks, Windows VM results and remaining limits.

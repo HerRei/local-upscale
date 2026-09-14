@@ -7,7 +7,7 @@ export const appState = writable<AppSnapshot>(demoSnapshot());
 export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): CatalogModel[] {
   if (task === 'upscale') {
     return snapshot.catalog.models.filter(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face')
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
     );
   }
   if (task === 'denoise') {
@@ -15,7 +15,7 @@ export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): Catal
   }
   if (task === 'video') {
     return snapshot.catalog.models.filter(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face')
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
     );
   }
   return [];
@@ -24,7 +24,7 @@ export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): Catal
 export function choosePresetModel(
   snapshot: AppSnapshot,
   task: TaskKind,
-  quality: 'quick' | 'best'
+  quality: 'quick' | 'best',
 ): CatalogModel | undefined {
   const candidates = modelsForTask(snapshot, task);
   return [...candidates].sort((left, right) => {
@@ -45,20 +45,34 @@ export function choosePresetModel(
 }
 
 export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {
+  const selected = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
+  if (!selected) return '';
+  if (
+    snapshot.jobs.some(
+      (job) => job.id === snapshot.runtime.active_job_id && job.media_id === selected.id,
+    )
+  )
+    return '';
+  const completed = snapshot.jobs.find(
+    (job) => job.media_id === selected.id && job.status === 'completed' && job.output_path,
+  );
+  if (
+    completed &&
+    snapshot.runtime.comparison_media_id === selected.id &&
+    snapshot.runtime.comparison_output_path === completed.output_path
+  ) {
+    return snapshot.runtime.comparison_preview_data_url ?? '';
+  }
   if (!snapshot.runtime.result_preview_data_url) return '';
   // Progressive tiles and video-frame thumbnails are useful while a job is
   // running, but they are not a completed result and must never enable the
-  // before/after comparison. This mirrors the released Slint UI's separate
-  // `live_result_ready` and `result_ready` states.
+  // before/after comparison.
   if (snapshot.runtime.active_job_id) return '';
-  const selected = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
-  if (!selected) return '';
-
   const owner = snapshot.jobs.find(
     (job) =>
       job.status === 'completed' &&
       Boolean(snapshot.runtime.last_output_path) &&
-      job.output_path === snapshot.runtime.last_output_path
+      job.output_path === snapshot.runtime.last_output_path,
   );
   return owner?.media_id === selected.id ? snapshot.runtime.result_preview_data_url : '';
 }
@@ -78,7 +92,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     'video_stage_progress',
     'video_memory',
     'video_frame_started',
-    'video_frame_completed'
+    'video_frame_completed',
   ].includes(envelope.type)
     ? { ...snapshot, runtime: { ...snapshot.runtime } }
     : structuredClone(snapshot);
@@ -104,9 +118,12 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
         media.frame_count = Number(data.frame_count ?? 0);
         media.fps = Number(data.fps ?? 0);
         media.duration_seconds = Number(data.duration_seconds ?? 0);
-        media.hdr_format = data.hdr_format === 'HLG' || data.hdr_format === 'PQ' ? data.hdr_format : '';
+        media.hdr_format =
+          data.hdr_format === 'HLG' || data.hdr_format === 'PQ' ? data.hdr_format : '';
         media.audio_warning = String(data.audio_warning ?? '');
-        media.preview_data_url = data.jpeg_base64 ? `data:image/jpeg;base64,${data.jpeg_base64}` : '';
+        media.preview_data_url = data.jpeg_base64
+          ? `data:image/jpeg;base64,${data.jpeg_base64}`
+          : '';
         media.probe_status = 'ready';
         media.probe_stage = undefined;
         media.probe_started_at = undefined;
@@ -152,7 +169,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
         deblock: 'Removing JPEG artifacts',
         restore: 'Restoring',
         upscale: 'Upscaling',
-        face_restore: 'Restoring faces'
+        face_restore: 'Restoring faces',
       };
       const kind = String(data.stage_kind ?? '');
       next.runtime.status_title = `${labels[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
@@ -168,9 +185,10 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} tiles${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
-      next.runtime.throughput = next.runtime.elapsed_seconds > 0
-        ? Number(data.completed_tiles ?? 0) / next.runtime.elapsed_seconds
-        : 0;
+      next.runtime.throughput =
+        next.runtime.elapsed_seconds > 0
+          ? Number(data.completed_tiles ?? 0) / next.runtime.elapsed_seconds
+          : 0;
       next.runtime.throughput_unit = 'tiles/s';
       next.runtime.active_tile_size = Number(data.active_tile_size ?? 0);
       next.runtime.device_free_memory = Number(data.device_free_memory ?? 0);
@@ -185,7 +203,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       const total = Number(data.total_frames ?? 0);
       const fraction = frame + (count > 0 ? done / count : 0);
       const remaining = Number(data.estimated_remaining_seconds ?? 0);
-      next.runtime.progress = total > 0 ? fraction / total * 100 : 0;
+      next.runtime.progress = total > 0 ? (fraction / total) * 100 : 0;
       next.runtime.status_title = 'Enhancing video';
       next.runtime.status_detail = `Frame ${frame + 1} of ${total || '?'} · Tile ${done} / ${count || '?'} · ${remaining > 0 ? `ETA ≈ ${formatDuration(remaining)}` : fraction > 0 ? 'Finishing frame' : 'ETA: measuring first tile…'}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
@@ -206,22 +224,33 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'video_stage_progress': {
       if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
       const labels: Record<string, string> = {
-        verifying_model: 'Checking model files', loading_model: 'Loading video model',
-        reading_frames: 'Reading video frames', preparing_clip: 'Preparing clip',
-        encoding: 'Encoding clip', enhancing: 'Enhancing clip',
-        decoding: 'Decoding enhanced clip', finishing: 'Finishing clip', saving: 'Saving video'
+        verifying_model: 'Checking model files',
+        loading_model: 'Loading video model',
+        reading_frames: 'Reading video frames',
+        preparing_clip: 'Preparing clip',
+        encoding: 'Encoding clip',
+        enhancing: 'Enhancing clip',
+        decoding: 'Decoding enhanced clip',
+        finishing: 'Finishing clip',
+        saving: 'Saving video',
       };
       next.runtime.status_title = labels[String(data.stage)] ?? 'Processing video';
       const count = Number(data.total ?? 0);
       const totalFrames = Number(data.total_frames ?? 0);
       // A newer phase can coalesce away the preceding frame-completed pulse.
       // Carry its measured ETA and frame count in every temporal phase event.
-      if (data.frames_processed !== undefined && totalFrames > 0) next.runtime.progress = Number(data.frames_processed) / totalFrames * 100;
-      if (data.estimated_remaining_seconds !== undefined) next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds);
+      if (data.frames_processed !== undefined && totalFrames > 0)
+        next.runtime.progress = (Number(data.frames_processed) / totalFrames) * 100;
+      if (data.estimated_remaining_seconds !== undefined)
+        next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds);
       const steps = count > 0 ? `${Number(data.completed ?? 0)} / ${count} · ` : '';
-      const frames = totalFrames > 0 ? `From frame ${Number(data.frame_index ?? 0) + 1} of ${totalFrames} · ` : '';
+      const frames =
+        totalFrames > 0
+          ? `From frame ${Number(data.frame_index ?? 0) + 1} of ${totalFrames} · `
+          : '';
       next.runtime.status_detail = `${steps}${frames}${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first clip…'}`;
-      if (data.stage === 'saving') next.runtime.status_detail = 'Finalizing video timing and audio…';
+      if (data.stage === 'saving')
+        next.runtime.status_detail = 'Finalizing video timing and audio…';
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.throughput_unit = 'frames/s';
       break;
@@ -264,7 +293,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Benchmark running';
       next.runtime.status_detail = String(data.workload_version ?? '').startsWith(
-        'localsr-benchmark-v2'
+        'localsr-benchmark-v2',
       )
         ? `Multi-device benchmark · ${Number(data.measured_frame_count ?? 0)} phases · warming up each device`
         : `Warming up ${Number(data.warmup_count ?? 0)} iteration${Number(data.warmup_count ?? 0) === 1 ? '' : 's'} · then measuring ${Number(data.measured_frame_count ?? 0)} frames`;
@@ -301,15 +330,25 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
         const result = next.latest_benchmark;
         if (result?.workload_version.startsWith('localsr-benchmark-v2')) {
           const old = snapshot.latest_benchmark;
-          const history = old?.workload_version === result.workload_version
-            ? old.device_history?.length ? old.device_history : old.device_results ?? [] : [];
+          const history =
+            old?.workload_version === result.workload_version
+              ? old.device_history?.length
+                ? old.device_history
+                : (old.device_results ?? [])
+              : [];
           const current = result.device_results ?? [];
-          result.device_history = [...history.filter(device => !current.some(item => item.device === device.device)), ...current];
-          next.runtime.status_detail = result.stable
-            ? result.system_score != null
-              ? `GPU score ${result.system_score.toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
-              : `CPU score ${(result.cpu_score ?? 0).toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
-            : `Unstable run (${(result.cv_percent ?? 0).toFixed(1)}% spread) — close background apps and retry`;
+          result.device_history = [
+            ...history.filter((device) => !current.some((item) => item.device === device.device)),
+            ...current,
+          ];
+          next.runtime.status_detail =
+            result.cv_percent == null
+              ? 'Measurements saved. Too few repetitions to assess consistency on this device.'
+              : result.stable
+                ? result.system_score != null
+                  ? `GPU score ${result.system_score.toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
+                  : `CPU score ${(result.cpu_score ?? 0).toFixed(2)} output MP/s · stable (${(result.cv_percent ?? 0).toFixed(1)}% spread)`
+                : `Unstable run (${(result.cv_percent ?? 0).toFixed(1)}% spread) — close background apps and retry`;
           next.runtime.elapsed_seconds =
             result.result_elapsed_seconds ?? result.total_elapsed_seconds;
           next.runtime.throughput = result.system_score ?? result.cpu_score ?? 0;
@@ -344,7 +383,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.last_output_path = String(data.output_path ?? '');
       next.runtime.elapsed_seconds = Math.max(
         Number(data.inference_seconds ?? 0),
-        Number(data.elapsed_seconds ?? 0)
+        Number(data.elapsed_seconds ?? 0),
       );
       next.runtime.estimated_remaining_seconds = 0;
       break;
@@ -394,7 +433,9 @@ export function formatBytes(bytes: number): string {
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '—';
   const total = Math.round(seconds);
-  if (total >= 86400) return `${Math.floor(total / 86400)}d ${Math.floor(total % 86400 / 3600)}h`;
-  if (total >= 3600) return `${Math.floor(total / 3600)}h ${Math.floor(total % 3600 / 60)}m`;
-  return total >= 60 ? `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}` : `${total}s`;
+  if (total >= 86400) return `${Math.floor(total / 86400)}d ${Math.floor((total % 86400) / 3600)}h`;
+  if (total >= 3600) return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+  return total >= 60
+    ? `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`
+    : `${total}s`;
 }

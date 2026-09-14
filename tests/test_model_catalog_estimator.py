@@ -56,7 +56,6 @@ def test_catalog_has_pinned_optional_downloads():
         "Apache-2.0",
         "CC-BY-4.0",
         "CC BY 4.0",
-        "CC-BY-0.4 (upstream; clarify)",
         "Checkpoint rights unverified",
         "BSD-3-Clause",
         "MIT",
@@ -171,9 +170,10 @@ def test_measured_estimate_uses_a_narrower_calibrated_range():
     assert first_run.seconds_high / first_run.seconds_low > 4
 
 
-def test_gui_restricts_controls_to_reported_capabilities(qapp, tmp_path):
+def test_gui_restricts_controls_to_reported_capabilities(qtbot, tmp_path):
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
     window = MainWindow(start_worker=False, settings=settings)
+    qtbot.addWidget(window)
     custom_index = window.combo_model.findData(CUSTOM_MODEL_ID)
     window.combo_model.setCurrentIndex(custom_index)
     window.custom_model_path = str(tmp_path / "model.pth")

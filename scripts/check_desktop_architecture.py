@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Enforce the additive LocalSR desktop architecture and CI boundary.
+"""Enforce the LocalSR desktop architecture and CI boundary.
 
-This check is intentionally dependency-free so it can run before either the
-Python engine or the Tauri toolchain is installed.  It protects the migration
-contract: the legacy Slint application remains independently buildable while
-the new webview delegates native authority to Rust and inference to the Python
-worker. Public Tauri alpha releases use their own fail-closed signed pipeline.
+The webview delegates native authority to Rust and inference to the Python
+worker. Public Tauri releases use their own fail-closed signed pipeline.
 """
 
 from __future__ import annotations
@@ -115,14 +112,10 @@ def webview_authority_violations(
     return violations
 
 
-def workflow_isolation_violations(release: str, preview: str) -> list[str]:
+def workflow_isolation_violations(preview: str) -> list[str]:
     """Return violations that couple preview packaging to public releases."""
 
     violations: list[str] = []
-    release_lower = release.lower()
-    if any(token in release_lower for token in ("desktop/", "build_tauri_preview", "tauri")):
-        violations.append("release.yml must not build or invoke the additive Tauri preview")
-
     preview_lower = preview.lower()
     if "contents: write" in preview_lower:
         violations.append("the preview workflow must not have release-write permission")
@@ -134,17 +127,13 @@ def workflow_isolation_violations(release: str, preview: str) -> list[str]:
         violations.append("preview installers must remain an explicit manual build")
     if "retention-days: 7" not in preview:
         violations.append("private preview artifacts must retain the seven-day limit")
-    if '".github/workflows/release.yml"' not in preview:
-        violations.append("release workflow edits must trigger the architecture isolation check")
     return violations
 
 
-def signed_release_violations(legacy: str, desktop_release: str) -> list[str]:
+def signed_release_violations(desktop_release: str) -> list[str]:
     """Return violations that could publish the wrong host or unsigned installers."""
 
     violations: list[str] = []
-    if re.search(r"(?m)^\s{4}tags:\s*$", legacy):
-        violations.append("the legacy Slint workflow must remain manual-only")
     required = {
         "signed release workflow tag trigger": '      - "v*"',
         "fail-closed Tauri signing": "--require-signing",
@@ -171,7 +160,7 @@ def signed_release_violations(legacy: str, desktop_release: str) -> list[str]:
 
 
 def cross_alpha_release_violations(workflow: str) -> list[str]:
-    """Keep the one unsigned cross-build exception exact, honest, and temporary."""
+    """Restrict unsigned cross-builds to the designated alpha release."""
 
     violations: list[str] = []
     required = {
@@ -182,7 +171,7 @@ def cross_alpha_release_violations(workflow: str) -> list[str]:
         "ARM64 Rust target": "--target aarch64-apple-darwin",
         "ARM64 package verification": "--platform macos --architecture arm64",
         "explicit unsigned evidence": "write_alpha_signing_report.py",
-        "honest static-only macOS smoke": '"mode":"cross-build-static"',
+        "static-only macOS smoke": '"mode":"cross-build-static"',
         "real empty-cache Quick/Best inference": "validate_live_models.py",
         "exception manifest": "ci/v0.0.12-cross-alpha-artifacts.json",
         "explicit prerelease publication": "publish_tauri_release.py",
@@ -257,12 +246,6 @@ def collect_violations(root: Path = ROOT) -> list[str]:
     if tauri.get("identifier") != "com.localsr.desktop.next":
         violations.append("the additive desktop must keep bundle id com.localsr.desktop.next")
 
-    legacy_spec = _read(root, "packaging/localsr.spec")
-    if 'bundle_identifier="com.localsr.desktop"' not in legacy_spec:
-        violations.append("the released Slint bundle identity is missing")
-    if 'bundle_identifier="com.localsr.desktop.next"' in legacy_spec:
-        violations.append("the released Slint package must not adopt the preview bundle identity")
-
     cargo_dependencies = cargo.get("dependencies", {})
     if isinstance(cargo_dependencies, dict):
         forbidden_rust_plugins = sorted(FORBIDDEN_TAURI_PLUGINS.intersection(cargo_dependencies))
@@ -279,12 +262,11 @@ def collect_violations(root: Path = ROOT) -> list[str]:
     }
     violations.extend(webview_authority_violations(package, capability, frontend_sources))
 
-    release = _read(root, ".github/workflows/release.yml")
     preview = _read(root, ".github/workflows/tauri-preview.yml")
     desktop_release = _read(root, ".github/workflows/desktop-release.yml")
     cross_alpha_release = _read(root, CROSS_ALPHA_WORKFLOW)
-    violations.extend(workflow_isolation_violations(release, preview))
-    violations.extend(signed_release_violations(release, desktop_release))
+    violations.extend(workflow_isolation_violations(preview))
+    violations.extend(signed_release_violations(desktop_release))
     violations.extend(cross_alpha_release_violations(cross_alpha_release))
     violations.extend(workflow_upload_platform_violations(root))
 
@@ -295,7 +277,7 @@ def collect_violations(root: Path = ROOT) -> list[str]:
         violations.append("preview packaging must use the worker-only PyInstaller specification")
 
     worker_spec = _read(root, "packaging/tauri_worker.spec")
-    for excluded_ui in ('"PySide6"', '"slint"'):
+    for excluded_ui in ('"PySide6"',):
         if excluded_ui not in worker_spec:
             violations.append(f"worker package must continue to exclude {excluded_ui}")
 
@@ -324,7 +306,7 @@ def main() -> int:
         return 1
     print(
         "Desktop architecture boundary valid: isolated webview, Rust authority, "
-        "Python worker, manual legacy build, fail-closed signed Tauri release, "
+        "Python worker, fail-closed signed Tauri release, "
         "and the exact v0.0.12 cross-alpha exception."
     )
     return 0

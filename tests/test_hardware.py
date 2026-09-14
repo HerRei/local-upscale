@@ -8,6 +8,37 @@ from localsr.core import hardware
 from localsr.core.device_manager import DeviceManager
 
 
+@pytest.fixture(autouse=True)
+def isolate_directml_hardware(monkeypatch):
+    from localsr.core import onnx_runtime
+
+    # These are discovery tests, not probes of the CI host's physical adapter.
+    monkeypatch.setattr(onnx_runtime, "directml_available", lambda: False)
+
+
+def test_onnx_discovery_keeps_dxgi_ids_and_separates_shared_memory(monkeypatch):
+    from localsr.core import onnx_runtime, windows_adapters
+
+    gib = 1024**3
+    monkeypatch.delenv("LOCALSR_SKIP_DIRECTML_PROBE", raising=False)
+    monkeypatch.setattr(onnx_runtime, "directml_available", lambda: True)
+    monkeypatch.setattr(
+        windows_adapters,
+        "directml_adapters",
+        lambda: [
+            {"index": 2, "name": "Intel UHD", "dedicated_memory": 128 * 1024**2},
+            {"index": 5, "name": "Discrete GPU", "dedicated_memory": 6 * gib},
+        ],
+    )
+    devices = []
+    hardware._detect_directml(devices, 16 * gib, 8 * gib)
+    assert [device["id"] for device in devices] == ["directml:2", "directml:5"]
+    assert [device["is_integrated"] for device in devices] == [True, False]
+    assert [device["total_memory"] for device in devices] == [16 * gib, 6 * gib]
+    assert all(device["free_memory"] == 4 * gib for device in devices)
+    assert all(not device["supports_fp16"] for device in devices)
+
+
 def test_mps_and_cpu_capabilities_always_describe_shared_memory(monkeypatch):
     gib = 1024**3
     monkeypatch.setattr(hardware.sys, "platform", "darwin")
@@ -56,7 +87,9 @@ def test_discovers_each_available_directml_adapter(monkeypatch):
         SimpleNamespace(
             is_available=lambda: True,
             device_count=lambda: 2,
-            device_name=lambda index: ["Intel(R) Iris(R) Xe Graphics", "NVIDIA GeForce RTX"][index],
+            device_name=lambda index: ["Intel(R) Iris(R) Xe Graphics\x00", "NVIDIA GeForce RTX"][
+                index
+            ],
         ),
     )
     devices = []

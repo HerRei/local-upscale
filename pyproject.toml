@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.0.12-alpha"
+version = "0.0.13-beta.1"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -17,7 +17,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-    "slint==1.9.2a1",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "spandrel>=0.4.0",
@@ -69,7 +68,7 @@ face = [
 ]
 
 [build-system]
-requires = ["setuptools>=77.0"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
@@ -112,7 +111,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "localsr.core" = ["benchmark_references.json"]
-"localsr.ui" = ["slint/*.slint"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",
     "*.md",

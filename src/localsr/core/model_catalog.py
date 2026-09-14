@@ -292,14 +292,14 @@ MODEL_CATALOG = (
         quality_tier=QualityTier.HIGH,
         speed_tier=SpeedTier.FAST,
         recommended_halo=16,
-        source_url="https://github.com/Phhofm/models",
-        license_name="CC-BY-0.4 (upstream; clarify)",
+        source_url="https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample",
+        license_name="CC BY 4.0",
         author="Philip Hofmann",
         memory_factor=0.88,
         time_factor=0.85,
         speed_factor=0.85,
         vram_estimate_mb=800,
-        commercial_use_status="unclear",
+        commercial_use_status="allowed",
     ),
     CatalogModel(
         model_id="span_photo_x4",
@@ -343,14 +343,14 @@ MODEL_CATALOG = (
         quality_tier=QualityTier.ULTRA,
         speed_tier=SpeedTier.MEDIUM,
         recommended_halo=16,
-        source_url="https://github.com/Phhofm/models",
-        license_name="CC-BY-0.4 (upstream; clarify)",
+        source_url="https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR",
+        license_name="CC BY 4.0",
         author="Philip Hofmann",
         memory_factor=0.80,
         time_factor=0.70,
         speed_factor=0.70,
         vram_estimate_mb=1200,
-        commercial_use_status="unclear",
+        commercial_use_status="allowed",
     ),
     CatalogModel(
         model_id="realesrgan_x2plus",
@@ -632,10 +632,18 @@ class ModelStore:
         )
         key = (os.fspath(path.absolute()), expected_size, expected_sha256.lower())
         cached = self._verification_cache.get(key)
-        if cached is not None and cached[0] == signature:
+        # Windows can give rapid same-size rewrites the same timestamps. Do
+        # not reuse a verdict while the file is still in that timestamp window.
+        settled = time.time_ns() - max(stat.st_mtime_ns, stat.st_ctime_ns) > 2_000_000_000
+        if settled and cached is not None and cached[0] == signature:
             return cached[1]
         verified = file_matches_checksum(path, expected_size, expected_sha256)
-        self._verification_cache[key] = (signature, verified)
+        if settled:
+            self._verification_cache[key] = (signature, verified)
+        else:
+            # A verdict made inside the timestamp window must not become
+            # reusable later if another rewrite happened before it settled.
+            self._verification_cache.pop(key, None)
         return verified
 
 

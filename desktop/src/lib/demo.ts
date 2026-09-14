@@ -43,7 +43,7 @@ export function demoSnapshot(): AppSnapshot {
       enable_face_model: false,
       face_fidelity: 70,
       enable_live_preview: true,
-      allow_unsafe_pickle_model: false
+      allow_unsafe_pickle_model: false,
     },
     recipes: [],
     capabilities: {
@@ -63,9 +63,9 @@ export function demoSnapshot(): AppSnapshot {
           free_memory: 0,
           supports_fp16: false,
           is_integrated: false,
-          recommended_tile_sizes: [64, 128, 192, 256]
-        }
-      ]
+          recommended_tile_sizes: [64, 128, 192, 256],
+        },
+      ],
     },
     engine: null,
     runtime: {
@@ -87,8 +87,8 @@ export function demoSnapshot(): AppSnapshot {
       device_allocated_memory: 0,
       live_system_ram_available: 0,
       live_memory_pressure_percent: 0,
-      thermal_status: 'Not exposed by this backend'
+      thermal_status: 'Not exposed by this backend',
     },
-    latest_benchmark: null
+    latest_benchmark: null,
   };
 }

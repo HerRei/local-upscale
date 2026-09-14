@@ -2,6 +2,7 @@ mod cancellation;
 mod catalog;
 mod commands;
 mod database;
+mod distribution;
 mod downloads;
 mod engine_payload;
 mod error;
@@ -12,11 +13,13 @@ mod launch;
 mod media_server;
 mod native_menu;
 mod paths;
+mod queue_timing;
 mod settings;
 mod state;
 mod types;
 mod update_storage;
 mod updates;
+mod video_preview;
 mod worker;
 
 use std::{
@@ -31,6 +34,10 @@ use std::{
 use launch::{ImmediateAction, LaunchIntent, ParsedLaunch};
 use state::{lock, AppState};
 use tauri::{Emitter, Manager};
+
+pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
 
 pub fn run() {
     if let Some(exit_code) = engine_payload::run_arguments(&env::args_os().collect::<Vec<_>>()) {
@@ -89,6 +96,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             updates::update_status,
+            updates::open_store_updates,
             updates::check_update,
             updates::download_update,
             updates::install_update,
@@ -111,6 +119,8 @@ pub fn run() {
             commands::start_benchmark,
             commands::export_benchmark,
             commands::prepare_video_comparison,
+            commands::cancel_video_comparison,
+            commands::request_image_comparison,
             commands::cancel_jobs,
             commands::refresh_capabilities,
             commands::probe_path,
@@ -125,7 +135,7 @@ pub fn run() {
             commands::install_integrations,
             commands::uninstall_integrations,
         ])
-        .build(tauri::generate_context!())
+        .build(compiled_context())
         .expect("failed to build LocalSR Next Preview");
 
     application.run(|app, event| {

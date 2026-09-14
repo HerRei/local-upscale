@@ -20,7 +20,7 @@ describe('video comparison player', () => {
   it('loads both frames and retries a failed player without calling the file corrupt', async () => {
     const { container } = render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',
-      enhancedSrc: 'asset://localhost/enhanced.mp4'
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
     });
     const videos = container.querySelectorAll('video');
     expect(screen.getByRole('status').textContent).toContain('Loading video comparison');
@@ -43,7 +43,7 @@ describe('video comparison player', () => {
   it('exposes one accessible comparison slider and one shared scrubber', async () => {
     render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',
-      enhancedSrc: 'asset://localhost/enhanced.mp4'
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
     });
 
     const divider = screen.getByRole('slider', { name: 'Video before and after comparison' });
@@ -67,7 +67,7 @@ describe('video comparison player', () => {
   it('keeps audio enabled only on the enhanced stream', () => {
     const { container } = render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',
-      enhancedSrc: 'asset://localhost/enhanced.mp4'
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
     });
     const videos = container.querySelectorAll('video');
     expect(videos).toHaveLength(2);
@@ -78,7 +78,7 @@ describe('video comparison player', () => {
   it('integrates shared playback, deterministic seeking, drift correction, and cleanup', async () => {
     const rendered = render(VideoComparison, {
       originalSrc: 'asset://localhost/generated-original.mp4',
-      enhancedSrc: 'asset://localhost/generated-enhanced.mp4'
+      enhancedSrc: 'asset://localhost/generated-enhanced.mp4',
     });
     const videos = rendered.container.querySelectorAll('video');
     Object.defineProperty(videos[0], 'duration', { configurable: true, value: 4.02 });
@@ -103,7 +103,7 @@ describe('video comparison player', () => {
     expect(videos[0].currentTime).toBe(3);
 
     await fireEvent.change(screen.getByRole('combobox', { name: 'Playback speed' }), {
-      target: { value: '1.5' }
+      target: { value: '1.5' },
     });
     expect(videos[0].playbackRate).toBe(1.5);
     expect(videos[1].playbackRate).toBe(1.5);

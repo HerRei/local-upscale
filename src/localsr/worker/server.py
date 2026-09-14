@@ -62,8 +62,6 @@ from localsr.protocol.messages import (
     MediaProbeFailed,
     MediaProbeProgress,
     ModelInfo,
-    PreviewFailed,
-    PreviewReady,
     ProtocolError,
     TileUpdate,
     VideoFrameCompleted,
@@ -74,6 +72,7 @@ from localsr.protocol.messages import (
     WarningMessage,
     WorkerReady,
 )
+from localsr.worker.result_preview import ResultPreviewService
 
 # Thread-safe writing to stdout
 print_lock = threading.Lock()
@@ -105,16 +104,23 @@ def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
+def _video_engines() -> list[str]:
+    from localsr.core.video_engines import seedvr2_runtime_issue
+
+    return ["spandrel_image"] + (["seedvr2"] if seedvr2_runtime_issue() is None else [])
+
+
 def _engine_features() -> list[str]:
     features = [
         "image",
         "video_frame",
-        "video_seedvr2",
         "camera_raw",
         "cancellation",
         "progressive_preview",
         "benchmark_v1",
     ]
+    if "seedvr2" in _video_engines():
+        features.append("video_seedvr2")
     if importlib.util.find_spec("cv2") is not None:
         try:
             cv2 = importlib.import_module("cv2")
@@ -138,6 +144,7 @@ class WorkerServer:
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
+        self.result_previews = ResultPreviewService(send_message)
 
     def _request_cancel(self, requested_job_id: str) -> None:
         """Remember cancellation even if the matching job is still queued."""
@@ -179,9 +186,11 @@ class WorkerServer:
                 send_message(LogMessage(level="error", message="Worker request must be an object."))
                 continue
 
-            self.message_queue.put(msg)
-
             request_type = msg.get("type")
+            if request_type == "preview_request":
+                self.result_previews.submit(msg.get("data", {}))
+                continue
+            self.message_queue.put(msg)
             if request_type == "shutdown_request":
                 self.cancel_event.set()
             elif request_type == "cancel_request":
@@ -232,7 +241,7 @@ class WorkerServer:
                             engine_version=__version__,
                             features=_engine_features(),
                             model_formats=[".safetensors", ".pth", ".pt", ".ckpt"],
-                            video_engines=["spandrel_image", "seedvr2"],
+                            video_engines=_video_engines(),
                         )
                     )
 
@@ -268,27 +277,7 @@ class WorkerServer:
                     send_message(CapabilitiesInfo(**report))
 
                 elif req_type == "preview_request":
-                    image_path = str(data.get("image_path", ""))
-                    try:
-                        preview_data = ImageManager().load(image_path)
-                        tensor = preview_data["tensor"]
-                        _, height, width = tensor.shape
-                        send_message(
-                            PreviewReady(
-                                image_path=image_path,
-                                width=int(width),
-                                height=int(height),
-                                jpeg_base64=_encode_chw_jpeg(
-                                    tensor,
-                                    int(data.get("max_dimension", 1600)),
-                                    quality=82,
-                                ),
-                            )
-                        )
-                        del preview_data
-                        gc.collect()
-                    except Exception as error:  # noqa: BLE001
-                        send_message(PreviewFailed(image_path=image_path, error_message=str(error)))
+                    self.result_previews.submit(data)
 
                 elif req_type == "media_probe_request":
                     media_path = str(data.get("media_path", ""))
@@ -495,6 +484,8 @@ class WorkerServer:
             # Keep the long-lived worker responsive after an unexpected request.
             except Exception as e:  # noqa: BLE001
                 send_message(LogMessage(level="error", message=f"Worker loop error: {e}"))
+
+        self.result_previews.close()
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
         """Authenticate and execute the fixed, production-path benchmark."""
@@ -719,6 +710,8 @@ class WorkerServer:
                 image_width=packet.image_width,
                 image_height=packet.image_height,
                 frame_index=packet.frame_index,
+                active_tile_size=packet.active_tile_size,
+                stage_index=packet.stage_index,
             )
         )
 
@@ -1070,9 +1063,19 @@ class WorkerServer:
         # are not single-image checkpoints. An engine this build cannot
         # serve fails the job with a status-bar-ready message instead of a
         # stack trace, and frame-by-frame stays available.
-        from localsr.core.video_engines import resolve_video_engine
+        from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
 
         model_kind = str(data.get("model_kind", "spandrel_image"))
+        if model_kind == "seedvr2" and str(data.get("device", "")).split(":", 1)[0] in {
+            "directml",
+            "xpu",
+        }:
+            raise ValueError(
+                "SeedVR2 does not support this GPU backend. Choose frame-by-frame video "
+                "for Intel/DirectML, or a compatible CUDA, ROCm or Metal engine for SeedVR2."
+            )
+        if model_kind == "seedvr2" and (issue := seedvr2_runtime_issue()):
+            raise ValueError(issue)
         engine_factory = resolve_video_engine(model_kind)
         if engine_factory is not None:
             if data.get("hdr_mode") == "preserve":
@@ -1187,6 +1190,7 @@ class WorkerServer:
                     preview_kind="tile",
                     pixels=display_pixels(pixels.transpose(1, 2, 0)),
                     force=done >= count,
+                    active_tile_size=size,
                     **geometry,
                 )
 

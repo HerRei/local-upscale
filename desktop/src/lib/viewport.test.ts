@@ -6,7 +6,7 @@ describe('preview viewport', () => {
   it('enlarges a small image to use the available canvas', () => {
     expect(fitSize({ width: 1000, height: 700 }, { width: 64, height: 48 })).toEqual({
       width: 858.6666666666666,
-      height: 644
+      height: 644,
     });
   });
 
@@ -28,22 +28,12 @@ describe('preview viewport', () => {
   });
 
   it('keeps pointer-centered zoom bounded by the visible image', () => {
-    const bounds = panBounds(
-      { width: 800, height: 600 },
-      { width: 744, height: 558 },
-      2
-    );
-    const centered = pointerCenteredPan(
-      { x: 0, y: 0 },
-      { x: 200, y: 100 },
-      1,
-      2,
-      bounds
-    );
+    const bounds = panBounds({ width: 800, height: 600 }, { width: 744, height: 558 }, 2);
+    const centered = pointerCenteredPan({ x: 0, y: 0 }, { x: 200, y: 100 }, 1, 2, bounds);
     expect(centered).toEqual({ x: -200, y: -100 });
     expect(clampPan({ x: 9999, y: -9999 }, bounds)).toEqual({
       x: bounds.x,
-      y: -bounds.y
+      y: -bounds.y,
     });
   });
 });

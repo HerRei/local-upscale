@@ -19,10 +19,12 @@ from localsr.core.video_engines import (
     SPANDREL_IMAGE_KIND,
     TemporalEngineUnavailable,
     resolve_video_engine,
+    seedvr2_runtime_issue,
 )
 from localsr.protocol.messages import VideoJobRequest
 
 
+@pytest.mark.skipif(seedvr2_runtime_issue() is not None, reason=seedvr2_runtime_issue() or "")
 def test_seedvr2_vendor_download_rejects_non_https(tmp_path, monkeypatch):
     from localsr.video_models.seedvr2.vendor.utils import downloads
 
@@ -40,6 +42,7 @@ def test_seedvr2_vendor_download_rejects_non_https(tmp_path, monkeypatch):
     assert not destination.exists()
 
 
+@pytest.mark.skipif(seedvr2_runtime_issue() is not None, reason=seedvr2_runtime_issue() or "")
 def test_seedvr2_text_embeddings_use_validated_safetensors(monkeypatch):
     import torch
 

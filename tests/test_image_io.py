@@ -188,3 +188,33 @@ def test_atomic_save_error_cleanup(tmp_path, monkeypatch):
 
     assert not list(tmp_path.glob(".out_fail.png.localsr-image-*.tmp"))
     assert not os.path.exists(out_path)
+
+
+def test_cancel_during_encode_cleans_owned_scratch_and_preserves_existing_output(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    cancel = threading.Event()
+    destination = tmp_path / "existing.png"
+    destination.write_bytes(b"previous output")
+    scratch = tmp_path / ".localsr-job-test"
+    scratch.mkdir()
+    real_save = Image.Image.save
+
+    def cancel_after_encoding(image, path, *args, **kwargs):
+        assert Path(path).parent == scratch
+        real_save(image, path, *args, **kwargs)
+        cancel.set()
+
+    monkeypatch.setattr(Image.Image, "save", cancel_after_encoding)
+    with pytest.raises(InterruptedError, match="during image export"):
+        ImageManager().save(
+            np.zeros((3, 16, 16), dtype=np.uint8),
+            str(destination),
+            "png",
+            temporary_directory=scratch,
+            cancel_event=cancel,
+        )
+    assert destination.read_bytes() == b"previous output"
+    assert not list(scratch.iterdir())

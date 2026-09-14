@@ -1,92 +1,93 @@
-# LocalSR Next Preview
+# LocalSR desktop
 
-This directory contains the additive Tauri 2 desktop host. It preserves the
-current LocalSR workflow and runs the existing Python inference code as a
-hidden worker.
-
-## Layering
+The current desktop app uses Svelte 5 and Tauri 2. Rust handles native operations
+and persistent state; a separate Python process runs inference.
 
 ```text
-Svelte UI (no shell or general filesystem access)
-  ↕ typed Tauri commands and events
-Rust control plane (SQLite queue, downloads, policy, native authority)
-  ↕ versioned JSON Lines over stdin/stdout
-Python inference worker (PyTorch, Spandrel, RAW, face, PyAV, SeedVR2)
+Svelte interface
+    ↕ typed Tauri commands and events
+Rust host · queue, settings, downloads, recovery
+    ↕ versioned JSON Lines over stdin/stdout
+Python worker · PyTorch, Spandrel, PyAV, RAW, face and SeedVR2 processing
 ```
 
-The preview has a separate bundle identifier and stores its preferences and
-queue under the `LocalSR/next` application-data directory. It only shares the
-existing checksum-verified `LocalSR/models` cache. Running or uninstalling it
-does not overwrite the released Slint application.
+The webview has no general shell, filesystem or network API. Native file access
+and downloads go through the Rust host. See the [worker protocol](../protocol/README.md)
+and [component boundaries](../docs/development.md#desktop-components).
 
-The parity surface currently includes fit-to-window and 1:1 image inspection,
-dynamic zoom and bounded panning, non-destructive Single/Batch scope, native
-menus and recipe shortcuts, file-open arguments, FIFO image/video jobs,
-notifications, interface scaling, and copyable live diagnostics. Video remains
-visibly labelled Labs / Experimental.
+## Run from source
 
-## Development
+Use Python 3.11, Node.js and a stable Rust toolchain with `rustfmt` and `clippy`.
+Install [Tauri's native prerequisites](https://v2.tauri.app/start/prerequisites/)
+for your operating system. GPU development also requires the appropriate PyTorch
+build and driver; see the backend pins in [`requirements/`](../requirements/).
 
-Prerequisites are Node.js, Rust stable, Python 3.11, and the normal LocalSR
-development environment.
+From the repository root:
 
-```bash
+```sh
+./local-ci.sh setup
 cd desktop
-npm ci
-npm run check
-npm test
 npm run tauri -- dev
 ```
 
-During development, the Rust host launches `../.venv/bin/python -m
-localsr.worker`. Set `LOCALSR_WORKER` to a worker executable to test a frozen
-engine.
+The development host starts the Python worker from the repository's `.venv`.
+`LOCALSR_WORKER` can point to a frozen worker executable for packaging tests.
+A browser-only workspace is available through `npm run dev:web`; its demo data
+is for interface development and does not run inference.
 
-Finder, Explorer, Dolphin, and Nautilus actions are optional and never install
-silently. Enable or remove them from **System integrations** in the app, or run
-the packaged executable with `--install-integrations` or
-`--uninstall-integrations`. The additive command is named `localsr-next`, so it
-does not replace the released app's command. On Linux, place the AppImage where
-you intend to keep it before enabling integrations; LocalSR records the stable
-AppImage path rather than its temporary runtime mount.
+## Check changes
 
-## Production-shaped build
+From `desktop/`:
 
-```bash
-python -m pip install -e ".[package,video,face]"
+```sh
+npm run format:check
+npm run check
+npm test
+npm run build:frontend
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets
+```
+
+The repository's [local checks](../docs/development.md) also validate Python,
+worker messages, catalog consistency and packaging inputs.
+
+## Build an installer
+
+With the target platform's Python environment active, run from the repository root:
+
+```sh
+python -m pip install -e '.[package,video,face]'
 python scripts/build_tauri_preview.py
 ```
 
-The build script exports the catalog, creates a worker-only PyInstaller engine,
-embeds that directory as a Tauri resource, runs frontend checks, and then
-builds the native installer. Credential-free local macOS previews receive an
-ad-hoc resource seal. The explicitly testing-only `v0.0.11` cross-alpha
-workflow uses the same honest ad-hoc/unsigned exception and records it in the
-release index. The normal desktop release workflow still passes
-`--require-signing` and refuses ad-hoc/unsigned substitutes.
+The script exports the catalog, freezes the inference worker, checks the frontend
+and bundles both in a native installer. Local builds can use ad-hoc macOS signing;
+public packages require the platform's production trust checks. A packaged
+`--smoke-test` must start the bundled worker and complete its protocol handshake.
 
-Each packaged preview is acceptance-tested by mounting or silently installing
-the actual DMG, NSIS setup, or AppImage and launching its bundled worker with
-`--smoke-test`. A successful report requires the frozen worker to negotiate the
-protocol and reach `ready`; a mocked download or source-tree Python process
-does not satisfy this gate.
+The beta retains macOS MPS, Windows CPU/CUDA/DirectML and Linux CPU/CUDA/ROCm/XPU.
+Exact artifacts, tested hardware and gaps are in the
+[platform matrix](../docs/beta-platform-matrix.md). Store application updates
+belong to Microsoft Store; direct editions use [signed updates](../docs/local-updates.md).
 
-The existing `.github/workflows/release.yml` remains an independent,
-manual-only Slint build and does not invoke the preview build.
-`.github/workflows/tauri-preview.yml` verifies all three desktop hosts and can
-build short-lived private Windows NSIS and Linux AppImage artifacts when
-manually requested. An architecture check rejects accidental coupling between
-the two workflows, shared bundle identities, or native authority exposed to
-the webview. `.github/workflows/v0.0.11-cross-alpha.yml` is the only workflow
-allowed to handle the `v0.0.11-alpha` tag. It publishes exactly three
-installers plus `SHA256SUMS` and `release-index.json`, with static-only ARM
-evidence and explicit trust warnings. The normal
-`.github/workflows/desktop-release.yml` excludes that tag and requires
-production signatures, a native ARM64 maintained PyTorch runtime, and
-installed-package smoke evidence for future releases.
+## Application data
 
-The hosted preview packages deliberately use the portable CPU runtime on
-Windows/Linux and the native MPS-capable runtime on Apple Silicon. Selecting
-how signed CUDA, DirectML, XPU, and ROCm engine packs are delivered through one
-simple installer remains a cutover decision; the worker protocol does not tie
-the interface or queue database to one backend.
+Settings, recipes and queues live in `LocalSR/next` under the platform's
+application-data directory. Verified checkpoints use the shared `LocalSR/models`
+cache. The Slint frontend has been retired. The existing application identity and
+state paths are retained, so this cleanup does not move or migrate user data.
+
+`python -m localsr` launches the separately installed Tauri executable. If it is
+not found, set `LOCALSR_DESKTOP_EXECUTABLE` to its absolute path (the executable
+inside the macOS app bundle, `localsr-next.exe`, or a Linux AppImage). Files,
+`--recipe`, `--preset` and `--auto-start` pass through unchanged. For source
+development, use `npm run tauri -- dev` here. The Python CLI works independently;
+`python -m localsr --legacy` still opens the optional Qt Widgets client.
+
+MSIX upgrades preserve the profile in recorded tests. An explicit Store uninstall
+can delete the profile; restore from a verified backup after reinstalling.
+
+Optional Finder, Explorer, Dolphin and Nautilus actions are managed through
+**System integrations**, or with `--install-integrations` / `--uninstall-integrations`.
+On Linux, move the AppImage to its permanent location before registering it.

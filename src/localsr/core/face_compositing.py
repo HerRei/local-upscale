@@ -58,7 +58,7 @@ def blend_tile_outputs(
     if not 0.0 <= fidelity <= 1.0:
         raise ValueError("Face restoration fidelity must be between 0 and 1.")
     # The companion HAT checkpoint has no native fidelity parameter. LocalSR
-    # therefore defines an honest two-step spatial blend:
+    # therefore applies two spatial blends:
     #   face_mix = original_upscaled * (1-fidelity) + restored * fidelity
     #   output = general * (1-mask) + face_mix * mask
     # A value of 0 retains the resampled original inside the face mask; 1 uses

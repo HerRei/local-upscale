@@ -1,13 +1,18 @@
 **LocalSR privacy and support drafts**
 
-Prepared locally on 12 September 2026 from the desktop implementation. This file
+Updated locally on 13 September 2026 from the desktop implementation. This file
 is preparation for the website and Store submission, not a published policy.
 The user confirmed GitHub Issues for bug reports and
 [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com) for contact and private
-privacy requests. Confirm the publisher's legal name/entity and the final package
-behavior before publication. The contact was supplied explicitly by the user.
+privacy requests. On 13 September 2026 the user confirmed **Hermes Reisner** as
+the personal publisher, **HerRei** as project branding and the beta's hobby purpose
+outside business activity. Verify the final package behavior and any applicable
+account-holder/trader declarations before publication. The contact was supplied
+explicitly by the user.
 
 **Privacy text**
+
+LocalSR is published by Hermes Reisner, using the project branding HerRei.
 
 LocalSR processes the images and videos you select on your own computer. The
 application does not upload your media for enhancement or use it to train models.
@@ -31,8 +36,8 @@ may need an additional model download.
 For a direct-download edition with updates enabled, checking for updates contacts
 the configured release service for compatible software. Downloading an update
 contacts its file host. These services receive connection information and the
-requested manifest or artifact. A Microsoft Store edition receives application
-updates through Microsoft once that edition's Store integration is complete.
+requested manifest or artifact. The tested Microsoft Store edition receives application and bundled-engine
+updates through Microsoft Store; its direct application updater is disabled.
 Selecting a website or model-license link opens an external site in your browser.
 Those services apply their own privacy policies.
 
@@ -74,9 +79,14 @@ The current unpackaged desktop builds use these locations:
 The `models` subfolder contains downloaded checkpoints and may retain partial
 downloads so they can resume. The `next` subfolder contains settings/recipes,
 the queue database, benchmarks, work files and update/recovery files. Exports are
-stored in the output directory selected for each job. The actual MSIX storage
-and uninstall behavior still need installed Windows verification before these
-instructions are adapted for the Store edition.
+stored in the output directory selected for each job. Installed MSIX 1.0.7.0 uses
+`%LOCALAPPDATA%\Packages\HerRei.LocalSR_tvsg0jvwy7150\LocalCache\Local\LocalSR`.
+The explicit native uninstall test **deleted this package profile**, including
+settings. Reinstallation plus restoration from a verified independent backup
+recovered settings, recipes, model hashes and logical queue data. **Back up the
+profile before uninstalling.** Normal installed upgrades retained this data;
+uninstall/reinstall is a different operation. Exports outside the package profile
+were not removed.
 
 Removing media from the queue removes its active queue entry and associated
 jobs; it does not remove source files or finished exports. Local backups can
@@ -91,8 +101,8 @@ Storage providers or operating system backups may retain their own copies.
 LocalSR beta feedback helps identify problems with different media, models and
 hardware. Check the known limitations below, then report a reproducible problem
 through GitHub Issues. For contact or private matters, email
-[hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com). The tracker files are
-prepared locally; add its working public URL when it is published.
+[hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com). The tracker README, security contact and structured bug form are
+prepared in `build/beta-review/public-tracker`; add its working public URL when published.
 
 Include the LocalSR version, your operating system, processing device, model,
 input dimensions and the steps that caused the problem. Copy diagnostics can
@@ -118,8 +128,8 @@ with HDR preservation and SeedVR2 3B as optional Labs. The existing FP16 variant
 supports NVIDIA CUDA, AMD ROCm and Apple Metal; the FP8 variant is for CUDA/ROCm.
 All eight existing backend targets remain in the planned beta, with less-tested
 paths labelled Labs and model compatibility stated separately. Recorded preview
-checks cover macOS MPS, Linux CPU/ROCm and Windows CPU; the Intel iGPU path is
-included, with its hardware/build evidence still to capture. See the
+checks cover macOS MPS, Linux CPU/ROCm and Windows CPU; native Intel UHD 620 DirectML image/video and separate CPU/iGPU benchmarks
+passed in the installed MSIX. Other DirectML adapters remain untested. See the
 [coverage matrix](beta-platform-matrix.md). A smaller FP8 download does not
 guarantee that the working buffers fit in RAM/VRAM.
 
@@ -146,12 +156,12 @@ This operating plan still needs the user's agreement.
 
 | Item | Status |
 | --- | --- |
-| Publisher legal name and individual/entity status | Awaiting confirmation; Store display name is HerRei. |
+| Publisher legal name and individual/entity status | Confirmed by user on 13 September 2026: Hermes Reisner, personal hobby project; HerRei branding. Applicable trader declarations remain separate. |
 | Private privacy/contact route | Confirmed by user: `hermes.reisner@gmail.com`. No test email has been sent. |
 | General support destination | Confirmed by user: public GitHub Issues. Tracker files are prepared locally; repository publication and access testing remain pending. |
 | Support information retention | Confirm how long private support messages are kept and how deletion requests are handled. Public reports should remain useful without retaining unnecessary personal information. |
 | Public page addresses | Proposed `/localsr/privacy/` and `/localsr/support/`; neither has been created or published by this work. |
-| Store edition data/update behavior | Awaiting exact MSIX acceptance; do not reuse unpackaged assumptions as verification. |
+| Store edition data/update behavior | Installed 1.0.7.0 upgrade and explicit backup recovery are recorded above. The new ONNX package must repeat acceptance and network observation. |
 
 **Implementation evidence**
 
@@ -167,3 +177,15 @@ This operating plan still needs the user's agreement.
 This review establishes what the current code and documentation say. A network
 observation of the final installed candidate, publisher details and support-record
 retention are still needed before the final privacy text is approved and published.
+
+
+The prepared Windows ONNX Runtime path disables its telemetry before session
+creation. The earlier MSIX uses a different runtime; do not apply that statement
+to the installed baseline. Source-worker connection snapshots are narrower than
+a packet capture or final-package network assessment.
+
+The proposed large-download host necessarily receives connection addresses and
+requested paths. The local Caddy draft disables application access logs; ISP,
+operating-system and any future CDN practices must be described once hosting is
+chosen. No public release server is running. The hosting privacy paragraph and
+private-support retention period remain draft choices.

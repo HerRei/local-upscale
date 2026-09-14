@@ -1,6 +1,6 @@
 """LocalSR Benchmark v2 — fixed multi-scene workload with stability gating.
 
-Design goals (workload ``localsr-benchmark-v2``):
+Design goals (workload ``localsr-benchmark-v2.1``):
 
 - **Fixed, versioned scenes** so two results are comparable only when the
   ``workload_version`` matches, in the spirit of Blender's BMW27: every
@@ -34,7 +34,7 @@ import torch
 
 from .inference import InferenceEngine
 
-WORKLOAD_VERSION = "localsr-benchmark-v2"
+WORKLOAD_VERSION = "localsr-benchmark-v2.1"
 WORKLOAD_MODEL_ID = "span_photo_x4"
 OUTPUT_SCALE = 4
 HALO = 16
@@ -51,6 +51,9 @@ WARMUP_MAX_SECONDS = 30.0
 MEASURE_TARGET_SECONDS = 20.0
 MEASURE_MIN_ITERATIONS = 6
 MEASURE_MAX_SECONDS = 45.0
+# A single large-scene iteration can exceed the time budget on a slow CPU.
+# Three complete measurements are still required to assess consistency.
+MEASURE_MIN_SLOW_ITERATIONS = 3
 COOLDOWN_MAX_SECONDS = 60.0
 COOLDOWN_POLL_SECONDS = 2.0
 PROGRESS_INTERVAL_SECONDS = 0.5
@@ -89,7 +92,7 @@ class SceneResult:
     median_ms: float
     p05_ms: float
     p95_ms: float
-    cv_percent: float
+    cv_percent: float | None
     megapixels_per_second: float
     encode_ms: float | None = None
     preview: dict | None = None
@@ -108,7 +111,7 @@ class DeviceBenchmark:
     peak_memory_bytes: int | None
     peak_device_memory_bytes: int | None
     stable: bool
-    cv_percent: float
+    cv_percent: float | None
     score: float
     scenes: list[dict] = field(default_factory=list)
 
@@ -137,7 +140,7 @@ class BenchmarkV2Result:
     system_score: float | None
     cpu_score: float | None
     stable: bool
-    cv_percent: float
+    cv_percent: float | None
     elapsed_seconds: float
     thermal_state: str
     reference_label: str | None
@@ -222,7 +225,10 @@ def _scene_tensor(scene: SceneSpec) -> torch.Tensor:
         plane[:, third : 2 * third] = np.broadcast_to(
             checker[:, third : 2 * third], (height, third)
         )
-        noise_channel = ((noise + channel * 37) % 256).astype(np.float32)
+        # Full-range independent RGB noise made the reference SPAN model
+        # diverge before its output clamp. Use bounded sensor noise; this
+        # content change is recorded in workload v2.1, not mixed with v2 scores.
+        noise_channel = (112 + ((noise + channel * 37) % 256) // 8).astype(np.float32)
         plane[:, 2 * third :] = np.clip(
             noise_channel[:, 2 * third :] * vignette[:, 2 * third :] / 255.0, 0, 255
         ).astype(np.uint8)
@@ -483,7 +489,12 @@ def run_device_phase(
     expected_type = (
         "privateuseone" if device_id.startswith("directml:") else device_id.split(":", 1)[0]
     )
-    if torch_device.type != expected_type:
+    onnx_gpu = (
+        device_id.startswith("directml:")
+        and getattr(engine, "active_backend_id", None) == device_id
+        and getattr(engine.active_model, "execution_provider", None) == "DmlExecutionProvider"
+    )
+    if torch_device.type != expected_type and not onnx_gpu:
         raise RuntimeError(f"Requested {device_id}, but the engine loaded on {torch_device}.")
     stage_count = len(scenes) + 2
 
@@ -630,9 +641,14 @@ def run_device_phase(
                     encode_ms = scene_encode
                 iterations += 1
                 elapsed = clock() - measured_started
+                minimum_iterations = (
+                    MEASURE_MIN_SLOW_ITERATIONS
+                    if elapsed >= MEASURE_MAX_SECONDS
+                    else MEASURE_MIN_ITERATIONS
+                )
                 required_fraction = min(
                     elapsed / MEASURE_TARGET_SECONDS,
-                    iterations / MEASURE_MIN_ITERATIONS,
+                    iterations / minimum_iterations,
                 )
                 now = time.monotonic()
                 if now - last_progress_at >= PROGRESS_INTERVAL_SECONDS:
@@ -641,12 +657,11 @@ def run_device_phase(
                         scene.scene_id,
                         scene_index,
                         completed_units=iterations,
+                        total_units=minimum_iterations,
                         fraction=min(0.99, required_fraction),
                     )
                     last_progress_at = now
-                if (
-                    elapsed >= MEASURE_TARGET_SECONDS and iterations >= MEASURE_MIN_ITERATIONS
-                ) or elapsed >= MEASURE_MAX_SECONDS:
+                if elapsed >= MEASURE_TARGET_SECONDS and iterations >= minimum_iterations:
                     break
 
             cv = coefficient_of_variation(timings)
@@ -666,7 +681,7 @@ def run_device_phase(
                     median_ms=round(median_ms, 3),
                     p05_ms=round(percentile(timings, 5) * 1000.0, 3),
                     p95_ms=round(percentile(timings, 95) * 1000.0, 3),
-                    cv_percent=round(cv * 100.0, 2),
+                    cv_percent=round(cv * 100.0, 2) if math.isfinite(cv) else None,
                     megapixels_per_second=round(mps, 4),
                     encode_ms=round(encode_ms, 3) if encode_ms is not None else None,
                     preview=preview,
@@ -681,6 +696,8 @@ def run_device_phase(
                 fraction=1.0,
             )
 
+    if onnx_gpu and not engine.active_model.execution_verified:
+        raise RuntimeError("The benchmark did not verify GPU execution; no GPU score was saved.")
     thermal_after = _thermal_state(device_id)
     cooldown_index = stage_count - 1
     emit("started", "cooldown", cooldown_index)
@@ -706,7 +723,7 @@ def run_device_phase(
         peak_memory_bytes=memory.peak,
         peak_device_memory_bytes=memory.peak_device,
         stable=phase_cv <= TARGET_CV,
-        cv_percent=round(phase_cv * 100.0, 2),
+        cv_percent=round(phase_cv * 100.0, 2) if math.isfinite(phase_cv) else None,
         score=round(score, 2) if score is not None else 0.0,
         scenes=scene_results,
     )
@@ -769,9 +786,12 @@ def aggregate_v2(
     stable = bool(device_results) and all(
         bool(device.get("stable", False)) for device in device_results
     )
-    worst_cv = max(
-        (float(device.get("cv_percent", 100.0)) for device in device_results), default=100.0
-    )
+    # A slow scene can exhaust the measurement budget after only one run.
+    # Its spread is unknown, not zero or Infinity (which is invalid JSON).
+    cvs = [device.get("cv_percent") for device in device_results]
+    measured = bool(cvs) and all(cv is not None and math.isfinite(cv) for cv in cvs)
+    worst_cv = max(cvs) if measured else None
+    stable = stable and measured
     thermal_states = {str(device.get("thermal_state", "unknown")) for device in device_results}
 
     score = system_score(device_results)
@@ -784,7 +804,7 @@ def aggregate_v2(
         system_score=score if stable else None,
         cpu_score=cpu if stable else None,
         stable=stable,
-        cv_percent=round(worst_cv, 2),
+        cv_percent=round(worst_cv, 2) if worst_cv is not None else None,
         elapsed_seconds=round(elapsed_seconds, 2),
         thermal_state=(
             "mixed" if len(thermal_states) > 1 else next(iter(thermal_states), "unknown")

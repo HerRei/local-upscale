@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+import threading
 import warnings
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,8 @@ class ImageManager:
         safe_exif: dict | None = None,
         scale: int = 1,
         output_scale: int | None = None,
+        temporary_directory: str | os.PathLike | None = None,
+        cancel_event: threading.Event | None = None,
     ):
         """
         Saves the memory-mapped numpy array to the final destination.
@@ -164,6 +167,8 @@ class ImageManager:
             safe_exif=safe_exif,
             scale=scale,
             output_scale=output_scale,
+            temporary_directory=temporary_directory,
+            cancel_event=cancel_event,
         )
 
     def save_from_writer(
@@ -177,6 +182,8 @@ class ImageManager:
         safe_exif: dict,
         scale: int,
         output_scale: int | None = None,
+        temporary_directory: str | os.PathLike | None = None,
+        cancel_event: threading.Event | None = None,
     ):
 
         arr = np.transpose(writer_mmap, (1, 2, 0))
@@ -221,10 +228,14 @@ class ImageManager:
 
         fmt = format.lower()
         destination = Path(destination_path)
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Cancelled before image export.")
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{destination.name}.localsr-image-",
             suffix=".tmp",
-            dir=destination.parent,
+            # The native host provides a per-job directory on the output's
+            # filesystem, so even a force-stopped encode can be cleaned up.
+            dir=temporary_directory or destination.parent,
         )
         os.close(descriptor)
         tmp_path = Path(temporary_name)
@@ -244,6 +255,8 @@ class ImageManager:
             else:
                 out_img.save(tmp_path, format=fmt, **kwargs)
 
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Cancelled during image export.")
             os.replace(tmp_path, destination)
         except Exception:
             try:

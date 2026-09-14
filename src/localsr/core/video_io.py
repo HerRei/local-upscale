@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+import heapq
 import os
 import tempfile
 import threading
@@ -23,6 +24,8 @@ import numpy as np
 from PIL import Image
 
 from .hdr import tone_map_to_sdr
+from .video_audio import aac_packets, needs_aac
+from .video_normalization import display_frames, square_pixel_width
 
 
 @dataclass(frozen=True)
@@ -111,11 +114,12 @@ class VideoStageError(RuntimeError):
 
 
 @contextmanager
-def _video_decoder(path: str, *, frame_threads: bool = False):
+def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int = 0):
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
+        stream.codec_context.thread_count = max(0, min(8, thread_count))
         if frame_threads:
             try:
                 stream.thread_type = "FRAME"
@@ -136,6 +140,7 @@ def _video_probe(container, stream, first: av.VideoFrame | None) -> VideoProbe:
     count = int(stream.frames or 0) or (int(round(duration * fps)) if fps else 0)
     turns, _ = _display_transform(first) if first is not None else (0, False)
     width, height = int(stream.width or 0), int(stream.height or 0)
+    width = square_pixel_width(stream, width)
     transfer = int(getattr(first, "color_trc", stream.codec_context.color_trc))
     if turns % 2:
         width, height = height, width
@@ -163,16 +168,22 @@ def _audio_compatibility_warning(container) -> str:
             "Standard audio will be kept. An unsupported additional audio track will be omitted; "
             "spatial audio may not be preserved."
         )
+    if any(needs_aac(stream, "mp4") for stream in audio):
+        return "For MP4 output, legacy audio is converted to AAC. The source audio stays unchanged."
     return ""
 
 
 def probe_video(path: str) -> VideoProbe:
     """Probe metadata and one frame to resolve its display orientation."""
     with _video_decoder(path) as (container, stream):
-        return _video_probe(container, stream, next(container.decode(stream), None))
+        return _video_probe(container, stream, next(display_frames(container, stream), None))
 
 
 def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
+    turns, flipped = _display_transform(frame)
+    width = square_pixel_width(stream, frame.width)
+    if width != frame.width:
+        frame = frame.reformat(width=width, height=frame.height, interpolation="BICUBIC")
     transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
     if transfer in (16, 18) and hdr_mode in {"tone_map", "preserve"}:
         # Swscale expands the source's YUV matrix/range without dropping the
@@ -194,7 +205,6 @@ def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
     else:
         _check_sdr(stream, frame)
         rgb = frame.to_ndarray(format="rgb24")
-    turns, flipped = _display_transform(frame)
     rgb = np.rot90(rgb, turns)
     if flipped:
         rgb = np.fliplr(rgb)
@@ -211,7 +221,7 @@ def probe_video_preview(
     report("opening")
     with _video_decoder(path) as (container, stream):
         report("decoding_video")
-        first = next(container.decode(stream), None)
+        first = next(display_frames(container, stream), None)
         if first is None:
             raise ValueError("This video contains no decodable picture frames.")
         probe = _video_probe(container, stream, first)
@@ -247,15 +257,19 @@ def decode_timed_frames(
     cancel_event: threading.Event | None = None,
     *,
     hdr_mode: str = "reject",
+    decoder_threads: int = 0,
 ):
     """Decode oriented SDR frames with exact source times and one-frame lookahead."""
     if hdr_mode not in {"reject", "tone_map", "preserve"}:
         raise ValueError("HDR mode must be reject, tone_map or preserve.")
     start = max(0, int(start_frame or 0))
     selected_frame_count(0, start, end_frame)
-    with _video_decoder(path, frame_threads=True) as (container, stream):
+    with _video_decoder(path, frame_threads=True, thread_count=decoder_threads) as (
+        container,
+        stream,
+    ):
         pending = None
-        for index, frame in enumerate(container.decode(stream)):
+        for index, frame in enumerate(display_frames(container, stream, cancel_event)):
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
             if index < start:
@@ -314,12 +328,13 @@ def encode_video(
     sdr_bt709: bool = False,
     hdr_format: str = "",
     temporary_directory: str | None = None,
+    encoder_threads: int = 0,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
     The enhanced picture is encoded to an app-owned temporary container, then
-    remuxed with compatible source audio/subtitles without re-encoding those
-    streams. The final destination appears only through one atomic replace.
+    remuxed with source audio/subtitles. MP4 converts legacy audio to AAC;
+    compatible audio streams are copied. The final destination appears only through one atomic replace.
     """
     if hdr_format:
         if hdr_format not in {"HLG", "PQ"} or sdr_bt709:
@@ -345,6 +360,7 @@ def encode_video(
             source_start_seconds = float(origin)
         output_container = av.open(str(encoded_temporary), mode="w", format=container_format)
         stream = output_container.add_stream(codec, rate=fps_fraction)
+        stream.codec_context.thread_count = max(0, min(8, encoder_threads))
         stream.time_base = time_base
         stream.codec_context.time_base = time_base
         stream.width = int(width)
@@ -577,7 +593,17 @@ def _remux_source_streams(
         output_container = av.open(str(output_path), mode="w", format=container_format)
         video_out = output_container.add_stream_from_template(video_in)
         auxiliary_outputs: dict[int, object] = {}
+        converted_audio: dict[int, object] = {}
         for stream in auxiliary_inputs:
+            if needs_aac(stream, container_format):
+                converted = output_container.add_stream("aac", rate=48000)
+                converted.layout = {1: "mono", 2: "stereo"}.get(
+                    stream.codec_context.channels, stream.codec_context.layout.name
+                )
+                converted.bit_rate = 192000
+                converted.metadata.update(stream.metadata)
+                converted_audio[stream.index] = converted
+                continue
             try:
                 auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)
             except (av.FFmpegError, ValueError, OSError) as error:
@@ -597,7 +623,7 @@ def _remux_source_streams(
                 ) from error
 
         selected_aux = [stream for stream in auxiliary_inputs if stream.index in auxiliary_outputs]
-        if not selected_aux:
+        if not selected_aux and not converted_audio:
             output_container.close()
             output_container = None
             try:
@@ -612,33 +638,48 @@ def _remux_source_streams(
             else None
         )
         source_end_seconds = source_start_seconds + (duration or float("inf"))
-        video_packets = video_container.demux(video_in)
-        auxiliary_packets = source_container.demux(*selected_aux)
-        video_packet = _next_packet(video_packets)
-        auxiliary_packet = _next_trimmed_packet(
-            auxiliary_packets, source_start_seconds, source_end_seconds, cancel_event
-        )
-        while video_packet is not None or auxiliary_packet is not None:
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
-            use_video = auxiliary_packet is None or (
-                video_packet is not None
-                and _packet_time(video_packet) <= _packet_time(auxiliary_packet)
-            )
-            if use_video:
-                packet = video_packet
-                packet.stream = video_out
-                output_container.mux(packet)
-                video_packet = _next_packet(video_packets)
-            else:
-                packet = auxiliary_packet
-                packet_time = _packet_time(packet)
-                if duration is None or packet_time <= duration + 0.05:
-                    packet.stream = auxiliary_outputs[packet.stream.index]
-                    output_container.mux(packet)
-                auxiliary_packet = _next_trimmed_packet(
-                    auxiliary_packets, source_start_seconds, source_end_seconds, cancel_event
+
+        def video_packets():
+            for packet in video_container.demux(video_in):
+                if packet.dts is not None or packet.pts is not None:
+                    packet.stream = video_out
+                    yield packet
+
+        def copied_packets():
+            if not selected_aux:
+                return
+            iterator = source_container.demux(*selected_aux)
+            while (
+                packet := _next_trimmed_packet(
+                    iterator, source_start_seconds, source_end_seconds, cancel_event
                 )
+            ) is not None:
+                packet.stream = auxiliary_outputs[packet.stream.index]
+                yield packet
+
+        iterators = [video_packets(), copied_packets()]
+        iterators.extend(
+            aac_packets(
+                source_path, index, output, source_start_seconds, source_end_seconds, cancel_event
+            )
+            for index, output in converted_audio.items()
+        )
+        # One pending packet per stream, ordered by decode timestamp.
+        pending = []
+        try:
+            for index, iterator in enumerate(iterators):
+                if (packet := next(iterator, None)) is not None:
+                    heapq.heappush(pending, (_packet_time(packet), index, packet))
+            while pending:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("video job cancelled")
+                _, index, packet = heapq.heappop(pending)
+                output_container.mux(packet)
+                if (packet := next(iterators[index], None)) is not None:
+                    heapq.heappush(pending, (_packet_time(packet), index, packet))
+        finally:
+            for iterator in iterators:
+                iterator.close()
         output_container.close()
         output_container = None
         return True

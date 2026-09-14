@@ -22,6 +22,14 @@ REQUIRED_SUFFIXES = (
 FORBIDDEN_SUFFIXES = (
     "localsr/video_models/seedvr2/neg_emb.pt",
     "localsr/video_models/seedvr2/pos_emb.pt",
+    "localsr/ui/slint_app.py",
+    "localsr/ui/slint_worker.py",
+    "localsr/ui/slint_preview.py",
+    "localsr/ui/slint_check.py",
+    "localsr/ui/slint/main.slint",
+    "localsr/ui/slint/components.slint",
+    "localsr/ui/native_dialog.py",
+    "localsr/platform/macos_menu.py",
 )
 
 
@@ -46,9 +54,7 @@ def verify(path: Path) -> None:
         suffix for suffix in FORBIDDEN_SUFFIXES if any(name.endswith(suffix) for name in names)
     ]
     if forbidden:
-        raise ValueError(
-            f"{path.name} contains obsolete pickle package data: {', '.join(forbidden)}"
-        )
+        raise ValueError(f"{path.name} contains retired package data: {', '.join(forbidden)}")
 
 
 def main() -> int:

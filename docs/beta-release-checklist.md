@@ -1,196 +1,258 @@
-**LocalSR beta release checklist and walkthrough**
+# LocalSR public beta checklist
 
-Updated 12 September 2026 from the local preview, the current release configuration, the [application verification record](local-update-acceptance.json), the [Apple signing check](apple-signing-acceptance-2026-09.json) and the user's account/submission updates. This is the working checklist for our decisions together. Approved choices and pending questions belong in the [decision log](beta-release-decisions.md).
+Updated 13 September 2026. Candidate **0.0.13-beta.1 is provisional**, awaiting
+user confirmation. This checklist follows the current isolated beta work and
+[recorded acceptance](beta-acceptance-2026-09-12.md), not the old alpha gate count.
+The separate machine-readable records are [the beta plan](../ci/public-beta-release.json)
+and [readiness register](../ci/public-beta-readiness.json).
 
-The existing `.12` release, its runners and the running Mac application stay untouched. This work is local. The user created the Apple signing key/certificate and authorized its local installation; no private key was exported, account purchase made, repository visibility changed or release published by the agent.
+**Build pause:** no beta packages on any host until the user explicitly says
+“.12 has concluded; you may build the beta.” Do not poll, wait on a timer or
+schedule a build. The existing Mac mini Windows VM is selected for later isolated
+builds; native Intel remains acceptance-only. Website/GitHub publication precedes
+Store submission, following final package review.
 
-**Where we are**
+The active `.12` checkout, jobs and runners remain untouched. This Mac's GUI is
+not used for testing. Native Windows and DDP GUI acceptance use isolated work.
+No public release, Store submission, repository visibility change or message
+to a model publisher has been sent. Private scan fixtures are excluded from
+release screenshots and review downloads.
 
-- [x] Latest local regression suite after the Intel GPU fixes: 597 Python tests passed, 3 skipped; 49 focused frontend tests passed and Svelte checks were clean. The earlier full frontend/Rust results remain 83/58 in the [prior record](local-update-acceptance.json).
-- [x] CPU/ROCm worker inference, cancellation and subsequent processing checked on DDP.
-- [x] Linux portable signed update, restart and failed-startup rollback tested with a disposable key; recipes, settings, queue data and models survived.
-- [x] Both RealPLKSR downloads passed the two-acknowledgement UI flow, checksum verification and AMD inference. This establishes functionality; their license ambiguity remains unresolved.
-- [x] Test keys, profiles, services and build caches cleaned up; current DDP preview left open.
-- [x] Store identity, package artwork and local MSIX layout helper prepared; 18 packaging tests passed. A complete Windows MSIX has not yet been built or tested.
-- [x] Partner Center pricing/availability, properties and age ratings marked complete in the user's screenshot. Packages remain incomplete, Store listings are not started and the submission remains a draft.
-- [x] Apple Developer account reported ready; the downloaded Developer ID Application certificate is installed, matches the CSR/private key and is trusted with Apple's G2 intermediate. A disposable native executable passed signing with an Apple timestamp, hardened runtime, signature verification and execution. [Evidence](apple-signing-acceptance-2026-09.json).
-- [x] Apple notarization authentication verified using the saved `LocalSR-Z2TU844D84-notary` login Keychain profile. An authenticated request to Apple's notarization history succeeded; the completed setup helper was removed. No application has been submitted by this setup check.
-- [x] Prepared local [Store listing text, reviewer notes and screenshot plan](beta-store-submission.md), a [privacy/support draft](beta-privacy-and-support.md), and a [public feedback form](../packaging/beta-feedback/README.md). These drafts do not establish published pages, captured Windows screenshots or candidate acceptance.
-- [x] User confirmed public GitHub Issues for beta bug reports and `hermes.reisner@gmail.com` for contact/private requests. These details are now in the local Store/privacy/support drafts and prepared tracker configuration. Public tracker activation remains pending.
-- [x] User confirmed image processing/SDR video as core, with HDR preservation and SeedVR2 3B as optional Labs. Existing FP16/FP8 variants remain included where compatible. Explicit powerful-hardware, long-processing-time and memory-limit wording is included in local app descriptions and beta materials.
-- [x] User confirmed retaining all eight existing backend targets, using Labs for less-tested paths. Main testing focus: macOS MPS, Linux ROCm and Windows CPU/Intel iGPU. The [coverage matrix](beta-platform-matrix.md) records actual checks; Intel iGPU evidence still needs to be captured.
-- [x] Fixed local Intel GPU selection/discovery gaps and added regression coverage. Windows DirectML adapters now show actual GPU names; the Python automatic preset resolver includes DirectML ahead of CPU. Desktop selection/job submission retain the selected Intel adapter. [Implementation and test limits](intel-gpu-support.md).
-- [x] Prepared the user-authorized native Windows Intel test device: administrator SSH, desktop viewing, keyboard/mouse input and UAC prompt handling verified over LAN. Windows 11 Home / UHD 620 hardware recorded. [Device setup](windows-intel-test-host.md).
-- [x] Disabled automatic standby, timed hibernation and unattended-wake sleep on that device for AC and battery, as requested. Read back all six timeout values; removed temporary setup files and test tasks.
-- [ ] Public beta acceptance completed. The existing readiness register still has **10 unresolved blocking requirements**, plus two optional Labs items. Its strict check currently exits with code 1. Production signing, actual installer upgrades and long-video acceptance are still open.
+## Legacy-video addition — 13 September
 
-The register predates the updater work, the Store route and the confirmed platform/Labs decision. Its count does not include every newly documented item below. Prepare a separate beta configuration with common distribution/data checks and main-path functional acceptance; track missing broad Labs hardware and quality coverage as experimental follow-up. Add production updater and HDR compatibility/output checks and record Store certification/signing as the Windows MSIX trust path. The existing Windows PFX requirement concerns direct installers. Apple account readiness does not establish a signed or notarized build. No existing gate is marked passed by this checklist update.
+- [x] Extend file/folder imports and associations for common legacy containers.
+- [x] Add AAC conversion, tagged deinterlacing and pixel aspect normalization.
+- [x] Add cancellable playback conversion, request ownership and bounded storage.
+- [x] Run source codec/timing, switching and recovery checks; retain
+  [evidence and scope](beta-legacy-video-2026-09-13.md).
+- [ ] After build authorization, verify the new installed packages' AVI/WMV/MPEG
+  import/export, audio, playback/seek, result switching, cancellation and restart.
+  Previous installed packages do not contain this addition. Include OGV coverage.
 
-**Current step: finish preparation before candidate builds**
+## Decisions with the user
 
-The user asked to keep the Mac candidate build, signing, notarization and installed/update tests on the to-do list and complete other prerequisites first. Those tasks remain unchecked in sections 4–7. The verified identity and Keychain profile are ready for that later stage. [Apple setup evidence](apple-signing.md).
+- [x] Audience: friends and voluntary Reddit testers; limited maintenance time
+  during university, with the full agreed scope retained.
+- [x] Retain all eight backend targets. Main test focus: macOS MPS, Linux ROCm,
+  Windows CPU/Intel iGPU; other hardware paths are Labs with honest coverage.
+- [x] Image processing and SDR video are core. HDR preservation, SeedVR2 3B
+  FP16/FP8, de-flicker and video-face processing keep individual Labs limits.
+- [x] Contact: **hermes.reisner@gmail.com**. Public GitHub Issues for bug reports.
+- [x] Personal publisher **Hermes Reisner**, project branding **HerRei**, for a
+  hobby beta outside business activity; confirmed 13 September 2026. Any required
+  account-holder/trader declarations still need their own assessment.
+- [ ] Confirm provisional version **0.0.13-beta.1** and Store package numbering.
+- [x] Direct Windows installers remain unsigned for this beta, as requested;
+  no paid code-signing purchase. Retain updater signatures and disclose Windows
+  publisher warnings. The separate Store MSIX remains Store-signed.
+- [ ] Build and accept direct CPU/DirectML/CUDA installers after the explicit
+  go-ahead; DirectML must be available at website/GitHub launch, before Store.
+- [x] Approve and implement the corrected RealPLKSR download policy: the author's
+  explicit CC BY 4.0 declarations, intended application downloads and checkpoint
+  provenance support verified downloads with accurate attribution. User approval
+  and targeted source tests recorded on 13 September. Face-fork imports remain
+  separate; final native package rebuilding/acceptance is still required.
+- [x] Approve public release source and required exact dependency sources/build
+  instructions, retaining the application's MIT notice. Approved 13 September,
+  conditional on source/README cleanup and respecting upstream terms.
+- [x] Clean and check the source/READMEs, preserve upstream notices and publish
+  the separately authorized GitHub profile README. [Review and tests](source-release-review.md).
+- [ ] Complete corresponding-source delivery and verify the actual bundled
+  components' compatibility. Source publication alone does not settle this.
+- [x] Approve a Windows ML/ONNX Runtime prototype to replace the old torch-directml
+  dependency while retaining Intel acceleration (B20, 13 September).
+- [x] Export all twelve catalog models and run native CPU/Intel GPU probes.
+  The later native matrix includes five patterns/three sizes for HAT-S, SPAN
+  and SIDD, plus 45/45 probes for the other nine models. SPAN instability is
+  detected on both paths. Three SIDD photo comparisons remain outside tolerance.
+- [x] Integrate and test the replacement source worker: separate CPU/iGPU v2.1
+  benchmarks, larger tiles/ETA, short video/audio, cancellation and real allocation
+  pressure/recovery pass. [Runtime review](windows-inference-runtime-review.md).
+- [x] Complete the bounded native Intel five-minute export: 3,600/3,600 frames
+  fully decoded, increasing timestamps, matching audio and stable memory.
+  This uses 160 × 90 input, not a full-length 4K workload. Custom Safetensors,
+  rejection and same-worker recovery also pass on Windows CPU/iGPU and Mac CPU/MPS.
+- [x] Choose further bounded NAFNet SIDD investigation before a restriction.
+  The user deferred this investigation to a later point; it is not scheduled.
+- [ ] Complete that investigation and settle the final SIDD GPU treatment.
+  No temporary CPU restriction or acceptance of the discrepancy for release was
+  approved. New installed acceptance requires the deferred package.
+- [x] Retire Slint separately; retain Qt/CLI/engine and verify the Tauri launcher
+  and migrated tests. Approved under B22; 595 Python, 110 frontend and 67 Rust
+  checks pass. [Cleanup and migration record](slint-retirement.md).
+- [x] Choose the Mac mini's existing Windows x64 VM for separate beta builds
+  after explicit authorization. No availability polling or timed restart. Its
+  jobs, checkouts, caches and runners remain protected.
+- [x] Prepare the dedicated release-directory/Caddy/service draft locally; test
+  large ranges, resumption, concurrency, cache behavior and process restart.
+- [x] Keep the Mac mini as the preferred release host; managed hosting is a
+  contingency, not a required purchase.
+- [ ] Choose the public download hostname and confirm hosting reachability; test public HTTPS/WAN,
+  reboot and uptime only after explicit deployment approval. [Hosting plan](beta-hosting-plan.md).
+- [ ] Arrange independent protected backup of the production updater key.
+- [ ] Confirm support-message retention and maintenance wording; recommend no
+  promised update cadence and one public feedback channel.
+- [ ] Approve actual artifacts/content before public downloads, tracker activation,
+  website deployment or Store certification submission.
 
-The Windows follow-up is also queued at the user's request. Access setup and the
-always-on settings are verified; track the remaining application tests here:
+Details and prior approvals: [decision log](beta-release-decisions.md).
 
-- [x] User completed Tailscale enrollment. SSH, checksum-verified file transfer, desktop viewing and keyboard/mouse input passed through the Tailscale connection with the existing host key verified. The persistent Mac access alias is `localsr-intel-test`; temporary test artifacts were removed. [Access record](windows-intel-test-host.md).
-- [ ] Test the actual LocalSR candidate on the physical Intel UHD 620: bounded CPU/DirectML inference, a HAT-S image, a short SDR video, cancellation followed by another job, and separate CPU/GPU benchmark scores. Record the exact driver, app and engine versions. [Test procedure](intel-gpu-support.md).
-- [ ] Build the Windows MSIX on isolated build infrastructure after engine delivery and Store integration are ready; use this laptop to test installation, first launch, update and preservation of models, recipes, settings and queue data. It remains a test device and must not become a build runner. [Store preparation](microsoft-store.md).
+## Reported bugs and targeted acceptance
 
-Work through the following preparation first:
+The [bug-by-bug status](beta-bug-status.md) distinguishes verified interface
+fixes from remaining restoration-quality limits and final-package checks.
 
-1. Record whether the publisher is the individual Hermes Reisner (display name HerRei) or a registered company, then complete the corresponding publisher details in the privacy/support draft. Agree support expectations and private-message retention during university afterward. The contact is confirmed as `hermes.reisner@gmail.com`.
-2. Prepare Windows engine delivery for the retained CPU/CUDA/DirectML targets and settle the remaining checkpoint offering. Platform scope, the Labs approach and SeedVR2 3B inclusion are confirmed. Follow the [coverage matrix](beta-platform-matrix.md) for main-path acceptance, Intel iGPU evidence and Labs package checks.
-3. Prepare the selected public GitHub issue tracker using the [local repository files](../packaging/beta-feedback/README.md), then publish and test access when remote work is authorized. Contact and tracker type do not need reconfirmation.
-4. Review the prepared Store text and reviewer procedure against that scope. Capture the planned screenshots from the exact Windows candidate later.
-5. Prepare the website/privacy/support destinations and production update configuration locally; verify public access after publication is authorized.
+- [x] Correct tile outlines for denoise, NomosWebPhoto and HAT, including partial
+  edges, switching to an unseen running image and multi-stage jobs.
+- [x] Correct benchmark rendering squares and keep separate CPU/iGPU scores.
+  Native Windows CPU and UHD 620 runs completed; both survived a Windows Update reboot.
+- [x] Keep the completed-image comparison responsive during another queued job;
+  trusted-mouse slider movement passed on installed Windows.
+- [x] Video A completed → start B → return to A → play both sides passed on
+  native Windows and DDP. Actual player ownership and synchronization were checked.
+- [x] Folder jobs export to `LocalSR Results`; native Windows folder selection
+  and grouped exports passed. DDP's configured-folder path was checked.
+- [x] Show current-job, next-job and whole-queue ETA, with unmeasured work identified.
+- [x] Lock incompatible controls during processing and cancellation.
+- [x] Forced stalled-worker cancellation/restart followed by another successful
+  job passed on DDP and native Windows.
+- [x] Reproduce scan corruption across CPU/ROCm; apply bounded context retries
+  and instability guards before saving. Nine of eleven denoise inputs succeed;
+  two are rejected clearly with no output. Full-quality claims remain limited.
+- [x] Signed native macOS worker passed six real MPS cases: corrupt-file rejection,
+  recovery, transparent image/unicode paths, video/audio/tiles/ETA, cancellation
+  cleanup and a subsequent successful video. The signed host used its bundled worker.
+- [x] Final CPU/ROCm frozen workers passed six image/video/recovery cases each.
+  The exact ROCm AppImage passed completed-video switching while a second job ran.
+- [ ] Finish DDP native folder-dialog observation and the remaining native
+  installed upgrade checks; reconcile binaries with the final reviewed source.
 
-There is no additional Apple certificate or notarization password to obtain at this stage.
+Earlier automated checks: 619 Python tests passed / 3 skipped on the Mac
+headlessly; 581 / 41 on Windows; 105 frontend and 65 Rust tests passed. These
+counts precede the separate beta metadata and final packaging changes. They
+are not substitutes for installed-package acceptance.
 
-**The decisions, in the order we will make them**
+## Windows package and Store
 
-| Step | Decision | Choice or starting recommendation |
-| --- | --- | --- |
-| 1 | Beta audience | **Confirmed:** friends and voluntary testers reached through Reddit. Prepare public access for those testers; no announcement or publication is authorized yet. |
-| 2 | Publisher and account setup | Store identity supplied; Apple signing identity and notarization authentication verified for team `Z2TU844D84`, certificate subject country `CH`. Publisher account type remains to record. Candidate build/signing acceptance is scheduled after the other preparation. |
-| 3 | Windows distribution | The user created a Store MSIX draft and supplied its identity. Local package preparation is implemented; the native Windows package and installed acceptance remain to do. Keeping a direct EXE download is a separate choice. |
-| 4 | Which operating systems and GPUs ship in beta 1? | **Confirmed:** retain all eight existing Tauri targets, with less-tested paths labelled Labs. Main testing focus: macOS MPS, Linux ROCm and Windows CPU/Intel iGPU. Capture the Intel GPU evidence before marking it verified; see the [coverage matrix](beta-platform-matrix.md). |
-| 5 | What counts as supported versus experimental? | **Confirmed:** image processing and SDR video as core; HDR preservation and SeedVR2 3B FP16/FP8 as optional Labs where compatible. De-flicker and video-face processing retain existing Labs status. State the need for powerful hardware and potentially very long processing times clearly. |
-| 6 | Which model checkpoints can be offered publicly? | Prefer documented checkpoint rights for the main catalog. Review your face forks and the two ambiguous RealPLKSR checkpoints together before deciding their beta availability. |
-| 7 | Downloads, source visibility and feedback? | **Confirmed:** public GitHub Issues for bugs; `hermes.reisner@gmail.com` for contact/private requests. A separate feedback repository is prepared locally. Final download destination and public access testing remain pending. |
-| 8 | Budget, build capacity and release timing? | **Confirmed constraint:** limited maintenance time during university for roughly the next six months. Keep the agreed feature/backend scope and clear Labs labels; discuss update expectations, costs and isolated build capacity before setting a date. |
+- [x] Reserved identity recorded: `HerRei.LocalSR`, Store ID `9NTG848ZQTCQ`.
+- [x] User's Partner Center screenshot shows pricing, properties and age ratings
+  complete; Store package/listing/submission remain drafts.
+- [x] Native CPU/DirectML MSIX built with the bundled worker, integrity-checked
+  models and Store-managed application updates. No restoration weights bundled.
+- [x] Fresh installation and 1.0.0.0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 upgrades preserve
+  settings, recipes, model hashes and logical queue contents; backups retained.
+- [x] Native Windows 11 / Intel UHD 620 driver 24.20.100.6286 passed real HAT-S,
+  SPAN, short video, cancellation/recovery, comparisons and both benchmarks.
+- [x] Full WACK executed on 1.0.5.0. Overall **WARNING**: required DPI warning
+  and optional blocked-executable findings; other reported tests passed.
+- [x] Add per-monitor DPI declarations and use native ShellExecute for core Open actions.
+- [x] Build/install 1.0.6.0; settings, recipes, model hashes, queue and recovery backup verified.
+- [x] Repeat full WACK on 1.0.6.0; report retained. It still reports **WARNING**
+  for host DPI processing and optional blocked-executable findings.
+- [x] Build/install 1.0.7.0 with a validated embedded assembly identity and DPI manifest;
+  settings, recipes, model hashes, logical queue and recovery backup survived.
+- [x] Repeat full WACK on 1.0.7.0 and retain native DPI evidence. Overall **WARNING**:
+  the kit's DPI inspection reports COM E_FAIL, while the actual window is
+  PerMonitorV2 at 120 DPI. Optional blocked-executable findings remain.
+- [ ] Complete final installed Open/Reveal and remaining GUI acceptance.
+- [x] Uninstall/reinstall 1.0.7.0 and verify explicit backup restoration of the
+  entire profile. Windows deleted the profile during uninstall: this is not
+  automatic retention. Accepted upgrade evidence and the recovery backup remain.
+- [ ] Finish runtime/dependency policy and rebuild acceptance after those changes.
+- [x] Capture four actual 1.0.7.0 Windows screenshots: image comparison, video
+  comparison, real HAT-S video tiles/ETA, and separate saved CPU/iGPU scores.
+  Public NASA imagery replaces private acceptance scans; captions/listing need final review.
+- [x] Prepare copyable English listing, reviewer instructions, captions, sample
+  media, privacy/support pages and exact package hashes in `build/beta-review/`.
+- [ ] Confirm publisher/content choices and deploy/test the final public URLs.
+- [ ] User review → upload MSIX → certification → Store publication. Microsoft's
+  signing applies after certification; the temporary acceptance certificate is not public trust.
 
-Only the entries explicitly marked confirmed record user decisions. The remaining entries are proposals. No models have been removed and no platform has been dropped by this checklist.
+[Store details](microsoft-store.md) · [Listing/reviewer materials](beta-store-submission.md).
 
-**1. Confirm audience, publisher and accounts — you decide; I guide**
+## macOS and Linux packages
 
-- [x] Record friends and Reddit volunteers as the intended beta audience.
-- [x] Record the user's Apple Developer account as ready and verify the downloaded signing certificate against the local CSR/private key.
-- [ ] Confirm publisher type in the decision log.
-- [x] Record Apple Team ID `Z2TU844D84` and certificate subject country `CH` from the issued certificate. The publisher account type is still a separate pending decision.
-- [ ] Agree a signing/build budget before purchasing anything.
-- [x] Choose the tester contact/feedback route: public GitHub Issues for bugs and `hermes.reisner@gmail.com` for contact/private requests.
-- [ ] Publish the prepared tracker when remote work is authorized, then verify public reading while signed out and issue creation as an ordinary tester. Do not use the private source repository's issue URL as the public support destination.
-- [ ] Agree maintenance expectations: recommend one feedback channel, clear known issues and no promised release cadence during university. Decide how to pause downloads or notify testers if a serious issue is found while maintenance capacity is limited.
+- [x] Existing Apple Developer ID identity and matching private key verified in
+  Keychain; team `Z2TU844D84`. Notarization profile authenticated without key export.
+- [x] Maintained native Apple Silicon worker built with Torch 2.13; macOS 14+ floor.
+- [x] Sign all 317 native bundle files and the outer app inside out with hardened
+  runtime/timestamps; strict verification and real MPS acceptance passed.
+- [x] Apple accepted both app and DMG notarization submissions. Both are stapled;
+  strict signature and Gatekeeper checks pass. The mounted DMG's app starts its
+  bundled worker successfully. This Mac's GUI was not used.
+- [ ] Verify native macOS upgrade/data retention; document any recovery limit.
+- [x] Build CPU AppImage on Ubuntu 24.04; bundled host/worker and CPU runtime smoke passed.
+- [x] Diagnose DDP's packaged EGL failure: conflicting bundled Wayland libraries.
+  The corrected CPU AppImage launches and plays both video-comparison streams.
+  A compiled packaging-wrapper regression test verifies the library exclusions.
+- [x] Verify the source-preview → beta AppImage profile backup and preservation
+  of settings, recipes, twelve model hashes and logical media/queue rows.
+- [x] Build all four retained Linux AppImages on the Ubuntu 24.04 baseline,
+  with the multimedia framework needed for playback. All four final archives
+  exclude the conflicting Wayland libraries and pass native ELF/host inspection.
+- [x] Final CPU/ROCm AppImages pass host startup, real inference, cancellation
+  cleanup and subsequent recovery. CPU/ROCm native video comparisons play;
+  the final ROCm package preserves the selected completed result during another job.
+- [x] CUDA/XPU archives pass bundled-host handshake, clean shutdown and all-ELF
+  architecture inspection. Physical CUDA/XPU inference remains explicitly untested.
+- [ ] Finish DDP native folder selection and signed native AppImage upgrade testing.
+- [ ] Complete Windows CPU/DirectML/CUDA direct-edition package preparation without
+  repurposing the native Intel acceptance PC as a build runner.
 
-The Developer ID Application certificate and notarization authentication are verified locally. The complete application still needs signing, notarization and installed acceptance. [Apple setup and verification record](apple-signing.md).
+## Video, resource limits and dependencies
 
-For Windows, **Microsoft Store registration is free through the new onboarding flow**, for both [individuals](https://learn.microsoft.com/en-us/windows/apps/publish/whats-new-individual-developer) and [companies](https://blogs.windows.com/windowsdeveloper/2026/05/07/publish-to-microsoft-store-as-a-company-now-with-free-registration-and-faster-onboarding/). Use [the Store developer entry point](https://storedeveloper.microsoft.com/) for that flow. Identity/account verification still applies.
+- [x] Full five-minute SPAN ROCm export: 480×854 → 960×1708, 9,000 frames,
+  approximately 100 minutes. Full frame/audio decode and increasing timestamps passed.
+- [x] Native DDP and Windows result-switching sequence passed during a second job.
+- [x] Known SeedVR2 OOM and NAFNet context-memory limits produce bounded errors;
+  do not advertise 16 GB as a guarantee for any resolution or duration.
+- [x] Final ROCm worker exports six 4K frames to 8K with full frame/audio decode,
+  increasing timestamps, tiles/ETA and bounded memory observations. A forced
+  per-process file-size failure leaves no output; the same worker recovers.
+  This is not a complete four-minute 4K export.
+- [x] Inspect actual dependency advisories, FFmpeg configurations and bundled terms.
+  Record the DirectML Torch 2.4.1 and GTK3 risks without claiming blanket safety.
+- [ ] Resolve distribution policy; finish worker rebuilds and corresponding-source
+  delivery. Routine setuptools/wheel updates are prepared in the beta source.
+- [x] Preserve supported model/backend restrictions and explicit SDR/HDR output labels.
+- [x] Keep restoration quality, broad HDR-model validation and untested GPU hardware
+  as specific Labs limitations, without weakening core package/data requirements.
 
-**An MSIX package distributed through the Store receives free Microsoft signing after certification.** It does not require purchasing a signing certificate. A Store listing for an MSI/EXE installer does require the publisher's own trusted Authenticode signature. LocalSR currently builds a Windows EXE installer; Store MSIX compatibility has not been established. [Microsoft signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options).
+## Updates, distribution content and cleanup
 
-If we retain direct installer downloads, choose their signing provider separately. Microsoft's Artifact Signing Public Trust service currently supports Swiss **organizations**, but only US/Canadian **individuals**. That restriction applies to this direct-signing service, not to the free Store MSIX signing route. [Artifact Signing requirements](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart).
+- [x] Production updater key stored in Keychain; public key retained in the repo.
+  Correct signatures pass the runtime-equivalent verifier; altered content fails.
+- [x] Earlier disposable-key Linux update/restart/rollback preserves user data.
+- [x] Production-sign and verify four AppImages and the stapled macOS app archive.
+  The application's downloader accepts the actual signed CPU candidate and rejects
+  truncation and substituted bytes even with a recomputed checksum.
+- [x] Assemble backend/channel contracts and exact checksums. Draft feed URLs are
+  deliberately non-deployable until hosting and publication are approved.
+- [ ] Exercise native production-key install/restart/recovery on the final binary
+  set. Existing disposable-key rollback and low-disk tests do not establish this.
+- [x] Keep application updates in the Store edition managed by Microsoft Store.
+- [x] Prepare privacy/support/download pages and public issue-tracker contents,
+  including the confirmed contact, capable-hardware warning and slow-video examples.
+- [x] Assemble release notes, checksums, download/update manifests, installation
+  instructions, actual Store screenshots and acceptance evidence for user review.
+- [x] Remove owned disposable build/test artifacts and temporary tasks/tunnels;
+  retain reviewed packages, evidence, working acceptance installs and user originals.
+  Corrected AppImages remain; obsolete failing variants, temporary extractions,
+  the one-off reinstall task and test-only processes were removed.
+- [ ] After user approval, publish and test public access; never publish private scans,
+  unresolved checkpoints, credentials or false hardware/certification claims.
 
-You complete identity verification, account agreements and purchases directly with the provider. Passwords, private signing keys and identity documents stay out of chat and the repository.
 
-**2. Apply the confirmed beta scope — retain features and show testing coverage**
+## Current independent handoff
 
-- [x] Retain all eight existing Tauri targets with main-path/Labs coverage recorded in the [platform matrix](beta-platform-matrix.md). Broader Labs hardware testing is not required before those paths can be included as experimental.
-- [ ] Record exact OS versions, GPU models and drivers for the main tested paths; capture the Windows Intel iGPU result. A CPU-only VM does not establish GPU inference.
-- [ ] Resolve packaging/runtime issues for retained targets and record known Labs compatibility gaps. Intel macOS is a separate legacy target, absent from the current Tauri registry.
-- [x] Record the confirmed core/Labs split and optional SeedVR2 3B FP16/FP8 inclusion, with clear hardware and processing-time warnings.
-- [ ] Finalize tested minimum requirements for the advertised packages. SeedVR2's weight size or a 16 GB baseline is not a guarantee that a particular resolution fits.
-- [ ] Give each retained Labs feature/backend specific limitations. Keep common package, cancellation/recovery and data-preservation checks; track unverified hardware, performance and experimental model quality as Labs follow-up. A broken core video path remains blocking even if SeedVR2 is experimental.
+The [13 September handoff](beta-handoff-2026-09-13.md) is the current review hub.
+It separates source-worker tests, previous installed-package acceptance and gates
+that cannot be completed until the next build. Historical checked items above do
+not certify rebuilt packages. Download inventories contain only actual artifact
+hashes/sizes; final links remain disabled. Store screenshots remain labelled
+1.0.7.0 and must be refreshed for the changed benchmark/runtime.
 
-The current target registry contains eight Tauri targets, all retained by this decision. Carry their coverage labels into the future beta manifest, readiness configuration, release notes and website separately from `.12`. A backend being available as Labs does not make every model compatible with it.
-
-**3. Resolve model distribution — we decide; I prepare the evidence**
-
-- [ ] Review the exact checkpoint and training-data evidence for both HAT face forks, including what redistribution and use are permitted.
-- [ ] Clarify the RealPLKSR publisher's `CC-BY-0.4` string, or agree a beta catalog/default that does not rely on an unresolved permission claim.
-- [ ] Record which models are stock defaults, optional downloads, user imports or deferred from the beta offering.
-- [ ] Align model cards, download acknowledgements, attribution and commercial-use labels with that decision.
-- [ ] Ensure installers do not redistribute checkpoint files without the required rights.
-
-The existing [model-license evidence](model-licenses.md) is the starting point. A download checkbox does not settle missing rights. We will preserve the local research setup while deciding what is appropriate to offer to beta users. Any publisher contact is a separate action for you to authorize; none has been sent.
-
-**4. Sign the application — you provide account access; I implement and verify**
-
-- [x] **Mac account:** user reports the Apple Developer account is ready.
-- [x] **Mac certificate:** installed the user-created Developer ID Application certificate and verified the matching private key, trust chain and real native signing with an Apple secure timestamp. Team ID `Z2TU844D84`; certificate expires 13 September 2031. The private key remains in this Mac's login Keychain. [Verification record](apple-signing.md).
-- [x] **Mac notarization access:** verified an authenticated request to Apple with the `LocalSR-Z2TU844D84-notary` profile saved in this Mac's login Keychain. No credential was exported or logged by verification. Local renewal instructions are in the [Apple setup guide](apple-signing.md); production runner configuration and key recovery remain separate tasks.
-- [ ] **Mac candidate signing — deferred until the other prerequisites are ready:** prepare a maintained native Apple-Silicon build in isolated directories, sign the app and embedded worker/native libraries with the required runtime options and entitlements, and retain the signature verification report. This depends on the build work in section 6.
-- [ ] **Mac notarization and distribution:** submit the signed candidate to Apple's notarization service, inspect the result, attach the notarization ticket and validate it for the app and final DMG. Verify Gatekeeper acceptance and real inference from that downloaded candidate on a separate Mac, followed by the update/data tests in sections 5 and 7. [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
-- [ ] **Windows distribution:** decide Store MSIX, direct installer, or both before buying a certificate.
-- [x] **Store identity:** reserved LocalSR product supplied by the user and recorded in the [local MSIX preparation guide](microsoft-store.md). The layout tool and Store artwork are prepared locally; Windows packaging and installed acceptance remain open.
-- [ ] **Windows Store:** complete the ordered Store checklist below, including installation of the Microsoft-signed package after certification. Local layout preparation does not establish installed compatibility or certification.
-- [ ] **Windows direct installer, if retained:** choose a provider that supports your identity/country and unattended signing, adapt the pipeline to its key-storage method, then sign and timestamp the app and installer and verify Authenticode trust. This also applies to submitting an EXE/MSI installer to the Store.
-- [ ] **Linux:** create the selected distributable package, retain its checksums and provide signed updater artifacts. Test the package on the advertised distributions.
-- [ ] Document certificate/key renewal and a recovery contact. Store secrets in the chosen protected signing environment.
-
-The current Windows workflow builds an EXE and expects PFX input. A future Store edition needs a separate MSIX packaging and acceptance path; a retained direct installer must follow its selected provider's supported signing method. Record the chosen trust path and its actual acceptance evidence in the future beta readiness register. The current trust requirement remains unresolved. The current Mac workflow also requires a native ARM64 runner but is still routed to the old X64 label; both routing and actual build capacity need correction in the future beta workflow.
-
-**Microsoft Store: current preview to publication, in order**
-
-- [ ] **1. Prepare Windows engine delivery.** Retain CPU, CUDA and DirectML targets with the agreed main-path/Labs labels. Record real Intel iGPU evidence for its tested claim. One x64 Store identity does not choose between separate CPU/CUDA/DirectML packages by GPU vendor; settle engine delivery before creating alternative packages.
-- [ ] **2. Finish Store integration.** Make update controls use Store-managed updates and prevent a cached direct-distribution engine override from replacing the packaged engine. Verify writable data paths, WebView2 availability and preservation of existing preferences, recipes, queue data and downloaded models.
-- [ ] **3. Build the native MSIX.** Use the reserved identity, a documented Store package version and the complete frozen engine/runtime dependencies. Build in an isolated Windows environment, run MakeAppx schema validation and the Windows App Certification Kit, and retain package hashes and reports. The [Store preparation guide](microsoft-store.md) has the commands; its 18 layout tests do not replace these checks.
-- [ ] **4. Test the installed candidate.** Complete section 7 on the exact MSIX: fresh install, downloads/imports, image enhancement, representative long MOV export, media switching/playback, aligned render tiles, ETA, separate CPU/GPU benchmarks, cancellation/restart and resource-pressure recovery. Test an upgrade between two package versions and data preservation; check reinstall/uninstall separately. The last recorded Windows rerun still needs completion on the current candidate.
-- [ ] **5. Finalize the public beta offering.** Complete the checkpoint decisions in section 3, state the supported/Labs limits, and provide working privacy/support information and a feedback route accessible to friends and Reddit testers. The [privacy/support text](beta-privacy-and-support.md) includes the confirmed Gmail contact and GitHub Issues route; publisher details and public hosting remain open.
-- [ ] **6. Complete listing, upload and certification.** Review the prepared [English listing and reviewer notes](beta-store-submission.md) against the installed candidate, then capture its four planned Windows screenshots (1920 × 1080 PNG recommended; one is the minimum). Upload the tested MSIX. Review the release timing/visibility before submitting; after certification, release according to the approved settings and verify installation and updates through the Store. Microsoft provides the Store MSIX signature; a paid Windows certificate is not required for this route.
-
-The user asked to add this work to the beta to-do list on 12 September 2026. This records pending work, not authorization to upload or publish. Package and listing requirements are documented by [Microsoft](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/create-app-submission); see also [MSIX signing](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements) and [screenshot specifications](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images).
-
-**5. Enable production updates — I prepare; we verify together**
-
-- [ ] For a selected Store MSIX edition, use Store-managed application updates and adapt the update control accordingly. Verify the engine/backend packaging and data preservation through a real Store package upgrade.
-- [ ] For direct-distribution editions, choose the final updater feed/download URLs and Stable/Beta policy.
-- [ ] Generate a production updater key for those direct editions in the chosen secure environment and arrange its backup; embed only the public key in their initial beta.
-- [ ] Include the correct backend and engine identity in every build and generate the artifacts/manifests required by its distribution path.
-- [ ] Test actual upgrades from an older installed candidate on macOS, Windows and the selected Linux package format. Repeat split-engine and changed-engine cases, not only an unchanged engine.
-- [ ] Verify interrupted downloads, invalid signatures, low disk space, busy/cancelling queues, unreadable settings and failed-startup recovery.
-- [ ] Check that recipes, preferences, queue history and downloaded models survive; confirm uninstall behavior separately.
-
-For direct-distribution editions, the updater's signature is separate from Apple's or Windows' application signing. Tauri requires signatures for updates. Production feeds are currently disabled; their first beta must include the correct public key from its initial installation. [Tauri updater documentation](https://v2.tauri.app/plugin/updater/). Build and manifest details are in [local-updates.md](local-updates.md). A Store MSIX edition would instead use Microsoft's hosting and automatic application updates; its packaging and upgrade behavior still require implementation and testing. [Microsoft Store MSIX benefits](https://blogs.windows.com/windowsdeveloper/2026/05/07/publish-to-microsoft-store-as-a-company-now-with-free-registration-and-faster-onboarding/).
-
-**6. Prepare a separate beta build — I handle implementation**
-
-- [ ] Choose the beta version after checking the release history; keep `.12` and its testing-only exception separate.
-- [ ] Synchronize Python/npm/Cargo/Tauri versions, package names, manifests and release notes on a separate beta branch.
-- [ ] Use a maintained native Apple-Silicon worker/runtime and resolve the selected backend dependencies.
-- [ ] Arrange isolated build capacity. Recheck the account spending/artifact-storage issue recorded during the last Windows rerun before relying on hosted Windows jobs. Do not repurpose an active `.12` runner or VM.
-- [ ] Recheck dependency advisories and available scanning/protection. The readiness register records an unresolved Linux GTK/glib issue and runner trust concerns; retain this requirement until supported fixes and evidence, or an explicitly reviewed scope change, resolve it.
-- [ ] Build one immutable release candidate and retain package hashes, signing reports, worker versions and test results.
-
-**7. Test the exact candidate — I run tests; you/testers assess real use**
-
-- [ ] Check installation and first launch for every distributed package without a development environment. Run main-path inference on the matching devices; disclose missing Labs GPU coverage instead of treating a CPU smoke check as a GPU pass.
-- [ ] Download/import a model, change settings, save a recipe, restart and verify persistence.
-- [ ] Test photos, faces, anime/text, transparency, DNG and a large image; verify valid exports and unchanged sources.
-- [ ] Complete a representative long MOV export. Fully decode it and inspect orientation, audio, timing, motion and visual integrity. Earlier short-clip results do not establish a full four-minute 4K export.
-- [ ] Repeat video A completed → start B → return to A; verify playback, correct frame ownership, aligned tile display and useful ETA.
-- [ ] Cancel during verification/loading/inference/encoding, then process another job. Test memory pressure, insufficient disk space and worker recovery.
-- [ ] Run separate CPU/GPU benchmarks and verify the correct device labels and independently retained scores.
-- [ ] If HDR preservation is included, test HLG and PQ precision/metadata plus actual highlights and colours on an HDR-capable display. Valid 10-bit output alone does not establish HAT model quality on HDR. Confirm SeedVR2 cannot select preservation.
-- [ ] Inspect SeedVR2 multi-window continuity and tile seams before making a quality claim; retain explicit Labs limitations if unresolved.
-- [ ] Repeat update/reinstall/uninstall and record results for each shipped artifact.
-
-Use [platform acceptance evidence](platform-acceptance-2026-09.md) as prior evidence, then update the [candidate acceptance template](acceptance-record.example.json) for the actual beta version and [coverage matrix](beta-platform-matrix.md). Complete core functional acceptance on the main tested paths and package/data checks for all distributed artifacts. Broader Labs hardware and quality validation can continue during beta. The previous Windows fixes still need final platform verification; they are not certified by the local Linux updater test.
-
-**8. Release to the agreed audience — final decision together**
-
-- [ ] Update the website with the actual beta version, tested requirements, download sizes, install/update instructions, model limitations and feedback contact.
-- [ ] Explain local processing and what model downloads, update checks or optional diagnostic reports contact online. Do not describe all application network activity as zero.
-- [ ] Finalize the prepared privacy/support text, verify the final candidate's network behavior, and add working privacy/support links to the app, Store and website. Include locally retained thumbnails, queue history and backups; confirm the Store edition's actual data removal behavior.
-- [ ] Test every distribution link with the intended access level and verify checksums/signatures after downloading.
-- [ ] Close each applicable readiness requirement with evidence; add the updater/HDR requirements for the agreed beta scope. The strict readiness check must pass for the beta candidate.
-- [ ] Review the concrete installers, release notes, known issues and rollback plan together, then publish only to the audience you selected.
-- [ ] Collect the first test cycle's feedback, fix blocking failures and decide when to widen access.
-
-```sh
-python3 scripts/check_beta_readiness.py --require-beta-ready
-```
-
-Today that command correctly fails because beta requirements are unresolved. This checklist does not alter that register or declare the preview beta-ready.
-
-**Our next conversation step**
-
-Contact, bug-report routing, full backend scope with Labs labels and SeedVR2 3B
-inclusion are confirmed. Tailscale access is verified; native Intel tests and MSIX
-acceptance remain on the to-do list. The next question is the remaining publisher
-identity: individual Hermes Reisner / HerRei, or a registered company. Complete
-that field in the prepared Store/privacy/support material once answered, then
-continue with support expectations, engine delivery and checkpoint details.
-The Mac candidate build, signing, notarization and installed/update acceptance
-remain scheduled after this preparation. The audience remains friends and
-Reddit volunteers, with limited maintenance capacity during university.
+Current checks: 603 Python passes / 3 skips / 0 failures, 110 frontend passes,
+zero Svelte errors/warnings, frontend build and Ruff pass. Exact reports and
+owned-artifact cleanup are linked from the handoff; no paused package build or
+publication was started.

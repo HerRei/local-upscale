@@ -4,7 +4,7 @@ from typing import Protocol
 
 # The worker protocol is deliberately versioned independently from the desktop
 # application.  Version 1 is a backwards-compatible superset of the original
-# Slint JSON-lines messages: old clients may continue to wait for worker_ready,
+# Version 1 JSON-lines messages: existing clients may still wait for worker_ready,
 # while newer hosts negotiate capabilities with HandshakeRequest.
 PROTOCOL_VERSION = 1
 MIN_PROTOCOL_VERSION = 1
@@ -72,6 +72,7 @@ class JobRequest:
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
     scratch_directory: str | None = None
+    output_temporary_directory: str | None = None
     stages: list[dict[str, object]] | None = None
 
     def to_json(self) -> str:
@@ -161,6 +162,7 @@ class CapabilitiesRequest:
 class PreviewRequest:
     image_path: str
     max_dimension: int = 1600
+    comparison: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_request", "data": asdict(self)})
@@ -370,6 +372,7 @@ class TileUpdate:
     active_tile_size: int
     jpeg_base64: str = ""
     frame_index: int = -1
+    stage_index: int = 0
     processing_stage: str = ""
 
     def to_json(self) -> str:
@@ -398,6 +401,8 @@ class LivePreviewFrame:
     image_width: int = 0
     image_height: int = 0
     frame_index: int = -1
+    active_tile_size: int = 0
+    stage_index: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "live_preview_frame", "data": asdict(self)})
@@ -538,7 +543,9 @@ class BenchmarkCompleted:
     result: dict[str, object]
 
     def to_json(self) -> str:
-        return json.dumps({"type": "benchmark_completed", "data": asdict(self)})
+        # A malformed terminal event leaves a native host waiting forever.
+        # Reject non-finite results here so the worker emits benchmark_failed.
+        return json.dumps({"type": "benchmark_completed", "data": asdict(self)}, allow_nan=False)
 
 
 @dataclass

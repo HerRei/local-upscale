@@ -21,9 +21,42 @@ ENGINE_DIR = WORKER_DIST / "engine"
 CONFIG_PATH = BUILD_ROOT / "tauri-worker.conf.json"
 LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
 LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
+# Mesa is supplied by the host. Bundling older Wayland libraries alongside it
+# makes WebKit abort on newer desktops with EGL_BAD_PARAMETER. These must come
+# from the same host graphics stack (reproduced on Fedora / RX 9060 XT).
+LINUXDEPLOY_HOST_GRAPHICS_LIBRARIES = (
+    "libwayland-client.so.0",
+    "libwayland-cursor.so.0",
+    "libwayland-egl.so.1",
+    "libwayland-server.so.0",
+)
 LINUXDEPLOY_PRIVATE_LIBRARY_ALIASES = {
+    "libMIOpen.so.1": "libMIOpen.so",
     "libamd_comgr.so.3": "libamd_comgr.so",
     "libamdhip64.so.7": "libamdhip64.so",
+    "libhipblas.so.3": "libhipblas.so",
+    "libhipblaslt.so.1": "libhipblaslt.so",
+    "libhipfft.so.0": "libhipfft.so",
+    "libhiprand.so.1": "libhiprand.so",
+    "libhiprtc.so.7": "libhiprtc.so",
+    "libhipsolver.so.1": "libhipsolver.so",
+    "libhipsparse.so.4": "libhipsparse.so",
+    "libhipsparselt.so.0": "libhipsparselt.so",
+    "libhsa-amd-aqlprofile64.so.1": "libhsa-amd-aqlprofile64.so",
+    "libhsa-runtime64.so.1": "libhsa-runtime64.so",
+    "librccl.so.1": "librccl.so",
+    "librocblas.so.5": "librocblas.so",
+    "librocfft.so.0": "librocfft.so",
+    "librocm-core.so.1": "librocm-core.so",
+    "librocm_smi64.so.1": "librocm_smi64.so",
+    "librocprofiler-register.so.0": "librocprofiler-register.so",
+    "librocprofiler-sdk.so.1": "librocprofiler-sdk.so",
+    "librocrand.so.1": "librocrand.so",
+    "librocroller.so.1": "librocroller.so",
+    "librocsolver.so.0": "librocsolver.so",
+    "librocsparse.so.1": "librocsparse.so",
+    "libroctracer64.so.4": "libroctracer64.so",
+    "libroctx64.so.4": "libroctx64.so",
 }
 
 
@@ -204,7 +237,7 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
 
 
 def _wrap_linuxdeploy_for_appimage() -> Path | None:
-    """Temporarily add known external GPU driver excludes to linuxdeploy.
+    """Temporarily add host graphics library excludes to linuxdeploy.
 
     Tauri invokes the cached linuxdeploy AppImage directly and does not expose
     linuxdeploy's ``--exclude-library`` arguments through tauri.conf.json.
@@ -229,21 +262,33 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
     if compiler is None:
         raise SystemExit("cannot wrap linuxdeploy because no C compiler is available")
 
-    excludes = [
-        "libcuda.so.1",
-        "libnvidia-ml.so.1",
-    ]
+    excludes = [*LINUXDEPLOY_DRIVER_LIBRARIES, *LINUXDEPLOY_HOST_GRAPHICS_LIBRARIES]
+    exclude_arguments = "".join(
+        f"  next[out++] = {json.dumps('--exclude-library=' + name)};\n" for name in excludes
+    )
     wrapper_dir = BUILD_ROOT / "linuxdeploy-wrapper"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     source = wrapper_dir / "linuxdeploy-wrapper.c"
     binary = wrapper_dir / "linuxdeploy-wrapper"
+    remove_libraries = "".join(
+        f"  if (remove_library(appdir, {json.dumps(name)})) return 1;\n" for name in excludes
+    )
     source.write_text(
         "#include <errno.h>\n"
         "#include <stdio.h>\n"
         "#include <stdlib.h>\n"
         "#include <string.h>\n"
         "#include <unistd.h>\n"
+        "#include <sys/wait.h>\n"
         f"static const char *backup_path = {json.dumps(str(backup))};\n"
+        "static int remove_library(const char *appdir, const char *name) {\n"
+        "  size_t size = strlen(appdir) + strlen(name) + 16;\n"
+        "  char *path = malloc(size); if (!path) return 1;\n"
+        '  snprintf(path, size, "%s/usr/lib/%s", appdir, name);\n'
+        "  int result = unlink(path); int error = errno; free(path);\n"
+        "  if (result && error != ENOENT) { errno = error; perror(name); return 1; }\n"
+        "  return 0;\n"
+        "}\n"
         "int main(int argc, char **argv) {\n"
         '  FILE *log = fopen(getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") ? getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") : "/tmp/localsr-linuxdeploy-wrapper.log", "a");\n'
         "  if (log) {\n"
@@ -254,15 +299,38 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
         "  }\n"
         "  int first = 1;\n"
         "  while (first < argc && argv[first] && argv[first][0] == '\\0') first++;\n"
-        "  char **next = calloc((size_t)argc + 5, sizeof(char *));\n"
+        f"  char **next = calloc((size_t)argc + {len(excludes) + 3}, sizeof(char *));\n"
         "  if (!next) return 127;\n"
         "  int out = 0;\n"
         "  next[out++] = (char *)backup_path;\n"
         '  if (first < argc && strcmp(argv[first], "--appimage-extract-and-run") == 0) next[out++] = argv[first++];\n'
-        '  next[out++] = "--exclude-library=libcuda.so.1";\n'
-        '  next[out++] = "--exclude-library=libnvidia-ml.so.1";\n'
-        "  for (int i = first; i < argc; ++i) next[out++] = argv[i];\n"
+        + exclude_arguments
+        + "  const char *appdir = NULL; int appimage = 0;\n"
+        "  for (int i = first; i < argc; ++i) {\n"
+        '    if (!strcmp(argv[i], "--appdir") && i + 1 < argc) appdir = argv[i + 1];\n'
+        '    if (!strncmp(argv[i], "--appdir=", 9)) appdir = argv[i] + 9;\n'
+        '    if (!strcmp(argv[i], "--output=appimage") || (!strcmp(argv[i], "--output") && i + 1 < argc && !strcmp(argv[i + 1], "appimage"))) appimage = 1;\n'
+        "  }\n"
+        "  int prefix = out;\n"
+        "  for (int i = first; i < argc; ++i) {\n"
+        '    if (appimage && appdir && !strcmp(argv[i], "--output=appimage")) continue;\n'
+        '    if (appimage && appdir && !strcmp(argv[i], "--output") && i + 1 < argc && !strcmp(argv[i + 1], "appimage")) { i++; continue; }\n'
+        "    next[out++] = argv[i];\n"
+        "  }\n"
         "  next[out] = NULL;\n"
+        # Media plugins can copy excluded libraries back into the AppDir.
+        # Deploy plugins first, remove only host libraries, then generate the
+        # AppImage in a second pass that has no deployment plugins.
+        "  if (appimage && appdir) {\n"
+        "    pid_t child = fork(); if (child < 0) return 127;\n"
+        "    if (!child) { execv(backup_path, next); _exit(127); }\n"
+        "    int status; while (waitpid(child, &status, 0) < 0) { if (errno != EINTR) return 127; }\n"
+        "    if (!WIFEXITED(status) || WEXITSTATUS(status)) return WIFEXITED(status) ? WEXITSTATUS(status) : 1;\n"
+        + remove_libraries
+        + "    out = prefix;\n"
+        '    next[out++] = "--appdir"; next[out++] = (char *)appdir;\n'
+        '    next[out++] = "--output"; next[out++] = "appimage"; next[out] = NULL;\n'
+        "  }\n"
         "  execv(backup_path, next);\n"
         '  log = fopen(getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") ? getenv("LOCALSR_LINUXDEPLOY_WRAPPER_LOG") : "/tmp/localsr-linuxdeploy-wrapper.log", "a");\n'
         '  if (log) { fprintf(log, "execv failed: %s\\n", strerror(errno)); fclose(log); }\n'
@@ -277,7 +345,7 @@ def _wrap_linuxdeploy_for_appimage() -> Path | None:
     shutil.copy2(binary, linuxdeploy)
     linuxdeploy.chmod(0o755)
     print(
-        "Wrapped linuxdeploy with an ELF launcher to exclude external GPU driver libraries: "
+        "Wrapped linuxdeploy with an ELF launcher to exclude host graphics libraries: "
         + ", ".join(excludes),
         flush=True,
     )
@@ -526,7 +594,7 @@ def main() -> int:
             subprocess.run(["sudo", "ldconfig"], capture_output=True)
     print(
         f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
-        "The legacy Slint app and its artifacts were not modified.",
+        "This build uses the Tauri desktop and the separate Python inference worker.",
         flush=True,
     )
     return 0

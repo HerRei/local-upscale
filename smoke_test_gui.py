@@ -1,34 +1,15 @@
-"""Small cross-platform Slint/worker startup and shutdown smoke test."""
+"""Run the installed Tauri app's bundled-worker startup smoke check."""
 
-import tempfile
-import time
-from pathlib import Path
+import sys
 
-from localsr.ui.slint_app import create_slint_application
+from localsr.desktop_launcher import launch_desktop
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="localsr-smoke-") as temporary:
-        root = Path(temporary)
-        application = create_slint_application(
-            start_worker=True,
-            settings_path=root / "settings.json",
-            model_root=root / "models",
-        )
-        deadline = time.monotonic() + 15
-        ready = False
-        while time.monotonic() < deadline:
-            application.poll_events()
-            if application.ui.status_title == "Ready":
-                ready = True
-                break
-            time.sleep(0.025)
-        application.shutdown()
-        clean_exit = not application.worker.running
-        if ready and clean_exit:
-            print("SUCCESS: Slint bridge worker became ready and exited cleanly")
-            return 0
-        print("FAILED: Slint bridge did not complete its startup/shutdown cycle")
+    try:
+        return launch_desktop(["--smoke-test", *sys.argv[1:]])
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
         return 1
 
 
