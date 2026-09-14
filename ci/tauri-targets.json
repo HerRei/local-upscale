@@ -46,17 +46,6 @@
       "scratch_peak_gib": 20
     },
     {
-      "id": "linux-x86_64-rocm",
-      "platform": "linux",
-      "architecture": "x86_64",
-      "backend": "AMD-ROCm",
-      "index": "rocm7.2",
-      "suffix": "Linux-ROCm-x86_64.AppImage",
-      "signing": "sha256",
-      "alpha_signing": "sha256",
-      "scratch_peak_gib": 100
-    },
-    {
       "id": "linux-x86_64-cpu",
       "platform": "linux",
       "architecture": "x86_64",
@@ -88,6 +77,17 @@
       "signing": "sha256",
       "alpha_signing": "sha256",
       "scratch_peak_gib": 50
+    },
+    {
+      "id": "linux-x86_64-rocm",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "AMD-ROCm",
+      "index": "rocm7.2",
+      "suffix": "Linux-ROCm-x86_64.AppImage",
+      "signing": "sha256",
+      "alpha_signing": "sha256",
+      "scratch_peak_gib": 100
     }
   ],
   "legacy_manifest": "ci/release-artifacts.json",

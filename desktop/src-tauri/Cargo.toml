@@ -1,6 +1,6 @@
 [package]
 name = "localsr-next"
-version = "0.0.13-alpha"
+version = "0.0.13-beta.1"
 description = "LocalSR desktop control plane"
 authors = ["Hermes Reisner"]
 license = "MIT"

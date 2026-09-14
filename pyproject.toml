@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.0.13-alpha"
+version = "0.0.13-beta.1"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"

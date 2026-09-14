@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "version": "0.0.13-alpha",
+  "version": "0.0.12-alpha",
   "artifacts": [
     {
       "id": "macos-arm64-mps",
-      "filename": "LocalSR-v0.0.13-alpha-macOS-arm64.dmg",
+      "filename": "LocalSR-v0.0.12-alpha-macOS-arm64.dmg",
       "platform": "macos",
       "architecture": "arm64",
       "backend": "MPS",
@@ -12,7 +12,7 @@
     },
     {
       "id": "windows-x86_64-cuda",
-      "filename": "LocalSR-v0.0.13-alpha-Windows-CUDA-x86_64.exe",
+      "filename": "LocalSR-v0.0.12-alpha-Windows-CUDA-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CUDA",
@@ -21,7 +21,7 @@
     },
     {
       "id": "windows-x86_64-cpu",
-      "filename": "LocalSR-v0.0.13-alpha-Windows-CPU-x86_64.exe",
+      "filename": "LocalSR-v0.0.12-alpha-Windows-CPU-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CPU",
@@ -29,23 +29,15 @@
     },
     {
       "id": "windows-x86_64-directml",
-      "filename": "LocalSR-v0.0.13-alpha-Windows-DirectML-x86_64.exe",
+      "filename": "LocalSR-v0.0.12-alpha-Windows-DirectML-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "DirectML",
       "signing": "authenticode-valid"
     },
     {
-      "id": "linux-x86_64-rocm",
-      "filename": "LocalSR-v0.0.13-alpha-Linux-ROCm-x86_64.AppImage",
-      "platform": "linux",
-      "architecture": "x86_64",
-      "backend": "AMD-ROCm",
-      "signing": "sha256"
-    },
-    {
       "id": "linux-x86_64-cpu",
-      "filename": "LocalSR-v0.0.13-alpha-Linux-CPU-x86_64.AppImage",
+      "filename": "LocalSR-v0.0.12-alpha-Linux-CPU-x86_64.AppImage",
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "CPU",
@@ -53,7 +45,7 @@
     },
     {
       "id": "linux-x86_64-cuda",
-      "filename": "LocalSR-v0.0.13-alpha-Linux-CUDA-x86_64.AppImage",
+      "filename": "LocalSR-v0.0.12-alpha-Linux-CUDA-x86_64.AppImage",
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "CUDA",
@@ -61,10 +53,18 @@
     },
     {
       "id": "linux-x86_64-xpu",
-      "filename": "LocalSR-v0.0.13-alpha-Linux-Intel-x86_64.AppImage",
+      "filename": "LocalSR-v0.0.12-alpha-Linux-Intel-x86_64.AppImage",
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "Intel-XPU",
+      "signing": "sha256"
+    },
+    {
+      "id": "linux-x86_64-rocm",
+      "filename": "LocalSR-v0.0.12-alpha-Linux-ROCm-x86_64.AppImage",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "AMD-ROCm",
       "signing": "sha256"
     }
   ]

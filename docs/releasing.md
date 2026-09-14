@@ -19,13 +19,12 @@ be reused or altered for beta preparation.
 
 # Native release process
 
-`v0.0.13 Mac mini Cross Alpha` (`.github/workflows/v0.0.13-cross-alpha.yml`) is the cross-alpha
-pipeline accepting the `v0.0.13-alpha` tag. Earlier, `v0.0.12 Mac mini Cross Alpha` (`.github/workflows/v0.0.12-cross-alpha.yml`)
-served as the one-release exception for `v0.0.12-alpha`. The normal
-`Signed Tauri Alpha Release` pipeline explicitly skips those alpha tags and continues to fail closed for
+`v0.0.12 Mac mini Cross Alpha` (`.github/workflows/v0.0.12-cross-alpha.yml`) is a one-release
+exception that accepts only the exact `v0.0.12-alpha` tag. The normal
+`Signed Tauri Alpha Release` pipeline explicitly skips that tag and continues to fail closed for
 later signed releases. The former Slint build has been retired from the beta checkout.
 
-## v0.0.13-alpha artifact matrix
+## v0.0.12-alpha artifact matrix
 
 The canonical target registry is `ci/tauri-targets.json`. Both desktop workflows expand their
 Windows/Linux matrices from it, and generated manifests must match it exactly. The legacy manual
