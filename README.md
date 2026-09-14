@@ -17,13 +17,13 @@ The prepared beta also imports common older recordings such as AVI, MPEG/VOB,
 WMV and camcorder video, with local playback conversion where needed.
 See [video support and tested limits](docs/video-support.md).
 
-## Beta status
+## Release status
 
-**v0.0.13-beta.1 is being prepared for public testing.** The version is provisional;
-final installers, source distribution and public downloads are still under review.
-See the [release notes](docs/releases/v0.0.13-beta.1.md),
-[known limitations](KNOWN_LIMITATIONS.md) and [beta checklist](docs/beta-release-checklist.md).
+**v0.0.13-alpha is the current cross-platform testing release.**
+See the [release notes](docs/releases/v0.0.13-alpha.md),
+[known limitations](KNOWN_LIMITATIONS.md) and [release documentation](docs/releasing.md).
 Earlier alpha packages have their own release notes and support limits.
+Public beta candidates are separately tracked on the [beta checklist](docs/beta-release-checklist.md).
 
 ## What you can do
 

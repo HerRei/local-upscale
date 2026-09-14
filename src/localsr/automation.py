@@ -16,15 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
 
-from localsr.core.benchmark import WORKLOAD_MODEL_ID, run_benchmark
-from localsr.core.hardware import get_capability_report
 from localsr.core.image_formats import SUPPORTED_INPUT_EXTENSIONS, is_video_input
-from localsr.core.image_io import ImageManager
-from localsr.core.inference import InferenceEngine
-from localsr.core.model_adapter import ModelAdapter
 from localsr.core.model_catalog import CATALOG_BY_ID, ModelStore
 from localsr.core.output_writer import default_work_directory
-from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
+WORKLOAD_MODEL_ID = "span_photo_x4"
 
 WATCH_STATE_SCHEMA = "localsr-watch-state-v1"
 IGNORED_PARTIAL_SUFFIXES = frozenset(
@@ -168,6 +164,8 @@ def stable_watch_candidates(
 def select_device(requested: str) -> str:
     if requested != "auto":
         return requested
+    from localsr.core.hardware import get_capability_report
+
     devices = get_capability_report()["devices"]
     return str(next((device["id"] for device in devices if device["id"] != "cpu"), "cpu"))
 
@@ -205,6 +203,9 @@ def _unique_output_path(
 
 class AutomationRunner:
     def __init__(self, reporter: Reporter, cancel_event: threading.Event | None = None) -> None:
+        from localsr.core.inference import InferenceEngine
+        from localsr.core.model_adapter import ModelAdapter
+
         self.reporter = reporter
         self.cancel_event = cancel_event or threading.Event()
         self.adapter = ModelAdapter()
@@ -260,6 +261,8 @@ class AutomationRunner:
 
         started = time.monotonic()
         if is_video_input(source):
+            from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
             result = run_video_job(
                 VideoJobConfig(
                     video_path=str(source),
@@ -288,6 +291,8 @@ class AutomationRunner:
             )
             elapsed = result.elapsed_seconds
         else:
+            from localsr.core.image_io import ImageManager
+
             manager = ImageManager()
             image_data = manager.load(str(source))
             writer = None
@@ -342,6 +347,8 @@ class AutomationRunner:
         return result_data
 
     def benchmark(self, device: str) -> dict[str, object]:
+        from localsr.core.benchmark import run_benchmark
+
         model, model_path = _trusted_model(WORKLOAD_MODEL_ID)
         model_info = self.adapter.inspect(model_path)
         result = run_benchmark(

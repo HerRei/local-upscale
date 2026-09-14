@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,6 +110,10 @@ def test_does_not_change_library_lookup_outside_linux(monkeypatch, tmp_path: Pat
     assert build.tauri_build_environment() == base_environment
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Linux packaging specific and requires POSIX symlink resolution",
+)
 def test_linuxdeploy_symlinks_private_rocm_soname_alias(monkeypatch, tmp_path: Path) -> None:
     engine = tmp_path / "engine"
     torch_libraries = engine / "_internal" / "torch" / "lib"
@@ -261,9 +266,7 @@ def test_linuxdeploy_removes_plugin_copied_host_libraries_before_packaging(
     assert tool.read_text() == original
 
 
-def test_repacks_linux_appimage_payload_with_system_gzip(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: Path) -> None:
     appimage_dir = tmp_path / "bundle" / "appimage"
     appdir = appimage_dir / "LocalSR Next Preview.AppDir"
     appdir.mkdir(parents=True)

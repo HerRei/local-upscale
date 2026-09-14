@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "version": "0.0.13-alpha",
+  "release_policy": "v0.0.13-cross-alpha-exception",
   "artifacts": [
     {
       "id": "macos-arm64-mps",
@@ -8,7 +9,7 @@
       "platform": "macos",
       "architecture": "arm64",
       "backend": "MPS",
-      "signing": "developer-id-notarized"
+      "signing": "ad-hoc-alpha"
     },
     {
       "id": "windows-x86_64-cuda",
@@ -16,7 +17,7 @@
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CUDA",
-      "signing": "authenticode-valid",
+      "signing": "unsigned-alpha",
       "external_engine": true
     },
     {
@@ -25,7 +26,7 @@
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CPU",
-      "signing": "authenticode-valid"
+      "signing": "unsigned-alpha"
     },
     {
       "id": "windows-x86_64-directml",
@@ -33,7 +34,7 @@
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "DirectML",
-      "signing": "authenticode-valid"
+      "signing": "unsigned-alpha"
     },
     {
       "id": "linux-x86_64-rocm",

@@ -249,12 +249,16 @@ def test_linux_smoke_uses_unsquashfs_extraction_for_rocm_backend(
         worker.chmod(0o755)
         return dest
 
-    monkeypatch.setattr(smoke.shutil, "which", lambda cmd: "/usr/bin/unsquashfs" if cmd == "unsquashfs" else None)
+    monkeypatch.setattr(
+        smoke.shutil, "which", lambda cmd: "/usr/bin/unsquashfs" if cmd == "unsquashfs" else None
+    )
     monkeypatch.setattr(smoke, "run", fake_run)
     monkeypatch.setattr(smoke, "extract_appimage_payload", fake_extract)
     monkeypatch.setattr(smoke, "verify_backend", lambda *args, **kwargs: None)
 
-    smoke.smoke_linux(artifact, tmp_path / "report.json", {"LOCALSR_SMOKE_BACKEND": "AMD-ROCm"}, 240)
+    smoke.smoke_linux(
+        artifact, tmp_path / "report.json", {"LOCALSR_SMOKE_BACKEND": "AMD-ROCm"}, 240
+    )
 
     # When ROCm is detected with unsquashfs, direct smoke is skipped; AppRun is invoked directly
     assert len(calls) == 1
@@ -280,7 +284,9 @@ def test_extract_appimage_payload_falls_back_when_unsquashfs_fails(
         (root / "AppRun").write_text("#!/bin/sh\nexit 0\n")
         return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr(smoke.shutil, "which", lambda cmd: "/usr/bin/unsquashfs" if cmd == "unsquashfs" else None)
+    monkeypatch.setattr(
+        smoke.shutil, "which", lambda cmd: "/usr/bin/unsquashfs" if cmd == "unsquashfs" else None
+    )
     monkeypatch.setattr(smoke.subprocess, "run", fake_subprocess_run)
 
     dest = tmp_path / "destination"

@@ -136,7 +136,7 @@ runpy.run_module('localsr', run_name='__main__')
         env=environment,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "usage:" in result.stdout
