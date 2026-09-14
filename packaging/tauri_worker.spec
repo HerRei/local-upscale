@@ -96,6 +96,21 @@ if sys.platform == "linux" and "+xpu" in metadata.version("torch").lower():
     for distribution_name in runtime.metadata_names:
         datas += copy_metadata(distribution_name)
 
+# Filter out deeply nested license and third-party vendor subtrees in wheel
+# dist-info (notably kineto/dynolog/civetweb inside torch.dist-info) that exceed
+# the Win32 MAX_PATH (260 characters) limit during PyInstaller assembly.
+# Distribution metadata needed for runtime version checks (METADATA, entry_points.txt,
+# top-level license files) is preserved.
+filtered_datas = []
+for src, dst in datas:
+    normalized_dst = dst.replace("\\", "/")
+    if "/licenses/third_party" in normalized_dst or normalized_dst.startswith("licenses/third_party"):
+        continue
+    if "licenses" in normalized_dst and normalized_dst.count("/") > 3:
+        continue
+    filtered_datas.append((src, dst))
+datas = filtered_datas
+
 analysis = Analysis(
     [str(ROOT / "packaging" / "worker_entrypoint.py")],
     pathex=[str(SOURCE)],
