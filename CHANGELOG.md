@@ -4,6 +4,14 @@ Release history and changes in the next beta candidate.
 
 ## [0.0.13-beta.1] - Candidate for review, not published
 
+- Replace the Enhance pane's model dropdowns with a model library: Quick/Best stay selected,
+  Content (Photo/Illustration) and Fix-first chips (Noise, JPEG, Blur, Faces) resolve the plan,
+  a plan card names every stage with license, size and hardware fit, and Start downloads any
+  missing stage before the job. A library sheet groups verified models by what they do, shows
+  provenance, pins a model to a preset, and manages installed files (ADR 0007).
+- Separate checkpoint rights from Labs status in the catalog (schema 2: `rights_status`, `role`,
+  `stage`, `fixes`, `content`, `display_name`); Quick and Best never pick a checkpoint whose
+  rights are unresolved. The *Denoise* task is labelled *Restore*.
 - Retire Slint and its installer. The Python launcher opens the separately installed
   Tauri app; the engine, automation CLI and optional Qt Widgets client remain.
 

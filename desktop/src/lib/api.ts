@@ -155,6 +155,7 @@ export const requestImageComparison = (mediaId: string): Promise<void> =>
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>
   invoke('download_model', { modelId, acceptedTerms });
+export const removeModel = (modelId: string): Promise<void> => invoke('remove_model', { modelId });
 export const cancelDownload = (modelId: string): Promise<void> =>
   invoke('cancel_download', { modelId });
 export const importCatalogModel = (

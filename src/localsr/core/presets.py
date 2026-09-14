@@ -68,6 +68,18 @@ def _purpose_match(model: CatalogModel, purpose: ModelPurpose | str) -> int:
     return 0
 
 
+def _rights_allow_preset(model: CatalogModel, purpose: ModelPurpose | str) -> bool:
+    """Quick/Best never pick a checkpoint whose rights are unresolved or non-commercial.
+
+    Labs status is a separate axis (validation), so a Labs model with verified
+    rights stays eligible. Face companions are chosen by pairing with the primary
+    model and imported by the user, so the FACE purpose is exempt.
+    """
+    if str(purpose).lower() == ModelPurpose.FACE.value:
+        return True
+    return model.commercial_use_status == "allowed"
+
+
 def _mode_category(mode: Preset | PresetMode | str) -> str:
     val = str(mode.value if isinstance(mode, (Preset, PresetMode)) else mode).lower()
     if val in (Preset.FAST.value, PresetMode.QUICK_UPSCALE.value, PresetMode.QUICK_DENOISE.value):
@@ -113,7 +125,9 @@ def rank_models_for_preset(
     eligible = [
         model
         for model in models
-        if model.native_scale >= target_scale and _purpose_match(model, purpose) > 0
+        if model.native_scale >= target_scale
+        and _purpose_match(model, purpose) > 0
+        and _rights_allow_preset(model, purpose)
     ]
 
     category = _mode_category(mode)

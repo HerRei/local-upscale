@@ -126,6 +126,7 @@ pub fn run() {
             commands::probe_path,
             commands::download_model,
             commands::cancel_download,
+            commands::remove_model,
             commands::import_catalog_model,
             commands::open_result,
             commands::reveal_result,

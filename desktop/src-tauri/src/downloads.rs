@@ -33,13 +33,13 @@ pub async fn download_model(
             .iter()
             .find(|model| model.model_id == model_id)
         {
-            DownloadTarget::Image(model.clone())
+            DownloadTarget::Image(Box::new(model.clone()))
         } else if let Some(model) = catalog
             .video_models
             .iter()
             .find(|model| model.model_id == model_id)
         {
-            DownloadTarget::Video(model.clone())
+            DownloadTarget::Video(Box::new(model.clone()))
         } else {
             return Err(AppError::Validation("unknown model identifier".into()));
         }
@@ -121,8 +121,8 @@ pub fn cancel_download(state: &AppState, model_id: &str) -> AppResult<()> {
 }
 
 enum DownloadTarget {
-    Image(CatalogModel),
-    Video(CatalogVideoModel),
+    Image(Box<CatalogModel>),
+    Video(Box<CatalogVideoModel>),
 }
 
 impl DownloadTarget {
@@ -587,14 +587,14 @@ mod tests {
             assert!(model
                 .source_url
                 .starts_with("https://huggingface.co/Phips/"));
-            assert!(DownloadTarget::Image(model.clone())
+            assert!(DownloadTarget::Image(Box::new(model.clone()))
                 .validate_policy(false)
                 .is_ok());
         }
         for id in ["hat_s_x4_face", "hat_l_x4_face"] {
             let model = manifest.models.iter().find(|m| m.model_id == id).unwrap();
             assert_eq!(model.commercial_use_allowed, None);
-            assert!(DownloadTarget::Image(model.clone())
+            assert!(DownloadTarget::Image(Box::new(model.clone()))
                 .validate_policy(true)
                 .is_err());
         }

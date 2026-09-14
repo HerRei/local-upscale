@@ -57,7 +57,16 @@ def build_manifest() -> dict:
         entry["speed_tier"] = int(model.speed_tier)
         entry.update(_license_policy(model.license_name, model.commercial_use_status))
         entry["engine_id"] = "localsr.pytorch-spandrel"
+        # Two separate axes: `support_tier` is validation status (supported or
+        # labs); `rights_status` is what the checkpoint's terms allow. Presets
+        # may use Labs models whose rights are verified, never the reverse.
         entry["support_tier"] = "labs" if model.commercial_use_status != "allowed" else "supported"
+        entry["rights_status"] = model.rights_status
+        entry["display_name"] = model.display_name
+        entry["role"] = model.role
+        entry["stage"] = model.stage_kind
+        entry["fixes"] = list(model.fixes)
+        entry["content"] = list(model.content)
         if model.model_id in {"realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"}:
             # Both author's model cards explicitly declare CC BY 4.0; the
             # checkpoint provenance is recorded in docs/model-licenses.md.
@@ -79,7 +88,9 @@ def build_manifest() -> dict:
         video_models.append(entry)
 
     return {
-        "schema_version": 1,
+        # Schema 2 adds the model-library fields (role, stage, fixes, content,
+        # rights_status, display_name). Every earlier field is unchanged.
+        "schema_version": 2,
         "catalog_revision": CATALOG_REVISION,
         "models": models,
         "video_models": video_models,

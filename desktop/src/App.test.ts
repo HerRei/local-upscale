@@ -38,6 +38,7 @@ const api = vi.hoisted(() => ({
   probePath: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
   cancelDownload: vi.fn(async () => undefined),
+  removeModel: vi.fn(async () => undefined),
   importCatalogModel: vi.fn(async () => undefined),
   saveRecipe: vi.fn(async () => undefined),
   deleteRecipe: vi.fn(async () => undefined),
@@ -184,7 +185,7 @@ it.each(['realplksr_nomoswebphoto_x4', 'realplksr_hfa2k_anime_x4'])(
     await user.click(screen.getByRole('button', { name: /License terms/ }));
     expect(api.openModelSource).toHaveBeenCalledWith(modelId);
     expect(api.openModelLicense).toHaveBeenCalledWith(modelId);
-    await user.click(screen.getByRole('button', { name: /Download .* MB/ }));
+    await user.click(screen.getByRole('button', { name: /^Download [\d.]+ MB$/ }));
     expect(api.downloadModel).toHaveBeenCalledWith(modelId, false);
     expect(api.importCatalogModel).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -743,7 +744,11 @@ describe('LocalSR desktop interface', () => {
       }),
     );
     await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
-    await user.selectOptions(screen.getByLabelText('Frame model'), '__custom__');
+    api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
     expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(false);
     await user.selectOptions(hdr, 'preserve');
     expect(hdr.value).toBe('preserve');
@@ -786,18 +791,23 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(readySnapshot());
     await chooseTask(user, /Upscale\s*Photos and artwork/i);
 
-    expect(screen.getByRole('button', { name: /Quick\s*Fast and efficient/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Best\s*Maximum quality/i })).toBeTruthy();
-    expect(screen.getByLabelText('Checkpoint')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Quick\s*SPAN ×4 NomosUni/i })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /^Best\s*RealPLKSR ×4 NomosWebPhoto/i }),
+    ).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Change…' })).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
     const hardware = screen.getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
 
-    await user.click(screen.getByRole('checkbox', { name: /Face-aware pass/i }));
-    expect(await screen.findByRole('heading', { name: 'Face detector unavailable' })).toBeTruthy();
-    expect(screen.getByText(/disabled unless a supported local detector/i)).toBeTruthy();
+    // Faces need a primary model with a companion; the default Best (RealPLKSR)
+    // has none, so the chip is disabled until such a model is chosen.
+    expect(
+      (screen.getByRole('button', { name: 'Faces', pressed: false }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it.each([
@@ -811,12 +821,13 @@ describe('LocalSR desktop interface', () => {
       const face = snapshot.catalog.models.find((model) => model.model_id === faceId)!;
       face.installed = false;
       api.chooseCustomModel.mockResolvedValueOnce(`/models/${face.filename}` as never);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.selected_model_id = primaryId;
+      snapshot.settings.quality = 'custom';
       const user = await mountWith(snapshot);
-      await chooseTask(user, /Upscale\s*Photos and artwork/i);
-      await user.selectOptions(screen.getByLabelText('Checkpoint'), primaryId);
-      await user.click(
-        screen.getByRole('checkbox', { name: new RegExp(`Face-aware pass with ${face.name}`) }),
-      );
+      await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
+      expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
+      expect(screen.getByText('Needs your file')).toBeTruthy();
       expect(
         screen.getByRole('button', { name: 'Upscale selected' }).hasAttribute('disabled'),
       ).toBe(true);
@@ -895,7 +906,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(
       true,
     );
-    await user.click(screen.getByRole('button', { name: /BestMaximum quality/ }));
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
   });
@@ -913,7 +924,7 @@ describe('LocalSR desktop interface', () => {
         .disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: /Denoise\s*Noise and blur/i }) as HTMLButtonElement)
+      (screen.getByRole('button', { name: /Restore\s*Noise, blur, JPEG/i }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
   });
@@ -1476,5 +1487,177 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe('100%'));
     expect(stage?.style.left).toBe('50%');
     expect(stage?.style.top).toBe('50%');
+  });
+
+  it('shows the resolved plan and downloads a missing stage before starting', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'best';
+    snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
+    snapshot.settings.fixes = ['jpeg'];
+    snapshot.settings.preprocess_model_id = 'fbcnn_color';
+    snapshot.catalog.models.find((model) => model.model_id === 'fbcnn_color')!.installed = false;
+    const user = await mountWith(snapshot);
+
+    const stages = within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem');
+    expect(stages[0].textContent).toContain('Fix JPEG');
+    expect(stages[0].textContent).toContain('FBCNN Color');
+    expect(stages[1].textContent).toContain('Upscale ×4');
+    expect(stages[1].textContent).toContain('RealPLKSR ×4 NomosWebPhoto');
+    expect(stages[1].textContent).toContain('On this computer');
+    expect(
+      screen.getByRole('button', { name: /^Best\s*RealPLKSR ×4 NomosWebPhoto/, pressed: true }),
+    ).toBeTruthy();
+
+    const start = screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ });
+    expect(start.matches(':disabled')).toBe(false);
+    await user.click(start);
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('fbcnn_color', false));
+    expect(api.downloadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves Quick and Best for illustrations and keeps the choice in the recipe', async () => {
+    const snapshot = readySnapshot([image('frame', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          content: 'illustration',
+          selected_model_id: 'realplksr_hfa2k_anime_x4',
+        }),
+      ),
+    );
+    expect(screen.getByText('Quick · Illustration')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: '＋ Save current setup as recipe' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.saveRecipe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          content: 'illustration',
+          model_id: 'realplksr_hfa2k_anime_x4',
+        }),
+      ),
+    );
+  });
+
+  it('maps the JPEG chip to a restoration stage and clears it again', async () => {
+    const snapshot = readySnapshot([image('scan', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: ['jpeg'], preprocess_model_id: 'fbcnn_color' }),
+      ),
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem'),
+    ).toHaveLength(2);
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: ['blur'], preprocess_model_id: 'nafnet_gopro_deblur' }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: [], preprocess_model_id: '' }),
+      ),
+    );
+  });
+
+  it('picks a model for this job from the library and marks the recipe as custom', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    expect(within(library).getByText('Apache-2.0 ↗')).toBeTruthy();
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+    expect(screen.getByText('MODEL · CHOSEN BY YOU')).toBeTruthy();
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'hat_l_x4_imagenet', quality: 'custom' }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Back to Best' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          quality: 'best',
+        }),
+      ),
+    );
+  });
+
+  it('pins a library model to Best and removes an installed model', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    api.removeModel.mockResolvedValue(undefined);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Make my Best · Photo' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          selected_model_id: 'hat_l_x4_imagenet',
+          preset_pins: { 'upscale/photo/best': 'hat_l_x4_imagenet' },
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const reopened = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(reopened).getByRole('button', { name: /^Installed/ }));
+    await user.click(within(reopened).getByRole('button', { name: /SPAN ×4 NomosUni/ }));
+    await user.click(within(reopened).getByRole('button', { name: 'Remove from this computer' }));
+    await waitFor(() => expect(api.removeModel).toHaveBeenCalledWith('span_photo_x4'));
+  });
+
+  it('explains the one-time download on first run and fetches Quick on request', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    const note = screen.getByRole('note', { name: 'Get started' });
+    expect(note.textContent).toContain('Models aren’t bundled');
+    await user.click(within(note).getByRole('button', { name: /^Get Quick · \d+(\.\d+)? MB/ }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
+    expect(
+      screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
+    ).toBeTruthy();
+  });
+
+  it('keeps Best selected when the content type changes', async () => {
+    const snapshot = readySnapshot([image('frame', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          content: 'illustration',
+          selected_model_id: 'realplksr_hfa2k_anime_x4',
+        }),
+      ),
+    );
+    expect(screen.getByText('Best · Illustration')).toBeTruthy();
   });
 });

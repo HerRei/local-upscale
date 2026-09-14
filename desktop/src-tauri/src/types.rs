@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -43,6 +45,21 @@ pub struct CatalogModel {
     pub terms_acceptance_required: bool,
     pub engine_id: String,
     pub support_tier: String,
+    // Model-library fields (catalog schema 2). Defaults keep an older
+    // manifest loadable; `support_tier` stays the validation axis while
+    // `rights_status` says what the checkpoint's terms allow.
+    #[serde(default)]
+    pub rights_status: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub fixes: Vec<String>,
+    #[serde(default)]
+    pub content: Vec<String>,
     #[serde(default)]
     pub installed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,6 +238,14 @@ pub struct Recipe {
     pub face_fidelity: Option<u32>,
     #[serde(default)]
     pub stages: Vec<RecipeStage>,
+    // Model-library state captured with the recipe so it re-applies the same
+    // Quality/Content/Fix choices, not only the resolved checkpoints.
+    #[serde(default)]
+    pub quality: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub fixes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -265,6 +290,13 @@ pub struct UiSettings {
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
+    // Model-library state: which recipe is active ("quick", "best", "custom"
+    // or empty), what the image contains, which problems to fix first, and
+    // the checkpoint each preset slot is pinned to ("upscale/photo/best").
+    pub quality: String,
+    pub content: String,
+    pub fixes: Vec<String>,
+    pub preset_pins: BTreeMap<String, String>,
 }
 
 fn default_low_memory() -> bool {
@@ -306,6 +338,10 @@ impl Default for UiSettings {
             face_fidelity: 70,
             enable_live_preview: true,
             allow_unsafe_pickle_model: false,
+            quality: String::new(),
+            content: "photo".into(),
+            fixes: Vec::new(),
+            preset_pins: BTreeMap::new(),
         }
     }
 }

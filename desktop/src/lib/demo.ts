@@ -44,6 +44,10 @@ export function demoSnapshot(): AppSnapshot {
       face_fidelity: 70,
       enable_live_preview: true,
       allow_unsafe_pickle_model: false,
+      quality: '',
+      content: 'photo',
+      fixes: [],
+      preset_pins: {},
     },
     recipes: [],
     capabilities: {

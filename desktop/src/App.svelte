@@ -9,12 +9,21 @@
   import UpdatePanel from './UpdatePanel.svelte';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
+  import ModelLibrary from './ModelLibrary.svelte';
   import {
+    FIT_LABELS,
+    FIX_LABELS,
     applyWorkerEnvelope,
+    chooseFixModel,
     choosePresetModel,
+    displayName,
+    fitFor,
     formatBytes,
     formatDuration,
     modelsForTask,
+    pendingDownloads,
+    presetSlot,
+    resolvePlan,
     resultPreviewForSelectedMedia,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
@@ -24,8 +33,10 @@
     BenchmarkRender,
     CatalogModel,
     CatalogVideoModel,
+    FixKind,
     IntegrationStatus,
     LaunchIntent,
+    Quality,
     Recipe,
     StartBatchInput,
     TaskKind,
@@ -66,6 +77,12 @@
   let handlingLaunchIntents = false;
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
   let livePreviewWarning = '';
+  let preparing = false;
+  let libraryOpen = false;
+  let libraryContext: {
+    slot: 'primary' | 'fix' | 'face' | 'browse';
+    fix?: Exclude<FixKind, 'faces'>;
+  } = { slot: 'browse' };
   let startingJob = false;
   let requestingCancel = false;
   $: settingsLocked = startingJob || Boolean(snapshot.runtime.active_job_id);
@@ -228,6 +245,65 @@
         : `${selectedMedia.width * settings.output_scale} × ${selectedMedia.height * settings.output_scale} · ${settings.output_scale}×`
     : '—';
   $: currentDownloadTarget = usingTemporalVideo ? selectedVideoModel : selectedModel;
+  $: quickModel = settings.task
+    ? choosePresetModel(snapshot, settings.task, 'quick', settings.content, settings.preset_pins)
+    : undefined;
+  $: bestModel = settings.task
+    ? choosePresetModel(snapshot, settings.task, 'best', settings.content, settings.preset_pins)
+    : undefined;
+  // Settings saved before the model library exist without a quality; infer it
+  // from the selection so Quick/Best light up correctly after an update.
+  $: activeQuality = ((): Quality => {
+    if (settings.quality) return settings.quality;
+    if (usingTemporalVideo || settings.selected_model_id === '__custom__') return 'custom';
+    if (settings.preprocess_model_id || settings.enable_face_model) return 'custom';
+    if (bestModel && settings.selected_model_id === bestModel.model_id) return 'best';
+    if (quickModel && settings.selected_model_id === quickModel.model_id) return 'quick';
+    return 'custom';
+  })();
+  $: plan = resolvePlan(snapshot, settings, {
+    faceModel,
+    faceEnabled,
+    usingTemporalVideo,
+    selectedVideoModel,
+  });
+  $: downloads = pendingDownloads(plan);
+  $: planNeedsFile = plan.some((stage) => stage.needsFile);
+  $: firstRun = !snapshot.catalog.models.some((model) => model.installed);
+  $: fixChips = (
+    settings.task === 'denoise' ? ['noise', 'blur', 'jpeg'] : ['noise', 'jpeg', 'blur', 'faces']
+  ) as FixKind[];
+  $: illustrationFallback =
+    settings.task !== 'denoise' &&
+    settings.content === 'illustration' &&
+    activeQuality !== 'custom' &&
+    selectedModel &&
+    !(selectedModel.purposes.includes('illustration') || selectedModel.purposes.includes('anime'))
+      ? {
+          model: snapshot.catalog.models.find(
+            (model) =>
+              model.native_scale > 1 &&
+              (model.purposes.includes('illustration') || model.purposes.includes('anime')),
+          ),
+        }
+      : undefined;
+  $: canPrepare =
+    !snapshot.runtime.active_job_id &&
+    !activeDownload &&
+    !preparing &&
+    !startingJob &&
+    !cancelling &&
+    downloads.stages.length > 0 &&
+    !planNeedsFile &&
+    downloads.stages.every((stage) => !stage.model?.terms_acceptance_required) &&
+    snapshot.runtime.worker === 'ready' &&
+    Boolean(settings.task) &&
+    queueSelection.length > 0 &&
+    queueSelection.every((media) => media.probe_status === 'ready') &&
+    hdrModelCompatible &&
+    (!usingTemporalVideo || !temporalUnavailableReason);
+  $: startVerb =
+    settings.task === 'video' ? 'start video' : settings.task === 'denoise' ? 'restore' : 'upscale';
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id,
   );
@@ -486,8 +562,155 @@
   function chooseInitialModel(): void {
     const task = snapshot.settings.task;
     if (!task || snapshot.settings.selected_model_id) return;
-    const first = modelsForTask(snapshot, task)[0];
-    if (first) updateSettings({ selected_model_id: first.model_id });
+    resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
+  }
+
+  function recipeSubtitle(model: CatalogModel | undefined, fallback: string): string {
+    if (!model) return fallback;
+    return `${displayName(model)} · ${model.installed ? 'on this computer' : formatBytes(model.size_bytes)}`;
+  }
+
+  /**
+   * Resolve the plan for the active recipe from the catalog. Reads
+   * `snapshot.settings` (updated synchronously by `updateSettings`) so callers
+   * can chain it after a task or content change within the same tick.
+   */
+  function resolveRecipe(
+    patch: Partial<Pick<UiSettings, 'quality' | 'content' | 'fixes'>>,
+    options: { keepVideoEngine?: boolean } = {},
+  ): void {
+    const current = { ...snapshot.settings, ...patch };
+    const task = current.task;
+    if (!task) return;
+    const quality: 'quick' | 'best' =
+      current.quality === 'quick' || current.quality === 'best' ? current.quality : 'best';
+    const fix = current.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
+    const wantsFaces = current.fixes.includes('faces');
+    const keepPrimary = current.quality === 'custom';
+    const patchSettings: Partial<UiSettings> = {
+      quality: current.quality || quality,
+      content: current.content,
+      fixes: current.fixes,
+    };
+    if (task === 'denoise') {
+      const model =
+        (fix ? chooseFixModel(snapshot, fix, quality) : undefined) ??
+        choosePresetModel(snapshot, task, quality);
+      if (model && !keepPrimary) {
+        patchSettings.selected_model_id = model.model_id;
+        patchSettings.halo = model.recommended_halo;
+      }
+      patchSettings.preprocess_model_id = '';
+      patchSettings.output_scale = 1;
+      patchSettings.enable_face_model = false;
+    } else {
+      const primary = keepPrimary
+        ? undefined
+        : choosePresetModel(snapshot, task, quality, current.content, current.preset_pins);
+      if (primary) {
+        patchSettings.selected_model_id = primary.model_id;
+        // Quick and Best are frame-by-frame recipes; a saved SeedVR2 choice
+        // survives only the initial resolution and task changes.
+        if (!options.keepVideoEngine) patchSettings.selected_video_model_id = 'frame_by_frame';
+        patchSettings.output_scale = primary.native_scale;
+        patchSettings.halo = primary.recommended_halo;
+        patchSettings.safe_memory = quality === 'best' ? current.safe_memory : false;
+      }
+      patchSettings.preprocess_model_id =
+        task === 'upscale' && fix ? (chooseFixModel(snapshot, fix, quality)?.model_id ?? '') : '';
+      const primaryId = patchSettings.selected_model_id ?? current.selected_model_id;
+      const primaryModel = snapshot.catalog.models.find((model) => model.model_id === primaryId);
+      const companion = snapshot.catalog.models.find(
+        (model) => model.purposes.includes('face') && primaryModel?.pair_with === model.model_id,
+      );
+      patchSettings.enable_face_model = wantsFaces && Boolean(companion) && faceEngineAvailable;
+    }
+    updateSettings(patchSettings);
+    termsAccepted = false;
+    faceTermsAccepted = false;
+  }
+
+  function setContent(content: UiSettings['content']): void {
+    if (settings.content === content) return;
+    resolveRecipe({ content, quality: activeQuality });
+  }
+
+  function toggleFix(fix: FixKind): void {
+    const current = settings.fixes;
+    let fixes: FixKind[];
+    if (fix === 'faces') {
+      if (!faceModel && !current.includes('faces')) return;
+      fixes = current.includes('faces')
+        ? current.filter((item) => item !== 'faces')
+        : [...current, 'faces'];
+    } else {
+      // The host runs one restoration stage before the upscaler, so the
+      // noise/JPEG/blur chips are exclusive; Faces is an independent pass.
+      const faces = current.includes('faces') ? (['faces'] as FixKind[]) : [];
+      fixes = current.includes(fix) ? faces : [fix, ...faces];
+    }
+    resolveRecipe({ fixes, quality: activeQuality });
+  }
+
+  function useModelForJob(model: CatalogModel | undefined): void {
+    if (!model) return;
+    selectPrimaryModel(model.model_id);
+    libraryOpen = false;
+  }
+
+  function pinPreset(model: CatalogModel, quality: 'quick' | 'best'): void {
+    if (!settings.task) return;
+    const preset_pins = {
+      ...settings.preset_pins,
+      [presetSlot(settings.task, settings.content, quality)]: model.model_id,
+    };
+    updateSettings({ preset_pins });
+    resolveRecipe({ quality });
+    libraryOpen = false;
+  }
+
+  function openLibrary(slot: 'primary' | 'fix' | 'face' | 'browse'): void {
+    const fix = settings.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
+    libraryContext = slot === 'fix' ? { slot, fix } : { slot };
+    libraryOpen = true;
+  }
+
+  async function removeModel(model: CatalogModel): Promise<void> {
+    try {
+      await api.removeModel(model.model_id);
+      await refresh();
+    } catch (error) {
+      showModal('Could not remove the model', String(error));
+    }
+  }
+
+  /** Download several catalog models one after another, then refresh. */
+  async function downloadModels(
+    models: (CatalogModel | CatalogVideoModel | undefined)[],
+  ): Promise<boolean> {
+    preparing = true;
+    try {
+      for (const model of models) {
+        if (!model || model.installed || !model.automated_download_allowed) continue;
+        await api.downloadModel(model.model_id, false);
+      }
+      await refresh();
+      return true;
+    } catch (error) {
+      showModal('Download failed', String(error));
+      return false;
+    } finally {
+      preparing = false;
+    }
+  }
+
+  /** Fetch every missing stage the catalog allows, then start without another click. */
+  async function prepareAndStart(): Promise<void> {
+    if (!canPrepare) return;
+    const targets = downloads.stages.map((stage) => stage.model ?? stage.videoModel);
+    if (!(await downloadModels(targets))) return;
+    await tick();
+    if (canStart) await start();
   }
 
   function supportsHdrPreservation(candidate: UiSettings): boolean {
@@ -523,20 +746,33 @@
     if (selectedMedia && (task === 'video') !== (selectedMedia.kind === 'video')) return;
     if (task !== 'video') lastImageTask = task;
     const models = modelsForTask(snapshot, task);
-    const chosen =
-      models.find((model) => model.model_id === settings.selected_model_id) ?? models[0];
+    // Keep a manual choice that still fits the task; otherwise the active
+    // recipe (Quick until one is chosen) resolves the plan for the new task.
+    const kept =
+      activeQuality === 'custom'
+        ? models.find((model) => model.model_id === settings.selected_model_id)
+        : undefined;
     updateSettings({
       task,
-      selected_model_id: chosen?.model_id ?? '',
+      selected_model_id: kept?.model_id ?? '',
       preprocess_model_id: task === 'upscale' ? settings.preprocess_model_id : '',
       output_scale:
         task === 'denoise'
           ? 1
-          : Math.min(chosen?.native_scale ?? 4, Math.max(2, settings.output_scale)),
+          : Math.min(kept?.native_scale ?? 4, Math.max(2, settings.output_scale)),
       enable_face_model: false,
     });
     termsAccepted = false;
     faceTermsAccepted = false;
+    if (!kept) {
+      resolveRecipe(
+        {
+          quality: activeQuality === 'quick' || activeQuality === 'best' ? activeQuality : 'quick',
+          fixes: task === 'video' ? [] : settings.fixes,
+        },
+        { keepVideoEngine: true },
+      );
+    }
   }
 
   function ensureTaskMatchesSelection(): void {
@@ -615,7 +851,9 @@
         custom_model_path: path,
         allow_unsafe_pickle_model: false,
         enable_face_model: false,
+        quality: 'custom',
       });
+      libraryOpen = false;
       termsAccepted = false;
       faceTermsAccepted = false;
     }
@@ -636,6 +874,7 @@
         : settings.output_scale,
       allow_unsafe_pickle_model: false,
       enable_face_model: false,
+      quality: 'custom',
     });
     termsAccepted = false;
     faceTermsAccepted = false;
@@ -643,22 +882,10 @@
 
   function applyPreset(kind: 'quick' | 'best'): void {
     if (!settings.task) {
-      showModal('Choose a task', 'Select Upscale, Denoise, or Video before applying a recipe.');
+      showModal('Choose a task', 'Select Upscale, Restore, or Video before applying a recipe.');
       return;
     }
-    const chosen = choosePresetModel(snapshot, settings.task, kind);
-    if (!chosen) return;
-    updateSettings({
-      selected_model_id: chosen.model_id,
-      selected_video_model_id: 'frame_by_frame',
-      preprocess_model_id: '',
-      output_scale: settings.task === 'denoise' ? 1 : chosen.native_scale,
-      halo: chosen.recommended_halo,
-      safe_memory: kind === 'best' ? settings.safe_memory : false,
-      enable_face_model: false,
-    });
-    termsAccepted = false;
-    faceTermsAccepted = false;
+    resolveRecipe({ quality: kind });
   }
 
   async function runDownload(
@@ -781,6 +1008,9 @@
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
+      quality: activeQuality,
+      content: settings.content,
+      fixes: settings.fixes,
       stages: [
         ...(settings.task === 'upscale' && preprocessModel
           ? [
@@ -873,6 +1103,9 @@
           ? (recipe.face_fidelity ?? 70)
           : Math.round(recipeFace.fidelity * 100),
       allow_unsafe_pickle_model: false,
+      quality: recipe.quality || 'custom',
+      content: recipe.content || settings.content,
+      fixes: recipe.fixes ?? [],
     });
     termsAccepted = false;
     faceTermsAccepted = false;
@@ -1291,7 +1524,7 @@
           >{settingsLocked
             ? 'Locked during processing'
             : settings.task
-              ? 'Manual'
+              ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${settings.task === 'denoise' ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
               : 'Choose a task'}</span
         >
       </div>
@@ -1333,7 +1566,7 @@
                 disabled={selectedMedia?.kind === 'video'}
                 class:active={settings.task === 'denoise'}
                 on:click={() => setTask('denoise')}
-                ><b>Denoise</b><span>Noise and blur</span></button
+                ><b>Restore</b><span>Noise, blur, JPEG</span></button
               >
               <button
                 disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'}
@@ -1407,13 +1640,51 @@
 
           {#if settings.task}
             <section class="control-section recipes">
-              <span class="eyebrow">RECIPES</span>
-              <div class="recipe-grid">
-                <button on:click={() => applyPreset('quick')}
-                  ><b>Quick</b><span>Fast and efficient</span></button
+              <span class="eyebrow">QUALITY</span>
+              {#if firstRun && quickModel}
+                <div class="notice first-run" role="note" aria-label="Get started">
+                  <b>Models aren’t bundled</b>
+                  <p>
+                    LocalSR downloads the models you pick once, checks them, and keeps them on this
+                    computer. Your images never leave it.
+                  </p>
+                  <div class="actions-row">
+                    <button
+                      class="button primary compact"
+                      type="button"
+                      disabled={Boolean(activeDownload) || preparing}
+                      on:click={() => void downloadModels([quickModel])}
+                      >Get Quick · {formatBytes(quickModel.size_bytes)}</button
+                    >
+                    {#if bestModel && bestModel.model_id !== quickModel.model_id}
+                      <button
+                        class="button compact"
+                        type="button"
+                        disabled={Boolean(activeDownload) || preparing}
+                        on:click={() => void downloadModels([quickModel, bestModel])}
+                        >Quick + Best · {formatBytes(
+                          quickModel.size_bytes + bestModel.size_bytes,
+                        )}</button
+                      >
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+              <div class="recipe-grid" role="group" aria-label="Quality">
+                <button
+                  class="quick"
+                  class:active={activeQuality === 'quick'}
+                  aria-pressed={activeQuality === 'quick'}
+                  on:click={() => applyPreset('quick')}
+                  ><b>Quick</b><span>{recipeSubtitle(quickModel, 'Fast and efficient')}</span
+                  ></button
                 >
-                <button on:click={() => applyPreset('best')}
-                  ><b>Best</b><span>Maximum quality</span></button
+                <button
+                  class="best"
+                  class:active={activeQuality === 'best'}
+                  aria-pressed={activeQuality === 'best'}
+                  on:click={() => applyPreset('best')}
+                  ><b>Best</b><span>{recipeSubtitle(bestModel, 'Maximum quality')}</span></button
                 >
               </div>
               <div class="recipe-tools">
@@ -1466,8 +1737,91 @@
               </div>
             </section>
 
-            <section class="control-section model-section">
-              <label class="eyebrow" for="model-select">MODEL</label>
+            {#if !usingTemporalVideo}
+              <section
+                class="control-section"
+                aria-label={settings.task === 'denoise' ? 'What to fix' : 'Your image'}
+              >
+                <span class="eyebrow"
+                  >{settings.task === 'denoise' ? 'WHAT TO FIX' : 'YOUR IMAGE'}</span
+                >
+                {#if settings.task !== 'denoise'}
+                  <span class="field-label" id="content-label">Content</span>
+                  <div class="seg-inline" role="radiogroup" aria-labelledby="content-label">
+                    <button
+                      role="radio"
+                      aria-checked={settings.content !== 'illustration'}
+                      class:active={settings.content !== 'illustration'}
+                      on:click={() => setContent('photo')}>Photo</button
+                    >
+                    <button
+                      role="radio"
+                      aria-checked={settings.content === 'illustration'}
+                      class:active={settings.content === 'illustration'}
+                      on:click={() => setContent('illustration')}>Illustration</button
+                    >
+                  </div>
+                  <span class="field-label" id="fix-label">Fix first</span>
+                {/if}
+                <div
+                  class="chips"
+                  role="group"
+                  aria-label={settings.task === 'denoise' ? 'Problems to fix' : 'Fix first'}
+                >
+                  {#each fixChips as fix (fix)}
+                    <button
+                      class="chip"
+                      type="button"
+                      class:on={settings.fixes.includes(fix)}
+                      aria-pressed={settings.fixes.includes(fix)}
+                      disabled={fix === 'faces' && !faceModel}
+                      title={fix === 'faces' && !faceModel
+                        ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
+                        : ''}
+                      on:click={() => toggleFix(fix)}
+                      >{#if settings.fixes.includes(fix)}<svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"><path d="m5 12 5 5L20 7" /></svg
+                        >{/if}{FIX_LABELS[fix]}</button
+                    >
+                  {/each}
+                </div>
+                {#if illustrationFallback}
+                  <p class="inline-warning" role="status">
+                    No fully verified illustration model yet, so the photo model is used.
+                    {#if illustrationFallback.model}<button
+                        class="link-button"
+                        type="button"
+                        on:click={() => useModelForJob(illustrationFallback.model)}
+                        >Use {displayName(illustrationFallback.model)} (Labs) for this job</button
+                      >{/if}
+                  </p>
+                {/if}
+              </section>
+            {/if}
+
+            <section class="control-section model-section" aria-label="Model plan">
+              <div class="eyebrow eyebrow-row">
+                <span>{activeQuality === 'custom' ? 'MODEL · CHOSEN BY YOU' : 'MODEL'}</span>
+                <span class="eyebrow-actions">
+                  {#if activeQuality === 'custom' && bestModel}<button
+                      class="link-button"
+                      type="button"
+                      on:click={() => applyPreset('best')}>Back to Best</button
+                    >{/if}
+                  <button class="link-button" type="button" on:click={() => openLibrary('primary')}
+                    >Change…</button
+                  >
+                </span>
+              </div>
               {#if settings.task === 'video'}
                 <label class="field-label" for="video-engine">Video engine</label>
                 <select
@@ -1489,106 +1843,189 @@
                 {#if temporalUnavailableReason}<p class="model-output-note" role="status">
                     {temporalUnavailableReason}
                   </p>{/if}
-              {/if}
-
-              {#if !usingTemporalVideo}
-                <label class="field-label" for="model-select"
-                  >{settings.task === 'video' ? 'Frame model' : 'Checkpoint'}</label
-                >
-                <select
-                  id="model-select"
-                  value={settings.selected_model_id}
-                  on:change={(event) => selectPrimaryModel(event.currentTarget.value)}
-                >
-                  {#each compatibleModels as model}<option value={model.model_id}
-                      >{model.name}{model.installed
-                        ? ' · Installed'
-                        : ` · ${formatBytes(model.size_bytes)}`}</option
-                    >{/each}
-                  <option value="__custom__">Use my own checkpoint…</option>
-                </select>
-              {/if}
-              {#if settings.task === 'video' && selectedMedia?.hdr_format && !hdrPreservationAvailable}
-                <p class="model-output-note" role="status">
-                  SDR output selected. This model cannot preserve HDR.
-                </p>
-              {/if}
-
-              {#if settings.selected_model_id === '__custom__' && !usingTemporalVideo}
-                <button class="button full" on:click={chooseCustomModel}
-                  >{settings.custom_model_path
-                    ? 'Choose another checkpoint…'
-                    : 'Choose checkpoint…'}</button
-                >
-                <p class="path-text">
-                  {settings.custom_model_path || 'Safetensors is strongly recommended.'}
-                </p>
-                {#if settings.custom_model_path && !settings.custom_model_path
-                    .toLowerCase()
-                    .endsWith('.safetensors')}
-                  <label class="terms"
-                    ><input
-                      type="checkbox"
-                      checked={settings.allow_unsafe_pickle_model}
-                      on:change={(event) =>
-                        updateSettings({ allow_unsafe_pickle_model: event.currentTarget.checked })}
-                    /> Allow this pickle-based checkpoint. It may execute code inside the inference worker.</label
-                  >
+                {#if selectedMedia?.hdr_format && !hdrPreservationAvailable}
+                  <p class="model-output-note" role="status">
+                    SDR output selected. This model cannot preserve HDR.
+                  </p>
                 {/if}
-              {:else if currentDownloadTarget}
-                <p class="model-description">{currentDownloadTarget.description}</p>
-                <div class="license-line">
-                  <span>{currentDownloadTarget.license_name}</span>
-                  <span
-                    >{currentDownloadTarget.commercial_use_allowed === false
-                      ? 'Non-commercial only'
-                      : currentDownloadTarget.commercial_use_allowed === null
-                        ? 'Commercial terms unclear'
-                        : currentDownloadTarget.author}</span
+              {/if}
+
+              <div class="plan" role="list" aria-label="Stages">
+                {#each plan as stage (stage.kind)}
+                  <div class="plan-row" role="listitem">
+                    <span class="stage">{stage.label}</span>
+                    <div class="plan-copy">
+                      <div class="name">
+                        {stage.model
+                          ? displayName(stage.model)
+                          : stage.videoModel
+                            ? stage.videoModel.name
+                            : 'Your checkpoint'}
+                      </div>
+                      <div class="meta">
+                        {#if stage.model}
+                          {stage.model.license_name}{stage.model.support_tier === 'labs'
+                            ? ' · Labs'
+                            : ''} · {formatBytes(stage.model.size_bytes)}{fitFor(
+                            stage.model,
+                            activeDevice,
+                          ) !== 'unknown'
+                            ? ` · ${FIT_LABELS[fitFor(stage.model, activeDevice)]}`
+                            : ''}
+                        {:else if stage.videoModel}
+                          {stage.videoModel.license_name} · Labs · {formatBytes(
+                            stage.videoModel.total_size_bytes,
+                          )}
+                        {:else}
+                          <span class="path-text"
+                            >{settings.custom_model_path ||
+                              'Safetensors is strongly recommended.'}</span
+                          >
+                        {/if}
+                      </div>
+                      {#if stage.custom !== undefined}
+                        <button class="button full" on:click={chooseCustomModel}
+                          >{settings.custom_model_path
+                            ? 'Choose another checkpoint…'
+                            : 'Choose checkpoint…'}</button
+                        >
+                        {#if customModelNeedsOptIn}
+                          <label class="terms"
+                            ><input
+                              type="checkbox"
+                              checked={settings.allow_unsafe_pickle_model}
+                              on:change={(event) =>
+                                updateSettings({
+                                  allow_unsafe_pickle_model: event.currentTarget.checked,
+                                })}
+                            /> Allow this pickle-based checkpoint. It may execute code inside the inference
+                            worker.</label
+                          >
+                        {/if}
+                      {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
+                        {#key stage.model.model_id}<LicenseDownload
+                            model={stage.model}
+                            disabled={settingsLocked ||
+                              preparing ||
+                              (Boolean(activeDownload) && activeDownload !== stage.model.model_id)}
+                            downloading={activeDownload === stage.model.model_id}
+                            progress={snapshot.runtime.download_progress}
+                            download={() => runDownload(stage.model)}
+                            openLicense={() => api.openModelLicense(stage.model!.model_id)}
+                            openSource={() => api.openModelSource(stage.model!.model_id)}
+                          />{/key}
+                      {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
+                        <p class="model-description">
+                          Optional companion pass for faces. The exact checkpoint's redistribution
+                          and training-data rights are not verified, so LocalSR only accepts a
+                          matching user-supplied copy.
+                        </p>
+                        {#if stage.model.terms_acceptance_required}
+                          <label class="terms"
+                            ><input type="checkbox" bind:checked={faceTermsAccepted} /> I understand that
+                            the checkpoint rights are unresolved and will provide a copy I am permitted
+                            to use.</label
+                          >
+                        {/if}
+                        <button
+                          class="button full"
+                          class:primary={stage.model.automated_download_allowed}
+                          disabled={Boolean(activeDownload) &&
+                            activeDownload !== stage.model.model_id}
+                          on:click={() => runDownload(stage.model, faceTermsAccepted)}
+                        >
+                          {activeDownload === stage.model.model_id
+                            ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                            : stage.model.automated_download_allowed
+                              ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
+                              : 'Choose externally downloaded face checkpoint…'}
+                        </button>
+                      {:else if (stage.model || stage.videoModel) && !stage.installed}
+                        {#if stage.model?.terms_acceptance_required}
+                          <label class="terms"
+                            ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model
+                            license and restrictions.</label
+                          >
+                        {/if}
+                        <button
+                          class="button full"
+                          class:primary={stage.canDownload}
+                          disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
+                            preparing ||
+                            (Boolean(activeDownload) &&
+                              activeDownload !== (stage.model ?? stage.videoModel)?.model_id)}
+                          on:click={() => runDownload(stage.model ?? stage.videoModel)}
+                        >
+                          {activeDownload === (stage.model ?? stage.videoModel)?.model_id
+                            ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                            : stage.canDownload
+                              ? `Download ${formatBytes(stage.sizeBytes)}`
+                              : 'Choose externally downloaded checkpoint…'}
+                        </button>
+                        {#if activeDownload === (stage.model ?? stage.videoModel)?.model_id}<div
+                            class="download-track"
+                          >
+                            <i style={`width:${snapshot.runtime.download_progress}%`}></i>
+                          </div>{/if}
+                      {/if}
+                    </div>
+                    <span class="state" class:ok={stage.installed} class:warn={stage.needsFile}
+                      >{stage.installed
+                        ? '✓ On this computer'
+                        : activeDownload === (stage.model ?? stage.videoModel)?.model_id
+                          ? `${Math.round(snapshot.runtime.download_progress)}%`
+                          : stage.needsFile
+                            ? 'Needs your file'
+                            : 'Download'}</span
+                    >
+                  </div>
+                {/each}
+              </div>
+              {#if faceEnabled && faceModel}
+                <div class="range-row">
+                  <label for="face-fidelity"
+                    >Face fidelity <b>{settings.face_fidelity}% restored</b></label
+                  ><input
+                    id="face-fidelity"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={settings.face_fidelity}
+                    on:input={(event) =>
+                      updateSettings({ face_fidelity: Number(event.currentTarget.value) })}
+                  /><small
+                    >0% retains the resampled original face; 100% applies the strongest restoration.
+                    Non-face regions keep the primary result.</small
                   >
                 </div>
-                {#if licenseReviewModel}
-                  {#key licenseReviewModel.model_id}<LicenseDownload
-                      model={licenseReviewModel}
-                      disabled={settingsLocked ||
-                        (Boolean(activeDownload) && activeDownload !== licenseReviewModel.model_id)}
-                      downloading={activeDownload === licenseReviewModel.model_id}
-                      progress={snapshot.runtime.download_progress}
-                      download={() => runDownload(licenseReviewModel)}
-                      openLicense={() => api.openModelLicense(licenseReviewModel!.model_id)}
-                      openSource={() => api.openModelSource(licenseReviewModel!.model_id)}
-                    />{/key}
-                {/if}
-                {#if !licenseReviewModel && currentDownloadTarget.terms_acceptance_required && !currentDownloadTarget.installed}
-                  <label class="terms"
-                    ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model license
-                    and restrictions.</label
-                  >
-                {/if}
-                {#if !currentDownloadTarget.installed && !licenseReviewModel}
-                  <button
-                    class="button full"
-                    class:primary={currentDownloadTarget.automated_download_allowed}
-                    disabled={(usingTemporalVideo && Boolean(temporalUnavailableReason)) ||
-                      (Boolean(activeDownload) &&
-                        activeDownload !== currentDownloadTarget.model_id)}
-                    on:click={() => runDownload()}
-                  >
-                    {activeDownload === currentDownloadTarget.model_id
-                      ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
-                      : currentDownloadTarget.automated_download_allowed
-                        ? `Download ${formatBytes('size_bytes' in currentDownloadTarget ? currentDownloadTarget.size_bytes : currentDownloadTarget.total_size_bytes)}`
-                        : 'Choose externally downloaded checkpoint…'}
-                  </button>
-                  {#if activeDownload === currentDownloadTarget.model_id}<div
-                      class="download-track"
-                    >
-                      <i style={`width:${snapshot.runtime.download_progress}%`}></i>
-                    </div>{/if}
-                {:else if currentDownloadTarget.installed}
-                  <div class="installed-badge">✓ Installed · integrity checked before use</div>
-                {/if}
               {/if}
+              {#if settings.fixes.includes('faces') && faceModel && !faceEngineAvailable}
+                <p class="inline-warning" role="status">
+                  Face-aware processing stays off: the local face detector is not packaged for this
+                  platform. The normal model still works.
+                </p>
+              {/if}
+              <p class="model-note">
+                {#if activeQuality === 'custom'}
+                  Chosen by you. Quick and Best re-resolve from the catalog when you pick them
+                  again.
+                {:else if downloads.stages.length}
+                  {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
+                  'illustration'
+                    ? 'illustrations'
+                    : 'photos'}. {downloads.stages.length === 1
+                    ? 'One download'
+                    : `${downloads.stages.length} downloads`}
+                  ({formatBytes(downloads.bytes)}) happen{downloads.stages.length === 1 ? 's' : ''} when
+                  you press Start; each file's SHA-256 is checked before it is used.
+                {:else}
+                  {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
+                  'illustration'
+                    ? 'illustrations'
+                    : 'photos'}. Everything this job needs is on this computer.
+                {/if}
+              </p>
               {#if usingTemporalVideo}
                 <VideoMemory
                   lowMemory={settings.video_low_memory ?? true}
@@ -1629,143 +2066,6 @@
                 {/if}
               {/if}
             </section>
-
-            {#if settings.task === 'upscale' && !usingTemporalVideo}
-              <section class="control-section model-section" aria-labelledby="preprocess-heading">
-                <label id="preprocess-heading" class="eyebrow" for="preprocess-model"
-                  >RESTORE BEFORE UPSCALE</label
-                >
-                <select
-                  id="preprocess-model"
-                  value={settings.preprocess_model_id}
-                  on:change={(event) =>
-                    updateSettings({ preprocess_model_id: event.currentTarget.value })}
-                >
-                  <option value="">None · upscale directly</option>
-                  {#each preprocessModels as model}
-                    <option value={model.model_id}
-                      >{model.name}{model.installed
-                        ? ' · Installed'
-                        : ` · ${formatBytes(model.size_bytes)}`}</option
-                    >
-                  {/each}
-                </select>
-                {#if preprocessModel}
-                  <p class="model-description">
-                    {preprocessModel.description} This lossless in-memory stage runs before the selected
-                    upscaler.
-                  </p>
-                  <div class="license-line">
-                    <span>{preprocessModel.license_name}</span><span>{preprocessModel.author}</span>
-                  </div>
-                  {#if !preprocessModel.installed}
-                    <button
-                      class="button full"
-                      class:primary={preprocessModel.automated_download_allowed}
-                      disabled={Boolean(activeDownload) &&
-                        activeDownload !== preprocessModel.model_id}
-                      on:click={() => runDownload(preprocessModel, false)}
-                    >
-                      {activeDownload === preprocessModel.model_id
-                        ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
-                        : preprocessModel.automated_download_allowed
-                          ? `Download restoration model · ${formatBytes(preprocessModel.size_bytes)}`
-                          : 'Choose externally downloaded checkpoint…'}
-                    </button>
-                    {#if activeDownload === preprocessModel.model_id}<div class="download-track">
-                        <i style={`width:${snapshot.runtime.download_progress}%`}></i>
-                      </div>{/if}
-                  {:else}
-                    <div class="installed-badge">
-                      ✓ Restoration stage installed · integrity checked before use
-                    </div>
-                  {/if}
-                {/if}
-              </section>
-            {/if}
-
-            {#if settings.task !== 'denoise' && !usingTemporalVideo && faceModel}
-              <section class="control-section">
-                <label class="check-row">
-                  <input
-                    type="checkbox"
-                    checked={faceEnabled}
-                    on:change={(event) => {
-                      if (event.currentTarget.checked && !faceEngineAvailable) {
-                        showModal(
-                          'Face detector unavailable',
-                          'This preview keeps face-aware processing disabled unless a supported local detector is packaged for this platform. The normal model still works.',
-                        );
-                        return;
-                      }
-                      updateSettings({ enable_face_model: event.currentTarget.checked });
-                    }}
-                  />
-                  Face-aware pass with {faceModel.name}
-                  {settings.task === 'video' ? '· Labs' : ''}<em
-                    >{faceEngineAvailable
-                      ? 'checkpoint rights review required'
-                      : 'detector unavailable'}</em
-                  >
-                </label>
-                {#if !faceEngineAvailable}
-                  <p class="model-description">
-                    Visible for workflow parity, but disabled because the OpenCV face-detector
-                    runtime is missing from this package.
-                  </p>
-                {:else if faceEnabled}
-                  <p class="model-description">
-                    Optional companion pass for faces. The exact checkpoint's redistribution and
-                    training-data rights are not verified, so LocalSR only accepts a matching
-                    user-supplied copy.
-                  </p>
-                  <div class="range-row">
-                    <label for="face-fidelity"
-                      >Face fidelity <b>{settings.face_fidelity}% restored</b></label
-                    ><input
-                      id="face-fidelity"
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="5"
-                      value={settings.face_fidelity}
-                      on:input={(event) =>
-                        updateSettings({ face_fidelity: Number(event.currentTarget.value) })}
-                    /><small
-                      >0% retains the resampled original face; 100% applies the strongest
-                      restoration. Non-face regions keep the primary result.</small
-                    >
-                  </div>
-                  {#if faceModel.terms_acceptance_required && !faceModel.installed}
-                    <label class="terms"
-                      ><input type="checkbox" bind:checked={faceTermsAccepted} /> I understand that the
-                      checkpoint rights are unresolved and will provide a copy I am permitted to use.</label
-                    >
-                  {/if}
-                  {#if !faceModel.installed}
-                    <button
-                      class="button full"
-                      class:primary={faceModel.automated_download_allowed}
-                      disabled={Boolean(activeDownload) && activeDownload !== faceModel.model_id}
-                      on:click={() => runDownload(faceModel, faceTermsAccepted)}
-                    >
-                      {activeDownload === faceModel.model_id
-                        ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
-                        : faceModel.automated_download_allowed
-                          ? `Download companion · ${formatBytes(faceModel.size_bytes)}`
-                          : 'Choose externally downloaded face checkpoint…'}
-                    </button>
-                    {#if activeDownload === faceModel.model_id}<div class="download-track">
-                        <i style={`width:${snapshot.runtime.download_progress}%`}></i>
-                      </div>{/if}
-                  {:else}
-                    <div class="installed-badge">
-                      ✓ Face companion installed · checked before use
-                    </div>
-                  {/if}
-                {/if}
-              </section>
-            {/if}
 
             <AdvancedSettings
               {settings}
@@ -1878,6 +2178,15 @@
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
           >{cancelling ? 'Cancelling…' : 'Cancel queue'}</button
         >
+      {:else if canPrepare || preparing}
+        <button
+          class="button primary start"
+          disabled={preparing}
+          on:click={() => void prepareAndStart()}
+          >{preparing
+            ? 'Downloading…'
+            : `Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
+        >
       {:else}
         <button class="button primary start" disabled={!canStart} on:click={() => start()}
           >{settings.batch_mode
@@ -1885,13 +2194,40 @@
             : settings.task === 'video'
               ? 'Start selected video'
               : settings.task === 'denoise'
-                ? 'Denoise selected'
+                ? 'Restore selected'
                 : 'Upscale selected'}</button
         >
       {/if}
     </div>
   </footer>
 </div>
+
+{#if libraryOpen}
+  <ModelLibrary
+    {snapshot}
+    {settings}
+    context={{
+      task: settings.task,
+      content: settings.content,
+      quality: activeQuality,
+      slot: libraryContext.slot,
+      fix: libraryContext.fix,
+    }}
+    device={activeDevice}
+    {activeDownload}
+    downloadProgress={snapshot.runtime.download_progress}
+    busy={settingsLocked || preparing}
+    close={() => (libraryOpen = false)}
+    useForJob={useModelForJob}
+    pin={pinPreset}
+    download={(model) => runDownload(model, false)}
+    importFile={(model, accepted) => runDownload(model, accepted)}
+    remove={removeModel}
+    chooseCustom={chooseCustomModel}
+    openLicense={api.openModelLicense}
+    openSource={api.openModelSource}
+  />
+{/if}
 
 {#if modalTitle}
   <div class="modal-backdrop" role="presentation" on:click={closeFromBackdrop}>

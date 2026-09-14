@@ -41,9 +41,23 @@ export interface CatalogModel {
   terms_acceptance_required: boolean;
   engine_id: string;
   support_tier: string;
+  // Model-library fields (catalog schema 2). Optional so an older manifest or
+  // a hand-built test model still type-checks; helpers derive fallbacks.
+  rights_status?: RightsStatus;
+  display_name?: string;
+  role?: string;
+  stage?: StageKind;
+  fixes?: FixKind[];
+  content?: ContentKind[];
   installed: boolean;
   installed_path?: string;
 }
+
+export type Quality = 'quick' | 'best' | 'custom';
+export type ContentKind = 'photo' | 'illustration' | 'face';
+export type FixKind = 'noise' | 'jpeg' | 'blur' | 'faces';
+export type StageKind = 'upscale' | 'deblock' | 'restore' | 'face_restore';
+export type RightsStatus = 'verified' | 'attribution' | 'unresolved' | 'non_commercial';
 
 export interface ModelFile {
   role: string;
@@ -177,6 +191,9 @@ export interface Recipe {
   enable_face_model?: boolean;
   face_fidelity?: number;
   stages?: RecipeStage[];
+  quality?: Quality | '';
+  content?: Exclude<ContentKind, 'face'> | '';
+  fixes?: FixKind[];
 }
 
 export interface RecipeStage {
@@ -214,6 +231,13 @@ export interface UiSettings {
   face_fidelity: number;
   enable_live_preview: boolean;
   allow_unsafe_pickle_model: boolean;
+  // Model-library state. `quality` is the active recipe ('' before any choice,
+  // 'custom' after a manual pick); `preset_pins` maps a slot such as
+  // "upscale/photo/best" to the checkpoint that slot is pinned to.
+  quality: Quality | '';
+  content: Exclude<ContentKind, 'face'>;
+  fixes: FixKind[];
+  preset_pins: Record<string, string>;
 }
 
 export interface VideoMemoryStatus {

@@ -1,8 +1,237 @@
 import { writable } from 'svelte/store';
 import { demoSnapshot } from './demo';
-import type { AppSnapshot, CatalogModel, TaskKind, WorkerEnvelope } from './types';
+import type {
+  AppSnapshot,
+  CatalogModel,
+  CatalogVideoModel,
+  ContentKind,
+  DeviceInfo,
+  FixKind,
+  Quality,
+  TaskKind,
+  UiSettings,
+  WorkerEnvelope,
+} from './types';
 
 export const appState = writable<AppSnapshot>(demoSnapshot());
+
+export const FIX_LABELS: Record<FixKind, string> = {
+  noise: 'Noise',
+  jpeg: 'JPEG artifacts',
+  blur: 'Blur',
+  faces: 'Faces',
+};
+
+export const STAGE_LABELS: Record<string, string> = {
+  deblock: 'Fix JPEG',
+  restore: 'Restore',
+  upscale: 'Upscale',
+  face_restore: 'Faces',
+  video: 'Video',
+};
+
+/** Catalog name without its role suffix, with `4x` written `×4`. */
+export function displayName(model: { name: string; display_name?: string }): string {
+  if (model.display_name) return model.display_name;
+  return model.name
+    .split(' — ')[0]
+    .replace(' 4x ', ' ×4 ')
+    .replace(' 2x ', ' ×2 ')
+    .replace(' 1x ', ' ×1 ');
+}
+
+/** Problems a 1× checkpoint fixes, derived from purposes when the catalog omits it. */
+export function fixesOf(model: CatalogModel): FixKind[] {
+  if (model.fixes?.length) return model.fixes;
+  if (model.native_scale !== 1 || model.purposes.includes('face')) return [];
+  const found: FixKind[] = [];
+  if (model.purposes.includes('denoise')) found.push('noise');
+  if (model.purposes.includes('deblur')) found.push('blur');
+  if (model.purposes.includes('restoration') && !found.length) found.push('jpeg');
+  return found;
+}
+
+/**
+ * Mirrors `presets.py`: Quick and Best never pick a checkpoint whose rights are
+ * unresolved or non-commercial. Labs is a separate axis (validation), so a Labs
+ * model with verified rights stays eligible.
+ */
+export function rightsAllowPreset(model: CatalogModel): boolean {
+  return model.commercial_use_allowed === true;
+}
+
+function contentMatch(model: CatalogModel, content: ContentKind): number {
+  if (content === 'illustration') {
+    if (model.purposes.includes('illustration') || model.purposes.includes('anime')) return 2;
+    return model.purposes.includes('general') ? 1 : 0;
+  }
+  if (model.purposes.includes('photo')) return 2;
+  return model.purposes.includes('general') ? 1 : 0;
+}
+
+function rankForQuality(models: CatalogModel[], quality: 'quick' | 'best'): CatalogModel[] {
+  return [...models].sort((left, right) => {
+    if (quality === 'quick') {
+      return (
+        right.speed_tier - left.speed_tier ||
+        right.speed_factor - left.speed_factor ||
+        left.memory_factor - right.memory_factor ||
+        left.size_bytes - right.size_bytes ||
+        left.model_id.localeCompare(right.model_id)
+      );
+    }
+    return (
+      right.quality_tier - left.quality_tier ||
+      right.size_bytes - left.size_bytes ||
+      right.speed_tier - left.speed_tier ||
+      left.model_id.localeCompare(right.model_id)
+    );
+  });
+}
+
+export function presetSlot(task: TaskKind, content: ContentKind, quality: Quality): string {
+  return `${task}/${content}/${quality}`;
+}
+
+/** The 1× checkpoint a Fix chip resolves to for the chosen quality. */
+export function chooseFixModel(
+  snapshot: AppSnapshot,
+  fix: Exclude<FixKind, 'faces'>,
+  quality: 'quick' | 'best',
+): CatalogModel | undefined {
+  const candidates = snapshot.catalog.models.filter(
+    (model) =>
+      model.native_scale === 1 &&
+      !model.purposes.includes('face') &&
+      fixesOf(model).includes(fix) &&
+      rightsAllowPreset(model),
+  );
+  return rankForQuality(candidates, quality)[0];
+}
+
+export type Fit = 'runs' | 'heavy' | 'too_heavy' | 'unknown';
+
+/**
+ * Hardware fit from the catalog's memory estimate against the device's total
+ * memory: below two-thirds runs well, above it needs safe-memory mode, above
+ * the total it will not fit. Shared Apple memory includes the OS, so this is
+ * deliberately conservative.
+ */
+export function fitFor(model: { vram_estimate_mb: number }, device?: DeviceInfo): Fit {
+  if (!device || !device.total_memory || !model.vram_estimate_mb) return 'unknown';
+  const needed = model.vram_estimate_mb * 1024 * 1024;
+  if (needed > device.total_memory) return 'too_heavy';
+  if (needed > (device.total_memory * 2) / 3) return 'heavy';
+  return 'runs';
+}
+
+export const FIT_LABELS: Record<Fit, string> = {
+  runs: 'Runs well here',
+  heavy: 'Heavy here · safe-memory mode',
+  too_heavy: 'Too heavy for this device',
+  unknown: '',
+};
+
+export interface PlanStage {
+  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
+  label: string;
+  model?: CatalogModel;
+  videoModel?: CatalogVideoModel;
+  custom?: string;
+  installed: boolean;
+  /** Missing, and the catalog allows LocalSR to fetch it. */
+  canDownload: boolean;
+  /** Missing, and only a user-supplied copy is accepted. */
+  needsFile: boolean;
+  sizeBytes: number;
+}
+
+/**
+ * The stages the current settings will run, in order. This reads what is
+ * selected (it never re-resolves), so the plan card always tells the truth
+ * about the next Start.
+ */
+export function resolvePlan(
+  snapshot: AppSnapshot,
+  settings: UiSettings,
+  options: {
+    faceModel?: CatalogModel;
+    faceEnabled: boolean;
+    usingTemporalVideo: boolean;
+    selectedVideoModel?: CatalogVideoModel;
+  },
+): PlanStage[] {
+  const stages: PlanStage[] = [];
+  const byId = (id: string): CatalogModel | undefined =>
+    snapshot.catalog.models.find((model) => model.model_id === id);
+  const stageFor = (
+    kind: PlanStage['kind'],
+    label: string,
+    model: CatalogModel | undefined,
+  ): PlanStage | undefined =>
+    model && {
+      kind,
+      label,
+      model,
+      installed: model.installed,
+      canDownload: !model.installed && model.automated_download_allowed,
+      needsFile: !model.installed && !model.automated_download_allowed,
+      sizeBytes: model.installed ? 0 : model.size_bytes,
+    };
+
+  if (settings.task === 'upscale' && settings.preprocess_model_id) {
+    const model = byId(settings.preprocess_model_id);
+    const kind =
+      model?.stage === 'deblock' || fixesOf(model ?? ({} as CatalogModel)).includes('jpeg')
+        ? 'deblock'
+        : 'restore';
+    const stage = stageFor(kind, kind === 'deblock' ? 'Fix JPEG' : 'Fix first', model);
+    if (stage) stages.push(stage);
+  }
+
+  if (options.usingTemporalVideo && options.selectedVideoModel) {
+    const video = options.selectedVideoModel;
+    stages.push({
+      kind: 'video',
+      label: 'Video',
+      videoModel: video,
+      installed: video.installed,
+      canDownload: !video.installed && video.automated_download_allowed,
+      needsFile: !video.installed && !video.automated_download_allowed,
+      sizeBytes: video.installed ? 0 : video.total_size_bytes,
+    });
+  } else if (settings.selected_model_id === '__custom__') {
+    stages.push({
+      kind: settings.task === 'denoise' ? 'restore' : 'upscale',
+      label: settings.task === 'denoise' ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      custom: settings.custom_model_path,
+      installed: Boolean(settings.custom_model_path),
+      canDownload: false,
+      needsFile: !settings.custom_model_path,
+      sizeBytes: 0,
+    });
+  } else {
+    const primary = byId(settings.selected_model_id);
+    const stage = stageFor(
+      settings.task === 'denoise' ? 'restore' : 'upscale',
+      settings.task === 'denoise' ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      primary,
+    );
+    if (stage) stages.push(stage);
+  }
+
+  if (options.faceEnabled && options.faceModel && settings.task !== 'denoise') {
+    const stage = stageFor('face_restore', 'Faces', options.faceModel);
+    if (stage) stages.push(stage);
+  }
+  return stages;
+}
+
+/** Stages LocalSR can fetch itself before the job, and their total size. */
+export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; bytes: number } {
+  const pending = stages.filter((stage) => stage.canDownload);
+  return { stages: pending, bytes: pending.reduce((total, stage) => total + stage.sizeBytes, 0) };
+}
 
 export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): CatalogModel[] {
   if (task === 'upscale') {
@@ -21,27 +250,35 @@ export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): Catal
   return [];
 }
 
+/**
+ * The checkpoint Quick or Best resolves to for a task and content type.
+ *
+ * A pin for the slot wins when it names a compatible model. Otherwise models
+ * that match the content exactly rank above general ones, rights must allow a
+ * preset, and the Quick/Best ordering mirrors `presets.py`. For the Restore
+ * task the fix chip decides the model instead (see `chooseFixModel`); here it
+ * falls back to the first eligible 1× model so a plan always exists.
+ */
 export function choosePresetModel(
   snapshot: AppSnapshot,
   task: TaskKind,
   quality: 'quick' | 'best',
+  content: ContentKind = 'photo',
+  pins: Record<string, string> = {},
 ): CatalogModel | undefined {
   const candidates = modelsForTask(snapshot, task);
-  return [...candidates].sort((left, right) => {
-    if (quality === 'quick') {
-      return (
-        right.speed_tier - left.speed_tier ||
-        right.speed_factor - left.speed_factor ||
-        left.memory_factor - right.memory_factor ||
-        left.size_bytes - right.size_bytes
-      );
-    }
-    return (
-      right.quality_tier - left.quality_tier ||
-      right.size_bytes - left.size_bytes ||
-      right.speed_tier - left.speed_tier
-    );
-  })[0];
+  const pinned = candidates.find(
+    (model) => model.model_id === pins[presetSlot(task, content, quality)],
+  );
+  if (pinned) return pinned;
+  const eligible = candidates.filter(
+    (model) => rightsAllowPreset(model) && (task === 'denoise' || contentMatch(model, content) > 0),
+  );
+  if (task === 'denoise') return rankForQuality(eligible, quality)[0];
+  const ranked = rankForQuality(eligible, quality);
+  return ranked.sort(
+    (left, right) => contentMatch(right, content) - contentMatch(left, content),
+  )[0];
 }
 
 export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {

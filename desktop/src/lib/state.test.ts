@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
 import {
   applyWorkerEnvelope,
+  chooseFixModel,
   choosePresetModel,
+  displayName,
+  fitFor,
   formatBytes,
   formatDuration,
   modelsForTask,
+  pendingDownloads,
+  resolvePlan,
   resultPreviewForSelectedMedia,
 } from './state';
 
@@ -356,4 +361,103 @@ it('keeps temporal memory evidence separate from progress and rejects other jobs
   expect(snapshot.runtime.video_memory?.oom).toBe(true);
   snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'next' } });
   expect(snapshot.runtime.video_memory).toBeUndefined();
+});
+
+describe('model library resolution', () => {
+  it('resolves Quick and Best by content and honours a pinned slot', () => {
+    const snapshot = demoSnapshot();
+    expect(choosePresetModel(snapshot, 'upscale', 'best', 'illustration')?.model_id).toBe(
+      'realplksr_hfa2k_anime_x4',
+    );
+    expect(choosePresetModel(snapshot, 'upscale', 'quick', 'illustration')?.model_id).toBe(
+      'realplksr_hfa2k_anime_x4',
+    );
+    expect(
+      choosePresetModel(snapshot, 'upscale', 'best', 'photo', {
+        'upscale/photo/best': 'hat_l_x4_imagenet',
+      })?.model_id,
+    ).toBe('hat_l_x4_imagenet');
+    // A pin naming a model that is not a candidate for the task is ignored.
+    expect(
+      choosePresetModel(snapshot, 'upscale', 'best', 'photo', {
+        'upscale/photo/best': 'fbcnn_color',
+      })?.model_id,
+    ).toBe('realplksr_nomoswebphoto_x4');
+  });
+
+  it('never lets Quick or Best pick a checkpoint with unresolved rights', () => {
+    const snapshot = demoSnapshot();
+    const best = snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!;
+    snapshot.catalog.models.push({
+      ...best,
+      model_id: 'tempting_unverified_x4',
+      quality_tier: 4,
+      size_bytes: best.size_bytes + 1,
+      commercial_use_allowed: null,
+      rights_status: 'unresolved',
+      support_tier: 'labs',
+    });
+    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
+      'realplksr_nomoswebphoto_x4',
+    );
+  });
+
+  it('maps fix chips to restoration checkpoints by quality', () => {
+    const snapshot = demoSnapshot();
+    expect(chooseFixModel(snapshot, 'jpeg', 'best')?.model_id).toBe('fbcnn_color');
+    expect(chooseFixModel(snapshot, 'blur', 'quick')?.model_id).toBe('nafnet_gopro_deblur');
+    expect(chooseFixModel(snapshot, 'noise', 'quick')?.model_id).toBe('denoise_realplksr_1x');
+    expect(chooseFixModel(snapshot, 'noise', 'best')?.model_id).toBe('nafnet_sidd_width64');
+  });
+
+  it('lists the stages a job will run and what still needs downloading', () => {
+    const snapshot = demoSnapshot();
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.preprocess_model_id = 'fbcnn_color';
+    snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
+    snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!.installed = true;
+    const face = snapshot.catalog.models.find((model) => model.model_id === 'hat_l_x4_face');
+    const plan = resolvePlan(snapshot, snapshot.settings, {
+      faceModel: face,
+      faceEnabled: true,
+      usingTemporalVideo: false,
+    });
+    expect(plan.map((stage) => stage.kind)).toEqual(['deblock', 'upscale', 'face_restore']);
+    expect(plan[0].canDownload).toBe(true);
+    expect(plan[1].installed).toBe(true);
+    expect(plan[2].needsFile).toBe(true);
+    const pending = pendingDownloads(plan);
+    expect(pending.stages.map((stage) => stage.model?.model_id)).toEqual(['fbcnn_color']);
+    expect(pending.bytes).toBe(plan[0].model!.size_bytes);
+  });
+
+  it('judges hardware fit against the device memory', () => {
+    const device = {
+      id: 'mps',
+      type: 'mps',
+      name: 'Apple GPU',
+      total_memory: 8 * 1024 ** 3,
+      free_memory: 4 * 1024 ** 3,
+      supports_fp16: true,
+      is_integrated: true,
+      recommended_tile_sizes: [64],
+    };
+    expect(fitFor({ vram_estimate_mb: 1200 }, device)).toBe('runs');
+    expect(fitFor({ vram_estimate_mb: 6000 }, device)).toBe('heavy');
+    expect(fitFor({ vram_estimate_mb: 9000 }, device)).toBe('too_heavy');
+    expect(fitFor({ vram_estimate_mb: 0 }, device)).toBe('unknown');
+    expect(fitFor({ vram_estimate_mb: 1200 }, undefined)).toBe('unknown');
+  });
+
+  it('shortens catalog names for the library rows', () => {
+    expect(displayName({ name: 'RealPLKSR 4x NomosWebPhoto — Best' })).toBe(
+      'RealPLKSR ×4 NomosWebPhoto',
+    );
+    expect(displayName({ name: 'HAT-L ×4 ImageNet — Large' })).toBe('HAT-L ×4 ImageNet');
+    expect(displayName({ name: 'x', display_name: 'Given' })).toBe('Given');
+  });
 });

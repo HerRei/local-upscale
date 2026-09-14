@@ -56,10 +56,14 @@ Start with a small image or a short clip and inspect the output before a long ru
 
 ## Models and Labs
 
-Choose a lightweight SPAN model for quick photo upscaling, HAT-S/HAT-L for general
-restoration, or a specialist such as NomosWebPhoto, HFA2k or NAFNet. Models download
-on demand and are checked against their pinned size and SHA-256 before loading.
-The [model guide](docs/models/README.md) lists the full catalog and each license.
+Choose Quick or Best, say whether the image is a photo or an illustration, and tick the
+problems to fix first (noise, JPEG artifacts, blur, faces); the plan card names the
+checkpoint each stage will run, with its license, size and hardware fit. The model
+library behind “Change…” groups every verified model by what it does, shows its
+provenance, and manages installed files. Models download on demand and are checked
+against their pinned size and SHA-256 before loading. The
+[model guide](docs/models/README.md) lists the full catalog and each license;
+[ADR 0007](docs/adr/0007-model-library.md) records the design.
 
 NomosWebPhoto and HFA2k are by Philip Hofmann (Phips / Phhofm), under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). LocalSR downloads the

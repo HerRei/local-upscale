@@ -831,6 +831,51 @@ pub async fn download_model(
     downloads::download_model(state.inner().clone(), app, model_id, accepted_terms).await
 }
 
+/// Remove an installed catalog checkpoint from the shared model directory.
+///
+/// Only files that the catalog itself placed under `model_root` are eligible,
+/// so a user-supplied custom checkpoint elsewhere on disk is never touched.
+/// Processing and downloads must be idle: a job may be reading the file.
+#[tauri::command]
+pub fn remove_model(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    model_id: String,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Err(AppError::Validation(
+            "finish or cancel processing before removing a model".into(),
+        ));
+    }
+    if !lock(&state.runtime)?.download_model_id.is_empty() {
+        return Err(AppError::Validation(
+            "wait for the current download to finish before removing a model".into(),
+        ));
+    }
+    let path = {
+        let catalog = lock(&state.catalog)?;
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.model_id == model_id)
+            .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
+        if !model.installed {
+            return Err(AppError::Validation("the model is not installed".into()));
+        }
+        state
+            .paths
+            .model_root
+            .join(crate::catalog::safe_model_filename(&model.filename)?)
+    };
+    if path.is_file() {
+        fs::remove_file(&path)?;
+    }
+    state.refresh_catalog()?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn cancel_download(state: State<'_, Arc<AppState>>, model_id: String) -> AppResult<()> {
     downloads::cancel_download(&state, &model_id)
@@ -1052,6 +1097,23 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     {
         return Err(AppError::Validation("unknown task".into()));
     }
+    if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
+        || !matches!(settings.content.as_str(), "" | "photo" | "illustration")
+        || settings.fixes.len() > 4
+        || !settings
+            .fixes
+            .iter()
+            .all(|fix| matches!(fix.as_str(), "noise" | "jpeg" | "blur" | "faces"))
+        || settings.preset_pins.len() > 64
+        || !settings
+            .preset_pins
+            .iter()
+            .all(|(slot, model_id)| slot.len() <= 64 && model_id.len() <= 64)
+    {
+        return Err(AppError::Validation(
+            "unsupported quality, content, fix, or preset pin setting".into(),
+        ));
+    }
     if !matches!(
         settings.output_format.as_str(),
         "png" | "jpg" | "tif" | "webp"
@@ -1112,6 +1174,7 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         face_fidelity: input.face_fidelity,
         enable_live_preview: input.enable_live_preview,
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
+        ..UiSettings::default()
     };
     validate_settings(&settings)?;
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
@@ -2075,6 +2138,9 @@ mod tests {
             enable_face_model: None,
             face_fidelity: None,
             stages: Vec::new(),
+            quality: String::new(),
+            content: String::new(),
+            fixes: Vec::new(),
         };
         assert!(validate_recipe_stages(&legacy).is_ok());
 

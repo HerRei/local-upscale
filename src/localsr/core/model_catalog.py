@@ -72,6 +72,64 @@ class CatalogModel:
     # models without a compatible companion.
     pair_with: str = ""
     commercial_use_status: str = "allowed"
+    # One plain-language line for the model library ("Fast everyday photos").
+    role: str = ""
+    # Pipeline stage the checkpoint serves: upscale, deblock, restore, or
+    # face_restore. Derived from purposes and scale when left empty.
+    stage: str = ""
+
+    @property
+    def stage_kind(self) -> str:
+        if self.stage:
+            return self.stage
+        if ModelPurpose.FACE in self.purposes:
+            return "face_restore"
+        if self.native_scale > 1:
+            return "upscale"
+        if ModelPurpose.DENOISE in self.purposes or ModelPurpose.DEBLUR in self.purposes:
+            return "restore"
+        return "deblock"
+
+    @property
+    def fixes(self) -> tuple[str, ...]:
+        """Problems a 1× checkpoint fixes, in the vocabulary of the Fix chips."""
+        if self.native_scale != 1 or ModelPurpose.FACE in self.purposes:
+            return ()
+        found: list[str] = []
+        if ModelPurpose.DENOISE in self.purposes:
+            found.append("noise")
+        if ModelPurpose.DEBLUR in self.purposes:
+            found.append("blur")
+        if ModelPurpose.RESTORATION in self.purposes and not found:
+            found.append("jpeg")
+        return tuple(found)
+
+    @property
+    def content(self) -> tuple[str, ...]:
+        """Content types the checkpoint is meant for: photo, illustration, face."""
+        found: list[str] = []
+        if ModelPurpose.FACE in self.purposes:
+            found.append("face")
+        if ModelPurpose.PHOTO in self.purposes or ModelPurpose.GENERAL in self.purposes:
+            found.append("photo")
+        if ModelPurpose.ILLUSTRATION in self.purposes or ModelPurpose.ANIME in self.purposes:
+            found.append("illustration")
+        return tuple(found)
+
+    @property
+    def rights_status(self) -> str:
+        """Checkpoint rights, separate from validation status (support tier)."""
+        if self.commercial_use_status == "not-allowed":
+            return "non_commercial"
+        if self.commercial_use_status != "allowed":
+            return "unresolved"
+        return "attribution" if self.license_name.upper().startswith("CC") else "verified"
+
+    @property
+    def display_name(self) -> str:
+        """Catalog name without its role suffix, with ``4x`` written ``×4``."""
+        base = self.name.split(" — ", 1)[0]
+        return base.replace(" 4x ", " ×4 ").replace(" 2x ", " ×2 ").replace(" 1x ", " ×1 ")
 
     @property
     def size_megabytes(self) -> float:
@@ -129,6 +187,8 @@ FACE_DETECTOR_MODEL = CatalogModel(
 MODEL_CATALOG = (
     CatalogModel(
         model_id="hat_s_x4",
+        role="Lighter HAT for laptops and small GPUs",
+        stage="upscale",
         name="HAT-S ×4 — Slim",
         filename="HAT-S_SRx4.pth",
         description="The lightest official HAT variant. Best default for laptops and smaller GPUs.",
@@ -150,6 +210,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="hat_s_x4_face",
+        role="Face companion for HAT-S; bring your own checkpoint",
+        stage="face_restore",
         name="HAT-S ×4 Face — Restoration",
         filename="base_95k_interp_a0p1.pth",
         description=(
@@ -177,6 +239,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="hat_l_x4_imagenet",
+        role="Highest fidelity on clean sources; slow",
+        stage="upscale",
         name="HAT-L ×4 ImageNet — Large",
         filename="HAT-L_SRx4_ImageNet-pretrain.pth",
         description="The largest official HAT variant. Highest cost; intended for capable hardware.",
@@ -198,6 +262,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="hat_l_x4_face",
+        role="Face companion for HAT-L; bring your own checkpoint",
+        stage="face_restore",
         name="HAT-L ×4 Face — Restoration",
         filename="hat_l_x4_face_task4.pth",
         description=(
@@ -226,6 +292,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="denoise_realplksr_1x",
+        role="Fast photo denoising",
+        stage="restore",
         name="RealPLKSR Denoise — Slim",
         filename="1xDeNoise_realplksr_otf.pth",
         description="A very fast, lightweight denoising model trained on Nomosv2 to rapidly clean up noisy photos.",
@@ -248,6 +316,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="nafnet_sidd_width64",
+        role="Strongest camera-noise removal; large download",
+        stage="restore",
         name="NAFNet SIDD Width64 — Large",
         filename="NAFNet-SIDD-width64.pth",
         description=(
@@ -277,6 +347,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="realplksr_hfa2k_anime_x4",
+        role="Anime, illustration and clean line art",
+        stage="upscale",
         name="RealPLKSR 4x HFA2k — Anime",
         filename="4xHFA2k_ludvae_realplksr_dysample.pth",
         description="Fast RealPLKSR model trained for anime, illustrations, and clean line art.",
@@ -303,6 +375,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="span_photo_x4",
+        role="Fast everyday photos; seconds even on CPU",
+        stage="upscale",
         name="SPAN 4x NomosUni — Quick",
         filename="4xNomosUni_span_multijpg.pth",
         description="Ultra-lightweight SPAN photo upscaler used by the Quick Start preset.",
@@ -328,6 +402,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="realplksr_nomoswebphoto_x4",
+        role="Best photo detail; trained on real-world JPEG damage",
+        stage="upscale",
         name="RealPLKSR 4x NomosWebPhoto — Best",
         filename="4xNomosWebPhoto_RealPLKSR.pth",
         description="High-fidelity RealPLKSR photo upscaler used by the Best Quality preset.",
@@ -354,6 +430,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="realesrgan_x2plus",
+        role="Native 2× for modest enlargements",
+        stage="upscale",
         name="Real-ESRGAN ×2 — Compact",
         filename="RealESRGAN_x2plus.pth",
         description=(
@@ -381,6 +459,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="fbcnn_color",
+        role="Removes JPEG blocking before upscaling",
+        stage="deblock",
         name="FBCNN Color — JPEG Restoration",
         filename="fbcnn_color.pth",
         description=(
@@ -408,6 +488,8 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="nafnet_gopro_deblur",
+        role="Camera motion deblurring",
+        stage="restore",
         name="NAFNet GoPro Deblur",
         filename="NAFNet-GoPro-width64.pth",
         description="Single-image camera motion deblurring model",
