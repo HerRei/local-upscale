@@ -56,7 +56,6 @@ function show(id = 'a') {
     selectedMedia: video(id),
     resultPreview: '',
     completedVideoOutput: `/${id}-result.mp4`,
-    addFiles: async () => {},
   });
 }
 

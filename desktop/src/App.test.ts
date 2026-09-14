@@ -336,7 +336,8 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('heading', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Choose an image or video to enhance')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: '＋ Add Media' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Add Files…' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '＋ Add Media' })).toBeNull();
     expect(document.querySelector('.media-illustration svg .play-mark')).toBeTruthy();
   });
 

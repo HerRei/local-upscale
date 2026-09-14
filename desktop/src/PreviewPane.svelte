@@ -29,7 +29,6 @@
   export let activityLabel = '';
   export let processing = false;
   export let activeTileSize = 0;
-  export let addFiles: () => Promise<void>;
 
   let videoRequestId = '';
   let videoPreparation = false;
@@ -879,8 +878,7 @@
         <MediaIllustration />
         <h2>Choose an image or video to enhance</h2>
         <p>Upscale photos, artwork and video, or remove noise<br />with private local AI models.</p>
-        <button class="button primary" on:click={() => addFiles()}>＋ Add Media</button>
-        <p class="canvas-hint">Or add a whole folder from the Media pane.</p>
+        <p class="canvas-hint">Add files or a folder in the Media pane to get started.</p>
       </div>
     {/if}
   </div>

@@ -1488,6 +1488,7 @@
       {inflightMediaIds}
       {setBatchMode}
       {selectQueueMedia}
+      {addFiles}
       {addFolder}
       removeMedia={async (id) => {
         await api.removeMedia(id);
@@ -1512,7 +1513,6 @@
       comparisonError={selectedComparisonError}
       {completedVideoOutput}
       compactHidden={page !== 'preview'}
-      addFiles={() => addFiles()}
     />
 
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>

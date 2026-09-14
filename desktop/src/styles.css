@@ -277,7 +277,8 @@ input:focus-visible {
 }
 .empty-card {
   margin: 0 12px;
-  height: 160px;
+  padding: 22px 16px;
+  text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -290,9 +291,16 @@ input:focus-visible {
   font-size: calc(13px * var(--ui-scale));
 }
 .empty-card p {
-  margin: 4px 0 12px;
+  margin: 4px 0 14px;
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
+  line-height: 1.45;
+}
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
 }
 .empty-plus {
   display: grid;

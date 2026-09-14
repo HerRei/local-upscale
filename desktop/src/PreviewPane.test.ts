@@ -46,7 +46,6 @@ it('rejects denoise tiles arriving after the upscale stage established its raste
     selectedMedia,
     resultPreview: '',
     completedVideoOutput: '',
-    addFiles: async () => {},
   });
   const data = {
     job_id: 'two-stages',
@@ -125,7 +124,6 @@ it.each([1, 4])(
       selectedMedia: first,
       resultPreview: '',
       completedVideoOutput: '',
-      addFiles: async () => {},
     });
     await app.rerender({
       selectedMedia: {
@@ -211,7 +209,6 @@ it.each([1, 4])(
       selectedMedia,
       resultPreview: '',
       completedVideoOutput: '',
-      addFiles: async () => {},
     });
     const data = {
       job_id: 'fast',
@@ -287,7 +284,6 @@ it('paints the asynchronous JPEG after empty completion metadata, and rejects an
     selectedMedia,
     resultPreview: '',
     completedVideoOutput: '',
-    addFiles: async () => {},
   });
   const data = {
     job_id: 'job',
@@ -356,7 +352,6 @@ it('keeps the current source frame below completed tiles and rejects stale sourc
     processing: true,
     resultPreview: '',
     completedVideoOutput: '',
-    addFiles: async () => {},
   });
   const geometry = {
     job_id: 'job',
@@ -430,7 +425,6 @@ it('shows overlapping SeedVR2 regions over the source without inventing a HAT gr
     activityLabel: 'Encoding clip',
     resultPreview: '',
     completedVideoOutput: '',
-    addFiles: async () => {},
   });
   component.queueVideoSource(
     {

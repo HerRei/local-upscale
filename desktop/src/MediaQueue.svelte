@@ -12,6 +12,7 @@
   export let benchmarkRunning: boolean;
   export let inflightMediaIds: Set<string>;
   export let setBatchMode: (value: boolean) => void;
+  export let addFiles: (replace?: boolean) => Promise<void>;
   export let selectQueueMedia: (id: string) => Promise<void>;
   export let addFolder: () => Promise<void>;
   export let removeMedia: (id: string) => Promise<void>;
@@ -25,27 +26,32 @@
     >
   </div>
 
-  <div class="segmented">
-    <button
-      disabled={Boolean(activeJobId)}
-      class:active={!batchMode}
-      on:click={() => setBatchMode(false)}>Single</button
-    >
-    <button
-      disabled={Boolean(activeJobId)}
-      class:active={batchMode}
-      on:click={() => setBatchMode(true)}>Batch</button
-    >
-  </div>
-  <p class="mode-scope" class:warning={!batchMode && scopeWarning}>{singleScopeMessage}</p>
-
   {#if items.length === 0}
     <div class="empty-card">
-      <div class="empty-plus">＋</div>
-      <strong>No media yet</strong>
-      <p>Use <b>＋ Add Media</b> in the toolbar for images, camera RAW, or video clips.</p>
+      <div class="empty-plus" aria-hidden="true">＋</div>
+      <strong>Add media to begin</strong>
+      <p>Images, camera RAW, or video clips. A folder becomes a batch.</p>
+      <div class="empty-actions">
+        <button class="button primary" disabled={benchmarkRunning} on:click={() => addFiles(false)}
+          >Add Files…</button
+        >
+        <button class="button" disabled={benchmarkRunning} on:click={addFolder}>Add Folder…</button>
+      </div>
     </div>
   {:else}
+    <div class="segmented">
+      <button
+        disabled={Boolean(activeJobId)}
+        class:active={!batchMode}
+        on:click={() => setBatchMode(false)}>Single</button
+      >
+      <button
+        disabled={Boolean(activeJobId)}
+        class:active={batchMode}
+        on:click={() => setBatchMode(true)}>Batch</button
+      >
+    </div>
+    <p class="mode-scope" class:warning={!batchMode && scopeWarning}>{singleScopeMessage}</p>
     <div class="media-list">
       {#each items as media (media.id)}
         <div class="media-row" class:selected={media.selected}>
@@ -105,17 +111,17 @@
     </div>
   {/if}
 
-  <div class="media-actions">
-    <button
-      class="button"
-      title="Add every image in a folder as a batch"
-      disabled={benchmarkRunning || Boolean(activeJobId)}
-      on:click={addFolder}>Add Folder…</button
-    >
-    {#if items.length}<button
-        class="button danger ghost"
-        disabled={Boolean(activeJobId)}
-        on:click={clearMedia}>Clear</button
-      >{/if}
-  </div>
+  {#if items.length}
+    <div class="media-actions">
+      <button
+        class="button"
+        title="Add every image in a folder as a batch"
+        disabled={benchmarkRunning || Boolean(activeJobId)}
+        on:click={addFolder}>Add Folder…</button
+      >
+      <button class="button danger ghost" disabled={Boolean(activeJobId)} on:click={clearMedia}
+        >Clear</button
+      >
+    </div>
+  {/if}
 </aside>
