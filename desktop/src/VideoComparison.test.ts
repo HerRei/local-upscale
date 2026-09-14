@@ -112,4 +112,42 @@ describe('video comparison player', () => {
     expect(videos[0].getAttribute('src')).toBeNull();
     expect(videos[1].getAttribute('src')).toBeNull();
   });
+
+  it('zooms the playing comparison with the wheel and the zoom group, and pans when zoomed', async () => {
+    const { container } = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+    });
+    const viewport = container.querySelector('.video-viewport') as HTMLDivElement;
+    vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 450,
+      right: 800,
+      bottom: 450,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const videos = container.querySelectorAll('video');
+    const readZoom = () => screen.getByRole('group', { name: 'Video zoom' }).textContent;
+    expect(readZoom()).toContain('100%');
+    await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(readZoom()).toContain('125%');
+    expect(videos[0].style.transform).toContain('scale(1.25)');
+    expect(videos[1].style.transform).toBe(videos[0].style.transform);
+    await fireEvent.wheel(viewport, { deltaY: -100, clientX: 400, clientY: 225 });
+    expect(readZoom()).toContain('144%');
+    await fireEvent.pointerDown(viewport, { button: 0, clientX: 400, clientY: 225, pointerId: 1 });
+    await fireEvent.pointerMove(viewport, { clientX: 460, clientY: 235, pointerId: 1 });
+    await fireEvent.pointerUp(viewport, { pointerId: 1 });
+    expect(videos[0].style.transform).toContain('translate(60px, 10px)');
+    await fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    expect(readZoom()).toContain('100%');
+    expect(videos[0].style.transform).toContain('translate(0px, 0px) scale(1)');
+    expect((screen.getByRole('button', { name: 'Zoom out' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
 });

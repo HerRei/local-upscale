@@ -19,6 +19,91 @@
   let playbackError = '';
   let originalLoaded = false;
   let enhancedLoaded = false;
+  // Zoom applies the same transform to both video layers, so the clip edge
+  // and the divider (both in viewport coordinates) stay aligned at any zoom.
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 6;
+  let zoom = 1;
+  let panX = 0;
+  let panY = 0;
+  let panning = false;
+  let panStart = { x: 0, y: 0, panX: 0, panY: 0 };
+  $: videoTransform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+
+  function clampPan(x: number, y: number, scale: number): { x: number; y: number } {
+    const bounds = viewport?.getBoundingClientRect();
+    if (!bounds) return { x, y };
+    const limitX = ((scale - 1) * bounds.width) / 2;
+    const limitY = ((scale - 1) * bounds.height) / 2;
+    return {
+      x: Math.max(-limitX, Math.min(limitX, x)),
+      y: Math.max(-limitY, Math.min(limitY, y)),
+    };
+  }
+
+  export function setZoom(next: number, clientX?: number, clientY?: number): void {
+    const bounded = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    if (bounded === zoom) return;
+    if (bounded === 1 || !viewport) {
+      zoom = bounded;
+      panX = 0;
+      panY = 0;
+      return;
+    }
+    // Keep the point under the pointer (or the centre) fixed while zooming.
+    const bounds = viewport.getBoundingClientRect();
+    const pointerX = (clientX ?? bounds.left + bounds.width / 2) - bounds.left - bounds.width / 2;
+    const pointerY = (clientY ?? bounds.top + bounds.height / 2) - bounds.top - bounds.height / 2;
+    const ratio = bounded / zoom;
+    const next_ = clampPan(
+      pointerX - (pointerX - panX) * ratio,
+      pointerY - (pointerY - panY) * ratio,
+      bounded,
+    );
+    zoom = bounded;
+    panX = next_.x;
+    panY = next_.y;
+  }
+
+  export function resetZoom(): void {
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+  }
+
+  function wheel(event: WheelEvent): void {
+    event.preventDefault();
+    const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
+    setZoom(zoom * factor, event.clientX, event.clientY);
+  }
+
+  function panDown(event: PointerEvent): void {
+    if (event.button !== 0 || zoom <= 1) return;
+    if ((event.target as HTMLElement).closest('.video-divider')) return;
+    panning = true;
+    panStart = { x: event.clientX, y: event.clientY, panX, panY };
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+
+  function panMove(event: PointerEvent): void {
+    if (!panning) return;
+    const next = clampPan(
+      panStart.panX + (event.clientX - panStart.x),
+      panStart.panY + (event.clientY - panStart.y),
+      zoom,
+    );
+    panX = next.x;
+    panY = next.y;
+  }
+
+  function panUp(event: PointerEvent): void {
+    if (!panning) return;
+    panning = false;
+    const target = event.currentTarget as HTMLElement;
+    if (target.hasPointerCapture?.(event.pointerId))
+      target.releasePointerCapture?.(event.pointerId);
+  }
 
   function retryPlayback(): void {
     playbackError = '';
@@ -151,10 +236,23 @@
   on:pointerup|stopPropagation
   on:wheel|stopPropagation
 >
-  <div bind:this={viewport} class="video-viewport">
+  <div
+    bind:this={viewport}
+    class="video-viewport"
+    class:zoomed={zoom > 1}
+    class:panning
+    role="application"
+    aria-label="Video comparison viewport · scroll to zoom, drag to pan"
+    on:wheel={wheel}
+    on:pointerdown={panDown}
+    on:pointermove={panMove}
+    on:pointerup={panUp}
+    on:pointercancel={panUp}
+  >
     <video
       bind:this={original}
       src={originalSrc}
+      style={`transform:${videoTransform}`}
       muted
       playsinline
       preload="auto"
@@ -168,6 +266,7 @@
       <video
         bind:this={enhanced}
         src={enhancedSrc}
+        style={`transform:${videoTransform}`}
         playsinline
         preload="auto"
         on:loadedmetadata={updateDuration}
@@ -237,6 +336,22 @@
         ><option value="2">2×</option></select
       ></label
     >
+    <div class="video-zoom" role="group" aria-label="Video zoom">
+      <button
+        type="button"
+        aria-label="Zoom out"
+        disabled={zoom <= MIN_ZOOM}
+        on:click={() => setZoom(zoom / 1.25)}>−</button
+      >
+      <span>{Math.round(zoom * 100)}%</span>
+      <button
+        type="button"
+        aria-label="Zoom in"
+        disabled={zoom >= MAX_ZOOM}
+        on:click={() => setZoom(zoom * 1.25)}>＋</button
+      >
+      <button type="button" class:active={zoom === 1} on:click={resetZoom}>Fit</button>
+    </div>
   </div>
   {#if playbackError}
     <div class="video-error" role="alert">

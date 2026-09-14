@@ -677,7 +677,57 @@ input:focus-visible {
   font-size: calc(16px * var(--ui-scale));
 }
 .canvas-hint {
-  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 22px 0 0;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+}
+.canvas-hint svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: #9dc0fd;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canvas-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.canvas-capabilities li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 132px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.canvas-capabilities svg {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 4px;
+  fill: none;
+  stroke: #9dc0fd;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canvas-capabilities b {
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 600;
+}
+.canvas-capabilities span {
   color: var(--tertiary);
   font-size: calc(11px * var(--ui-scale));
 }
@@ -1784,6 +1834,49 @@ input[type='text'],
   overflow: hidden;
   background: #050608;
 }
+.video-viewport.zoomed {
+  cursor: grab;
+}
+.video-viewport.panning {
+  cursor: grabbing;
+}
+.video-viewport video {
+  transform-origin: center;
+  will-change: transform;
+}
+.video-zoom {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(22, 24, 28, 0.9);
+}
+.video-zoom button,
+.video-zoom span {
+  min-width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #d9dce2;
+  font-size: calc(11px * var(--ui-scale));
+}
+.video-zoom span {
+  min-width: 46px;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.video-zoom button:hover:not(:disabled),
+.video-zoom button.active {
+  background: rgba(78, 140, 255, 0.2);
+}
+.video-zoom button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
 .video-viewport > video,
 .enhanced-clip,
 .enhanced-clip video {
@@ -1866,7 +1959,7 @@ input[type='text'],
   z-index: 5;
   min-height: 48px;
   display: grid;
-  grid-template-columns: auto minmax(100px, 1fr) auto auto;
+  grid-template-columns: auto minmax(100px, 1fr) auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 7px 12px;
