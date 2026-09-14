@@ -12,6 +12,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.util import find_spec
 from pathlib import Path
 
+from PyInstaller.building.datastruct import TOC
 from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 
@@ -140,7 +141,6 @@ analysis = Analysis(
 if sys.platform == "darwin" and target_arch in ("arm64", "x86_64"):
     sys.path.insert(0, str(ROOT / "scripts"))
     import filter_macho_architecture
-    from PyInstaller.building.datastruct import TOC
     
     report_path = Path(os.environ.get(
         "LOCALSR_ARCHITECTURE_REPORT",
@@ -166,6 +166,22 @@ executable = EXE(
     console=True,
     target_arch=target_arch,
 )
+# Filter analysis.datas after Analysis and all built-in PyInstaller hooks have
+# run to remove deeply nested license and vendor trees in wheel dist-info
+# (notably kineto/dynolog/civetweb inside torch.dist-info) that exceed
+# Win32 MAX_PATH (260 characters) during COLLECT assembly on Windows.
+filtered_analysis_datas = []
+for entry in analysis.datas:
+    dest_name = entry[0].replace("\\", "/")
+    if "/licenses/third_party" in dest_name or dest_name.startswith("licenses/third_party"):
+        continue
+    if "licenses" in dest_name and dest_name.count("/") > 3:
+        continue
+    if len(entry[0]) > 140 and "dist-info" in dest_name:
+        continue
+    filtered_analysis_datas.append(entry)
+analysis.datas = TOC(filtered_analysis_datas)
+
 collection = COLLECT(
     executable,
     analysis.binaries,
