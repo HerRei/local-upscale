@@ -24,7 +24,7 @@ env:
 jobs:
   coordinate-heavy-work:
     name: Require an idle Mac mini
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 10
     outputs:
       linux: ${{ steps.targets.outputs.linux }}
@@ -72,6 +72,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mountpoint -q /mnt/hdd
+          python3 scripts/release_scratch.py init --root /mnt/hdd/ci-scratch
+          python3 scripts/release_scratch.py cleanup --root /mnt/hdd/ci-scratch --force --include-unretained --include-legacy-runs --include-orphaned-runs
           python3 scripts/release_runner_preflight.py \
             --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /mnt/hdd \
             --scratch-min-free-gib 200 --require-tool python3 --require-tool curl --require-tool git
@@ -107,7 +109,9 @@ jobs:
 
   build-linux:
     name: Build Linux x86_64 ${{ matrix.backend }} alpha on Mac mini
-    needs: [build-windows, coordinate-heavy-work]
+    # Linux builds run after macOS cross-build completes.
+    # The builds remain serialized to protect the shared Mac mini hardware concurrency.
+    needs: [build-macos-cross, coordinate-heavy-work]
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -148,7 +152,7 @@ jobs:
           ROOT=$(python3 scripts/release_scratch.py start --root "$LOCALSR_LINUX_SCRATCH" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --platform linux --flavor v0.0.12-alpha-${{ matrix.id }})
-          mkdir -p "$PIP_CACHE_DIR" "$ROOT/source"
+          mkdir -p "$PIP_CACHE_DIR" "$ROOT/source" "$ROOT/tmp"
           python3 scripts/storage_preflight.py \
             --ssd-path / --ssd-min-percent 15 --ssd-min-gib 6 --ssd-peak-gib 8 \
             --hdd-path "$LOCALSR_LINUX_SCRATCH" --hdd-peak-gib "${{ matrix.scratch_peak_gib }}"
@@ -175,7 +179,7 @@ jobs:
         run: |
           cd "$LOCALSR_ALPHA_ROOT/source"
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 squashfs-tools
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
             --cache-root "$LOCALSR_LINUX_SCRATCH/wheelhouses" --report "$LOCALSR_ALPHA_ROOT/staging/dependency-wheelhouse.json"
@@ -200,7 +204,7 @@ jobs:
           ARTIFACT="$LOCALSR_ALPHA_ROOT/staging/${{ matrix.pkg_name }}"
           cp "$SOURCE" "$ARTIFACT"
           chmod +x "$ARTIFACT"
-          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 \
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 1500 \
             --artifact-glob "$ARTIFACT" \
             --report "$LOCALSR_ALPHA_ROOT/staging/package-smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
@@ -235,7 +239,10 @@ jobs:
 
   build-windows:
     name: Build unsigned Windows x86_64 ${{ matrix.backend }} alpha on Mac mini
-    needs: [build-macos-cross, coordinate-heavy-work]
+    # Windows builds run first to test the Windows targets immediately, failing fast
+    # before the macOS and Linux builds.
+    # The builds remain serialized to protect the shared Mac mini hardware concurrency.
+    needs: [preflight, coordinate-heavy-work]
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -367,10 +374,9 @@ jobs:
 
   build-macos-cross:
     name: Cross-build ad-hoc macOS ARM64 alpha on Mac mini
-    # macOS cross-build intentionally runs first to expose high-risk universal2 and
-    # cross-architecture issues early, failing fast before the long Windows/Linux builds.
+    # macOS cross-build runs after Windows targets complete.
     # The builds remain serialized to protect the shared Mac mini hardware concurrency.
-    needs: [preflight]
+    needs: [build-windows, coordinate-heavy-work]
     runs-on: [self-hosted, macOS, X64, localsr-macos-cross-builder]
     timeout-minutes: 360
     env:
@@ -503,7 +509,7 @@ jobs:
 
   verify-release-matrix:
     name: Verify complete v0.0.12 release matrix
-    needs: [build-linux]
+    needs: [build-linux, build-macos-cross, build-windows]
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     timeout-minutes: 30
     steps:
