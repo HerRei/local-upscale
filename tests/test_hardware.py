@@ -135,7 +135,9 @@ def test_directml_driver_failure_preserves_cpu_capabilities(monkeypatch, failure
     monkeypatch.setattr(hardware, "_system_pressure_snapshot", lambda *_: {})
     monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: False)
     monkeypatch.setattr(hardware.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(hardware.torch, "xpu", SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(
+        hardware.torch, "xpu", SimpleNamespace(is_available=lambda: False), raising=False
+    )
     monkeypatch.delenv("LOCALSR_SKIP_DIRECTML_PROBE", raising=False)
     monkeypatch.setitem(sys.modules, "torch_directml", SimpleNamespace(is_available=unavailable))
 
