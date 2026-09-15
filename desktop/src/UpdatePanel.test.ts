@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import UpdatePanel from './UpdatePanel.svelte';
+import { updateDialogOpen } from './lib/updates';
 const api = vi.hoisted(() => ({
   updateStatus: vi.fn(),
   listenForUpdates: vi.fn(async () => () => {}),
@@ -18,6 +19,7 @@ vi.mock('./lib/api', () => api);
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  updateDialogOpen.set(true);
   api.updateStatus.mockResolvedValue({
     configured: true,
     channel: 'beta',
@@ -34,7 +36,6 @@ beforeEach(() => {
 it('keeps install disabled throughout processing and cancellation', async () => {
   const user = userEvent.setup();
   const view = render(UpdatePanel, { processing: true });
-  await user.click(screen.getByRole('button', { name: 'Update LocalSR' }));
   const install = await screen.findByRole('button', { name: 'Install and restart' });
   expect(install.matches(':disabled')).toBe(true);
   await user.click(install);
@@ -53,7 +54,6 @@ it('explains an unconfigured feed without pretending the preview is current', as
   });
   const user = userEvent.setup();
   render(UpdatePanel);
-  await user.click(screen.getByRole('button', { name: 'Update LocalSR' }));
   await screen.findByText('Updates are not published for this preview yet.');
   expect(screen.getByRole('button', { name: 'Check for updates' }).matches(':disabled')).toBe(true);
   expect(api.checkUpdate).not.toHaveBeenCalled();
@@ -70,7 +70,6 @@ it('uses Store updates and waits for the active queue to finish', async () => {
   });
   const user = userEvent.setup();
   const view = render(UpdatePanel, { processing: true });
-  await user.click(screen.getByRole('button', { name: 'Update LocalSR' }));
   const button = await screen.findByRole('button', { name: 'Open Microsoft Store updates' });
   expect(button.matches(':disabled')).toBe(true);
   expect(screen.queryByLabelText('Release channel')).toBeNull();

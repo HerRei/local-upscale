@@ -6,7 +6,10 @@
   import AdvancedSettings from './AdvancedSettings.svelte';
   import VideoMemory from './VideoMemory.svelte';
   import LicenseDownload from './LicenseDownload.svelte';
+  import UpdateMenuItem from './UpdateMenuItem.svelte';
+  import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
+  import { startUpdateWatcher } from './lib/updates';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -358,6 +361,7 @@
           api.listenForNativeMenu((action) => void handleNativeMenuAction(action)),
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
+        await subscribe(() => startUpdateWatcher());
         await subscribe(() =>
           api.listenForFileDrops({
             hover: (active) => (filesDragging = active),
@@ -1540,18 +1544,24 @@
         {#if appMenuOpen}
           <div class="app-menu-panel" role="menu" aria-label="LocalSR">
             <div class="app-menu-head">
-              <b>LocalSR</b><span>{snapshot.app_version}</span>
+              <span class="app-menu-glyph" aria-hidden="true"
+                ><svg viewBox="0 0 24 24"
+                  ><rect x="3.5" y="5.5" width="17" height="13" rx="3" /><path
+                    d="M12 5.5v13"
+                  /></svg
+                ></span
+              >
+              <div><b>LocalSR</b><span>{snapshot.app_version}</span></div>
             </div>
-            <UpdatePanel
-              processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-            />
+            <UpdateMenuItem onOpen={() => (appMenuOpen = false)} />
+            <div class="app-menu-separator" role="separator"></div>
             <button
               class="app-menu-item"
               role="menuitem"
               on:click={() => {
                 appMenuOpen = false;
                 void copyDiagnostics();
-              }}>Copy diagnostics</button
+              }}>Copy Diagnostics</button
             >
             <button
               class="app-menu-item"
@@ -1559,16 +1569,23 @@
               on:click={() => {
                 appMenuOpen = false;
                 void showIntegrations();
-              }}>System integrations…</button
+              }}>System Integrations…</button
             >
             <p class="app-menu-foot">
-              Local processing · nothing is uploaded.<br />Models keep their own licenses.
+              Everything runs on this computer. Models keep their own licenses.
             </p>
           </div>
         {/if}
       </div>
     </div>
   </header>
+
+  <UpdateNotice
+    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+  />
+  <UpdatePanel
+    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+  />
 
   <main class="workspace">
     <MediaQueue

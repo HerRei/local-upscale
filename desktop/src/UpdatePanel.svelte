@@ -1,25 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import * as api from './lib/api';
+  import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
-  let opened = false;
-  let status: api.UpdateStatus = {
-    configured: false,
-    managed_by_store: false,
-    channel: 'beta',
-    target: '',
-    stage: 'idle',
-    version: '',
-    notes: '',
-    size: 0,
-    downloaded: 0,
-    message: '',
-    settings_recovery: false,
-  };
   let channel = 'beta';
-  let error = '';
   let working = false;
   let recoveryConfirmed = false;
+  $: status = $updateState;
+  $: error = $updateError;
   $: inProgress = working || ['checking', 'downloading', 'installing'].includes(status.stage);
   $: sizeText = status.size ? `${(status.size / 1024 ** 2).toFixed(1)} MB` : '';
   onMount(() => {
@@ -29,15 +17,13 @@
       .updateStatus()
       .then((value) => {
         if (!disposed) {
-          status = value;
-          channel = value.channel;
+          updateState.set(value);
+          channel = value.channel || channel;
         }
       })
       .catch(() => {});
     void api
-      .listenForUpdates((value) => {
-        status = value;
-      })
+      .listenForUpdates((value) => updateState.set(value))
       .then((stop) => {
         if (disposed) stop();
         else unsubscribe = stop;
@@ -51,32 +37,28 @@
   async function run(action: () => Promise<unknown>) {
     if (working) return;
     working = true;
-    error = '';
+    updateError.set('');
     try {
       await action();
-      status = await api.updateStatus();
+      updateState.set(await api.updateStatus());
     } catch (e) {
-      error = String(e);
-      status = {
-        ...status,
+      updateError.set(String(e));
+      updateState.update((current) => ({
+        ...current,
         stage:
-          status.stage === 'installing'
+          current.stage === 'installing'
             ? 'downloaded'
-            : status.stage === 'checking'
+            : current.stage === 'checking'
               ? 'idle'
-              : status.stage,
-      };
+              : current.stage,
+      }));
     } finally {
       working = false;
     }
   }
 </script>
 
-<button type="button" class="about-link" on:click={() => (opened = true)}>Update LocalSR</button>
-{#if status.settings_recovery}<p class="recovery-alert" role="alert">
-    Settings need recovery. The original file is preserved. Open Update LocalSR to recover safely.
-  </p>{/if}
-{#if opened}
+{#if $updateDialogOpen}
   <div class="update-backdrop">
     <div
       class="update-dialog"
@@ -85,7 +67,7 @@
       aria-labelledby="update-title"
       tabindex="-1"
     >
-      <h2 id="update-title">Update LocalSR</h2>
+      <h2 id="update-title">Software Update</h2>
       {#if status.managed_by_store}
         <p>
           Settings, recipes and downloaded models are kept. LocalSR backs up your profile on the
@@ -174,7 +156,7 @@
         <button
           class="button"
           disabled={status.stage === 'installing'}
-          on:click={() => (opened = false)}>Close</button
+          on:click={() => updateDialogOpen.set(false)}>Close</button
         >
       </div>
     </div>
@@ -227,8 +209,7 @@
     padding: 12px;
     border-radius: 8px;
   }
-  .error,
-  .recovery-alert {
+  .error {
     color: #f0b2aa;
   }
   progress {
