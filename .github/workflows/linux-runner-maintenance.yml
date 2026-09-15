@@ -1,0 +1,12 @@
+name: Linux Runner Maintenance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  maintenance:
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    steps:
+      - name: Inspect libintlc.so
+        run: |
+          find /mnt/hdd/ci-scratch/ -name "libintlc*" -exec ls -la {} + -exec file {} + 2>/dev/null || true
