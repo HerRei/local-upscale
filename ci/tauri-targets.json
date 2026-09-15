@@ -90,6 +90,5 @@
       "scratch_peak_gib": 100
     }
   ],
-  "legacy_manifest": "ci/release-artifacts.json",
   "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets."
 }

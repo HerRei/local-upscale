@@ -2,13 +2,63 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import re
 import shlex
 import shutil
 from pathlib import Path
 
-from prepare_release_assets import asset_record, split_file, validate_asset_name
+MIB = 1024**2
+PART_BYTES = 1900 * MIB
+SAFE_ASSET_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
-PART_BYTES = 1900 * 1024**2
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(4 * MIB), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_asset_name(name: str) -> None:
+    if not SAFE_ASSET_NAME.fullmatch(name):
+        raise ValueError(f"Unsafe release asset name: {name!r}")
+
+
+def asset_record(path: Path) -> dict[str, object]:
+    validate_asset_name(path.name)
+    return {"filename": path.name, "size": path.stat().st_size, "sha256": sha256(path)}
+
+
+def split_file(source: Path, destination: Path, part_bytes: int) -> list[dict[str, object]]:
+    parts: list[dict[str, object]] = []
+    with source.open("rb") as stream:
+        index = 1
+        while True:
+            first = stream.read(min(4 * MIB, part_bytes))
+            if not first:
+                break
+            output = destination / f"{source.name}.part-{index:04d}"
+            digest = hashlib.sha256()
+            written = 0
+            with output.open("wb") as part:
+                chunk = first
+                while chunk:
+                    part.write(chunk)
+                    digest.update(chunk)
+                    written += len(chunk)
+                    if written >= part_bytes:
+                        break
+                    chunk = stream.read(min(4 * MIB, part_bytes - written))
+                part.flush()
+                os.fsync(part.fileno())
+            record = {"filename": output.name, "size": written, "sha256": digest.hexdigest()}
+            validate_asset_name(output.name)
+            parts.append(record)
+            index += 1
+    return parts
 
 
 def stage_file(source: Path, output: Path, expected: dict) -> dict:

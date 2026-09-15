@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
-import io
 import json
 import shutil
 import struct
 import subprocess
 import sys
-import tarfile
 import threading
 from pathlib import Path
 
@@ -34,18 +31,14 @@ def load_script(path: Path):
     return module
 
 
-verify = load_script(ROOT / "tests" / "verify_artifacts.py")
 preflight = load_script(ROOT / "scripts" / "storage_preflight.py")
 cross_wheels = load_script(ROOT / "scripts" / "macos_cross_wheels.py")
 artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 artifact_auth = load_script(ROOT / "scripts" / "artifact_auth.py")
 artifact_upload = load_script(ROOT / "scripts" / "upload_artifacts.py")
 maintenance = load_script(ROOT / "scripts" / "ci_artifact_maintenance.py")
-prepare_release = load_script(ROOT / "scripts" / "prepare_release_assets.py")
-confirm_release = load_script(ROOT / "scripts" / "confirm_release_assets.py")
 scratch = None if sys.platform == "win32" else load_script(ROOT / "scripts" / "ci_scratch.py")
 macho_tree = load_script(ROOT / "scripts" / "verify_macho_tree.py")
-frozen_smoke = load_script(ROOT / "scripts" / "smoke_frozen_worker.py")
 release_version = load_script(ROOT / "scripts" / "check_release_version.py")
 public_beta = load_script(ROOT / "scripts" / "check_public_beta.py")
 beta_readiness = load_script(ROOT / "scripts" / "check_beta_readiness.py")
@@ -55,32 +48,6 @@ release_scratch = load_script(ROOT / "scripts" / "release_scratch.py")
 
 def thin_macho(cpu: int) -> bytes:
     return b"\xcf\xfa\xed\xfe" + struct.pack("<I", cpu) + bytes(64)
-
-
-def elf(machine: int) -> bytes:
-    payload = bytearray(64)
-    payload[:6] = b"\x7fELF\x02\x01"
-    struct.pack_into("<H", payload, 18, machine)
-    return bytes(payload)
-
-
-def test_native_header_parsers():
-    assert verify.macho_arches(thin_macho(0x0100000C)) == {"arm64"}
-    fat = (
-        b"\xca\xfe\xba\xbe"
-        + struct.pack(">I", 2)
-        + struct.pack(">IIIII", 0x01000007, 0, 0, 0, 0)
-        + struct.pack(">IIIII", 0x0100000C, 0, 0, 0, 0)
-    )
-    assert verify.macho_arches(fat) == {"x86_64", "arm64"}
-    assert verify.elf_arch(elf(62)) == "x86_64"
-    assert verify.elf_arch(elf(224)) == "amdgpu"
-    pe = bytearray(256)
-    pe[:2] = b"MZ"
-    struct.pack_into("<I", pe, 0x3C, 128)
-    pe[128:132] = b"PE\0\0"
-    struct.pack_into("<H", pe, 132, 0xAA64)
-    assert verify.pe_arch(bytes(pe)) == "arm64"
 
 
 def test_macho_tree_excludes_build_tool_fixtures(tmp_path: Path):
@@ -101,69 +68,6 @@ def test_macho_tree_excludes_build_tool_fixtures(tmp_path: Path):
     assert report["result"] == "PASS"
     assert report["native_binary_count"] == 1
     assert report["excluded_patterns"] == ["delocate/tests/data/*"]
-
-
-def test_stream_verifies_arm64_mps_artifact(tmp_path: Path):
-    artifact = tmp_path / "LocalSR-macOS-arm64.tar.gz"
-    with tarfile.open(artifact, "w:gz") as archive:
-        for name in (
-            "LocalSR.app/Contents/MacOS/LocalSR",
-            "LocalSR.app/Contents/Frameworks/torch/lib/libtorch_cpu.dylib",
-        ):
-            payload = thin_macho(0x0100000C)
-            member = tarfile.TarInfo(name)
-            member.size = len(payload)
-            archive.addfile(member, io.BytesIO(payload))
-    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    artifact.with_name(artifact.name + ".sha256").write_text(
-        f"{digest}  {artifact.name}\n", encoding="utf-8"
-    )
-    metadata = {
-        "artifact_filename": artifact.name,
-        "platform": "macos",
-        "architecture": "arm64",
-        "backend": "MPS",
-        "sha256": digest,
-        "repository_commit": "a" * 40,
-        "github_run_id": "1",
-        "run_attempt": "1",
-        "timestamp": "2026-08-23T00:00:00+00:00",
-        "signing": {
-            "status": "ad-hoc",
-            "developer_id": False,
-            "notarized": False,
-            "gatekeeper_accepted": False,
-        },
-        "mps": {
-            "torch_arm64_wheel": "torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
-            "torch_arm64_sha256": "b" * 64,
-        },
-    }
-    artifact.with_name(artifact.name + ".metadata.json").write_text(
-        json.dumps(metadata), encoding="utf-8"
-    )
-    spec = verify.ArtifactSpec(
-        artifact.name,
-        "macos",
-        "arm64",
-        "MPS",
-        "LocalSR.app/Contents/MacOS/LocalSR",
-        True,
-    )
-    report, verified_digest = verify.verify_artifact(artifact, spec)
-    assert "Result: PASS" in report
-    assert "Native binaries inspected: 2" in report
-    assert verified_digest == digest
-
-
-def test_release_verifier_rejects_duplicate_archive_digests():
-    with pytest.raises(ValueError, match="distinct SHA-256"):
-        verify.verify_unique_digests(
-            [
-                ("LocalSR-Linux-CPU-x86_64.tar.gz", "a" * 64),
-                ("LocalSR-Linux-CUDA-x86_64.tar.gz", "a" * 64),
-            ]
-        )
 
 
 def test_release_metadata_is_synchronized():
@@ -294,154 +198,6 @@ def test_manual_acceptance_requires_evidence(tmp_path):
     beta_readiness.validate(path, ROOT)
 
 
-def test_compact_release_assets_embed_sidecars_and_support_split_bundles(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / ".complete").write_text("{}\n", encoding="utf-8")
-    specs = [
-        {
-            "filename": "LocalSR-Linux-CPU-x86_64.tar.gz",
-            "platform": "linux",
-            "architecture": "x86_64",
-            "backend": "CPU",
-            "main": "LocalSR/LocalSR",
-        },
-        {
-            "filename": "LocalSR-Windows-CUDA-x86_64.zip",
-            "platform": "windows",
-            "architecture": "x86_64",
-            "backend": "CUDA",
-            "main": "LocalSR/LocalSR.exe",
-        },
-    ]
-    for spec, payload in zip(specs, (b"small archive", b"x" * (1024**2 + 3)), strict=True):
-        artifact = root / spec["platform"] / spec["filename"]
-        artifact.parent.mkdir(exist_ok=True)
-        artifact.write_bytes(payload)
-        digest = hashlib.sha256(payload).hexdigest()
-        artifact.with_name(artifact.name + ".sha256").write_text(
-            f"{digest}  {artifact.name}\n", encoding="utf-8"
-        )
-        artifact.with_name(artifact.name + ".metadata.json").write_text(
-            json.dumps(
-                {
-                    "artifact_filename": artifact.name,
-                    "sha256": digest,
-                    "platform": spec["platform"],
-                    "architecture": spec["architecture"],
-                    "backend": spec["backend"],
-                }
-            ),
-            encoding="utf-8",
-        )
-        artifact.with_name(artifact.name + ".architecture.txt").write_text(
-            "Result: PASS\nNative binaries inspected: 1\n", encoding="utf-8"
-        )
-
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"artifacts": specs}), encoding="utf-8")
-    readiness = tmp_path / "readiness.json"
-    readiness.write_text(
-        json.dumps({"release": "0.0.9-alpha", "beta_ready": False}), encoding="utf-8"
-    )
-    shell_installer = tmp_path / "install.sh"
-    shell_installer.write_text('#!/bin/sh\nTAG="@LOCALSR_RELEASE_TAG@"\n', encoding="utf-8")
-    powershell_installer = tmp_path / "install.ps1"
-    powershell_installer.write_text('$Tag = "@LOCALSR_RELEASE_TAG@"\n', encoding="utf-8")
-    output = root / "release-assets"
-
-    index_path = prepare_release.prepare(
-        root,
-        output=output,
-        manifest=manifest,
-        readiness=readiness,
-        tag="v0.0.9-alpha",
-        shell_installer=shell_installer,
-        powershell_installer=powershell_installer,
-        part_mib=1,
-    )
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-
-    assert index["schema_version"] == 2
-    assert index["release_tag"] == "v0.0.9-alpha"
-    assert index["beta_readiness"]["beta_ready"] is False
-    assert len(index["assets"]) == 7
-    assert index["bundles"][0]["architecture_report"].startswith("Result: PASS")
-    assert index["bundles"][0]["metadata"]["artifact_filename"] == specs[0]["filename"]
-    assert index["bundles"][0]["assets"] == [specs[0]["filename"]]
-    assert index["bundles"][1]["assets"] == [
-        specs[1]["filename"] + ".part-0001",
-        specs[1]["filename"] + ".part-0002",
-    ]
-    assert "@LOCALSR_RELEASE_TAG@" not in (output / "Install-LocalSR.sh").read_text()
-    assert "v0.0.9-alpha" in (output / "Install-LocalSR.ps1").read_text()
-    published_names = {item["filename"] for item in index["assets"]}
-    assert not any(
-        name.endswith((".sha256", ".metadata.json", ".architecture.txt", ".parts.json"))
-        for name in published_names
-    )
-    checksum_lines = (output / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
-    assert len(checksum_lines) == 5
-    assert all(len(line.split("  ", 1)[0]) == 64 for line in checksum_lines)
-    upload_names = [
-        Path(line).name for line in (output / "release-files.txt").read_text().splitlines()
-    ]
-    assert upload_names[:4] == [
-        "Install-LocalSR.sh",
-        "Install-LocalSR.ps1",
-        "SHA256SUMS",
-        "release-index.json",
-    ]
-
-
-def test_release_asset_confirmation_requires_exact_set():
-    index = {
-        "assets": [
-            {"filename": "Install-LocalSR.sh", "size": 100},
-            {"filename": "release-index.json", "size": None},
-        ]
-    }
-    release = {
-        "assets": [
-            {"name": "Install-LocalSR.sh", "size": 99},
-            {"name": "release-index.json", "size": 250},
-            {"name": "old.sha256", "size": 80},
-        ]
-    }
-
-    assert confirm_release.compare(index, release) == {
-        "missing": [],
-        "wrong_size": ["Install-LocalSR.sh"],
-        "wrong_digest": [],
-        "unexpected": ["old.sha256"],
-    }
-
-
-def test_release_installer_templates_have_one_tag_marker_and_compact_manifest_support():
-    shell = (ROOT / "install.sh").read_text(encoding="utf-8")
-    powershell = (ROOT / "install.ps1").read_text(encoding="utf-8")
-    for contents in (shell, powershell):
-        assert contents.count("@LOCALSR_RELEASE_TAG@") == 1
-        assert "release-index.json" in contents
-        assert "SHA256SUMS" in contents
-        assert "Assembled bundle checksum verification failed" in contents
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell parser is provided by Windows")
-def test_windows_release_installer_parses():
-    path = str(ROOT / "install.ps1").replace("'", "''")
-    command = (
-        "$tokens=$null; $errors=$null; "
-        f"[System.Management.Automation.Language.Parser]::ParseFile('{path}', "
-        "[ref]$tokens, [ref]$errors) | Out-Null; "
-        "if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }"
-    )
-    subprocess.run(
-        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-        check=True,
-    )
-
-
 @pytest.mark.skipif(sys.platform == "win32", reason="SSD scratch management uses POSIX locks")
 def test_cache_trim_tolerates_concurrent_pip_rename(tmp_path: Path, monkeypatch):
     assert scratch is not None
@@ -524,46 +280,6 @@ def test_macos_signing_secrets_are_not_job_scoped():
     assert "secrets." not in job_configuration
     for name in secret_names:
         assert f"secrets.{name}" in signing_step
-
-
-def test_arm_verifier_rejects_x86_member(tmp_path: Path):
-    artifact = tmp_path / "bad.tar.gz"
-    with tarfile.open(artifact, "w:gz") as archive:
-        for name, cpu in (("LocalSR/LocalSR", 0x0100000C), ("LocalSR/bad.dylib", 0x01000007)):
-            payload = thin_macho(cpu)
-            member = tarfile.TarInfo(name)
-            member.size = len(payload)
-            archive.addfile(member, io.BytesIO(payload))
-    spec = verify.ArtifactSpec(artifact.name, "macos", "arm64", "MPS", "LocalSR/LocalSR")
-    _count, errors = verify.verify_archive(artifact, spec)
-    assert any("bad.dylib" in error and "x86_64" in error for error in errors)
-
-
-def test_linux_verifier_distinguishes_rocm_device_code_from_host_libraries(tmp_path: Path):
-    artifact = tmp_path / "rocm.tar.gz"
-    members = {
-        "LocalSR/LocalSR": elf(62),
-        "LocalSR/_internal/torch/lib/rocblas/library/kernel.hsaco": elf(224),
-        "LocalSR/_internal/torch/lib/hipblaslt/library/extop_gfx1100.co": elf(224),
-    }
-    with tarfile.open(artifact, "w:gz") as archive:
-        for name, payload in members.items():
-            member = tarfile.TarInfo(name)
-            member.size = len(payload)
-            archive.addfile(member, io.BytesIO(payload))
-    spec = verify.ArtifactSpec(artifact.name, "linux", "x86_64", "AMD-ROCm", "LocalSR/LocalSR")
-    count, errors = verify.verify_archive(artifact, spec)
-    assert count == 1
-    assert errors == []
-
-    members["LocalSR/_internal/bad.so"] = elf(224)
-    with tarfile.open(artifact, "w:gz") as archive:
-        for name, payload in members.items():
-            member = tarfile.TarInfo(name)
-            member.size = len(payload)
-            archive.addfile(member, io.BytesIO(payload))
-    _count, errors = verify.verify_archive(artifact, spec)
-    assert any("bad.so" in error and "amdgpu" in error for error in errors)
 
 
 def test_storage_preflight_includes_peak_and_reserve(monkeypatch: pytest.MonkeyPatch):
@@ -841,30 +557,3 @@ def test_artifact_upload_and_receiver_use_hmac_without_bearer(tmp_path: Path):
     assert result["status"] == "stored"
     assert (root / "123" / "1" / "linux" / payload.name).read_bytes() == payload.read_bytes()
     assert "Bearer " not in (ROOT / "scripts" / "upload_artifacts.py").read_text(encoding="utf-8")
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Test fixture uses a POSIX executable script")
-def test_frozen_worker_smoke_protocol(tmp_path: Path):
-    bundle = tmp_path / "LocalSR"
-    bundle.mkdir()
-    worker = bundle / "LocalSRWorker"
-    worker.write_text(
-        f"#!{sys.executable}\n"
-        "import json, sys\n"
-        "print(json.dumps({'type': 'worker_ready', 'data': {}}), flush=True)\n"
-        "for line in sys.stdin:\n"
-        "    message = json.loads(line)\n"
-        "    if message['type'] == 'capabilities_request':\n"
-        "        print(json.dumps({'type': 'capabilities_info', 'data': "
-        "{'devices': [{'id': 'cpu', 'type': 'cpu'}]}}), flush=True)\n"
-        "    elif message['type'] == 'shutdown_request':\n"
-        "        break\n",
-        encoding="utf-8",
-    )
-    worker.chmod(0o755)
-
-    report = frozen_smoke.smoke(bundle, timeout=10)
-
-    assert report["result"] == "PASS"
-    assert report["worker_ready"] is True
-    assert report["capabilities"]["devices"][0]["type"] == "cpu"
