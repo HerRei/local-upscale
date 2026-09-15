@@ -2,7 +2,8 @@
 # Build, sign, notarize and package a LocalSR macOS arm64 (MPS) beta, including the
 # separate signed engine payload the in-app updater needs when the engine identity
 # changes, and a ready update-feed entry. Usage: scripts/release_macos_beta.sh
-# The version comes from pyproject.toml; the tree must be committed.
+# The version comes from pyproject.toml; the tree must be committed. LOCALSR_FEED_NOTES
+# sets the text the update dialog shows for this entry.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
@@ -159,12 +160,8 @@ contract = {
 feed = {
     "version": version,
     "pub_date": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-    "notes": (
-        "Adds the FFmpeg notice: when a phone or camera video (H.264/HEVC) is added, or such an "
-        "export is started, LocalSR explains that it ships only royalty-free formats, shows the "
-        "install command for FFmpeg with a copy button, links to ffmpeg.org, and can find or choose "
-        "the installed program and re-inspect the videos. Everything else from 0.1.0-beta is unchanged."
-    ),
+    "notes": os.environ.get("LOCALSR_FEED_NOTES")
+    or f"LocalSR {version}. What changed: https://herrei.github.io/localsr/release-notes/",
     "platforms": {
         "darwin-aarch64-mps-native": {
             "url": f"{host}/LocalSR-v{version}-macOS-arm64.app.tar.gz",
