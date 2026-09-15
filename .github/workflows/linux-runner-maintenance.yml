@@ -7,8 +7,7 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Check /usr/local/lib and /usr/lib on runner
+      - name: Check df -h /tmp and /mnt/hdd
         run: |
-          ls -la /usr/local/lib/*torch* 2>/dev/null || true
-          ls -la /usr/lib/*torch* 2>/dev/null || true
-          find /mnt/hdd/ci-scratch/cargo-target/tauri-x86_64/release/bundle/appimage/ -name "*libtorch*" -exec ls -la {} + 2>/dev/null || true
+          df -h /tmp /mnt/hdd /
+          ls -la /tmp/squashfs-root 2>/dev/null | head -n 10 || true
