@@ -2,9 +2,8 @@
 
 Standard video processes each frame and exports SDR. The beta also offers
 HLG/PQ preservation with HAT as a Labs option. SeedVR2, de-flicker and video face
-processing have their own Labs limits. These notes describe the beta source;
-package-specific checks and open requirements are in the
-[platform matrix](beta-platform-matrix.md) and [beta checklist](beta-release-checklist.md).
+processing have their own Labs limits. Platform coverage is in [Platforms](platforms.md) and
+the verified formats are listed in [Testing](testing.md).
 
 ## Media contract
 
@@ -21,32 +20,29 @@ Packet durations are restored from the source presentation intervals after encod
 
 ## Legacy recordings
 
-The prepared beta accepts AVI/DivX, MPEG/VOB, camcorder transport streams,
+LocalSR accepts AVI/DivX, MPEG/VOB, camcorder transport streams,
 WMV/ASF, FLV/F4V, 3GP/3G2 and OGV, alongside MP4/MOV/M4V and MKV/WebM. Recordings whose video or audio codec LocalSR does not include (for example DivX, WMV, H.263 or AAC-only tracks that cannot be copied) require a user-installed FFmpeg.
 It normalizes flagged interlacing and non-square pixels before enhancement,
 converts legacy audio to Opus for MP4, and prepares labelled SDR VP9 playback copies
 when the comparison player needs them. Originals and saved exports are preserved.
-See [supported extensions, conversion limits and actual source tests](beta-legacy-video-2026-09-13.md).
-These additions await the next authorized packages and installed acceptance.
+Comparison copies are limited to 1280 pixels on the longest edge, 30 minutes and 2 GiB of
+temporary files, with a 6 GiB session cache that is cleared on exit. DVD menus, disc images and
+encrypted media are out of scope.
 
-## Installed Linux playback
+## Linux playback
 
-The platform-acceptance preview streams completed video comparisons to WebKitGTK
-through a private loopback HTTP listener. WebKitGTK could reject valid H.264
+Linux builds stream completed video comparisons to WebKitGTK through a private
+loopback HTTP listener. WebKitGTK could reject valid H.264
 files opened through the custom asset URI scheme, even when the same files
 decoded correctly outside the app. Ordinary HTTP byte ranges fix playback and
 seeking, including returning to a completed video while another job runs.
 Only the original and completed output authorized by the native queue receive
 random, session-lifetime URLs. The listener binds to `127.0.0.1`, serves no
 directory, streams with bounded buffers, and closes with the app. Processing and
-playback remain local. Prepared legacy playback conversion now creates compatible
-copies before this transport; it still awaits new installed-package acceptance.
+playback remain local. Legacy playback conversion creates compatible copies before this transport.
 AppImages ship only royalty-free GStreamer plugins, so H.264 sources and AV1 outputs that the
 system cannot play fall back to VP9 playback copies. Windows and macOS keep their asset
 transport.
-
-See the [September platform acceptance record](platform-acceptance-2026-09.md)
-for the installed AMD/CPU checks, Windows VM results and remaining limits.
 
 ## HDR conversion and import feedback
 
@@ -79,7 +75,7 @@ mastering-display, MaxCLL, or Dolby Vision metadata is added. Dolby Vision dynam
 metadata is omitted; only a supported HLG/PQ base layer is processed. Other colour
 primaries/matrices are rejected. SeedVR2 and de-flicker do not support preservation.
 
-All desktop thumbnails and live tiles remain explicitly **SDR display previews**;
+All desktop thumbnails and live tiles are **SDR display previews**;
 they do not prove HDR display playback. Full HDR mastering, perceptual model quality,
 temporal stability and long-clip/platform acceptance remain unverified. FP32 HDR
 requires substantially more memory than the SDR byte-buffer path.
@@ -120,10 +116,9 @@ require an NVIDIA GPU. FP8 reduces weight storage and download size, while worki
 memory still depends on the clip and output resolution. HDR preservation remains
 disabled for both variants.
 
-Packaged workers must include Diffusers' dependency metadata as well as its Python
-modules. A missing `requests` distribution record previously made SeedVR2 fail to
-load in the Linux package despite a healthy worker handshake. The preview package
-now includes Diffusers' transitive metadata and Torch/Torchvision version records.
+Packaged workers include Diffusers' dependency metadata as well as its modules; without the
+`requests` distribution record, SeedVR2 failed to load in an early Linux package despite a
+healthy worker handshake.
 
 Local acceptance on an RX 9060 XT (16 GB, ROCm 7.2 / Torch 2.13) with
 SeedVR2-3B FP8 and memory saving completed five frames from the original rotated
@@ -213,13 +208,9 @@ The script does not download models or make network requests. FFmpeg constructs 
 - A seven-frame moving-square strip from the actual de-flicker function.
 - An explicitly identified temporal routing check using an identity substitute, not actual SeedVR2 inference.
 
-This suite is a regression and visual-inspection aid, not a perceptual quality score or a hardware ranking. Passing generated fixtures does not finish installed-platform acceptance. Use the video cases in `acceptance-record.example.json` for long clips, resource pressure, queue behavior, real audio/subtitle combinations, and system webview playback. Record those separately for each supported installer/backend.
+This suite is a regression and visual-inspection aid, not a perceptual quality score or a hardware ranking. Passing generated fixtures does not finish installed-platform acceptance. Long clips, resource pressure, queue behaviour, real audio and subtitle combinations and webview playback are covered by the manual cases in [Testing](testing.md).
 
-## Release gate schema
-
-`ci/beta-readiness.json` uses schema 2. Every gate has an explicit `blocking` boolean and a `scope`. A manual pass requires an evidence reference. `standard-video-acceptance` remains blocking and pending; optional temporal and processing Labs gates are nonblocking. Signing, runtime support, licensing, public downloads, and other existing application requirements remain independent blockers.
-
-**Cancellation and memory controls in the local follow-up**
+## Cancellation and memory controls
 
 Processing settings lock from Start until processing or cancellation finishes. Media selection and diagnostics remain available. SeedVR2 checks cancellation between model modules even when live previews are disabled. If a video worker does not stop within eight seconds, the host resets that worker, removes its own partial-output directory and starts a fresh worker. Existing finished exports are preserved.
 

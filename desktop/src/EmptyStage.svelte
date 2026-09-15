@@ -102,7 +102,9 @@
         <span class="chip after">4×</span>
       </span>
       <span class="title">{dropping ? 'Drop to add' : 'Drop photos or videos here'}</span>
-      <span class="subtitle">or click to choose · upscaled and restored privately on this Mac</span>
+      <span class="subtitle"
+        >or click to choose · upscaled and restored privately on this computer</span
+      >
       <span class="capabilities" aria-hidden="true">
         <span>Upscale 2–4×</span>
         <span>Remove noise, blur, JPEG</span>

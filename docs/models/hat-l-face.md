@@ -67,10 +67,10 @@ The model is loaded through the same Spandrel `HAT` architecture path as stock H
 identical tiling/halo requirements (`recommended_halo` 16, ×4 native scale). It is listed
 in the catalog with `FACE` and `PHOTO` purposes and is **not auto-downloaded** (see
 policy below); a user imports the exact file, LocalSR verifies the SHA-256, and the model
-becomes available as a companion. In the Tauri desktop, select stock HAT-L as the
+becomes available as a companion. In the app, select stock HAT-L as the
 primary checkpoint, enable its face-aware pass, acknowledge the checkpoint terms,
 and choose the exact external file. Face-aware processing requires the local OpenCV
-detector runtime. Face checkpoints are companions, not primary choices in Tauri.
+detector runtime. Face checkpoints are companions, not primary choices.
 
 ## Limitations and trade-offs
 
@@ -89,8 +89,6 @@ detector runtime. Face checkpoints are companions, not primary choices in Tauri.
 
 ## Availability
 
-The LocalSR integration is prepared on `codex/hat-face-models` for a later release.
-It does not change the ongoing v0.0.12-alpha release or its installer assets.
-The catalog reserves a `v1.0.1-hat-l-face` asset URL, but that release does not exist
-and is not an available download. The URL is never used for automatic acquisition.
-No HAT-L weights are published by this integration; the established rights policy remains.
+The checkpoint is not published. The catalog reserves an asset URL for it, but LocalSR never
+downloads from that URL; the only way to use the model is to import an exact matching file that
+you are independently permitted to use.

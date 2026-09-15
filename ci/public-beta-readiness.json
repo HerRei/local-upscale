@@ -8,176 +8,102 @@
       "status": "manual-pass",
       "blocking": true,
       "scope": "image-queue",
-      "summary": "Late selection, edge tiles, stage changes, completed comparison while another job runs, grouped output folders and queue ETA have targeted native/headless evidence.",
-      "next_action": "Carry the recorded cases into each final candidate.",
-      "evidence": "docs/beta-acceptance-2026-09-12.md"
+      "summary": "Live tiles follow the model's tile geometry (late selection, partial edges, stage changes); completed comparisons stay responsive while another job runs; folder jobs save together; queue estimates separate measured from unmeasured work.",
+      "next_action": "Repeat the recorded cases on each new package.",
+      "evidence": "docs/testing.md"
     },
     {
-      "id": "windows-installed-acceptance",
-      "status": "manual-required",
-      "blocking": true,
-      "scope": "windows",
-      "summary": "Installed 1.0.7.0 preserves settings, recipes, models and logical queue through upgrades; explicit verified-backup recovery after uninstall/reinstall passed. WACK remains WARNING despite validated PerMonitorV2 evidence.",
-      "next_action": "After explicit build authorization, upgrade the preserved 1.0.7.0 baseline to the new ONNX MSIX; repeat installed GUI/video/tiles/ETA, Open/Reveal, data recovery and WACK. No new package is built.",
-      "evidence": "docs/windows-beta-build-handoff.md"
-    },
-    {
-      "id": "macos-production-trust",
+      "id": "macos-release",
       "status": "manual-pass",
       "blocking": true,
       "scope": "macos",
-      "summary": "Developer ID signed ARM64 app and DMG are notarized and stapled. Gatekeeper and mounted bundled-worker handshake pass; six real MPS cases passed without using this Mac GUI.",
-      "next_action": "Preserve the accepted hashes; repeat trust checks after the final source/dependency rebuild.",
-      "evidence": "docs/beta-acceptance-2026-09-12.md"
+      "summary": "v0.1.1-beta is Developer ID signed, notarized and stapled. Images, video, cancellation, worker recovery and the in-app update from 0.1.0 passed on an M1 Pro.",
+      "next_action": "Keep the accepted hashes; re-run the trust checks on every new build.",
+      "evidence": "docs/releases/v0.1.1-beta.md"
     },
     {
-      "id": "macos-installed-upgrade",
-      "status": "manual-required",
+      "id": "production-direct-updates",
+      "status": "manual-pass",
       "blocking": true,
-      "scope": "macos-native-update",
-      "summary": "The mounted signed candidate and MPS worker pass; native GUI/data-preserving upgrade on a separate authorized Mac is not yet verified.",
-      "next_action": "Complete installed native upgrade and recovery after final source/dependency reconciliation; leave the current Mac GUI untouched."
-    },
-    {
-      "id": "linux-final-packages",
-      "status": "manual-required",
-      "blocking": true,
-      "scope": "linux",
-      "summary": "All four retained AppImages pass all-ELF architecture inspection and actual bundled-host handshake. Final CPU/ROCm workers pass image/video/cancel/recovery; native ROCm completed-result switching passes.",
-      "next_action": "Finish native folder-dialog observation and signed installed upgrade checks; repeat affected checks after the final rebuild.",
-      "evidence": "docs/beta-acceptance-2026-09-12.md"
-    },
-    {
-      "id": "windows-engine-delivery",
-      "status": "manual-required",
-      "blocking": true,
-      "scope": "windows-distribution",
-      "summary": "Direct CPU/DirectML/CUDA installers are planned for website/GitHub launch; the separate DirectML Store MSIX follows later. User chose unsigned direct Windows installers, retaining signed updates. No new package is built.",
-      "next_action": "Wait for explicit .12-complete/build authorization, then build in the isolated Mac mini VM and run native acceptance. Keep publisher-warning disclosure; no paid code signing. Native Intel remains acceptance-only.",
-      "evidence": "docs/windows-beta-build-handoff.md"
+      "scope": "updater",
+      "summary": "The beta feed is live on the website. Downloads are verified by size, SHA-256 and minisign signature; truncated and substituted archives are rejected; settings, recipes and the queue are backed up before an install.",
+      "next_action": "Publish every future entry only after installing it from the feed on a test machine.",
+      "evidence": "docs/updates.md"
     },
     {
       "id": "video-resource-acceptance",
       "status": "manual-pass",
       "blocking": true,
       "scope": "core-video",
-      "summary": "Preserved full five-minute 9000-frame export/decode. Final ROCm worker passes six-frame 4K-to-8K export and recovery from a forced per-process output-size failure. Windows and final ROCm GUI result switching pass.",
-      "next_action": "Keep bounded workload limits explicit; a full four-minute 4K export and broad temporal-quality validation are not claimed.",
-      "evidence": "docs/beta-acceptance-2026-09-12.md"
+      "summary": "A complete five-minute 480p clip exported at 2x on ROCm (9,000 frames, audio intact); a six-frame 4K to 8K export and recovery from a forced output-size failure passed.",
+      "next_action": "Keep the workload limits documented; a full 4K export of several minutes has not been exercised.",
+      "evidence": "docs/testing.md"
     },
     {
       "id": "restoration-stability",
       "status": "manual-pass",
       "blocking": true,
-      "scope": "denoise",
-      "summary": "The scan reproduction identified model/context instability across CPU and ROCm; bounded context retries and pre-quantization guards prevent unstable exports. Two of eleven inputs remain rejected.",
-      "next_action": "Document the rejection limit; retain original files and inspect outputs.",
-      "evidence": "docs/beta-acceptance-2026-09-12.md"
-    },
-    {
-      "id": "production-direct-updates",
-      "status": "manual-required",
-      "blocking": true,
-      "scope": "updater",
-      "summary": "Four AppImages and the stapled Mac app archive are production-signed and verified. The application downloader accepts the actual signed CPU candidate and rejects truncation and substituted content.",
-      "next_action": "Choose hosting and protect an independent key backup; after explicit build authorization, test production-signed native install/restart/recovery on the final packages. Deploy no feed before package review.",
-      "evidence": "docs/beta-hosting-plan.md"
+      "scope": "restore",
+      "summary": "NAFNet and SPAN can diverge on some inputs. Bounded retries and a pre-quantization guard reject unstable output instead of saving it; two of eleven reproduced scans are rejected.",
+      "next_action": "Document the rejection limit and keep the originals.",
+      "evidence": "docs/testing.md"
     },
     {
       "id": "model-license-policy",
       "status": "manual-pass",
       "blocking": true,
       "scope": "models",
-      "summary": "User approved author-declared CC BY 4.0 downloads for NomosWebPhoto/HFA2k after verifying intended application downloads and checkpoint provenance. Attribution/source/license links and ordinary verified downloads are implemented and tested locally. Face checkpoints remain verified manual imports; no restoration weights are bundled.",
-      "next_action": "Carry the approved policy and notices into the final rebuilt candidates and repeat installed download checks. This policy approval does not clear the separate codec/dependency gates.",
-      "evidence": "docs/beta-model-license-choices.md"
+      "summary": "Every catalog download names its author, source and license. NomosWebPhoto and HFA2k download under the author's CC BY 4.0 terms with attribution; the two HAT face checkpoints require a verified user import; no weights are bundled.",
+      "next_action": "Keep the notices in sync with the catalog.",
+      "evidence": "docs/model-licenses.md"
     },
     {
-      "id": "dependency-review",
-      "status": "decision-required",
+      "id": "windows-packages",
+      "status": "manual-required",
       "blocking": true,
-      "scope": "application",
-      "summary": "Prepared DirectML lock uses Torch 2.13.0 CPU / ONNX Runtime DirectML 1.24.4; all 56 distribution dependencies validate and dated OSV lookup has no matches. Existing package dependencies remain historical. Exact FFmpeg/x265 source archives and pinned codec build inputs are retained; complete corresponding source and native codec/GPU compatibility remain unresolved.",
-      "next_action": "Complete exact component/source compatibility before publication; later finish the user-deferred SIDD investigation and final runtime treatment, then verify frozen runtime/notices and installed acceptance after build authorization.",
-      "evidence": "docs/beta-dependency-review.md"
+      "scope": "windows",
+      "summary": "The royalty-free media runtime does not build on Windows yet, so no Windows package passes the codec gate. CPU and DirectML test builds passed installed acceptance on Windows 11 with an Intel UHD 620. CUDA also waits for NVIDIA's confirmation on cuDNN 9 DLL redistribution.",
+      "next_action": "Port packaging/ffmpeg/build_lgpl_media.py to Windows, rebuild the CPU and DirectML workers, repeat the installed checks and publish the direct installers with the SmartScreen notice."
     },
     {
-      "id": "public-content-and-store-assets",
-      "status": "manual-pass",
+      "id": "linux-packages",
+      "status": "manual-required",
       "blocking": true,
-      "scope": "distribution",
-      "summary": "Actual 1.0.7.0 screenshots remain preserved. Updated local website, release/listing/reviewer drafts and eight-edition download inventory separate older artifacts from future packages; mobile/desktop and disabled-download tests pass.",
-      "next_action": "Confirm version, public tracker URL and support wording. Prepare Mac mini hosting subject to later approval and unsigned Windows direct download wording. Refresh captures after the next package; website/GitHub first, Store later.",
-      "evidence": "docs/beta-handoff-2026-09-13.md"
+      "scope": "linux",
+      "summary": "CPU, CUDA and ROCm AppImages build with verified production update signatures. CPU and ROCm passed installed worker acceptance on Fedora 44. The GPU packages are 5 to 6 GB and need the release host.",
+      "next_action": "Rebuild from the released source, host the files, verify the installed upgrade and the folder dialog in a desktop session, then publish."
     },
     {
       "id": "publication-and-certification",
       "status": "decision-required",
       "blocking": true,
       "scope": "distribution",
-      "summary": "No package, website, issue tracker or Store submission has been published. Personal hobby publisher Hermes Reisner / HerRei is confirmed; the beta version and any applicable account-holder/trader declarations remain separate.",
-      "next_action": "After build/signing/installed acceptance and package review, request approval for website/GitHub beta publication first. Microsoft Store submission follows that publication; no submission is authorized now."
+      "summary": "macOS is published through the website. Windows and Linux downloads and the Microsoft Store listing (HerRei.LocalSR) are not published.",
+      "next_action": "Publish Windows and Linux once their gates pass; submit the Store package after the website release."
     },
     {
-      "id": "final-source-reconciliation",
-      "status": "manual-required",
+      "id": "licensing-questions",
+      "status": "external-clarification",
       "blocking": true,
-      "scope": "all-binary-artifacts",
-      "summary": "Accepted review binaries precede the approved RealPLKSR license/download policy, expanded dependency notices, routine build-tool pins and some packaging/headless diagnostic refinements. Source/README cleanup is also prepared separately from those binaries.",
-      "next_action": "Wait for the user\u2019s explicit .12-complete/build authorization. Reconcile approved remaining choices, build one immutable source snapshot in isolated storage, then repeat affected acceptance, signing/notarization and manifests.",
-      "evidence": "docs/windows-beta-build-handoff.md"
+      "scope": "legal",
+      "summary": "docs/licensing-media.md lists the open questions on demuxing patent-encumbered formats, running a user-installed FFmpeg, MPEG-2/AC-3 patent expiry and NVIDIA library terms.",
+      "next_action": "Put the questions to an IP lawyer before promoting the beta beyond a small circle of testers."
     },
     {
       "id": "untested-gpu-hardware",
       "status": "labs",
       "blocking": false,
       "scope": "cuda-xpu-other-directml",
-      "summary": "Retain all backend targets; no matching physical NVIDIA, Linux Intel XPU or other DirectML adapter acceptance is claimed.",
-      "next_action": "Gather volunteer hardware results before expanding tested claims."
+      "summary": "NVIDIA CUDA, Linux Intel XPU and DirectML adapters other than the UHD 620 have not run on physical hardware.",
+      "next_action": "Collect volunteer hardware reports before describing these engines as tested."
     },
     {
       "id": "hdr-and-temporal-quality",
       "status": "labs",
       "blocking": false,
       "scope": "hdr-seedvr2-deflicker-faces",
-      "summary": "Retain compatible HDR preservation, SeedVR2 3B FP16/FP8, de-flicker and video-face features as Labs. SDR-trained HDR quality and broad temporal quality remain unverified.",
-      "next_action": "Use short clips, model/backend compatibility limits and clear memory/time expectations."
-    },
-    {
-      "id": "windows-onnx-source-runtime",
-      "status": "manual-required",
-      "blocking": true,
-      "scope": "windows-directml",
-      "summary": "Native source-worker CPU/iGPU benchmarks v2.1 pass separately with measured consistency, as do larger images, short video/audio, live tile/ETA events, cancellation and real allocation-failure recovery. NAFNet SIDD three photo comparisons fail the fixed GPU tolerance; no CPU restriction was approved or implemented.",
-      "next_action": "User selected further bounded SIDD investigation but deferred it until later. Do not start or schedule it now. Establish cause, representative quality and practical CPU/GPU timings before final runtime acceptance; no restriction or release waiver approved.",
-      "evidence": "docs/windows-inference-runtime-review.md"
-    },
-    {
-      "id": "release-hosting",
-      "status": "decision-required",
-      "blocking": true,
-      "scope": "large-artifact-delivery",
-      "summary": "Reviewed loopback Caddy config passes >2 GiB range, interrupted/resumed transfer, four concurrent downloads, caching and process restart. No public server or host service is configured.",
-      "next_action": "Keep the Mac mini as preferred host. Choose public hostname and obtain deployment approval before WAN HTTPS, speed, reachability, reboot and availability tests. No paid hosting or service changes authorized.",
-      "evidence": "docs/beta-hosting-plan.md"
-    },
-    {
-      "id": "explicit-build-authorization",
-      "status": "decision-required",
-      "blocking": true,
-      "scope": "all-beta-package-builds",
-      "summary": "All beta package builds are paused by the user while .12 uses the Mac mini. No polling, timer, scheduler or alternative build host is permitted.",
-      "next_action": "Proceed only after the user says .12 has concluded and explicitly authorizes the beta build. End independent preparation with a reviewable handoff.",
-      "evidence": "docs/windows-beta-build-handoff.md"
-    },
-    {
-      "id": "legacy-video-installed-acceptance",
-      "status": "manual-required",
-      "blocking": true,
-      "scope": "legacy-video-playback",
-      "summary": "Source implements common legacy containers, AAC audio conversion, tagged deinterlacing/aspect normalization and cancellable comparison copies. Headless codec, timing, long conversion, UI ownership and recovery tests pass; no new installed package contains these changes.",
-      "next_action": "After explicit build authorization, verify frozen decoders/filters, AVI/WMV/MPEG/OGV imports, audio export, player seeking/switching, cancellation and cleanup on authorized Windows, Linux and macOS installations. Preserve earlier MSIX evidence.",
-      "evidence": "docs/beta-legacy-video-2026-09-13.md"
+      "summary": "HDR preservation, SeedVR2 3B, de-flicker and video face processing ship as Labs features. Perceptual HDR quality and long-clip temporal stability are unverified.",
+      "next_action": "Recommend short clips and state the memory and time limits in the app."
     }
   ]
 }

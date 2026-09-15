@@ -39,6 +39,14 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 
+/// Files macOS asked us to open before the setup hook created the app state.
+///
+/// When the app is launched by opening a document, `application:openURLs:` is
+/// delivered before Tauri's `Ready` event runs `setup`, so there is no managed
+/// state yet. The intents wait here and are moved into the state in `setup`.
+#[cfg(target_os = "macos")]
+static EARLY_OPEN_INTENTS: std::sync::Mutex<Vec<LaunchIntent>> = std::sync::Mutex::new(Vec::new());
+
 pub fn run() {
     if let Some(exit_code) = engine_payload::run_arguments(&env::args_os().collect::<Vec<_>>()) {
         std::process::exit(exit_code);
@@ -79,6 +87,10 @@ pub fn run() {
             let state = Arc::new(AppState::new()?);
             if !initial_intent.is_empty() {
                 lock(&state.launch_intents)?.push(initial_intent.clone());
+            }
+            #[cfg(target_os = "macos")]
+            if let Ok(mut early) = EARLY_OPEN_INTENTS.lock() {
+                lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
             native_menu::install(app, &lock(&state.recipes)?)?;
@@ -202,7 +214,13 @@ fn enqueue_launch_intent(app: &tauri::AppHandle, intent: LaunchIntent) {
         focus_main_window(app);
         return;
     }
-    let state = app.state::<Arc<AppState>>();
+    let Some(state) = app.try_state::<Arc<AppState>>() else {
+        #[cfg(target_os = "macos")]
+        if let Ok(mut early) = EARLY_OPEN_INTENTS.lock() {
+            early.push(intent);
+        }
+        return;
+    };
     if let Ok(mut pending) = state.launch_intents.lock() {
         pending.push(intent);
     }

@@ -1,12 +1,10 @@
 {
   "schema_version": 1,
   "version": "0.1.1-beta",
-  "version_decision": "provisional-awaiting-user",
   "channel": "beta",
-  "release_status": "independent-preparation-builds-explicitly-paused",
-  "published": false,
   "contact": "hermes.reisner@gmail.com",
-  "preserved_release": "v0.0.12-alpha",
+  "download_page": "https://herrei.github.io/localsr/download/",
+  "update_feed": "https://herrei.github.io/localsr/updates/beta.json",
   "update_public_key": "packaging/updates/production.pub",
   "readiness": "ci/public-beta-readiness.json",
   "targets": [
@@ -16,24 +14,8 @@
       "architecture": "arm64",
       "backend": "MPS",
       "coverage": "main-path",
-      "package_status": "review-notarized-stapled",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [
-        {
-          "path": "macos/LocalSR_0.1.1-beta_macos-arm64-mps.app.tar.gz",
-          "size": 384974688,
-          "sha256": "27b2497af13aa79bf019e1f41bd1502a8f7ec0bb8353ea465034fbc7d81bfe98"
-        },
-        {
-          "path": "macos/LocalSR_0.1.1-beta_macos-arm64-mps.dmg",
-          "size": 454501508,
-          "sha256": "c24f964a722ba5a35d7045bacf45881e28aea2d50eb94ca904418a01ab8f628a"
-        }
-      ],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization"
+      "package": "published",
+      "signing": "developer-id-notarized"
     },
     {
       "id": "windows-x86_64-cuda",
@@ -41,16 +23,8 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "coverage": "labs",
-      "package_status": "retained-awaiting-isolated-build",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization",
-      "planned_distribution": [
-        "direct-nsis"
-      ]
+      "package": "not-built",
+      "signing": "unsigned-direct-installer"
     },
     {
       "id": "windows-x86_64-cpu",
@@ -58,16 +32,8 @@
       "architecture": "x86_64",
       "backend": "CPU",
       "coverage": "main-path",
-      "package_status": "retained-awaiting-isolated-build",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization",
-      "planned_distribution": [
-        "direct-nsis"
-      ]
+      "package": "test-builds-only",
+      "signing": "unsigned-direct-installer"
     },
     {
       "id": "windows-x86_64-directml",
@@ -75,36 +41,10 @@
       "architecture": "x86_64",
       "backend": "DirectML",
       "coverage": "main-path",
-      "package_status": "review-installed-test-trust-only",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [
-        {
-          "path": "windows/LocalSR_1.0.7.0_x64_DirectML_store-upload.msix",
-          "size": 258703901,
-          "sha256": "bf4f748d95cfea976e05ca394ee13e53b3c3cd2dfecc675ab6cb6b3525f7bf9c"
-        },
-        {
-          "path": "windows/LocalSR_1.0.7.0_x64_DirectML_test-signed.msix",
-          "size": 258645611,
-          "sha256": "273247411733590cc3ef83d3e858d32bddfd4910890118e56f1f7f97a65b4f21"
-        }
-      ],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization",
-      "planned_distribution": [
-        "direct-nsis",
-        "microsoft-store-msix"
-      ],
-      "compatible_gpu_vendors": [
-        "AMD",
-        "Intel",
-        "NVIDIA"
-      ],
-      "physically_tested_windows_adapters": [
-        "Intel UHD 620"
-      ]
+      "package": "test-builds-only",
+      "signing": "unsigned-direct-installer",
+      "store": "HerRei.LocalSR",
+      "tested_adapters": ["Intel UHD 620"]
     },
     {
       "id": "linux-x86_64-cpu",
@@ -112,19 +52,8 @@
       "architecture": "x86_64",
       "backend": "CPU",
       "coverage": "main-path",
-      "package_status": "review-production-update-signed",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [
-        {
-          "path": "linux/packages/LocalSR_0.1.1-beta_linux-x86_64-cpu.AppImage",
-          "size": 493681144,
-          "sha256": "a8f51ac51366fcef9a02e435f81f12e5166855babd85271453b1e3ad95fc6efa"
-        }
-      ],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization"
+      "package": "built-unpublished",
+      "signing": "sha256-and-update-signature"
     },
     {
       "id": "linux-x86_64-cuda",
@@ -132,19 +61,8 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "coverage": "labs",
-      "package_status": "review-production-update-signed",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [
-        {
-          "path": "linux/packages/LocalSR_0.1.1-beta_linux-x86_64-cuda.AppImage",
-          "size": 5089909240,
-          "sha256": "f29f087d15d6c619e3ee950cafae620adf92a2e02d196949cc27ed42f811d5d3"
-        }
-      ],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization"
+      "package": "built-unpublished",
+      "signing": "sha256-and-update-signature"
     },
     {
       "id": "linux-x86_64-rocm",
@@ -152,70 +70,8 @@
       "architecture": "x86_64",
       "backend": "AMD-ROCm",
       "coverage": "main-path",
-      "package_status": "review-production-update-signed",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [
-        {
-          "path": "linux/packages/LocalSR_0.1.1-beta_linux-x86_64-rocm.AppImage",
-          "size": 6237354488,
-          "sha256": "ea5172912dbface3f7698bbb4601b74b696bc4a02c04835e308b7bc37ce694da"
-        }
-      ],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization"
-    }
-  ],
-  "review_root": "build/beta-review",
-  "build_authorization": {
-    "required": true,
-    "granted": false,
-    "resume_signal": ".12 has concluded; you may build the beta.",
-    "poll_or_schedule": false,
-    "windows_builder": "existing Mac mini Windows x64 VM, isolated directory after explicit authorization",
-    "intel_windows_role": "acceptance-only"
-  },
-  "rollout_order": [
-    "explicit-build-authorization",
-    "isolated-candidate-builds",
-    "final-signing-and-installed-acceptance",
-    "user-package-review",
-    "approved-website-github-beta-publication",
-    "microsoft-store-submission"
-  ],
-  "current_download_review": "build/beta-review/rollout-decisions-20260913/downloads.review.json",
-  "windows_direct_trust": {
-    "authenticode": "unsigned-by-user-choice-for-beta",
-    "paid_signing_authorized": false,
-    "disclose_windows_publisher_warnings": true,
-    "production_update_signatures_required": true,
-    "store_msix_trust": "Microsoft Store signs its distribution",
-    "publication_authorized": false
-  },
-  "hosting_preference": {
-    "host": "Mac mini dedicated release directory",
-    "managed_hosting": "contingency only",
-    "deployment_authorized": false,
-    "public_hostname": null,
-    "wan_verification": "pending deployment approval"
-  },
-  "sidd_investigation": {
-    "decision": "investigate-before-restricting",
-    "status": "deferred-by-user",
-    "scheduled": false,
-    "temporary_cpu_restriction_approved": false,
-    "release_exception_approved": false,
-    "initial_estimate_hours": [
-      2,
-      4
-    ]
-  },
-  "withheld_targets": [
-    {
-      "id": "linux-x86_64-xpu",
-      "backend": "Intel-XPU",
-      "reason": "Intel oneAPI runtime redistribution terms (distributor indemnity, reverse-engineering restriction) are not cleared; see docs/licensing-media.md."
+      "package": "built-unpublished",
+      "signing": "sha256-and-update-signature"
     }
   ]
 }

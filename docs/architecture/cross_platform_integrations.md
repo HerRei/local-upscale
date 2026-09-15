@@ -33,10 +33,6 @@ registration does not imply that every input codec or model works on every GPU.
 Store-specific delivery and update behavior are described in the
 [MSIX guide](../microsoft-store.md).
 
-The Qt Widgets client and its Python integration service have been removed.
-Slint's separate dialogs, menu adapter, installer and worker bridge were
-[retired in the beta](../slint-retirement.md).
-
 ## Media and state
 
 The Rust host authorizes individual source/result paths. It owns the queue
@@ -45,9 +41,8 @@ stay associated with their media and output paths while another job runs.
 Linux video playback uses a loopback media server with bounded file authorization;
 this does not upload video to a remote service.
 
-The application retains `com.localsr.desktop.next` and its `LocalSR/next` state
-root. Models stay in the shared verified `LocalSR/models` cache. Slint retirement
-does not remove an existing installation or delete its settings.
+The application identifier is `com.localsr.desktop.next` and its state lives under
+`LocalSR/next`. Models stay in the shared `LocalSR/models` cache.
 
 ## Verification and limits
 
@@ -56,8 +51,6 @@ path authorization, settings and queue behavior. Svelte tests cover forwarded
 launches, mixed media, batching, comparison ownership and cancellation. Python
 launcher tests verify literal arguments, error handling and GUI-free CLI use.
 
-Native file-manager behavior and installed packages require separate acceptance.
-Recorded results and remaining observations are in the
-[beta checklist](../beta-release-checklist.md) and
-[hardware matrix](../beta-platform-matrix.md). Supported APIs and generated
-scripts alone are not evidence for every desktop environment or graphics driver.
+Native file-manager behaviour and installed packages need checks on the real desktop; see
+[Testing](../testing.md) and [Platforms](../platforms.md). A generated script is not evidence
+for every desktop environment or graphics driver.

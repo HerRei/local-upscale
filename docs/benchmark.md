@@ -1,9 +1,8 @@
 # LocalSR benchmark
 
-## Separate CPU / GPU benchmark (v2.1 beta candidate)
+## CPU and GPU benchmarks (workload v2.1)
 
-**Run Benchmark** lets you select CPU or one detected GPU, including the tested
-Intel DirectML adapter. The worker runs exactly that device and rejects
+**Run Benchmark** lets you select the CPU or one detected GPU. The worker runs exactly that device and rejects
 an unavailable selection. It does not automatically append a CPU phase. Each
 completed device score is retained locally, with its own confidence and timestamp;
 a CPU run preserves the previous GPU result and vice versa. JSON separates the
@@ -47,14 +46,11 @@ measurement and labels it accordingly. Preview canvases are bounded; the saved
 full-scene proxy is at most 640 pixels per side. There is no simulated progress or
 before/after slider in this benchmark viewer.
 
-This is isolated preview work for a later release; it does not change the v0.0.12
-release branch, tag, workflow, or installer claims.
-
 The separate [video benchmark](video-support.md#visual-local-benchmark) renders actual video files
 through the local production pipeline and produces a browsable report with playback and timing
 checks. It makes no hardware score or SeedVR2 inference claim.
 
-## Legacy single-device benchmark (v1)
+## Workload v1 (command line)
 
 `localsr-benchmark-v1` is a deterministic, local workload for comparing one LocalSR installation
 over time. It is not a universal hardware ranking and results are comparable only when the workload

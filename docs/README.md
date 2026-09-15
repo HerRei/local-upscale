@@ -1,35 +1,30 @@
-# LocalSR documentation
+# Documentation
 
-Start with the [project overview](../README.md) or the
-[current limitations](../KNOWN_LIMITATIONS.md). The public beta is in preparation;
-package-specific evidence is listed separately from feature documentation.
+New here? Start with the [project README](../README.md) and the
+[known limitations](../KNOWN_LIMITATIONS.md).
 
 ## Using LocalSR
 
-| Guide | Contents |
+| Guide | What it covers |
 | --- | --- |
-| [Models](models/README.md) | Choosing a model, downloads and license links |
-| [Video](video-support.md) | Formats, orientation, audio, HDR and Labs features |
-| [Metadata and colour](metadata.md) | RAW input, ICC profiles and export behavior |
-| [Automation](automation.md) | CLI processing, watch folders and benchmarks |
-| [Benchmark](benchmark.md) | Workloads, measurements and score definitions |
-| [Intel graphics](intel-gpu-support.md) | DirectML/XPU support and recorded hardware tests |
-| [Updates](local-updates.md) | Signed direct updates, Store updates and data recovery |
+| [Models](models/README.md) | The catalog, Quick and Best, licenses, importing your own checkpoints |
+| [Video](video-support.md) | Formats, timing, rotation, audio, HDR, SeedVR2 and the other Labs features |
+| [Platforms](platforms.md) | Engines per operating system, what has been tested on which hardware |
+| [Metadata and colour](metadata.md) | EXIF, ICC profiles, RAW input, alpha channels |
+| [Automation](automation.md) | The `localsr` command line, watch folders and benchmarks |
+| [Benchmark](benchmark.md) | What the CPU and GPU benchmarks measure |
+| [Updates](updates.md) | How in-app updates and engine downloads work, backups and recovery |
 
-## Development
+## Building and contributing
 
-[Desktop setup](../desktop/README.md) · [Contributing](../CONTRIBUTING.md) ·
-[Checks and component boundaries](development.md) · [Worker protocol](../protocol/README.md) ·
-[Architecture decisions](adr/) · [Slint retirement](slint-retirement.md)
+[Desktop app](../desktop/README.md) · [Development checks](development.md) ·
+[Testing](testing.md) · [Worker protocol](../protocol/README.md) ·
+[Desktop integrations](architecture/cross_platform_integrations.md) ·
+[Architecture decisions](adr/) · [Contributing](../CONTRIBUTING.md)
 
-## Licensing and release review
+## Releasing and licensing
 
-[Application license](../LICENSE) · [Third-party notices](../THIRD_PARTY_NOTICES.md) ·
-[Model licenses](model-licenses.md) · [Dependency review](beta-dependency-review.md) ·
-[Windows runtime prototype](windows-inference-runtime-review.md)
-
-[Beta checklist](beta-release-checklist.md) · [Platform matrix](beta-platform-matrix.md) ·
-[Acceptance record](beta-acceptance-2026-09-12.md) ·
-[Source review](source-release-review.md) · [Release notes](releases/)
-
-Questions and private reports: [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com).
+[Releasing](releasing.md) · [Microsoft Store](microsoft-store.md) ·
+[Release notes](releases/) · [Media formats and licensing](licensing-media.md) ·
+[Model licenses](model-licenses.md) · [Third-party notices](../THIRD_PARTY_NOTICES.md) ·
+[Security](../SECURITY.md)

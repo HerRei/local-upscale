@@ -1,35 +1,35 @@
 # Security policy
 
-## Report a vulnerability
+## Reporting a vulnerability
 
-Email [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com), or use the
-repository's private security advisory form if available to you. Include the
-version, platform and steps needed to reproduce the issue. Send reports about
-code execution, checkpoint loading, file access or download integrity privately.
+Email [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com) or use GitHub's
+private vulnerability report on this repository. Include the LocalSR version,
+your platform and the steps to reproduce. Please report anything involving code
+execution, checkpoint loading, file access or download integrity privately
+rather than in a public issue.
 
-Do not include credentials, signing keys, private media or a full queue database.
+Do not include credentials, signing keys, private media or your queue database.
 
-## Checkpoint trust
+## What LocalSR trusts
 
-LocalSR accepts custom `.safetensors` files and blocks unverified pickle or
-TorchScript checkpoints by default. Curated downloads must match the catalog's
-byte size and SHA-256 immediately before loading.
+**Model files.** Catalog downloads must match the size and SHA-256 recorded in the
+catalog before they are loaded. Custom `.safetensors` files are accepted as they
+are. Pickle-based checkpoints (`.pth`, `.pt`, `.ckpt`) can execute code while they
+load, so unverified ones are refused unless you set
+`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` for files whose publisher you trust.
+SeedVR2's bundled conditioning tensors are Safetensors and are validated for
+keys, shapes and dtype before use.
 
-`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` explicitly allows unverified `.pth`, `.pt`
-and `.ckpt` files. Such files can execute code while loading; only enable it for
-checkpoints whose publisher and contents you trust. The worker is isolated from
-the interface for recovery, but is not a security sandbox.
+**Process boundaries.** Inference runs in a separate Python worker that talks to
+the app over JSON Lines. The webview has no shell, filesystem or network API;
+native operations go through the Rust host, which only grants access to the
+files you select. The worker boundary exists for recovery from GPU and memory
+failures; it is not a security sandbox.
 
-SeedVR2's bundled conditioning assets use Safetensors. Their tensor keys, shapes
-and dtype are validated before use.
+**Releases and updates.** macOS builds are Developer ID signed and notarized.
+Update downloads are verified by size, SHA-256 and a minisign signature before
+they are installed, and settings, recipes and the queue are backed up first.
+Microsoft Store builds receive their updates from the Store. Direct Windows
+installers for the beta are not Authenticode signed; SmartScreen will warn.
 
-## Release trust
-
-Checksums detect changed or corrupted files. Public direct-download packages also
-require signature verification; Store application updates are managed by Microsoft
-Store. Earlier unsigned alpha packages are not substitutes for a signed beta.
-
-The current beta is still under review. Known dependency issues and uncompleted
-release checks are documented in the [limitations](KNOWN_LIMITATIONS.md) and
-[dependency review](docs/beta-dependency-review.md). No stable release branch or
-long-term security support period has been established.
+Third-party dependencies are pinned in lock files and reviewed with Dependabot.

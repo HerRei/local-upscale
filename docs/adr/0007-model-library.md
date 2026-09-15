@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the v0.0.13 beta line. Implemented additively on top of ADR 0003's workspace.
+Accepted and implemented in 0.1.0-beta on top of ADR 0003's workspace.
 
 ## Context
 
@@ -13,9 +13,6 @@ nothing showed which recipe was active. The frontend preset ranking ignored purp
 Best for an illustration picked the photo model. The catalog's `support_tier: labs` carried
 two meanings — experimental validation (SeedVR2) and, historically, an unclear license — so
 policy questions about presets could not be answered from the data.
-
-The design study in `docs/design/model-library/` (with its published canvas) records the
-audit, references and options considered.
 
 ## Decision
 

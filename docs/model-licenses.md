@@ -1,4 +1,4 @@
-# Curated checkpoint provenance and license evidence
+# Model licenses and provenance
 
 LocalSR is an MIT application harness. It does not bundle or relicense model weights. The catalog
 offers pinned upstream downloads only where the repository records a defensible checkpoint path;
@@ -127,22 +127,18 @@ redistribution and training-data terms was established for this release. It is t
 trusted auto-download catalog. This avoids presenting source-code licensing as if it also proved
 checkpoint rights.
 
-**NomosWebPhoto / HFA2k — approved beta policy, 13 September 2026:** Philip Hofmann
-(Phips / Phhofm) declares both checkpoints under **CC BY 4.0** on his
-[NomosWebPhoto card](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR) and
-[HFA2k card](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample).
-His [repository README](https://github.com/Phhofm/models#models) expressly supports
-application downloads. The explicit metadata and verified provenance supersede
-the earlier assessment based solely on the transposed `CC-BY-0.4` description.
-HFA2k's exact `.pth` hash matches the catalog; all 340 NomosWebPhoto tensors match
-the author's licensed conversion. See the [pinned evidence](beta-model-license-choices.md).
+### NomosWebPhoto and HFA2k (`realplksr_nomoswebphoto_x4`, `realplksr_hfa2k_anime_x4`)
 
-The beta source retains direct downloads of the author's unchanged checkpoint
-files, with the same size/SHA-256 verification, author credit and source/license
-links. Both remain Labs. The [CC BY 4.0 terms](https://creativecommons.org/licenses/by/4.0/)
-allow sharing and commercial use with attribution, retained notices, a license
-reference and disclosure of changes; they do not imply endorsement or warrant
-rights the licensor cannot grant. No additional non-commercial restriction is
-imposed. Face checkpoints still require verified manual import under their
-separate unresolved-rights policy. No restoration weights are bundled. Retained
-native review binaries predate this source change and require final rebuilding.
+Both are by Philip Hofmann (Phips / Phhofm), who declares them under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) on the
+[NomosWebPhoto](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR) and
+[HFA2k](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample) model cards; his
+[models README](https://github.com/Phhofm/models#models) welcomes application downloads.
+LocalSR downloads the author's unchanged checkpoint files with the same size and SHA-256
+verification as every other model, credits the author and links the source and license in the
+app. HFA2k's `.pth` hash matches the catalog, and all 340 NomosWebPhoto tensors match the
+author's licensed conversion. CC BY 4.0 permits sharing and commercial use with attribution and
+retained notices; it does not imply the author's endorsement of LocalSR.
+
+The two HAT face checkpoints stay outside this policy and require a verified manual import.
+No restoration weights are bundled with the application.

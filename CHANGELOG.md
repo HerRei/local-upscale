@@ -1,44 +1,85 @@
 # Changelog
 
-Release history and changes in the next beta candidate.
+## [Unreleased]
+
+### Fixed
+
+- macOS: opening a file with LocalSR while the app was not running crashed at
+  launch, because the open-file event arrived before the app state existed.
 
 ## [0.1.1-beta] - 2026-09-15
 
-- Show an FFmpeg notice when a phone or camera video in a format LocalSR omits (H.264, HEVC
-  and similar) is added without a selected FFmpeg, and before an H.264/HEVC export starts. It
-  explains the royalty-free codec policy, shows the platform's install command, opens
-  ffmpeg.org, and can find or choose the installed program and re-inspect the videos. The
-  worker's `media_probe_failed` message now carries a `reason` field.
-- Bundle only royalty-free or patent-expired media formats from an allowlisted LGPL FFmpeg build
-  (AV1, VP9, FFV1, Opus, FLAC and more): export defaults to AV1, playback copies are VP9 WebM and
-  converted audio is Opus. H.264/HEVC import and export use an FFmpeg the user installed and
-  selects under Advanced settings; LocalSR never bundles or downloads it.
-- Fail release builds on GPL/nonfree or patent-licensed codecs, on non-allowlisted GStreamer
-  plugins in AppImages, and on NVIDIA libraries without a redistribution basis (cuFile and
-  NVSHMEM are excluded). Generate the corresponding-source bundle from each binary's inventory.
-- Replace the Enhance pane's model dropdowns with a model library: Quick/Best stay selected,
-  Content (Photo/Illustration) and Fix-first chips (Noise, JPEG, Blur, Faces) resolve the plan,
-  a plan card names every stage with license, size and hardware fit, and Start downloads any
-  missing stage before the job. A library sheet groups verified models by what they do, shows
-  provenance, pins a model to a preset, and manages installed files (ADR 0007).
-- Separate checkpoint rights from Labs status in the catalog (schema 2: `rights_status`, `role`,
-  `stage`, `fixes`, `content`, `display_name`); Quick and Best never pick a checkpoint whose
-  rights are unresolved. The *Denoise* task is labelled *Restore*.
-- Retire Slint and its installer. The Python launcher opens the separately installed
-  Tauri app; the engine, automation CLI and optional Qt Widgets client remain.
+The first public beta, for Apple Silicon Macs. Everything below is relative to
+0.0.12-alpha.
 
-- Correct live tile geometry when first selecting an already-running image, at partial edges and across denoise/upscale stages; apply the same geometry to benchmarks.
-- Keep completed-image comparison responsive while another queued job is running, and preserve video comparison ownership when switching results.
-- Group folder exports in `LocalSR Results`; show current, next-item and whole-queue timing estimates.
-- Complete bounded cancellation recovery and reject unstable NAFNet scan output before saving it.
-- Complete HAT-S/HAT-L face pairing in the desktop catalog, recipes and job messages; retain verified external imports, Labs labels and documented interpolation trade-offs.
-- Retain all existing backend/Labs features with exact checkpoint and hardware limits.
-- Correct NomosWebPhoto/HFA2k to the author's CC BY 4.0 terms; keep attribution and verified in-app downloads.
-- Add the Store-managed CPU/DirectML MSIX route with recorded installed upgrades; prepare separate signed direct-download updates and protected data recovery.
-- Build a maintained native Apple Silicon worker and use Developer ID signing through the existing Keychain.
-- Refresh the project and developer guides, add an actual desktop screenshot and model guide, and check source formatting in local CI.
-- Select beta release metadata and readiness checks automatically in local CI while preserving the alpha checks.
-- Final dependency/source distribution, packaging and publication checks remain on the beta checklist.
+### Added
+
+- A model library in place of the model dropdowns. Quick and Best stay selected,
+  Content (Photo or Illustration) and Fix-first chips (Noise, JPEG artifacts, Blur,
+  Faces) resolve the plan, and a plan card names every stage with its license, size
+  and hardware fit. The library sheet groups verified models by purpose, shows
+  provenance, pins a model to a preset and manages installed files (ADR 0007).
+- Four more verified models: Real-ESRGAN ×4 and ×4 Anime 6B, SwinIR-M ×4 and
+  SCUNet. NomosWebPhoto and HFA2k download under Philip Hofmann's CC BY 4.0
+  terms with attribution and source links.
+- Legacy video import: AVI/DivX, MPEG/VOB, transport streams, WMV/ASF, FLV, 3GP and
+  OGV. Tagged interlacing is deinterlaced, non-square pixels are normalised, legacy
+  soundtracks are converted for MP4, and comparison copies are prepared with
+  progress and cancellation.
+- An FFmpeg notice when a video needs a codec LocalSR does not ship (H.264, HEVC
+  and similar), with the platform's install command and a picker for the
+  installed program.
+- Signed, notarized macOS builds with in-app updates: minisign-verified downloads,
+  separate engine payloads, profile backups before installation and recovery of
+  unreadable settings.
+- Separate CPU and GPU benchmarks (workload v2.1) that render the model's real
+  tiles.
+- Folder jobs save together in `LocalSR Results`; current-job, next-job and
+  whole-queue estimates distinguish measured from unmeasured work.
+- The crop-mark logo, app icon and a drop-well empty state; an update notice at
+  launch.
+
+### Changed
+
+- Every binary ships only royalty-free or patent-expired media formats from an
+  allowlisted LGPL FFmpeg build (AV1, VP9, FFV1, Opus, FLAC and more). AV1 is the
+  default export, playback copies are VP9 WebM and converted audio is Opus.
+  H.264/HEVC import and export use an FFmpeg the user installs and selects;
+  LocalSR never bundles or downloads it.
+- Release builds fail on GPL, nonfree or patent-licensed codecs, on unlisted
+  GStreamer plugins in AppImages and on NVIDIA libraries without a redistribution
+  basis. The corresponding-source bundle is generated from each binary's inventory.
+- Catalog schema 2 separates checkpoint rights from Labs status; Quick and Best
+  never choose a checkpoint with unresolved rights. The Denoise task is now
+  called Restore.
+- Live tiles follow the model's tile geometry, including partial edges, stage
+  changes and switching to an already-running image; benchmarks use the same
+  geometry.
+- Completed comparisons stay responsive while another job runs, and video
+  comparisons keep their result when switching between items.
+- The Windows DirectML engine moves from `torch-directml` (Torch 2.4.1) to ONNX
+  Runtime DirectML 1.24.4 on Torch 2.13 (source only; no package yet).
+- The `localsr` command without a subcommand launches the installed desktop app.
+
+### Fixed
+
+- Cancellation recovers a stalled worker, and unstable NAFNet or SPAN output is
+  rejected before an export is committed.
+- The benchmark no longer emits non-finite JSON when only one repetition fits the
+  time budget.
+- macOS update archives are written without AppleDouble entries; the 0.1.0
+  archive could not be unpacked by the updater.
+- Video decoders flush before early exit, which removed a native shutdown deadlock.
+
+### Removed
+
+- The Slint front end and its installer, the Qt Widgets client, the alpha
+  cross-build machinery and the one-off diagnostic workflows.
+
+## [0.1.0-beta] - 2026-09-15
+
+The first macOS beta build, given to a few testers. Superseded the same day by
+0.1.1-beta, which adds the FFmpeg notice and the macOS release script.
 
 ## [0.0.12-alpha] - 2026-09-06
 

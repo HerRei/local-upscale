@@ -2,8 +2,8 @@
 """Prepare a desktop-only Store MSIX layout from an existing Windows build.
 
 This tool never builds, installs, signs or publishes the application. MakeAppx
-and installed Windows acceptance are separate steps. The existing .12 release
-configuration and artifacts are not used as output locations.
+and installed Windows acceptance are separate steps, and the output directory
+must not exist yet.
 """
 
 from __future__ import annotations

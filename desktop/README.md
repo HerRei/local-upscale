@@ -1,6 +1,6 @@
 # LocalSR desktop
 
-The current desktop app uses Svelte 5 and Tauri 2. Rust handles native operations
+The desktop app uses Svelte 5 and Tauri 2. Rust handles native operations
 and persistent state; a separate Python process runs inference.
 
 ```text
@@ -66,17 +66,15 @@ and bundles both in a native installer. Local builds can use ad-hoc macOS signin
 public packages require the platform's production trust checks. A packaged
 `--smoke-test` must start the bundled worker and complete its protocol handshake.
 
-The beta retains macOS MPS, Windows CPU/CUDA/DirectML and Linux CPU/CUDA/ROCm/XPU.
-Exact artifacts, tested hardware and gaps are in the
-[platform matrix](../docs/beta-platform-matrix.md). Store application updates
-belong to Microsoft Store; direct editions use [signed updates](../docs/local-updates.md).
+Packages exist for macOS MPS, Windows CPU/CUDA/DirectML and Linux CPU/CUDA/ROCm;
+[Platforms](../docs/platforms.md) lists what has been tested where. Store builds update
+through Microsoft Store; direct builds use [signed updates](../docs/updates.md).
 
 ## Application data
 
 Settings, recipes and queues live in `LocalSR/next` under the platform's
 application-data directory. Verified checkpoints use the shared `LocalSR/models`
-cache. The Slint frontend has been retired. The existing application identity and
-state paths are retained, so this cleanup does not move or migrate user data.
+cache.
 
 `python -m localsr` launches the separately installed Tauri executable. If it is
 not found, set `LOCALSR_DESKTOP_EXECUTABLE` to its absolute path (the executable
@@ -84,8 +82,8 @@ inside the macOS app bundle, `localsr-next.exe`, or a Linux AppImage). Files,
 `--recipe`, `--preset` and `--auto-start` pass through unchanged. For source
 development, use `npm run tauri -- dev` here. The Python CLI works independently.
 
-MSIX upgrades preserve the profile in recorded tests. An explicit Store uninstall
-can delete the profile; restore from a verified backup after reinstalling.
+MSIX upgrades preserve the profile; uninstalling the Store package can delete it,
+so back it up first.
 
 Optional Finder, Explorer, Dolphin and Nautilus actions are managed through
 **System integrations**, or with `--install-integrations` / `--uninstall-integrations`.

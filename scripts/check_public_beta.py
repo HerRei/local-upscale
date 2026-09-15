@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the separate public beta release plan."""
+"""Validate the beta release plan and its version metadata."""
 
 from __future__ import annotations
 
@@ -48,7 +48,9 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     fields = ("id", "platform", "architecture", "backend")
     actual = plan.get("targets", [])
     if [{k: t[k] for k in fields} for t in actual] != [{k: t[k] for k in fields} for t in expected]:
-        raise ValueError("The beta plan must retain every agreed backend target in registry order")
+        raise ValueError(
+            "The beta plan must list every registered backend target in registry order"
+        )
     if any(t.get("coverage") not in {"main-path", "labs"} for t in actual):
         raise ValueError("Every beta backend needs an explicit coverage label")
     validate_readiness(root / plan["readiness"], root)
@@ -71,4 +73,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag")
     args = parser.parse_args()
-    print(f"Separate beta metadata synchronized: v{check(args.tag)}")
+    print(f"Beta metadata synchronized: v{check(args.tag)}")

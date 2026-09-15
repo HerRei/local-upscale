@@ -1,80 +1,77 @@
 # Known limitations
 
-These notes describe the **v0.1.1-beta candidate**, which is not yet publicly
-released. Older alpha packages have different dependencies and trust properties;
-see their [release notes](docs/releases/).
+These apply to v0.1.1-beta. Please read them before starting a long job.
 
-## Hardware and processing time
+## Platforms
 
-Recorded beta workloads cover Apple Silicon/MPS, Linux CPU and RX 9060 XT/ROCm,
-and Windows CPU and Intel UHD 620/DirectML. Other CUDA, XPU and DirectML devices
-remain available targets with Labs coverage. A successful build or worker startup
-does not establish physical GPU compatibility. See the [platform matrix](docs/beta-platform-matrix.md).
-
-High-resolution video can take hours or days and may exceed available RAM, GPU
-memory or disk space. A nominal 16 GB GPU is not a guarantee that SeedVR2 fits.
-Five-minute 480p export has been exercised; a complete four-minute 4K export has
-not. Try a short clip before committing to a long job.
+- Only the Apple Silicon macOS build is published. Windows and Linux builds exist
+  in the release pipeline but are held back: Windows until the royalty-free media
+  runtime builds there, Linux until the 5–6 GB GPU packages have a download host.
+  See [Platforms](docs/platforms.md).
+- NVIDIA and Intel XPU GPUs have not been tested on real hardware. Those engines
+  are labelled Labs in the app.
+- A working launch does not prove GPU compatibility. Some operators fall back to
+  the CPU (for example `aten::roll` on DirectML), and drivers vary.
+- On macOS, opening a file *with* LocalSR while the app is not running can crash
+  it during launch. Start LocalSR first, then open or drop the file. Fixed in
+  the next build.
 
 ## Media formats
 
-LocalSR includes only royalty-free or patent-expired media formats to avoid
-patent and copyleft licensing conflicts. H.264, HEVC, WMV, DivX and AAC-only
-sources, which include most phone and camera videos, open only after the user
-installs FFmpeg and selects it under Advanced settings → Video; adding such a
-video shows a notice with the install command for the platform. That FFmpeg also
-writes H.264/HEVC exports, from a temporary lossless copy that needs extra disk
-space. The default export is AV1, which some older players and editors cannot
-open. Windows packages stay blocked until the Windows LGPL media build exists,
-and Windows CUDA packages until NVIDIA confirms cuDNN 9 DLL redistribution.
-See [media formats and licensing](docs/licensing-media.md).
+- H.264, HEVC, WMV, DivX and AAC-only sources — which includes most phone and
+  camera videos — need an FFmpeg you install yourself and select under
+  *Advanced settings → Video*. LocalSR shows the install command when you add
+  such a file. The reasons are in [Media formats and licensing](docs/licensing-media.md).
+- The default video export is AV1. Some older players and editors cannot open it;
+  VP9 and lossless FFV1 are built in, and H.264/HEVC export goes through your
+  FFmpeg from a temporary lossless copy, which needs extra disk space.
+- Interlacing is deinterlaced only when the file is tagged; untagged interlacing
+  and inverse telecine are not detected. DVD menus, disc images and encrypted
+  media are out of scope.
+- A `.mov` extension says little about compatibility: the codec, colour metadata,
+  transforms and audio tracks all matter. Spatial audio and unsupported tracks
+  are dropped with a warning.
+
+## Time and memory
+
+- Video is not real time. A five-minute 480p clip upscaled 2× with SPAN took
+  about 100 minutes on a Radeon RX 9060 XT. High-resolution video can take hours
+  or days, and a complete multi-minute 4K export has not been exercised yet.
+- Memory use depends on the model, the output size and the clip. 16 GB of GPU
+  memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
+  but the working memory is not. Try a short clip at a modest output size first.
+- Estimates are measured from completed tiles and frames, so they appear only
+  after the first results and change with the scene.
 
 ## Restoration quality
 
-- HAT HDR preservation uses floating-point processing and 10-bit HLG/PQ export,
-  but the models were trained on SDR. HDR perceptual quality and temporal stability
-  remain unverified. Live previews are SDR display conversions.
-- SeedVR2 exports SDR and requires a compatible engine. Its FP8 download size
-  does not describe total working memory. De-flicker and video face processing
-  are also Labs features.
-- NAFNet can produce unstable results on some scanned documents. The current
-  guard rejects two of eleven reproduced inputs after bounded retries and writes
-  no output for those failures. Always inspect text, faces and fine detail.
-- MOV compatibility depends on codecs, colour metadata, transforms and audio
-  tracks. Compatible audio is retained; spatial audio and unsupported tracks may
-  be omitted. Compressed audio trims have packet-level precision.
+- AI restoration invents detail. Inspect text, faces and fine structure, and keep
+  your originals; LocalSR never overwrites a source file.
+- HAT HDR preservation is experimental: the models were trained on SDR, so HDR
+  perceptual quality and temporal stability are unverified. SeedVR2 exports SDR.
+- NAFNet can produce unstable results on some scanned documents, and SPAN on
+  some periodic high-contrast patterns. LocalSR detects this and refuses to
+  write the output rather than saving a broken file; in the reproduction set,
+  two of eleven scans are rejected.
+- The two HAT face companions must be imported manually because their
+  checkpoint rights are unresolved. Video face processing reuses masks across
+  frames and is not motion tracking.
 
-See [video support](docs/video-support.md) and [metadata handling](docs/metadata.md).
+## Models
 
-## Models and runtime dependencies
-
-Both HAT face checkpoints require verified user imports because their independent
-checkpoint rights remain unresolved. NomosWebPhoto/HFA2k use the author's declared
-CC BY 4.0 terms with attribution. No restoration checkpoints are bundled.
-
-The retained Windows MSIX uses torch-directml / Torch 2.4.1. The prepared source
-replacement uses Torch 2.13.0 CPU and ONNX Runtime DirectML 1.24.4, but no package
-containing it has been built. NAFNet SIDD photo comparisons still exceed the
-fixed GPU numerical tolerance; no temporary CPU restriction is approved or
-applied. SPAN can also diverge on some periodic high-contrast inputs; detected
-unstable output is rejected before export. The Linux GTK dependency chain has a
-recorded glib advisory. The native dependency/codec redistribution review and
-final installed acceptance must finish before publication.
-[Dependency review](docs/beta-dependency-review.md) · [Model licenses](docs/model-licenses.md).
-
-Custom `.safetensors` models are accepted by default. The explicit override for
-unverified `.pth`, `.pt` and `.ckpt` files treats them as executable code; it is
-not a sandbox. Read the [security policy](SECURITY.md).
+- No weights are bundled. Each model downloads from its author's release when
+  you choose it, so the first use of a model needs a network connection.
+- Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
+  `.ckpt` files can run code when loaded and are refused unless you set
+  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`; see [SECURITY.md](SECURITY.md).
 
 ## Installation and updates
 
-The macOS review candidate is signed, notarized and stapled. Native installed
-upgrade/recovery checks remain incomplete. Windows WACK still reports a warning;
-Microsoft Store certification is pending. MSIX upgrades preserve user data in
-recorded tests, but uninstall can delete the profile; explicit backup restoration
-has been verified.
-
-Direct-update signature and download checks pass. Public feeds, native install/
-restart/recovery and final package rebuilding remain release requirements.
-The public download and issue-tracker destinations are still being prepared.
-Current blockers are recorded in the [beta checklist](docs/beta-release-checklist.md).
+- macOS updates are downloaded and verified in the app. Settings, recipes and
+  the queue are backed up before an update is installed.
+- Direct Windows installers for the beta will not be Authenticode signed, so
+  SmartScreen will warn. The Microsoft Store edition, when it ships, is signed by
+  the Store.
+- Uninstalling the Store edition can delete its data folder, including settings
+  and recipes. Back it up first; downloaded models live in the shared
+  `LocalSR/models` folder and survive.

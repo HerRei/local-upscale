@@ -24,7 +24,7 @@ def verify(output: Path, manifest_path: Path, commit: str) -> None:
     ):
         raise ValueError("prepared release is missing targets or has a different identity")
     assets = expected_assets(output)
-    # Preparation also keeps private handoff manifests, so validate the checksum
+    # Preparation also keeps private build manifests, so validate the checksum
     # set directly rather than treating those private files as public downloads.
     lines = (output / "SHA256SUMS").read_text().splitlines()
     checksums = {line.split("  ", 1)[1]: line.split("  ", 1)[0] for line in lines}

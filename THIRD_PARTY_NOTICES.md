@@ -3,20 +3,16 @@
 LocalSR application source is MIT licensed. Dependencies and optional model downloads retain their
 own terms; this file is a distribution notice, not a replacement for their license texts.
 
-- **LocalSR Next Preview host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
+- **Desktop host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
   components retain their upstream permissive or file-level terms (including Apache, BSD, ISC,
   MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. macOS uses WKWebView and Windows uses WebView2. The Linux AppImages bundle
   WebKitGTK/GTK/GStreamer libraries from Ubuntu 24.04; these include LGPL and other
   licenses and require the matching notices and applicable source/relinking materials.
 - **PyTorch / TorchVision** — BSD-style licenses from the PyTorch project.
-- **Windows ONNX path (prepared source)** — ONNX is Apache-2.0; ONNX Runtime is
-  MIT and includes its own third-party notices. The prepared DirectML lock uses
-  ONNX 1.22.0, ONNX Runtime DirectML 1.24.4 and maintained Torch 2.13.0 CPU for
-  loading/conversion. DirectML/provider DLLs retain their shipped terms.
-  `ml_dtypes` is Apache-2.0. The complete license/notice files and exact provider
-  binaries must be retained in the frozen package. The older installed MSIX
-  still uses torch-directml; these source changes do not describe its contents.
-  See `docs/windows-inference-runtime-review.md` for numerical and adoption gates.
+- **Windows DirectML engine** — ONNX is Apache-2.0; ONNX Runtime is MIT and ships its own
+  third-party notices. The DirectML build uses ONNX 1.22.0, ONNX Runtime DirectML 1.24.4 and
+  Torch 2.13.0 CPU for loading and conversion; `ml_dtypes` is Apache-2.0. The provider DLLs
+  keep their shipped terms, and the license and notice files are included in the frozen worker.
 - **Spandrel** — MIT license.
 - **Media runtime policy** — LocalSR bundles only royalty-free or patent-expired media formats
   and LGPL-2.1-or-later or permissively licensed media code. The exact allowlist is
@@ -43,11 +39,11 @@ own terms; this file is a distribution notice, not a replacement for their licen
   LGPL-2.1-or-later. The macOS runtime also uses libjpeg-turbo, JasPer and
   LittleCMS under their retained upstream terms. The optional LibRaw GPL
   demosaic packs are disabled. Matching source and the upstream macOS build
-  recipe accompany the .13 macOS source bundle.
-- **Beta distribution status** — Corresponding source, build instructions and license texts for
-  each binary are assembled by `scripts/build_source_bundle.py` from that binary's actual file
-  inventory and published next to it. Older alpha packages had a different media runtime; their
-  notices remain in their release notes. See `docs/licensing-media.md`.
+  recipe accompany the macOS source bundle.
+- **Corresponding source** — `scripts/build_source_bundle.py` assembles the source, build
+  instructions and license texts for each binary from that binary's file inventory, and the
+  bundle is published next to the download. Alpha packages before 0.1.0 used a different media
+  runtime, described in their release notes. See `docs/licensing-media.md`.
 - **YuNet 2023mar face detector** — MIT, copyright Shiqi Yu; downloaded on demand from the
   OpenCV Zoo with an exact size and SHA-256 rather than bundled in the application.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included
@@ -65,8 +61,8 @@ own terms; this file is a distribution notice, not a replacement for their licen
   LocalSR downloads the author's checkpoint files unchanged from their catalog-pinned
   publisher assets; no model weights are included in installers. Sharing and commercial
   use are permitted under the license, with attribution and retained notices. This does
-  not imply the author's endorsement of LocalSR. See `docs/beta-model-license-choices.md`
-  for the explicit declarations and exact checkpoint provenance.
+  not imply the author's endorsement of LocalSR. See `docs/model-licenses.md` for the
+  exact checkpoint provenance.
 
 Review upstream license files and current terms before redistributing LocalSR or using outputs in a
 commercial workflow.

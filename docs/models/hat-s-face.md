@@ -29,7 +29,7 @@ The HAT-S and HAT-L reports are separate experiments, not a controlled size comp
 
 ## Use in LocalSR
 
-In Tauri, choose stock HAT-S, enable its face-aware pass, acknowledge the terms,
+In the app, choose stock HAT-S, enable its face-aware pass, acknowledge the terms,
 and import the exact checkpoint. LocalSR verifies its size and SHA-256. The local
 OpenCV face detector must be available. Face companions run only when their
 face-aware pass is enabled.

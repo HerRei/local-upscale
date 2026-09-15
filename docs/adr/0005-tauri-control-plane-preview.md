@@ -1,15 +1,9 @@
 # Architecture Decision Record: 0005 - Tauri Control Plane Preview
 
-Historical design. Slint retirement was approved for the separate beta on
-13 September 2026; see [the cleanup record](../slint-retirement.md).
-The retained Tauri host owns current desktop integrations.
-
 ## Status
 
-Accepted for an additive alpha release. The legacy Slint host remains independently
-buildable and installable; the Tauri host may publish prereleases only through the
-fail-closed signed pipeline. Public-beta/default-host promotion still requires the
-physical acceptance matrix and remaining product decisions.
+Accepted. Introduced alongside the Slint host in 0.0.10-alpha; since 0.1.0-beta the Tauri host
+is the only desktop interface.
 
 ## Context
 

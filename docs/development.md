@@ -50,10 +50,10 @@ Remove unused code rather than extending that list. `frontend` runs Knip
 (`npm --prefix desktop run knip`, configured in `desktop/knip.ts`) for unused files,
 exports and dependencies, and the Rust crate denies `dead_code`.
 
-These checks cover the development host. They do not run foreign OS installers,
-certify GPU/driver compatibility, supply signing credentials, or clear the existing
-beta-readiness blockers. Release CI still builds every registered backend and
-verifies each artifact's source commit and runtime evidence. Real-model acceptance
+These checks cover the development host. They do not run other operating systems'
+installers, certify GPU or driver compatibility or supply signing credentials. Release
+CI builds every registered backend and verifies each artifact's source commit and
+runtime evidence. Real-model acceptance
 remains an explicit, networked check: `python scripts/validate_live_models.py`.
 
 Native-library deadlocks may prevent Python's timeout thread from running. The test suite also

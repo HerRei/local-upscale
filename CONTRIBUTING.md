@@ -1,59 +1,58 @@
-# Contributing to LocalSR
+# Contributing
 
-LocalSR restores images and video on the user's computer. Changes should keep
-processing observable, cancellation reliable and source files intact.
+LocalSR restores images and video on the user's own computer. Changes should keep
+processing observable, cancellation reliable and source files untouched.
 
-## Get started
+## Getting started
 
-The current interface is in [`desktop/`](desktop/README.md). It uses Svelte/Tauri
-and a Python worker.
-Use Python 3.11 and install the native dependencies listed in the desktop guide.
-
-From the repository root:
+The app lives in [`desktop/`](desktop/README.md) (Svelte + Tauri) with a Python
+inference worker in [`src/localsr/`](src/localsr). You need Python 3.11, Node.js
+and a stable Rust toolchain. From the repository root:
 
 ```sh
 ./local-ci.sh setup
 ./local-ci.sh
 ```
 
-See [development checks](docs/development.md) for individual commands and the
-current type-checking boundary. The default Python suite runs headlessly.
-Real-model downloads, physical GPU tests and installed-package checks are
-separate acceptance steps.
+`setup` installs the development dependencies; the second command runs every
+check that works on a development machine. [Development](docs/development.md)
+lists the individual steps. Model downloads, GPU runs and installed-package
+checks are separate; see [Testing](docs/testing.md).
 
-## Working on a change
+## Making a change
 
-Keep a change focused enough to review. Describe the problem, resulting behavior
-and the checks you ran. Add a regression test for a reproducible bug; visual-only
-changes can use a checked screenshot and a short explanation.
+Keep a change small enough to review. In the pull request, describe the problem,
+the resulting behaviour and the checks you ran. Add a regression test for a
+reproducible bug. For visual changes, attach a screenshot.
 
-Run the desktop app for interface changes and test the relevant installed package
-when changing native integration, worker startup or bundled dependencies. Report
-which operating system, device and driver you actually tested. Do not infer broad
-GPU support from a CPU smoke test.
+Run the desktop app for interface changes, and test the installed package when
+you touch native integration, worker startup or bundled dependencies. Say which
+operating system, GPU and driver you used; a CPU smoke test says nothing about
+GPU support.
 
-## Code boundaries
+## Boundaries to keep
 
-- Keep PyTorch and Spandrel in the inference worker. Worker failure must not take down the GUI.
-- Keep worker stdout as JSON Lines; diagnostics belong on stderr.
-- Route native operations through Rust, with access limited to the requested files.
-- Preserve cancellation, atomic output replacement and temporary-file cleanup.
-- Validate model sizes and SHA-256 hashes before deserialization.
-- Keep resource limits enabled and display uncertainty in estimates.
-- Keep model downloads optional and preserve each author's terms and attribution.
+- PyTorch and Spandrel stay in the inference worker. A worker failure must not
+  take down the app.
+- Worker stdout is JSON Lines; diagnostics go to stderr.
+- Native operations go through Rust, with access limited to the files the user
+  chose.
+- Output files are replaced atomically; temporary files are cleaned up; jobs can
+  be cancelled at any point.
+- Model files are verified by size and SHA-256 before deserialization.
+- Model downloads stay optional, and each author's terms and attribution stay
+  visible.
 
-Prefer names and comments that explain a constraint or a non-obvious choice.
-Remove obsolete branches and unused code when their replacements are verified.
-Avoid broad refactors in a bug fix. Third-party vendored code and its modification
-notices must retain their provenance; do not reformat it with application code.
+Write comments that explain a constraint or a non-obvious choice. Remove code
+when its replacement is verified rather than leaving both. Vendored third-party
+code keeps its provenance and formatting.
 
-Do not commit checkpoints, private media, runtime profiles, signing material,
-virtual environments or local acceptance artifacts. Required, fixed SeedVR2
-conditioning assets are explicitly listed in the package configuration.
+Do not commit checkpoints, media, runtime profiles, signing material, virtual
+environments or local test artifacts.
 
 ## Reports and proposals
 
-Use [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com) while the public
-beta tracker is being prepared. Send security reports privately as described in
-[SECURITY.md](SECURITY.md). For a proposal, explain the use case and the effect on
-processing time, memory, output quality and platform support where relevant.
+Use [GitHub Issues](https://github.com/HerRei/local-upscale/issues) for bugs and
+feature requests, and [SECURITY.md](SECURITY.md) for vulnerabilities. For a
+proposal, explain the use case and its effect on processing time, memory, output
+quality and platform support.

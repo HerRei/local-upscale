@@ -123,7 +123,7 @@ def test_public_beta_rejects_wrong_tag_missing_backend_and_stale_lock(tmp_path):
     plan = json.loads(original)
     plan["targets"].pop()
     plan_path.write_text(json.dumps(plan))
-    with pytest.raises(ValueError, match="every agreed backend"):
+    with pytest.raises(ValueError, match="every registered backend"):
         public_beta.check(root=tmp_path)
     plan_path.write_text(original)
     lock_path = tmp_path / "desktop/package-lock.json"

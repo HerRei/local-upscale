@@ -89,7 +89,7 @@
       "blocking": true,
       "scope": "standard-video",
       "summary": "SDR frame-by-frame video has timing, orientation, trim and motion regression coverage. Installed-platform playback, long-clip and resource acceptance remains pending.",
-      "next_action": "Run the local visual video benchmark and complete the video cases in docs/acceptance-record.example.json on each supported installer."
+      "next_action": "Run the local visual video benchmark and complete the video cases in docs/testing.md on each supported installer."
     },
     {
       "id": "temporal-video-labs",
