@@ -38,63 +38,6 @@ def write_pe(path: Path, machine: int) -> None:
     path.write_bytes(pe)
 
 
-def test_unsigned_cross_policy_is_restricted_to_exact_non_beta_alpha() -> None:
-    manifest = {"release_policy": "v0.0.12-cross-alpha-exception"}
-    readiness = {"beta_ready": False}
-
-    assert (
-        prepare_release.release_policy(manifest, readiness, "0.0.12-alpha")
-        == prepare_release.CROSS_ALPHA_POLICY
-    )
-    with pytest.raises(ValueError, match="restricted"):
-        prepare_release.release_policy(manifest, readiness, "0.0.13-alpha")
-    with pytest.raises(ValueError, match="non-beta"):
-        prepare_release.release_policy(manifest, {"beta_ready": True}, "0.0.12-alpha")
-
-
-def test_unsigned_cross_policy_requires_explicit_signing_warning() -> None:
-    evidence = {
-        "status": "ad-hoc-alpha",
-        "production_signed": False,
-        "warning": "Testing-only ad-hoc signature",
-    }
-    assert (
-        prepare_release.validate_signing_evidence(
-            "macos", evidence, "ad-hoc-alpha", prepare_release.CROSS_ALPHA_POLICY
-        )
-        == evidence
-    )
-    with pytest.raises(ValueError, match="warning"):
-        prepare_release.validate_signing_evidence(
-            "macos",
-            {"status": "ad-hoc-alpha", "production_signed": False},
-            "ad-hoc-alpha",
-            prepare_release.CROSS_ALPHA_POLICY,
-        )
-
-
-def test_cross_built_macos_static_smoke_is_never_reported_as_runtime_pass() -> None:
-    evidence = {
-        "passed": False,
-        "mode": "cross-build-static",
-        "version": "0.0.12-alpha",
-        "architecture": "arm64",
-        "static_verified": True,
-        "runtime_tested": False,
-        "reason": "No native Apple-Silicon runner was available.",
-    }
-    assert (
-        prepare_release.validate_smoke_evidence(
-            "macos", evidence, prepare_release.CROSS_ALPHA_POLICY, "0.0.12-alpha"
-        )
-        == evidence
-    )
-    with pytest.raises(ValueError, match="acceptable"):
-        prepare_release.validate_smoke_evidence(
-            "windows", evidence, prepare_release.CROSS_ALPHA_POLICY, "0.0.12-alpha"
-        )
-
-
 def installed_smoke(version: str) -> dict[str, object]:
     return {
         "passed": True,
@@ -116,63 +59,24 @@ def architecture_evidence(filename: str, architecture: str) -> dict[str, object]
     }
 
 
+def test_release_policy_and_signing_accept_only_production_requirements() -> None:
+    assert prepare_release.release_policy({}) == prepare_release.SIGNED_POLICY
+    with pytest.raises(ValueError, match="unsupported release policy"):
+        prepare_release.release_policy({"release_policy": "v0.0.12-cross-alpha-exception"})
+    unsigned = {"status": "ad-hoc-alpha", "production_signed": False, "warning": "testing"}
+    with pytest.raises(ValueError, match="unsupported signing requirement"):
+        prepare_release.validate_signing_evidence(unsigned, "ad-hoc-alpha")
+
+
 def test_release_matrix_rejects_weak_smoke_and_architecture_evidence() -> None:
     with pytest.raises(ValueError, match="acceptable"):
-        prepare_release.validate_smoke_evidence(
-            "linux",
-            {"passed": True},
-            prepare_release.SIGNED_POLICY,
-            "0.0.12-alpha",
-        )
+        prepare_release.validate_smoke_evidence({"passed": True}, "0.0.12-alpha")
     with pytest.raises(ValueError, match="different artifact"):
         prepare_release.validate_architecture_evidence(
             "LocalSR.AppImage",
             architecture_evidence("other.AppImage", "x86_64"),
             "x86_64",
         )
-
-
-def cross_macos_provenance() -> dict[str, object]:
-    return {
-        "torch_version": "2.2.2",
-        "torch_arm64_wheel": "torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
-        "torch_arm64_sha256": "a" * 64,
-        "universal2_wheel": ("torch-2.2.2-cp311-none-macosx_11_0_arm64.macosx_10_9_x86_64.whl"),
-        "static_evidence": ["wheel", "merge", "Mach-O verification"],
-        "openmp_normalization": {
-            "schema_version": 1,
-            "operation": "pair-torch-openmp-aliases",
-            "source_sha256": {"torch/lib/libiomp5.dylib": "b" * 64},
-            "outputs": [
-                {
-                    "path": f"library-{index}.dylib",
-                    "architectures": ["arm64", "x86_64"],
-                    "sha256": character * 64,
-                }
-                for index, character in enumerate(("c", "d", "e"))
-            ],
-        },
-    }
-
-
-def test_cross_macos_provenance_requires_exact_pins_and_dual_arch_openmp() -> None:
-    evidence = cross_macos_provenance()
-    assert prepare_release.validate_cross_macos_provenance(evidence) == evidence
-    with pytest.raises(ValueError, match="torch 2.2.2"):
-        prepare_release.validate_cross_macos_provenance(evidence | {"torch_version": "2.3.0"})
-    malformed = dict(evidence)
-    malformed["openmp_normalization"] = {
-        **evidence["openmp_normalization"],
-        "outputs": [
-            {
-                "path": "library.dylib",
-                "architectures": ["x86_64"],
-                "sha256": "f" * 64,
-            }
-        ],
-    }
-    with pytest.raises(ValueError, match="output evidence"):
-        prepare_release.validate_cross_macos_provenance(malformed)
 
 
 def test_reads_x86_64_elf_and_pe_release_containers(tmp_path: Path) -> None:
@@ -292,7 +196,7 @@ def release_fixture(tmp_path: Path):
     from release_targets import artifact_entries
 
     staging, output = tmp_path / "staging", tmp_path / "output"
-    entries = artifact_entries("1-alpha", alpha=False)
+    entries = artifact_entries("1-alpha")
     for number, entry in enumerate(entries):
         directory = staging / "1" / entry["platform"]
         directory.mkdir(parents=True, exist_ok=True)

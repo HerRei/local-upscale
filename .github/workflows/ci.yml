@@ -35,9 +35,7 @@ jobs:
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "v0.0.12 Mac mini Cross Alpha" \
-            --blocked-workflow "v0.0.13 Mac mini Cross Alpha" \
-            --blocked-workflow "Signed Tauri Alpha Release"
+            --blocked-workflow "Signed Tauri Release"
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \

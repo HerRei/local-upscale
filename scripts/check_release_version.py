@@ -46,10 +46,7 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     if {str(desktop_package.get("version")), str(tauri.get("version")), cargo_version} != {version}:
         failures.append("npm, Tauri, Cargo, and Python release versions do not match")
 
-    for relative, label in (
-        ("ci/tauri-release-artifacts.json", "signed Tauri"),
-        (f"ci/v{version.split('-')[0]}-cross-alpha-artifacts.json", "cross-alpha Tauri"),
-    ):
+    for relative, label in (("ci/tauri-release-artifacts.json", "signed Tauri"),):
         path = root / relative
         if not path.is_file():
             failures.append(f"{label} manifest is missing: {relative}")
@@ -62,10 +59,7 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
         except ValueError as error:
             failures.append(f"{label}: {error}")
 
-    for relative, label in (
-        (".github/workflows/desktop-release.yml", "signed release workflow"),
-        (f".github/workflows/v{version.split('-')[0]}-cross-alpha.yml", "cross-alpha workflow"),
-    ):
+    for relative, label in ((".github/workflows/desktop-release.yml", "signed release workflow"),):
         path = root / relative
         if not path.is_file():
             failures.append(f"{label} is missing: {relative}")

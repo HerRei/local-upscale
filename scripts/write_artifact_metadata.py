@@ -25,37 +25,6 @@ def atomic_json(path: Path, value: object) -> None:
     os.replace(temporary, path)
 
 
-def mps_provenance(
-    wheel_manifest: Path,
-    normalization_report: Path | None = None,
-) -> dict[str, object]:
-    data = json.loads(wheel_manifest.read_text(encoding="utf-8"))
-    for wheel in data.get("wheels", []):
-        if wheel.get("distribution") != "torch":
-            continue
-        for filename, digest in zip(
-            wheel.get("sources", []), wheel.get("source_sha256", []), strict=True
-        ):
-            if "arm64" in filename:
-                result: dict[str, object] = {
-                    "torch_version": wheel.get("version"),
-                    "torch_arm64_wheel": filename,
-                    "torch_arm64_sha256": digest,
-                    "universal2_wheel": wheel.get("output"),
-                    "static_evidence": [
-                        "official arm64 macOS torch wheel",
-                        "paired x86_64/arm64 wheel merged with delocate-merge",
-                        "recursive bundled Mach-O ARM64-slice verification",
-                    ],
-                }
-                if normalization_report:
-                    result["openmp_normalization"] = json.loads(
-                        normalization_report.read_text(encoding="utf-8")
-                    )
-                return result
-    raise ValueError(f"No arm64 torch wheel provenance in {wheel_manifest}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
@@ -67,8 +36,6 @@ def main() -> None:
     parser.add_argument("--backend", required=True)
     parser.add_argument("--backend-probe", type=Path)
     parser.add_argument("--smoke-report", type=Path)
-    parser.add_argument("--wheel-manifest", type=Path)
-    parser.add_argument("--normalization-report", type=Path)
     parser.add_argument("--signing-report", type=Path)
     parser.add_argument("--live-model-report", type=Path)
     parser.add_argument("--engine-payload-manifest", type=Path)
@@ -105,8 +72,6 @@ def main() -> None:
         metadata["engine_payload_sha256"] = sha256(args.engine_payload_manifest)
     if args.dependency_report:
         metadata["dependency_wheelhouse"] = json.loads(args.dependency_report.read_text())
-    if args.wheel_manifest:
-        metadata["mps"] = mps_provenance(args.wheel_manifest, args.normalization_report)
     if args.signing_report:
         metadata["signing"] = json.loads(args.signing_report.read_text(encoding="utf-8"))
     if args.live_model_report:

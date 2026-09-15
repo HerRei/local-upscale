@@ -112,12 +112,11 @@ def test_registry_covers_all_backends():
         ("linux", "AMD-ROCm"),
         ("macos", "MPS"),
     }
-    for name in ("tauri-release-artifacts.json", "v0.0.12-cross-alpha-artifacts.json"):
-        manifest = json.loads((ROOT / "ci" / name).read_text())
+    manifest = json.loads((ROOT / "ci" / "tauri-release-artifacts.json").read_text())
+    validate_manifest(manifest)
+    manifest["artifacts"].pop()
+    with pytest.raises(ValueError, match="every target"):
         validate_manifest(manifest)
-        manifest["artifacts"].pop()
-        with pytest.raises(ValueError, match="every target"):
-            validate_manifest(manifest)
 
 
 @pytest.mark.parametrize("flavor", ["cu126", "rocm7.2", "xpu"])

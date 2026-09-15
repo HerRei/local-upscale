@@ -18,7 +18,7 @@ def main() -> None:
         if args.target and target["id"] != args.target:
             continue
         if target["platform"] == "macos":
-            continue  # The separately pinned universal2 recipe remains the alpha exception.
+            continue  # macOS builds natively and has no cross-resolved lock.
         lock = ROOT / "requirements/locks" / f"{target['id']}.txt"
         source = "backend-directml.in" if target["backend"] == "DirectML" else "backend-modern.in"
         backend = "cpu" if target["backend"] == "DirectML" else target["index"]

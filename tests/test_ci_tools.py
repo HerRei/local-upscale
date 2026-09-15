@@ -32,7 +32,6 @@ def load_script(path: Path):
 
 
 preflight = load_script(ROOT / "scripts" / "storage_preflight.py")
-cross_wheels = load_script(ROOT / "scripts" / "macos_cross_wheels.py")
 artifact_server = load_script(ROOT / "scripts" / "ci_artifact_server.py")
 artifact_auth = load_script(ROOT / "scripts" / "artifact_auth.py")
 artifact_upload = load_script(ROOT / "scripts" / "upload_artifacts.py")
@@ -102,36 +101,17 @@ def copy_release_metadata(destination: Path) -> None:
         "desktop/src-tauri/tauri.conf.json",
         "ci/tauri-targets.json",
         "ci/tauri-release-artifacts.json",
-        "ci/v0.0.12-cross-alpha-artifacts.json",
         "ci/beta-readiness.json",
         "ci/public-beta-release.json",
         "ci/public-beta-readiness.json",
         "packaging/updates/production.pub",
-        "docs/releases/v0.0.12-alpha.md",
         "docs/releases/v0.0.13-beta.1.md",
         ".github/workflows/desktop-release.yml",
-        ".github/workflows/v0.0.12-cross-alpha.yml",
     ]
     for relative in paths:
         path = destination / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, path)
-
-
-def test_preserved_alpha_metadata_still_satisfies_its_unchanged_gates(tmp_path):
-    copy_release_metadata(tmp_path)
-    for relative in (
-        "README.md",
-        "pyproject.toml",
-        "src/localsr/__init__.py",
-        "desktop/package.json",
-        "desktop/src-tauri/Cargo.toml",
-        "desktop/src-tauri/tauri.conf.json",
-    ):
-        path = tmp_path / relative
-        path.write_text(path.read_text().replace("0.0.13-beta.1", "0.0.12-alpha"))
-    assert release_version.check("v0.0.12-alpha", tmp_path) == "0.0.12-alpha"
-    assert not beta_readiness.validate(tmp_path / "ci/beta-readiness.json", tmp_path)["beta_ready"]
 
 
 def test_public_beta_rejects_wrong_tag_missing_backend_and_stale_lock(tmp_path):
@@ -423,54 +403,6 @@ def test_release_scratch_rejects_broad_and_unowned_cleanup_targets(tmp_path: Pat
     (target / release_scratch.RUN_MARKER).unlink()
     with pytest.raises(ValueError, match="ownership marker"):
         release_scratch.finish(target, root, "success")
-
-
-def test_cross_wheel_pair_is_merged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    x86 = tmp_path / "x86"
-    arm = tmp_path / "arm"
-    output = tmp_path / "out"
-    x86.mkdir()
-    arm.mkdir()
-    (x86 / "demo-1.0-cp311-cp311-macosx_12_0_x86_64.whl").write_bytes(b"x86")
-    (arm / "demo-1.0-cp311-cp311-macosx_12_0_arm64.whl").write_bytes(b"arm")
-
-    def fake_run(command, check):
-        assert check
-        destination = Path(command[command.index("-w") + 1])
-        merged = destination / ("demo-1.0-cp311-cp311-macosx_10_13_x86_64.macosx_11_0_arm64.whl")
-        merged.write_bytes(b"merged")
-
-    monkeypatch.setattr(cross_wheels.subprocess, "run", fake_run)
-    records = cross_wheels.merge_wheel_sets(x86, arm, output)
-    assert records[0].operation == "delocate-merge"
-    assert cross_wheels.is_dual_arch_wheel(Path(records[0].output))
-
-
-def test_torch_openmp_aliases_become_dual_arch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    site_packages = tmp_path / "site-packages"
-    paths = (
-        site_packages / "torch/lib/libiomp5.dylib",
-        site_packages / "functorch/.dylibs/libiomp5.dylib",
-        site_packages / "functorch/.dylibs/libomp.dylib",
-    )
-    for path in paths:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"arm" if path.name == "libomp.dylib" else b"x86")
-
-    def fake_arches(path: Path, _lipo: str = "lipo") -> set[str]:
-        payload = path.read_bytes()
-        if payload == b"fat":
-            return {"x86_64", "arm64"}
-        return {"arm64"} if payload == b"arm" else {"x86_64"}
-
-    def fake_fat(_x86: Path, _arm: Path, destination: Path, **_kwargs) -> None:
-        destination.write_bytes(b"fat")
-
-    monkeypatch.setattr(cross_wheels, "lipo_arches", fake_arches)
-    monkeypatch.setattr(cross_wheels, "make_fat_binary", fake_fat)
-    report = cross_wheels.normalize_torch_openmp(site_packages)
-    assert len(report["outputs"]) == 3
-    assert all(path.read_bytes() == b"fat" for path in paths)
 
 
 def test_artifact_path_components_and_managed_root(tmp_path: Path):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the separate beta plan without rewriting the active alpha manifests."""
+"""Validate the separate public beta release plan."""
 
 from __future__ import annotations
 
