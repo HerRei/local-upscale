@@ -106,6 +106,11 @@
         >
       {/if}
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
+      <p class="detail">
+        This software uses libraries from the FFmpeg project under the LGPLv2.1. LocalSR does not
+        own FFmpeg. Corresponding source, build instructions and third-party notices are published
+        with each download.
+      </p>
       <p role="status">{status.message}</p>
       {#if status.version}<h3>{status.version} · {sizeText}</h3>
         <p class="notes">{status.notes}</p>{/if}

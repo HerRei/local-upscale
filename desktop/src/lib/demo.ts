@@ -38,6 +38,8 @@ export function demoSnapshot(): AppSnapshot {
       deflicker: false,
       deflicker_window: 3,
       video_container: 'mp4',
+      video_codec: 'av1',
+      external_ffmpeg_path: '',
       video_hdr_mode: 'tone_map',
       video_crf: 18,
       enable_face_model: false,

@@ -224,6 +224,8 @@ pub struct Recipe {
     pub deflicker_window: Option<u32>,
     #[serde(default)]
     pub video_container: String,
+    #[serde(default)]
+    pub video_codec: String,
     #[serde(default = "default_hdr_mode")]
     pub video_hdr_mode: String,
     #[serde(default)]
@@ -279,6 +281,12 @@ pub struct UiSettings {
     pub deflicker: bool,
     pub deflicker_window: u32,
     pub video_container: String,
+    // Royalty-free AV1/VP9/FFV1 are bundled; H.264/HEVC use the user's FFmpeg.
+    #[serde(default = "default_video_codec")]
+    pub video_codec: String,
+    // An FFmpeg executable the user installed; LocalSR never bundles one.
+    #[serde(default)]
+    pub external_ffmpeg_path: String,
     #[serde(default = "default_hdr_mode")]
     pub video_hdr_mode: String,
     #[serde(default)]
@@ -307,6 +315,10 @@ fn default_hdr_mode() -> String {
     "tone_map".into()
 }
 
+pub(crate) fn default_video_codec() -> String {
+    "av1".into()
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
@@ -330,6 +342,8 @@ impl Default for UiSettings {
             deflicker: false,
             deflicker_window: 3,
             video_container: "mp4".into(),
+            video_codec: default_video_codec(),
+            external_ffmpeg_path: String::new(),
             video_hdr_mode: default_hdr_mode(),
             video_target_resolution: 0,
             video_low_memory: true,
@@ -573,6 +587,10 @@ pub struct StartBatchInput {
     pub deflicker: bool,
     pub deflicker_window: u32,
     pub video_container: String,
+    #[serde(default = "default_video_codec")]
+    pub video_codec: String,
+    #[serde(default)]
+    pub external_ffmpeg_path: String,
     #[serde(default = "default_hdr_mode")]
     pub video_hdr_mode: String,
     #[serde(default)]

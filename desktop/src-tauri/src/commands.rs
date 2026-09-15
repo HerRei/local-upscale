@@ -103,13 +103,7 @@ pub fn add_media(
             &name,
             kind,
         )? {
-            let _ = worker::send(
-                &state,
-                &json!({
-                    "type": "media_probe_request",
-                    "data": {"media_path": encoded, "max_dimension": 2048}
-                }),
-            );
+            let _ = worker::send(&state, &worker::media_probe_request(&state, &encoded));
         }
     }
     emit_state_changed(&app);
@@ -186,6 +180,11 @@ pub fn save_recipe(
         ))
         || (!recipe.video_container.is_empty()
             && !matches!(recipe.video_container.as_str(), "mp4" | "mkv"))
+        || (!recipe.video_codec.is_empty()
+            && !matches!(
+                recipe.video_codec.as_str(),
+                "av1" | "vp9" | "ffv1" | "h264" | "hevc"
+            ))
         || recipe
             .jpeg_quality
             .is_some_and(|value| !(1..=100).contains(&value))
@@ -796,13 +795,7 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String)
         emit_state_changed(&app);
     }
     let result = if queued_media.is_some() || media_kind(&canonical) == Some("video") {
-        worker::send(
-            &state,
-            &json!({
-                "type": "media_probe_request",
-                "data": {"media_path": encoded, "max_dimension": 2048}
-            }),
-        )
+        worker::send(&state, &worker::media_probe_request(&state, &encoded))
     } else {
         worker::send(
             &state,
@@ -1002,6 +995,41 @@ pub fn uninstall_integrations() -> AppResult<integrations::IntegrationStatus> {
     integrations::uninstall()
 }
 
+/// Suggest FFmpeg executables the user installed. LocalSR never runs one
+/// until the user selects it, and never downloads or bundles FFmpeg.
+#[tauri::command]
+pub fn detect_external_ffmpeg() -> Vec<String> {
+    let name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let mut found: Vec<String> = Vec::new();
+    let mut consider = |path: PathBuf| {
+        if path.is_file() {
+            let text = path.to_string_lossy().into_owned();
+            if !found.contains(&text) {
+                found.push(text);
+            }
+        }
+    };
+    if let Some(paths) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&paths) {
+            consider(directory.join(name));
+        }
+    }
+    for directory in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/snap/bin",
+        "C:\\ffmpeg\\bin",
+    ] {
+        consider(PathBuf::from(directory).join(name));
+    }
+    found
+}
+
 #[tauri::command]
 pub fn diagnostic_summary(state: State<'_, Arc<AppState>>) -> AppResult<String> {
     let snapshot = state.snapshot()?;
@@ -1118,11 +1146,25 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         settings.output_format.as_str(),
         "png" | "jpg" | "tif" | "webp"
     ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
+        || !matches!(
+            settings.video_codec.as_str(),
+            "av1" | "vp9" | "ffv1" | "h264" | "hevc"
+        )
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
     {
         return Err(AppError::Validation(
             "unsupported output or precision setting".into(),
+        ));
+    }
+    if settings.video_codec == "ffv1" && settings.video_container != "mkv" {
+        return Err(AppError::Validation(
+            "Lossless FFV1 video requires the MKV container.".into(),
+        ));
+    }
+    if settings.external_ffmpeg_path.len() > 4096 || settings.external_ffmpeg_path.contains('\0') {
+        return Err(AppError::Validation(
+            "the external FFmpeg path is invalid".into(),
         ));
     }
     if !(1..=8).contains(&settings.output_scale)
@@ -1166,6 +1208,8 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         deflicker: input.deflicker,
         deflicker_window: input.deflicker_window,
         video_container: input.video_container.clone(),
+        video_codec: input.video_codec.clone(),
+        external_ffmpeg_path: input.external_ffmpeg_path.clone(),
         video_hdr_mode: input.video_hdr_mode.clone(),
         video_target_resolution: input.video_target_resolution,
         video_low_memory: input.video_low_memory,
@@ -1177,6 +1221,14 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
+    if input.task == "video"
+        && matches!(input.video_codec.as_str(), "h264" | "hevc")
+        && input.external_ffmpeg_path.trim().is_empty()
+    {
+        return Err(AppError::Validation(
+            "H.264 and HEVC export use the FFmpeg installed on this computer. Select it under Advanced settings → Video, or choose AV1, VP9 or FFV1.".into(),
+        ));
+    }
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation("invalid batch size".into()));
     }
@@ -1429,6 +1481,8 @@ fn build_job_message(
                 "model_path": path,
                 "output_video_path": output,
                 "container": input.video_container,
+                "video_codec": input.video_codec,
+                "external_ffmpeg": input.external_ffmpeg_path,
                 "crf": input.video_crf,
                 "fps": null,
                 "device": input.device,
@@ -1479,6 +1533,8 @@ fn build_job_message(
                     "model_path": "",
                     "output_video_path": output,
                     "container": input.video_container,
+                    "video_codec": input.video_codec,
+                    "external_ffmpeg": input.external_ffmpeg_path,
                     "crf": input.video_crf,
                     "fps": null,
                     "device": input.device,
@@ -1815,6 +1871,8 @@ mod tests {
             deflicker: false,
             deflicker_window: 3,
             video_container: "mp4".into(),
+            video_codec: "av1".into(),
+            external_ffmpeg_path: String::new(),
             video_hdr_mode: "tone_map".into(),
             video_target_resolution: 0,
             video_low_memory: true,
@@ -2112,6 +2170,26 @@ mod tests {
     }
 
     #[test]
+    fn video_codec_settings_follow_the_media_policy() {
+        let mut video = input("video");
+        assert!(validate_start_input(&video).is_ok());
+        video.video_codec = "ffv1".into();
+        assert!(validate_start_input(&video).is_err(), "FFV1 requires MKV");
+        video.video_container = "mkv".into();
+        assert!(validate_start_input(&video).is_ok());
+        video.video_codec = "h264".into();
+        video.video_container = "mp4".into();
+        assert!(
+            validate_start_input(&video).is_err(),
+            "H.264 export needs a user-selected FFmpeg"
+        );
+        video.external_ffmpeg_path = "/opt/homebrew/bin/ffmpeg".into();
+        assert!(validate_start_input(&video).is_ok());
+        video.video_codec = "x264".into();
+        assert!(validate_start_input(&video).is_err());
+    }
+
+    #[test]
     fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
         let legacy = Recipe {
             id: "legacy".into(),
@@ -2131,6 +2209,7 @@ mod tests {
             deflicker: None,
             deflicker_window: None,
             video_container: String::new(),
+            video_codec: String::new(),
             video_hdr_mode: "tone_map".into(),
             video_target_resolution: 0,
             video_low_memory: true,

@@ -462,6 +462,8 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
       const labels: Record<string, string> = {
         verifying_model: 'Checking model files',
+        external_decode: 'Converting the source with your FFmpeg',
+        external_encode: 'Encoding with your FFmpeg',
         loading_model: 'Loading video model',
         reading_frames: 'Reading video frames',
         preparing_clip: 'Preparing clip',

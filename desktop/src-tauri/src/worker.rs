@@ -564,13 +564,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             }
             send(state, &json!({"type": "capabilities_request", "data": {}}))?;
             for path in lock(&state.database)?.pending_probe_paths()? {
-                send(
-                    state,
-                    &json!({
-                        "type": "media_probe_request",
-                        "data": {"media_path": path, "max_dimension": 2048}
-                    }),
-                )?;
+                send(state, &media_probe_request(state, &path))?;
             }
         }
         "capabilities_info" => {
@@ -710,6 +704,8 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             if runtime.active_job_id == string(data, "job_id") {
                 runtime.status_title = match string(data, "stage").as_str() {
                     "verifying_model" => "Checking model files",
+                    "external_decode" => "Converting the source with your FFmpeg",
+                    "external_encode" => "Encoding with your FFmpeg",
                     "loading_model" => "Loading video model",
                     "reading_frames" => "Reading video frames",
                     "preparing_clip" => "Preparing clip",
@@ -1026,10 +1022,28 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
     Ok(())
 }
 
+/// A media probe carries the user's optional FFmpeg for formats LocalSR omits.
+pub(crate) fn media_probe_request(state: &AppState, path: &str) -> serde_json::Value {
+    let external = state
+        .settings
+        .lock()
+        .map(|settings| settings.external_ffmpeg_path.clone())
+        .unwrap_or_default();
+    json!({
+        "type": "media_probe_request",
+        "data": {"media_path": path, "max_dimension": 2048, "external_ffmpeg": external}
+    })
+}
+
 pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResult<Command> {
     let specification = resolve_worker_command(state, app)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
+    if let Ok(settings) = state.settings.lock() {
+        if !settings.external_ffmpeg_path.is_empty() {
+            command.env("LOCALSR_EXTERNAL_FFMPEG", &settings.external_ffmpeg_path);
+        }
+    }
     if let Some(directory) = specification.working_directory {
         command.current_dir(directory);
     }

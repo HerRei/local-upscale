@@ -187,6 +187,7 @@ export interface Recipe {
   video_target_resolution?: number;
   video_low_memory?: boolean;
   video_container?: 'mp4' | 'mkv';
+  video_codec?: VideoCodec | '';
   video_crf?: number;
   enable_face_model?: boolean;
   face_fidelity?: number;
@@ -195,6 +196,9 @@ export interface Recipe {
   content?: Exclude<ContentKind, 'face'> | '';
   fixes?: FixKind[];
 }
+
+/** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
+export type VideoCodec = 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
 
 export interface RecipeStage {
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
@@ -226,6 +230,8 @@ export interface UiSettings {
   video_target_resolution?: number;
   video_low_memory?: boolean;
   video_container: 'mp4' | 'mkv';
+  video_codec: VideoCodec;
+  external_ffmpeg_path: string;
   video_crf: number;
   enable_face_model: boolean;
   face_fidelity: number;
@@ -422,6 +428,8 @@ export interface StartBatchInput {
   video_target_resolution?: number;
   video_low_memory?: boolean;
   video_container: string;
+  video_codec: string;
+  external_ffmpeg_path: string;
   video_crf: number;
   enable_face_model: boolean;
   face_fidelity: number;

@@ -98,7 +98,15 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     #[cfg(target_os = "macos")]
     let menu_builder = {
         let app_menu = SubmenuBuilder::new(manager, "LocalSR")
-            .about(None)
+            .about(Some(tauri::menu::AboutMetadata {
+                credits: Some(
+                    "This software uses libraries from the FFmpeg project under the LGPLv2.1. \
+                     LocalSR does not own FFmpeg. Corresponding source and third-party notices \
+                     are published with each download."
+                        .into(),
+                ),
+                ..Default::default()
+            }))
             .separator()
             .services()
             .separator()

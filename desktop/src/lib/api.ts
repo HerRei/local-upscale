@@ -125,6 +125,23 @@ export const exportBenchmark = async (): Promise<boolean> => {
   await invoke('export_benchmark', { destination });
   return true;
 };
+/** Suggest FFmpeg executables installed on this computer; LocalSR never bundles one. */
+export async function detectExternalFFmpeg(): Promise<string[]> {
+  if (!isTauri()) return [];
+  return invoke<string[]>('detect_external_ffmpeg');
+}
+
+export async function chooseExternalFFmpeg(current: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const selection = await open({
+    multiple: false,
+    directory: false,
+    defaultPath: current || undefined,
+    title: 'Select the FFmpeg program installed on this computer',
+  });
+  return typeof selection === 'string' ? selection : null;
+}
+
 export const prepareVideoComparison = async (
   mediaId: string,
   requestId: string,

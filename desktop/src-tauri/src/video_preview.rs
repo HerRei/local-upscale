@@ -108,7 +108,8 @@ impl VideoPreviewControl {
         let work = tempfile::Builder::new()
             .prefix("converting-")
             .tempdir_in(directory)?;
-        let output = work.path().join("preview.mp4");
+        // Royalty-free VP9/Opus WebM plays in every supported web view.
+        let output = work.path().join("preview.webm");
         command
             .arg("--video-playback-preview")
             .arg(source)
@@ -161,7 +162,7 @@ fn cache_key(source: &Path) -> AppResult<String> {
         .as_nanos();
     let mut hash = Sha256::new();
     hash.update(format!(
-        "playback-v1:{}:{}:{}",
+        "playback-v2:{}:{}:{}",
         source.display(),
         metadata.len(),
         modified
@@ -171,7 +172,7 @@ fn cache_key(source: &Path) -> AppResult<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    Ok(format!("{hex}.mp4"))
+    Ok(format!("{hex}.webm"))
 }
 
 fn run_conversion(
@@ -275,6 +276,14 @@ mod tests {
             assert!(needs_conversion(Path::new(name)));
         }
         assert!(!needs_conversion(Path::new("export.MP4")));
+    }
+
+    #[test]
+    fn playback_copies_are_webm() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("clip.mkv");
+        fs::write(&source, b"video").unwrap();
+        assert!(cache_key(&source).unwrap().ends_with(".webm"));
     }
 
     #[test]

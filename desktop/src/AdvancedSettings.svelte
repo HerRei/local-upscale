@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { CapabilityInfo, CatalogModel, UiSettings } from './lib/types';
+  import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
+  import type { CapabilityInfo, CatalogModel, UiSettings, VideoCodec } from './lib/types';
 
   export let settings: UiSettings;
   export let selectedModel: CatalogModel | undefined;
@@ -9,6 +10,36 @@
   export let chooseOutput: () => Promise<void>;
   export let refreshCapabilities: () => Promise<void>;
   let advanced = false;
+  let ffmpegNote = '';
+
+  $: codec = settings.video_codec ?? 'av1';
+  $: externalCodec = codec === 'h264' || codec === 'hevc';
+
+  function chooseCodec(value: VideoCodec): void {
+    // FFV1 is lossless and only fits MKV; the others keep the chosen container.
+    updateSettings(
+      value === 'ffv1' ? { video_codec: value, video_container: 'mkv' } : { video_codec: value },
+    );
+  }
+
+  async function findFFmpeg(): Promise<void> {
+    const found = await detectExternalFFmpeg();
+    if (found.length) {
+      updateSettings({ external_ffmpeg_path: found[0] });
+      ffmpegNote = found.length > 1 ? `Also found: ${found.slice(1).join(', ')}` : '';
+    } else {
+      ffmpegNote =
+        'No FFmpeg was found. Install it (for example with Homebrew, winget or your package manager), then choose it here.';
+    }
+  }
+
+  async function pickFFmpeg(): Promise<void> {
+    const path = await chooseExternalFFmpeg(settings.external_ffmpeg_path ?? '');
+    if (path) {
+      updateSettings({ external_ffmpeg_path: path });
+      ffmpegNote = '';
+    }
+  }
 </script>
 
 <section class="control-section">
@@ -71,15 +102,59 @@
         >
       {:else}
         <div class="field-row">
+          <label for="video-codec">Video format</label><select
+            id="video-codec"
+            value={codec}
+            on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
+            ><option value="av1">AV1 · recommended</option><option value="vp9">VP9</option><option
+              value="ffv1">FFV1 · lossless, MKV</option
+            ><option value="h264">H.264 · needs your FFmpeg</option><option value="hevc"
+              >HEVC · needs your FFmpeg</option
+            ></select
+          >
+        </div>
+        <div class="field-row">
           <label for="container">Container</label><select
             id="container"
             value={settings.video_container}
             on:change={(event) =>
               updateSettings({
                 video_container: event.currentTarget.value as UiSettings['video_container'],
-              })}><option value="mp4">MP4</option><option value="mkv">MKV</option></select
+              })}
+            ><option value="mp4" disabled={codec === 'ffv1'}>MP4</option><option value="mkv"
+              >MKV</option
+            ></select
           >
         </div>
+        {#if externalCodec}
+          <p class="model-description">
+            LocalSR does not include patent-licensed H.264/HEVC encoders. This export is written by
+            the FFmpeg installed on your computer, from a temporary lossless copy that needs extra
+            disk space.
+          </p>
+        {/if}
+        <div class="field-row">
+          <label for="external-ffmpeg">External FFmpeg</label><input
+            id="external-ffmpeg"
+            type="text"
+            placeholder="Not used"
+            value={settings.external_ffmpeg_path ?? ''}
+            on:change={(event) =>
+              updateSettings({ external_ffmpeg_path: event.currentTarget.value.trim() })}
+          />
+        </div>
+        <div class="field-row">
+          <button on:click={findFFmpeg}>Find installed FFmpeg</button>
+          <button on:click={pickFFmpeg}>Choose…</button>
+          {#if settings.external_ffmpeg_path}<button
+              on:click={() => updateSettings({ external_ffmpeg_path: '' })}>Don’t use</button
+            >{/if}
+        </div>
+        <p class="model-description">
+          Optional. Used only for H.264/HEVC export and for opening videos in formats LocalSR does
+          not include (for example most phone and camera videos). LocalSR never downloads or bundles
+          FFmpeg.{#if ffmpegNote}<br />{ffmpegNote}{/if}
+        </p>
         <div class="range-row">
           <label for="crf">Video quality · CRF <b>{settings.video_crf}</b></label><input
             id="crf"
