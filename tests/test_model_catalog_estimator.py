@@ -58,7 +58,6 @@ def test_catalog_has_pinned_optional_downloads():
     assert all(model.download_url.startswith("https://") for model in MODEL_CATALOG)
     assert {model.license_name for model in MODEL_CATALOG} == {
         "Apache-2.0",
-        "CC-BY-4.0",
         "CC BY 4.0",
         "Checkpoint rights unverified",
         "BSD-3-Clause",
