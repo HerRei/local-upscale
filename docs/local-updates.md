@@ -24,6 +24,11 @@ The target key is `<os>-<architecture>-<backend>-<kind>`, for example `linux-x86
 
 The separate beta build produces macOS app archives and Linux AppImages, signed
 with the production key retained in Keychain through the signed local helper.
+`scripts/release_macos_beta.sh` builds, signs, notarizes and packages the macOS beta,
+including the engine payload and a ready `beta.json` entry. The update archive must be
+written without macOS AppleDouble metadata entries (`COPYFILE_DISABLE=1 tar --no-mac-metadata`):
+the updater strips the bundle name from every entry, so a hidden top-level `._<app>` entry
+becomes an empty path and unpacking fails. The 0.1.0 and first 0.1.1 archives had this defect.
 Windows direct editions require compatible updater installers. Updater signatures
 and platform code signing/notarization are separate requirements. See the
 [official Tauri updater documentation](https://v2.tauri.app/plugin/updater/).
