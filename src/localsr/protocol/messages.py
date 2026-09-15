@@ -294,9 +294,14 @@ class MediaProbeProgress:
 class MediaProbeFailed:
     media_path: str
     error_message: str
+    # "external_ffmpeg_required" when a user-installed FFmpeg would open the file.
+    reason: str = ""
 
     def to_json(self) -> str:
-        return json.dumps({"type": "media_probe_failed", "data": asdict(self)})
+        data = asdict(self)
+        if not data["reason"]:
+            del data["reason"]  # Keep the wire format unchanged for ordinary failures.
+        return json.dumps({"type": "media_probe_failed", "data": data})
 
 
 @dataclass

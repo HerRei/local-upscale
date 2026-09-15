@@ -1,6 +1,6 @@
 # Known limitations
 
-These notes describe the **v0.1.0-beta candidate**, which is not yet publicly
+These notes describe the **v0.1.1-beta candidate**, which is not yet publicly
 released. Older alpha packages have different dependencies and trust properties;
 see their [release notes](docs/releases/).
 
@@ -21,7 +21,8 @@ not. Try a short clip before committing to a long job.
 LocalSR includes only royalty-free or patent-expired media formats to avoid
 patent and copyleft licensing conflicts. H.264, HEVC, WMV, DivX and AAC-only
 sources, which include most phone and camera videos, open only after the user
-installs FFmpeg and selects it under Advanced settings → Video. That FFmpeg also
+installs FFmpeg and selects it under Advanced settings → Video; adding such a
+video shows a notice with the install command for the platform. That FFmpeg also
 writes H.264/HEVC exports, from a temporary lossless copy that needs extra disk
 space. The default export is AV1, which some older players and editors cannot
 open. Windows packages stay blocked until the Windows LGPL media build exists,

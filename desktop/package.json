@@ -1,7 +1,7 @@
 {
   "name": "localsr-desktop",
   "private": true,
-  "version": "0.1.0-beta",
+  "version": "0.1.1-beta",
   "type": "module",
   "scripts": {
     "dev": "npm run build:frontend && vite preview --host localhost --port 1420 --strictPort",

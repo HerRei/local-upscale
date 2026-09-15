@@ -36,6 +36,18 @@ UNDECODABLE_VIDEO_MESSAGE = (
     "This video uses a patent-licensed format (for example H.264, HEVC, WMV or MPEG-4 "
     "Part 2) that LocalSR does not include. " + EXTERNAL_FFMPEG_HINT
 )
+# Sent with a failed media probe so the desktop app can show its FFmpeg notice
+# instead of a bare error. Stable protocol value; do not rename.
+EXTERNAL_FFMPEG_REQUIRED = "external_ffmpeg_required"
+
+
+class UndecodableVideoError(ValueError):
+    """The source uses a format LocalSR omits; a user-installed FFmpeg can open it."""
+
+    reason = EXTERNAL_FFMPEG_REQUIRED
+
+    def __init__(self, message: str = UNDECODABLE_VIDEO_MESSAGE) -> None:
+        super().__init__(message)
 
 
 @dataclass(frozen=True)

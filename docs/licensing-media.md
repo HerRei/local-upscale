@@ -47,7 +47,9 @@ H.264/HEVC, a user can install FFmpeg (for example `brew install ffmpeg`,
 - H.264/HEVC exports are encoded by that program from a temporary lossless FFV1
   master written by LocalSR.
 - Without a selected FFmpeg, such videos show an actionable message instead of a
-  preview, and H.264/HEVC export cannot be started.
+  preview, and H.264/HEVC export cannot be started. In both cases the desktop app
+  opens a notice with the platform's install command and a link to ffmpeg.org;
+  finding or choosing the program from that notice re-inspects the videos.
 
 ## Usability consequences
 

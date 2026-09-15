@@ -127,14 +127,32 @@ def test_bundled_exports_round_trip_with_timing(tmp_path, codec, container):
         assert result.streams.video[0].codec_context.name == expected
 
 
+def test_probe_failure_message_carries_the_ffmpeg_reason_only_when_set():
+    from localsr.protocol.messages import MediaProbeFailed
+
+    plain = json.loads(MediaProbeFailed("a.mp4", "Truncated file").to_json())
+    assert plain["data"] == {"media_path": "a.mp4", "error_message": "Truncated file"}
+    needs = json.loads(
+        MediaProbeFailed(
+            "b.mp4",
+            media_codecs.UNDECODABLE_VIDEO_MESSAGE,
+            reason=media_codecs.EXTERNAL_FFMPEG_REQUIRED,
+        ).to_json()
+    )
+    assert needs["data"]["reason"] == "external_ffmpeg_required"
+
+
 def test_h264_source_needs_user_ffmpeg_then_converts_losslessly(
     tmp_path, user_ffmpeg, clean_runtime
 ):
     source = make_h264_aac(tmp_path / "phone.mp4", user_ffmpeg)
     assert plan_source(str(source)) == plan_source(str(source), "mp4")
     assert not plan_source(str(source)).video_decodable
-    with pytest.raises(ValueError, match="patent-licensed format"):
+    with pytest.raises(
+        media_codecs.UndecodableVideoError, match="patent-licensed format"
+    ) as refused:
         probe_video_preview(str(source))
+    assert refused.value.reason == media_codecs.EXTERNAL_FFMPEG_REQUIRED
     with pytest.raises(ValueError, match="patent-licensed format"):
         run_standard(source, tmp_path / "refused.mp4")
     assert not (tmp_path / "refused.mp4").exists()

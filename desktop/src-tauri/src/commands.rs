@@ -1030,6 +1030,15 @@ pub fn detect_external_ffmpeg() -> Vec<String> {
     found
 }
 
+/// Open the FFmpeg project's download page in the user's browser. Installing
+/// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.
+#[tauri::command]
+pub fn open_ffmpeg_download_page() -> AppResult<()> {
+    open::that_detached("https://ffmpeg.org/download.html").map_err(|error| {
+        AppError::Config(format!("could not open the FFmpeg download page: {error}"))
+    })
+}
+
 #[tauri::command]
 pub fn diagnostic_summary(state: State<'_, Arc<AppState>>) -> AppResult<String> {
     let snapshot = state.snapshot()?;

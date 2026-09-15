@@ -132,6 +132,7 @@ pub fn run() {
             commands::reveal_result,
             commands::open_output_directory,
             commands::detect_external_ffmpeg,
+            commands::open_ffmpeg_download_page,
             commands::diagnostic_summary,
             commands::integration_status,
             commands::install_integrations,

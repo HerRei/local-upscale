@@ -36,6 +36,9 @@ const api = vi.hoisted(() => ({
   requestImageComparison: vi.fn(async (_mediaId: string): Promise<void> => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
+  detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
+  chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
+  openFfmpegDownloadPage: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
   cancelDownload: vi.fn(async () => undefined),
   removeModel: vi.fn(async () => undefined),
@@ -1692,4 +1695,69 @@ describe('LocalSR desktop interface', () => {
     );
     expect(screen.getByText('Best · Illustration')).toBeTruthy();
   });
+});
+
+it('offers the FFmpeg notice for an undecodable phone video and re-inspects it once FFmpeg is found', async () => {
+  const media = video('phone', true);
+  media.probe_status = 'pending';
+  const snapshot = readySnapshot([media]);
+  const user = await mountWith(snapshot);
+  api.detectExternalFFmpeg.mockResolvedValue(['/opt/homebrew/bin/ffmpeg']);
+
+  const failed = structuredClone(snapshot);
+  failed.media[0].probe_status = 'failed';
+  failed.media[0].error = 'This video uses a patent-licensed format that LocalSR does not include.';
+  api.refreshSnapshot.mockResolvedValue(failed);
+  const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+  callback({
+    type: 'media_probe_failed',
+    data: {
+      media_path: media.path,
+      error_message: failed.media[0].error,
+      reason: 'external_ffmpeg_required',
+    },
+  });
+
+  const dialog = await screen.findByRole('dialog', { name: 'This video needs FFmpeg' });
+  expect(within(dialog).getByText(/Phone and camera videos need FFmpeg/)).toBeTruthy();
+  expect(within(dialog).getByText(/Photos work without it/)).toBeTruthy();
+  expect(within(dialog).getByText('phone.mp4')).toBeTruthy();
+  await user.click(within(dialog).getByRole('button', { name: 'Install FFmpeg…' }));
+  expect(api.openFfmpegDownloadPage).toHaveBeenCalled();
+
+  await user.click(within(dialog).getByRole('button', { name: 'I installed it, find FFmpeg' }));
+  await waitFor(() =>
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ external_ffmpeg_path: '/opt/homebrew/bin/ffmpeg' }),
+    ),
+  );
+  await waitFor(() => expect(api.probePath).toHaveBeenCalledWith(media.path));
+  expect(screen.queryByRole('dialog', { name: 'This video needs FFmpeg' })).toBeNull();
+});
+
+it('keeps ordinary probe failures out of the FFmpeg notice', async () => {
+  const media = video('broken', true);
+  await mountWith(readySnapshot([media]));
+  const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+  callback({
+    type: 'media_probe_failed',
+    data: { media_path: media.path, error_message: 'This video contains no decodable frames.' },
+  });
+  await waitFor(() => expect(api.refreshSnapshot).toHaveBeenCalled());
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('asks for FFmpeg before starting an H.264 export instead of failing later', async () => {
+  const snapshot = readySnapshot([video('clip', true)]);
+  snapshot.settings.video_codec = 'h264';
+  snapshot.settings.external_ffmpeg_path = '';
+  const user = await mountWith(snapshot);
+  await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
+  await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+  expect(
+    await screen.findByRole('dialog', { name: 'H.264 and HEVC export needs FFmpeg' }),
+  ).toBeTruthy();
+  expect(api.startJobs).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'Not now' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
 });

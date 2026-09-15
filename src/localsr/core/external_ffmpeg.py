@@ -26,6 +26,7 @@ import av
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     UNDECODABLE_VIDEO_MESSAGE,
+    UndecodableVideoError,
     stream_copy_supported,
     video_stream_decodable,
 )
@@ -335,7 +336,7 @@ def decodable_source(
         return
     if ffmpeg is None:
         if not plan.video_decodable:
-            raise ValueError(UNDECODABLE_VIDEO_MESSAGE)
+            raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
         # Keep the enhanced video; the remux step reports the omitted track.
         yield path, path
         return

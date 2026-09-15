@@ -28,6 +28,7 @@ from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     EXTERNAL_OUTPUT_CODECS,
     UNDECODABLE_VIDEO_MESSAGE,
+    UndecodableVideoError,
     encode_spec,
     muxer_format,
     normalize_container,
@@ -131,7 +132,7 @@ def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int 
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
         if stream.codec_context is None:
-            raise ValueError(UNDECODABLE_VIDEO_MESSAGE)
+            raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
         stream.codec_context.thread_count = max(0, min(8, thread_count))
         if frame_threads:
             try:
@@ -292,7 +293,7 @@ def probe_video_preview(
     report("opening")
     if not _source_decodable(path):
         if external_ffmpeg is None:
-            raise ValueError(UNDECODABLE_VIDEO_MESSAGE)
+            raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
         from .external_ffmpeg import first_frame_source
 
         try:

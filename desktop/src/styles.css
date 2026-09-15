@@ -2737,3 +2737,39 @@ input[type='text'],
     border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
 }
+
+/* The FFmpeg notice: royalty-free codecs only; the user installs FFmpeg. */
+.ffmpeg-notice .ffmpeg-files {
+  margin: -4px 0 10px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: calc(11px * var(--ui-scale));
+}
+.ffmpeg-notice p code,
+.ffmpeg-command code {
+  color: #b9d0ff;
+  font-family: ui-monospace, monospace;
+}
+.ffmpeg-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--recess);
+}
+.ffmpeg-command code {
+  font-size: calc(12px * var(--ui-scale));
+}
+.ffmpeg-notice .ffmpeg-fineprint {
+  font-size: calc(11px * var(--ui-scale));
+}
+.ffmpeg-notice .ffmpeg-note {
+  color: var(--text);
+}
+.ffmpeg-notice .modal-actions {
+  flex-wrap: wrap;
+}

@@ -4,6 +4,8 @@
   import { queueTiming } from './lib/queue-timing';
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
+  import FFmpegNotice from './FFmpegNotice.svelte';
+  import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
   import LicenseDownload from './LicenseDownload.svelte';
   import UpdateMenuItem from './UpdateMenuItem.svelte';
@@ -72,6 +74,9 @@
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
   let modalTitle = '';
   let modalMessage = '';
+  // The FFmpeg notice: once per batch of videos LocalSR cannot decode, and
+  // before an H.264/HEVC export starts without a selected FFmpeg.
+  let ffmpegNotice: { context: 'open' | 'export'; paths: string[] } | null = null;
   let stateRefresh: ReturnType<typeof setTimeout> | undefined;
   let runtimePulseTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingRuntimePulse: WorkerEnvelope | undefined;
@@ -545,6 +550,7 @@
       }
       scheduleRefresh();
     } else if (message.type === 'media_probe_failed') {
+      noteFfmpegProbeFailure(message.data);
       scheduleRefresh();
     }
     if (message.type === 'job_completed' || message.type === 'video_job_completed') {
@@ -953,6 +959,10 @@
     if ((!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
     const ids = mediaIds ?? queueSelection.map((media) => media.id);
     if (!ids.length) return;
+    if (exportNeedsExternalFFmpeg(settings)) {
+      ffmpegNotice = { context: 'export', paths: [] };
+      return;
+    }
     const input: StartBatchInput = {
       media_ids: ids,
       batch_mode: mediaIds ? ids.length > 1 : settings.batch_mode,
@@ -1288,10 +1298,12 @@
     if (media.some((item) => item.probe_status === 'pending')) return;
     if (media.some((item) => item.probe_status === 'failed')) {
       pendingAutoStartIds = [];
-      showModal(
-        'Could not inspect requested media',
-        'At least one file could not be read, so automatic processing was cancelled.',
-      );
+      if (!ffmpegNotice) {
+        showModal(
+          'Could not inspect requested media',
+          'At least one file could not be read, so automatic processing was cancelled.',
+        );
+      }
       return;
     }
     if (new Set(media.map((item) => item.kind)).size > 1) {
@@ -1481,6 +1493,62 @@
     } catch (error) {
       modalMessage = `Could not export benchmark JSON: ${String(error)}`;
     }
+  }
+
+  function noteFfmpegProbeFailure(data: Record<string, unknown>): void {
+    if (!probeNeedsExternalFFmpeg(data) || (settings.external_ffmpeg_path ?? '').trim()) return;
+    const path = String(data.media_path ?? '');
+    if (ffmpegNotice?.context === 'open') {
+      if (path && !ffmpegNotice.paths.includes(path)) {
+        ffmpegNotice = { ...ffmpegNotice, paths: [...ffmpegNotice.paths, path] };
+      }
+      return;
+    }
+    if (ffmpegNotice) return;
+    ffmpegNotice = { context: 'open', paths: path ? [path] : [] };
+  }
+
+  /** Save the FFmpeg the user chose, then re-inspect the videos that failed without it. */
+  async function useExternalFFmpeg(path: string): Promise<void> {
+    const notice = ffmpegNotice;
+    ffmpegNotice = null;
+    if (settingsLocked) {
+      showModal(
+        'Settings are locked',
+        'Wait for the running job to finish, then select FFmpeg under Advanced settings → Video.',
+      );
+      return;
+    }
+    snapshot = { ...snapshot, settings: { ...snapshot.settings, external_ffmpeg_path: path } };
+    try {
+      if (api.isTauri()) await api.saveSettings(snapshot.settings);
+    } catch (error) {
+      showModal('Could not save settings', String(error));
+      return;
+    }
+    if (notice?.context !== 'open') return;
+    const retry = snapshot.media.filter(
+      (media) =>
+        media.probe_status === 'failed' &&
+        (notice.paths.includes(media.path) || media.kind === 'video'),
+    );
+    for (const media of retry) {
+      try {
+        await api.probePath(media.path);
+      } catch (error) {
+        console.error('Could not re-inspect the video', media.path, error);
+      }
+    }
+    await refresh();
+  }
+
+  function mediaNamesFor(paths: string[]): string[] {
+    return paths.map(
+      (path) =>
+        snapshot.media.find((media) => media.path === path)?.name ??
+        path.split(/[\\/]/).pop() ??
+        path,
+    );
   }
 
   function showModal(
@@ -2370,6 +2438,15 @@
     chooseCustom={chooseCustomModel}
     openLicense={api.openModelLicense}
     openSource={api.openModelSource}
+  />
+{/if}
+
+{#if ffmpegNotice}
+  <FFmpegNotice
+    context={ffmpegNotice.context}
+    mediaNames={mediaNamesFor(ffmpegNotice.paths)}
+    onSelected={useExternalFFmpeg}
+    onClose={() => (ffmpegNotice = null)}
   />
 {/if}
 

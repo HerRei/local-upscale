@@ -131,6 +131,11 @@ export async function detectExternalFFmpeg(): Promise<string[]> {
   return invoke<string[]>('detect_external_ffmpeg');
 }
 
+/** Open ffmpeg.org's download page; installing FFmpeg stays the user's own action. */
+export async function openFfmpegDownloadPage(): Promise<void> {
+  if (isTauri()) await invoke('open_ffmpeg_download_page');
+}
+
 export async function chooseExternalFFmpeg(current: string): Promise<string | null> {
   if (!isTauri()) return null;
   const selection = await open({

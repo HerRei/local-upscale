@@ -24,7 +24,7 @@ def test_review_inventory_preserves_real_hashes_without_enabling_downloads(tmp_p
     (artifacts / "review.msix").write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()
     plan = {
-        "version": "0.1.0-beta",
+        "version": "0.1.1-beta",
         "targets": [
             {
                 "id": "windows-x86_64-directml",

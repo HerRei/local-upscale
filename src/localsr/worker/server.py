@@ -304,6 +304,7 @@ class WorkerServer:
                             MediaProbeFailed(
                                 media_path=media_path,
                                 error_message=str(error),
+                                reason=str(getattr(error, "reason", "") or ""),
                             )
                         )
 

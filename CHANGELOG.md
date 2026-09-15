@@ -2,8 +2,13 @@
 
 Release history and changes in the next beta candidate.
 
-## [0.1.0-beta] - 2026-09-15
+## [0.1.1-beta] - 2026-09-15
 
+- Show an FFmpeg notice when a phone or camera video in a format LocalSR omits (H.264, HEVC
+  and similar) is added without a selected FFmpeg, and before an H.264/HEVC export starts. It
+  explains the royalty-free codec policy, shows the platform's install command, opens
+  ffmpeg.org, and can find or choose the installed program and re-inspect the videos. The
+  worker's `media_probe_failed` message now carries a `reason` field.
 - Bundle only royalty-free or patent-expired media formats from an allowlisted LGPL FFmpeg build
   (AV1, VP9, FFV1, Opus, FLAC and more): export defaults to AV1, playback copies are VP9 WebM and
   converted audio is Opus. H.264/HEVC import and export use an FFmpeg the user installed and
