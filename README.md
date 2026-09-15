@@ -19,9 +19,9 @@ See [video support and tested limits](docs/video-support.md).
 
 ## Beta status
 
-**v0.0.13-beta.1 is being prepared for public testing.** The version is provisional;
+**v0.1.0-beta is being prepared for public testing.** The version is provisional;
 final installers, source distribution and public downloads are still under review.
-See the [release notes](docs/releases/v0.0.13-beta.1.md),
+See the [release notes](docs/releases/v0.1.0-beta.md),
 [known limitations](KNOWN_LIMITATIONS.md) and [beta checklist](docs/beta-release-checklist.md).
 Earlier alpha packages have their own release notes and support limits.
 

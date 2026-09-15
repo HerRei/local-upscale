@@ -1,6 +1,6 @@
 # Known limitations
 
-These notes describe the **v0.0.13-beta.1 candidate**, which is not yet publicly
+These notes describe the **v0.1.0-beta candidate**, which is not yet publicly
 released. Older alpha packages have different dependencies and trust properties;
 see their [release notes](docs/releases/).
 

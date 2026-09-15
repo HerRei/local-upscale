@@ -2,7 +2,7 @@
 
 Release history and changes in the next beta candidate.
 
-## [0.0.13-beta.1] - Candidate for review, not published
+## [0.1.0-beta] - 2026-09-15
 
 - Bundle only royalty-free or patent-expired media formats from an allowlisted LGPL FFmpeg build
   (AV1, VP9, FFV1, Opus, FLAC and more): export defaults to AV1, playback copies are VP9 WebM and

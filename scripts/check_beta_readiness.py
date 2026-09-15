@@ -77,7 +77,7 @@ def main() -> int:
     path = args.path
     if path is None:
         version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-        register = "public-beta-readiness.json" if "-beta." in version else "beta-readiness.json"
+        register = "public-beta-readiness.json" if "-beta" in version else "beta-readiness.json"
         path = ROOT / "ci" / register
     data = validate(path)
     gates = data["gates"]

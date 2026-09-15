@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def check(tag: str | None = None, root: Path = ROOT) -> str:
     with (root / "pyproject.toml").open("rb") as stream:
         version = str(tomllib.load(stream)["project"]["version"])
-    if re.fullmatch(r"\d+\.\d+\.\d+-beta\.\d+", version):
+    if re.fullmatch(r"\d+\.\d+\.\d+-beta(\.\d+)?", version):
         return check_public_beta(tag, root)
     expected_tag = f"v{version}"
     failures: list[str] = []

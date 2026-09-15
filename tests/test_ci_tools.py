@@ -70,8 +70,8 @@ def test_macho_tree_excludes_build_tool_fixtures(tmp_path: Path):
 
 
 def test_release_metadata_is_synchronized():
-    assert public_beta.check("v0.0.13-beta.1", ROOT) == "0.0.13-beta.1"
-    assert release_version.check("v0.0.13-beta.1", ROOT) == "0.0.13-beta.1"
+    assert public_beta.check("v0.1.0-beta", ROOT) == "0.1.0-beta"
+    assert release_version.check("v0.1.0-beta", ROOT) == "0.1.0-beta"
 
 
 @pytest.mark.parametrize("require_ready, expected_code", [(False, 0), (True, 1)])
@@ -83,7 +83,7 @@ def test_readiness_cli_uses_beta_register_and_keeps_publication_blocked(
         command.append("--require-beta-ready")
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == expected_code, result.stderr
-    assert "register valid for v0.0.13-beta.1" in result.stdout
+    assert "register valid for v0.1.0-beta" in result.stdout
     assert "publication-and-certification" in result.stdout
 
 
@@ -105,7 +105,7 @@ def copy_release_metadata(destination: Path) -> None:
         "ci/public-beta-release.json",
         "ci/public-beta-readiness.json",
         "packaging/updates/production.pub",
-        "docs/releases/v0.0.13-beta.1.md",
+        "docs/releases/v0.1.0-beta.md",
         ".github/workflows/desktop-release.yml",
     ]
     for relative in paths:
@@ -136,7 +136,7 @@ def test_public_beta_rejects_wrong_tag_missing_backend_and_stale_lock(tmp_path):
 
 def test_beta_readiness_register_is_valid_and_honest():
     data = beta_readiness.validate(ROOT / "ci" / "public-beta-readiness.json", ROOT)
-    assert data["release"] == "0.0.13-beta.1"
+    assert data["release"] == "0.1.0-beta"
     assert data["beta_ready"] is False
     statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
     assert statuses["batch-rendering-and-comparison"] == "manual-pass"

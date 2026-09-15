@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def check(tag: str | None = None, root: Path = ROOT) -> str:
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
-    if not re.fullmatch(r"\d+\.\d+\.\d+-beta\.\d+", version):
+    if not re.fullmatch(r"\d+\.\d+\.\d+-beta(\.\d+)?", version):
         raise ValueError("The public beta check requires a beta version")
     if tag is not None and tag != f"v{version}":
         raise ValueError("Beta tag does not match the application version")

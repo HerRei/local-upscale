@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "version": "0.0.13-beta.1",
+  "version": "0.1.0-beta",
   "artifacts": [
     {
       "id": "macos-arm64-mps",
-      "filename": "LocalSR-v0.0.13-beta.1-macOS-arm64.dmg",
+      "filename": "LocalSR-v0.1.0-beta-macOS-arm64.dmg",
       "platform": "macos",
       "architecture": "arm64",
       "backend": "MPS",
@@ -12,7 +12,7 @@
     },
     {
       "id": "windows-x86_64-cuda",
-      "filename": "LocalSR-v0.0.13-beta.1-Windows-CUDA-x86_64.exe",
+      "filename": "LocalSR-v0.1.0-beta-Windows-CUDA-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CUDA",
@@ -21,7 +21,7 @@
     },
     {
       "id": "windows-x86_64-cpu",
-      "filename": "LocalSR-v0.0.13-beta.1-Windows-CPU-x86_64.exe",
+      "filename": "LocalSR-v0.1.0-beta-Windows-CPU-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CPU",
@@ -29,7 +29,7 @@
     },
     {
       "id": "windows-x86_64-directml",
-      "filename": "LocalSR-v0.0.13-beta.1-Windows-DirectML-x86_64.exe",
+      "filename": "LocalSR-v0.1.0-beta-Windows-DirectML-x86_64.exe",
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "DirectML",
@@ -37,7 +37,7 @@
     },
     {
       "id": "linux-x86_64-cpu",
-      "filename": "LocalSR-v0.0.13-beta.1-Linux-CPU-x86_64.AppImage",
+      "filename": "LocalSR-v0.1.0-beta-Linux-CPU-x86_64.AppImage",
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "CPU",
@@ -45,7 +45,7 @@
     },
     {
       "id": "linux-x86_64-cuda",
-      "filename": "LocalSR-v0.0.13-beta.1-Linux-CUDA-x86_64.AppImage",
+      "filename": "LocalSR-v0.1.0-beta-Linux-CUDA-x86_64.AppImage",
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "CUDA",
@@ -53,7 +53,7 @@
     },
     {
       "id": "linux-x86_64-rocm",
-      "filename": "LocalSR-v0.0.13-beta.1-Linux-ROCm-x86_64.AppImage",
+      "filename": "LocalSR-v0.1.0-beta-Linux-ROCm-x86_64.AppImage",
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "AMD-ROCm",

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.0.13-beta.1",
+  "version": "0.1.0-beta",
   "version_decision": "provisional-awaiting-user",
   "channel": "beta",
   "release_status": "independent-preparation-builds-explicitly-paused",
@@ -20,12 +20,12 @@
       "evidence": "docs/beta-acceptance-2026-09-12.md",
       "review_artifacts": [
         {
-          "path": "macos/LocalSR_0.0.13-beta.1_macos-arm64-mps.app.tar.gz",
+          "path": "macos/LocalSR_0.1.0-beta_macos-arm64-mps.app.tar.gz",
           "size": 384974688,
           "sha256": "27b2497af13aa79bf019e1f41bd1502a8f7ec0bb8353ea465034fbc7d81bfe98"
         },
         {
-          "path": "macos/LocalSR_0.0.13-beta.1_macos-arm64-mps.dmg",
+          "path": "macos/LocalSR_0.1.0-beta_macos-arm64-mps.dmg",
           "size": 454501508,
           "sha256": "c24f964a722ba5a35d7045bacf45881e28aea2d50eb94ca904418a01ab8f628a"
         }
@@ -116,7 +116,7 @@
       "evidence": "docs/beta-acceptance-2026-09-12.md",
       "review_artifacts": [
         {
-          "path": "linux/packages/LocalSR_0.0.13-beta.1_linux-x86_64-cpu.AppImage",
+          "path": "linux/packages/LocalSR_0.1.0-beta_linux-x86_64-cpu.AppImage",
           "size": 493681144,
           "sha256": "a8f51ac51366fcef9a02e435f81f12e5166855babd85271453b1e3ad95fc6efa"
         }
@@ -136,7 +136,7 @@
       "evidence": "docs/beta-acceptance-2026-09-12.md",
       "review_artifacts": [
         {
-          "path": "linux/packages/LocalSR_0.0.13-beta.1_linux-x86_64-cuda.AppImage",
+          "path": "linux/packages/LocalSR_0.1.0-beta_linux-x86_64-cuda.AppImage",
           "size": 5089909240,
           "sha256": "f29f087d15d6c619e3ee950cafae620adf92a2e02d196949cc27ed42f811d5d3"
         }
@@ -156,7 +156,7 @@
       "evidence": "docs/beta-acceptance-2026-09-12.md",
       "review_artifacts": [
         {
-          "path": "linux/packages/LocalSR_0.0.13-beta.1_linux-x86_64-rocm.AppImage",
+          "path": "linux/packages/LocalSR_0.1.0-beta_linux-x86_64-rocm.AppImage",
           "size": 6237354488,
           "sha256": "ea5172912dbface3f7698bbb4601b74b696bc4a02c04835e308b7bc37ce694da"
         }

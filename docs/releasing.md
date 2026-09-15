@@ -1,4 +1,4 @@
-**Separate public beta candidate: v0.0.13-beta.1 (provisional)**
+**Separate public beta candidate: v0.1.0-beta (provisional)**
 
 The current beta work uses `ci/public-beta-release.json` and
 `ci/public-beta-readiness.json`. Run `python scripts/check_public_beta.py` and
