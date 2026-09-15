@@ -948,6 +948,10 @@ input:focus-visible {
 .recipe-grid button:first-child b {
   color: #9dc0fd;
 }
+.recipe-grid small {
+  color: var(--tertiary);
+  font-size: calc(10px * var(--ui-scale));
+}
 .recipe-grid button:last-child b {
   color: #e8c47e;
 }

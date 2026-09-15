@@ -14,7 +14,7 @@ loading. Restoration weights are not included in installers.
 | RealPLKSR NomosWebPhoto | 4× | Degraded web photos · Labs | 29.7 MB | CC BY 4.0 |
 | RealPLKSR HFA2k | 4× | Anime and line art · Labs | 29.7 MB | CC BY 4.0 |
 | Real-ESRGAN x2plus | 2× | Native 2× upscaling | 67.1 MB | BSD-3-Clause |
-| RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC-BY-4.0 |
+| RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC BY 4.0 |
 | NAFNet SIDD | 1× | Camera-noise removal | 464.2 MB | MIT |
 | NAFNet GoPro | 1× | Motion deblurring | 271.8 MB | MIT |
 | FBCNN Color | 1× | JPEG artifact removal | 287.8 MB | Apache-2.0 |

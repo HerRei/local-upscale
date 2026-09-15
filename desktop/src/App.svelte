@@ -568,8 +568,12 @@
   }
 
   function recipeSubtitle(model: CatalogModel | undefined, fallback: string): string {
-    if (!model) return fallback;
-    return `${displayName(model)} · ${model.installed ? 'on this computer' : formatBytes(model.size_bytes)}`;
+    return model ? displayName(model) : fallback;
+  }
+
+  function recipeAvailability(model: CatalogModel | undefined): string {
+    if (!model) return '';
+    return model.installed ? 'On this computer' : `${formatBytes(model.size_bytes)} download`;
   }
 
   /**
@@ -1742,14 +1746,15 @@
                   aria-pressed={activeQuality === 'quick'}
                   on:click={() => applyPreset('quick')}
                   ><b>Quick</b><span>{recipeSubtitle(quickModel, 'Fast and efficient')}</span
-                  ></button
+                  >{#if quickModel}<small>{recipeAvailability(quickModel)}</small>{/if}</button
                 >
                 <button
                   class="best"
                   class:active={activeQuality === 'best'}
                   aria-pressed={activeQuality === 'best'}
                   on:click={() => applyPreset('best')}
-                  ><b>Best</b><span>{recipeSubtitle(bestModel, 'Maximum quality')}</span></button
+                  ><b>Best</b><span>{recipeSubtitle(bestModel, 'Maximum quality')}</span
+                  >{#if bestModel}<small>{recipeAvailability(bestModel)}</small>{/if}</button
                 >
               </div>
               <div class="recipe-tools">
@@ -2041,7 +2046,7 @@
                           ? `${Math.round(snapshot.runtime.download_progress)}%`
                           : stage.needsFile
                             ? 'Needs your file'
-                            : 'Download'}</span
+                            : formatBytes(stage.sizeBytes)}</span
                     >
                   </div>
                 {/each}

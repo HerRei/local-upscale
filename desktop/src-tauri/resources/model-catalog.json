@@ -193,7 +193,7 @@
       "fixes": [
         "noise"
       ],
-      "license_name": "CC-BY-4.0",
+      "license_name": "CC BY 4.0",
       "license_url": "https://creativecommons.org/licenses/by/4.0/",
       "memory_factor": 0.38,
       "model_id": "denoise_realplksr_1x",
