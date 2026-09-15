@@ -66,9 +66,15 @@ def test_planar_and_rotated_decoder_frames_match_interleaved_color_conversion(tr
     )
 
 
-def make_hdr(path, transfer):
-    # Encode a real ten-bit source with explicit BT.2020 matrix/range tags.
+def make_hdr(path, transfer, codec="libsvtav1", audio="libopus"):
+    # Encode a real ten-bit source with explicit BT.2020 matrix/range tags. AV1 is
+    # bundled; HEVC/AAC sources exercise the user-installed FFmpeg route.
     untagged = make_vfr(path.with_suffix(".source.mp4"))
+    video_options = (
+        ["-x265-params", "log-level=error:pools=1:frame-threads=1"]
+        if codec == "libx265"
+        else ["-preset", "12", "-crf", "20"]
+    )
     ffmpeg(
         "-i",
         untagged,
@@ -79,9 +85,8 @@ def make_hdr(path, transfer):
         "-vf",
         f"scale=out_color_matrix=bt2020:out_range=tv,format=yuv420p10le,setparams=color_primaries=bt2020:color_trc={'smpte2084' if transfer == 16 else 'arib-std-b67'}:colorspace=bt2020nc:range=limited",
         "-c:v",
-        "libx265",
-        "-x265-params",
-        "log-level=error:pools=1:frame-threads=1",
+        codec,
+        *video_options,
         "-color_trc",
         "smpte2084" if transfer == 16 else "arib-std-b67",
         "-color_primaries",
@@ -91,7 +96,7 @@ def make_hdr(path, transfer):
         "-color_range",
         "tv",
         "-c:a",
-        "aac",
+        audio,
         "-shortest",
         "-fps_mode",
         "passthrough",
@@ -105,7 +110,7 @@ def make_hdr(path, transfer):
 def test_hdr_preview_and_export_keep_timing_audio_and_explicit_sdr_tags(
     tmp_path, monkeypatch, transfer, temporal
 ):
-    source = make_hdr(tmp_path / "hdr.mov", transfer)
+    source = make_hdr(tmp_path / "hdr.mkv", transfer)
     stages = []
     probe, jpeg = probe_video_preview(str(source), 128, stages.append)
     assert probe.hdr_format == ("PQ" if transfer == 16 else "HLG")
@@ -152,7 +157,7 @@ def test_hdr_preview_and_export_keep_timing_audio_and_explicit_sdr_tags(
             data.type.name in {"DOVI_METADATA", "MASTERING_DISPLAY_METADATA"}
             for data in frame.side_data
         )
-        # Compare the round trip in BT.709, allowing H.264/chroma quantization.
+        # Compare the round trip in BT.709, allowing AV1/chroma quantization.
         rgb = frame.reformat(format="rgb24", src_colorspace="ITU709").to_ndarray()
         assert np.abs(rgb.astype(float) - decoded[1].rgb).mean() < 8
 
@@ -188,7 +193,7 @@ def test_image_worker_reports_real_phases_then_preview(monkeypatch, tmp_path):
 
 
 def test_video_thumbnail_failure_is_terminal_not_blank_ready(monkeypatch, tmp_path):
-    source = make_vfr(tmp_path / "source.mov")
+    source = make_vfr(tmp_path / "source.mp4")
 
     def fail(*_args, **_kwargs):
         raise ValueError("Thumbnail encoder failed")
@@ -204,9 +209,9 @@ def test_video_thumbnail_failure_is_terminal_not_blank_ready(monkeypatch, tmp_pa
 
 
 @pytest.mark.parametrize("has_standard_audio", [False, True])
-def test_unknown_mov_audio_keeps_standard_track_or_fails_actionably(tmp_path, has_standard_audio):
+def test_unknown_mov_audio_keeps_standard_track_or_warns_actionably(tmp_path, has_standard_audio):
     video = make_vfr(tmp_path / "video.mp4")
-    source = tmp_path / "extra-audio.mov"
+    source = tmp_path / "extra-audio.mp4"
     mappings = ["-map", "0:v", "-map", "1:a"]
     if has_standard_audio:
         mappings += ["-map", "1:a"]
@@ -221,39 +226,39 @@ def test_unknown_mov_audio_keeps_standard_track_or_fails_actionably(tmp_path, ha
         "-c:v",
         "copy",
         "-c:a",
-        "aac",
+        "libopus",
         "-shortest",
         source,
     )
     # Unknown audio sample entry, as with Apple APAC on a decoder build that
-    # lacks that codec. Leave a real, decodable AAC fallback when requested.
+    # lacks that codec. Leave a real, decodable Opus fallback when requested.
     content = bytearray(source.read_bytes())
     sample_entry = [
         match.start()
-        for match in re.finditer(b"mp4a", content)
+        for match in re.finditer(b"Opus", content)
         if 36 <= int.from_bytes(content[match.start() - 4 : match.start()], "big") <= 512
     ][-1]
-    content[sample_entry : sample_entry + 4] = b"zzzz"
     entry_end = sample_entry - 4 + int.from_bytes(content[sample_entry - 4 : sample_entry], "big")
-    descriptor = content.index(b"esds", sample_entry, entry_end)
+    descriptor = content.index(b"dOps", sample_entry, entry_end)
     content[descriptor : descriptor + 4] = b"free"
-    content[sample_entry:entry_end] = content[sample_entry:entry_end].replace(b"mp4a", b"zzzz")
+    content[sample_entry : sample_entry + 4] = b"zzzz"
     source.write_bytes(content)
     with av.open(str(source)) as container:
         assert container.streams.audio[-1].codec_context is None
     output = tmp_path / "output.mp4"
+    probe, _ = probe_video_preview(str(source))
     if has_standard_audio:
-        probe, _ = probe_video_preview(str(source))
-        assert "Standard audio will be kept" in probe.audio_warning
+        assert "additional audio track" in probe.audio_warning
         with pytest.warns(UserWarning, match="additional audio track"):
             run_standard(source, output, end_frame=2)
         with av.open(str(output)) as container:
             assert len(container.streams.audio) == 1
-            assert container.streams.audio[0].codec_context.name == "aac"
+            assert container.streams.audio[0].codec_context.name == "opus"
             assert len(list(container.decode(audio=0))) > 0
     else:
-        with pytest.raises(RuntimeError, match="Convert its audio to AAC"):
-            probe_video_preview(str(source))
-        with pytest.raises(RuntimeError, match="Convert its audio to AAC"):
-            run_standard(source, output)
-        assert not output.exists()
+        assert "no sound" in probe.audio_warning
+        with pytest.warns(UserWarning, match="no sound"):
+            run_standard(source, output, end_frame=2)
+        with av.open(str(output)) as container:
+            assert not container.streams.audio
+            assert len(list(container.decode(video=0))) == 3

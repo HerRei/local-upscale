@@ -45,11 +45,11 @@ def _make_synthetic_video(
 ) -> Path:
     """Write a small, deterministic mp4 with a different color per frame."""
     container = av.open(str(path), mode="w", format="mp4")
-    stream = container.add_stream("libx264", rate=Fraction(int(fps * 1000), 1000))
+    stream = container.add_stream("libvpx-vp9", rate=Fraction(int(fps * 1000), 1000))
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
-    stream.options = {"crf": "20", "preset": "ultrafast"}
+    stream.options = {"crf": "20", "b": "0", "deadline": "realtime", "cpu-used": "8"}
     for index in range(frames):
         # A different solid color per frame so decode order is verifiable.
         rgb = np.full((height, width, 3), index * 30, dtype=np.uint8)
@@ -64,12 +64,12 @@ def _make_synthetic_video(
 
 
 def _make_synthetic_video_with_audio(path: Path, *, frames: int = 8, fps: int = 8) -> Path:
-    """Write a deterministic one-second H.264/AAC source for remux tests."""
+    """Write a deterministic one-second VP9/Opus source for remux tests."""
     container = av.open(str(path), mode="w", format="mp4")
-    video = container.add_stream("libx264", rate=fps)
+    video = container.add_stream("libvpx-vp9", rate=fps)
     video.width, video.height, video.pix_fmt = FRAME_WIDTH, FRAME_HEIGHT, "yuv420p"
-    audio = container.add_stream("aac", rate=44_100)
-    samples_per_frame = 44_100 // fps
+    audio = container.add_stream("libopus", rate=48_000)
+    samples_per_frame = 48_000 // fps
     for index in range(frames):
         rgb = np.full((FRAME_HEIGHT, FRAME_WIDTH, 3), index * 25, dtype=np.uint8)
         for packet in video.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
@@ -77,7 +77,7 @@ def _make_synthetic_video_with_audio(path: Path, *, frames: int = 8, fps: int = 
         phase = np.linspace(0, 2 * np.pi, samples_per_frame, endpoint=False)
         samples = (np.sin(phase + index) * 8_000).astype(np.int16)
         frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16", layout="mono")
-        frame.sample_rate = 44_100
+        frame.sample_rate = 48_000
         for packet in audio.encode(frame):
             container.mux(packet)
     for stream in (video, audio):
@@ -131,7 +131,7 @@ def test_probe_video_returns_dimensions_and_fps(synthetic_video):
     assert probe.width == FRAME_WIDTH
     assert probe.height == FRAME_HEIGHT
     assert probe.fps == pytest.approx(FPS, abs=0.1)
-    assert probe.codec in {"h264", "mpeg4", "avc1"} or probe.codec.startswith("h264")
+    assert probe.codec == "vp9"
 
 
 def test_decode_frames_yields_every_frame_in_order(synthetic_video):
@@ -461,16 +461,16 @@ def test_encode_video_remuxes_source_audio(tmp_path):
 
     source = tmp_path / "with-audio.mp4"
     container = av.open(str(source), mode="w")
-    video = container.add_stream("libx264", rate=8)
+    video = container.add_stream("libvpx-vp9", rate=8)
     video.width, video.height, video.pix_fmt = 64, 48, "yuv420p"
-    audio = container.add_stream("aac", rate=44100)
+    audio = container.add_stream("libopus", rate=48000)
     for index in range(8):
         rgb = np.full((48, 64, 3), index * 20, dtype=np.uint8)
         for packet in video.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
             container.mux(packet)
-        samples = (np.sin(np.linspace(0, 3.14, 5512)) * 8000).astype(np.int16)
+        samples = (np.sin(np.linspace(0, 3.14, 6000)) * 8000).astype(np.int16)
         frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16", layout="mono")
-        frame.sample_rate = 44100
+        frame.sample_rate = 48000
         for packet in audio.encode(frame):
             container.mux(packet)
     for stream in (video, audio):

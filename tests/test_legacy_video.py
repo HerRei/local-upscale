@@ -14,12 +14,21 @@ import av
 import numpy as np
 import pytest
 
+from localsr.core.external_ffmpeg import decodable_source, load_external_ffmpeg
 from localsr.core.image_formats import VIDEO_INPUT_EXTENSIONS, is_video_input
 from localsr.core.video_io import decode_timed_frames, encode_video, probe_video_preview
 from localsr.core.video_playback import prepare_playback
 
 
-def make_clip(path, video="mpeg4", audio="pcm_s16le", container="avi", duration=1.2):
+def user_ffmpeg():
+    """The FFmpeg a user installed; LocalSR itself bundles no patent-licensed codecs."""
+    binary = shutil.which("ffmpeg")
+    if not binary:
+        pytest.skip("needs a user-installed ffmpeg")
+    return load_external_ffmpeg(binary)
+
+
+def make_clip(path, video="mjpeg", audio="pcm_s16le", container="avi", duration=1.2):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         pytest.skip("fixture generation needs ffmpeg; production uses PyAV")
@@ -64,40 +73,53 @@ def make_clip(path, video="mpeg4", audio="pcm_s16le", container="avi", duration=
 
 
 @pytest.mark.parametrize(
-    "extension,container,video,audio",
+    "extension,container,video,audio,needs_user_ffmpeg",
     [
-        ("avi", "avi", "mpeg4", "pcm_s16le"),
-        ("avi", "avi", "mjpeg", "adpcm_ima_wav"),
-        ("divx", "avi", "mpeg4", "mp3"),
-        ("wmv", "asf", "wmv2", "wmav2"),
-        ("mpg", "mpeg", "mpeg2video", "mp2"),
-        ("vob", "vob", "mpeg2video", "ac3"),
-        ("mts", "mpegts", "libx264", "aac"),
-        ("flv", "flv", "flv", "mp3"),
-        ("3gp", "3gp", "h263", "aac"),
-        ("ogv", "ogg", "libtheora", "libvorbis"),
+        # Royalty-free or patent-expired formats open with LocalSR alone.
+        ("avi", "avi", "mjpeg", "adpcm_ima_wav", False),
+        ("mpg", "mpeg", "mpeg2video", "mp2", False),
+        ("vob", "vob", "mpeg2video", "ac3", False),
+        ("ogv", "ogg", "libtheora", "libvorbis", False),
+        # Patent-licensed formats need the FFmpeg the user installed.
+        ("avi", "avi", "mpeg4", "pcm_s16le", True),
+        ("divx", "avi", "mpeg4", "mp3", True),
+        ("wmv", "asf", "wmv2", "wmav2", True),
+        ("mts", "mpegts", "libx264", "aac", True),
+        ("flv", "flv", "flv", "mp3", True),
+        ("3gp", "3gp", "h263", "aac", True),
     ],
 )
-def test_legacy_picture_audio_and_timing(tmp_path, extension, container, video, audio):
+def test_legacy_picture_audio_and_timing(
+    tmp_path, extension, container, video, audio, needs_user_ffmpeg
+):
     source = make_clip(tmp_path / f"source.{extension}", video, audio, container)
     before = hashlib.sha256(source.read_bytes()).hexdigest()
     assert is_video_input(source)
-    probe, jpeg = probe_video_preview(str(source))
+    external = None
+    if needs_user_ffmpeg:
+        with pytest.raises(ValueError, match="patent-licensed format"):
+            probe_video_preview(str(source))
+        external = user_ffmpeg()
+    probe, jpeg = probe_video_preview(str(source), external_ffmpeg=external)
     assert (probe.width, probe.height) == (176, 144)
     assert jpeg.startswith(b"\xff\xd8")
-    frames = list(decode_timed_frames(str(source)))
-    assert len(frames) == 30
     output = tmp_path / "output.mp4"
     messages = []
-    encode_video(
-        iter(frames),
-        str(output),
-        fps=25,
-        width=176,
-        height=144,
-        audio_source=str(source),
-        warning_callback=messages.append,
-    )
+    with decodable_source(
+        str(source), ffmpeg=external, temporary_directory=str(tmp_path), output_container="mp4"
+    ) as (frame_source, audio_source):
+        frames = list(decode_timed_frames(frame_source))
+        assert len(frames) == 30
+        encode_video(
+            iter(frames),
+            str(output),
+            fps=25,
+            width=176,
+            height=144,
+            audio_source=audio_source,
+            warning_callback=messages.append,
+        )
+    assert not list(tmp_path.glob("localsr-external-*"))
     decoded = list(decode_timed_frames(str(output)))
     assert len(decoded) == 30
     np.testing.assert_allclose(
@@ -107,7 +129,8 @@ def test_legacy_picture_audio_and_timing(tmp_path, extension, container, video, 
     )
     assert np.mean(np.abs(decoded[10].rgb.astype(float) - frames[10].rgb)) < 8
     with av.open(str(output)) as result:
-        assert result.streams.audio[0].codec_context.name in {"aac", "mp3", "mp3float"}
+        assert result.streams.video[0].codec_context.name == "libdav1d"
+        assert result.streams.audio[0].codec_context.name in {"opus", "flac", "ac3"}
         samples = list(result.decode(audio=0))
         assert samples and np.max(np.abs(samples[5].to_ndarray())) > 0.02
         assert abs(sum(f.samples / f.sample_rate for f in samples) - 1.2) < 0.09
@@ -116,7 +139,7 @@ def test_legacy_picture_audio_and_timing(tmp_path, extension, container, video, 
 
 def test_playback_copy_trim_and_cancellation_preserve_files(tmp_path):
     source = make_clip(tmp_path / "source.avi", duration=3)
-    output = tmp_path / "playback.mp4"
+    output = tmp_path / "playback.webm"
     events = []
     prepare_playback(source, output, progress=events.append)
     assert events[0]["frame"] > 0 and events[-1]["stage"] == "Playback copy ready"
@@ -244,7 +267,7 @@ def test_interlaced_anamorphic_recording_matches_progressive_reference(tmp_path)
 
 def test_playback_helper_runs_without_torch_and_reports_failure_then_recovery(tmp_path):
     source = make_clip(tmp_path / "tape with spaces.avi")
-    output = tmp_path / "preview.mp4"
+    output = tmp_path / "preview.webm"
     root = Path(__file__).resolve().parents[1]
     launcher = (
         "import runpy,sys; sys.modules['torch']=None; "

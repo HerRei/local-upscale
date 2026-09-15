@@ -66,7 +66,7 @@ def test_ten_bit_export_retains_more_than_8bit_levels_and_bt2020_samples(
             9,
             1,
         )
-        assert ctx.profile == "Main 10"
+        assert ctx.name == "libdav1d"
         frame = next(container.decode(stream))
         # Verify the encoded Y plane really has >256 levels, independent of
         # the RGB decode/encode helper and any nominal 10-bit container label.
@@ -85,7 +85,7 @@ def test_ten_bit_export_retains_more_than_8bit_levels_and_bt2020_samples(
 def test_float_h_at_pipeline_preserves_timing_audio_colour_and_reports_first_frame_tiles(
     tmp_path, transfer
 ):
-    source = make_hdr(tmp_path / "source.mov", transfer)
+    source = make_hdr(tmp_path / "source.mkv", transfer)
     adapter = DummyAdapter(2)
     info = replace(adapter.model_info, architecture="HAT")
     engine = InferenceEngine(adapter)

@@ -1,4 +1,8 @@
-"""Create a disposable, SDR H.264 playback copy without running an AI model."""
+"""Create a disposable, SDR VP9/WebM playback copy without running an AI model.
+
+VP9 is royalty-free and plays in every supported desktop web view. Sources in
+formats LocalSR does not include are read through the user's selected FFmpeg.
+"""
 
 import json
 import sys
@@ -8,13 +12,37 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .external_ffmpeg import decodable_source, load_external_ffmpeg
 from .video_io import decode_timed_frames, encode_video, probe_video
 
 
-def prepare_playback(source, destination, *, progress=None, cancel_event=None):
+def prepare_playback(
+    source, destination, *, progress=None, cancel_event=None, external_ffmpeg=None
+):
     source, destination = Path(source), Path(destination)
     if source.resolve() == destination.resolve():
         raise ValueError("Playback conversion must not replace the source.")
+    report = progress or (lambda _data: None)
+    with decodable_source(
+        str(source),
+        ffmpeg=external_ffmpeg,
+        temporary_directory=str(destination.parent),
+        cancel_event=cancel_event,
+        output_container="webm",
+        on_convert=lambda: report(
+            {"stage": "Converting with your FFmpeg", "frame": 0, "total": 0, "elapsed_seconds": 0}
+        ),
+    ) as (frame_source, audio_source):
+        _prepare_playback(
+            Path(frame_source),
+            Path(audio_source),
+            destination,
+            report=report,
+            cancel_event=cancel_event,
+        )
+
+
+def _prepare_playback(source, audio_source, destination, *, report, cancel_event):
     probe = probe_video(str(source))
     if probe.width * probe.height > 80_000_000:
         raise ValueError("This video's dimensions exceed the playback conversion limit.")
@@ -22,7 +50,6 @@ def prepare_playback(source, destination, *, progress=None, cancel_event=None):
     width, height = (
         max(2, int(dimension * ratio) // 2 * 2) for dimension in (probe.width, probe.height)
     )
-    report = progress or (lambda _data: None)
     started = time.monotonic()
     last_report = 0
 
@@ -61,7 +88,10 @@ def prepare_playback(source, destination, *, progress=None, cancel_event=None):
         fps=probe.fps,
         width=width,
         height=height,
-        audio_source=str(source),
+        container_format="webm",
+        video_codec="vp9",
+        fast=True,
+        audio_source=str(audio_source),
         cancel_event=cancel_event,
         crf=23,
         warning_callback=lambda _message: None,
@@ -90,6 +120,7 @@ def main(arguments):
             options.source,
             options.destination,
             progress=lambda value: print(json.dumps(value), flush=True),
+            external_ffmpeg=load_external_ffmpeg(None),
         )
     except Exception as error:
         print(str(error), file=sys.stderr)

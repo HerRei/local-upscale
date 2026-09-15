@@ -77,7 +77,8 @@
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
                 "comparison": { "type": "boolean" },
-                "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 }
+                "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 },
+                "external_ffmpeg": { "type": "string" }
               },
               "minProperties": 1,
               "additionalProperties": false
@@ -205,6 +206,8 @@
                     "hdr_mode": { "enum": ["reject", "tone_map"], "default": "reject" },
                     "output_video_path": { "type": "string", "minLength": 1 },
                     "container": { "enum": ["mp4", "mkv"] },
+                    "video_codec": { "enum": ["av1", "vp9", "ffv1", "h264", "hevc"], "default": "av1" },
+                    "external_ffmpeg": { "type": "string" },
                     "crf": { "type": "integer", "minimum": 0, "maximum": 51 },
                     "fps": { "type": ["number", "null"], "exclusiveMinimum": 0 },
                     "keyframe_interval": { "type": ["integer", "null"], "minimum": 1 },

@@ -288,9 +288,15 @@ class WorkerServer:
 
                     try:
                         if is_video_input(media_path):
+                            from localsr.core.external_ffmpeg import load_external_ffmpeg
                             from localsr.core.video_io import probe_video_preview
 
-                            probe, preview = probe_video_preview(media_path, maximum, report_probe)
+                            probe, preview = probe_video_preview(
+                                media_path,
+                                maximum,
+                                report_probe,
+                                load_external_ffmpeg(data.get("external_ffmpeg")),
+                            )
                             preview_base64 = base64.b64encode(preview).decode("ascii")
                             send_message(
                                 MediaInfo(
@@ -725,9 +731,34 @@ class WorkerServer:
             send_message,
         ) as memory:
             try:
-                return WorkerServer._run_temporal_video_job_impl(
-                    self, job_id, data, engine_factory, memory
-                )
+                from localsr.core.external_ffmpeg import decodable_source, load_external_ffmpeg
+                from localsr.core.media_codecs import validate_output
+
+                external = load_external_ffmpeg(data.get("external_ffmpeg"))
+                container = str(data.get("container", "mp4"))
+                validate_output(str(data.get("video_codec", "av1")), container)
+                with decodable_source(
+                    str(data["video_path"]),
+                    ffmpeg=external,
+                    temporary_directory=data.get("temporary_directory"),
+                    cancel_event=self.cancel_event,
+                    output_container=container,
+                    on_convert=lambda: send_message(
+                        VideoStageProgress(job_id=job_id, stage="external_decode")
+                    ),
+                ) as (frame_source, audio_source):
+                    return WorkerServer._run_temporal_video_job_impl(
+                        self,
+                        job_id,
+                        {
+                            **data,
+                            "video_path": frame_source,
+                            "audio_path": audio_source,
+                            "_external_ffmpeg": external,
+                        },
+                        engine_factory,
+                        memory,
+                    )
             except RuntimeError as error:
                 if "out of memory" in str(error).lower():
                     raise RuntimeError(memory.oom_message()) from error
@@ -982,10 +1013,15 @@ class WorkerServer:
                 output_path,
                 fps=float(fps),
                 container_format=str(data.get("container", "mp4")),
+                video_codec=str(data.get("video_codec", "av1")),
                 crf=int(data.get("crf", 18)),
                 width=int(out_width),
                 height=int(out_height),
-                audio_source=video_path if data.get("fps") is None else None,
+                audio_source=(data.get("audio_path") or video_path)
+                if data.get("fps") is None
+                else None,
+                external_ffmpeg=data.get("_external_ffmpeg"),
+                stage_callback=lambda stage: report(stage),
                 preserve_timing=data.get("fps") is None,
                 cancel_event=self.cancel_event,
                 warning_callback=lambda message: send_message(
@@ -1093,6 +1129,8 @@ class WorkerServer:
             self._run_temporal_video_job(job_id, data, engine_factory)
             return
 
+        from localsr.core.external_ffmpeg import load_external_ffmpeg
+
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
 
@@ -1121,6 +1159,7 @@ class WorkerServer:
             safe_memory=bool(data.get("safe_memory", True)),
             temporary_directory=data.get("temporary_directory"),
             container=str(data.get("container", "mp4")),
+            video_codec=str(data.get("video_codec", "av1")),
             crf=int(data.get("crf", 18)),
             start_frame=data.get("start_frame"),
             end_frame=data.get("end_frame"),
@@ -1132,6 +1171,7 @@ class WorkerServer:
             deflicker_window=int(data.get("deflicker_window", 3)),
             output_scale=data.get("output_scale"),
             hdr_mode=str(data.get("hdr_mode", "reject")),
+            external_ffmpeg=load_external_ffmpeg(data.get("external_ffmpeg")),
         )
 
         preview_encoder = LatestPreviewEncoder(
@@ -1151,7 +1191,11 @@ class WorkerServer:
         from localsr.core.video_io import probe_video
 
         hdr_format = (
-            probe_video(config.video_path).hdr_format if config.hdr_mode == "preserve" else ""
+            probe_video(
+                config.video_path, config.external_ffmpeg, config.temporary_directory
+            ).hdr_format
+            if config.hdr_mode == "preserve"
+            else ""
         )
         hdr_transfer = 18 if hdr_format == "HLG" else 16
         current_frame = -1
@@ -1275,6 +1319,7 @@ class WorkerServer:
                 warning_callback=lambda message: send_message(
                     LogMessage(level="warning", message=message)
                 ),
+                stage_cb=lambda stage: send_message(VideoStageProgress(job_id=job_id, stage=stage)),
             )
         except InterruptedError:
             preview_encoder.close()

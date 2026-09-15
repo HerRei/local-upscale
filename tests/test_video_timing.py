@@ -18,11 +18,12 @@ from localsr.worker.server import WorkerServer
 
 def make_vfr(path, times=(0, 40, 80, 120, 480, 840, 1200, 1560, 1920, 2280), transfer=2):
     with av.open(str(path), "w") as container:
-        stream = container.add_stream("libx264", rate=25)
+        # Lossless VP9 is royalty-free and bundled; no reordering keeps VFR exact.
+        stream = container.add_stream("libvpx-vp9", rate=25)
         stream.width, stream.height, stream.pix_fmt = 48, 32, "yuv420p"
         stream.codec_context.time_base = Fraction(1, 1000)
         stream.codec_context.color_trc = transfer
-        stream.options = {"crf": "0", "bf": "0"}
+        stream.options = {"lossless": "1", "lag-in-frames": "0"}
         for index, stamp in enumerate(times):
             rgb = np.full((32, 48, 3), index % 10 * 20, dtype=np.uint8)
             rgb[:12, :16] = [240, 40, 20]
@@ -211,7 +212,7 @@ def ffmpeg(*args):
 )
 def test_display_transform_matches_ffmpeg_autorotate(tmp_path, angle, flip, translated):
     source = make_vfr(tmp_path / "source.mp4")
-    rotated = tmp_path / "rotated.mov"
+    rotated = tmp_path / "rotated.mp4"
     args = ["-display_rotation", str(angle)]
     if flip:
         args += ["-display_hflip"]
@@ -289,7 +290,7 @@ def test_temporal_worker_preserves_vfr_trim_and_audio(tmp_path, monkeypatch, sta
         "-c:v",
         "copy",
         "-c:a",
-        "aac",
+        "libopus",
         "-shortest",
         source,
     )
@@ -361,7 +362,7 @@ def test_cancel_during_remux_preserves_existing_destination(tmp_path):
         "-c:v",
         "copy",
         "-c:a",
-        "aac",
+        "libopus",
         "-shortest",
         audio,
     )

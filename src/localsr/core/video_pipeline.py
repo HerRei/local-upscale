@@ -23,6 +23,7 @@ from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine
+from .media_codecs import validate_output
 from .tiling import generate_tiles
 from .video_io import (
     TimedVideoFrame,
@@ -116,6 +117,7 @@ class VideoJobConfig:
     halo: int
     safe_memory: bool
     container: str = "mp4"
+    video_codec: str = "av1"
     crf: int = 18
     start_frame: int | None = None
     end_frame: int | None = None
@@ -129,6 +131,10 @@ class VideoJobConfig:
     face_fidelity: float = 0.7
     hdr_mode: str = "reject"
     temporary_directory: str | None = None
+    # A user-selected ExternalFFmpeg for formats LocalSR does not include.
+    external_ffmpeg: object | None = None
+    # Source of audio/subtitles when it differs from the decoded picture source.
+    audio_path: str | None = None
 
 
 @dataclass
@@ -151,6 +157,7 @@ def run_video_job(
     tile_progress_cb: Callable[..., None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
     source_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
+    stage_cb: Callable[[str], None] | None = None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
 
@@ -158,7 +165,54 @@ def run_video_job(
     frame_completed_cb(frame_index, total_frames, jpeg_b64) are called
     per frame. progress_cb(frames_done, total_frames, elapsed_seconds)
     is called after each frame. All callbacks are optional.
+
+    Sources in a format LocalSR does not include are first converted to a
+    lossless intermediate by the user's selected FFmpeg, if any.
     """
+    from dataclasses import replace
+
+    from .external_ffmpeg import decodable_source
+
+    validate_output(config.video_codec, config.container)
+    with decodable_source(
+        config.video_path,
+        ffmpeg=config.external_ffmpeg,
+        temporary_directory=config.temporary_directory,
+        cancel_event=cancel_event,
+        output_container=config.container,
+        on_convert=(lambda: stage_cb("external_decode")) if stage_cb else None,
+    ) as (frame_source, audio_source):
+        return _run_video_job(
+            replace(config, video_path=frame_source, audio_path=audio_source),
+            engine,
+            cancel_event,
+            frame_started_cb=frame_started_cb,
+            frame_completed_cb=frame_completed_cb,
+            enhanced_frame_cb=enhanced_frame_cb,
+            progress_cb=progress_cb,
+            tile_callback=tile_callback,
+            tile_progress_cb=tile_progress_cb,
+            warning_callback=warning_callback,
+            source_frame_cb=source_frame_cb,
+            stage_cb=stage_cb,
+        )
+
+
+def _run_video_job(
+    config: VideoJobConfig,
+    engine: InferenceEngine,
+    cancel_event: threading.Event,
+    *,
+    frame_started_cb,
+    frame_completed_cb,
+    enhanced_frame_cb,
+    progress_cb,
+    tile_callback,
+    tile_progress_cb,
+    warning_callback,
+    source_frame_cb,
+    stage_cb,
+) -> VideoJobResult:
     # Python 3.11's Windows monotonic clock can tick more slowly than a tile.
     # Measure short inference intervals with the highest-resolution clock so
     # a completed tile does not incorrectly report zero elapsed time / ETA.
@@ -170,7 +224,7 @@ def run_video_job(
     transfer = 18 if probe.hdr_format == "HLG" else 16
     precision_str = "fp32" if preserve_hdr else config.precision_str
     if preserve_hdr:
-        validate_hdr_encoder()
+        validate_hdr_encoder(config.video_codec, config.external_ffmpeg)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
         for info in (config.model_info, config.face_model_info):
@@ -408,16 +462,19 @@ def run_video_job(
         config.output_video_path,
         fps=fps,
         container_format=config.container,
+        video_codec=config.video_codec,
         crf=config.crf,
         width=output_width,
         height=output_height,
-        audio_source=config.video_path if rate_unchanged else None,
+        audio_source=(config.audio_path or config.video_path) if rate_unchanged else None,
         preserve_timing=rate_unchanged,
         cancel_event=cancel_event,
         warning_callback=warning_callback,
         sdr_bt709=bool(probe.hdr_format and config.hdr_mode == "tone_map"),
         hdr_format=probe.hdr_format if preserve_hdr else "",
         temporary_directory=config.temporary_directory,
+        external_ffmpeg=config.external_ffmpeg,
+        stage_callback=stage_cb,
     )
 
     completed_at = time.perf_counter()
