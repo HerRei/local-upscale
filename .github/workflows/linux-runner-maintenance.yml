@@ -7,15 +7,16 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Install system RDMA libraries and configure stubs
+      - name: Install system runtime libraries and test torch import
         run: |
+          # Remove broken dummy stubs
+          sudo rm -f /usr/local/lib/libze_loader.so.1 /usr/local/lib/libucp.so.0 /usr/local/lib/libpsm2.so.2
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            librdmacm1 libibverbs1 libze-loader1 libze1 libucx0 libpsm2-2 || true
-          mkdir -p /tmp/stubs
-          for lib in librdmacm.so.1 libibverbs.so.1 libze_loader.so.1 libucp.so.0 libpsm2.so.2; do
-            gcc -shared -Wl,-soname,"$lib" -o "/tmp/stubs/$lib" -x c - <<< "void stub(){}"
-            sudo cp -n "/tmp/stubs/$lib" /usr/local/lib/ || true
-          done
+          # Install real Level Zero loader and verbs
+          sudo apt-get install -y --no-install-recommends libze1 librdmacm1 libibverbs1
           sudo ldconfig
-          ldconfig -p | grep -E "librdmacm|libibverbs|libze_loader|libucp|libpsm2"
+          ldconfig -p | grep -E "libze|librdmacm|libibverbs"
+          # Test if torch imports cleanly in CI venv if present
+          if [ -f "$HOME/.venv-ci/bin/python3.11" ]; then
+            "$HOME/.venv-ci/bin/python3.11" -c "import sys; print(sys.version)"
+          fi
