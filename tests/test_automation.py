@@ -2,6 +2,8 @@ import json
 import threading
 import tracemalloc
 
+import pytest
+
 from localsr.automation import (
     FileFingerprint,
     Reporter,
@@ -109,6 +111,22 @@ def test_automation_parser_exposes_process_benchmark_and_watch_commands():
     assert process.command == "process"
     assert benchmark.command == "benchmark" and benchmark.json
     assert watch.command == "watch" and watch.once
+    assert process.video_codec == "av1" and process.external_ffmpeg == ""
+
+
+@pytest.mark.parametrize(
+    "arguments,message",
+    [
+        (["--video-codec", "ffv1"], "MKV"),
+        (["--video-codec", "h264"], "--external-ffmpeg"),
+    ],
+)
+def test_automation_rejects_codec_choices_that_cannot_run(arguments, message):
+    from localsr.automation import AutomationError, _validate_automation_args
+
+    args = build_automation_parser().parse_args(["process", "a.mp4", "--output", "out", *arguments])
+    with pytest.raises(AutomationError, match=message):
+        _validate_automation_args(args)
 
 
 def test_json_reporter_emits_machine_readable_json(capsys):

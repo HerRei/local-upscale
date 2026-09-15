@@ -231,6 +231,8 @@ class AutomationRunner:
         preserve_metadata: bool,
         jpeg_quality: int,
         crf: int,
+        video_codec: str = "av1",
+        external_ffmpeg: str = "",
     ) -> dict[str, object]:
         source = source.resolve(strict=True)
         if not source.is_file() or source.suffix.lower() not in SUPPORTED_INPUT_EXTENSIONS:
@@ -261,7 +263,13 @@ class AutomationRunner:
 
         started = time.monotonic()
         if is_video_input(source):
+            from localsr.core.external_ffmpeg import ExternalFFmpegError, load_external_ffmpeg
             from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
+            try:
+                user_ffmpeg = load_external_ffmpeg(external_ffmpeg)
+            except ExternalFFmpegError as error:
+                raise AutomationError(str(error)) from error
 
             result = run_video_job(
                 VideoJobConfig(
@@ -275,8 +283,10 @@ class AutomationRunner:
                     halo=halo,
                     safe_memory=True,
                     container=video_container,
+                    video_codec=video_codec,
                     crf=crf,
                     output_scale=output_scale,
+                    external_ffmpeg=user_ffmpeg,
                 ),
                 self.engine,
                 self.cancel_event,
@@ -391,6 +401,17 @@ def _add_processing_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--format", choices=["png", "jpg", "tif", "webp"], default="png")
     parser.add_argument("--video-container", choices=["mp4", "mkv"], default="mp4")
+    parser.add_argument(
+        "--video-codec",
+        choices=["av1", "vp9", "ffv1", "h264", "hevc"],
+        default="av1",
+        help="H.264/HEVC are written by the FFmpeg given with --external-ffmpeg.",
+    )
+    parser.add_argument(
+        "--external-ffmpeg",
+        default="",
+        help="An FFmpeg you installed, for formats LocalSR does not include.",
+    )
     parser.add_argument("--tile-size", type=int, default=256)
     parser.add_argument("--halo", type=int, default=16)
     parser.add_argument("--precision", choices=["fp32", "fp16"], default="fp32")
@@ -428,6 +449,8 @@ def _processing_kwargs(args: argparse.Namespace, device: str) -> dict[str, objec
         "output_scale": args.scale,
         "output_format": args.format,
         "video_container": args.video_container,
+        "video_codec": args.video_codec,
+        "external_ffmpeg": args.external_ffmpeg,
         "tile_size": args.tile_size,
         "halo": args.halo,
         "precision": args.precision,
@@ -568,6 +591,16 @@ def _validate_automation_args(args: argparse.Namespace) -> None:
         raise AutomationError("Scale, tile size, and halo values are out of range.")
     if not 1 <= args.jpeg_quality <= 100 or not 0 <= args.crf <= 51:
         raise AutomationError("Image or video quality is out of range.")
+    from localsr.core.media_codecs import validate_output
+
+    try:
+        validate_output(args.video_codec, args.video_container)
+    except ValueError as error:
+        raise AutomationError(str(error)) from error
+    if args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
+        raise AutomationError(
+            "H.264/HEVC export uses the FFmpeg installed on this computer; pass --external-ffmpeg."
+        )
     if args.command == "watch":
         if (
             not math.isfinite(args.stable_seconds)
