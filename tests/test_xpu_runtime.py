@@ -162,6 +162,35 @@ def test_validates_bundled_runtime_without_a_gpu(tmp_path: Path, intel_runtime) 
     assert result["xpu_runtime_data_file_count"] == 1
 
 
+def test_accepts_intel_linker_script_libraries_beside_real_elfs(
+    tmp_path: Path, intel_runtime
+) -> None:
+    root = assemble(tmp_path, intel_runtime)
+    script = b"GROUP ( libintlc.so.5 )\n"
+    (root / "libintlc.so").write_bytes(script)
+    (root / "libintlc.so.5").write_bytes(elf())
+    manifest_path = root / "localsr" / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["libraries"] = sorted(manifest["libraries"] + ["libintlc.so", "libintlc.so.5"])
+    manifest_path.write_text(json.dumps(manifest))
+    result = verify_bundled_runtime(root, TORCH_VERSION)
+    assert result["xpu_runtime_library_count"] == len(LIBRARIES) + 2
+
+
+@pytest.mark.parametrize("content", [b"MZ not an elf at all", elf(machine=183)])
+def test_rejects_non_elf_libraries_that_are_not_linker_scripts(
+    tmp_path: Path, intel_runtime, content: bytes
+) -> None:
+    root = assemble(tmp_path, intel_runtime)
+    (root / "libintlc.so").write_bytes(content)
+    manifest_path = root / "localsr" / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["libraries"] = sorted(manifest["libraries"] + ["libintlc.so"])
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="not x86-64 ELF: libintlc.so"):
+        verify_bundled_runtime(root, TORCH_VERSION)
+
+
 @pytest.mark.parametrize(
     "failure", ["missing-adapter", "wrong-architecture", "unsafe-path", "wrong-version"]
 )
