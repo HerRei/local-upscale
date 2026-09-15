@@ -87,14 +87,6 @@ def encoder_available(name: str) -> bool:
     return True
 
 
-def decoder_available(name: str) -> bool:
-    try:
-        av.Codec(name, "r")
-    except (av.FFmpegError, ValueError):
-        return False
-    return True
-
-
 def _svt_crf(crf: int) -> int:
     """Map LocalSR's historical 0-51 quality scale onto SVT-AV1's 0-63 scale."""
     return max(1, min(63, round(int(crf) * 1.2 + 8)))

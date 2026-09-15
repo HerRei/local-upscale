@@ -16,7 +16,7 @@ import torch
 from torch import nn
 
 from localsr.core.face_compositing import blend_tile_outputs, classify_tile
-from localsr.core.face_detection import FaceBox, FaceMask, face_area_ratio, smooth_alpha
+from localsr.core.face_detection import FaceBox, FaceMask, smooth_alpha
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import NormalizedModelInfo
 from localsr.core.video_pipeline import process_frame_face_aware
@@ -145,13 +145,6 @@ def test_smooth_alpha_blurs_boundaries():
     # Far from the boundary, values are still 0 or 1.
     assert smoothed[0, 10] == pytest.approx(0.0, abs=0.1)
     assert smoothed[19, 10] == pytest.approx(1.0, abs=0.1)
-
-
-def test_face_area_ratio():
-    mask = np.zeros((100, 100), dtype=bool)
-    mask[25:75, 25:75] = True
-    fm = FaceMask(mask=mask, boxes=(FaceBox(25, 25, 50, 50, 0.9),))
-    assert face_area_ratio(fm) == pytest.approx(0.25)
 
 
 # ── face_compositing tests ──────────────────────────────────────────

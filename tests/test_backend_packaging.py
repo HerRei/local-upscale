@@ -108,10 +108,13 @@ def test_registry_covers_all_backends():
         ("windows", "DirectML"),
         ("linux", "CPU"),
         ("linux", "CUDA"),
-        ("linux", "Intel-XPU"),
         ("linux", "AMD-ROCm"),
         ("macos", "MPS"),
     }
+    # Intel XPU stays in the source but is not distributed until Intel's runtime
+    # redistribution terms are cleared.
+    registry = json.loads((ROOT / "ci" / "tauri-targets.json").read_text())
+    assert [t["backend"] for t in registry["withheld_targets"]] == ["Intel-XPU"]
     manifest = json.loads((ROOT / "ci" / "tauri-release-artifacts.json").read_text())
     validate_manifest(manifest)
     manifest["artifacts"].pop()

@@ -199,10 +199,3 @@ def smooth_alpha(alpha: np.ndarray, kernel_size: int = 5) -> np.ndarray:
     col_sum = np.cumsum(row_sum, axis=0)
     col_sum[k:, :] -= col_sum[:-k, :]
     return (col_sum[k - 1 :, k - 1 :] / float(k * k)).clip(0.0, 1.0)
-
-
-def face_area_ratio(face_mask: FaceMask) -> float:
-    """Fraction of the frame area covered by faces."""
-    if face_mask.mask.size == 0:
-        return 0.0
-    return float(face_mask.mask.mean())

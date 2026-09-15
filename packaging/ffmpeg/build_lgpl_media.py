@@ -338,7 +338,6 @@ class Builder:
         self.ffmpeg_args: list[str] = []
         self.enabled_components: dict[str, list[str]] = {}
         self.available_components: dict[str, set[str]] = {}
-        self.venv_python: Path | None = None
 
     # -- helpers -----------------------------------------------------------
 
@@ -788,7 +787,6 @@ class Builder:
     def build_pyav(self) -> Path:
         repair = MACOS_REPAIR_REQUIREMENTS if self.system == "Darwin" else LINUX_REPAIR_REQUIREMENTS
         python = self.create_venv(self.work / "buildenv", BUILD_REQUIREMENTS + repair)
-        self.venv_python = python
         env = self.env()
         env["PATH"] = str(python.parent) + os.pathsep + env["PATH"]
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"

@@ -128,9 +128,3 @@ _.total_size_bytes
 _.get_path  # OutputWriter memmap path, used by tests
 get_preset_model  # reference preset behavior mirrored by the desktop
 resolve_settings_for_model
-
-# Owned by the concurrent video codec work; review there.
-_next_packet  # core/video_io.py
-decode_frames  # core/video_io.py
-face_area_ratio  # core/face_detection.py
-active_tile  # core/video_pipeline.py

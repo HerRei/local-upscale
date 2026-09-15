@@ -147,26 +147,6 @@
       "next_build": "awaiting-explicit-user-authorization"
     },
     {
-      "id": "linux-x86_64-xpu",
-      "platform": "linux",
-      "architecture": "x86_64",
-      "backend": "Intel-XPU",
-      "coverage": "labs",
-      "package_status": "review-production-update-signed",
-      "evidence": "docs/beta-acceptance-2026-09-12.md",
-      "review_artifacts": [
-        {
-          "path": "linux/packages/LocalSR_0.0.13-beta.1_linux-x86_64-xpu.AppImage",
-          "size": 2000800248,
-          "sha256": "9e6214e201023812c0e2e3438bcdfd27667948780b5039f933f7c3df7626a4ef"
-        }
-      ],
-      "public_ready": false,
-      "final_package_ready": false,
-      "review_artifacts_are_historical": true,
-      "next_build": "awaiting-explicit-user-authorization"
-    },
-    {
       "id": "linux-x86_64-rocm",
       "platform": "linux",
       "architecture": "x86_64",
@@ -230,5 +210,12 @@
       2,
       4
     ]
-  }
+  },
+  "withheld_targets": [
+    {
+      "id": "linux-x86_64-xpu",
+      "backend": "Intel-XPU",
+      "reason": "Intel oneAPI runtime redistribution terms (distributor indemnity, reverse-engineering restriction) are not cleared; see docs/licensing-media.md."
+    }
+  ]
 }

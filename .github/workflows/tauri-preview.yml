@@ -420,11 +420,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Replace PyPI media wheels with the licensing-clean runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch
+          python packaging/ffmpeg/install_media_runtime.py \
+            --work-dir "$HOME/.cache/localsr-lgpl-media/linux-x86_64" --jobs 4
       - name: Build the additive desktop package
         # The required verify matrix has already run Svelte checks and tests on
         # this exact commit. Avoid starting a second Vitest worker pool after
         # the memory-intensive PyInstaller build on constrained runner VMs.
-        run: python scripts/build_tauri_preview.py --skip-checks --bundles ${{ matrix.bundles }}
+        # Windows has no licensing-clean media runtime yet; its package is a
+        # private acceptance preview only and is never published.
+        run: python scripts/build_tauri_preview.py --skip-checks --bundles ${{ matrix.bundles }} ${{ runner.os == 'Windows' && '--private-preview-media' || '' }}
       - name: Install or mount the package and boot its bundled worker
         run: python scripts/smoke_tauri_installer.py --artifact-glob "${{ matrix.package_path }}" --report build/tauri-preview/installer-smoke-${{ runner.os }}.json
       - name: Upload optional private acceptance package

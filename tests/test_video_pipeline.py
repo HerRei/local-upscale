@@ -23,7 +23,7 @@ from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import NormalizedModelInfo
 from localsr.core.video_io import (
     VideoStageError,
-    decode_frames,
+    decode_timed_frames,
     encode_video,
     probe_video,
     uint8_chw_to_rgb_hwc,
@@ -33,6 +33,13 @@ from localsr.core.video_pipeline import VideoJobConfig, rgb_to_tensor, run_video
 FRAME_WIDTH = 32
 FRAME_HEIGHT = 24
 FRAME_COUNT = 6
+
+
+def decode_frames(path, start_frame=None, end_frame=None):
+    """(index, rgb) pairs, in decode order, for compact assertions."""
+    return [(frame.index, frame.rgb) for frame in decode_timed_frames(path, start_frame, end_frame)]
+
+
 FPS = 12.0
 
 

@@ -323,22 +323,6 @@ def probe_video_preview(
         )
 
 
-def decode_frames(
-    path: str,
-    start_frame: int | None = None,
-    end_frame: int | None = None,
-    *,
-    hdr_mode: str = "reject",
-):
-    """Yield (frame_index, rgb_uint8_HxWx3) for every decoded frame.
-
-    Frames are converted to RGB on decode. start_frame/end_frame are
-    inclusive 0-indexed bounds; None means unbounded on that side.
-    """
-    for frame in decode_timed_frames(path, start_frame, end_frame, hdr_mode=hdr_mode):
-        yield frame.index, frame.rgb
-
-
 def decode_timed_frames(
     path: str,
     start_frame: int | None = None,

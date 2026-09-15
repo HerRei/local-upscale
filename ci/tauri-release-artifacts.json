@@ -52,14 +52,6 @@
       "signing": "sha256"
     },
     {
-      "id": "linux-x86_64-xpu",
-      "filename": "LocalSR-v0.0.13-beta.1-Linux-Intel-x86_64.AppImage",
-      "platform": "linux",
-      "architecture": "x86_64",
-      "backend": "Intel-XPU",
-      "signing": "sha256"
-    },
-    {
       "id": "linux-x86_64-rocm",
       "filename": "LocalSR-v0.0.13-beta.1-Linux-ROCm-x86_64.AppImage",
       "platform": "linux",

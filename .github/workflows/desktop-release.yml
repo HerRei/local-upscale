@@ -141,6 +141,11 @@ jobs:
           python -m pip check
           python -c "import diffusers; from packaging.version import Version; assert Version(diffusers.__version__) >= Version('0.38.0')"
           npm ci --prefix desktop
+      - name: Replace PyPI media wheels with the licensing-clean runtime
+        run: |
+          sudo apt-get install -y nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch
+          python packaging/ffmpeg/install_media_runtime.py \
+            --work-dir /ci-scratch/lgpl-media/linux-x86_64 --source-cache /ci-scratch/lgpl-media/sources --jobs 8
       - name: Download and run the actual Quick and Best models from an empty cache
         run: |
           LIVE_MODEL_CACHE="$LOCALSR_TAURI_ROOT/live-model-cache"
@@ -203,6 +208,10 @@ jobs:
       run:
         shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
+      - name: Stop until the Windows licensing-clean media runtime exists
+        run: |
+          Write-Output "::error::Windows packages are blocked: packaging/ffmpeg/build_lgpl_media.py cannot build the LGPL media runtime on Windows yet, and cuDNN 9 Windows DLL redistribution is unconfirmed. See docs/licensing-media.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -395,6 +404,14 @@ jobs:
           python -m pip check
           python -c "import diffusers,platform,torch; from packaging.version import Version; assert platform.machine()=='arm64'; assert Version(diffusers.__version__) >= Version('0.38.0'); assert torch.__version__.startswith('2.13.')"
           npm ci --prefix desktop
+      - name: Replace PyPI media wheels with the licensing-clean runtime
+        run: |
+          for tool in nasm meson ninja cmake autoconf automake; do
+            command -v "$tool" >/dev/null || brew install "$tool"
+          done
+          python packaging/ffmpeg/install_media_runtime.py \
+            --work-dir /Volumes/CISCRATCH/lgpl-media/macos-arm64 \
+            --source-cache /Volumes/CISCRATCH/lgpl-media/sources --jobs 8
       - name: Build, sign, notarize, staple, and smoke-test the DMG
         env:
           APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -410,7 +427,8 @@ jobs:
           python scripts/build_tauri_preview.py --skip-checks --require-signing --bundles dmg
           SOURCE=$(find "$CARGO_TARGET_DIR/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg')
           test "$(printf '%s\n' "$SOURCE" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
-          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.12-alpha-macOS-arm64.dmg"
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v${VERSION}-macOS-arm64.dmg"
           cp "$SOURCE" "$ARTIFACT"
           python scripts/smoke_tauri_installer.py --backend MPS --artifact-glob "$ARTIFACT" \
             --report "$LOCALSR_TAURI_ROOT/staging/package-smoke.json"
@@ -427,7 +445,8 @@ jobs:
         env:
           CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
         run: |
-          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v0.0.12-alpha-macOS-arm64.dmg"
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v${VERSION}-macOS-arm64.dmg"
           python scripts/upload_artifacts.py --server "$CI_ARTIFACT_SERVER" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform macos \
             "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
@@ -454,8 +473,9 @@ jobs:
         run: |
           RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"
           OUTPUT="$RUN_ROOT/$GITHUB_RUN_ATTEMPT/tauri-signed-rehearsal"
-          TAG="${GITHUB_REF_NAME:-v0.0.12-alpha}"
-          if [[ "$TAG" != v* ]]; then TAG=v0.0.12-alpha; fi
+          VERSION=$("$HOME/.venv-ci/bin/python3.11" -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          TAG="${GITHUB_REF_NAME:-v$VERSION}"
+          if [[ "$TAG" != v* ]]; then TAG="v$VERSION"; fi
           "$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py "$RUN_ROOT" \
             --manifest ci/tauri-release-artifacts.json --readiness ci/beta-readiness.json \
             --tag "$TAG" --commit "$GITHUB_SHA" --output "$OUTPUT" --verification-only

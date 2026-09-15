@@ -303,20 +303,18 @@ def test_compacts_every_backend_and_verified_payload(tmp_path: Path) -> None:
     staging, manifest, output, readiness = release_fixture(tmp_path)
     index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
     index = json.loads(index_path.read_text())
-    assert len(index["installers"]) == len(index["source_matrix"]) == 8
-    assert len(index["public_assets"]) == 9
+    assert len(index["installers"]) == len(index["source_matrix"]) == 7
+    assert len(index["public_assets"]) == 8
     assert index["beta_ready"] is False
-    assert len((output / "release-files.txt").read_text().splitlines()) == 11
+    assert len((output / "release-files.txt").read_text().splitlines()) == 10
     verify(output, manifest, "c" * 40)
-    assert len(publish_release.expected_assets(output)) == 11
+    assert len(publish_release.expected_assets(output)) == 10
     second = tmp_path / "rerun"
     prepare_release.prepare(staging, manifest, "v1-alpha", second, readiness)
     assert index_path.read_bytes() == (second / "release-index.json").read_bytes()
 
 
-@pytest.mark.parametrize(
-    "failure", ["model", "backend", "payload", "wheelhouse", "missing-target", "xpu-runtime"]
-)
+@pytest.mark.parametrize("failure", ["model", "backend", "payload", "wheelhouse", "missing-target"])
 def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> None:
     staging, manifest, output, readiness = release_fixture(tmp_path)
     match = {
@@ -325,7 +323,6 @@ def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> No
         "payload": "payload digest",
         "wheelhouse": "wheelhouse provenance",
         "missing-target": "every target",
-        "xpu-runtime": "bundled Intel runtime",
     }[failure]
     if failure == "missing-target":
         data = json.loads(manifest.read_text())
@@ -333,12 +330,6 @@ def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> No
         manifest.write_text(json.dumps(data))
     elif failure == "payload":
         next(staging.rglob("*.part-0001")).write_bytes(b"corrupted")
-    elif failure == "xpu-runtime":
-        path = next(staging.rglob("*Linux-Intel*.metadata.json"))
-        data = json.loads(path.read_text())
-        data["backend_probe"].pop("xpu_runtime_files_verified")
-        data["package_smoke"]["backend_probe"].pop("xpu_runtime_files_verified")
-        path.write_text(json.dumps(data))
     else:
         path = next(staging.rglob("*Linux-CPU*.metadata.json"))
         data = json.loads(path.read_text())

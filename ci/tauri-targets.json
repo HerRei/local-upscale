@@ -62,17 +62,6 @@
       "scratch_peak_gib": 45
     },
     {
-      "id": "linux-x86_64-xpu",
-      "platform": "linux",
-      "architecture": "x86_64",
-      "backend": "Intel-XPU",
-      "index": "xpu",
-      "suffix": "Linux-Intel-x86_64.AppImage",
-      "signing": "sha256",
-      "alpha_signing": "sha256",
-      "scratch_peak_gib": 50
-    },
-    {
       "id": "linux-x86_64-rocm",
       "platform": "linux",
       "architecture": "x86_64",
@@ -83,5 +72,12 @@
       "scratch_peak_gib": 100
     }
   ],
-  "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets."
+  "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets.",
+  "withheld_targets": [
+    {
+      "id": "linux-x86_64-xpu",
+      "backend": "Intel-XPU",
+      "reason": "Intel's oneAPI runtime license requires the distributor to indemnify Intel and restricts reverse engineering, which conflicts with LGPL relinking terms. The source keeps Intel XPU support; no package is distributed until the license question is resolved. See docs/licensing-media.md."
+    }
+  ]
 }

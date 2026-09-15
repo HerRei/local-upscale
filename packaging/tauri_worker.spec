@@ -209,8 +209,11 @@ collection = COLLECT(
 )
 
 # Fail the build if any bundled media component falls outside the codec policy
-# (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC).
+# (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC). Private,
+# never-distributed preview builds may opt out explicitly.
 import subprocess  # noqa: E402
+
+private_preview = os.environ.get("LOCALSR_PRIVATE_PREVIEW_MEDIA") == "1"
 
 policy_check = subprocess.run(
     [
@@ -231,13 +234,13 @@ nvidia_check = subprocess.run(
     capture_output=True,
     text=True,
 )
-if nvidia_check.returncode != 0:
+if nvidia_check.returncode != 0 and not private_preview:
     raise SystemExit(
         "The frozen worker contains NVIDIA libraries that may not be redistributed:\n"
         + nvidia_check.stdout
         + nvidia_check.stderr
     )
-if policy_check.returncode != 0:
+if policy_check.returncode != 0 and not private_preview:
     raise SystemExit(
         "The frozen worker violates packaging/ffmpeg/codec-policy.json:\n"
         + policy_check.stdout

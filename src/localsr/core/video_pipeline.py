@@ -336,8 +336,8 @@ def _run_video_job(
                         ).transpose(2, 0, 1)
                     tile_callback(phase, tile, pixels, done, count, image_w, image_h, size)
 
-            def tile_progress(completed: int, total: int, active_tile: int) -> None:
-                pass
+            def tile_progress(_completed: int, _total: int, _active_tile: int) -> None:
+                """Tile timing is reported by ``tile_callback``; the engine requires a callback."""
 
             try:
                 if use_face_aware:

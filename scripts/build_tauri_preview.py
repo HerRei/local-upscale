@@ -604,7 +604,7 @@ def worker_target_arch(target: str | None) -> str | None:
     return None
 
 
-def build_worker(target: str | None = None) -> None:
+def build_worker(target: str | None = None, private_preview_media: bool = False) -> None:
     if shutil.which("pyinstaller") is None:
         try:
             import PyInstaller  # noqa: F401
@@ -616,17 +616,26 @@ def build_worker(target: str | None = None) -> None:
     # Refuse to freeze a media runtime with GPL or patent-licensed codecs (for
     # example PyPI's PyAV wheels, which include x264/x265). Build the LGPL runtime
     # with packaging/ffmpeg/build_lgpl_media.py and install it first.
-    run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "verify_codec_allowlist.py"),
-            "--python-env",
-            sys.executable,
-        ]
-    )
+    if private_preview_media:
+        print(
+            "WARNING: private preview build without the licensing-clean media runtime. "
+            "Never distribute this package.",
+            flush=True,
+        )
+    else:
+        run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "verify_codec_allowlist.py"),
+                "--python-env",
+                sys.executable,
+            ]
+        )
     WORKER_DIST.mkdir(parents=True, exist_ok=True)
     WORKER_WORK.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
+    if private_preview_media:
+        environment["LOCALSR_PRIVATE_PREVIEW_MEDIA"] = "1"
     if target_arch := worker_target_arch(target):
         environment["LOCALSR_TARGET_ARCH"] = target_arch
     run(
@@ -738,6 +747,11 @@ def main() -> int:
         action="store_true",
         help="Refuse release bundles unless platform production signing is configured",
     )
+    parser.add_argument(
+        "--private-preview-media",
+        action="store_true",
+        help="Allow a media runtime outside the codec policy for a never-distributed preview",
+    )
     parser.add_argument("--target", help="Native Rust target triple")
     parser.add_argument(
         "--external-engine-prefix", help="Create adjacent CUDA engine payloads for NSIS"
@@ -751,10 +765,12 @@ def main() -> int:
         "--no-bundle", action="store_true", help="Compile without an installer"
     )
     args = parser.parse_args()
+    if args.private_preview_media and args.require_signing:
+        parser.error("--private-preview-media can never be combined with a signed release build")
 
     run([sys.executable, str(ROOT / "scripts" / "export_desktop_catalog.py")])
     if not args.skip_worker:
-        build_worker(args.target)
+        build_worker(args.target, args.private_preview_media)
     payload = None
     if args.external_engine_prefix:
         if os.name != "nt" or args.bundles != "nsis":

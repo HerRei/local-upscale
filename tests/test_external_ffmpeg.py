@@ -39,6 +39,15 @@ def user_ffmpeg():
     return load_external_ffmpeg(binary)
 
 
+@pytest.fixture
+def clean_runtime():
+    """Refusal tests need the licensing-clean runtime, not PyPI's PyAV."""
+    if "h264" in av.codecs_available:
+        pytest.skip(
+            "this environment uses PyPI's PyAV; run packaging/ffmpeg/install_media_runtime.py"
+        )
+
+
 def ffprobe_streams(path: Path) -> list[dict]:
     binary = shutil.which("ffprobe")
     if not binary:
@@ -118,7 +127,9 @@ def test_bundled_exports_round_trip_with_timing(tmp_path, codec, container):
         assert result.streams.video[0].codec_context.name == expected
 
 
-def test_h264_source_needs_user_ffmpeg_then_converts_losslessly(tmp_path, user_ffmpeg):
+def test_h264_source_needs_user_ffmpeg_then_converts_losslessly(
+    tmp_path, user_ffmpeg, clean_runtime
+):
     source = make_h264_aac(tmp_path / "phone.mp4", user_ffmpeg)
     assert plan_source(str(source)) == plan_source(str(source), "mp4")
     assert not plan_source(str(source)).video_decodable
@@ -182,7 +193,7 @@ def test_h264_and_hevc_exports_are_written_by_user_ffmpeg(tmp_path, user_ffmpeg,
     assert int(video["nb_frames"] if "nb_frames" in video else len(frames)) == len(frames)
 
 
-def test_hevc_hdr_source_and_export_through_user_ffmpeg(tmp_path, user_ffmpeg):
+def test_hevc_hdr_source_and_export_through_user_ffmpeg(tmp_path, user_ffmpeg, clean_runtime):
     source = make_hdr(tmp_path / "camera.mp4", 18, codec="libx265", audio="aac")
     with pytest.raises(ValueError, match="patent-licensed format"):
         probe_video(str(source))
@@ -211,7 +222,7 @@ def test_hevc_hdr_source_and_export_through_user_ffmpeg(tmp_path, user_ffmpeg):
     )
 
 
-def test_playback_copy_of_h264_source_is_royalty_free_webm(tmp_path, user_ffmpeg):
+def test_playback_copy_of_h264_source_is_royalty_free_webm(tmp_path, user_ffmpeg, clean_runtime):
     source = make_h264_aac(tmp_path / "phone.mp4", user_ffmpeg)
     output = tmp_path / "preview.webm"
     with pytest.raises(ValueError, match="patent-licensed format"):
@@ -238,7 +249,7 @@ def test_user_ffmpeg_selection_is_validated(tmp_path, monkeypatch):
         load_external_ffmpeg(str(impostor))
 
 
-def test_cancelled_conversion_leaves_no_intermediate(tmp_path, user_ffmpeg):
+def test_cancelled_conversion_leaves_no_intermediate(tmp_path, user_ffmpeg, clean_runtime):
     source = make_h264_aac(tmp_path / "phone.mp4", user_ffmpeg, frames=240)
     cancel = threading.Event()
     cancel.set()
