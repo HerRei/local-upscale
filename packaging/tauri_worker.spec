@@ -152,6 +152,23 @@ if sys.platform == "darwin" and target_arch in ("arm64", "x86_64"):
         )
     )
 
+# OpenCV's Windows wheel loads FFmpeg as a separate videoio plugin. LocalSR uses
+# OpenCV only for face detection and drawing, so that plugin is never shipped.
+analysis.binaries = TOC(
+    entry
+    for entry in analysis.binaries
+    if not Path(entry[0]).name.lower().startswith("opencv_videoio_ffmpeg")
+)
+# cuFile and NVSHMEM are not redistributable under the licenses shipped in their
+# NVIDIA wheels (see packaging/nvidia/redistributables.json). PyTorch loads them
+# only for GPUDirect Storage and multi-GPU symmetric memory, which LocalSR does
+# not use.
+analysis.binaries = TOC(
+    entry
+    for entry in analysis.binaries
+    if not Path(entry[0]).name.startswith(("libcufile", "libnvshmem", "nvshmem_"))
+)
+
 pyz = PYZ(analysis.pure)
 executable = EXE(
     pyz,
@@ -190,3 +207,39 @@ collection = COLLECT(
     upx=False,
     name="engine",
 )
+
+# Fail the build if any bundled media component falls outside the codec policy
+# (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC).
+import subprocess  # noqa: E402
+
+policy_check = subprocess.run(
+    [
+        sys.executable,
+        str(ROOT / "scripts" / "verify_codec_allowlist.py"),
+        "--tree",
+        str(Path(DISTPATH) / "engine"),
+    ],
+    capture_output=True,
+    text=True,
+)
+nvidia_check = subprocess.run(
+    [
+        sys.executable,
+        str(ROOT / "scripts" / "verify_nvidia_redistributables.py"),
+        str(Path(DISTPATH) / "engine"),
+    ],
+    capture_output=True,
+    text=True,
+)
+if nvidia_check.returncode != 0:
+    raise SystemExit(
+        "The frozen worker contains NVIDIA libraries that may not be redistributed:\n"
+        + nvidia_check.stdout
+        + nvidia_check.stderr
+    )
+if policy_check.returncode != 0:
+    raise SystemExit(
+        "The frozen worker violates packaging/ffmpeg/codec-policy.json:\n"
+        + policy_check.stdout
+        + policy_check.stderr
+    )

@@ -276,10 +276,14 @@ def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: 
     runtime = b"ELF-runtime-prefix"
     image.write_bytes(runtime + b"hsqs-old-zstd-payload")
     commands: list[list[str]] = []
+    policy_checks: list[list[str]] = []
 
     def fake_run(command, **kwargs):
         if command[0] == str(image):
             return SimpleNamespace(returncode=0, stdout=f"{len(runtime)}\n")
+        if str(command[1]).endswith("verify_codec_allowlist.py"):
+            policy_checks.append(command)
+            return SimpleNamespace(returncode=0, stdout="PASS", stderr="")
         commands.append(command)
         Path(command[2]).write_bytes(b"hsqs-gzip-payload")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -295,6 +299,7 @@ def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: 
     repacked = build._repack_linux_appimages_with_system_mksquashfs(tmp_path / "bundle")
 
     assert repacked == [image]
+    assert policy_checks and policy_checks[0][-2:] == ["--tree", str(appdir)]
     assert image.read_bytes() == runtime + b"hsqs-gzip-payload"
     assert image.stat().st_mode & 0o111
     assert commands == [

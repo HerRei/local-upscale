@@ -22,6 +22,79 @@ CONFIG_PATH = BUILD_ROOT / "tauri-worker.conf.json"
 LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
 LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
 LINUX_APPIMAGE_PAYLOAD_COMPRESSOR = "gzip"
+# WebKitGTK plays media through GStreamer. Only plugins for royalty-free or
+# patent-expired formats and generic plumbing are distributed; libav, x264,
+# openh264, AAC and similar plugins pulled in from the build host are removed.
+# See packaging/ffmpeg/codec-policy.json.
+LINUX_GSTREAMER_PLUGIN_ALLOWLIST = frozenset(
+    {
+        "alsa",
+        "app",
+        "audioconvert",
+        "audiomixer",
+        "audioparsers",
+        "audiorate",
+        "audioresample",
+        "autodetect",
+        "coreelements",
+        "coretracers",
+        "dav1d",
+        "deinterlace",
+        "flac",
+        "gio",
+        "imagefreeze",
+        "interleave",
+        "isomp4",
+        "jpeg",
+        "matroska",
+        "mpg123",
+        "ogg",
+        "opengl",
+        "opus",
+        "pbtypes",
+        "playback",
+        "png",
+        "pulseaudio",
+        "rawparse",
+        "subparse",
+        "theora",
+        "typefindfunctions",
+        "videoconvertscale",
+        "videoconvert",
+        "videofilter",
+        "videorate",
+        "videoscale",
+        "volume",
+        "vorbis",
+        "vpx",
+        "wavparse",
+    }
+)
+# Host libraries that only patent-encumbered GStreamer plugins pull into usr/lib.
+LINUX_FORBIDDEN_HOST_MEDIA_LIBRARIES = (
+    "libavcodec",
+    "libavformat",
+    "libavfilter",
+    "libavutil",
+    "libavdevice",
+    "libswscale",
+    "libswresample",
+    "libpostproc",
+    "libx264",
+    "libx265",
+    "libopenh264",
+    "libfdk-aac",
+    "libfaad",
+    "liba52",
+    "libmpeg2",
+    "libdvdread",
+    "libxvidcore",
+    "libopencore-amr",
+    "libvo-amrwbenc",
+    "libtwolame",
+    "libdca",
+    "libde265",
+)
 # Mesa is supplied by the host. Bundling older Wayland libraries alongside it
 # makes WebKit abort on newer desktops with EGL_BAD_PARAMETER. These must come
 # from the same host graphics stack (reproduced on Fedora / RX 9060 XT).
@@ -396,6 +469,34 @@ def _copy_bytes(source: Path, destination: Path, *, limit: int | None = None) ->
                 remaining -= len(chunk)
 
 
+def prune_patent_encumbered_media(appdir: Path) -> list[Path]:
+    """Remove GStreamer plugins and host codec libraries outside the codec policy.
+
+    Only the AppDir's host library directory and GStreamer plugin directories
+    are pruned. The frozen worker's own LGPL media runtime lives elsewhere and
+    is validated separately by ``verify_codec_allowlist.py``.
+    """
+    removed: list[Path] = []
+    for plugin_dir in sorted(appdir.rglob("gstreamer-1.0")):
+        if not plugin_dir.is_dir():
+            continue
+        for plugin in sorted(plugin_dir.glob("libgst*.so*")):
+            name = plugin.name.removeprefix("libgst").split(".so", 1)[0]
+            if name not in LINUX_GSTREAMER_PLUGIN_ALLOWLIST:
+                plugin.unlink()
+                removed.append(plugin)
+    for library_dir in (appdir / "usr" / "lib", appdir / "usr" / "lib" / "x86_64-linux-gnu"):
+        if not library_dir.is_dir():
+            continue
+        for library in sorted(library_dir.iterdir()):
+            if (library.is_file() or library.is_symlink()) and library.name.startswith(
+                LINUX_FORBIDDEN_HOST_MEDIA_LIBRARIES
+            ):
+                library.unlink()
+                removed.append(library)
+    return removed
+
+
 def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Path]:
     """Rebuild Linux AppImage payloads with system gzip-capable mksquashfs.
 
@@ -425,6 +526,28 @@ def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Pa
         return []
 
     appdir = appdirs[0]
+    removed = prune_patent_encumbered_media(appdir)
+    if removed:
+        print(
+            f"Removed {len(removed)} patent-encumbered media plugin/library files from the AppDir.",
+            flush=True,
+        )
+    verify = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_codec_allowlist.py"),
+            "--tree",
+            str(appdir),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if verify.returncode != 0:
+        raise SystemExit(
+            "AppImage contents violate packaging/ffmpeg/codec-policy.json:\n"
+            + verify.stdout
+            + verify.stderr
+        )
     repacked: list[Path] = []
     for image in images:
         offset = _find_appimage_squashfs_offset(image)
@@ -490,6 +613,17 @@ def build_worker(target: str | None = None) -> None:
                 "PyInstaller is missing. Install the package build dependencies first: "
                 "python -m pip install -e '.[package,video,face]'"
             ) from error
+    # Refuse to freeze a media runtime with GPL or patent-licensed codecs (for
+    # example PyPI's PyAV wheels, which include x264/x265). Build the LGPL runtime
+    # with packaging/ffmpeg/build_lgpl_media.py and install it first.
+    run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_codec_allowlist.py"),
+            "--python-env",
+            sys.executable,
+        ]
+    )
     WORKER_DIST.mkdir(parents=True, exist_ok=True)
     WORKER_WORK.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()

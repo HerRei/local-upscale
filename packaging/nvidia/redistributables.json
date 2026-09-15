@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "summary": "NVIDIA libraries a LocalSR CUDA package may contain, with the license basis for each. Anything NVIDIA-named that is not matched here fails the build. Reviewed 2026-09-15 against the license texts shipped in the pinned nvidia-*-cu12 wheels and https://docs.nvidia.com/cuda/eula/index.html.",
+  "notice_required": "Distributable NVIDIA SDK portions may only be accessed by LocalSR, must stay in object form, must not be distributed stand-alone, and LocalSR's distribution terms must be consistent with NVIDIA's license restrictions.",
+  "allowed": [
+    {
+      "component": "CUDA Runtime",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcudart\\.so",
+        "^cudart64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "cuBLAS",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcublas(Lt)?\\.so",
+        "^cublas(Lt)?64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "cuFFT",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcufftw?\\.so",
+        "^cufftw?64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "cuRAND",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcurand\\.so",
+        "^curand64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "cuSOLVER",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcusolver\\.so",
+        "^cusolver64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "cuSPARSE",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcusparse\\.so",
+        "^cusparse64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "NVRTC",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libnvrtc(-builtins)?\\.so",
+        "^nvrtc(-builtins)?64_[0-9_]+\\.dll$"
+      ]
+    },
+    {
+      "component": "nvJitLink",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libnvJitLink\\.so",
+        "^nvJitLink_[0-9_]+\\.dll$"
+      ]
+    },
+    {
+      "component": "CUPTI",
+      "basis": "CUDA Toolkit EULA Attachment A",
+      "patterns": [
+        "^libcupti\\.so",
+        "^cupti64_[0-9.]+\\.dll$"
+      ]
+    },
+    {
+      "component": "NVTX",
+      "basis": "CUDA Toolkit EULA Attachment A / Apache-2.0 headers",
+      "patterns": [
+        "^libnvToolsExt\\.so",
+        "^nvToolsExt64_[0-9]+\\.dll$"
+      ]
+    },
+    {
+      "component": "cuDNN (Linux)",
+      "basis": "cuDNN supplement: runtime .so files are distributable",
+      "patterns": [
+        "^libcudnn(_[a-z_]+)?\\.so"
+      ]
+    },
+    {
+      "component": "cuSPARSELt (Linux)",
+      "basis": "cuSPARSELt supplement: runtime .so files are distributable",
+      "patterns": [
+        "^libcusparseLt\\.so"
+      ]
+    },
+    {
+      "component": "NCCL",
+      "basis": "BSD-3-Clause",
+      "patterns": [
+        "^libnccl\\.so"
+      ]
+    }
+  ],
+  "forbidden": [
+    {
+      "component": "cuFile / GPUDirect Storage",
+      "reason": "Not listed as distributable in the CUDA Toolkit EULA shipped with nvidia-cufile-cu12.",
+      "patterns": [
+        "^libcufile"
+      ]
+    },
+    {
+      "component": "NVSHMEM",
+      "reason": "Not listed as distributable in the license shipped with nvidia-nvshmem-cu12.",
+      "patterns": [
+        "^libnvshmem",
+        "^nvshmem_"
+      ]
+    },
+    {
+      "component": "cuDNN (Windows DLLs)",
+      "reason": "The cuDNN supplement names only cudnn64_7.dll; cuDNN 9 DLL names need written confirmation from NVIDIA (nvidia-compute-license-questions@nvidia.com) before distribution.",
+      "patterns": [
+        "^cudnn.*\\.dll$"
+      ]
+    },
+    {
+      "component": "NVIDIA driver libraries",
+      "reason": "Driver libraries are provided by the user's installed driver and are never bundled.",
+      "patterns": [
+        "^libcuda\\.so",
+        "^libnvidia-",
+        "^nvcuda\\.dll$",
+        "^nvml\\.dll$"
+      ]
+    }
+  ],
+  "nvidia_name_pattern": "^(lib)?(cudart|cublas|cufft|curand|cusolver|cusparse|cudnn|cupti|cufile|nvrtc|nvJitLink|nvToolsExt|nvshmem|nccl|npp|nvjpeg|nvblas|nvvm|nvidia-|cuda\\.)"
+}
