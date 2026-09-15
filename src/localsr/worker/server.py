@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 
 # Set MPS memory limits before torch is imported
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
@@ -50,8 +50,6 @@ from localsr.protocol.messages import (
     BenchmarkTile,
     CapabilitiesInfo,
     EngineInfo,
-    FaceDetectionUnavailable,
-    FacesDetected,
     JobCancelled,
     JobFailed,
     JobStarted,
@@ -339,34 +337,6 @@ class WorkerServer:
                     with self.state_lock:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
-
-                elif req_type == "detect_faces_request":
-                    image_path = str(data.get("image_path", ""))
-                    try:
-                        from localsr.core.face_detection import detect_faces
-
-                        img = Image.open(image_path)
-                        img = ImageOps.exif_transpose(img)
-                        rgb = np.array(img.convert("RGB"))
-                        result = detect_faces(rgb, cancel_event=self.cancel_event)
-                        boxes = [
-                            {
-                                "x": int(box.x),
-                                "y": int(box.y),
-                                "w": int(box.w),
-                                "h": int(box.h),
-                                "confidence": float(box.confidence),
-                            }
-                            for box in result.boxes
-                        ]
-                        send_message(FacesDetected(image_path=image_path, boxes=boxes))
-                    except Exception as error:  # noqa: BLE001
-                        send_message(
-                            FaceDetectionUnavailable(
-                                image_path=image_path,
-                                message=f"Face detection failed: {error}",
-                            )
-                        )
 
                 elif req_type == "job_request":
                     if self.active_job_id is not None:

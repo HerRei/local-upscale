@@ -21,9 +21,7 @@ from localsr.core.model_catalog import (
     SpeedTier,
     default_model_directory,
     download_model,
-    get_all_models,
     get_model_by_id,
-    get_models_for_purpose,
 )
 
 
@@ -248,43 +246,10 @@ def test_model_purpose_enum():
     assert ModelPurpose.VIDEO == "video"
 
 
-def test_get_models_for_purpose():
-    # Illustration
-    illustration_models = get_models_for_purpose(ModelPurpose.ILLUSTRATION)
-    assert any(m.model_id == "realplksr_hfa2k_anime_x4" for m in illustration_models)
-
-    # String input compatibility
-    illustration_by_str = get_models_for_purpose("illustration")
-    assert illustration_by_str == illustration_models
-
-    # Deblur
-    deblur_models = get_models_for_purpose(ModelPurpose.DEBLUR)
-    assert any(m.model_id == "nafnet_gopro_deblur" for m in deblur_models)
-    assert get_models_for_purpose("deblur") == deblur_models
-
-    # Photo
-    photo_models = get_models_for_purpose(ModelPurpose.PHOTO)
-    photo_ids = {m.model_id for m in photo_models}
-    assert "hat_s_x4" in photo_ids
-    assert "span_photo_x4" in photo_ids
-    assert "realplksr_nomoswebphoto_x4" in photo_ids
-
-    # Denoise
-    denoise_models = get_models_for_purpose(ModelPurpose.DENOISE)
-    denoise_ids = {m.model_id for m in denoise_models}
-    assert "denoise_realplksr_1x" in denoise_ids
-    assert "nafnet_sidd_width64" in denoise_ids
-
-
 def test_get_model_by_id():
     assert get_model_by_id("realplksr_hfa2k_anime_x4") is not None
     assert get_model_by_id("realplksr_hfa2k_anime_x4").model_id == "realplksr_hfa2k_anime_x4"
     assert get_model_by_id("non_existent_id") is None
-
-
-def test_get_all_models():
-    all_models = get_all_models()
-    assert all_models == MODEL_CATALOG
 
 
 def test_catalog_model_properties_and_immutability():

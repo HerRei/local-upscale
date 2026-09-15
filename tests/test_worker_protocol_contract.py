@@ -148,3 +148,29 @@ def test_benchmark_v2_stage_envelopes_are_additive_protocol_messages():
     assert progress["type"] == "benchmark_stage_progress"
     assert progress["data"]["completed_units"] == 3
     assert completed["type"] == "benchmark_stage_completed"
+
+
+def _schema_message_types(node) -> set[str]:
+    found: set[str] = set()
+    if isinstance(node, dict):
+        type_rule = node.get("properties", {}).get("type")
+        if isinstance(type_rule, dict):
+            if isinstance(type_rule.get("const"), str):
+                found.add(type_rule["const"])
+            found.update(value for value in type_rule.get("enum", []) if isinstance(value, str))
+        for value in node.values():
+            found |= _schema_message_types(value)
+    elif isinstance(node, list):
+        for value in node:
+            found |= _schema_message_types(value)
+    return found
+
+
+def test_every_python_protocol_message_type_is_declared_in_the_schema():
+    import re
+
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    messages = (ROOT / "src" / "localsr" / "protocol" / "messages.py").read_text(encoding="utf-8")
+    emitted = set(re.findall(r'json\.dumps\(\{"type": "([a-z_]+)"', messages))
+    assert emitted
+    assert emitted - _schema_message_types(schema) == set()

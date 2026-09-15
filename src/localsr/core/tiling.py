@@ -1,8 +1,6 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-import numpy as np
-
 
 @dataclass
 class TileCoordinates:
@@ -76,23 +74,3 @@ def make_tile(
         out_w=core_w * scale,
         out_h=core_h * scale,
     )
-
-
-def tile_face_overlap(
-    tile: TileCoordinates,
-    face_mask: np.ndarray,
-) -> float:
-    """Fraction of the tile's core region that overlaps a face.
-
-    face_mask is a (H, W) boolean array at source-frame resolution.
-    Returns 0.0 when the mask is empty.
-    """
-    if face_mask.size == 0:
-        return 0.0
-    core = face_mask[
-        tile.core_y : tile.core_y + tile.core_h,
-        tile.core_x : tile.core_x + tile.core_w,
-    ]
-    if core.size == 0:
-        return 0.0
-    return float(core.mean())

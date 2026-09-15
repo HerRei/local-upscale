@@ -135,10 +135,3 @@ def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
     if trailing and stages[-1].execution != "fused-with-upscale":
         raise ValueError("The current face checkpoint must be fused with its paired upscale stage.")
     return tuple(stages)
-
-
-def stage_percentage(stage_index: int, stage_count: int, completed: int, total: int) -> float:
-    if stage_count < 1 or not 0 <= stage_index < stage_count:
-        raise ValueError("Invalid pipeline stage position.")
-    fraction = max(0.0, min(1.0, completed / max(1, total)))
-    return (stage_index + fraction) / stage_count * 100.0

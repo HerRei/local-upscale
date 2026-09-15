@@ -159,16 +159,6 @@ class CapabilitiesRequest:
 
 
 @dataclass
-class PreviewRequest:
-    image_path: str
-    max_dimension: int = 1600
-    comparison: bool = False
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "preview_request", "data": asdict(self)})
-
-
-@dataclass
 class MediaProbeRequest:
     media_path: str
     max_dimension: int = 1600
@@ -658,29 +648,3 @@ class VideoJobCompleted:
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
-
-
-@dataclass
-class DetectFacesRequest:
-    image_path: str
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "detect_faces_request", "data": asdict(self)})
-
-
-@dataclass
-class FacesDetected:
-    image_path: str
-    boxes: list[dict]  # [{"x": int, "y": int, "w": int, "h": int, "confidence": float}, ...]
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "faces_detected", "data": asdict(self)})
-
-
-@dataclass
-class FaceDetectionUnavailable:
-    image_path: str
-    message: str
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "face_detection_unavailable", "data": asdict(self)})

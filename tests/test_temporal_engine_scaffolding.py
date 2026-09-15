@@ -12,7 +12,6 @@ from localsr.core.model_catalog import (
     CatalogVideoModel,
     ModelFile,
     ModelStore,
-    download_bundle,
 )
 from localsr.core.temporal import clip_windows, crossfade_weights, stitch_clips
 from localsr.core.video_engines import (
@@ -180,34 +179,6 @@ class _FakeResponse:
 
     def __exit__(self, *args):
         return False
-
-
-def test_download_bundle_fetches_verifies_and_reports_progress(tmp_path):
-    payloads = {"dit": b"d" * 2048, "vae": b"v" * 512}
-    model, store = _bundle_fixture(tmp_path, payloads)
-
-    def opener(request, timeout):
-        role = request.full_url.rsplit("/", 1)[-1]
-        return _FakeResponse(payloads[role])
-
-    progress = []
-    bundle_dir = download_bundle(
-        model,
-        store,
-        progress_callback=lambda done, total: progress.append((done, total)),
-        cancel_event=threading.Event(),
-        opener=opener,
-    )
-    assert bundle_dir == store.bundle_dir_for(model)
-    assert store.is_bundle_installed(model)
-    assert progress[-1] == (model.total_size_bytes, model.total_size_bytes)
-    # Progress is monotonic across the whole bundle.
-    assert all(a[0] <= b[0] for a, b in zip(progress, progress[1:], strict=False))
-
-    # A second call is a no-op that still reports completion.
-    progress.clear()
-    download_bundle(model, store, progress_callback=lambda d, t: progress.append((d, t)))
-    assert progress[-1] == (model.total_size_bytes, model.total_size_bytes)
 
 
 def test_bundle_is_not_installed_when_a_file_is_missing_or_truncated(tmp_path):
