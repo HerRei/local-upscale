@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
+  import EmptyStage from './EmptyStage.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
   import * as api from './lib/api';
@@ -29,6 +30,9 @@
   export let activityLabel = '';
   export let processing = false;
   export let activeTileSize = 0;
+  export let addFiles: () => void = () => {};
+  export let addFolder: () => void = () => {};
+  export let dropping = false;
 
   let videoRequestId = '';
   let videoPreparation = false;
@@ -874,36 +878,7 @@
           >
         </p>{/if}
     {:else}
-      <div class="canvas-empty">
-        <MediaIllustration />
-        <h2>Choose an image or video to enhance</h2>
-        <p>Private, local AI models. Nothing leaves this computer.</p>
-        <ul class="canvas-capabilities" aria-label="What LocalSR can do">
-          <li>
-            <svg viewBox="0 0 24 24" aria-hidden="true"
-              ><path d="M4 20V10M4 20h10M14 4h6v6M20 4l-8 8" /></svg
-            ><b>Upscale</b><span>2×, 3× or 4×</span>
-          </li>
-          <li>
-            <svg viewBox="0 0 24 24" aria-hidden="true"
-              ><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" /><path
-                d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"
-              /></svg
-            ><b>Restore</b><span>noise, blur, JPEG</span>
-          </li>
-          <li>
-            <svg viewBox="0 0 24 24" aria-hidden="true"
-              ><rect x="3" y="6" width="13" height="12" rx="2" /><path
-                d="M16 10l5-3v10l-5-3"
-              /></svg
-            ><b>Video</b><span>frame by frame · Labs</span>
-          </li>
-        </ul>
-        <p class="canvas-hint">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6" /></svg>
-          Add files or a folder in the Media pane to begin.
-        </p>
-      </div>
+      <EmptyStage {addFiles} {addFolder} {dropping} />
     {/if}
   </div>
 </section>

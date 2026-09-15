@@ -358,6 +358,12 @@
           api.listenForNativeMenu((action) => void handleNativeMenuAction(action)),
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
+        await subscribe(() =>
+          api.listenForFileDrops({
+            hover: (active) => (filesDragging = active),
+            drop: (paths) => void addDroppedMedia(paths),
+          }),
+        );
         if (!disposed) await consumeLaunchIntents();
       } catch (error) {
         if (!disposed) showModal('Could not start LocalSR', String(error));
@@ -810,6 +816,20 @@
     } catch (error) {
       if (key === imageComparisonKey) imageComparisonError = String(error);
     }
+  }
+
+  let filesDragging = false;
+
+  async function addDroppedMedia(paths: string[]): Promise<void> {
+    try {
+      await api.addMedia(paths, false);
+    } catch (error) {
+      showModal('Could not add dropped files', String(error));
+      return;
+    }
+    page = 'preview';
+    await refresh();
+    ensureTaskMatchesSelection();
   }
 
   async function addFiles(replace = false): Promise<void> {
@@ -1589,6 +1609,9 @@
       comparisonError={selectedComparisonError}
       {completedVideoOutput}
       compactHidden={page !== 'preview'}
+      addFiles={() => void addFiles()}
+      addFolder={() => void addFolder()}
+      dropping={filesDragging}
     />
 
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>

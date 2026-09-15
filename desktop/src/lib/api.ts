@@ -209,6 +209,24 @@ export async function listenForNativeMenu(handler: (action: string) => void): Pr
   return listen<string>('native-menu-action', (event) => handler(event.payload));
 }
 
+/** Files dragged from Finder, Explorer or a file manager onto the LocalSR window. */
+export async function listenForFileDrops(handlers: {
+  hover: (active: boolean) => void;
+  drop: (paths: string[]) => void;
+}): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+  return getCurrentWebview().onDragDropEvent((event) => {
+    const payload = event.payload;
+    if (payload.type === 'enter' || payload.type === 'over') handlers.hover(true);
+    else if (payload.type === 'leave') handlers.hover(false);
+    else if (payload.type === 'drop') {
+      handlers.hover(false);
+      if (payload.paths.length) handlers.drop(payload.paths);
+    }
+  });
+}
+
 export async function listenForLaunchIntent(handler: () => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
   return listen('launch-intent-available', handler);

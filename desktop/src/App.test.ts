@@ -80,6 +80,7 @@ const api = vi.hoisted(() => ({
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async () => () => undefined),
   listenForLaunchIntent: vi.fn(async () => () => undefined),
+  listenForFileDrops: vi.fn(async () => () => undefined),
 }));
 
 vi.mock('./lib/api', () => api);
@@ -205,6 +206,7 @@ beforeEach(() => {
   api.listenForStateChange.mockResolvedValue(() => undefined);
   api.listenForNativeMenu.mockResolvedValue(() => undefined);
   api.listenForLaunchIntent.mockResolvedValue(() => undefined);
+  api.listenForFileDrops.mockResolvedValue(() => undefined);
   api.takeLaunchIntents.mockResolvedValue([]);
   api.chooseMediaFolder.mockReset().mockResolvedValue(null);
   api.requestImageComparison.mockReset().mockResolvedValue(undefined);
@@ -230,7 +232,7 @@ describe('LocalSR desktop interface', () => {
       paths: ['/Scans/a.png', '/Scans/b.png'],
       outputDirectory: '/Scans/LocalSR Results',
     });
-    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await user.click(screen.getAllByRole('button', { name: 'Add Folder…' })[0]);
     await waitFor(() =>
       expect(api.addMedia).toHaveBeenCalledWith(['/Scans/a.png', '/Scans/b.png'], false),
     );
@@ -245,7 +247,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot();
     const user = await mountWith(snapshot);
     api.saveSettings.mockClear();
-    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await user.click(screen.getAllByRole('button', { name: 'Add Folder…' })[0]);
     expect(api.addMedia).not.toHaveBeenCalled();
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
@@ -328,6 +330,7 @@ describe('LocalSR desktop interface', () => {
     expect(api.listenForStateChange).not.toHaveBeenCalled();
     expect(api.listenForNativeMenu).not.toHaveBeenCalled();
     expect(api.listenForLaunchIntent).not.toHaveBeenCalled();
+    expect(api.listenForFileDrops).not.toHaveBeenCalled();
   });
 
   it('mounts the complete three-pane workspace after native bootstrap', async () => {
@@ -335,10 +338,11 @@ describe('LocalSR desktop interface', () => {
 
     expect(screen.getByRole('heading', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
-    expect(screen.getByText('Choose an image or video to enhance')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Add Files…' })).toBeTruthy();
+    expect(screen.getByText('Drop a photo or video')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(2);
     expect(screen.queryByRole('button', { name: '＋ Add Media' })).toBeNull();
-    expect(document.querySelector('.media-illustration svg .play-mark')).toBeTruthy();
+    expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'What LocalSR can do' })).toBeTruthy();
   });
 
   it('makes the real benchmark discoverable and starts it from the toolbar', async () => {
