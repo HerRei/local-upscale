@@ -95,6 +95,15 @@ The first public beta, for Apple Silicon Macs. Everything below is relative to
 The first macOS beta build, given to a few testers. Superseded the same day by
 0.1.1-beta, which adds the FFmpeg notice and the macOS release script.
 
+## [0.0.13-alpha] - 2026-09-14
+
+- Intel XPU runtime bundling and device selection updates for Linux/Windows.
+- Streamlined noninteractive automation CLI with deferred heavy module imports and sub-second `--help` response.
+- Windows CI test reliability hardening for subprocess execution timeouts.
+- Robust Linux AppImage packaging using system gzip repacking and unsquashfs payload extraction for smoke tests on AMD ROCm.
+- Prioritized Windows-first release matrix ordering across CUDA, CPU, and DirectML targets.
+- Retain all 8 cross-platform backend variants across macOS (Apple Silicon MPS), Windows (CUDA, CPU, DirectML), and Linux (AMD-ROCm, CPU, CUDA, Intel-XPU).
+
 ## [0.0.12-alpha] - 2026-09-06
 
 - Separate image-job execution and progress reporting; release previews and temporary outputs on failures.

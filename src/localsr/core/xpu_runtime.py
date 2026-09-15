@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 MANIFEST_NAME = "xpu-runtime.json"
+ELF_X86_64_HEADER = b"\x7fELF\x02\x01"
+ELF_X86_64_MACHINE = 62
 REQUIRED_LIBRARIES = (
     "libsycl.so",
     "libur_loader.so",
@@ -24,6 +26,12 @@ def require_runtime_libraries(names: list[str]) -> None:
     ]
     if missing:
         raise RuntimeError(f"XPU runtime is missing native libraries: {', '.join(missing)}")
+
+
+def _is_gnu_linker_script(header: bytes) -> bool:
+    """Detect GNU ld text scripts, which some runtime wheels ship as *.so."""
+    stripped = header.lstrip()
+    return stripped.startswith((b"/*", b"GROUP", b"INPUT"))
 
 
 def verify_bundled_runtime(root: Path, torch_version: str) -> dict[str, object]:
@@ -64,7 +72,14 @@ def verify_bundled_runtime(root: Path, torch_version: str) -> dict[str, object]:
         if name in libraries:
             with path.open("rb") as stream:
                 header = stream.read(20)
-            if header[:6] != b"\x7fELF\x02\x01" or int.from_bytes(header[18:20], "little") != 62:
+            if _is_gnu_linker_script(header):
+                # Intel compiler wheels ship unversioned linker scripts such as
+                # libintlc.so ("GROUP ( libintlc.so.5 )") alongside the real ELF.
+                continue
+            if (
+                header[:6] != ELF_X86_64_HEADER
+                or int.from_bytes(header[18:20], "little") != ELF_X86_64_MACHINE
+            ):
                 raise RuntimeError(f"Bundled XPU runtime library is not x86-64 ELF: {name}")
     return {
         "xpu_runtime_files_verified": True,
