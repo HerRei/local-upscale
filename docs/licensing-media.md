@@ -17,11 +17,14 @@ sources. The single source of truth is
 | Video encoders | AV1 (SVT-AV1), VP9 (libvpx), FFV1 (lossless) | x264, x265, OpenH264, any H.264/HEVC encoder |
 | Audio decoders | Opus, Vorbis, FLAC, ALAC, MP3, MP2, AC-3, PCM, IMA/MS ADPCM | AAC, WMA, AMR, E-AC-3, DTS, TrueHD |
 | Audio encoders | Opus, FLAC, PCM | AAC |
+| Subtitles | SubRip, ASS/SSA, WebVTT, MP4 timed text | — |
 | Containers | MP4/MOV, MKV/WebM, AVI, MPEG-PS/TS, Ogg, WAV, FLAC, MP3, ASF (container only) | — |
 
-Audio in a format the output container accepts is **copied unchanged**, without
-being decoded or re-encoded (for example AAC audio into MP4 or MKV). Other audio
-is converted to Opus.
+Decodable audio that the output container accepts is **copied unchanged** (for
+example Opus, FLAC, MP3 or AC-3 into MP4). Other decodable audio is converted to
+Opus. AAC and other audio LocalSR cannot decode cannot be copied either (PyAV
+needs a decoder to copy a stream), so it is omitted with a warning unless a
+user-installed FFmpeg converts it.
 
 The FFmpeg libraries are built by
 [`packaging/ffmpeg/build_lgpl_media.py`](../packaging/ffmpeg/build_lgpl_media.py)
@@ -72,8 +75,22 @@ Release builds fail closed when:
    cuDNN 9 Windows DLLs block Windows CUDA packages until NVIDIA confirms their
    distribution in writing.
 
-The Windows LGPL media build is not implemented yet, so Windows packages cannot
-pass gate 1 and stay blocked until it is.
+`packaging/ffmpeg/install_media_runtime.py` builds and installs the compliant
+PyAV and OpenCV wheels in one step; the Linux and macOS release jobs run it
+before freezing the worker.
+
+The Windows LGPL media build is not implemented yet, so Windows release jobs stop
+immediately and Windows previews are built only as private, never-distributed
+packages (`--private-preview-media`).
+
+## Withheld packages
+
+- **Intel XPU (Linux)** — Intel's oneAPI runtime license asks the distributor to
+  indemnify Intel and to prohibit reverse engineering, which conflicts with the
+  LGPL's relinking and debugging permissions. XPU support stays in the source;
+  `ci/tauri-targets.json` lists it under `withheld_targets`.
+- **All Windows packages** — until the Windows media build exists; Windows CUDA
+  additionally needs NVIDIA's confirmation for cuDNN 9 DLLs.
 
 ## What each download must publish
 
@@ -94,8 +111,9 @@ This is engineering risk reduction, not legal advice. Before a public release,
 ask a Swiss IP lawyer (for example through IGE IP-Info or the Basel bar
 association's legal information desk):
 
-1. Does copying H.264/HEVC-adjacent audio such as AAC into a container without
-   decoding it carry patent risk in Switzerland, the EU or the US?
+1. Does bundling an MP4/Matroska demuxer that merely reads (never decodes)
+   H.264/HEVC/AAC streams, in order to tell users that FFmpeg is needed, carry
+   patent risk in Switzerland, the EU or the US?
 2. Does offering a setting that runs a user-installed FFmpeg create indirect
    infringement exposure?
 3. Are the MPEG-2 video and AC-3 audio patents fully expired in all download

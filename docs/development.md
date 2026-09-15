@@ -14,6 +14,20 @@ On Linux, install Tauri's native build prerequisites as described in
 extras and runs `npm ci`. The check commands reuse that environment; they do not
 upgrade dependencies. Set `VENV_DIR` to use another existing virtual environment.
 
+PyPI's PyAV and OpenCV wheels include GPL and patent-licensed codecs, which
+LocalSR must never ship. Replace them with the allowlisted builds before testing
+media behavior or freezing a worker (needs `nasm`, `meson`, `ninja`, `cmake`,
+`autoconf`, `automake` and `patch`; builds are cached under `build/lgpl-media`):
+
+```bash
+.venv/bin/python packaging/ffmpeg/install_media_runtime.py --python .venv/bin/python
+```
+
+With PyPI's wheels the suite still passes, but tests that prove patent-licensed
+formats are refused are skipped. `build_tauri_preview.py` refuses to freeze a
+worker from a non-compliant environment unless `--private-preview-media` marks a
+never-distributed preview. See [media formats and licensing](licensing-media.md).
+
 The default command runs Python lint/format checks, workflow syntax validation,
 lock/version/catalog/architecture/readiness checks, gradual Python type checking,
 the offline Python suite, Svelte checks/tests/build,
