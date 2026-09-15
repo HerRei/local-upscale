@@ -2,9 +2,6 @@ name: Isolated Windows acceptance
 
 # Deliberately uses a disposable hosted VM, never the shared release runners.
 on:
-  push:
-    branches: [codex/platform-acceptance]
-    paths-ignore: ['docs/**', 'README.md']
   workflow_dispatch:
 
 permissions:
