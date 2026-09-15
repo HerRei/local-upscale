@@ -20,7 +20,12 @@ WORKER_WORK = BUILD_ROOT / "worker-build"
 ENGINE_DIR = WORKER_DIST / "engine"
 CONFIG_PATH = BUILD_ROOT / "tauri-worker.conf.json"
 LINUXDEPLOY_SYSTEM_LIB = Path("/usr/local/lib")
-LINUXDEPLOY_DRIVER_LIBRARIES = ("libcuda.so.1", "libnvidia-ml.so.1")
+LINUXDEPLOY_DRIVER_LIBRARIES = (
+    "libcuda.so.1",
+    "libnvidia-ml.so.1",
+    "librdmacm.so.1",
+    "libibverbs.so.1",
+)
 LINUX_APPIMAGE_PAYLOAD_COMPRESSOR = "gzip"
 # Mesa is supplied by the host. Bundling older Wayland libraries alongside it
 # makes WebKit abort on newer desktops with EGL_BAD_PARAMETER. These must come

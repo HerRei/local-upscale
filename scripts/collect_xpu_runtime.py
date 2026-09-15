@@ -55,6 +55,8 @@ def collect_runtime(
         for record in records:
             filename = Path(record).name
             is_library = re.fullmatch(r".+\.so(?:\.[0-9]+)*", filename) is not None
+            if is_library and (filename.endswith("-fi.so") or filename.startswith("libverbs")):
+                continue
             parts = [part.lower() for part in Path(record).parts]
             # copy_metadata retains dist-info licenses; Intel also installs
             # compiler and oneMKL third-party notices outside site-packages.
