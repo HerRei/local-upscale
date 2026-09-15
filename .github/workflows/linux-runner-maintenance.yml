@@ -9,14 +9,16 @@ jobs:
     steps:
       - name: Test backend-probe on HDD
         run: |
-          rm -rf /tmp/squashfs-root* /tmp/stubs
           APPIMAGE=$(find /mnt/hdd/ci-scratch/r/34889339156/ -name "*.AppImage" | head -n 1)
           echo "Found AppImage: $APPIMAGE"
-          rm -rf /mnt/hdd/ci-scratch/test-extract
-          mkdir -p /mnt/hdd/ci-scratch/test-extract
-          unsquashfs -d /mnt/hdd/ci-scratch/test-extract "$APPIMAGE"
-          WORKER="/mnt/hdd/ci-scratch/test-extract/usr/lib/LocalSR Next Preview/engine/localsr-worker"
-          echo "Running probe..."
-          "$WORKER" --backend-probe Intel-XPU --output /mnt/hdd/ci-scratch/test.json 2>&1 || true
+          cd /mnt/hdd/ci-scratch
+          rm -rf /mnt/hdd/ci-scratch/squashfs-root
+          "$APPIMAGE" --appimage-extract
+          WORKER="/mnt/hdd/ci-scratch/squashfs-root/usr/lib/LocalSR Next Preview/engine/localsr-worker"
+          echo "Worker: $WORKER"
+          ls -lh "/mnt/hdd/ci-scratch/squashfs-root/usr/lib/libtorch_python.so" || true
+          ls -lh "/mnt/hdd/ci-scratch/squashfs-root/usr/lib/LocalSR Next Preview/engine/_internal/torch/lib/libtorch_python.so" || true
+          echo "Testing probe..."
+          "$WORKER" --backend-probe Intel-XPU --output /mnt/hdd/ci-scratch/test.json
           cat /mnt/hdd/ci-scratch/test.json || true
-          rm -rf /mnt/hdd/ci-scratch/test-extract
+          rm -rf /mnt/hdd/ci-scratch/squashfs-root
