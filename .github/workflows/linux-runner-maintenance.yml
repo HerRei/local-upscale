@@ -7,16 +7,9 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Debug backend-probe failure from AppImage
+      - name: Inspect AppDir libtorch_python
         run: |
-          APPIMAGE=$(find /mnt/hdd/ci-scratch/r/34889339156/ -name "*.AppImage" | head -n 1)
-          echo "Found AppImage: $APPIMAGE"
-          if [ -n "$APPIMAGE" ]; then
-            cd /tmp
-            rm -rf /tmp/squashfs-root
-            "$APPIMAGE" --appimage-extract
-            WORKER="/tmp/squashfs-root/usr/lib/LocalSR Next Preview/engine/localsr-worker"
-            echo "Running: $WORKER --backend-probe Intel-XPU --output /tmp/debug.json"
-            "$WORKER" --backend-probe Intel-XPU --output /tmp/debug.json 2>&1 || true
-            cat /tmp/debug.json || true
-          fi
+          ls -la "/tmp/squashfs-root/usr/lib/LocalSR Next Preview/engine/_internal/torch/" || true
+          ls -la "/tmp/squashfs-root/usr/lib/LocalSR Next Preview/engine/_internal/torch/lib/" || true
+          ls -la "/tmp/squashfs-root/usr/lib/libtorch_python"* || true
+          find /tmp/squashfs-root -name "*libtorch_python*" -exec ls -la {} +
