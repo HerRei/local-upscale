@@ -7,7 +7,16 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Check df -h /tmp and /mnt/hdd
+      - name: Test backend-probe on HDD
         run: |
-          df -h /tmp /mnt/hdd /
-          ls -la /tmp/squashfs-root 2>/dev/null | head -n 10 || true
+          rm -rf /tmp/squashfs-root* /tmp/stubs
+          APPIMAGE=$(find /mnt/hdd/ci-scratch/r/34889339156/ -name "*.AppImage" | head -n 1)
+          echo "Found AppImage: $APPIMAGE"
+          rm -rf /mnt/hdd/ci-scratch/test-extract
+          mkdir -p /mnt/hdd/ci-scratch/test-extract
+          unsquashfs -d /mnt/hdd/ci-scratch/test-extract "$APPIMAGE"
+          WORKER="/mnt/hdd/ci-scratch/test-extract/usr/lib/LocalSR Next Preview/engine/localsr-worker"
+          echo "Running probe..."
+          "$WORKER" --backend-probe Intel-XPU --output /mnt/hdd/ci-scratch/test.json 2>&1 || true
+          cat /mnt/hdd/ci-scratch/test.json || true
+          rm -rf /mnt/hdd/ci-scratch/test-extract
