@@ -10,11 +10,12 @@ jobs:
       - name: Install system RDMA libraries and configure stubs
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends librdmacm1 libibverbs1 || true
+          sudo apt-get install -y --no-install-recommends \
+            librdmacm1 libibverbs1 libze-loader1 libze1 libucx0 libpsm2-2 || true
           mkdir -p /tmp/stubs
-          gcc -shared -Wl,-soname,librdmacm.so.1 -o /tmp/stubs/librdmacm.so.1 -x c - <<< "void stub(){}"
-          gcc -shared -Wl,-soname,libibverbs.so.1 -o /tmp/stubs/libibverbs.so.1 -x c - <<< "void stub(){}"
-          sudo cp -n /tmp/stubs/librdmacm.so.1 /usr/local/lib/ || true
-          sudo cp -n /tmp/stubs/libibverbs.so.1 /usr/local/lib/ || true
+          for lib in librdmacm.so.1 libibverbs.so.1 libze_loader.so.1 libucp.so.0 libpsm2.so.2; do
+            gcc -shared -Wl,-soname,"$lib" -o "/tmp/stubs/$lib" -x c - <<< "void stub(){}"
+            sudo cp -n "/tmp/stubs/$lib" /usr/local/lib/ || true
+          done
           sudo ldconfig
-          ldconfig -p | grep -E "librdmacm|libibverbs"
+          ldconfig -p | grep -E "librdmacm|libibverbs|libze_loader|libucp|libpsm2"
