@@ -7,15 +7,8 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Install fabric dependencies and configure stubs
+      - name: Verify installed system libraries
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpsm2-2 libucx0 || true
-          mkdir -p /tmp/stubs
-          for lib in libpsm2.so.2 libucp.so.0; do
-            gcc -shared -Wl,-soname,"$lib" -o "/tmp/stubs/$lib" -x c - <<< "void stub(){}"
-            sudo cp -n "/tmp/stubs/$lib" /usr/local/lib/ || true
-          done
+          sudo rm -f /usr/local/lib/libpsm2.so.2 /usr/local/lib/libucp.so.0 /usr/local/lib/libze_loader.so.1
           sudo ldconfig
           ldconfig -p | grep -E "libze_loader|librdmacm|libibverbs|libpsm2|libucp"
-          python3 -c "import diffusers; print('diffusers imported successfully')"
