@@ -794,6 +794,32 @@ describe('LocalSR desktop interface', () => {
     );
   }, 20_000);
 
+  it('lights up a saved recipe while its settings are applied', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+    snapshot.recipes = [
+      {
+        id: 'jens67',
+        name: 'Jens67',
+        task: 'upscale',
+        model_id: model.model_id,
+        output_scale: 4,
+        tile_size: 256,
+        halo: 32,
+        precision: 'fp32',
+        safe_memory: true,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const recipe = screen.getByRole('button', { name: /^Jens67/ });
+    expect(recipe.getAttribute('aria-pressed')).toBe('false');
+    await user.click(recipe);
+    await waitFor(() => expect(recipe.getAttribute('aria-pressed')).toBe('true'));
+    expect(recipe.classList.contains('active')).toBe(true);
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await waitFor(() => expect(recipe.getAttribute('aria-pressed')).toBe('false'));
+  });
+
   it('exposes image recipes, hardware controls, and installed face companions', async () => {
     const user = await mountWith(readySnapshot());
     await chooseTask(user, /Upscale\s*Photos and artwork/i);

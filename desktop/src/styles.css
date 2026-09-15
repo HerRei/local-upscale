@@ -1238,6 +1238,11 @@ input[type='text'],
   border-radius: 6px;
   background: var(--raised);
 }
+.saved-recipe button.active {
+  border-color: rgba(78, 140, 255, 0.55);
+  background: rgba(78, 140, 255, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(78, 140, 255, 0.08);
+}
 .saved-recipe button:disabled {
   cursor: not-allowed;
   opacity: 0.4;

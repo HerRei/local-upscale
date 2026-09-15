@@ -1091,6 +1091,50 @@
     inspectorScroll?.querySelector<HTMLInputElement>('.recipe-input input')?.focus();
   }
 
+  /** A saved recipe is selected while the current settings still match what it applies. */
+  function recipeMatches(
+    recipe: Recipe,
+    current: UiSettings,
+    catalog: AppSnapshot['catalog'],
+  ): boolean {
+    if (current.task !== recipe.task) return false;
+    if (
+      recipe.task === 'video' &&
+      (recipe.video_model_id || 'frame_by_frame') !== current.selected_video_model_id
+    )
+      return false;
+    const recipeModel = catalog.models.find((model) => model.model_id === recipe.model_id);
+    const scale =
+      recipe.task === 'denoise'
+        ? 1
+        : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale);
+    const preprocess =
+      recipe.task === 'upscale'
+        ? (recipe.stages?.find((stage) => stage.kind === 'deblock' || stage.kind === 'restore')
+            ?.model_id ?? '')
+        : '';
+    const face =
+      Boolean(recipe.stages?.some((stage) => stage.kind === 'face_restore')) ||
+      (recipe.enable_face_model ?? false);
+    return (
+      current.selected_model_id === recipe.model_id &&
+      current.output_scale === scale &&
+      current.precision === recipe.precision &&
+      current.tile_size === recipe.tile_size &&
+      current.halo === recipe.halo &&
+      current.safe_memory === recipe.safe_memory &&
+      (current.preprocess_model_id || '') === preprocess &&
+      current.enable_face_model === face &&
+      (current.quality || 'custom') === (recipe.quality || 'custom')
+    );
+  }
+
+  $: activeRecipeIds = new Set(
+    snapshot.recipes
+      .filter((recipe) => recipeMatches(recipe, settings, snapshot.catalog))
+      .map((recipe) => recipe.id),
+  );
+
   function applyRecipe(recipe: Recipe): void {
     if (selectedMedia && (recipe.task === 'video') !== (selectedMedia.kind === 'video')) {
       showModal(
@@ -1805,6 +1849,8 @@
                 {#each snapshot.recipes as recipe (recipe.id)}
                   <div class="saved-recipe">
                     <button
+                      class:active={activeRecipeIds.has(recipe.id)}
+                      aria-pressed={activeRecipeIds.has(recipe.id)}
                       disabled={Boolean(selectedMedia) &&
                         (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
                       on:click={() => applyRecipe(recipe)}
