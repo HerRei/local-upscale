@@ -52,6 +52,8 @@ run_lint() {
     require uv
     "$VENV_PYTHON" -m ruff check src tests scripts
     "$VENV_PYTHON" -m ruff format --check src tests scripts
+    "$VENV_PYTHON" -m vulture src scripts packaging ci/vulture_whitelist.py \
+        --exclude src/localsr/video_models/seedvr2/vendor
     actionlint -config-file .github/actionlint.yaml .github/workflows/*.yml
     uv lock --check
     "$VENV_PYTHON" scripts/check_release_version.py
@@ -75,6 +77,7 @@ run_frontend() {
     require npm
     npm --prefix desktop run format:check
     npm --prefix desktop run check
+    npm --prefix desktop run knip
     npm --prefix desktop test
     npm --prefix desktop run build:frontend
 }

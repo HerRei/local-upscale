@@ -24,11 +24,17 @@ under `build/local-ci/` for inspection.
 Use `./local-ci.sh --help` for individual checks. `lint` and `test` remain aliases
 for `lint-only` and `test-only`. Help and invalid commands never install packages.
 
-The release-metadata check selects the beta register for beta versions and keeps
-the earlier alpha manifests separate. Frontend formatting uses the pinned
+The release-metadata check selects the beta register for beta versions. Frontend formatting uses the pinned
 Prettier/Svelte plugin; run `npm --prefix desktop run format` to apply it. Python
 uses Ruff and Rust uses rustfmt. Vendored third-party source is excluded from
 application formatting.
+
+Dead code is checked in three places. `lint` runs Vulture over `src`, `scripts` and
+`packaging`; names it cannot see being used (serialized dataclass fields, framework
+callbacks, PyInstaller hooks) are listed with a reason in `ci/vulture_whitelist.py`.
+Remove unused code rather than extending that list. `frontend` runs Knip
+(`npm --prefix desktop run knip`, configured in `desktop/knip.ts`) for unused files,
+exports and dependencies, and the Rust crate denies `dead_code`.
 
 These checks cover the development host. They do not run foreign OS installers,
 certify GPU/driver compatibility, supply signing credentials, or clear the existing

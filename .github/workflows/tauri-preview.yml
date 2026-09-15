@@ -266,6 +266,7 @@ jobs:
         working-directory: desktop
         run: |
           npm run check
+          npm run knip
           npm test
           npm run build
       - name: Check Rust formatting
