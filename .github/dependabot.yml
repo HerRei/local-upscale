@@ -4,11 +4,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # v0.0.12's Intel-to-ARM cross build requires the exact paired Torch
-    # wheels documented and tested in this one-release file. Maintained
-    # platform requirements remain eligible for normal updates.
-    exclude-paths:
-      - "requirements/macos-cross-v0.0.12-alpha.txt"
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /

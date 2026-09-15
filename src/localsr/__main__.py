@@ -1,5 +1,4 @@
 import argparse
-import importlib
 import sys
 
 
@@ -13,7 +12,6 @@ def _parse_cli_args(args: list[str]) -> tuple[argparse.Namespace, list[str]]:
         add_help=False,
     )
     parser.add_argument("--worker", action="store_true", help="Launch inference worker process.")
-    parser.add_argument("--legacy", action="store_true", help="Use legacy QWidget interface.")
     parser.add_argument(
         "--smoke-test", action="store_true", help="Run automated packaging smoke test."
     )
@@ -58,28 +56,6 @@ def main():
         raise SystemExit(run_automation_cli(filtered_args))
     parsed, _unknown = _parse_cli_args(filtered_args)
 
-    if parsed.legacy and parsed.install_integrations:
-        from localsr.platform import install_system_integrations
-
-        success = install_system_integrations()
-        print(
-            "System integrations installed successfully."
-            if success
-            else "Failed to install system integrations."
-        )
-        return
-
-    if parsed.legacy and parsed.uninstall_integrations:
-        from localsr.platform import uninstall_system_integrations
-
-        success = uninstall_system_integrations()
-        print(
-            "System integrations uninstalled successfully."
-            if success
-            else "Failed to uninstall system integrations."
-        )
-        return
-
     if parsed.test_mps:
         import torch
 
@@ -90,27 +66,6 @@ def main():
         y = x @ x
         print("Tensor device:", y.device)
         return
-
-    smoke_test = parsed.smoke_test
-    if parsed.legacy:
-        try:
-            QApplication = importlib.import_module("PySide6.QtWidgets").QApplication
-            MainWindow = importlib.import_module("localsr.ui.main_window").MainWindow
-        except ImportError as error:
-            raise SystemExit(
-                'The legacy UI is optional. Install it with: pip install -e ".[legacy]"'
-            ) from error
-
-        app = QApplication(sys.argv)
-        app.setApplicationName("LocalSR")
-        app.setOrganizationName("LocalSR")
-        app.setApplicationDisplayName("LocalSR")
-        window = MainWindow()
-        window.show()
-        if smoke_test:
-            window.close()
-            return
-        raise SystemExit(app.exec())
 
     from localsr.desktop_launcher import launch_desktop
 

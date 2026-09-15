@@ -17,7 +17,6 @@ concurrency:
 
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
-  QT_QPA_PLATFORM: "offscreen"
 
 jobs:
   coordinate-heavy-work:
@@ -36,9 +35,7 @@ jobs:
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "v0.0.12 Mac mini Cross Alpha" \
-            --blocked-workflow "v0.0.13 Mac mini Cross Alpha" \
-            --blocked-workflow "Signed Tauri Alpha Release"
+            --blocked-workflow "Signed Tauri Release"
           python3 scripts/workflow_coordination.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
@@ -83,7 +80,7 @@ jobs:
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install \
             --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff
+          "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff "vulture==2.14"
           cd "$RUN_ROOT/source"
           ACTIONLINT_ARCHIVE="$RUN_ROOT/environment/actionlint.tar.gz"
           curl --fail --silent --show-error --location \
@@ -97,6 +94,8 @@ jobs:
           "$RUN_ROOT/environment/venv/bin/python" scripts/check_beta_readiness.py
           "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
           "$RUN_ROOT/environment/venv/bin/python" -m ruff format --check src tests scripts
+          "$RUN_ROOT/environment/venv/bin/python" -m vulture src scripts packaging ci/vulture_whitelist.py \
+            --exclude src/localsr/video_models/seedvr2/vendor
       - name: Remove successful scratch
         if: success()
         run: |
@@ -267,9 +266,7 @@ jobs:
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
-          "$PYTHON" -m pip install --disable-pip-version-check pyobjc-framework-Cocoa
           cd "$RUN_ROOT/source"
-          "$PYTHON" -m pytest tests/test_platform_integration.py -v
           "$PYTHON" -m pytest tests/ -v
       - name: Finalize guest scratch state
         if: always()

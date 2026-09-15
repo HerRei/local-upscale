@@ -683,7 +683,6 @@ def write_bundle_overlay(*, require_signing: bool = False, payload: Path | None 
         from importlib.metadata import version
 
         # The maintained Torch 2.13 ARM wheels have a macOS 14 deployment floor.
-        # The explicitly pinned 2.2 cross-alpha retains the existing macOS 12 floor.
         if version("torch").split("+")[0].startswith("2.13."):
             bundle["macOS"] = {"minimumSystemVersion": "14.0"}
         apple_signing = os.environ.get("APPLE_SIGNING_IDENTITY") or os.environ.get(

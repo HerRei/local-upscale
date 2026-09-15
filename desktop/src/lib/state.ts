@@ -1,5 +1,3 @@
-import { writable } from 'svelte/store';
-import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -13,21 +11,11 @@ import type {
   WorkerEnvelope,
 } from './types';
 
-export const appState = writable<AppSnapshot>(demoSnapshot());
-
 export const FIX_LABELS: Record<FixKind, string> = {
   noise: 'Noise',
   jpeg: 'JPEG artifacts',
   blur: 'Blur',
   faces: 'Faces',
-};
-
-export const STAGE_LABELS: Record<string, string> = {
-  deblock: 'Fix JPEG',
-  restore: 'Restore',
-  upscale: 'Upscale',
-  face_restore: 'Faces',
-  video: 'Video',
 };
 
 /** Catalog name without its role suffix, with `4x` written `×4`. */

@@ -19,7 +19,7 @@ EXPECTED_LIVE_MODELS = {
     "Best": "realplksr_nomoswebphoto_x4",
 }
 SIGNED_POLICY = "production-signed"
-CROSS_ALPHA_POLICY = "v0.0.12-cross-alpha-exception"
+SIGNING_REQUIREMENTS = {"developer-id-notarized", "authenticode-valid", "sha256"}
 
 
 def sha256(path: Path) -> str:
@@ -102,29 +102,16 @@ def load_json(path: Path) -> dict[str, object]:
     return value
 
 
-def release_policy(
-    manifest: dict[str, object],
-    readiness: dict[str, object] | None,
-    version: str,
-) -> str:
+def release_policy(manifest: dict[str, object]) -> str:
     policy = str(manifest.get("release_policy", SIGNED_POLICY))
-    if policy == SIGNED_POLICY:
-        return policy
-    if policy != CROSS_ALPHA_POLICY:
+    if policy != SIGNED_POLICY:
         raise ValueError(f"unsupported release policy {policy!r}")
-    if version != "0.0.12-alpha":
-        raise ValueError("the unsigned cross-build exception is restricted to v0.0.12-alpha")
-    if readiness is None or readiness.get("beta_ready") is not False:
-        raise ValueError("the unsigned cross-build exception must be explicitly non-beta")
     return policy
 
 
-def validate_signing_evidence(
-    platform: str,
-    signing: object,
-    expected: object,
-    policy: str,
-) -> dict[str, object]:
+def validate_signing_evidence(signing: object, expected: object) -> dict[str, object]:
+    if expected not in SIGNING_REQUIREMENTS:
+        raise ValueError(f"unsupported signing requirement {expected!r}")
     if not isinstance(signing, dict) or signing.get("status") != expected:
         raise ValueError(f"signing evidence does not match {expected!r}")
     if expected == "developer-id-notarized" and not all(
@@ -136,20 +123,10 @@ def validate_signing_evidence(
         signing.get(field) for field in ("signer_subject", "signer_thumbprint", "timestamped")
     ):
         raise ValueError("incomplete Authenticode evidence")
-    if expected in {"ad-hoc-alpha", "unsigned-alpha"}:
-        if policy != CROSS_ALPHA_POLICY or platform not in {"macos", "windows"}:
-            raise ValueError("unsigned evidence is allowed only by the v0.0.12 cross-alpha policy")
-        if signing.get("production_signed") is not False or not signing.get("warning"):
-            raise ValueError("unsigned alpha evidence must record its warning and unsigned state")
     return signing
 
 
-def validate_smoke_evidence(
-    platform: str,
-    smoke: object,
-    policy: str,
-    version: str,
-) -> dict[str, object]:
+def validate_smoke_evidence(smoke: object, version: str) -> dict[str, object]:
     if (
         isinstance(smoke, dict)
         and smoke.get("passed") is True
@@ -158,20 +135,6 @@ def validate_smoke_evidence(
         and isinstance(smoke.get("worker_path"), str)
         and bool(str(smoke["worker_path"]).strip())
         and smoke.get("version") == version
-    ):
-        return smoke
-    if (
-        policy == CROSS_ALPHA_POLICY
-        and platform == "macos"
-        and isinstance(smoke, dict)
-        and smoke.get("passed") is False
-        and smoke.get("mode") == "cross-build-static"
-        and smoke.get("static_verified") is True
-        and smoke.get("runtime_tested") is False
-        and smoke.get("version") == version
-        and smoke.get("architecture") == "arm64"
-        and isinstance(smoke.get("reason"), str)
-        and bool(str(smoke["reason"]).strip())
     ):
         return smoke
     raise ValueError("no acceptable installed-package smoke evidence")
@@ -198,57 +161,6 @@ def validate_architecture_evidence(
     if not isinstance(count, int) or isinstance(count, bool) or count < 1:
         raise ValueError("architecture evidence has no native binaries")
     return architecture
-
-
-def validate_cross_macos_provenance(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise ValueError("cross-built macOS artifact has no MPS wheel provenance")
-    if value.get("torch_version") != "2.2.2":
-        raise ValueError("cross-built macOS artifact does not use the proven torch 2.2.2 pin")
-    arm_wheel = str(value.get("torch_arm64_wheel", ""))
-    if "torch-2.2.2" not in arm_wheel or "arm64" not in arm_wheel:
-        raise ValueError("cross-built macOS artifact has invalid ARM64 torch wheel provenance")
-    if not SHA256_RE.fullmatch(str(value.get("torch_arm64_sha256", ""))):
-        raise ValueError("cross-built macOS artifact has no ARM64 torch wheel digest")
-    universal_wheel = str(value.get("universal2_wheel", "")).lower()
-    if not (
-        "universal2" in universal_wheel
-        or ("x86_64" in universal_wheel and "arm64" in universal_wheel)
-    ):
-        raise ValueError("cross-built macOS artifact has no dual-architecture torch wheel")
-    static_evidence = value.get("static_evidence")
-    if (
-        not isinstance(static_evidence, list)
-        or len(static_evidence) < 3
-        or not all(isinstance(item, str) and item.strip() for item in static_evidence)
-    ):
-        raise ValueError("cross-built macOS artifact has incomplete static provenance")
-    normalization = value.get("openmp_normalization")
-    if not isinstance(normalization, dict):
-        raise ValueError("cross-built macOS artifact has no OpenMP normalization evidence")
-    if normalization.get("schema_version") != 1 or normalization.get("operation") != (
-        "pair-torch-openmp-aliases"
-    ):
-        raise ValueError("cross-built macOS artifact has invalid OpenMP normalization evidence")
-    source_hashes = normalization.get("source_sha256")
-    if (
-        not isinstance(source_hashes, dict)
-        or not source_hashes
-        or not all(SHA256_RE.fullmatch(str(digest)) for digest in source_hashes.values())
-    ):
-        raise ValueError("cross-built macOS OpenMP sources have invalid digests")
-    outputs = normalization.get("outputs")
-    if not isinstance(outputs, list) or len(outputs) < 3:
-        raise ValueError("cross-built macOS OpenMP output evidence is incomplete")
-    for output in outputs:
-        if (
-            not isinstance(output, dict)
-            or set(output.get("architectures", [])) != {"x86_64", "arm64"}
-            or not SHA256_RE.fullmatch(str(output.get("sha256", "")))
-            or not str(output.get("path", "")).strip()
-        ):
-            raise ValueError("cross-built macOS OpenMP output evidence is malformed")
-    return value
 
 
 def parse_evidence_timestamp(value: object, filename: str) -> datetime:
@@ -282,7 +194,7 @@ def prepare(
     readiness = load_json(readiness_path) if readiness_path else None
     if readiness and readiness.get("release") != version:
         raise ValueError("beta-readiness version does not match the release manifest")
-    policy = release_policy(manifest, readiness, version)
+    policy = release_policy(manifest)
     entries = manifest.get("artifacts")
     validate_manifest(manifest)
 
@@ -356,9 +268,7 @@ def prepare(
             "sha256": digest,
         }
         try:
-            smoke = validate_smoke_evidence(
-                str(entry["platform"]), metadata.get("package_smoke"), policy, version
-            )
+            smoke = validate_smoke_evidence(metadata.get("package_smoke"), version)
         except ValueError as error:
             raise ValueError(f"{filename} has {error}") from error
         try:
@@ -369,17 +279,9 @@ def prepare(
             raise ValueError(f"{filename} has {error}") from error
         expected_signing = entry.get("signing")
         try:
-            signing = validate_signing_evidence(
-                str(entry["platform"]), metadata.get("signing"), expected_signing, policy
-            )
+            signing = validate_signing_evidence(metadata.get("signing"), expected_signing)
         except ValueError as error:
             raise ValueError(f"{filename} has {error}") from error
-        mps_evidence: dict[str, object] | None = None
-        if policy == CROSS_ALPHA_POLICY and entry["platform"] == "macos":
-            try:
-                mps_evidence = validate_cross_macos_provenance(metadata.get("mps"))
-            except ValueError as error:
-                raise ValueError(f"{filename} has {error}") from error
         if entry["platform"] == "linux":
             live_models = metadata.get("live_models")
             if not isinstance(live_models, dict) or live_models.get("result") != "PASS":
@@ -412,22 +314,21 @@ def prepare(
                     raise ValueError(f"{filename} has malformed real model evidence")
             live_model_evidence = live_models
 
-        if not (policy == CROSS_ALPHA_POLICY and entry["platform"] == "macos"):
-            probe = metadata.get("backend_probe")
-            if (
-                not isinstance(probe, dict)
-                or probe.get("backend") != entry["backend"]
-                or probe.get("runtime_verified") is not True
-                or probe.get("cpu_inference_verified") is not True
-                or probe != smoke.get("backend_probe")
-            ):
-                raise ValueError(f"{filename} has no verified installed backend identity")
-            if entry["backend"] == "Intel-XPU" and (
-                probe.get("xpu_runtime_files_verified") is not True
-                or not isinstance(probe.get("xpu_runtime_library_count"), int)
-                or probe["xpu_runtime_library_count"] < 5
-            ):
-                raise ValueError(f"{filename} has no verified bundled Intel runtime files")
+        probe = metadata.get("backend_probe")
+        if (
+            not isinstance(probe, dict)
+            or probe.get("backend") != entry["backend"]
+            or probe.get("runtime_verified") is not True
+            or probe.get("cpu_inference_verified") is not True
+            or probe != smoke.get("backend_probe")
+        ):
+            raise ValueError(f"{filename} has no verified installed backend identity")
+        if entry["backend"] == "Intel-XPU" and (
+            probe.get("xpu_runtime_files_verified") is not True
+            or not isinstance(probe.get("xpu_runtime_library_count"), int)
+            or probe["xpu_runtime_library_count"] < 5
+        ):
+            raise ValueError(f"{filename} has no verified bundled Intel runtime files")
         if entry["platform"] != "macos":
             dependencies = metadata.get("dependency_wheelhouse")
             lock = ROOT / "requirements/locks" / f"{entry['id']}.txt"
@@ -454,7 +355,6 @@ def prepare(
                 "signing_evidence": signing,
                 "architecture_evidence": architecture,
                 "smoke_evidence": smoke,
-                **({"mps_evidence": mps_evidence} if mps_evidence is not None else {}),
             }
         )
 

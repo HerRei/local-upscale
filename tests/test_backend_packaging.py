@@ -100,7 +100,7 @@ def test_wheelhouse_reuse_verifies_files_and_invalidates_changed_locks(tmp_path:
     assert len(calls) == 2
 
 
-def test_registry_covers_all_backends_and_keeps_legacy_intel():
+def test_registry_covers_all_backends():
     entries = targets()
     assert {(t["platform"], t["backend"]) for t in entries} == {
         ("windows", "CPU"),
@@ -112,16 +112,11 @@ def test_registry_covers_all_backends_and_keeps_legacy_intel():
         ("linux", "AMD-ROCm"),
         ("macos", "MPS"),
     }
-    for name in ("tauri-release-artifacts.json", "v0.0.12-cross-alpha-artifacts.json"):
-        manifest = json.loads((ROOT / "ci" / name).read_text())
+    manifest = json.loads((ROOT / "ci" / "tauri-release-artifacts.json").read_text())
+    validate_manifest(manifest)
+    manifest["artifacts"].pop()
+    with pytest.raises(ValueError, match="every target"):
         validate_manifest(manifest)
-        manifest["artifacts"].pop()
-        with pytest.raises(ValueError, match="every target"):
-            validate_manifest(manifest)
-    legacy = json.loads((ROOT / "ci/release-artifacts.json").read_text())
-    assert any(
-        t["platform"] == "macos" and t["architecture"] == "x86_64" for t in legacy["artifacts"]
-    )
 
 
 @pytest.mark.parametrize("flavor", ["cu126", "rocm7.2", "xpu"])

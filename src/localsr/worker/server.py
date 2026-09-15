@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 
 # Set MPS memory limits before torch is imported
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
@@ -50,8 +50,6 @@ from localsr.protocol.messages import (
     BenchmarkTile,
     CapabilitiesInfo,
     EngineInfo,
-    FaceDetectionUnavailable,
-    FacesDetected,
     JobCancelled,
     JobFailed,
     JobStarted,
@@ -61,7 +59,6 @@ from localsr.protocol.messages import (
     MediaInfo,
     MediaProbeFailed,
     MediaProbeProgress,
-    ModelInfo,
     ProtocolError,
     TileUpdate,
     VideoFrameCompleted,
@@ -245,33 +242,6 @@ class WorkerServer:
                         )
                     )
 
-                elif req_type == "inspect_request":
-                    try:
-                        info = self.model_adapter.inspect(data["model_path"])
-                        send_message(
-                            ModelInfo(
-                                architecture=info.architecture,
-                                scale=info.scale,
-                                in_channels=info.in_channels,
-                                out_channels=info.out_channels,
-                                tiling_supported=info.tiling_supported,
-                                half_supported=info.half_supported,
-                                size_requirements_min=info.size_requirements_min,
-                                size_requirements_mult=info.size_requirements_mult,
-                                filename=info.filename,
-                                warnings=info.warnings,
-                                size_requirements_square=info.size_requirements_square,
-                                parameter_count=info.parameter_count,
-                                model_file_size=info.model_file_size,
-                            )
-                        )
-                    # Model loaders may raise architecture-specific exceptions.
-                    except Exception as e:  # noqa: BLE001
-                        send_message(
-                            LogMessage(level="error", message=f"Failed to inspect model: {e}")
-                        )
-                        send_message(WarningMessage(message=f"Model inspection failed: {e}"))
-
                 elif req_type == "capabilities_request":
                     report = get_capability_report()
                     send_message(CapabilitiesInfo(**report))
@@ -345,34 +315,6 @@ class WorkerServer:
                     with self.state_lock:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
-
-                elif req_type == "detect_faces_request":
-                    image_path = str(data.get("image_path", ""))
-                    try:
-                        from localsr.core.face_detection import detect_faces
-
-                        img = Image.open(image_path)
-                        img = ImageOps.exif_transpose(img)
-                        rgb = np.array(img.convert("RGB"))
-                        result = detect_faces(rgb, cancel_event=self.cancel_event)
-                        boxes = [
-                            {
-                                "x": int(box.x),
-                                "y": int(box.y),
-                                "w": int(box.w),
-                                "h": int(box.h),
-                                "confidence": float(box.confidence),
-                            }
-                            for box in result.boxes
-                        ]
-                        send_message(FacesDetected(image_path=image_path, boxes=boxes))
-                    except Exception as error:  # noqa: BLE001
-                        send_message(
-                            FaceDetectionUnavailable(
-                                image_path=image_path,
-                                message=f"Face detection failed: {error}",
-                            )
-                        )
 
                 elif req_type == "job_request":
                     if self.active_job_id is not None:

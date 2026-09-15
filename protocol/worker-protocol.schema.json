@@ -64,16 +64,13 @@
           "properties": {
             "type": {
               "enum": [
-                "inspect_request",
                 "preview_request",
-                "media_probe_request",
-                "detect_faces_request"
+                "media_probe_request"
               ]
             },
             "data": {
               "type": "object",
               "properties": {
-                "model_path": { "type": "string" },
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
                 "comparison": { "type": "boolean" },
@@ -303,7 +300,6 @@
             "type": {
               "enum": [
                 "protocol_error",
-                "model_info",
                 "capabilities_info",
                 "preview_ready",
                 "preview_failed",
@@ -325,6 +321,8 @@
                 "job_failed",
                 "video_frame_started",
                 "video_stage_progress",
+                "video_memory",
+                "video_tile_progress",
                 "video_frame_completed",
                 "video_job_completed",
                 "benchmark_started",
@@ -332,11 +330,11 @@
                 "benchmark_stage_started",
                 "benchmark_stage_progress",
                 "benchmark_stage_completed",
+                "benchmark_preview",
+                "benchmark_tile",
                 "benchmark_completed",
                 "benchmark_cancelled",
-                "benchmark_failed",
-                "faces_detected",
-                "face_detection_unavailable"
+                "benchmark_failed"
               ]
             }
           }

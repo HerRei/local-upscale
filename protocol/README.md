@@ -2,7 +2,7 @@
 
 The desktop host and inference engine exchange one JSON object per line over
 stdin/stdout. Protocol version 1 includes a host/worker handshake, media probing,
-job progress and results. The optional Qt client uses the same worker.
+job progress and results.
 
 Compatibility rules:
 

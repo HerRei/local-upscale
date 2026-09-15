@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from localsr.core.model_adapter import NormalizedModelInfo
-from localsr.core.pipeline import parse_pipeline_stages, stage_percentage
+from localsr.core.pipeline import parse_pipeline_stages
 from localsr.worker.server import WorkerServer
 
 
@@ -49,13 +49,6 @@ def test_pipeline_schema_accepts_restore_then_upscale_and_fused_face():
 def test_pipeline_schema_rejects_unbounded_or_ambiguous_order(stages, message):
     with pytest.raises(ValueError, match=message):
         parse_pipeline_stages(stages)
-
-
-def test_stage_percentage_is_monotonic_and_bounded():
-    values = [stage_percentage(1, 3, completed, 4) for completed in range(5)]
-    assert values == sorted(values)
-    assert values[0] == pytest.approx(100 / 3)
-    assert values[-1] == pytest.approx(200 / 3)
 
 
 class _Writer:

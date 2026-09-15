@@ -51,8 +51,7 @@ def find_desktop() -> Path:
         "Open the installed app, put localsr-next on PATH, or set "
         f"{EXECUTABLE_VARIABLE} to its full executable path (or Linux AppImage). "
         "For development, run npm run tauri -- dev in desktop/. "
-        "The Python process, watch and benchmark commands remain available; "
-        "the optional Qt interface is available with --legacy."
+        "The Python process, watch and benchmark commands remain available."
     )
 
 

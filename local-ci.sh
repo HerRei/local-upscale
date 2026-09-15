@@ -50,8 +50,10 @@ run_lint() {
     require_python
     require actionlint
     require uv
-    "$VENV_PYTHON" -m ruff check src tests scripts smoke_test_gui.py
-    "$VENV_PYTHON" -m ruff format --check src tests scripts smoke_test_gui.py
+    "$VENV_PYTHON" -m ruff check src tests scripts
+    "$VENV_PYTHON" -m ruff format --check src tests scripts
+    "$VENV_PYTHON" -m vulture src scripts packaging ci/vulture_whitelist.py \
+        --exclude src/localsr/video_models/seedvr2/vendor
     actionlint -config-file .github/actionlint.yaml .github/workflows/*.yml
     uv lock --check
     "$VENV_PYTHON" scripts/check_release_version.py
@@ -68,13 +70,14 @@ run_typecheck() {
 
 run_tests() {
     require_python
-    QT_QPA_PLATFORM=offscreen "$VENV_PYTHON" -m pytest tests/ -q --tb=short
+    "$VENV_PYTHON" -m pytest tests/ -q --tb=short
 }
 
 run_frontend() {
     require npm
     npm --prefix desktop run format:check
     npm --prefix desktop run check
+    npm --prefix desktop run knip
     npm --prefix desktop test
     npm --prefix desktop run build:frontend
 }

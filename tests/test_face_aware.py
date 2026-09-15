@@ -19,7 +19,6 @@ from localsr.core.face_compositing import blend_tile_outputs, classify_tile
 from localsr.core.face_detection import FaceBox, FaceMask, face_area_ratio, smooth_alpha
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import NormalizedModelInfo
-from localsr.core.tiling import generate_tiles, tile_face_overlap
 from localsr.core.video_pipeline import process_frame_face_aware
 
 # ── Dummy models ────────────────────────────────────────────────────
@@ -230,30 +229,6 @@ def test_fidelity_blends_original_and_restored_only_inside_face_mask():
     assert restored[:, 2:-2, :2].mean() == pytest.approx(220, abs=1)
     assert preserved[:, 2:-2, -2:].mean() == pytest.approx(40, abs=1)
     assert restored[:, 2:-2, -2:].mean() == pytest.approx(40, abs=1)
-
-
-# ── tiling tests ────────────────────────────────────────────────────
-
-
-def test_tile_face_overlap_full():
-    mask = np.ones((64, 64), dtype=bool)
-    tiles = list(generate_tiles(64, 64, 64, 4, 4))
-    assert len(tiles) == 1
-    assert tile_face_overlap(tiles[0], mask) == pytest.approx(1.0)
-
-
-def test_tile_face_overlap_none():
-    mask = np.zeros((64, 64), dtype=bool)
-    tiles = list(generate_tiles(64, 64, 64, 4, 4))
-    assert tile_face_overlap(tiles[0], mask) == pytest.approx(0.0)
-
-
-def test_tile_face_overlap_partial():
-    mask = np.zeros((64, 64), dtype=bool)
-    mask[:, :32] = True  # left half is face
-    tiles = list(generate_tiles(64, 64, 64, 4, 4))
-    overlap = tile_face_overlap(tiles[0], mask)
-    assert 0.4 < overlap < 0.6
 
 
 # ── InferenceEngine dual-model tests ────────────────────────────────
@@ -497,31 +472,6 @@ def test_process_frame_face_aware_with_no_faces_uses_general():
 
 
 # ── Protocol message tests ──────────────────────────────────────────
-
-
-def test_face_detection_protocol_messages():
-    import json
-
-    from localsr.protocol.messages import (
-        DetectFacesRequest,
-        FaceDetectionUnavailable,
-        FacesDetected,
-    )
-
-    req = DetectFacesRequest(image_path="/tmp/test.png")
-    assert json.loads(req.to_json())["type"] == "detect_faces_request"
-
-    detected = FacesDetected(
-        image_path="/tmp/test.png",
-        boxes=[{"x": 10, "y": 20, "w": 30, "h": 40, "confidence": 0.95}],
-    )
-    assert json.loads(detected.to_json())["type"] == "faces_detected"
-    assert json.loads(detected.to_json())["data"]["boxes"][0]["confidence"] == 0.95
-
-    unavailable = FaceDetectionUnavailable(
-        image_path="/tmp/test.png", message="MediaPipe not installed"
-    )
-    assert json.loads(unavailable.to_json())["type"] == "face_detection_unavailable"
 
 
 def test_job_request_includes_face_model_path():

@@ -50,3 +50,6 @@ uuid = { version = "1.26.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tauri = { version = "2.11.5", features = ["test"] }
+
+[lints.rust]
+dead_code = "deny"

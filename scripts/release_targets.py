@@ -25,7 +25,7 @@ def version(root: Path = ROOT) -> str:
         return tomllib.load(stream)["project"]["version"]
 
 
-def artifact_entries(release_version: str, *, alpha: bool) -> list[dict]:
+def artifact_entries(release_version: str) -> list[dict]:
     return [
         {
             "id": target["id"],
@@ -33,7 +33,7 @@ def artifact_entries(release_version: str, *, alpha: bool) -> list[dict]:
             "platform": target["platform"],
             "architecture": target["architecture"],
             "backend": target["backend"],
-            "signing": target["alpha_signing" if alpha else "signing"],
+            "signing": target["signing"],
             **({"external_engine": True} if target.get("external_engine") else {}),
         }
         for target in targets()
@@ -44,7 +44,7 @@ def validate_manifest(manifest: dict) -> None:
     entries = manifest.get("artifacts")
     if not isinstance(entries, list) or not entries:
         raise ValueError("release manifest has no targets")
-    expected = artifact_entries(str(manifest["version"]), alpha="release_policy" in manifest)
+    expected = artifact_entries(str(manifest["version"]))
     if entries != expected:
         raise ValueError("release manifest must match every target in ci/tauri-targets.json")
 
@@ -67,24 +67,12 @@ def main() -> None:
     args = parser.parse_args()
     current = version()
     if args.write_manifests:
-        for alpha, filename in (
-            (False, "tauri-release-artifacts.json"),
-            (
-                True,
-                f"v{current}-artifacts.json".replace("-alpha-artifacts", "-cross-alpha-artifacts"),
-            ),
-        ):
-            data = {
-                "schema_version": 1,
-                "version": current,
-                **(
-                    {"release_policy": f"v{current.split('-')[0]}-cross-alpha-exception"}
-                    if alpha
-                    else {}
-                ),
-                "artifacts": artifact_entries(current, alpha=alpha),
-            }
-            (ROOT / "ci" / filename).write_text(json.dumps(data, indent=2) + "\n")
+        data = {
+            "schema_version": 1,
+            "version": current,
+            "artifacts": artifact_entries(current),
+        }
+        (ROOT / "ci" / "tauri-release-artifacts.json").write_text(json.dumps(data, indent=2) + "\n")
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as stream:
             for platform in ("linux", "windows"):

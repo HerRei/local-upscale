@@ -8,8 +8,7 @@
       "backend": "MPS",
       "index": "",
       "suffix": "macOS-arm64.dmg",
-      "signing": "developer-id-notarized",
-      "alpha_signing": "ad-hoc-alpha"
+      "signing": "developer-id-notarized"
     },
     {
       "id": "windows-x86_64-cuda",
@@ -19,7 +18,6 @@
       "index": "cu126",
       "suffix": "Windows-CUDA-x86_64.exe",
       "signing": "authenticode-valid",
-      "alpha_signing": "unsigned-alpha",
       "external_engine": true,
       "scratch_peak_gib": 32
     },
@@ -31,7 +29,6 @@
       "index": "cpu",
       "suffix": "Windows-CPU-x86_64.exe",
       "signing": "authenticode-valid",
-      "alpha_signing": "unsigned-alpha",
       "scratch_peak_gib": 15
     },
     {
@@ -42,7 +39,6 @@
       "index": "",
       "suffix": "Windows-DirectML-x86_64.exe",
       "signing": "authenticode-valid",
-      "alpha_signing": "unsigned-alpha",
       "scratch_peak_gib": 20
     },
     {
@@ -53,7 +49,6 @@
       "index": "cpu",
       "suffix": "Linux-CPU-x86_64.AppImage",
       "signing": "sha256",
-      "alpha_signing": "sha256",
       "scratch_peak_gib": 15
     },
     {
@@ -64,7 +59,6 @@
       "index": "cu126",
       "suffix": "Linux-CUDA-x86_64.AppImage",
       "signing": "sha256",
-      "alpha_signing": "sha256",
       "scratch_peak_gib": 45
     },
     {
@@ -86,10 +80,8 @@
       "index": "rocm7.2",
       "suffix": "Linux-ROCm-x86_64.AppImage",
       "signing": "sha256",
-      "alpha_signing": "sha256",
       "scratch_peak_gib": 100
     }
   ],
-  "legacy_manifest": "ci/release-artifacts.json",
   "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets."
 }

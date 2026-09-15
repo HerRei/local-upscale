@@ -148,10 +148,6 @@ class CatalogModel:
         return self.purposes[0] if self.purposes else ModelPurpose.GENERAL
 
 
-# Type alias for interface contract compliance
-ModelCatalogEntry = CatalogModel
-
-
 # The detector is infrastructure for the optional face-aware path rather than
 # a Spandrel restoration checkpoint, so it deliberately stays out of
 # MODEL_CATALOG and the user-facing model picker.  It is fetched only when a
@@ -642,20 +638,9 @@ CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}
 CATALOG_BY_FILENAME = {model.filename: model for model in MODEL_CATALOG}
 
 
-def get_models_for_purpose(purpose: ModelPurpose | str) -> list[CatalogModel]:
-    """Return all single-image catalog models supporting the specified purpose."""
-    target_purpose = ModelPurpose(purpose) if isinstance(purpose, str) else purpose
-    return [model for model in MODEL_CATALOG if target_purpose in model.purposes]
-
-
 def get_model_by_id(model_id: str) -> CatalogModel | None:
     """Look up a single-image catalog model by its unique ID."""
     return CATALOG_BY_ID.get(model_id)
-
-
-def get_all_models() -> tuple[CatalogModel, ...]:
-    """Return all single-image models in the catalog."""
-    return MODEL_CATALOG
 
 
 def default_model_directory() -> Path:
@@ -1022,45 +1007,3 @@ def download_model(
     if isinstance(last_error, ModelDownloadError):
         raise last_error
     raise ModelDownloadError(message) from last_error
-
-
-def download_bundle(
-    model: CatalogVideoModel,
-    store: ModelStore,
-    progress_callback=None,
-    cancel_event: threading.Event | None = None,
-    opener=None,
-) -> Path:
-    """Download every file of a video model bundle with pinned verification.
-
-    Each file goes through download_model's preflight, partial-file, and
-    SHA-256 machinery. progress_callback receives (downloaded, total) in
-    bytes across the whole bundle. Returns the bundle directory.
-    """
-    bundle_dir = store.bundle_dir_for(model)
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    total = model.total_size_bytes
-    completed = 0
-    for file in model.files:
-        destination = store.bundle_file_path(model, file)
-        if store.is_bundle_file_installed(model, file):
-            completed += file.size_bytes
-            if progress_callback is not None:
-                progress_callback(completed, total)
-            continue
-
-        def file_progress(downloaded: int, _file_total: int, _completed: int = completed) -> None:
-            if progress_callback is not None:
-                progress_callback(_completed + downloaded, total)
-
-        download_model(
-            file,
-            destination,
-            progress_callback=file_progress,
-            cancel_event=cancel_event,
-            opener=opener,
-        )
-        completed += file.size_bytes
-        if progress_callback is not None:
-            progress_callback(completed, total)
-    return bundle_dir

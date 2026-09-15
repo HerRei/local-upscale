@@ -145,30 +145,6 @@ class BenchmarkRequest:
 
 
 @dataclass
-class InspectRequest:
-    model_path: str
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "inspect_request", "data": asdict(self)})
-
-
-@dataclass
-class CapabilitiesRequest:
-    def to_json(self) -> str:
-        return json.dumps({"type": "capabilities_request", "data": {}})
-
-
-@dataclass
-class PreviewRequest:
-    image_path: str
-    max_dimension: int = 1600
-    comparison: bool = False
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "preview_request", "data": asdict(self)})
-
-
-@dataclass
 class MediaProbeRequest:
     media_path: str
     max_dimension: int = 1600
@@ -178,43 +154,9 @@ class MediaProbeRequest:
 
 
 @dataclass
-class CancelRequest:
-    job_id: str
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "cancel_request", "data": asdict(self)})
-
-
-@dataclass
-class ShutdownRequest:
-    def to_json(self) -> str:
-        return json.dumps({"type": "shutdown_request", "data": {}})
-
-
-@dataclass
 class WorkerReady:
     def to_json(self) -> str:
         return json.dumps({"type": "worker_ready", "data": {}})
-
-
-@dataclass
-class ModelInfo:
-    architecture: str
-    scale: int
-    in_channels: int
-    out_channels: int
-    tiling_supported: bool
-    half_supported: bool
-    size_requirements_min: int
-    size_requirements_mult: int
-    filename: str
-    warnings: list[str]
-    size_requirements_square: bool = False
-    parameter_count: int = 0
-    model_file_size: int = 0
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "model_info", "data": asdict(self)})
 
 
 @dataclass
@@ -658,29 +600,3 @@ class VideoJobCompleted:
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
-
-
-@dataclass
-class DetectFacesRequest:
-    image_path: str
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "detect_faces_request", "data": asdict(self)})
-
-
-@dataclass
-class FacesDetected:
-    image_path: str
-    boxes: list[dict]  # [{"x": int, "y": int, "w": int, "h": int, "confidence": float}, ...]
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "faces_detected", "data": asdict(self)})
-
-
-@dataclass
-class FaceDetectionUnavailable:
-    image_path: str
-    message: str
-
-    def to_json(self) -> str:
-        return json.dumps({"type": "face_detection_unavailable", "data": asdict(self)})

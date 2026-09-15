@@ -32,23 +32,6 @@ def format_bytes(value: float | None) -> str:
     return "unknown"
 
 
-def format_duration(seconds: float) -> str:
-    seconds = max(1, round(seconds))
-    if seconds < 60:
-        return f"~{seconds} sec"
-    minutes, remaining = divmod(seconds, 60)
-    if minutes < 60:
-        return f"~{minutes} min {remaining:02d} sec"
-    hours, minutes = divmod(minutes, 60)
-    return f"~{hours} hr {minutes:02d} min"
-
-
-def format_duration_range(seconds_low: float, seconds_high: float) -> str:
-    low = format_duration(seconds_low).removeprefix("~")
-    high = format_duration(seconds_high).removeprefix("~")
-    return f"~{low}" if low == high else f"{low}–{high}"
-
-
 def estimate_resources(
     *,
     image_width: int,

@@ -82,8 +82,7 @@ state paths are retained, so this cleanup does not move or migrate user data.
 not found, set `LOCALSR_DESKTOP_EXECUTABLE` to its absolute path (the executable
 inside the macOS app bundle, `localsr-next.exe`, or a Linux AppImage). Files,
 `--recipe`, `--preset` and `--auto-start` pass through unchanged. For source
-development, use `npm run tauri -- dev` here. The Python CLI works independently;
-`python -m localsr --legacy` still opens the optional Qt Widgets client.
+development, use `npm run tauri -- dev` here. The Python CLI works independently.
 
 MSIX upgrades preserve the profile in recorded tests. An explicit Store uninstall
 can delete the profile; restore from a verified backup after reinstalling.

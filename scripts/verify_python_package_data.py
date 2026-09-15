@@ -30,6 +30,8 @@ FORBIDDEN_SUFFIXES = (
     "localsr/ui/slint/components.slint",
     "localsr/ui/native_dialog.py",
     "localsr/platform/macos_menu.py",
+    "localsr/ui/main_window.py",
+    "localsr/protocol/client.py",
 )
 
 
