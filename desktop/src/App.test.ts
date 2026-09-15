@@ -232,7 +232,7 @@ describe('LocalSR desktop interface', () => {
       paths: ['/Scans/a.png', '/Scans/b.png'],
       outputDirectory: '/Scans/LocalSR Results',
     });
-    await user.click(screen.getAllByRole('button', { name: 'Add Folder…' })[0]);
+    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
     await waitFor(() =>
       expect(api.addMedia).toHaveBeenCalledWith(['/Scans/a.png', '/Scans/b.png'], false),
     );
@@ -247,7 +247,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot();
     const user = await mountWith(snapshot);
     api.saveSettings.mockClear();
-    await user.click(screen.getAllByRole('button', { name: 'Add Folder…' })[0]);
+    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
     expect(api.addMedia).not.toHaveBeenCalled();
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
@@ -338,11 +338,13 @@ describe('LocalSR desktop interface', () => {
 
     expect(screen.getByRole('heading', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
-    expect(screen.getByText('Drop a photo or video')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(2);
+    expect(screen.getByText('Drop photos or videos here')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(1);
+    expect(
+      screen.getByRole('button', { name: /drop them here or click to choose files/ }),
+    ).toBeTruthy();
     expect(screen.queryByRole('button', { name: '＋ Add Media' })).toBeNull();
     expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
-    expect(screen.getByRole('list', { name: 'What LocalSR can do' })).toBeTruthy();
   });
 
   it('makes the real benchmark discoverable and starts it from the toolbar', async () => {

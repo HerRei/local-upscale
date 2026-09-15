@@ -1627,7 +1627,6 @@
       {completedVideoOutput}
       compactHidden={page !== 'preview'}
       addFiles={() => void addFiles()}
-      addFolder={() => void addFolder()}
       dropping={filesDragging}
     />
 

@@ -31,7 +31,6 @@
   export let processing = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
-  export let addFolder: () => void = () => {};
   export let dropping = false;
 
   let videoRequestId = '';
@@ -878,7 +877,7 @@
           >
         </p>{/if}
     {:else}
-      <EmptyStage {addFiles} {addFolder} {dropping} />
+      <EmptyStage {addFiles} {dropping} />
     {/if}
   </div>
 </section>

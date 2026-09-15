@@ -2,10 +2,9 @@
   import { onDestroy, onMount } from 'svelte';
 
   export let addFiles: () => void;
-  export let addFolder: () => void;
   export let dropping = false;
 
-  let shot: HTMLDivElement;
+  let shot: HTMLSpanElement;
   let canvas: HTMLCanvasElement;
   let dividerLeft = 50;
   let frame = 0;
@@ -87,28 +86,30 @@
 
 <div class="empty-stage" class:dropping>
   <div class="glow" aria-hidden="true"><i></i><i></i><i></i></div>
-  <div class="well">
+  <button
+    class="well"
+    type="button"
+    aria-label="Add photos or videos: drop them here or click to choose files"
+    on:pointerdown|stopPropagation
+    on:click={addFiles}
+  >
     <svg class="edge" aria-hidden="true"><rect width="100%" height="100%" rx="20" /></svg>
-    <div class="content">
-      <div class="shot" bind:this={shot} aria-hidden="true">
+    <span class="content">
+      <span class="shot" bind:this={shot} aria-hidden="true">
         <canvas bind:this={canvas}></canvas>
         <span class="divider" style={`left: ${dividerLeft}%`}></span>
         <span class="chip before">Original</span>
         <span class="chip after">4×</span>
-      </div>
-      <h2>{dropping ? 'Drop to add' : 'Drop a photo or video'}</h2>
-      <p>Upscale and restore it privately, right on this Mac.</p>
-      <div class="stage-actions" role="group" aria-label="Add media" on:pointerdown|stopPropagation>
-        <button class="stage-button primary" type="button" on:click={addFiles}>Add Files…</button>
-        <button class="stage-button" type="button" on:click={addFolder}>Add Folder…</button>
-      </div>
-      <ul class="capabilities" aria-label="What LocalSR can do">
-        <li>Upscale 2–4×</li>
-        <li>Remove noise, blur, JPEG</li>
-        <li>Video · Labs</li>
-      </ul>
-    </div>
-  </div>
+      </span>
+      <span class="title">{dropping ? 'Drop to add' : 'Drop photos or videos here'}</span>
+      <span class="subtitle">or click to choose · upscaled and restored privately on this Mac</span>
+      <span class="capabilities" aria-hidden="true">
+        <span>Upscale 2–4×</span>
+        <span>Remove noise, blur, JPEG</span>
+        <span>Video · Labs</span>
+      </span>
+    </span>
+  </button>
 </div>
 
 <style>
@@ -161,8 +162,25 @@
     inset: 22px;
     display: grid;
     place-items: center;
+    padding: 0;
+    border: 0;
     border-radius: 20px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+    cursor: pointer;
     transition: background 0.25s;
+  }
+  .well:hover {
+    background: rgba(255, 255, 255, 0.025);
+  }
+  .well:hover .edge rect {
+    stroke: rgba(255, 255, 255, 0.26);
+  }
+  .well:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
   }
   .edge {
     position: absolute;
@@ -187,6 +205,7 @@
     padding: 24px;
   }
   .shot {
+    display: block;
     position: relative;
     width: 216px;
     height: 144px;
@@ -243,52 +262,15 @@
     right: 8px;
     color: #b9d0ff;
   }
-  h2 {
-    margin: 0;
+  .title {
     font-size: calc(21px * var(--ui-scale));
     font-weight: 650;
     letter-spacing: -0.015em;
   }
-  p {
-    margin: -6px 0 0;
+  .subtitle {
+    margin-top: -6px;
     color: var(--secondary);
     font-size: calc(13px * var(--ui-scale));
-  }
-  .stage-actions {
-    display: flex;
-    flex-wrap: nowrap;
-    justify-content: center;
-    gap: 8px;
-    margin-top: 2px;
-  }
-  .stage-button {
-    padding: 7px 13px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 7px;
-    background: rgba(255, 255, 255, 0.08);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
-    color: var(--text);
-    font-size: calc(13px * var(--ui-scale));
-    font-weight: 500;
-    line-height: 1;
-  }
-  .stage-button:hover {
-    background: rgba(255, 255, 255, 0.12);
-  }
-  .stage-button.primary {
-    border-color: rgba(0, 0, 0, 0.25);
-    background: linear-gradient(#5b95ff, #3f7cf2);
-    box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.22),
-      0 1px 2px rgba(0, 0, 0, 0.3);
-    color: #fff;
-  }
-  .stage-button.primary:hover {
-    background: linear-gradient(#6aa0ff, #4a86f6);
-  }
-  .stage-button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
   .capabilities {
     display: flex;
@@ -301,7 +283,7 @@
     color: var(--tertiary);
     font-size: calc(12px * var(--ui-scale));
   }
-  .capabilities li + li::before {
+  .capabilities span + span::before {
     content: '·';
     margin-right: 14px;
     color: #3c4149;
