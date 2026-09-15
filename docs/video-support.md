@@ -8,23 +8,23 @@ package-specific checks and open requirements are in the
 
 ## Media contract
 
-- Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. SDR output is H.264 / 8-bit YUV420P; preserved HDR is HEVC Main 10 / YUV420P10LE, in MP4 or MKV. High-bit-depth SDR preservation is not implemented.
+- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. Export AV1 (default, MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. H.264 and HEVC exports, and sources in formats LocalSR does not include (such as H.264, HEVC, WMV and DivX), use an FFmpeg the user installed and selected under Advanced settings; otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
 - Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
-- MP4 copies AAC/MP3 and converts other decodable audio to 48 kHz AAC, preserving timing and channel layout. Copied audio has packet-level trim precision; converted audio has sample-level trimming plus AAC encoder padding. MKV retains compatible source audio. Unsupported subtitles and unknown additional audio produce a warning; an undecodable sole audio track produces an actionable error.
+- Audio the output container accepts is copied unchanged without decoding (MP4: AAC, MP3, Opus, FLAC, ALAC, AC-3; MKV: any). Other decodable audio is converted to 48 kHz Opus, preserving timing and channel layout. Copied audio has packet-level trim precision; converted audio has sample-level trimming plus Opus encoder padding. Unsupported subtitles and audio that can neither be copied nor decoded produce a warning and are omitted, unless a user-installed FFmpeg converts them.
 - An explicit API/CLI FPS override changes speed by assigning evenly spaced timestamps and omits audio/subtitles. Desktop jobs send no override. They preserve source timing.
-- The HDR control chooses **Preserve HLG/PQ · 10-bit HEVC · Labs** or **Convert to SDR · 8-bit H.264** before Start. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
+- The HDR control chooses **Preserve HLG/PQ · 10-bit · Labs** or **Convert to SDR · 8-bit** before Start; the video format setting picks AV1, VP9, FFV1 or (with a user-installed FFmpeg) HEVC. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
 - Selecting SeedVR2 or another incompatible catalog model switches to SDR and disables the HDR preservation option. Custom image checkpoints retain that option; the worker checks that the loaded architecture is compatible with the HAT preservation adapter.
 - Output creation is atomic. Cancellation checks extend through frame skipping and audio/subtitle remuxing; an existing destination survives failures or cancellation.
 
-The H.264 encoder disables B-frame reordering to keep packet durations consistent with variable presentation intervals and the last held frame. This trades some compression efficiency for predictable timing.
+Packet durations are restored from the source presentation intervals after encoding, so variable frame rate and the last held frame survive AV1, VP9 and FFV1 export. H.264/HEVC exports written by a user-installed FFmpeg use its passthrough timing mode.
 
 ## Legacy recordings
 
 The prepared beta accepts AVI/DivX, MPEG/VOB, camcorder transport streams,
-WMV/ASF, FLV/F4V, 3GP/3G2 and OGV, alongside MP4/MOV/M4V and MKV/WebM.
+WMV/ASF, FLV/F4V, 3GP/3G2 and OGV, alongside MP4/MOV/M4V and MKV/WebM. Recordings whose video or audio codec LocalSR does not include (for example DivX, WMV, H.263 or AAC-only tracks that cannot be copied) require a user-installed FFmpeg.
 It normalizes flagged interlacing and non-square pixels before enhancement,
-converts legacy audio to AAC for MP4, and prepares labelled SDR playback copies
+converts legacy audio to Opus for MP4, and prepares labelled SDR VP9 playback copies
 when the comparison player needs them. Originals and saved exports are preserved.
 See [supported extensions, conversion limits and actual source tests](beta-legacy-video-2026-09-13.md).
 These additions await the next authorized packages and installed acceptance.
@@ -41,7 +41,8 @@ random, session-lifetime URLs. The listener binds to `127.0.0.1`, serves no
 directory, streams with bounded buffers, and closes with the app. Processing and
 playback remain local. Prepared legacy playback conversion now creates compatible
 copies before this transport; it still awaits new installed-package acceptance.
-System H.264/AAC playback support is required. Windows and macOS keep their asset
+AppImages ship only royalty-free GStreamer plugins, so H.264 sources and AV1 outputs that the
+system cannot play fall back to VP9 playback copies. Windows and macOS keep their asset
 transport.
 
 See the [September platform acceptance record](platform-acceptance-2026-09.md)
@@ -70,9 +71,10 @@ scene light (HLG) or display light (PQ). This conservative constraint can introd
 block-boundary texture and is **not perceptual HDR validation or HDR training**.
 The two face forks keep their existing SDR training/selection claims and rights.
 
-Export quantizes once to 10-bit HEVC, tags BT.2020 primaries / non-constant-luminance
-matrix / limited range and the original HLG or PQ transfer, and uses `hvc1` in MP4.
-The worker checks for a Main 10 encoder before loading the model. No fabricated
+Export quantizes once to 10-bit AV1, VP9 or FFV1 (or HEVC Main 10 through a user-installed
+FFmpeg with `hvc1` in MP4), tags BT.2020 primaries / non-constant-luminance matrix / limited
+range and the original HLG or PQ transfer. The worker checks for a 10-bit encoder before loading
+the model. No fabricated
 mastering-display, MaxCLL, or Dolby Vision metadata is added. Dolby Vision dynamic
 metadata is omitted; only a supported HLG/PQ base layer is processed. Other colour
 primaries/matrices are rejected. SeedVR2 and de-flicker do not support preservation.

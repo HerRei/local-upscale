@@ -20,34 +20,36 @@ own terms; this file is a distribution notice, not a replacement for their licen
   still uses torch-directml; these source changes do not describe its contents.
   See `docs/windows-inference-runtime-review.md` for numerical and adoption gates.
 - **Spandrel** — MIT license.
-- **OpenCV headless runtime** — OpenCV application code is Apache-2.0 and is used by
-  the optional CPU face detector. Its binary wheels also contain third-party code.
-  The upstream macOS 4.10 wheel includes a GPLv3-or-later FFmpeg 6.0 build;
-  the Linux wheel includes an LGPLv2.1-or-later FFmpeg 5.1.4. The separately
-  prepared macOS .13 alpha uses our source-built OpenCV without FFmpeg,
-  camera SDKs or window-system backends. Its pinned source, small Python
-  typing patch and build recipe accompany that download. Video processing
-  remains in PyAV. This does not describe older installers.
-- **PyAV / FFmpeg** — PyAV is BSD-3-Clause. The inspected PyAV 18.1.0 wheels use
-  the upstream 8.1.2-1 FFmpeg build, with x264/x265 enabled. Its reported LGPLv3
-  string does not by itself settle the encoder licensing: the upstream build
-  patches FFmpeg's configure license lists. x264/x265 and other codec components
-  retain their own terms. The macOS .13 packaged inference worker is conveyed
-  under GPL-3.0-or-later for this combination; LocalSR's own files retain their
-  MIT copyright/license notices. Corresponding source, codec build scripts,
-  patches and license texts accompany the download. Linux's bundled GStreamer stack additionally contains
-  Ubuntu FFmpeg 6.1.1, which reports GPLv2-or-later.
+- **Media runtime policy** — LocalSR bundles only royalty-free or patent-expired media formats
+  and LGPL-2.1-or-later or permissively licensed media code. The exact allowlist is
+  `packaging/ffmpeg/codec-policy.json`; release builds fail if a bundled component is outside it.
+  H.264, HEVC, AAC, VC-1/WMV, MPEG-4 Part 2 and similar patent-licensed formats are not
+  implemented by any LocalSR binary. Users may select an FFmpeg they installed themselves; that
+  separate program is not distributed, bundled, downloaded or linked by LocalSR.
+- **PyAV / FFmpeg** — PyAV is BSD-3-Clause. This software uses libraries from the FFmpeg project
+  under the LGPLv2.1; LocalSR does not own FFmpeg. The bundled FFmpeg 8.1.2 is built by
+  `packaging/ffmpeg/build_lgpl_media.py` without `--enable-gpl`, `--enable-nonfree` or
+  `--enable-version3`, as shared libraries that can be replaced. It includes dav1d (BSD-2-Clause),
+  SVT-AV1 (BSD-3-Clause-Clear with the AOMedia Patent License 1.0), libvpx (BSD-3-Clause with the
+  WebM additional IP rights grant) and Opus (BSD-3-Clause with its royalty-free patent licenses).
+  The exact source archives, configure line, patches (none) and rebuild/relinking instructions
+  are published with every download as corresponding source.
+- **OpenCV runtime** — OpenCV is Apache-2.0 and is used only by the optional CPU face detector and
+  SeedVR2's drawing helpers. It is built from the pinned opencv-python-headless source by
+  `scripts/build_macos_face_runtime.py` with FFmpeg, GStreamer, camera and window-system backends
+  disabled, so it contains no video codecs. Windows packages never include OpenCV's FFmpeg plugin.
+- **Linux AppImage media playback** — WebKitGTK plays media through GStreamer. Only the plugins
+  listed in `scripts/build_tauri_preview.py` (`LINUX_GSTREAMER_PLUGIN_ALLOWLIST`) are distributed;
+  the GStreamer libav, x264, openh264 and AAC plugins and their host FFmpeg libraries are removed.
 - **RAW images** — rawpy is MIT; the bundled LibRaw 0.22.1 is provided under
   LGPL-2.1-or-later. The macOS runtime also uses libjpeg-turbo, JasPer and
   LittleCMS under their retained upstream terms. The optional LibRaw GPL
   demosaic packs are disabled. Matching source and the upstream macOS build
   recipe accompany the .13 macOS source bundle.
-- **Beta distribution status** — Exact library configurations, hashes and
-  upstream license/build evidence are retained in `build/beta-review/licenses`
-  and the multimedia inspection reports. Corresponding source, build instructions
-  and the chosen distribution terms must accompany public delivery. The current
-  review artifacts predate this expanded notice; their redistribution review is
-  unfinished. See `docs/beta-dependency-review.md`.
+- **Beta distribution status** — Corresponding source, build instructions and license texts for
+  each binary are assembled by `scripts/build_source_bundle.py` from that binary's actual file
+  inventory and published next to it. Older alpha packages had a different media runtime; their
+  notices remain in their release notes. See `docs/licensing-media.md`.
 - **YuNet 2023mar face detector** — MIT, copyright Shiqi Yu; downloaded on demand from the
   OpenCV Zoo with an exact size and SHA-256 rather than bundled in the application.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included

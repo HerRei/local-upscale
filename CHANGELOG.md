@@ -4,6 +4,13 @@ Release history and changes in the next beta candidate.
 
 ## [0.0.13-beta.1] - Candidate for review, not published
 
+- Bundle only royalty-free or patent-expired media formats from an allowlisted LGPL FFmpeg build
+  (AV1, VP9, FFV1, Opus, FLAC and more): export defaults to AV1, playback copies are VP9 WebM and
+  converted audio is Opus. H.264/HEVC import and export use an FFmpeg the user installed and
+  selects under Advanced settings; LocalSR never bundles or downloads it.
+- Fail release builds on GPL/nonfree or patent-licensed codecs, on non-allowlisted GStreamer
+  plugins in AppImages, and on NVIDIA libraries without a redistribution basis (cuFile and
+  NVSHMEM are excluded). Generate the corresponding-source bundle from each binary's inventory.
 - Replace the Enhance pane's model dropdowns with a model library: Quick/Best stay selected,
   Content (Photo/Illustration) and Fix-first chips (Noise, JPEG, Blur, Faces) resolve the plan,
   a plan card names every stage with license, size and hardware fit, and Start downloads any

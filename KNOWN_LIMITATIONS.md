@@ -16,6 +16,18 @@ memory or disk space. A nominal 16 GB GPU is not a guarantee that SeedVR2 fits.
 Five-minute 480p export has been exercised; a complete four-minute 4K export has
 not. Try a short clip before committing to a long job.
 
+## Media formats
+
+LocalSR includes only royalty-free or patent-expired media formats to avoid
+patent and copyleft licensing conflicts. H.264, HEVC, WMV, DivX and AAC-only
+sources, which include most phone and camera videos, open only after the user
+installs FFmpeg and selects it under Advanced settings → Video. That FFmpeg also
+writes H.264/HEVC exports, from a temporary lossless copy that needs extra disk
+space. The default export is AV1, which some older players and editors cannot
+open. Windows packages stay blocked until the Windows LGPL media build exists,
+and Windows CUDA packages until NVIDIA confirms cuDNN 9 DLL redistribution.
+See [media formats and licensing](docs/licensing-media.md).
+
 ## Restoration quality
 
 - HAT HDR preservation uses floating-point processing and 10-bit HLG/PQ export,

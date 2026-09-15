@@ -1,0 +1,12 @@
+# /etc/wireguard/wg-localsr.conf on the Mac mini. REVIEW TEMPLATE ONLY.
+[Interface]
+Address = 10.77.0.2/30
+PrivateKey = <macmini-private-key>
+
+[Peer]
+PublicKey = <relay-public-key>
+Endpoint = <relay-public-ipv4>:51820
+# Only the relay's tunnel address is routed through the tunnel.
+AllowedIPs = 10.77.0.1/32
+# Keeps the outbound connection alive through both NAT routers.
+PersistentKeepalive = 25
