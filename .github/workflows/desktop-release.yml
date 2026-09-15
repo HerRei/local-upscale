@@ -138,7 +138,7 @@ jobs:
       - name: Install native packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 librdmacm1 libibverbs1
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
             --cache-root /ci-scratch/wheelhouses --report "$LOCALSR_TAURI_ROOT/staging/dependency-wheelhouse.json"

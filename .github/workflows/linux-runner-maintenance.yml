@@ -1,0 +1,20 @@
+name: Linux Runner Maintenance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  maintenance:
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    steps:
+      - name: Install system RDMA libraries and configure stubs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librdmacm1 libibverbs1 || true
+          mkdir -p /tmp/stubs
+          gcc -shared -Wl,-soname,librdmacm.so.1 -o /tmp/stubs/librdmacm.so.1 -x c - <<< "void stub(){}"
+          gcc -shared -Wl,-soname,libibverbs.so.1 -o /tmp/stubs/libibverbs.so.1 -x c - <<< "void stub(){}"
+          sudo cp -n /tmp/stubs/librdmacm.so.1 /usr/local/lib/ || true
+          sudo cp -n /tmp/stubs/libibverbs.so.1 /usr/local/lib/ || true
+          sudo ldconfig
+          ldconfig -p | grep -E "librdmacm|libibverbs"
