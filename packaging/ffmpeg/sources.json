@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "summary": "Pinned upstream source archives for the LGPL-only LocalSR media stack (FFmpeg + royalty-free codec libraries + PyAV). build_lgpl_media.py refuses any archive whose SHA-256 differs.",
+  "sources": [
+    {
+      "name": "ffmpeg",
+      "version": "8.1.2",
+      "filename": "ffmpeg-8.1.2.tar.xz",
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+      "mirrors": [],
+      "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+      "license": "LGPL-2.1-or-later (as configured: no --enable-gpl/--enable-nonfree/--enable-version3)"
+    },
+    {
+      "name": "dav1d",
+      "version": "1.5.3",
+      "filename": "dav1d-dav1d-1.5.3.tar.bz2",
+      "url": "https://code.videolan.org/videolan/dav1d/-/archive/1.5.3/dav1d-1.5.3.tar.bz2",
+      "mirrors": [],
+      "sha256": "e099f53253f6c247580c554d53a13f1040638f2066edc3c740e4c2f15174ce22",
+      "license": "BSD-2-Clause"
+    },
+    {
+      "name": "svt-av1",
+      "version": "4.1.0",
+      "filename": "libsvtav1-SVT-AV1-v4.1.0.tar.bz2",
+      "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.1.0/SVT-AV1-v4.1.0.tar.bz2",
+      "mirrors": [],
+      "sha256": "184162d3db3a4448882b17230413b4938ca252eef6b3c5e2f1236b2fcf497881",
+      "license": "BSD-3-Clause-Clear AND LicenseRef-AOMedia-Patent-License-1.0"
+    },
+    {
+      "name": "libvpx",
+      "version": "1.16.0",
+      "filename": "vpx-v1.16.0.tar.gz",
+      "url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.16.0.tar.gz",
+      "mirrors": [],
+      "sha256": "7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c",
+      "license": "BSD-3-Clause AND LicenseRef-WebM-Additional-IP-Rights-Grant"
+    },
+    {
+      "name": "opus",
+      "version": "1.6.1",
+      "filename": "opus-opus-1.6.1.tar.gz",
+      "url": "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz",
+      "mirrors": ["https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz"],
+      "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+      "license": "BSD-3-Clause AND LicenseRef-Opus-Patent-Licenses"
+    },
+    {
+      "name": "pyav",
+      "version": "18.1.0",
+      "filename": "av-18.1.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/8d/f4/f22114d30d3435e38c6af2b4870f37b864403dca6ae7af747a289ce0a18e/av-18.1.0.tar.gz",
+      "mirrors": [],
+      "sha256": "47bfc286e1bc9de7ab4681fc2b575cd2460a66919d31ffe1bd5aa54fae531a28",
+      "license": "BSD-3-Clause"
+    }
+  ]
+}

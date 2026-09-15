@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "summary": "LocalSR bundles only royalty-free or patent-expired media formats and LGPL-2.1-or-later/permissive code. H.264, HEVC, AAC, VC-1/WMV, MPEG-4 Part 2 and similar formats are never compiled into a distributed binary; users may opt into an FFmpeg they installed themselves.",
+  "expected_license": "LGPL version 2.1 or later",
+  "configure_forbidden_flags": ["--enable-gpl", "--enable-nonfree", "--enable-version3"],
+  "external_libraries": {
+    "libdav1d": "BSD-2-Clause (AV1 decoder)",
+    "libsvtav1": "BSD-3-Clause-Clear with the AOMedia Patent License 1.0 (AV1 encoder)",
+    "libvpx": "BSD-3-Clause with the WebM additional IP rights grant (VP8/VP9)",
+    "libopus": "BSD-3-Clause with royalty-free patent licenses (Opus)",
+    "zlib": "Zlib (system or bundled)"
+  },
+  "decoders": [
+    "libdav1d", "vp8", "vp9", "theora", "vp3", "mpeg1video", "mpeg2video", "mjpeg", "ffv1", "rawvideo", "png",
+    "opus", "vorbis", "flac", "alac", "mp3", "mp3float", "mp2", "mp2float", "ac3", "ac3_fixed",
+    "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le",
+    "pcm_f64le", "pcm_u8", "pcm_alaw", "pcm_mulaw", "adpcm_ima_wav", "adpcm_ms",
+    "subrip", "srt", "ass", "ssa", "webvtt", "movtext", "text"
+  ],
+  "encoders": ["libsvtav1", "libvpx_vp9", "ffv1", "libopus", "flac", "pcm_s16le"],
+  "parsers": ["av1", "vp8", "vp9", "mpegvideo", "mjpeg", "opus", "vorbis", "flac", "mpegaudio", "ac3", "png"],
+  "bsfs": [
+    "null", "extract_extradata", "av1_frame_merge", "av1_frame_split", "av1_metadata",
+    "vp9_superframe", "vp9_superframe_split", "vp9_metadata"
+  ],
+  "demuxers": [
+    "mov", "matroska", "avi", "mpegps", "mpegts", "mpegvideo", "ogg", "flac", "wav", "mp3", "ac3",
+    "asf", "ivf", "obu", "yuv4mpegpipe"
+  ],
+  "muxers": ["mp4", "mov", "matroska", "webm"],
+  "filters": [
+    "buffer", "buffersink", "abuffer", "abuffersink", "aformat", "aresample", "asetnsamples",
+    "anull", "null", "format", "scale", "bwdif"
+  ],
+  "protocols": ["file", "pipe"],
+  "runtime_codec_names": {
+    "libvpx_vp9": "libvpx-vp9",
+    "movtext": "mov_text"
+  },
+  "forbidden_codec_patterns": [
+    "^h264", "^hevc", "^libx264", "^libx265", "^libopenh264", "^aac", "^libfdk", "_at$",
+    "_videotoolbox$", "_mf$", "_nvenc$", "_amf$", "_qsv$", "_vaapi$", "_v4l2m2m$", "_cuvid$",
+    "_mediacodec$", "^vc1", "^wmv", "^wma", "^msmpeg4", "^mpeg4", "^h263", "^amr", "^libopencore",
+    "^eac3", "^dca", "^truehd", "^mlp", "^prores", "^dnxhd", "^vvc", "^libxvid", "^mp4als", "^atrac"
+  ],
+  "forbidden_file_patterns": [
+    "(^|/)(lib)?x264[^/]*\\.(dll|so[^/]*|dylib)$",
+    "(^|/)(lib)?x265[^/]*\\.(dll|so[^/]*|dylib)$",
+    "(^|/)(lib)?openh264[^/]*\\.(dll|so[^/]*|dylib)$",
+    "(^|/)(lib)?fdk-aac[^/]*\\.(dll|so[^/]*|dylib)$",
+    "(^|/)(lib)?opencore-amr[^/]*\\.(dll|so[^/]*|dylib)$",
+    "(^|/)(lib)?xvidcore[^/]*\\.(dll|so[^/]*|dylib)$",
+    "(^|/)opencv_videoio_ffmpeg[^/]*\\.dll$",
+    "(^|/)cv2/\\.dylibs/libav[^/]*$",
+    "(^|/)opencv_python[^/]*\\.libs/libav[^/]*$",
+    "(^|/)gstreamer-1\\.0/libgstlibav[^/]*$",
+    "(^|/)gstreamer-1\\.0/libgst(x264|x265|openh264|fdkaac|faad|a52dec|mpeg2dec|dvdread|asf|rmdemux|realmedia|sid|twolame|amrnb|amrwbdec)[^/]*$"
+  ]
+}
