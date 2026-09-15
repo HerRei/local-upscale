@@ -122,6 +122,9 @@ input:focus-visible {
   font-weight: 600;
   letter-spacing: -0.1px;
 }
+.brand-dot {
+  color: #c4492f;
+}
 .brand-version {
   color: var(--tertiary);
   font-size: calc(11px * var(--ui-scale));
@@ -180,24 +183,6 @@ input:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.app-menu-glyph {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: linear-gradient(#5b95ff, #3f7cf2);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.25);
-}
-.app-menu-glyph svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: #fff;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
 .app-menu-item {
   display: block;
   width: 100%;
@@ -243,38 +228,6 @@ input:focus-visible {
   border: 0;
   background: transparent;
   text-align: left;
-}
-.brand-mark {
-  display: flex;
-  gap: 3px;
-  align-items: end;
-  width: 30px;
-  height: 30px;
-  padding: 4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  opacity: 0.72;
-}
-.brand-mark:hover,
-.brand-mark:focus-visible {
-  opacity: 1;
-  background: rgba(78, 140, 255, 0.14);
-}
-.brand-mark i {
-  display: block;
-  width: 5px;
-  border-radius: 2px;
-  background: linear-gradient(#6a9efe, #346dd7);
-}
-.brand-mark i:nth-child(1) {
-  height: 10px;
-}
-.brand-mark i:nth-child(2) {
-  height: 18px;
-}
-.brand-mark i:nth-child(3) {
-  height: 14px;
 }
 .toolbar-actions {
   display: flex;
@@ -2225,7 +2178,7 @@ input[type='text'],
   .preview-pane {
     display: grid;
   }
-  .brand-mark {
+  .brand .brand-logo {
     display: none;
   }
   .benchmark-shortcut {

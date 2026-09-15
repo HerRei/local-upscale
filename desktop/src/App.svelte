@@ -10,6 +10,7 @@
   import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import { startUpdateWatcher } from './lib/updates';
+  import BrandMark from './BrandMark.svelte';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -1540,8 +1541,10 @@
 >
   <header class="toolbar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
-      <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
-      <b>LocalSR</b><span class="brand-version">{snapshot.app_version.split(' · ')[0]}</span>
+      <BrandMark size={18} />
+      <b>LocalSR<span class="brand-dot" aria-hidden="true">.</span></b><span class="brand-version"
+        >{snapshot.app_version.split(' · ')[0]}</span
+      >
     </div>
     <nav class="compact-nav" aria-label="Workspace">
       <button class:active={page === 'media'} on:click={() => (page = 'media')}
@@ -1588,13 +1591,7 @@
         {#if appMenuOpen}
           <div class="app-menu-panel" role="menu" aria-label="LocalSR">
             <div class="app-menu-head">
-              <span class="app-menu-glyph" aria-hidden="true"
-                ><svg viewBox="0 0 24 24"
-                  ><rect x="3.5" y="5.5" width="17" height="13" rx="3" /><path
-                    d="M12 5.5v13"
-                  /></svg
-                ></span
-              >
+              <BrandMark variant="tile" size={32} />
               <div><b>LocalSR</b><span>{snapshot.app_version}</span></div>
             </div>
             <UpdateMenuItem onOpen={() => (appMenuOpen = false)} />
