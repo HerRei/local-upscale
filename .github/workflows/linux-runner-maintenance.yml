@@ -7,8 +7,11 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Verify installed system libraries
+      - name: Debug backend-probe failure
         run: |
-          sudo rm -f /usr/local/lib/libpsm2.so.2 /usr/local/lib/libucp.so.0 /usr/local/lib/libze_loader.so.1
-          sudo ldconfig
-          ldconfig -p | grep -E "libze_loader|librdmacm|libibverbs|libpsm2|libucp"
+          WORKER=$(find /mnt/hdd/ci-scratch/r/34889339156/ -name "localsr-worker" | head -n 1)
+          echo "Found worker: $WORKER"
+          if [ -n "$WORKER" ]; then
+            "$WORKER" --backend-probe Intel-XPU --output /tmp/debug.json
+            cat /tmp/debug.json || true
+          fi
