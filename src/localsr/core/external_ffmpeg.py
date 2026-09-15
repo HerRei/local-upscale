@@ -465,10 +465,15 @@ def transcode_output(
     subtitles_copy = ["-map", "0:s?", "-c:s", "mov_text" if container == "mp4" else "copy"]
     audio = ["-map", "0:a?"]
     head = ["-i", str(source), *video, "-fps_mode", "passthrough"]
+    # The master carries lossless FLAC or copied audio. MP4 players expect AAC,
+    # which the user's FFmpeg (not LocalSR) encodes; MKV keeps the audio as is.
+    aac = ["-c:a", "aac", "-b:a", "192k"]
+    preferred = aac if container == "mp4" else ["-c:a", "copy"]
+    fallback = ["-c:a", "copy"] if container == "mp4" else aac
     attempts = [
-        [*head, *audio, "-c:a", "copy", *subtitles_copy, *muxer, str(destination)],
-        [*head, *audio, "-c:a", "aac", "-b:a", "192k", *subtitles_copy, *muxer, str(destination)],
-        [*head, *audio, "-c:a", "aac", "-b:a", "192k", "-sn", *muxer, str(destination)],
+        [*head, *audio, *preferred, *subtitles_copy, *muxer, str(destination)],
+        [*head, *audio, *fallback, *subtitles_copy, *muxer, str(destination)],
+        [*head, *audio, *preferred, "-sn", *muxer, str(destination)],
     ]
     _run_with_fallbacks(
         ffmpeg,

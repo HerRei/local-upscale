@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -127,6 +128,16 @@ def main(argv: list[str] | None = None) -> int:
             ]
         )
         wheels.append(newest("opencv_python_headless-*.whl", work / "opencv" / "wheels"))
+        corresponding = work / "opencv" / "corresponding-source"
+        corresponding.mkdir(parents=True, exist_ok=True)
+        for item in (
+            fetch_opencv_source(sources),
+            ROOT / "packaging" / "patches" / "opencv-disabled-module-typing.patch",
+            ROOT / "scripts" / "build_macos_face_runtime.py",
+            work / "opencv" / "build-report.json",
+        ):
+            if item.is_file():
+                shutil.copy2(item, corresponding / item.name)
 
     run([python, "-m", "pip", "install", "--no-deps", "--force-reinstall", *map(str, wheels)])
     run(

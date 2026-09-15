@@ -99,6 +99,7 @@ def _bundle_arguments(inventory: Path, output: Path, **overrides) -> argparse.Na
         opencv_source=None,
         apt_sources=False,
         allow_missing_host_sources=False,
+        extra_source=None,
     )
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -154,3 +155,25 @@ def test_source_package_spec_prefers_the_source_version():
     assert (
         build_source_bundle.source_package_spec("libsoup-3.0-0", plain) == "libsoup-3.0-0=3.4.4-5"
     )
+
+
+def test_source_bundle_requires_libraw_and_gcc_runtime_sources(tmp_path: Path):
+    inventory = tmp_path / "engine"
+    _touch(inventory / "_internal/libraw_r.25.dylib")
+    _touch(inventory / "_internal/libquadmath.0.dylib")
+    with pytest.raises(SystemExit, match="--extra-source libraw"):
+        build_source_bundle.build(_bundle_arguments(inventory, tmp_path / "out"))
+    rawpy = _touch(tmp_path / "rawpy-0.27.0.tar.gz", "rawpy source")
+    gcc = tmp_path / "gcc"
+    _touch(gcc / "README", "gcc source")
+    output = tmp_path / "bundle"
+    report = build_source_bundle.build(
+        _bundle_arguments(
+            inventory,
+            output,
+            extra_source=[f"libraw={rawpy}", f"gcc-runtime={gcc}"],
+        )
+    )
+    assert (output / "extra-sources/libraw/rawpy-0.27.0.tar.gz").exists()
+    assert (output / "extra-sources/gcc-runtime/README").exists()
+    assert set(report["components"]) >= {"libraw", "gcc-runtime"}

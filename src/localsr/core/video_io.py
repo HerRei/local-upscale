@@ -147,7 +147,9 @@ def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int 
             stream.codec_context.flush_buffers()
 
 
-def _video_probe(container, stream, first: av.VideoFrame | None) -> VideoProbe:
+def _video_probe(
+    container, stream, first: av.VideoFrame | None, user_ffmpeg: bool = False
+) -> VideoProbe:
     fps = float(stream.average_rate) if stream.average_rate else 0.0
     duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
     count = int(stream.frames or 0) or (int(round(duration * fps)) if fps else 0)
@@ -165,7 +167,7 @@ def _video_probe(container, stream, first: av.VideoFrame | None) -> VideoProbe:
         str(stream.codec_context.name or "unknown"),
         duration,
         {16: "PQ", 18: "HLG"}.get(transfer, ""),
-        _audio_compatibility_warning(container),
+        _audio_compatibility_warning(container, user_ffmpeg=user_ffmpeg),
     )
 
 
@@ -174,9 +176,14 @@ def _audio_stream_usable(stream, container_format: str) -> bool:
     return stream.codec_context is not None or stream_copy_supported(stream, container_format)
 
 
-def _audio_compatibility_warning(container, container_format: str = "mp4") -> str:
+def _audio_compatibility_warning(
+    container, container_format: str = "mp4", *, user_ffmpeg: bool = False
+) -> str:
+    """Describe audio changes; a selected user FFmpeg converts otherwise-unusable tracks."""
     audio = [stream for stream in container.streams if stream.type == "audio"]
     unusable = [stream for stream in audio if not _audio_stream_usable(stream, container_format)]
+    if unusable and user_ffmpeg:
+        return "Audio in a format LocalSR does not include is converted by your FFmpeg."
     if unusable:
         if len(unusable) == len(audio):
             return (
@@ -261,7 +268,12 @@ def _source_timing(path: str) -> tuple[float, int, float, str]:
             rate = None
         fps = float(rate) if rate else 0.0
         duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
-        return fps, int(stream.frames or 0), duration, _audio_compatibility_warning(container)
+        return (
+            fps,
+            int(stream.frames or 0),
+            duration,
+            _audio_compatibility_warning(container, user_ffmpeg=True),
+        )
 
 
 def probe_video_preview(
@@ -313,7 +325,7 @@ def probe_video_preview(
         first = next(display_frames(container, stream), None)
         if first is None:
             raise ValueError("This video contains no decodable picture frames.")
-        probe = _video_probe(container, stream, first)
+        probe = _video_probe(container, stream, first, external_ffmpeg is not None)
         if probe.hdr_format:
             report("converting_hdr")
         rgb = _frame_rgb(stream, first, "tone_map")

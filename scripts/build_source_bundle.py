@@ -32,6 +32,19 @@ ROOT = Path(__file__).resolve().parents[1]
 LICENSE_NAMES = re.compile(r"^(LICEN[CS]E|COPYING|NOTICE|AUTHORS|COPYRIGHT)([.\-_].*)?$", re.I)
 MEDIA_LIBRARY = re.compile(r"(^|/)(lib)?(avcodec|avformat|avutil|swscale|swresample)[^/]*$")
 OPENCV_MARKER = re.compile(r"(^|/)cv2(/|$)")
+# Bundled copyleft libraries that need their exact corresponding source. Pass each
+# with --extra-source NAME=PATH (an archive or directory).
+EXTRA_SOURCE_RULES = {
+    "libraw": (
+        re.compile(r"(^|/)libraw(_r)?[.\-][^/]*$"),
+        "LibRaw (LGPL-2.1/CDDL-1.0) bundled by rawpy; use the matching rawpy sdist",
+    ),
+    "gcc-runtime": (
+        re.compile(r"(^|/)libquadmath[.\-][^/]*$"),
+        "libquadmath (LGPL-2.1) bundled by NumPy's OpenBLAS; use the exact GCC source the "
+        "NumPy wheel was built with",
+    ),
+}
 LGPL_HOST_LIBRARY_PREFIXES = (
     "libwebkit2gtk",
     "libjavascriptcoregtk",
@@ -162,8 +175,14 @@ def build(arguments: argparse.Namespace) -> dict:
     report: dict = {"inventory": str(tree), "files": len(files), "components": {}}
 
     if arguments.commit:
-        git_archive(arguments.commit, output / "localsr-source.tar.gz")
-        report["components"]["localsr"] = {"commit": arguments.commit}
+        commit = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", f"{arguments.commit}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        git_archive(commit, output / "localsr-source.tar.gz")
+        report["components"]["localsr"] = {"commit": commit}
 
     if needs_media_source(files):
         if not arguments.media_source:
@@ -182,6 +201,25 @@ def build(arguments: argparse.Namespace) -> dict:
             )
         copy_tree(Path(arguments.opencv_source), output / "opencv")
         report["components"]["opencv"] = {"source": arguments.opencv_source}
+
+    extras = dict(item.split("=", 1) for item in (arguments.extra_source or []))
+    for name, (pattern, description) in EXTRA_SOURCE_RULES.items():
+        if not any(pattern.search(file) for file in files):
+            continue
+        if name not in extras:
+            raise SystemExit(
+                f"the inventory contains {description}; pass --extra-source {name}=PATH"
+            )
+        supplied = Path(extras[name])
+        target = output / "extra-sources" / name
+        if supplied.is_dir():
+            copy_tree(supplied, target)
+        elif supplied.is_file():
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(supplied, target / supplied.name)
+        else:
+            raise SystemExit(f"--extra-source {name} does not exist: {supplied}")
+        report["components"][name] = {"source": str(supplied)}
 
     host = lgpl_host_libraries(files)
     if host:
@@ -228,6 +266,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", help="LocalSR commit to archive (for example HEAD)")
     parser.add_argument("--media-source", help="corresponding-source dir from build_lgpl_media")
     parser.add_argument("--opencv-source", help="OpenCV source, patch and recipe directory")
+    parser.add_argument(
+        "--extra-source",
+        action="append",
+        metavar="NAME=PATH",
+        help=f"corresponding source for: {', '.join(EXTRA_SOURCE_RULES)}",
+    )
     parser.add_argument(
         "--apt-sources", action="store_true", help="fetch Ubuntu sources for host libraries"
     )
