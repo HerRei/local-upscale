@@ -1,0 +1,17 @@
+[Unit]
+Description=Back up LocalSR daily totals
+RequiresMountsFor=/mnt/hdd/localsr-stats
+
+[Service]
+Type=oneshot
+User=localsr-stats
+Group=localsr-stats
+ExecStart=/usr/bin/python3 /opt/localsr-stats/localsr_stats.py backup --db /mnt/hdd/localsr-stats/stats.sqlite3 --dir /mnt/hdd/localsr-stats/backups --keep 90
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ReadWritePaths=/mnt/hdd/localsr-stats
+UMask=0027
+Nice=15

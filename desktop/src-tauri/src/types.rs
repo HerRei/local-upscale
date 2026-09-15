@@ -294,6 +294,9 @@ pub struct UiSettings {
     #[serde(default = "default_low_memory")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    // Direct builds send version, platform and channel after an update check.
+    #[serde(default = "default_anonymous_update_count")]
+    pub anonymous_update_count: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
@@ -305,6 +308,10 @@ pub struct UiSettings {
     pub content: String,
     pub fixes: Vec<String>,
     pub preset_pins: BTreeMap<String, String>,
+}
+
+fn default_anonymous_update_count() -> bool {
+    true
 }
 
 fn default_low_memory() -> bool {
@@ -348,6 +355,7 @@ impl Default for UiSettings {
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            anonymous_update_count: true,
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,

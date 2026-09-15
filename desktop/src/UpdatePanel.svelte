@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import * as api from './lib/api';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
+  export let anonymousUpdateCount = true;
+  const dispatch = createEventDispatcher<{ anonymouscount: boolean }>();
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
@@ -85,6 +87,14 @@
           on:change={() => run(api.discardUpdate)}
           disabled={inProgress || status.stage === 'downloaded'}
           ><option value="stable">Stable</option><option value="beta">Beta</option></select
+        >
+        <label class="count"
+          ><input
+            type="checkbox"
+            checked={anonymousUpdateCount}
+            disabled={processing}
+            on:change={(event) => dispatch('anonymouscount', event.currentTarget.checked)}
+          /> Send an anonymous update-check count (version, platform, channel)</label
         >
       {/if}
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
@@ -192,6 +202,10 @@
   .detail {
     font-size: 12px;
     color: #aeb7c9;
+  }
+  .count {
+    display: block;
+    margin-top: 12px;
   }
   .notes {
     white-space: pre-wrap;

@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up LocalSR daily totals every night
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

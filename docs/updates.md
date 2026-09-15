@@ -12,6 +12,18 @@ finished, and the native host enforces that as well as the interface.
 The Microsoft Store edition receives application and engine updates from the
 Store; its in-app updater is disabled.
 
+### Anonymous update-check count
+
+After a successful check, direct builds send one request to
+`https://macmini-ci.tail34a4e0.ts.net/ping/update-check?v=<version>&t=<platform key>&c=<channel>`,
+for example `v=0.1.2-beta&t=darwin-aarch64-mps-native&c=beta`. It carries no
+install or user ID and no cookies, times out after five seconds and never affects
+the check. The Mac mini counts active installs per day without storing the IP
+address (see `packaging/hosting/stats/`). Turn it off with **Send an anonymous
+update-check count** in the update dialog (setting `anonymous_update_count`).
+Store editions and loopback test feeds never send it; `LOCALSR_USAGE_PING` points
+a build at another HTTPS endpoint.
+
 ## Build identity
 
 Each build carries its update configuration at compile time; changing a value

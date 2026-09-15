@@ -1,0 +1,36 @@
+[Unit]
+Description=LocalSR visit, download and update-check counter
+After=network.target
+RequiresMountsFor=/mnt/hdd/localsr-stats
+Before=localsr-downloads.service
+
+[Service]
+Type=simple
+User=localsr-stats
+Group=localsr-stats
+ExecStart=/usr/bin/python3 /opt/localsr-stats/localsr_stats.py serve --db /mnt/hdd/localsr-stats/stats.sqlite3
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/mnt/hdd/localsr-stats
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+UMask=0027
+Nice=10
+CPUQuota=20%
+MemoryMax=128M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

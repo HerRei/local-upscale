@@ -1692,6 +1692,8 @@
   />
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+    anonymousUpdateCount={settings.anonymous_update_count ?? true}
+    on:anonymouscount={(event) => updateSettings({ anonymous_update_count: event.detail })}
   />
 
   <main class="workspace">

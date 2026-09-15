@@ -84,3 +84,20 @@ it('uses Store updates and waits for the active queue to finish', async () => {
   expect(api.downloadUpdate).not.toHaveBeenCalled();
   expect(api.installUpdate).not.toHaveBeenCalled();
 });
+
+it('lets direct builds turn off the anonymous update-check count, but not while processing', async () => {
+  const user = userEvent.setup();
+  const changes: boolean[] = [];
+  const view = render(UpdatePanel, {
+    props: { processing: true, anonymousUpdateCount: true },
+    events: { anonymouscount: (event: CustomEvent<boolean>) => changes.push(event.detail) },
+  });
+  const box = await screen.findByLabelText(
+    'Send an anonymous update-check count (version, platform, channel)',
+  );
+  expect((box as HTMLInputElement).checked).toBe(true);
+  expect(box.matches(':disabled')).toBe(true);
+  await view.rerender({ processing: false, anonymousUpdateCount: true });
+  await user.click(box);
+  expect(changes).toEqual([false]);
+});

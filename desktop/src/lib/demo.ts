@@ -42,6 +42,7 @@ export function demoSnapshot(): AppSnapshot {
       external_ffmpeg_path: '',
       video_hdr_mode: 'tone_map',
       video_crf: 18,
+      anonymous_update_count: true,
       enable_face_model: false,
       face_fidelity: 70,
       enable_live_preview: true,

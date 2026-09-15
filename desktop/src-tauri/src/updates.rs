@@ -317,6 +317,9 @@ pub async fn check_update(
             .map_err(|e| invalid(e.to_string()))
     }
     .await;
+    if result.is_ok() && !config.feed.starts_with("http://127.0.0.1:") {
+        send_usage_ping(&state, &app, &config, &channel);
+    }
     let update = match result {
         Ok(update) => update,
         Err(error) => {
@@ -365,6 +368,57 @@ pub async fn check_update(
     }
     publish(&state, &app, status.clone());
     Ok(status)
+}
+
+const USAGE_PING: &str = "https://macmini-ci.tail34a4e0.ts.net/ping/update-check";
+
+/// Only the version, build target and channel: no install ID and no cookies.
+fn usage_ping_url(base: &str, version: &str, target: &str, channel: &str) -> Option<reqwest::Url> {
+    let valid = |value: &str| {
+        (1..=80).contains(&value.len())
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+    };
+    if ![version, target, channel].into_iter().all(valid) {
+        return None;
+    }
+    let mut url = reqwest::Url::parse(base)
+        .ok()
+        .filter(|url| url.scheme() == "https")?;
+    url.set_query(None);
+    url.query_pairs_mut()
+        .append_pair("v", version)
+        .append_pair("t", target)
+        .append_pair("c", channel);
+    Some(url)
+}
+
+fn send_usage_ping(state: &AppState, app: &AppHandle, config: &UpdateConfig, channel: &str) {
+    let enabled = lock(&state.settings).is_ok_and(|settings| settings.anonymous_update_count);
+    if !enabled || crate::distribution::managed_by_store() {
+        return;
+    }
+    let Some(url) = usage_ping_url(
+        option_env!("LOCALSR_USAGE_PING").unwrap_or(USAGE_PING),
+        &app.package_info().version.to_string(),
+        &config.target(),
+        channel,
+    ) else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let Ok(client) = reqwest::Client::builder()
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .user_agent(concat!("LocalSR/", env!("CARGO_PKG_VERSION")))
+            .build()
+        else {
+            return;
+        };
+        let _ = client.get(url).send().await;
+    });
 }
 
 pub fn verify_file(path: &Path, file: &DownloadFile, public_key: &str) -> AppResult<()> {
@@ -903,6 +957,25 @@ mod tests {
         );
         assert_eq!(active_engine_for_distribution(&paths, true), None);
         assert_eq!(fs::read(engine).unwrap(), b"previous engine");
+    }
+
+    #[test]
+    fn usage_ping_carries_only_valid_version_target_and_channel() {
+        let url = super::usage_ping_url(
+            "https://stats.example/ping/update-check?old=1",
+            "0.1.1-beta",
+            "darwin-aarch64-mps-native",
+            "beta",
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://stats.example/ping/update-check?v=0.1.1-beta&t=darwin-aarch64-mps-native&c=beta"
+        );
+        assert!(super::usage_ping_url("http://stats.example/p", "1.0", "t", "beta").is_none());
+        assert!(super::usage_ping_url(super::USAGE_PING, "1.0 x", "t", "beta").is_none());
+        assert!(super::usage_ping_url(super::USAGE_PING, "1.0", "", "beta").is_none());
+        assert!(super::usage_ping_url(super::USAGE_PING, &"1".repeat(81), "t", "beta").is_none());
     }
 
     fn fixture() -> (Vec<u8>, DownloadFile, UpdateConfig) {
