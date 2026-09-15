@@ -7,18 +7,6 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Test backend-probe on HDD
+      - name: Inspect libintlc.so
         run: |
-          APPIMAGE=$(find /mnt/hdd/ci-scratch/r/34889339156/ -name "*.AppImage" | head -n 1)
-          echo "Found AppImage: $APPIMAGE"
-          cd /mnt/hdd/ci-scratch
-          rm -rf /mnt/hdd/ci-scratch/squashfs-root
-          "$APPIMAGE" --appimage-extract
-          WORKER="/mnt/hdd/ci-scratch/squashfs-root/usr/lib/LocalSR Next Preview/engine/localsr-worker"
-          echo "Worker: $WORKER"
-          ls -lh "/mnt/hdd/ci-scratch/squashfs-root/usr/lib/libtorch_python.so" || true
-          ls -lh "/mnt/hdd/ci-scratch/squashfs-root/usr/lib/LocalSR Next Preview/engine/_internal/torch/lib/libtorch_python.so" || true
-          echo "Testing probe..."
-          "$WORKER" --backend-probe Intel-XPU --output /mnt/hdd/ci-scratch/test.json
-          cat /mnt/hdd/ci-scratch/test.json || true
-          rm -rf /mnt/hdd/ci-scratch/squashfs-root
+          find /mnt/hdd/ci-scratch/ -name "libintlc*" -exec ls -la {} + -exec file {} + 2>/dev/null || true
