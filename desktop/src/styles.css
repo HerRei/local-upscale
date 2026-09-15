@@ -2468,6 +2468,9 @@ input[type='text'],
 }
 .row {
   position: relative;
+  /* The scrolling list is a flex column; rows keep their content height
+     instead of shrinking and letting wrapped text overlap the next row. */
+  flex: 0 0 auto;
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 124px 96px;
@@ -2554,6 +2557,7 @@ input[type='text'],
 }
 .library-empty,
 .own-file {
+  flex: 0 0 auto;
   padding: 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
