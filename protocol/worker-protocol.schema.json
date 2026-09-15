@@ -64,7 +64,6 @@
           "properties": {
             "type": {
               "enum": [
-                "inspect_request",
                 "preview_request",
                 "media_probe_request"
               ]
@@ -72,7 +71,6 @@
             "data": {
               "type": "object",
               "properties": {
-                "model_path": { "type": "string" },
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
                 "comparison": { "type": "boolean" },
@@ -299,7 +297,6 @@
             "type": {
               "enum": [
                 "protocol_error",
-                "model_info",
                 "capabilities_info",
                 "preview_ready",
                 "preview_failed",

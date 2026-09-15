@@ -36,14 +36,11 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 
 [project.optional-dependencies]
 dev = [
-    "PySide6>=6.5.0",
     "pytest>=9.1.1",
-    "pytest-qt>=4.2.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.1.0",
     "pyright==1.1.411",
 ]
-legacy = ["PySide6>=6.5.0"]
 video = [
     "omegaconf>=2.3.0",
     # Modern platforms use the release that fixes the custom-pipeline RCEs.

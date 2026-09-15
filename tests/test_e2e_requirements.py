@@ -19,26 +19,13 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image, ImageDraw
-
-# PySide6 imports for GUI signal testing
-from PySide6.QtWidgets import QApplication
 from torch import nn
 
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import NormalizedModelInfo
 from localsr.core.output_writer import OutputWriter
-from localsr.protocol.client import WorkerClient
 from localsr.worker.server import WorkerServer
-
-
-# Ensure QApplication instance exists for PySide6 signal/widget tests
-@pytest.fixture(scope="session", autouse=True)
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
 
 
 # Helper functions to build test images and models
@@ -155,63 +142,6 @@ def test_r1_output_saving_atomic_rename(tmp_path, monkeypatch):
         )
     finally:
         writer.cleanup()
-
-
-def test_r2_protocol_signals_emission():
-    """
-    R2: Verifies WorkerClient handles and emits worker_ready, job_started, job_completed,
-    job_cancelled, job_failed, warning signals.
-    """
-    client = WorkerClient()
-    emitted_signals = []
-
-    def make_listener(name):
-        return lambda *args: emitted_signals.append((name, args))
-
-    # Connect all protocol signals on client
-    for sig_name in [
-        "worker_ready",
-        "job_started",
-        "job_completed",
-        "job_cancelled",
-        "job_failed",
-        "warning",
-        "log_received",
-        "job_result",
-    ]:
-        if hasattr(client, sig_name):
-            getattr(client, sig_name).connect(make_listener(sig_name))
-
-    # Test handling worker_ready
-    client.buffer = json.dumps({"type": "worker_ready", "data": {}}) + "\n"
-    client.handle_stdout()
-
-    # Test handling job_started
-    client.buffer = json.dumps({"type": "job_started", "data": {"job_id": "j1"}}) + "\n"
-    client.handle_stdout()
-
-    # Test handling job_completed
-    client.buffer = (
-        json.dumps({"type": "job_completed", "data": {"job_id": "j1", "success": True}}) + "\n"
-    )
-    client.handle_stdout()
-
-    # Test handling job_cancelled
-    client.buffer = json.dumps({"type": "job_cancelled", "data": {"job_id": "j2"}}) + "\n"
-    client.handle_stdout()
-
-    # Test handling job_failed
-    client.buffer = (
-        json.dumps({"type": "job_failed", "data": {"job_id": "j3", "error_message": "error"}})
-        + "\n"
-    )
-    client.handle_stdout()
-
-    # Test handling warning
-    client.buffer = json.dumps({"type": "warning", "data": {"message": "warn_test"}}) + "\n"
-    client.handle_stdout()
-
-    assert len(emitted_signals) >= 5, "WorkerClient should parse and emit protocol messages."
 
 
 def test_r3_clean_shutdown_no_orphans(tmp_path):
@@ -436,34 +366,6 @@ def test_r1_boundary_zero_quality(tmp_path):
     assert os.path.getsize(out_q100) > 0
     with Image.open(out_q100) as img100:
         assert img100.format == "JPEG"
-
-
-def test_r2_boundary_unknown_msg():
-    """
-    R2 Boundary: Protocol message parser handling unexpected JSON fields/messages without crashing.
-    """
-    client = WorkerClient()
-
-    # 1. Non-JSON invalid text
-    client.buffer = "INVALID_NON_JSON_DATA\n"
-    client.handle_stdout()
-
-    # 2. Unknown message type
-    client.buffer = json.dumps({"type": "unknown_future_type", "data": {"x": 1}}) + "\n"
-    client.handle_stdout()
-
-    # 3. Known type with extra unknown fields
-    client.buffer = (
-        json.dumps(
-            {
-                "type": "job_started",
-                "data": {"job_id": "j99"},
-                "extra_unexpected_field": "unexpected_val",
-            }
-        )
-        + "\n"
-    )
-    client.handle_stdout()
 
 
 def test_r3_boundary_stdin_eof(tmp_path):

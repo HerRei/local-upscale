@@ -78,10 +78,9 @@ across these component boundaries.
 
 `pyproject.toml` defines the checked boundary: `localsr.protocol` and the pure
 pipeline configuration module. Pyright is pinned in the development extra and
-runs in the Linux CI test environment, where Qt stubs are installed. Run it locally
+runs in the Linux CI test environment. Run it locally
 with `./local-ci.sh typecheck`.
 
 This is an initial boundary, not a claim that the inference engine or vendored
 model code is fully typed. Expand it module by module with real annotations;
 resolve errors rather than adding blanket ignores or excluding failing modules.
-The retained legacy Qt client is checked alongside the shared protocol messages.

@@ -59,7 +59,6 @@ from localsr.protocol.messages import (
     MediaInfo,
     MediaProbeFailed,
     MediaProbeProgress,
-    ModelInfo,
     ProtocolError,
     TileUpdate,
     VideoFrameCompleted,
@@ -242,33 +241,6 @@ class WorkerServer:
                             video_engines=_video_engines(),
                         )
                     )
-
-                elif req_type == "inspect_request":
-                    try:
-                        info = self.model_adapter.inspect(data["model_path"])
-                        send_message(
-                            ModelInfo(
-                                architecture=info.architecture,
-                                scale=info.scale,
-                                in_channels=info.in_channels,
-                                out_channels=info.out_channels,
-                                tiling_supported=info.tiling_supported,
-                                half_supported=info.half_supported,
-                                size_requirements_min=info.size_requirements_min,
-                                size_requirements_mult=info.size_requirements_mult,
-                                filename=info.filename,
-                                warnings=info.warnings,
-                                size_requirements_square=info.size_requirements_square,
-                                parameter_count=info.parameter_count,
-                                model_file_size=info.model_file_size,
-                            )
-                        )
-                    # Model loaders may raise architecture-specific exceptions.
-                    except Exception as e:  # noqa: BLE001
-                        send_message(
-                            LogMessage(level="error", message=f"Failed to inspect model: {e}")
-                        )
-                        send_message(WarningMessage(message=f"Model inspection failed: {e}"))
 
                 elif req_type == "capabilities_request":
                     report = get_capability_report()

@@ -6,7 +6,7 @@ processing observable, cancellation reliable and source files intact.
 ## Get started
 
 The current interface is in [`desktop/`](desktop/README.md). It uses Svelte/Tauri
-and a Python worker. The optional Qt Widgets client remains available with `--legacy`.
+and a Python worker.
 Use Python 3.11 and install the native dependencies listed in the desktop guide.
 
 From the repository root:

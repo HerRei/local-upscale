@@ -2,7 +2,6 @@ import hashlib
 import io
 
 import pytest
-from PySide6.QtCore import QSettings
 
 from localsr.core.estimator import estimate_resources
 from localsr.core.model_catalog import (
@@ -14,7 +13,6 @@ from localsr.core.model_catalog import (
     ModelStore,
     download_model,
 )
-from localsr.ui.main_window import CUSTOM_MODEL_ID, MainWindow
 
 
 def _small_model(content=b"verified model"):
@@ -171,111 +169,3 @@ def test_measured_estimate_uses_a_narrower_calibrated_range():
     assert calibrated.calibrated
     assert calibrated.seconds_high / calibrated.seconds_low < 2
     assert first_run.seconds_high / first_run.seconds_low > 4
-
-
-def test_gui_restricts_controls_to_reported_capabilities(qtbot, tmp_path):
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
-    window = MainWindow(start_worker=False, settings=settings)
-    qtbot.addWidget(window)
-    custom_index = window.combo_model.findData(CUSTOM_MODEL_ID)
-    window.combo_model.setCurrentIndex(custom_index)
-    window.custom_model_path = str(tmp_path / "model.pth")
-    window.model_path = window.custom_model_path
-    window.image_path = str(tmp_path / "image.png")
-    window.image_w = 1536
-    window.image_h = 1024
-    window.on_model_info(
-        {
-            "filename": "model.pth",
-            "architecture": "HAT",
-            "scale": 4,
-            "half_supported": True,
-            "parameter_count": 20_000_000,
-            "model_file_size": 80_000_000,
-            "warnings": [],
-        }
-    )
-    window.on_capabilities(
-        {
-            "system_ram_total": 16 * 1024**3,
-            "system_ram_available": 8 * 1024**3,
-            "devices": [
-                {
-                    "id": "cuda:0",
-                    "type": "cuda",
-                    "name": "Test GPU",
-                    "total_memory": 2 * 1024**3,
-                    "free_memory": 2 * 1024**3,
-                    "supports_fp16": True,
-                    "recommended_tile_sizes": [64, 128],
-                }
-            ],
-        }
-    )
-
-    assert [window.combo_tile.itemText(i) for i in range(window.combo_tile.count())] == [
-        "64",
-        "128",
-    ]
-    assert window.combo_precision.findText("fp16") >= 0
-    assert window.check_safe_mem.isChecked()
-    assert not window.check_safe_mem.isEnabled()
-    assert "first-run range" in window.estimate_label.text()
-    assert "VRAM now:" in window.memory_label.text()
-    assert "RAM now:" in window.memory_label.text()
-    assert "Estimated LocalSR peak:" in window.hardware_label.text()
-    assert "of 2.0 GB" in window.hardware_label.text()
-    assert "VRAM" in window.hardware_label.text()
-    assert "of 16.0 GB" in window.hardware_label.text()
-    assert "RAM" in window.hardware_label.text()
-
-    window.on_progress(
-        {
-            "completed_tiles": 1,
-            "total_tiles": 10,
-            "percentage": 10.0,
-            "active_tile_size": 64,
-            "estimated_remaining_seconds": 90.0,
-            "device_free_memory": 1024**3,
-            "system_ram_available": 4 * 1024**3,
-        }
-    )
-    assert "1.0 GB VRAM left" in window.live_resource_label.text()
-
-    window.model_download_progress.setVisible(True)
-    assert not window.model_download_progress.isHidden()
-    window.on_model_download_finished()
-    assert window.model_download_progress.isHidden()
-
-    window.on_capabilities(
-        {
-            "system_ram_total": 16 * 1024**3,
-            "system_ram_available": 8 * 1024**3,
-            "devices": [
-                {
-                    "id": "mps",
-                    "type": "mps",
-                    "name": "Test Apple GPU",
-                    "total_memory": 16 * 1024**3,
-                    "free_memory": 8 * 1024**3,
-                    "supports_fp16": True,
-                    "recommended_tile_sizes": [64, 128],
-                }
-            ],
-        }
-    )
-    assert "Estimated LocalSR peak:" in window.hardware_label.text()
-    assert "of 16.0 GB" in window.hardware_label.text()
-    assert "unified memory" in window.hardware_label.text()
-    assert "Hard Metal allocation cap" in window.hardware_label.text()
-    assert window.btn_upscale.isEnabled()
-
-    assert [
-        window.combo_output_scale.itemData(index)
-        for index in range(window.combo_output_scale.count())
-    ] == [2, 3, 4]
-    window.combo_output_scale.setCurrentIndex(window.combo_output_scale.findData(3))
-    assert window.selected_output_scale() == 3
-    assert "4608x3072 (3×)" in window.predicted_size_label.text()
-    assert window.get_output_path().endswith("image_upscaled_3x.png")
-    window.close()

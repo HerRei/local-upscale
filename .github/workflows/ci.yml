@@ -17,7 +17,6 @@ concurrency:
 
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
-  QT_QPA_PLATFORM: "offscreen"
 
 jobs:
   coordinate-heavy-work:
@@ -267,9 +266,7 @@ jobs:
           PYTHON="$RUN_ROOT/environment/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
-          "$PYTHON" -m pip install --disable-pip-version-check pyobjc-framework-Cocoa
           cd "$RUN_ROOT/source"
-          "$PYTHON" -m pytest tests/test_platform_integration.py -v
           "$PYTHON" -m pytest tests/ -v
       - name: Finalize guest scratch state
         if: always()

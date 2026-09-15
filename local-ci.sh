@@ -68,7 +68,7 @@ run_typecheck() {
 
 run_tests() {
     require_python
-    QT_QPA_PLATFORM=offscreen "$VENV_PYTHON" -m pytest tests/ -q --tb=short
+    "$VENV_PYTHON" -m pytest tests/ -q --tb=short
 }
 
 run_frontend() {

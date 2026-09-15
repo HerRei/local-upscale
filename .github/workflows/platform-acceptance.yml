@@ -19,7 +19,6 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 45
     env:
-      QT_QPA_PLATFORM: offscreen
       CARGO_BUILD_JOBS: '2'
       PYTHONUTF8: '1'
     defaults:

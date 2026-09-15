@@ -3,8 +3,6 @@
 LocalSR application source is MIT licensed. Dependencies and optional model downloads retain their
 own terms; this file is a distribution notice, not a replacement for their license texts.
 
-- **Optional Qt Widgets client** — PySide6/Qt retain their LGPL/GPL/commercial terms.
-  This source-only legacy client is optional and is excluded from Tauri worker packages.
 - **LocalSR Next Preview host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
   components retain their upstream permissive or file-level terms (including Apache, BSD, ISC,
   MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. macOS uses WKWebView and Windows uses WebView2. The Linux AppImages bundle

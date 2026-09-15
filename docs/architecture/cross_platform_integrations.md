@@ -15,7 +15,7 @@ automatic processing when a mixed selection needs a user choice.
 
 The Python `localsr` command forwards desktop launches to this host. Its
 `process`, `watch` and `benchmark` subcommands run directly through the Python
-engine. The optional Qt Widgets client remains available with `--legacy`.
+engine.
 [Launcher configuration](../../desktop/README.md#application-data).
 
 ## Platform actions
@@ -33,9 +33,9 @@ registration does not imply that every input codec or model works on every GPU.
 Store-specific delivery and update behavior are described in the
 [MSIX guide](../microsoft-store.md).
 
-The optional Qt client's older integration service remains under
-`src/localsr/platform/`. Slint's separate dialogs, menu adapter, installer and
-worker bridge were [retired in the beta](../slint-retirement.md).
+The Qt Widgets client and its Python integration service have been removed.
+Slint's separate dialogs, menu adapter, installer and worker bridge were
+[retired in the beta](../slint-retirement.md).
 
 ## Media and state
 
