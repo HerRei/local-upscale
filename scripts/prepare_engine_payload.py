@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Stream a frozen Windows engine into bounded, checksummed installer payloads."""
+"""Stream a frozen engine into bounded, checksummed payload parts.
+
+Used for the adjacent Windows CUDA installer payloads and for the updater's
+separate engine package on every platform.
+"""
 
 from __future__ import annotations
 
@@ -53,13 +57,23 @@ class PartWriter:
             self.size = 0
 
 
-def prepare(engine: Path, output: Path, prefix: str, *, part_bytes: int = PART_BYTES) -> Path:
+def prepare(
+    engine: Path,
+    output: Path,
+    prefix: str,
+    *,
+    part_bytes: int = PART_BYTES,
+    backend: str = "CUDA",
+    worker: str = "localsr-worker.exe",
+) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", prefix):
         raise ValueError("invalid engine payload prefix")
     if not 1 <= part_bytes < 2 * 1024**3:
         raise ValueError("payload parts must be smaller than 2 GiB")
-    if not (engine / "localsr-worker.exe").is_file():
-        raise ValueError("the frozen Windows worker is missing")
+    if backend not in {"CUDA", "ROCM", "CPU", "MPS"}:
+        raise ValueError("unsupported engine payload backend")
+    if not (engine / worker).is_file():
+        raise ValueError("the frozen worker is missing")
     output.mkdir(parents=True, exist_ok=True)
     paths = sorted(engine.rglob("*"))
     if any(path.is_symlink() for path in paths):
@@ -84,7 +98,7 @@ def prepare(engine: Path, output: Path, prefix: str, *, part_bytes: int = PART_B
     manifest = {
         "schema_version": 1,
         "format": "tar.gz.parts",
-        "backend": "CUDA",
+        "backend": backend,
         "file_count": len(files),
         "unpacked_bytes": sum(p.stat().st_size for p in files),
         "parts": writer.parts,

@@ -44,3 +44,4 @@ desktop/src-tauri/gen/
 .gemini/
 .codex/
 publish/
+packaging/updates/verifier/target/
