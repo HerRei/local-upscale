@@ -91,14 +91,14 @@ input:focus-visible {
   min-width: 820px;
   min-height: 620px;
   display: grid;
-  grid-template-rows: 46px 1fr 54px;
+  grid-template-rows: 52px 1fr 54px;
   background: var(--base);
 }
 .app-shell.booting {
   cursor: progress;
 }
 .app-shell.queue-timing-visible {
-  grid-template-rows: 46px 1fr minmax(90px, auto);
+  grid-template-rows: 52px 1fr minmax(90px, auto);
 }
 .status-copy .queue-eta {
   color: var(--text);
@@ -113,10 +113,15 @@ input:focus-visible {
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   border-bottom: 1px solid #08090b;
 }
+/* The window title: centred like a macOS title, clear of the window buttons. */
 .brand {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
+  pointer-events: none;
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
@@ -131,11 +136,6 @@ input:focus-visible {
 }
 .brand-dot {
   color: #e0603f;
-}
-.brand-version {
-  color: var(--tertiary);
-  font-size: calc(11px * var(--ui-scale));
-  font-weight: 500;
 }
 .mac .toolbar {
   padding-left: 84px;
@@ -237,6 +237,7 @@ input:focus-visible {
   text-align: left;
 }
 .toolbar-actions {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2131,7 +2132,7 @@ input[type='text'],
   .enhance-pane {
     position: absolute;
     z-index: 20;
-    top: 46px;
+    top: 52px;
     right: 0;
     bottom: 54px;
     width: 360px;
@@ -2139,6 +2140,9 @@ input[type='text'],
   }
   .compact-nav {
     display: flex;
+  }
+  .brand {
+    display: none;
   }
   .compact-nav button:first-child {
     display: none;
@@ -2184,9 +2188,6 @@ input[type='text'],
   }
   .preview-pane {
     display: grid;
-  }
-  .brand .brand-logo {
-    display: none;
   }
   .benchmark-shortcut {
     font-size: 0;

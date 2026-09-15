@@ -1541,10 +1541,8 @@
 >
   <header class="toolbar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
-      <BrandMark size={18} />
-      <b>LocalSR<span class="brand-dot" aria-hidden="true">.</span></b><span class="brand-version"
-        >{snapshot.app_version.split(' · ')[0]}</span
-      >
+      <BrandMark size={16} />
+      <b>LocalSR<span class="brand-dot" aria-hidden="true">.</span></b>
     </div>
     <nav class="compact-nav" aria-label="Workspace">
       <button class:active={page === 'media'} on:click={() => (page = 'media')}
