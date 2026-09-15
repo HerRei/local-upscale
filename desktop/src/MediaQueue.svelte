@@ -13,6 +13,7 @@
   export let inflightMediaIds: Set<string>;
   export let setBatchMode: (value: boolean) => void;
   export let addFiles: (replace?: boolean) => Promise<void>;
+  export let locked = false;
   export let selectQueueMedia: (id: string) => Promise<void>;
   export let addFolder: () => Promise<void>;
   export let removeMedia: (id: string) => Promise<void>;
@@ -22,8 +23,16 @@
 <aside class="media-pane pane" class:compact-hidden={compactHidden}>
   <div class="pane-heading">
     <h1>Media</h1>
-    <span>{items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : 'No media'}</span
+    <span class="pane-heading-meta"
+      >{items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : 'No media'}</span
     >
+    {#if items.length}
+      <button
+        class="button primary compact add-media"
+        disabled={locked || benchmarkRunning}
+        on:click={() => addFiles(false)}>＋ Add Media</button
+      >
+    {/if}
   </div>
 
   {#if items.length === 0}

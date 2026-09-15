@@ -43,8 +43,12 @@ def test_catalog_has_pinned_optional_downloads():
         "realesrgan_x2plus",
         "fbcnn_color",
         "nafnet_gopro_deblur",
+        "realesrgan_x4plus",
+        "realesrgan_x4plus_anime_6b",
+        "swinir_m_real_x4_gan",
+        "scunet_color_real_psnr",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 12
+    assert len({model.filename for model in MODEL_CATALOG}) == 16
     upstream_hat = [
         model
         for model in MODEL_CATALOG

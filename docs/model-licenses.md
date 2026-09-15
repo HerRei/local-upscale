@@ -51,6 +51,47 @@ otherwise it accepts an exact user-supplied file after size and SHA-256 verifica
   restoration result from a 16×16 input. LocalSR uses the checkpoint's own blind quality-factor
   prediction and does not invent a model strength control.
 
+### Real-ESRGAN ×4 (`realesrgan_x4plus`) and ×4 Anime 6B (`realesrgan_x4plus_anime_6b`)
+
+- Exact upstream assets: `RealESRGAN_x4plus.pth` from the official
+  [Real-ESRGAN `v0.1.0` release](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.1.0)
+  and `RealESRGAN_x4plus_anime_6B.pth` from the
+  [`v0.2.2.4` release](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.2.4).
+- Sizes: `67,040,989` and `17,938,799` bytes.
+- SHA-256: `4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1` and
+  `f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da`.
+- Code/project terms: [BSD-3-Clause](https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE),
+  the same route already accepted for the official ×2 asset above; the releases distribute the
+  named files with no separate asset terms.
+- Selection evidence (15 September 2026): both assets were downloaded from those releases,
+  hashed, loaded by Spandrel 0.4.2 as `ESRGAN` (16.7M and 4.5M parameters) and produced finite
+  256×256 output from a 64×64 input on CPU.
+
+### SwinIR-M real-world ×4 (`swinir_m_real_x4_gan`)
+
+- Exact upstream asset: `003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth` from the official
+  [SwinIR `v0.0` model release](https://github.com/JingyunLiang/SwinIR/releases/tag/v0.0).
+- Size: `67,129,861` bytes.
+- SHA-256: `b9afb61e65e04eb7f8aba5095d070bbe9af28df76acd0c9405aeb33b814bcfc6`.
+- Code/project terms: [Apache-2.0](https://github.com/JingyunLiang/SwinIR/blob/main/LICENSE);
+  the official repository publishes the pretrained models in that release with no separate terms.
+- Selection evidence (15 September 2026): downloaded from that release, hashed, loaded by Spandrel
+  0.4.2 as `SwinIR` (11.7M parameters), finite 256×256 output from 64×64 on CPU.
+
+### SCUNet colour, real-image PSNR (`scunet_color_real_psnr`)
+
+- Exact upstream asset: `scunet_color_real_psnr.pth`, published by the SCUNet author in the
+  [KAIR `v1.0` model release](https://github.com/cszn/KAIR/releases/tag/v1.0) that the
+  [SCUNet README](https://github.com/cszn/SCUNet) links as the download location.
+- Size: `71,982,841` bytes.
+- SHA-256: `fa78899ba2caec9d235a900e91d96c689da71c42029230c2028b00f09f809c2e`.
+- Code/project terms: SCUNet is [Apache-2.0](https://github.com/cszn/SCUNet/blob/main/LICENSE);
+  the hosting KAIR repository is MIT. Both are permissive and by the same author; LocalSR records
+  Apache-2.0 for the model and preserves attribution.
+- Selection evidence (15 September 2026): downloaded from that release, hashed, loaded by Spandrel
+  0.4.2 as `SCUNet` (17.9M parameters), finite 64×64 output at native 1× on CPU. The GAN variant
+  was not added: same license and size, but it invents texture and duplicates the slot.
+
 ### HAT-S Face (`hat_s_x4_face`)
 
 - Exact file: `base_95k_interp_a0p1.pth` from the

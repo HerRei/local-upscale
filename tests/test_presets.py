@@ -237,13 +237,18 @@ class TestStandardCatalogRankings:
         selected = get_preset_model(Preset.QUALITY, ModelPurpose.PHOTO)
         assert selected.model_id == "realplksr_nomoswebphoto_x4"
 
-    def test_illustration_fast_preset_selects_realplksr_anime(self):
+    def test_illustration_fast_preset_selects_the_compact_anime_model(self):
+        # Real-ESRGAN Anime 6B is the fastest verified illustration checkpoint;
+        # HFA2k stays the Best pick (same quality tier, larger model).
         selected = get_preset_model(Preset.FAST, ModelPurpose.ILLUSTRATION)
-        assert selected.model_id == "realplksr_hfa2k_anime_x4"
+        assert selected.model_id == "realesrgan_x4plus_anime_6b"
+        assert get_preset_model(Preset.ULTRA, ModelPurpose.ILLUSTRATION).model_id == (
+            "realplksr_hfa2k_anime_x4"
+        )
 
-    def test_illustration_via_string_anime_selects_realplksr_anime(self):
+    def test_illustration_via_string_anime_selects_the_compact_anime_model(self):
         selected = get_preset_model(Preset.FAST, "anime")
-        assert selected.model_id == "realplksr_hfa2k_anime_x4"
+        assert selected.model_id == "realesrgan_x4plus_anime_6b"
 
     def test_face_quick_selects_hat_s_x4_face(self):
         selected = select_model_for_preset(

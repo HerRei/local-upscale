@@ -27,7 +27,13 @@
         "minHeight": 640,
         "resizable": true,
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 16
+        }
       }
     ]
   },
@@ -36,19 +42,8 @@
     "targets": "all",
     "fileAssociations": [
       {
-        "ext": [
-          "png",
-          "jpg",
-          "jpeg",
-          "webp",
-          "bmp",
-          "tif",
-          "tiff",
-          "dng"
-        ],
-        "contentTypes": [
-          "public.image"
-        ],
+        "ext": ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "dng"],
+        "contentTypes": ["public.image"],
         "name": "LocalSR image input",
         "description": "Image that can be enhanced by LocalSR",
         "role": "Editor",
@@ -78,9 +73,7 @@
           "ogv",
           "divx"
         ],
-        "contentTypes": [
-          "public.movie"
-        ],
+        "contentTypes": ["public.movie"],
         "name": "LocalSR video input",
         "description": "Video that can be enhanced by LocalSR Labs",
         "role": "Editor",

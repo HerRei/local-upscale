@@ -1525,7 +1525,7 @@ describe('LocalSR desktop interface', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           content: 'illustration',
-          selected_model_id: 'realplksr_hfa2k_anime_x4',
+          selected_model_id: 'realesrgan_x4plus_anime_6b',
         }),
       ),
     );
@@ -1618,8 +1618,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Change…' }));
     const reopened = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(reopened).getByRole('button', { name: /^Installed/ }));
-    await user.click(within(reopened).getByRole('button', { name: /SPAN ×4 NomosUni/ }));
-    await user.click(within(reopened).getByRole('button', { name: 'Remove from this computer' }));
+    await user.click(within(reopened).getByRole('button', { name: 'Remove SPAN ×4 NomosUni' }));
     await waitFor(() => expect(api.removeModel).toHaveBeenCalledWith('span_photo_x4'));
   });
 

@@ -107,15 +107,108 @@ input:focus-visible {
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 16px;
+  justify-content: space-between;
+  padding: 0 12px 0 14px;
   background: var(--chrome);
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   border-bottom: 1px solid #08090b;
 }
-.brand-mark {
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-size: calc(13px * var(--ui-scale));
+  font-weight: 600;
+  letter-spacing: -0.1px;
+}
+.brand-version {
+  color: var(--tertiary);
+  font-size: calc(11px * var(--ui-scale));
+  font-weight: 500;
+}
+.mac .toolbar {
+  padding-left: 84px;
+}
+.app-menu {
+  position: relative;
+}
+.app-menu-button {
+  min-width: 30px;
+  padding: 0 6px;
+  color: var(--secondary);
+}
+.app-menu-button:hover,
+.app-menu-button[aria-expanded='true'] {
+  background: var(--hover);
+  color: var(--text);
+}
+.app-menu-panel {
   position: absolute;
-  left: 14px;
+  z-index: 60;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 288px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: #202329;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+.app-menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  margin-bottom: 6px;
+}
+.app-menu-head b {
+  font-size: calc(12px * var(--ui-scale));
+}
+.app-menu-head span {
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+}
+.app-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  text-align: left;
+}
+.app-menu-item:hover {
+  background: var(--hover);
+}
+.app-menu-foot {
+  margin: 8px 0 2px;
+  padding: 8px 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--tertiary);
+  font-size: calc(11px * var(--ui-scale));
+  line-height: 1.5;
+}
+.pane-heading-meta {
+  margin-left: auto;
+  margin-right: 10px;
+}
+.installed-row {
+  grid-template-columns: minmax(0, 1fr) 96px auto;
+  padding-right: 12px;
+}
+.installed-row .row-select {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.brand-mark {
   display: flex;
   gap: 3px;
   align-items: end;

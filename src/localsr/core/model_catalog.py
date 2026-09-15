@@ -514,6 +514,128 @@ MODEL_CATALOG = (
         speed_factor=0.65,
         vram_estimate_mb=1500,
     ),
+    CatalogModel(
+        model_id="realesrgan_x4plus",
+        role="The classic real-world photo upscaler; robust on unknown damage",
+        stage="upscale",
+        name="Real-ESRGAN ×4 — Classic",
+        filename="RealESRGAN_x4plus.pth",
+        description=(
+            "Official Real-ESRGAN ×4 checkpoint trained on synthetic real-world degradations. "
+            "Robust on photos with unknown blur, noise and compression; smoother than the "
+            "RealPLKSR Best model on fine texture."
+        ),
+        size_bytes=67_040_989,
+        sha256="4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1",
+        download_url=(
+            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+        ),
+        architecture="RealESRGAN",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/xinntao/Real-ESRGAN",
+        license_name="BSD-3-Clause",
+        author="Xintao Wang et al.",
+        memory_factor=1.05,
+        time_factor=1.0,
+        speed_factor=0.55,
+        vram_estimate_mb=1800,
+    ),
+    CatalogModel(
+        model_id="realesrgan_x4plus_anime_6b",
+        role="Fast anime and illustration upscaler; clean lines and flat colour",
+        stage="upscale",
+        name="Real-ESRGAN ×4 Anime — Fast",
+        filename="RealESRGAN_x4plus_anime_6B.pth",
+        description=(
+            "Official compact Real-ESRGAN ×4 checkpoint for anime and illustration: six RRDB "
+            "blocks, so it runs in a fraction of the time of the photo models while keeping "
+            "line art crisp."
+        ),
+        size_bytes=17_938_799,
+        sha256="f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da",
+        download_url=(
+            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/"
+            "RealESRGAN_x4plus_anime_6B.pth"
+        ),
+        architecture="RealESRGAN",
+        native_scale=4,
+        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=16,
+        source_url="https://github.com/xinntao/Real-ESRGAN",
+        license_name="BSD-3-Clause",
+        author="Xintao Wang et al.",
+        memory_factor=0.6,
+        time_factor=0.45,
+        speed_factor=0.9,
+        vram_estimate_mb=900,
+    ),
+    CatalogModel(
+        model_id="swinir_m_real_x4_gan",
+        role="Transformer upscaler trained on real-world degradation; sharp, slower",
+        stage="upscale",
+        name="SwinIR ×4 Real — Transformer",
+        filename="003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth",
+        description=(
+            "Official SwinIR-M real-world ×4 checkpoint (BSRGAN degradation, GAN fine-tuned). "
+            "A well-understood transformer between SPAN and HAT in cost; strong on real "
+            "photographs with mixed blur and compression."
+        ),
+        size_bytes=67_129_861,
+        sha256="b9afb61e65e04eb7f8aba5095d070bbe9af28df76acd0c9405aeb33b814bcfc6",
+        download_url=(
+            "https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/"
+            "003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth"
+        ),
+        architecture="SwinIR",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/JingyunLiang/SwinIR",
+        license_name="Apache-2.0",
+        author="Jingyun Liang et al.",
+        memory_factor=1.2,
+        time_factor=1.3,
+        speed_factor=0.45,
+        vram_estimate_mb=2500,
+    ),
+    CatalogModel(
+        model_id="scunet_color_real_psnr",
+        role="Blind denoising for real photos with unknown noise and compression",
+        stage="restore",
+        name="SCUNet Color — Blind Denoise",
+        filename="scunet_color_real_psnr.pth",
+        description=(
+            "Official SCUNet colour checkpoint trained for blind real-image denoising. It "
+            "handles mixed camera noise and mild compression without a strength setting; the "
+            "PSNR variant keeps texture rather than inventing it."
+        ),
+        size_bytes=71_982_841,
+        sha256="fa78899ba2caec9d235a900e91d96c689da71c42029230c2028b00f09f809c2e",
+        download_url=(
+            "https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth"
+        ),
+        architecture="SCUNet",
+        native_scale=1,
+        purposes=(ModelPurpose.DENOISE, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/cszn/SCUNet",
+        license_name="Apache-2.0",
+        author="Kai Zhang et al.",
+        memory_factor=0.9,
+        time_factor=0.8,
+        speed_factor=0.7,
+        vram_estimate_mb=1500,
+    ),
 )
 
 CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}

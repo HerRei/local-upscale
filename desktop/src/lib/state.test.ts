@@ -370,7 +370,7 @@ describe('model library resolution', () => {
       'realplksr_hfa2k_anime_x4',
     );
     expect(choosePresetModel(snapshot, 'upscale', 'quick', 'illustration')?.model_id).toBe(
-      'realplksr_hfa2k_anime_x4',
+      'realesrgan_x4plus_anime_6b',
     );
     expect(
       choosePresetModel(snapshot, 'upscale', 'best', 'photo', {

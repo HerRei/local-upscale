@@ -78,6 +78,8 @@
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
   let livePreviewWarning = '';
   let preparing = false;
+  let appMenuOpen = false;
+  const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
   let libraryOpen = false;
   let libraryContext: {
     slot: 'primary' | 'fix' | 'face' | 'browse';
@@ -1443,13 +1445,27 @@
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
 >
 
+<svelte:window
+  on:pointerdown={(event) => {
+    if (appMenuOpen && !(event.target as HTMLElement).closest('.app-menu')) appMenuOpen = false;
+  }}
+  on:keydown={(event) => {
+    if (event.key === 'Escape' && appMenuOpen) appMenuOpen = false;
+  }}
+/>
+
 <div
   class="app-shell"
   class:booting
+  class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
   style={`--ui-scale:${settings.interface_scale / 100}`}
 >
-  <header class="toolbar">
+  <header class="toolbar" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>
+      <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
+      <b>LocalSR</b><span class="brand-version">{snapshot.app_version.split(' · ')[0]}</span>
+    </div>
     <nav class="compact-nav" aria-label="Workspace">
       <button class:active={page === 'media'} on:click={() => (page = 'media')}
         >Media <span>{snapshot.media.length}</span></button
@@ -1457,21 +1473,71 @@
       <button class:active={page === 'preview'} on:click={() => (page = 'preview')}>Preview</button>
       <button class:active={page === 'enhance'} on:click={() => (page = 'enhance')}>Enhance</button>
     </nav>
-    <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
     <div class="toolbar-actions">
+      <button
+        class="button compact"
+        type="button"
+        title="Browse, download, pin and remove models"
+        on:click={() => openLibrary('browse')}>Model library</button
+      >
       <button
         class="button compact benchmark-shortcut"
         type="button"
         title="Benchmark this computer, watch live memory, copy diagnostics"
         on:click={showPerformance}>Performance</button
       >
-      {#if snapshot.media.length}
+      <div class="app-menu">
         <button
-          class="button primary compact add-media"
-          disabled={settingsLocked}
-          on:click={() => addFiles()}>＋ Add Media</button
+          class="button compact ghost app-menu-button"
+          type="button"
+          aria-label="LocalSR menu"
+          aria-haspopup="menu"
+          aria-expanded={appMenuOpen}
+          on:click={() => (appMenuOpen = !appMenuOpen)}
+          ><svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+            ><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle
+              cx="19"
+              cy="12"
+              r="2"
+            /></svg
+          ></button
         >
-      {/if}
+        {#if appMenuOpen}
+          <div class="app-menu-panel" role="menu" aria-label="LocalSR">
+            <div class="app-menu-head">
+              <b>LocalSR</b><span>{snapshot.app_version}</span>
+            </div>
+            <UpdatePanel
+              processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+            />
+            <button
+              class="app-menu-item"
+              role="menuitem"
+              on:click={() => {
+                appMenuOpen = false;
+                void copyDiagnostics();
+              }}>Copy diagnostics</button
+            >
+            <button
+              class="app-menu-item"
+              role="menuitem"
+              on:click={() => {
+                appMenuOpen = false;
+                void showIntegrations();
+              }}>System integrations…</button
+            >
+            <p class="app-menu-foot">
+              Local processing · nothing is uploaded.<br />Models keep their own licenses.
+            </p>
+          </div>
+        {/if}
+      </div>
     </div>
   </header>
 
@@ -1490,6 +1556,7 @@
       {selectQueueMedia}
       {addFiles}
       {addFolder}
+      locked={settingsLocked}
       removeMedia={async (id) => {
         await api.removeMedia(id);
         await refresh();
@@ -2109,16 +2176,6 @@
             </section>
           {/if}
         </fieldset>
-        <section class="about-block">
-          <div class="about-heading"><b>LocalSR</b><span>{snapshot.app_version}</span></div>
-          <button class="about-link" on:click={copyDiagnostics}>Copy diagnostics</button><button
-            class="about-link"
-            on:click={showIntegrations}>System integrations</button
-          ><UpdatePanel
-            processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-          />
-          <p>Local processing · no media uploads<br />Models retain their own licenses.</p>
-        </section>
       </div>
     </aside>
   </main>

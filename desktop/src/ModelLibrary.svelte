@@ -333,54 +333,79 @@
             >
           </div>
           {#each rows as model (model.model_id)}
-            <button
-              class="row"
-              type="button"
-              class:selected={selected?.model_id === model.model_id}
-              aria-pressed={selected?.model_id === model.model_id}
-              on:click={() => selectRow(model)}
-            >
-              <div>
-                <div class="name">{displayName(model)}</div>
-                <div class="role">{model.role || model.description}</div>
-                <div class="pills">
-                  {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
-                  {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
-                  {#if model.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
-                  <span class="pill" class:warn={model.commercial_use_allowed !== true}
-                    >{rightsLabel(model)}</span
-                  >
-                  {#if fitFor(model, device) === 'heavy'}<span class="pill warn">Heavy here</span
-                    >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
-                      >Too heavy</span
-                    >{:else if fitFor(model, device) === 'runs'}<span class="pill ok"
-                      >Runs well</span
+            {#if group === 'installed'}
+              <div class="row installed-row" class:selected={selected?.model_id === model.model_id}>
+                <button class="row-select" type="button" on:click={() => selectRow(model)}>
+                  <div class="name">{displayName(model)}</div>
+                  <div class="role">
+                    {model.model_id === bestId
+                      ? 'Used by Best'
+                      : model.model_id === quickId
+                        ? 'Used by Quick'
+                        : (model.role ?? '')}
+                  </div>
+                </button>
+                <div class="right">
+                  <b>{formatBytes(model.size_bytes)}</b><span class="ok">Verified</span>
+                </div>
+                <button
+                  class="button compact ghost danger"
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${displayName(model)}`}
+                  on:click={() => void remove(model)}>Remove</button
+                >
+              </div>
+            {:else}
+              <button
+                class="row"
+                type="button"
+                class:selected={selected?.model_id === model.model_id}
+                aria-pressed={selected?.model_id === model.model_id}
+                on:click={() => selectRow(model)}
+              >
+                <div>
+                  <div class="name">{displayName(model)}</div>
+                  <div class="role">{model.role || model.description}</div>
+                  <div class="pills">
+                    {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
+                    {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
+                    {#if model.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
+                    <span class="pill" class:warn={model.commercial_use_allowed !== true}
+                      >{rightsLabel(model)}</span
+                    >
+                    {#if fitFor(model, device) === 'heavy'}<span class="pill warn">Heavy here</span
+                      >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
+                        >Too heavy</span
+                      >{:else if fitFor(model, device) === 'runs'}<span class="pill ok"
+                        >Runs well</span
+                      >{/if}
+                  </div>
+                </div>
+                <div class="meters" aria-hidden="true">
+                  <div class="meter">
+                    Quality<span class="dots"
+                      >{#each [1, 2, 3, 4] as tier}<i class:f={model.quality_tier >= tier}
+                        ></i>{/each}</span
+                    >
+                  </div>
+                  <div class="meter">
+                    Speed<span class="dots"
+                      >{#each [1, 2, 3, 4] as tier}<i
+                          class:f={model.speed_tier >= (tier === 4 ? 3 : tier) && tier <= 3}
+                        ></i>{/each}</span
+                    >
+                  </div>
+                </div>
+                <div class="right">
+                  <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
+                      >Installed</span
+                    >{:else if !model.automated_download_allowed}<span>Your file</span>{:else}<span
+                      >Not downloaded</span
                     >{/if}
                 </div>
-              </div>
-              <div class="meters" aria-hidden="true">
-                <div class="meter">
-                  Quality<span class="dots"
-                    >{#each [1, 2, 3, 4] as tier}<i class:f={model.quality_tier >= tier}
-                      ></i>{/each}</span
-                  >
-                </div>
-                <div class="meter">
-                  Speed<span class="dots"
-                    >{#each [1, 2, 3, 4] as tier}<i
-                        class:f={model.speed_tier >= (tier === 4 ? 3 : tier) && tier <= 3}
-                      ></i>{/each}</span
-                  >
-                </div>
-              </div>
-              <div class="right">
-                <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
-                    >Installed</span
-                  >{:else if !model.automated_download_allowed}<span>Your file</span>{:else}<span
-                    >Not downloaded</span
-                  >{/if}
-              </div>
-            </button>
+              </button>
+            {/if}
           {/each}
           {#if !rows.length}
             <p class="library-empty">

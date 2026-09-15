@@ -18,6 +18,10 @@ loading. Restoration weights are not included in installers.
 | NAFNet SIDD | 1× | Camera-noise removal | 464.2 MB | MIT |
 | NAFNet GoPro | 1× | Motion deblurring | 271.8 MB | MIT |
 | FBCNN Color | 1× | JPEG artifact removal | 287.8 MB | Apache-2.0 |
+| Real-ESRGAN x4plus | 4× | Classic real-world photo upscaling | 67.0 MB | BSD-3-Clause |
+| Real-ESRGAN x4plus Anime 6B | 4× | Fast anime and illustration | 17.9 MB | BSD-3-Clause |
+| SwinIR-M Real x4 GAN | 4× | Transformer real-world upscaling | 67.1 MB | Apache-2.0 |
+| SCUNet Color (PSNR) | 1× | Blind real-photo denoising | 72.0 MB | Apache-2.0 |
 | HAT-S Face | 4× | Face companion · verified import | 40.5 MB | Rights unresolved |
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |
 

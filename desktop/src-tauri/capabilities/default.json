@@ -3,5 +3,10 @@
   "identifier": "desktop-default",
   "description": "Only the native media picker and user-approved notifications are exposed to the LocalSR webview.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "notification:default"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "notification:default",
+    "core:window:allow-start-dragging"
+  ]
 }
