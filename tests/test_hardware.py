@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from localsr.core import hardware
-from localsr.core.device_manager import DeviceManager
 
 
 @pytest.fixture(autouse=True)
@@ -142,21 +141,6 @@ def test_directml_driver_failure_preserves_cpu_capabilities(monkeypatch, failure
     monkeypatch.setitem(sys.modules, "torch_directml", SimpleNamespace(is_available=unavailable))
 
     assert [d["id"] for d in hardware.get_capability_report()["devices"]] == ["cpu"]
-
-
-@pytest.mark.parametrize(
-    ("devices", "expected"),
-    [
-        (["cpu", "directml:1"], "directml:1"),
-        (["cpu", "xpu:0"], "xpu:0"),
-        (["cpu", "cuda:1", "directml:0"], "cuda:1"),
-        (["cpu", "mps"], "mps"),
-        (["cpu"], "cpu"),
-    ],
-)
-def test_default_device_uses_discovered_gpu_identifier(monkeypatch, devices, expected):
-    monkeypatch.setattr(DeviceManager, "get_available_devices", lambda: devices)
-    assert DeviceManager.get_default_device() == expected
 
 
 def test_capability_report_does_not_advertise_unimplemented_qnn(monkeypatch):

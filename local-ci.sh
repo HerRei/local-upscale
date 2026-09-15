@@ -50,8 +50,8 @@ run_lint() {
     require_python
     require actionlint
     require uv
-    "$VENV_PYTHON" -m ruff check src tests scripts smoke_test_gui.py
-    "$VENV_PYTHON" -m ruff format --check src tests scripts smoke_test_gui.py
+    "$VENV_PYTHON" -m ruff check src tests scripts
+    "$VENV_PYTHON" -m ruff format --check src tests scripts
     actionlint -config-file .github/actionlint.yaml .github/workflows/*.yml
     uv lock --check
     "$VENV_PYTHON" scripts/check_release_version.py

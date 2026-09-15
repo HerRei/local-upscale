@@ -381,38 +381,3 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
         # offering CPU processing. Explicit DirectML jobs still fail with their
         # backend error rather than silently switching their inference to CPU.
         logger.warning("DirectML discovery failed; CPU processing remains available", exc_info=True)
-
-
-def _detect_qnn(devices: list[dict], total_ram: int, available_ram: int) -> None:
-    try:
-        import onnxruntime as ort
-
-        available_providers = ort.get_available_providers()
-        if "QNNExecutionProvider" in available_providers:
-            devices.append(
-                {
-                    "id": "qnn-npu",
-                    "type": "qnn",
-                    "name": "Snapdragon NPU (Hexagon QNN)",
-                    "total_memory": total_ram,
-                    "free_memory": available_ram,
-                    "supports_fp16": True,
-                    "recommended_tile_sizes": [64, 128],
-                    "is_integrated": True,
-                }
-            )
-        if "QNNExecutionProvider" in available_providers:
-            devices.append(
-                {
-                    "id": "qnn-gpu",
-                    "type": "qnn-gpu",
-                    "name": "Snapdragon Adreno GPU (QNN)",
-                    "total_memory": total_ram,
-                    "free_memory": available_ram,
-                    "supports_fp16": True,
-                    "recommended_tile_sizes": _recommended_tiles(int(available_ram * 0.5)),
-                    "is_integrated": True,
-                }
-            )
-    except ImportError:
-        pass

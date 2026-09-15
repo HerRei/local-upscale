@@ -9,12 +9,6 @@ from .model_catalog import (
     ModelPurpose,
 )
 
-# Alias for external callers adhering to PROJECT.md spec
-try:
-    from .model_catalog import ModelCatalogEntry  # type: ignore
-except ImportError:
-    ModelCatalogEntry = CatalogModel  # type: ignore
-
 
 class Preset(StrEnum):
     FAST = "fast"

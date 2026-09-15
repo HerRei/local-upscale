@@ -148,10 +148,6 @@ class CatalogModel:
         return self.purposes[0] if self.purposes else ModelPurpose.GENERAL
 
 
-# Type alias for interface contract compliance
-ModelCatalogEntry = CatalogModel
-
-
 # The detector is infrastructure for the optional face-aware path rather than
 # a Spandrel restoration checkpoint, so it deliberately stays out of
 # MODEL_CATALOG and the user-facing model picker.  It is fetched only when a

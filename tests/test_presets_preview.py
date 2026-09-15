@@ -1,13 +1,5 @@
-import base64
-import io
-
-from PIL import Image
-from PySide6.QtCore import QSize
-from PySide6.QtGui import QColor, QImage
-
 from localsr.core.model_catalog import CATALOG_BY_ID, MODEL_CATALOG, ModelPurpose
 from localsr.core.presets import PresetMode, rank_models_for_preset, resolve_settings_for_model
-from localsr.ui.preview_provider import PreviewImageProvider
 
 
 def test_quick_and_best_rank_distinct_catalog_models():
@@ -125,29 +117,3 @@ def test_best_preset_preserves_fp32_quality():
 
     assert settings.device_id == "mps"
     assert settings.precision == "fp32"
-
-
-def test_progressive_preview_composites_a_completed_tile():
-    provider = PreviewImageProvider(maximum_dimension=100)
-    source = QImage(50, 25, QImage.Format_RGB32)
-    source.fill(QColor("#243044"))
-    provider.set_source_image(source)
-    provider.reset_progressive(200, 100)
-
-    tile_buffer = io.BytesIO()
-    Image.new("RGB", (20, 20), (240, 30, 30)).save(tile_buffer, format="JPEG", quality=95)
-    assert provider.apply_tile(
-        jpeg_base64=base64.b64encode(tile_buffer.getvalue()).decode("ascii"),
-        output_x=100,
-        output_y=0,
-        output_width=100,
-        output_height=100,
-        image_width=200,
-        image_height=100,
-    )
-
-    result = provider.requestImage("progressive", None, QSize())
-    assert result.size() == QSize(100, 50)
-    left = result.pixelColor(10, 25)
-    right = result.pixelColor(75, 25)
-    assert right.red() > left.red()

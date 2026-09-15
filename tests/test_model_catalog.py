@@ -13,7 +13,6 @@ from localsr.core.model_catalog import (
     FACE_DETECTOR_MODEL,
     MODEL_CATALOG,
     CatalogModel,
-    ModelCatalogEntry,
     ModelDownloadCancelled,
     ModelDownloadError,
     ModelPurpose,
@@ -294,7 +293,6 @@ def test_catalog_model_properties_and_immutability():
     assert model.scale == 4
     assert model.file_size_bytes == model.size_bytes
     assert model.purpose == ModelPurpose.ILLUSTRATION
-    assert ModelCatalogEntry is CatalogModel
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         model.name = "Mutated Name"  # type: ignore[misc]

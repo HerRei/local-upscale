@@ -429,13 +429,6 @@ export interface StartBatchInput {
   allow_unsafe_pickle_model: boolean;
 }
 
-export interface DownloadProgress {
-  model_id: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-  progress: number;
-}
-
 export interface LaunchIntent {
   files: string[];
   preset: 'quick' | 'best' | null;
