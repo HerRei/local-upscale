@@ -55,6 +55,8 @@ def test_nvidia_policy_allows_attachment_a_and_rejects_unlisted_libraries():
             "_internal/nvidia/cudnn/lib/libcudnn_cnn.so.9",
             "_internal/nvidia/nccl/lib/libnccl.so.2",
             "_internal/libcurl.so.4",
+            "_internal/torch/cuda/nccl.py",
+            "_internal/torch/_inductor/cutlass_mock_imports/cuda/cudart.py",
         ],
         policy,
     )

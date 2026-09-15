@@ -139,5 +139,5 @@
       ]
     }
   ],
-  "nvidia_name_pattern": "^(lib)?(cudart|cublas|cufft|curand|cusolver|cusparse|cudnn|cupti|cufile|nvrtc|nvJitLink|nvToolsExt|nvshmem|nccl|npp|nvjpeg|nvblas|nvvm|nvidia-|cuda\\.)"
+  "nvidia_name_pattern": "^(lib)?(cudart|cublas|cufft|curand|cusolver|cusparse|cudnn|cupti|cufile|nvrtc|nvJitLink|nvToolsExt|nvshmem|nccl|npp|nvjpeg|nvblas|nvvm|nvidia-|cuda\\.so|nvcuda\\.dll)[^/]*\\.(so(\\.[0-9.]+)?|dll|dylib)$"
 }
