@@ -116,14 +116,21 @@ input:focus-visible {
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
   color: var(--text);
   font-size: calc(13px * var(--ui-scale));
   font-weight: 600;
   letter-spacing: -0.1px;
 }
+.brand b {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
 .brand-dot {
-  color: #c4492f;
+  color: #e0603f;
 }
 .brand-version {
   color: var(--tertiary);

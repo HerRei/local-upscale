@@ -17,15 +17,15 @@
     class="marks"
     d={variant === 'tile'
       ? 'M5.5 9V5.5H9M15 5.5h3.5V9M18.5 15v3.5H15M9 18.5H5.5V15'
-      : 'M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5'}
+      : 'M3.5 9.5v-6h6M14.5 3.5h6v6M20.5 14.5v6h-6M9.5 20.5h-6v-6'}
   />
   <rect
     class="pixel"
-    x={variant === 'tile' ? 11.6 : 11.4}
-    y={variant === 'tile' ? 11.6 : 11.4}
-    width={variant === 'tile' ? 3.6 : 4.4}
-    height={variant === 'tile' ? 3.6 : 4.4}
-    rx="0.7"
+    x={variant === 'tile' ? 11.6 : 9.25}
+    y={variant === 'tile' ? 11.6 : 9.25}
+    width={variant === 'tile' ? 3.6 : 5.5}
+    height={variant === 'tile' ? 3.6 : 5.5}
+    rx="1"
   />
 </svg>
 
@@ -39,15 +39,18 @@
   }
   .marks {
     fill: none;
-    stroke: #e9e6db;
-    stroke-width: 2.2;
-    stroke-linecap: square;
+    stroke: #ece9df;
+    stroke-width: 2.6;
+    stroke-linecap: butt;
   }
   .tile .marks {
     stroke: #242720;
     stroke-width: 1.9;
   }
   .pixel {
-    fill: #c4492f;
+    fill: #e0603f;
+  }
+  .tile .pixel {
+    fill: #b33d26;
   }
 </style>
