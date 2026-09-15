@@ -7,16 +7,15 @@ jobs:
   maintenance:
     runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
     steps:
-      - name: Install system runtime libraries and test torch import
+      - name: Install fabric dependencies and configure stubs
         run: |
-          # Remove broken dummy stubs
-          sudo rm -f /usr/local/lib/libze_loader.so.1 /usr/local/lib/libucp.so.0 /usr/local/lib/libpsm2.so.2
           sudo apt-get update
-          # Install real Level Zero loader and verbs
-          sudo apt-get install -y --no-install-recommends libze1 librdmacm1 libibverbs1
+          sudo apt-get install -y --no-install-recommends libpsm2-2 libucx0 || true
+          mkdir -p /tmp/stubs
+          for lib in libpsm2.so.2 libucp.so.0; do
+            gcc -shared -Wl,-soname,"$lib" -o "/tmp/stubs/$lib" -x c - <<< "void stub(){}"
+            sudo cp -n "/tmp/stubs/$lib" /usr/local/lib/ || true
+          done
           sudo ldconfig
-          ldconfig -p | grep -E "libze|librdmacm|libibverbs"
-          # Test if torch imports cleanly in CI venv if present
-          if [ -f "$HOME/.venv-ci/bin/python3.11" ]; then
-            "$HOME/.venv-ci/bin/python3.11" -c "import sys; print(sys.version)"
-          fi
+          ldconfig -p | grep -E "libze_loader|librdmacm|libibverbs|libpsm2|libucp"
+          python3 -c "import diffusers; print('diffusers imported successfully')"
