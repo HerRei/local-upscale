@@ -1,7 +1,8 @@
 """Create a disposable, SDR VP9/WebM playback copy without running an AI model.
 
 VP9 is royalty-free and plays in every supported desktop web view. Sources in
-formats LocalSR does not include are read through the user's selected FFmpeg.
+formats LocalSR does not include are read through the system codecs or the
+user's selected FFmpeg.
 """
 
 import json
@@ -12,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .external_ffmpeg import decodable_source, load_external_ffmpeg
+from .media_bridge import decodable_source, load_media_bridge
 from .video_io import decode_timed_frames, encode_video, probe_video
 
 
@@ -30,7 +31,7 @@ def prepare_playback(
         cancel_event=cancel_event,
         output_container="webm",
         on_convert=lambda: report(
-            {"stage": "Converting with your FFmpeg", "frame": 0, "total": 0, "elapsed_seconds": 0}
+            {"stage": "Converting the source video", "frame": 0, "total": 0, "elapsed_seconds": 0}
         ),
     ) as (frame_source, audio_source):
         _prepare_playback(
@@ -120,7 +121,7 @@ def main(arguments):
             options.source,
             options.destination,
             progress=lambda value: print(json.dumps(value), flush=True),
-            external_ffmpeg=load_external_ffmpeg(None),
+            external_ffmpeg=load_media_bridge(None),
         )
     except Exception as error:
         print(str(error), file=sys.stderr)

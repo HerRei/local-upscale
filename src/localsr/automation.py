@@ -263,11 +263,12 @@ class AutomationRunner:
 
         started = time.monotonic()
         if is_video_input(source):
-            from localsr.core.external_ffmpeg import ExternalFFmpegError, load_external_ffmpeg
+            from localsr.core.external_ffmpeg import ExternalFFmpegError
+            from localsr.core.media_bridge import load_media_bridge
             from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 
             try:
-                user_ffmpeg = load_external_ffmpeg(external_ffmpeg)
+                user_ffmpeg = load_media_bridge(external_ffmpeg)
             except ExternalFFmpegError as error:
                 raise AutomationError(str(error)) from error
 
@@ -598,9 +599,13 @@ def _validate_automation_args(args: argparse.Namespace) -> None:
     except ValueError as error:
         raise AutomationError(str(error)) from error
     if args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
-        raise AutomationError(
-            "H.264/HEVC export uses the FFmpeg installed on this computer; pass --external-ffmpeg."
-        )
+        from localsr.core.media_bridge import system_codecs_available
+
+        if not system_codecs_available():
+            raise AutomationError(
+                "H.264/HEVC export uses the system codecs (macOS) or the FFmpeg installed on "
+                "this computer; pass --external-ffmpeg."
+            )
     if args.command == "watch":
         if (
             not math.isfinite(args.stable_seconds)

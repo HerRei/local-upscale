@@ -247,7 +247,7 @@ def test_playback_copy_of_h264_source_is_royalty_free_webm(tmp_path, user_ffmpeg
         prepare_playback(source, output)
     events = []
     prepare_playback(source, output, progress=events.append, external_ffmpeg=user_ffmpeg)
-    assert events[0]["stage"] == "Converting with your FFmpeg"
+    assert events[0]["stage"] == "Converting the source video"
     with av.open(str(output)) as result:
         assert result.format.name.startswith("matroska")
         assert result.streams.video[0].codec_context.name == "vp9"

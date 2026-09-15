@@ -5,7 +5,7 @@
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
   import FFmpegNotice from './FFmpegNotice.svelte';
-  import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg } from './lib/ffmpeg';
+  import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
   import LicenseDownload from './LicenseDownload.svelte';
   import UpdateMenuItem from './UpdateMenuItem.svelte';
@@ -959,7 +959,7 @@
     if ((!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
     const ids = mediaIds ?? queueSelection.map((media) => media.id);
     if (!ids.length) return;
-    if (exportNeedsExternalFFmpeg(settings)) {
+    if (exportNeedsExternalFFmpeg(settings, snapshot.capabilities)) {
       ffmpegNotice = { context: 'export', paths: [] };
       return;
     }
@@ -2447,6 +2447,8 @@
   <FFmpegNotice
     context={ffmpegNotice.context}
     mediaNames={mediaNamesFor(ffmpegNotice.paths)}
+    systemCodecs={systemCodecs(snapshot.capabilities)?.label ?? ''}
+    container={settings.video_container ?? 'mp4'}
     onSelected={useExternalFFmpeg}
     onClose={() => (ffmpegNotice = null)}
   />

@@ -13,7 +13,7 @@ machine.
 
 ![LocalSR on macOS comparing a photograph of Earth with its 4× upscale](docs/assets/localsr-desktop.png)
 
-*v0.1.1-beta on an M1 Pro. Photo: NASA, Apollo 17 ([capture details](docs/assets/README.md)).*
+*The beta on an M1 Pro. Photo: NASA, Apollo 17 ([capture details](docs/assets/README.md)).*
 
 ## What it does
 
@@ -21,8 +21,9 @@ machine.
 - **Restore** before upscaling: remove noise, motion blur and JPEG artifacts,
   with an optional face-aware pass.
 - **Video.** Every image model runs frame by frame with the source timing,
-  rotation and audio preserved. SeedVR2 3B adds temporal consistency, and
-  HLG/PQ HDR can be kept instead of tone-mapped (both Labs).
+  rotation and audio preserved. Phone and camera recordings open directly on
+  macOS. SeedVR2 3B adds temporal consistency, and HLG/PQ HDR can be kept
+  instead of tone-mapped (both Labs).
 - **Say what you want, not which network.** Pick Quick or Best, photo or
   illustration, and what to fix first. The plan card shows which model runs at
   each stage, its license, its size and whether it fits your hardware. Save the
@@ -38,12 +39,13 @@ machine.
 
 Inputs: JPEG, PNG, WebP, TIFF and DNG camera RAW; MP4/MOV, MKV/WebM, AVI,
 MPEG/VOB, transport streams, WMV, FLV, 3GP and OGV. Outputs: PNG, JPEG, TIFF and
-WebP; AV1, VP9 or lossless FFV1 video, and H.264/HEVC through an FFmpeg you
-install. [Metadata and colour](docs/metadata.md) · [Video](docs/video-support.md)
+WebP; AV1, VP9 or lossless FFV1 video, and H.264/HEVC through macOS's own codecs
+or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·
+[Video](docs/video-support.md)
 
 ## Download
 
-**v0.1.1-beta** runs on Apple Silicon Macs with macOS 14 or later:
+**v0.1.2-beta** runs on Apple Silicon Macs with macOS 14 or later:
 [download the DMG](https://herrei.github.io/localsr/download/) (414 MB, signed and
 notarized). The app checks for updates at launch and verifies each update's
 signature before installing it.

@@ -78,26 +78,34 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
         if side_data.type.name != "DISPLAYMATRIX":
             continue
         matrix = np.frombuffer(side_data, dtype=np.int32).reshape(3, 3)
-        basis = matrix[:2, :2].astype(float) / 65536
-        rotations = (
-            np.array([[1, 0], [0, 1]]),
-            np.array([[0, -1], [1, 0]]),
-            np.array([[-1, 0], [0, -1]]),
-            np.array([[0, 1], [-1, 0]]),
-        )
         # FFmpeg/ISO BMFF stores [a b u; c d v; x y w]. The bottom-row
         # x/y values are 16.16 translations, commonly used by iPhone MOVs to
         # keep a rotated portrait in positive coordinates. They are not
         # perspective terms (u/v), and do not change its normalized pixels.
         if matrix[0, 2] or matrix[1, 2] or matrix[2, 2] != 1 << 30:
             raise ValueError("Video display transform includes unsupported perspective or scale.")
-        for turns, rotation in enumerate(rotations):
-            for flipped in (False, True):
-                candidate = rotation @ np.diag([-1, 1]) if flipped else rotation
-                if np.allclose(basis, candidate, atol=1e-4):
-                    return turns, flipped
-        raise ValueError("Video display transform must use a right-angle rotation or mirror.")
+        return display_turns(matrix[:2, :2].astype(float) / 65536)
     return 0, False
+
+
+def display_turns(basis: np.ndarray) -> tuple[int, bool]:
+    """Right-angle turns for ``np.rot90`` and a mirror flag from a 2×2 display basis.
+
+    The basis is ``[[a, b], [c, d]]`` of an ISO BMFF track matrix; AVFoundation's
+    preferred transform uses the same layout.
+    """
+    rotations = (
+        np.array([[1, 0], [0, 1]]),
+        np.array([[0, -1], [1, 0]]),
+        np.array([[-1, 0], [0, -1]]),
+        np.array([[0, 1], [-1, 0]]),
+    )
+    for turns, rotation in enumerate(rotations):
+        for flipped in (False, True):
+            candidate = rotation @ np.diag([-1, 1]) if flipped else rotation
+            if np.allclose(basis, candidate, atol=1e-4):
+                return turns, flipped
+    raise ValueError("Video display transform must use a right-angle rotation or mirror.")
 
 
 def _check_sdr(stream, frame) -> None:
@@ -148,9 +156,7 @@ def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int 
             stream.codec_context.flush_buffers()
 
 
-def _video_probe(
-    container, stream, first: av.VideoFrame | None, user_ffmpeg: bool = False
-) -> VideoProbe:
+def _video_probe(container, stream, first: av.VideoFrame | None, converter: str = "") -> VideoProbe:
     fps = float(stream.average_rate) if stream.average_rate else 0.0
     duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
     count = int(stream.frames or 0) or (int(round(duration * fps)) if fps else 0)
@@ -168,7 +174,7 @@ def _video_probe(
         str(stream.codec_context.name or "unknown"),
         duration,
         {16: "PQ", 18: "HLG"}.get(transfer, ""),
-        _audio_compatibility_warning(container, user_ffmpeg=user_ffmpeg),
+        _audio_compatibility_warning(container, converter=converter),
     )
 
 
@@ -178,13 +184,13 @@ def _audio_stream_usable(stream, container_format: str) -> bool:
 
 
 def _audio_compatibility_warning(
-    container, container_format: str = "mp4", *, user_ffmpeg: bool = False
+    container, container_format: str = "mp4", *, converter: str = ""
 ) -> str:
-    """Describe audio changes; a selected user FFmpeg converts otherwise-unusable tracks."""
+    """Describe audio changes; ``converter`` names the program that converts unusable tracks."""
     audio = [stream for stream in container.streams if stream.type == "audio"]
     unusable = [stream for stream in audio if not _audio_stream_usable(stream, container_format)]
-    if unusable and user_ffmpeg:
-        return "Audio in a format LocalSR does not include is converted by your FFmpeg."
+    if unusable and converter:
+        return f"Audio in a format LocalSR does not include is converted by {converter}."
     if unusable:
         if len(unusable) == len(audio):
             return (
@@ -257,7 +263,17 @@ def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
     return np.ascontiguousarray(rgb)
 
 
-def _source_timing(path: str) -> tuple[float, int, float, str]:
+def _converter_label(bridge, path: str, *, audio_only: bool = False) -> str:
+    """Name the system codecs or the user's FFmpeg, whichever will convert ``path``."""
+    if bridge is None:
+        return ""
+    from .media_bridge import as_bridge
+
+    wrapped = as_bridge(bridge)
+    return wrapped.converter_label(path, audio_only=audio_only) if wrapped is not None else ""
+
+
+def _source_timing(path: str, converter: str = "your FFmpeg") -> tuple[float, int, float, str]:
     """Timing from the container and stream headers, which need no decoder."""
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
@@ -273,7 +289,7 @@ def _source_timing(path: str) -> tuple[float, int, float, str]:
             fps,
             int(stream.frames or 0),
             duration,
-            _audio_compatibility_warning(container, user_ffmpeg=True),
+            _audio_compatibility_warning(container, converter=converter),
         )
 
 
@@ -292,15 +308,15 @@ def probe_video_preview(
     report = progress or (lambda _stage: None)
     report("opening")
     if not _source_decodable(path):
+        from .media_bridge import external_timing, first_frame_source, undecodable_message
+
         if external_ffmpeg is None:
-            raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
-        from .external_ffmpeg import first_frame_source
-
+            raise UndecodableVideoError(undecodable_message(None))
         try:
-            fps, count, duration, audio_warning = _source_timing(path)
+            fps, count, duration, audio_warning = _source_timing(
+                path, _converter_label(external_ffmpeg, path) or "your FFmpeg"
+            )
         except av.FFmpegError:
-            from .external_ffmpeg import external_timing
-
             (fps, duration), count = external_timing(external_ffmpeg, path), 0
             audio_warning = ""
         report("decoding_video")
@@ -326,7 +342,9 @@ def probe_video_preview(
         first = next(display_frames(container, stream), None)
         if first is None:
             raise ValueError("This video contains no decodable picture frames.")
-        probe = _video_probe(container, stream, first, external_ffmpeg is not None)
+        probe = _video_probe(
+            container, stream, first, _converter_label(external_ffmpeg, path, audio_only=True)
+        )
         if probe.hdr_format:
             report("converting_hdr")
         rgb = _frame_rgb(stream, first, "tone_map")
@@ -441,7 +459,8 @@ def _external_export(
         )
         if stage_callback is not None:
             stage_callback("external_encode")
-        from .external_ffmpeg import ExternalFFmpegError, transcode_output
+        from .external_ffmpeg import ExternalFFmpegError
+        from .media_bridge import transcode_output
 
         try:
             transcode_output(

@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 # The worker protocol is deliberately versioned independently from the desktop
@@ -169,6 +169,8 @@ class CapabilitiesInfo:
     system_compressed_memory: int = 0
     system_swap_total: int = 0
     system_swap_used: int = 0
+    # Which programs can open and write the formats LocalSR's runtime omits.
+    media: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps({"type": "capabilities_info", "data": asdict(self)})

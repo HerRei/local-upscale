@@ -131,7 +131,7 @@ class VideoJobConfig:
     face_fidelity: float = 0.7
     hdr_mode: str = "reject"
     temporary_directory: str | None = None
-    # A user-selected ExternalFFmpeg for formats LocalSR does not include.
+    # A MediaBridge (system codecs and/or the user's FFmpeg) for formats LocalSR omits.
     external_ffmpeg: object | None = None
     # Source of audio/subtitles when it differs from the decoded picture source.
     audio_path: str | None = None
@@ -171,9 +171,10 @@ def run_video_job(
     """
     from dataclasses import replace
 
-    from .external_ffmpeg import decodable_source
+    from .media_bridge import decodable_source, validate_export
 
     validate_output(config.video_codec, config.container)
+    validate_export(config.external_ffmpeg, config.video_codec, config.container)
     with decodable_source(
         config.video_path,
         ffmpeg=config.external_ffmpeg,

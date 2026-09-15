@@ -121,12 +121,23 @@ def test_automation_parser_exposes_process_benchmark_and_watch_commands():
         (["--video-codec", "h264"], "--external-ffmpeg"),
     ],
 )
-def test_automation_rejects_codec_choices_that_cannot_run(arguments, message):
+def test_automation_rejects_codec_choices_that_cannot_run(arguments, message, monkeypatch):
     from localsr.automation import AutomationError, _validate_automation_args
 
+    monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: False)
     args = build_automation_parser().parse_args(["process", "a.mp4", "--output", "out", *arguments])
     with pytest.raises(AutomationError, match=message):
         _validate_automation_args(args)
+
+
+def test_automation_allows_h264_when_the_system_codecs_can_write_it(monkeypatch):
+    from localsr.automation import _validate_automation_args
+
+    monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: True)
+    args = build_automation_parser().parse_args(
+        ["process", "a.mp4", "--output", "out", "--video-codec", "h264"]
+    )
+    _validate_automation_args(args)
 
 
 def test_json_reporter_emits_machine_readable_json(capsys):

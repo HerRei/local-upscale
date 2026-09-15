@@ -168,6 +168,10 @@ pub struct CapabilityInfo {
     pub system_swap_total: u64,
     pub system_swap_used: u64,
     pub devices: Vec<DeviceInfo>,
+    /// Which programs open and write the formats LocalSR's runtime omits
+    /// (system codecs, a found FFmpeg); the worker reports it, the UI reads it.
+    #[serde(default)]
+    pub media: serde_json::Value,
 }
 
 impl CapabilityInfo {

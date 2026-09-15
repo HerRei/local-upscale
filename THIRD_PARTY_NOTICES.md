@@ -13,6 +13,9 @@ own terms; this file is a distribution notice, not a replacement for their licen
   third-party notices. The DirectML build uses ONNX 1.22.0, ONNX Runtime DirectML 1.24.4 and
   Torch 2.13.0 CPU for loading and conversion; `ml_dtypes` is Apache-2.0. The provider DLLs
   keep their shipped terms, and the license and notice files are included in the frozen worker.
+- **macOS system codecs** — `localsr-media` links Apple's AVFoundation, CoreMedia, CoreVideo and
+  VideoToolbox frameworks, which are part of macOS and not distributed by LocalSR. It adds no
+  third-party code to the package.
 - **Spandrel** — MIT license.
 - **Media runtime policy** — LocalSR bundles only royalty-free or patent-expired media formats
   and LGPL-2.1-or-later or permissively licensed media code. The exact allowlist is

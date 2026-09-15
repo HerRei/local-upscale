@@ -39,6 +39,8 @@ const api = vi.hoisted(() => ({
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
   chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
   openFfmpegDownloadPage: vi.fn(async () => undefined),
+  ffmpegInstallHint: vi.fn(async () => null),
+  openTerminalWithInstallCommand: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
   cancelDownload: vi.fn(async () => undefined),
   removeModel: vi.fn(async () => undefined),
@@ -1722,8 +1724,10 @@ it('offers the FFmpeg notice for an undecodable phone video and re-inspects it o
   expect(within(dialog).getByText(/Phone and camera videos need FFmpeg/)).toBeTruthy();
   expect(within(dialog).getByText(/Photos work without it/)).toBeTruthy();
   expect(within(dialog).getByText('phone.mp4')).toBeTruthy();
-  await user.click(within(dialog).getByRole('button', { name: 'Install FFmpeg…' }));
-  expect(api.openFfmpegDownloadPage).toHaveBeenCalled();
+  await user.click(within(dialog).getByRole('button', { name: 'Install in Terminal…' }));
+  expect(api.openTerminalWithInstallCommand).toHaveBeenCalledWith(
+    expect.stringContaining('ffmpeg'),
+  );
 
   await user.click(within(dialog).getByRole('button', { name: 'I installed it, find FFmpeg' }));
   await waitFor(() =>

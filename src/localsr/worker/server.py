@@ -258,14 +258,14 @@ class WorkerServer:
 
                     try:
                         if is_video_input(media_path):
-                            from localsr.core.external_ffmpeg import load_external_ffmpeg
+                            from localsr.core.media_bridge import load_media_bridge
                             from localsr.core.video_io import probe_video_preview
 
                             probe, preview = probe_video_preview(
                                 media_path,
                                 maximum,
                                 report_probe,
-                                load_external_ffmpeg(data.get("external_ffmpeg")),
+                                load_media_bridge(data.get("external_ffmpeg")),
                             )
                             preview_base64 = base64.b64encode(preview).decode("ascii")
                             send_message(
@@ -674,12 +674,17 @@ class WorkerServer:
             send_message,
         ) as memory:
             try:
-                from localsr.core.external_ffmpeg import decodable_source, load_external_ffmpeg
+                from localsr.core.media_bridge import (
+                    decodable_source,
+                    load_media_bridge,
+                    validate_export,
+                )
                 from localsr.core.media_codecs import validate_output
 
-                external = load_external_ffmpeg(data.get("external_ffmpeg"))
+                external = load_media_bridge(data.get("external_ffmpeg"))
                 container = str(data.get("container", "mp4"))
                 validate_output(str(data.get("video_codec", "av1")), container)
+                validate_export(external, str(data.get("video_codec", "av1")), container)
                 with decodable_source(
                     str(data["video_path"]),
                     ffmpeg=external,
@@ -1072,7 +1077,7 @@ class WorkerServer:
             self._run_temporal_video_job(job_id, data, engine_factory)
             return
 
-        from localsr.core.external_ffmpeg import load_external_ffmpeg
+        from localsr.core.media_bridge import load_media_bridge
 
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
@@ -1114,7 +1119,7 @@ class WorkerServer:
             deflicker_window=int(data.get("deflicker_window", 3)),
             output_scale=data.get("output_scale"),
             hdr_mode=str(data.get("hdr_mode", "reject")),
-            external_ffmpeg=load_external_ffmpeg(data.get("external_ffmpeg")),
+            external_ffmpeg=load_media_bridge(data.get("external_ffmpeg")),
         )
 
         preview_encoder = LatestPreviewEncoder(

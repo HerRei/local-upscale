@@ -310,7 +310,7 @@ pub fn start_jobs(
     {
         return Err(AppError::Validation("An update is being installed".into()));
     }
-    validate_start_input(&input)?;
+    validate_start_input(&input, external_codecs_available(&state))?;
 
     // Do not hash the complete model library on the UI command path. A
     // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
@@ -1039,6 +1039,169 @@ pub fn open_ffmpeg_download_page() -> AppResult<()> {
     })
 }
 
+/// Whether something other than the user's selected FFmpeg can handle H.264/HEVC:
+/// the system codecs (macOS) or an FFmpeg the worker found on this computer.
+pub(crate) fn external_codecs_available(state: &AppState) -> bool {
+    let Ok(capabilities) = state.capabilities.lock() else {
+        return false;
+    };
+    let media = &capabilities.media;
+    media["system_codecs"].is_object()
+        || media["external_ffmpeg"]["detected"]
+            .as_array()
+            .is_some_and(|found| !found.is_empty())
+}
+
+/// How to install FFmpeg on this computer: the package manager's command and,
+/// where a distribution needs an extra repository, a note about it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct FfmpegInstallHint {
+    pub command: String,
+    pub note: String,
+    pub system: String,
+}
+
+pub(crate) fn install_hint_for(os: &str, os_release: &str) -> FfmpegInstallHint {
+    let hint = |command: &str, note: &str, system: &str| FfmpegInstallHint {
+        command: command.into(),
+        note: note.into(),
+        system: system.into(),
+    };
+    match os {
+        "macos" => return hint("brew install ffmpeg", "Needs Homebrew (brew.sh).", "macOS"),
+        "windows" => {
+            return hint(
+                "winget install Gyan.FFmpeg",
+                "Open a new terminal afterwards so PATH is refreshed.",
+                "Windows",
+            )
+        }
+        _ => {}
+    }
+    let field = |name: &str| -> String {
+        os_release
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix(name)
+                    .and_then(|rest| rest.strip_prefix('='))
+            })
+            .map(|value| value.trim().trim_matches('"').to_ascii_lowercase())
+            .unwrap_or_default()
+    };
+    let id = field("ID");
+    let like = format!("{id} {}", field("ID_LIKE"));
+    let has = |name: &str| like.split_whitespace().any(|word| word == name);
+    if has("fedora") {
+        hint(
+            "sudo dnf install ffmpeg",
+            "Fedora's own ffmpeg-free package has no H.264; enable RPM Fusion first.",
+            "Fedora",
+        )
+    } else if has("rhel") || has("centos") {
+        hint(
+            "sudo dnf install ffmpeg",
+            "Needs the RPM Fusion or EPEL repository.",
+            "RHEL",
+        )
+    } else if has("arch") {
+        hint("sudo pacman -S ffmpeg", "", "Arch Linux")
+    } else if has("suse") || has("opensuse") {
+        hint(
+            "sudo zypper install ffmpeg",
+            "Needs the Packman repository for H.264.",
+            "openSUSE",
+        )
+    } else if has("alpine") {
+        hint("sudo apk add ffmpeg", "", "Alpine")
+    } else if has("nixos") {
+        hint("nix-env -iA nixpkgs.ffmpeg", "", "NixOS")
+    } else if has("debian") || has("ubuntu") || id.is_empty() {
+        hint(
+            "sudo apt install ffmpeg",
+            "",
+            if has("ubuntu") { "Ubuntu" } else { "Debian" },
+        )
+    } else {
+        hint(
+            "sudo apt install ffmpeg",
+            "Use your distribution's package manager if it is not apt.",
+            "Linux",
+        )
+    }
+}
+
+#[tauri::command]
+pub fn ffmpeg_install_hint() -> FfmpegInstallHint {
+    let release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    install_hint_for(std::env::consts::OS, &release)
+}
+
+/// Open the user's terminal with the install command typed in, so they can
+/// read it and approve any password prompt themselves. Only the command from
+/// `ffmpeg_install_hint` is accepted.
+#[tauri::command]
+pub fn open_terminal_with_install_command(command: String) -> AppResult<()> {
+    if command != ffmpeg_install_hint().command {
+        return Err(AppError::Validation("unexpected install command".into()));
+    }
+    open_terminal(&command).map_err(|error| {
+        AppError::Config(format!(
+            "could not open a terminal for the install command: {error}"
+        ))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal(command: &str) -> std::io::Result<()> {
+    let script = format!("tell application \"Terminal\" to do script \"{command}\"");
+    std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"Terminal\" to activate",
+            "-e",
+            &script,
+        ])
+        .status()
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("osascript failed"))
+            }
+        })
+}
+
+#[cfg(target_os = "windows")]
+fn open_terminal(command: &str) -> std::io::Result<()> {
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "cmd", "/k", command])
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn open_terminal(command: &str) -> std::io::Result<()> {
+    let script = format!("{command}; echo; read -r -p 'Press Enter to close this window'");
+    let attempts: [(&str, Vec<&str>); 5] = [
+        ("x-terminal-emulator", vec!["-e", "bash", "-c", &script]),
+        ("gnome-terminal", vec!["--", "bash", "-c", &script]),
+        ("konsole", vec!["-e", "bash", "-c", &script]),
+        (
+            "xfce4-terminal",
+            vec!["-e", &format!("bash -c \"{script}\"")],
+        ),
+        ("xterm", vec!["-e", "bash", "-c", &script]),
+    ];
+    let mut last = std::io::Error::other("no terminal emulator found");
+    for (program, arguments) in attempts {
+        match std::process::Command::new(program).args(&arguments).spawn() {
+            Ok(_) => return Ok(()),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
+}
+
 #[tauri::command]
 pub fn diagnostic_summary(state: State<'_, Arc<AppState>>) -> AppResult<String> {
     let snapshot = state.snapshot()?;
@@ -1195,7 +1358,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
+fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppResult<()> {
     let settings = UiSettings {
         interface_scale: 100,
         batch_mode: input.batch_mode,
@@ -1233,9 +1396,10 @@ fn validate_start_input(input: &StartBatchInput) -> AppResult<()> {
     if input.task == "video"
         && matches!(input.video_codec.as_str(), "h264" | "hevc")
         && input.external_ffmpeg_path.trim().is_empty()
+        && !external_codecs
     {
         return Err(AppError::Validation(
-            "H.264 and HEVC export use the FFmpeg installed on this computer. Select it under Advanced settings → Video, or choose AV1, VP9 or FFV1.".into(),
+            "H.264 and HEVC export use the codecs of this system or an FFmpeg installed on this computer. Install FFmpeg and select it under Advanced settings → Video, or choose AV1, VP9 or FFV1.".into(),
         ));
     }
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
@@ -2179,23 +2343,61 @@ mod tests {
     }
 
     #[test]
+    fn install_hints_follow_the_distribution() {
+        let fedora = "NAME=\"Fedora Linux\"\nID=fedora\nID_LIKE=\"rhel centos\"\n";
+        assert_eq!(
+            install_hint_for("linux", fedora).command,
+            "sudo dnf install ffmpeg"
+        );
+        assert!(install_hint_for("linux", fedora)
+            .note
+            .contains("RPM Fusion"));
+        let mint = "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n";
+        assert_eq!(
+            install_hint_for("linux", mint).command,
+            "sudo apt install ffmpeg"
+        );
+        assert_eq!(install_hint_for("linux", mint).system, "Ubuntu");
+        assert_eq!(
+            install_hint_for("linux", "ID=arch\n").command,
+            "sudo pacman -S ffmpeg"
+        );
+        assert_eq!(
+            install_hint_for("linux", "").command,
+            "sudo apt install ffmpeg"
+        );
+        assert_eq!(install_hint_for("macos", "").command, "brew install ffmpeg");
+        assert_eq!(
+            install_hint_for("windows", "").command,
+            "winget install Gyan.FFmpeg"
+        );
+    }
+
+    #[test]
     fn video_codec_settings_follow_the_media_policy() {
         let mut video = input("video");
-        assert!(validate_start_input(&video).is_ok());
+        assert!(validate_start_input(&video, false).is_ok());
         video.video_codec = "ffv1".into();
-        assert!(validate_start_input(&video).is_err(), "FFV1 requires MKV");
+        assert!(
+            validate_start_input(&video, false).is_err(),
+            "FFV1 requires MKV"
+        );
         video.video_container = "mkv".into();
-        assert!(validate_start_input(&video).is_ok());
+        assert!(validate_start_input(&video, false).is_ok());
         video.video_codec = "h264".into();
         video.video_container = "mp4".into();
         assert!(
-            validate_start_input(&video).is_err(),
-            "H.264 export needs a user-selected FFmpeg"
+            validate_start_input(&video, false).is_err(),
+            "H.264 export needs the system codecs or an FFmpeg"
+        );
+        assert!(
+            validate_start_input(&video, true).is_ok(),
+            "the system codecs or a found FFmpeg write H.264"
         );
         video.external_ffmpeg_path = "/opt/homebrew/bin/ffmpeg".into();
-        assert!(validate_start_input(&video).is_ok());
+        assert!(validate_start_input(&video, false).is_ok());
         video.video_codec = "x264".into();
-        assert!(validate_start_input(&video).is_err());
+        assert!(validate_start_input(&video, false).is_err());
     }
 
     #[test]

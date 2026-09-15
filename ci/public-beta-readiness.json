@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "release": "0.1.1-beta",
+  "release": "0.1.2-beta",
   "beta_ready": false,
   "gates": [
     {
@@ -17,7 +17,7 @@
       "status": "manual-pass",
       "blocking": true,
       "scope": "macos",
-      "summary": "v0.1.1-beta is Developer ID signed, notarized and stapled. Images, video, cancellation, worker recovery and the in-app update from 0.1.0 passed on an M1 Pro.",
+      "summary": "The macOS beta is Developer ID signed, notarized and stapled. Images, video, cancellation, worker recovery, the in-app update and the system-codec route passed on an M1 Pro.",
       "next_action": "Keep the accepted hashes; re-run the trust checks on every new build.",
       "evidence": "docs/releases/v0.1.1-beta.md"
     },

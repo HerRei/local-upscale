@@ -7,7 +7,7 @@ the verified formats are listed in [Testing](testing.md).
 
 ## Media contract
 
-- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. Export AV1 (default, MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. H.264 and HEVC exports, and sources in formats LocalSR does not include (such as H.264, HEVC, WMV and DivX), use an FFmpeg the user installed and selected under Advanced settings; otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
+- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. Export AV1 (default, MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. On macOS, H.264, HEVC and AAC go through the system codecs (`localsr-media`, AVFoundation). Other formats LocalSR does not include (WMV, DivX, FLV, H.263), and every such format on Windows and Linux, use an FFmpeg the user installed, found automatically or selected under Advanced settings; otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
 - Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
 - Decodable audio the output container accepts is copied unchanged (MP4: MP3, Opus, FLAC, ALAC, AC-3; MKV: any decodable track). Other decodable audio is converted to 48 kHz Opus, preserving timing and channel layout. Copied audio has packet-level trim precision; converted audio has sample-level trimming plus Opus encoder padding. Unsupported subtitles and audio that can neither be copied nor decoded produce a warning and are omitted, unless a user-installed FFmpeg converts them.
@@ -67,7 +67,7 @@ scene light (HLG) or display light (PQ). This conservative constraint can introd
 block-boundary texture and is **not perceptual HDR validation or HDR training**.
 The two face forks keep their existing SDR training/selection claims and rights.
 
-Export quantizes once to 10-bit AV1, VP9 or FFV1 (or HEVC Main 10 through a user-installed
+Export quantizes once to 10-bit AV1, VP9 or FFV1 (or HEVC Main 10 through macOS's encoder or a user-installed
 FFmpeg with `hvc1` in MP4), tags BT.2020 primaries / non-constant-luminance matrix / limited
 range and the original HLG or PQ transfer. The worker checks for a 10-bit encoder before loading
 the model. No fabricated

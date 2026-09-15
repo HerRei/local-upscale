@@ -1,11 +1,24 @@
 <script lang="ts">
-  import { chooseExternalFFmpeg, detectExternalFFmpeg, openFfmpegDownloadPage } from './lib/api';
+  import { onMount } from 'svelte';
+
+  import {
+    chooseExternalFFmpeg,
+    detectExternalFFmpeg,
+    ffmpegInstallHint,
+    isTauri,
+    openFfmpegDownloadPage,
+    openTerminalWithInstallCommand,
+  } from './lib/api';
   import { INSTALL_COMMANDS, detectPlatform, type FfmpegPlatform } from './lib/ffmpeg';
 
   /** Why the notice opened: a video LocalSR cannot decode, or an H.264/HEVC export. */
   export let context: 'open' | 'export' = 'open';
   export let mediaNames: string[] = [];
   export let platform: FfmpegPlatform = detectPlatform();
+  /** The label of this platform's own codecs ("macOS"), or empty when it has none. */
+  export let systemCodecs = '';
+  /** The container of the export that needs FFmpeg. */
+  export let container = 'mp4';
   /** The user picked or LocalSR found an installed FFmpeg. */
   export let onSelected: (path: string) => Promise<void> | void;
   export let onClose: () => void;
@@ -13,11 +26,22 @@
   let note = '';
   let busy = false;
   let copied = false;
+  let command = INSTALL_COMMANDS[platform];
+  let hintNote = '';
 
-  $: command = INSTALL_COMMANDS[platform];
+  onMount(async () => {
+    const hint = await ffmpegInstallHint();
+    if (hint) {
+      command = hint.command;
+      hintNote = hint.note;
+    }
+  });
+
   $: title =
     context === 'export'
-      ? 'H.264 and HEVC export needs FFmpeg'
+      ? systemCodecs && container !== 'mp4'
+        ? 'H.264 and HEVC in MKV need FFmpeg'
+        : 'H.264 and HEVC export needs FFmpeg'
       : mediaNames.length > 1
         ? 'These videos need FFmpeg'
         : 'This video needs FFmpeg';
@@ -56,6 +80,16 @@
     }
   }
 
+  async function runInTerminal(): Promise<void> {
+    try {
+      await openTerminalWithInstallCommand(command);
+      note =
+        'A terminal window is running the install command. When it finishes, click “I installed it”.';
+    } catch (error) {
+      note = `Could not open a terminal: ${String(error)}. Run the command yourself.`;
+    }
+  }
+
   function closeFromBackdrop(event: MouseEvent): void {
     if (event.target === event.currentTarget) onClose();
   }
@@ -78,30 +112,50 @@
   >
     <h2 id="ffmpeg-notice-title">{title}</h2>
     {#if mediaNames.length}<p class="ffmpeg-files">{mediaNames.join(', ')}</p>{/if}
-    <p>
-      Phone and camera videos need FFmpeg. LocalSR only includes royalty-free video formats (AV1,
-      VP9, FFV1 and more). To open H.264 or HEVC videos, or to export them, install FFmpeg yourself
-      (for example <code>{command}</code>) and select it in the app under Advanced settings → Video.
-      Photos work without it.
-    </p>
+    {#if context === 'export' && systemCodecs}
+      <p>
+        {systemCodecs} writes H.264 and HEVC into MP4 without any extra software. Choose MP4 as the container,
+        or install FFmpeg (for example <code>{command}</code>) for MKV and select it under Advanced
+        settings → Video.
+      </p>
+    {:else if systemCodecs}
+      <p>
+        Neither LocalSR nor {systemCodecs} can decode this format (for example WMV, DivX or FLV). Photos,
+        and H.264 or HEVC videos from phones and cameras, open without extra software. To open this file,
+        install FFmpeg (for example <code>{command}</code>) and select it under Advanced settings →
+        Video.
+      </p>
+    {:else}
+      <p>
+        Phone and camera videos need FFmpeg. LocalSR only includes royalty-free video formats (AV1,
+        VP9, FFV1 and more). To open H.264 or HEVC videos, or to export them, install FFmpeg (for
+        example <code>{command}</code>); LocalSR uses it as soon as it is installed. Photos work
+        without it.
+      </p>
+    {/if}
     <div class="ffmpeg-command">
       <code>{command}</code>
       <button class="button compact" on:click={copyCommand}
         >{copied ? 'Copied' : 'Copy command'}</button
       >
     </div>
+    {#if hintNote}<p class="ffmpeg-fineprint">{hintNote}</p>{/if}
     <p class="ffmpeg-fineprint">
-      “Install FFmpeg…” opens ffmpeg.org in your browser. LocalSR never downloads or bundles FFmpeg;
-      it runs the program you select as a separate process.
+      LocalSR never downloads or bundles FFmpeg; it runs the program installed on this computer as a
+      separate process.
     </p>
     {#if note}<p class="ffmpeg-note" role="status">{note}</p>{/if}
     <div class="modal-actions">
       <button class="button" on:click={onClose}>Not now</button>
       <button class="button" on:click={choose}>Choose FFmpeg…</button>
       <button class="button" disabled={busy} on:click={find}>I installed it, find FFmpeg</button>
-      <button class="button primary" on:click={() => void openFfmpegDownloadPage()}
-        >Install FFmpeg…</button
-      >
+      {#if isTauri()}
+        <button class="button primary" on:click={runInTerminal}>Install in Terminal…</button>
+      {:else}
+        <button class="button primary" on:click={() => void openFfmpegDownloadPage()}
+          >Install FFmpeg…</button
+        >
+      {/if}
     </div>
   </div>
 </div>

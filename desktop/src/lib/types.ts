@@ -145,6 +145,19 @@ export interface DeviceInfo {
   recommended_tile_sizes: number[];
 }
 
+/** Programs that open and write the formats LocalSR's own runtime omits. */
+export interface MediaCapabilities {
+  /** The operating system's codecs (macOS), reached through the localsr-media helper. */
+  system_codecs?: {
+    label: string;
+    decode: string[];
+    encode: string[];
+    containers: string[];
+  } | null;
+  /** An FFmpeg found on this computer, used without being selected. */
+  external_ffmpeg?: { detected: string[]; candidates: string[] };
+}
+
 export interface CapabilityInfo {
   system_ram_total: number;
   system_ram_available: number;
@@ -154,6 +167,7 @@ export interface CapabilityInfo {
   system_swap_total: number;
   system_swap_used: number;
   devices: DeviceInfo[];
+  media?: MediaCapabilities | null;
 }
 
 export interface EngineInfo {

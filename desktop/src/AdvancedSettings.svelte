@@ -1,5 +1,6 @@
 <script lang="ts">
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
+  import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
   import type { CapabilityInfo, CatalogModel, UiSettings, VideoCodec } from './lib/types';
 
   export let settings: UiSettings;
@@ -14,6 +15,13 @@
 
   $: codec = settings.video_codec ?? 'av1';
   $: externalCodec = codec === 'h264' || codec === 'hevc';
+  $: system = systemCodecs(capabilities);
+  $: foundFfmpeg = detectedFfmpeg(capabilities);
+  $: codecSuffix = system
+    ? `via ${system.label}`
+    : foundFfmpeg.length
+      ? 'via FFmpeg'
+      : 'needs your FFmpeg';
 
   function chooseCodec(value: VideoCodec): void {
     // FFV1 is lossless and only fits MKV; the others keep the chosen container.
@@ -108,8 +116,8 @@
             on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
             ><option value="av1">AV1 · recommended</option><option value="vp9">VP9</option><option
               value="ffv1">FFV1 · lossless, MKV</option
-            ><option value="h264">H.264 · needs your FFmpeg</option><option value="hevc"
-              >HEVC · needs your FFmpeg</option
+            ><option value="h264">H.264 · {codecSuffix}</option><option value="hevc"
+              >HEVC · {codecSuffix}</option
             ></select
           >
         </div>
@@ -126,7 +134,13 @@
             ></select
           >
         </div>
-        {#if externalCodec}
+        {#if externalCodec && system}
+          <p class="model-description">
+            LocalSR does not include patent-licensed H.264/HEVC encoders. This export is written by
+            {system.label}'s own encoder into MP4, from a temporary lossless copy that needs extra
+            disk space. MKV output needs an FFmpeg installed on your computer.
+          </p>
+        {:else if externalCodec}
           <p class="model-description">
             LocalSR does not include patent-licensed H.264/HEVC encoders. This export is written by
             the FFmpeg installed on your computer, from a temporary lossless copy that needs extra
@@ -137,7 +151,7 @@
           <label for="external-ffmpeg">External FFmpeg</label><input
             id="external-ffmpeg"
             type="text"
-            placeholder="Not used"
+            placeholder={foundFfmpeg.length ? `Found automatically: ${foundFfmpeg[0]}` : 'Not used'}
             value={settings.external_ffmpeg_path ?? ''}
             on:change={(event) =>
               updateSettings({ external_ffmpeg_path: event.currentTarget.value.trim() })}
@@ -151,9 +165,16 @@
             >{/if}
         </div>
         <p class="model-description">
-          Optional. Used only for H.264/HEVC export and for opening videos in formats LocalSR does
-          not include (for example most phone and camera videos). LocalSR never downloads or bundles
-          FFmpeg.{#if ffmpegNote}<br />{ffmpegNote}{/if}
+          {#if system}
+            Optional. On this computer, H.264 and HEVC videos open and export through {system.label}'s
+            own codecs. FFmpeg is only needed for other formats (WMV, DivX, FLV) and for H.264/HEVC
+            in MKV; one found on this computer is used automatically.
+          {:else}
+            Optional. An FFmpeg found on this computer is used automatically; select one here to use
+            a different build. It is needed for H.264/HEVC export and for opening most phone and
+            camera videos.
+          {/if}
+          LocalSR never downloads or bundles FFmpeg.{#if ffmpegNote}<br />{ffmpegNote}{/if}
         </p>
         <div class="range-row">
           <label for="crf">Video quality · CRF <b>{settings.video_crf}</b></label><input

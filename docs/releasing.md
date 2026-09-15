@@ -1,6 +1,6 @@
 # Releasing
 
-Current release: **v0.1.1-beta** for macOS. Release notes live in
+Current release: **v0.1.2-beta** for macOS. Release notes live in
 [`releases/`](releases/), one file per tag; the release workflow uses that file
 as the GitHub release body.
 
@@ -18,8 +18,9 @@ are published as prereleases.
 
 ## macOS beta
 
-`scripts/release_macos_beta.sh` builds the app from a committed tree, signs it
-with the Developer ID identity, notarizes and staples the app and the DMG,
+`scripts/release_macos_beta.sh` builds the app from a committed tree (the
+packaging step also compiles `localsr-media` with `swiftc` into the engine
+directory), signs it with the Developer ID identity, notarizes and staples the app and the DMG,
 packages the update archive and the engine payload, and writes `beta.json`,
 `release.json` and `SHA256SUMS` under `build/release-<version>/`. It writes the
 update archive without AppleDouble entries: the updater strips the bundle name

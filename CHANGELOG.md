@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.2-beta] - 2026-09-16
+
+### Added
+
+- macOS opens and exports H.264, HEVC and AAC through the codecs that ship with
+  the system. A small helper (`localsr-media`, built on AVFoundation) decodes phone
+  and camera videos into LocalSR's lossless intermediate and writes H.264/HEVC
+  exports, including 10-bit HLG/PQ HEVC, so no FFmpeg is needed for them.
+  LocalSR's own media runtime is unchanged and still contains no patent-licensed
+  code.
+- An FFmpeg found on this computer (Homebrew, winget or the distribution package)
+  is used automatically; selecting one is only needed to pick a different build.
+- The FFmpeg notice shows the install command for the actual distribution (apt,
+  dnf with the RPM Fusion note, pacman, zypper, apk, Homebrew, winget) and can run
+  it in a terminal window.
 
 ### Fixed
 

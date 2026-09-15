@@ -33,12 +33,29 @@ without `--enable-gpl`, `--enable-nonfree` or `--enable-version3`, as replaceabl
 shared libraries. OpenCV is built without FFmpeg. Linux AppImages keep only the
 GStreamer plugins in `LINUX_GSTREAMER_PLUGIN_ALLOWLIST`.
 
+## System codecs on macOS
+
+macOS ships H.264, HEVC and AAC codecs under Apple's licences, behind
+AVFoundation. LocalSR uses them through `localsr-media`, a small helper built
+from [`packaging/macos/media-helper/main.swift`](../packaging/macos/media-helper/main.swift)
+that links only Apple frameworks (AVFoundation, CoreMedia, CoreVideo,
+VideoToolbox). It decodes into the same lossless FFV1/FLAC intermediate the
+FFmpeg route uses and encodes exports with VideoToolbox, exchanging raw frames
+with the worker over pipes. LocalSR's binaries still contain no code for these
+formats, and the helper adds no third-party code to the package. It writes
+H.264/HEVC into MP4 or MOV; MKV output and formats macOS cannot read (WMV,
+DivX, FLV, H.263) still go through a user-installed FFmpeg. Windows has
+equivalent codecs in Media Foundation; a helper for them is planned.
+
 ## What users can add themselves
 
-Most phone and camera videos use H.264 or HEVC. To open them, or to export
-H.264/HEVC, a user can install FFmpeg (for example `brew install ffmpeg`,
-`winget install ffmpeg` or their Linux package manager) and select it under
-**Advanced settings → Video → External FFmpeg**.
+Most phone and camera videos use H.264 or HEVC. On macOS they open through the
+system codecs. Elsewhere, or for formats macOS cannot read, a user can install
+FFmpeg (for example `brew install ffmpeg`, `winget install Gyan.FFmpeg` or their
+Linux package manager). An FFmpeg on the PATH or in the usual locations is used
+automatically; selecting one under **Advanced settings → Video → External
+FFmpeg** picks a specific build. The notice that appears when a file needs it
+shows the command for the actual distribution and can run it in a terminal.
 
 - LocalSR never downloads, bundles or links that program. It runs the selected
   executable as a separate process.
@@ -53,7 +70,8 @@ H.264/HEVC, a user can install FFmpeg (for example `brew install ffmpeg`,
 
 ## Usability consequences
 
-- H.264/HEVC videos need a user-installed FFmpeg on every platform.
+- H.264/HEVC videos need a user-installed FFmpeg on Windows and Linux; macOS
+  uses its own codecs.
 - The default export is AV1 in MP4. AV1 encodes more slowly than x264 and some
   older players and editors cannot open it; VP9 and lossless FFV1 (MKV) are
   alternatives.
@@ -123,3 +141,6 @@ association's legal information desk):
 4. Can NVIDIA's reverse-engineering restrictions on its libraries coexist with the
    LGPL's relinking and debugging permissions in one CUDA package?
 5. Written confirmation from NVIDIA for cuDNN 9 Windows DLLs.
+6. Does using the operating system's licensed H.264/HEVC/AAC codecs through
+   Apple's and Microsoft's public APIs need anything beyond their platform
+   licence terms?

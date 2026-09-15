@@ -50,11 +50,11 @@ entry:
 
 ```json
 {
-  "version": "0.1.1-beta",
+  "version": "0.1.2-beta",
   "notes": "What changed and what to watch out for.",
   "platforms": {
     "darwin-aarch64-mps-native": {
-      "url": "https://downloads.example.org/LocalSR-v0.1.1-beta-macOS-arm64.app.tar.gz",
+      "url": "https://downloads.example.org/LocalSR-v0.1.2-beta-macOS-arm64.app.tar.gz",
       "signature": "BASE64_TAURI_SIGNATURE",
       "localsr": {
         "channel": "beta",

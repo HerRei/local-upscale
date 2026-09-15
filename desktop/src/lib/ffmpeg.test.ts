@@ -37,12 +37,44 @@ describe('FFmpeg notice helpers', () => {
     );
   });
 
+  it('does not ask for FFmpeg when the system codecs or a found FFmpeg can write the export', () => {
+    const settings = {
+      ...demoSnapshot().settings,
+      task: 'video' as const,
+      video_codec: 'hevc' as const,
+    };
+    const capabilities = demoSnapshot().capabilities;
+    const mac = {
+      ...capabilities,
+      media: {
+        system_codecs: {
+          label: 'macOS',
+          decode: ['h264'],
+          encode: ['h264', 'hevc'],
+          containers: ['mp4'],
+        },
+        external_ffmpeg: { detected: [], candidates: [] },
+      },
+    };
+    expect(exportNeedsExternalFFmpeg({ ...settings, video_container: 'mp4' }, mac)).toBe(false);
+    expect(exportNeedsExternalFFmpeg({ ...settings, video_container: 'mkv' }, mac)).toBe(true);
+    const linux = {
+      ...capabilities,
+      media: {
+        system_codecs: null,
+        external_ffmpeg: { detected: ['/usr/bin/ffmpeg'], candidates: [] },
+      },
+    };
+    expect(exportNeedsExternalFFmpeg({ ...settings, video_container: 'mkv' }, linux)).toBe(false);
+    expect(exportNeedsExternalFFmpeg(settings, { ...capabilities, media: null })).toBe(true);
+  });
+
   it('picks the install command for the platform', () => {
     expect(INSTALL_COMMANDS[detectPlatform('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')]).toBe(
       'brew install ffmpeg',
     );
     expect(INSTALL_COMMANDS[detectPlatform('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')]).toBe(
-      'winget install ffmpeg',
+      'winget install Gyan.FFmpeg',
     );
     expect(INSTALL_COMMANDS[detectPlatform('Mozilla/5.0 (X11; Linux x86_64)')]).toBe(
       'sudo apt install ffmpeg',

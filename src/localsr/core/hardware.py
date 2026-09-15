@@ -306,10 +306,13 @@ def get_capability_report() -> dict:
         }
     )
 
+    from .media_bridge import media_capabilities
+
     report = {
         "system_ram_total": total_ram,
         "system_ram_available": available_ram,
         "devices": devices,
+        "media": media_capabilities(),
     }
     report.update(_system_pressure_snapshot(total_ram, available_ram))
     return report

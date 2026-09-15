@@ -6,7 +6,7 @@ fetched on demand.
 
 | Package | Engine | Status | Tested on |
 | --- | --- | --- | --- |
-| macOS · Apple Silicon | MPS | Published (v0.1.1-beta) | MacBook Pro M1 Pro, 16 GB |
+| macOS · Apple Silicon | MPS | Published (v0.1.2-beta) | MacBook Pro M1 Pro, 16 GB |
 | Windows · x86-64 | CPU | Test builds only | Windows 11, Core i7-8550U |
 | Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Test builds only | Intel UHD 620, driver 24.20.100.6286 |
 | Windows · x86-64 | CUDA | Labs · no hardware run | — |
@@ -44,7 +44,8 @@ mean every model and resolution works on every GPU of that family.
 
 - **MPS.** Model weights are converted on the CPU before upload so two copies
   never sit in unified memory at once. SeedVR2 3B FP16 runs on MPS; FP8 needs
-  CUDA or ROCm.
+  CUDA or ROCm. H.264, HEVC and AAC decode and encode through the system codecs
+  ([media formats](licensing-media.md)).
 - **DirectML.** Any DXGI adapter with D3D12 support can be selected; only the
   UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
   DirectML implementation.

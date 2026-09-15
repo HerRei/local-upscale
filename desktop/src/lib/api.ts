@@ -136,6 +136,23 @@ export async function openFfmpegDownloadPage(): Promise<void> {
   if (isTauri()) await invoke('open_ffmpeg_download_page');
 }
 
+export interface FfmpegInstallHint {
+  command: string;
+  note: string;
+  system: string;
+}
+
+/** The package manager command that installs FFmpeg on this computer. */
+export async function ffmpegInstallHint(): Promise<FfmpegInstallHint | null> {
+  if (!isTauri()) return null;
+  return invoke<FfmpegInstallHint>('ffmpeg_install_hint');
+}
+
+/** Open a terminal with the install command typed in; the user runs it. */
+export async function openTerminalWithInstallCommand(command: string): Promise<void> {
+  if (isTauri()) await invoke('open_terminal_with_install_command', { command });
+}
+
 export async function chooseExternalFFmpeg(current: string): Promise<string | null> {
   if (!isTauri()) return null;
   const selection = await open({

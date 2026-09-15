@@ -668,6 +668,15 @@ def build_worker(target: str | None = None, private_preview_media: bool = False)
     executable = worker_executable()
     if not executable.is_file():
         raise SystemExit(f"worker build did not create {executable}")
+    if sys.platform == "darwin":
+        build_media_helper(target_arch)
+
+
+def build_media_helper(target_arch: str | None) -> None:
+    """Place localsr-media, the bridge to macOS's own codecs, next to the worker."""
+    from build_media_helper import build
+
+    build(ENGINE_DIR / "localsr-media", arch=target_arch, force=True)
 
 
 def write_bundle_overlay(*, require_signing: bool = False, payload: Path | None = None) -> None:

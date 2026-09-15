@@ -1,6 +1,6 @@
 # Known limitations
 
-These apply to v0.1.1-beta. Please read them before starting a long job.
+These apply to v0.1.2-beta. Please read them before starting a long job.
 
 ## Platforms
 
@@ -12,19 +12,19 @@ These apply to v0.1.1-beta. Please read them before starting a long job.
   are labelled Labs in the app.
 - A working launch does not prove GPU compatibility. Some operators fall back to
   the CPU (for example `aten::roll` on DirectML), and drivers vary.
-- On macOS, opening a file *with* LocalSR while the app is not running can crash
-  it during launch. Start LocalSR first, then open or drop the file. Fixed in
-  the next build.
 
 ## Media formats
 
-- H.264, HEVC, WMV, DivX and AAC-only sources — which includes most phone and
-  camera videos — need an FFmpeg you install yourself and select under
-  *Advanced settings → Video*. LocalSR shows the install command when you add
-  such a file. The reasons are in [Media formats and licensing](docs/licensing-media.md).
+- On macOS, H.264, HEVC and AAC — most phone and camera videos — open through
+  the system's own codecs. WMV, DivX, FLV and H.263 still need an FFmpeg you
+  install yourself, and on Windows and Linux so does every patent-licensed
+  format. An FFmpeg on your PATH or in Homebrew is used automatically; LocalSR
+  shows the install command when a file needs one. The reasons are in
+  [Media formats and licensing](docs/licensing-media.md).
 - The default video export is AV1. Some older players and editors cannot open it;
-  VP9 and lossless FFV1 are built in, and H.264/HEVC export goes through your
-  FFmpeg from a temporary lossless copy, which needs extra disk space.
+  VP9 and lossless FFV1 are built in. H.264/HEVC export uses macOS's encoders
+  (MP4 only) or your FFmpeg, from a temporary lossless copy that needs extra
+  disk space.
 - Interlacing is deinterlaced only when the file is tagged; untagged interlacing
   and inverse telecine are not detected. DVD menus, disc images and encrypted
   media are out of scope.
