@@ -1182,14 +1182,14 @@ fn open_terminal(command: &str) -> std::io::Result<()> {
 #[cfg(target_os = "linux")]
 fn open_terminal(command: &str) -> std::io::Result<()> {
     let script = format!("{command}; echo; read -r -p 'Press Enter to close this window'");
+    // xfce4-terminal takes the whole command as one -e argument, so it needs its
+    // own string; binding it here keeps it alive for as long as the array.
+    let single_argument = format!("bash -c \"{script}\"");
     let attempts: [(&str, Vec<&str>); 5] = [
         ("x-terminal-emulator", vec!["-e", "bash", "-c", &script]),
         ("gnome-terminal", vec!["--", "bash", "-c", &script]),
         ("konsole", vec!["-e", "bash", "-c", &script]),
-        (
-            "xfce4-terminal",
-            vec!["-e", &format!("bash -c \"{script}\"")],
-        ),
+        ("xfce4-terminal", vec!["-e", &single_argument]),
         ("xterm", vec!["-e", "bash", "-c", &script]),
     ];
     let mut last = std::io::Error::other("no terminal emulator found");
