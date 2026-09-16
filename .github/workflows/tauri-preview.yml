@@ -166,11 +166,14 @@ jobs:
             runner: '["self-hosted","Windows","X64"]'
             shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
             cargo_jobs: 2
-          - platform: macOS X64
-            cache_key: macos-x64
-            runner: '["self-hosted","macOS","X64"]'
+          # Hosted Apple Silicon. The Mac mini's macOS guest is Intel, so it
+          # could only ever verify x86_64 while we ship arm64. A hosted runner
+          # matches the shipped target and frees the guest entirely.
+          - platform: macOS arm64
+            cache_key: macos-arm64
+            runner: '["macos-latest"]'
             shell: bash
-            cargo_jobs: 2
+            cargo_jobs: 3
     runs-on: ${{ fromJSON(matrix.runner) }}
     defaults:
       run:
@@ -204,11 +207,17 @@ jobs:
           echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
           echo "PIP_CACHE_DIR=/ci-scratch/cache/pip" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
+      # The hosted image has no python.org framework build at a fixed path, so
+      # provision the interpreter instead of hardcoding one.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: runner.os == 'macOS'
+        with:
+          python-version: '3.11'
       - name: Create isolated macOS Python environment
         if: runner.os == 'macOS'
         run: |
           VENV="$RUNNER_TEMP/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify/venv"
-          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv "$VENV"
+          python3.11 -m venv "$VENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
       - name: Create isolated Windows Python environment
