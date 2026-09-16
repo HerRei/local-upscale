@@ -406,12 +406,12 @@ def _add_processing_options(parser: argparse.ArgumentParser) -> None:
         "--video-codec",
         choices=["av1", "vp9", "ffv1", "h264", "hevc"],
         default="av1",
-        help="H.264/HEVC are written by the FFmpeg given with --external-ffmpeg.",
+        help="H.264/HEVC are written by the system codecs (macOS) or an installed FFmpeg.",
     )
     parser.add_argument(
         "--external-ffmpeg",
         default="",
-        help="An FFmpeg you installed, for formats LocalSR does not include.",
+        help="A specific FFmpeg build; one installed on this computer is found anyway.",
     )
     parser.add_argument("--tile-size", type=int, default=256)
     parser.add_argument("--halo", type=int, default=16)

@@ -33,3 +33,5 @@ Microsoft Store builds receive their updates from the Store. Direct Windows
 installers for the beta are not Authenticode signed; SmartScreen will warn.
 
 Third-party dependencies are pinned in lock files and reviewed with Dependabot.
+One advisory is knowingly open: the unpublished Linux builds inherit `glib` 0.18
+through Tauri's GTK3 stack; see [Platforms](docs/platforms.md).

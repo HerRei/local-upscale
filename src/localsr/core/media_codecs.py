@@ -29,8 +29,8 @@ MP4_COPY_AUDIO = frozenset({"aac", "mp3", "mp3float", "opus", "flac", "alac", "a
 WEBM_COPY_AUDIO = frozenset({"opus", "vorbis"})
 
 EXTERNAL_FFMPEG_HINT = (
-    "Install FFmpeg on this computer and select it under Advanced settings → Video → "
-    "External FFmpeg, or convert the video to AV1, VP9 or FFV1 first."
+    "Install FFmpeg on this computer — LocalSR then uses it automatically — or convert "
+    "the video to AV1, VP9 or FFV1 first."
 )
 UNDECODABLE_VIDEO_MESSAGE = (
     "This video uses a patent-licensed format (for example H.264, HEVC, WMV or MPEG-4 "

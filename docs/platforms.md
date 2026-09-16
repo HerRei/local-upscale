@@ -34,7 +34,11 @@ mean every model and resolution works on every GPU of that family.
   cuDNN 9 DLLs may be redistributed.
 - **Linux.** The CPU, CUDA and ROCm AppImages build and carry verified update
   signatures. The GPU packages are 5–6 GB, beyond GitHub's release asset limit,
-  and go out once the download host serves them.
+  and go out once the download host serves them. They also carry one known open
+  advisory: Tauri's GTK3 stack pulls in `glib` 0.18, which has the unsoundness
+  advisory [GHSA-wrw7-89jp-8q8g](https://rustsec.org/advisories/RUSTSEC-2024-0429.html).
+  It is fixed only by the upstream move to GTK4, so it stays open until Tauri's
+  Linux backend migrates.
 - **Intel XPU on Linux** is withheld because Intel's oneAPI runtime licence asks
   the distributor to indemnify Intel and forbids reverse engineering, which
   conflicts with the LGPL relinking terms of the bundled media libraries. The
