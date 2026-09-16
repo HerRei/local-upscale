@@ -21,20 +21,39 @@ are published as prereleases.
 `scripts/release_macos_beta.sh` builds the app from a committed tree (the
 packaging step also compiles `localsr-media` with `swiftc` into the engine
 directory), signs it with the Developer ID identity, notarizes and staples the app and the DMG,
-packages the update archive and the engine payload, and writes `beta.json`,
-`release.json` and `SHA256SUMS` under `build/release-<version>/`. It writes the
-update archive without AppleDouble entries: the updater strips the bundle name
-from every path, so a hidden `._LocalSR.app` entry becomes an empty path and the
-install fails.
+packages the update archive and the engine payload, assembles the corresponding
+source, and writes `beta.json`, `release.json` and `SHA256SUMS` under
+`build/release-<version>/`. It writes the update archive without AppleDouble
+entries: the updater strips the bundle name from every path, so a hidden
+`._LocalSR.app` entry becomes an empty path and the install fails.
+
+The script needs the media runtime's corresponding source in this checkout —
+`build/lgpl-media/{dist,opencv}/corresponding-source` and the tarballs in
+`build/extra-sources/` — and refuses to start without them, because they are
+only used by the last step. A fresh worktree gets them by building the runtime
+(`packaging/ffmpeg/install_media_runtime.py`) or by copying `build/lgpl-media`
+and `build/extra-sources` from a worktree that already has them.
+
+`LOCALSR_FEED_NOTES` sets the text the update dialog shows for this release;
+without it the entry points at the release-notes page.
+
+Never edit the script while it runs: bash reads it incrementally, so a changed
+file resumes at the wrong offset.
 
 After the build:
 
-1. Upload the DMG, the update archive, its signature and the engine payload to
-   the download host.
-2. Install the previous version on a test Mac and confirm that the update
-   installs from the feed.
-3. Add the entry to the website's `updates/beta.json` and publish the download
-   page.
+1. Copy the DMG, the update archive and its signature, the engine payload and
+   its parts, the source bundle and `SHA256SUMS` to the download host. A direct
+   `scp` through the Tailscale relay runs at about 750 KB/s; uploading them to a
+   **draft** GitHub release and running `gh release download` on the host is far
+   faster and creates no tag. Delete that draft afterwards — publishing it would
+   create the tag and start the full release workflow.
+2. Verify the copies on the host with `shasum -a 256 -c SHA256SUMS`.
+3. Install the previous version on a test Mac and confirm that the update
+   downloads, installs and relaunches on the new version.
+4. Add the entry to the website's `updates/beta.json`, update `release.json` and
+   run `localsr/tools/sync_release.py` and `validate_site.py`, then publish.
+   GitHub Pages caches the feed for ten minutes.
 
 The signing identity (`Developer ID Application: Hermes Reisner`) and the
 notarization profile `LocalSR-Z2TU844D84-notary` live in the login Keychain of

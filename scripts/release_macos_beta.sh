@@ -19,6 +19,17 @@ HOST_BASE="https://macmini-ci.tail34a4e0.ts.net/releases/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 
 test -z "$(git status --porcelain -- src desktop packaging scripts pyproject.toml)" || { echo "uncommitted source changes"; exit 1; }
+# The source bundle is the last step but its inputs are built much earlier, so check
+# them now rather than after half an hour of building, signing and notarizing.
+for required in build/lgpl-media/dist/corresponding-source build/lgpl-media/opencv/corresponding-source \
+  build/extra-sources/rawpy-0.27.0.tar.gz build/extra-sources/gcc-11.3.0-2.tar.gz; do
+  test -e "$required" || {
+    echo "missing corresponding-source input: $required"
+    echo "Build the media runtime here (packaging/ffmpeg/install_media_runtime.py) or copy"
+    echo "build/lgpl-media and build/extra-sources from a worktree that has them."
+    exit 1
+  }
+done
 COMMIT=$(git rev-parse HEAD)
 export LOCALSR_UPDATE_PUBLIC_KEY="$(tr -d '\n' < packaging/updates/production.pub)"
 export LOCALSR_UPDATE_BACKEND=mps
