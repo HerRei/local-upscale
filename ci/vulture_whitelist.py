@@ -128,3 +128,13 @@ _.total_size_bytes
 _.get_path  # OutputWriter memmap path, used by tests
 get_preset_model  # reference preset behavior mirrored by the desktop
 resolve_settings_for_model
+
+# Threading server knobs read by the stdlib, never by our own code.
+daemon_threads  # socketserver.ThreadingMixIn, packaging/hosting/stats
+_.daemon_threads  # set on a ThreadingHTTPServer instance
+
+# Dataclass field serialized through asdict(); removing it breaks the protocol.
+_.media  # protocol/messages.py CapabilitiesInfo
+
+# Public display helper on the codec bridge, kept by decision.
+_.describe  # core/media_bridge.py MediaBridge
