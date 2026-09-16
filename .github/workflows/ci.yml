@@ -228,65 +228,24 @@ jobs:
         run: ./scripts/remove_windows_scratch.ps1 -ManagedRoot (Join-Path $env:RUNNER_TEMP "LocalSR-CI") -Target (Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests")
 
   test-macos:
-    name: Test macOS X64 on SSD
+    name: Test macOS arm64
     needs: [test-windows]
-    runs-on: [self-hosted, macOS, X64]
-    env:
-      CI_SCRATCH: /Volumes/CISCRATCH
-      PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
+    # Hosted Apple Silicon. The Mac mini's macOS guest is Intel, so this job
+    # could only ever exercise x86_64 while the project ships arm64. The hosted
+    # runner is also ephemeral, which removes the need for the guest-SSD
+    # scratch allocation, preflight and cleanup this job used to perform.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Allocate isolated guest SSD workspace
-        id: scratch
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Install and run the test suite
         run: |
-          python3 scripts/ci_scratch.py init --root "$CI_SCRATCH"
-          python3 scripts/ci_scratch.py cleanup --root "$CI_SCRATCH" --cache-max-gib 2
-          python3 scripts/storage_preflight.py \
-            --ssd-path "$CI_SCRATCH" \
-            --skip-hdd \
-            --ssd-min-percent 20 \
-            --ssd-min-gib 6 \
-            --ssd-min-percent 15 --ssd-peak-gib 5
-          python3 scripts/ci_scratch.py start \
-            --root "$CI_SCRATCH" \
-            --run-id "${{ github.run_id }}" \
-            --attempt "${{ github.run_attempt }}" \
-            --platform macos \
-            --flavor tests \
-            --github-output "$GITHUB_OUTPUT"
-      - name: Install and test entirely on the guest SSD
-        env:
-          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
-        run: |
-          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
-          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
-            -m venv "$RUN_ROOT/environment/venv"
-          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          python3.11 -m venv "$RUNNER_TEMP/venv"
+          PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
-          cd "$RUN_ROOT/source"
+          "$PYTHON" -m pip install --disable-pip-version-check -e ".[dev,video,face]"
           "$PYTHON" -m pytest tests/ -v
-      - name: Finalize guest scratch state
-        if: always()
-        env:
-          JOB_STATUS: ${{ job.status }}
-          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
-        run: |
-          if [ -n "$RUN_ROOT" ] && [ -f "$RUN_ROOT/.active" ]; then
-            if [ "$JOB_STATUS" = success ]; then
-              STATUS=complete
-              CLEANUP=--cleanup
-            else
-              STATUS=failed
-              CLEANUP=
-            fi
-            python3 scripts/ci_scratch.py finish \
-              --root "$CI_SCRATCH" \
-              --run-id "${{ github.run_id }}" \
-              --attempt "${{ github.run_attempt }}" \
-              --platform macos \
-              --flavor tests \
-              --status "$STATUS" $CLEANUP
-          fi
