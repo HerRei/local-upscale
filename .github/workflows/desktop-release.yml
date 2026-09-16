@@ -49,10 +49,11 @@ jobs:
           - platform: windows
             runner: '["self-hosted","Windows","X64","localsr-windows-builder"]'
           - platform: macos
-            # No native ARM64 runner is registered yet. Route to the confirmed
-            # Mac-mini runner so the explicit architecture gate fails quickly
-            # instead of leaving a signed release queued forever.
-            runner: '["self-hosted","macOS","X64","localsr-macos-cross-builder"]'
+            # Hosted Apple Silicon is genuinely arm64, so the architecture gate
+            # in the build job now passes instead of failing closed. This also
+            # frees the Mac mini's Intel macOS guest, which could never have
+            # satisfied that gate.
+            runner: '["macos-latest"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
     steps:
@@ -76,8 +77,10 @@ jobs:
             echo "::error::A registered native macOS ARM64 runner is required for signed releases."
             exit 1
           fi
-          python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" \
-            --platform macos --scratch-path /Volumes/CISCRATCH --scratch-min-free-gib 10 \
+          # The hosted runner cannot reach the LAN artifact receiver, and its
+          # workspace is ephemeral, so only the toolchain check applies here.
+          python3 scripts/release_runner_preflight.py \
+            --platform macos --scratch-path "$RUNNER_TEMP" --scratch-min-free-gib 10 \
             --require-tool python3 --require-tool git --require-tool codesign --require-tool xcrun
 
   build-linux:
@@ -339,13 +342,13 @@ jobs:
   build-macos-arm64:
     name: Build signed and notarized macOS ARM64 DMG
     needs: [build-windows]
-    # Deliberately uses the registered Mac-mini label until a native ARM64
-    # signing runner is provisioned; the architecture gate below fails closed.
-    runs-on: [self-hosted, macOS, X64, localsr-macos-cross-builder]
+    # Hosted Apple Silicon. The architecture gate below now passes on a genuine
+    # arm64 host instead of failing closed on the Intel Mac-mini guest, which
+    # could never satisfy it.
+    runs-on: macos-latest
     timeout-minutes: 300
     env:
       MACOSX_DEPLOYMENT_TARGET: "12.0"
-      PIP_CACHE_DIR: /Volumes/CISCRATCH/cache/pip
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -356,8 +359,10 @@ jobs:
             echo "::error::A registered native macOS ARM64 runner is required for signed releases."
             exit 1
           fi
-          python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" \
-            --platform macos --scratch-path /Volumes/CISCRATCH --scratch-min-free-gib 10 \
+          # No --server: the hosted runner cannot reach the LAN receiver, so
+          # only the runner-side toolchain and space checks apply.
+          python3 scripts/release_runner_preflight.py \
+            --platform macos --scratch-path "$RUNNER_TEMP" --scratch-min-free-gib 10 \
             --require-tool python3 --require-tool git --require-tool codesign --require-tool xcrun
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -377,20 +382,22 @@ jobs:
             exit 1
           fi
           python3 -c 'import platform; assert platform.machine() == "arm64", platform.machine()'
-      - name: Allocate bounded guest SSD working storage
+      # The hosted image has no python.org framework build at a fixed path.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Allocate working storage
         run: |
-          python3 scripts/release_scratch.py init --root /Volumes/CISCRATCH
-          python3 scripts/release_scratch.py cleanup --root /Volumes/CISCRATCH
-          ROOT=$(python3 scripts/release_scratch.py start --root /Volumes/CISCRATCH \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
-            --platform macos --flavor signed-arm64)
-          mkdir -p /Volumes/CISCRATCH/cache/pip
-          python3 scripts/storage_preflight.py --ssd-path /Volumes/CISCRATCH --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 10
-          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv "$ROOT/venv"
+          # A hosted runner is ephemeral and its disk is discarded with the job,
+          # so the guest-SSD scratch bookkeeping this job used to do is replaced
+          # by a plain directory under RUNNER_TEMP.
+          ROOT="$RUNNER_TEMP/localsr-release/signed-arm64"
+          mkdir -p "$ROOT/tmp" "$ROOT/staging"
+          python3.11 -m venv "$ROOT/venv"
           {
             echo "LOCALSR_TAURI_ROOT=$ROOT"
             echo "TMPDIR=$ROOT/tmp"
-            echo "CARGO_TARGET_DIR=/Volumes/CISCRATCH/cargo-target/tauri-arm64"
+            echo "CARGO_TARGET_DIR=$ROOT/cargo-target"
           } >> "$GITHUB_ENV"
           echo "$ROOT/venv/bin" >> "$GITHUB_PATH"
       - name: Install the maintained native ARM worker toolchain
@@ -409,9 +416,11 @@ jobs:
           for tool in nasm meson ninja cmake autoconf automake; do
             command -v "$tool" >/dev/null || brew install "$tool"
           done
+          # The source cache no longer survives between runs now that this job
+          # is ephemeral, so the LGPL media runtime is rebuilt each release.
           python packaging/ffmpeg/install_media_runtime.py \
-            --work-dir /Volumes/CISCRATCH/lgpl-media/macos-arm64 \
-            --source-cache /Volumes/CISCRATCH/lgpl-media/sources --jobs 8
+            --work-dir "$RUNNER_TEMP/lgpl-media/macos-arm64" \
+            --source-cache "$RUNNER_TEMP/lgpl-media/sources" --jobs 3
       - name: Build, sign, notarize, staple, and smoke-test the DMG
         env:
           APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -441,24 +450,27 @@ jobs:
             --platform macos --architecture arm64 --backend MPS \
             --smoke-report "$LOCALSR_TAURI_ROOT/staging/package-smoke.json" \
             --signing-report "$LOCALSR_TAURI_ROOT/staging/signing-report.json"
-      - name: Transfer only verified release inputs
-        env:
-          CI_ARTIFACT_TOKEN: ${{ secrets.CI_ARTIFACT_TOKEN }}
+      # The LAN artifact receiver is unreachable from a hosted runner, so the
+      # verified inputs travel through GitHub instead. publish-release unpacks
+      # them into the same ci-artifacts layout the receiver would have written.
+      - name: Collect verified release inputs
+        id: collect
         run: |
           VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           ARTIFACT="$LOCALSR_TAURI_ROOT/staging/LocalSR-v${VERSION}-macOS-arm64.dmg"
-          python scripts/upload_artifacts.py --server "$CI_ARTIFACT_SERVER" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --platform macos \
-            "$ARTIFACT" "$ARTIFACT.sha256" "$ARTIFACT.metadata.json" "$ARTIFACT.architecture.json"
-      - name: Finalize bounded macOS scratch
-        if: always()
-        env:
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          if [[ -n "${LOCALSR_TAURI_ROOT:-}" && -f "$LOCALSR_TAURI_ROOT/.localsr-release-run.json" ]]; then
-            python3 scripts/release_scratch.py finish --root /Volumes/CISCRATCH \
-              --target "$LOCALSR_TAURI_ROOT" --status "$JOB_STATUS" --retain-hours 48
-          fi
+          OUT="$RUNNER_TEMP/macos-release-inputs"
+          mkdir -p "$OUT"
+          for suffix in "" .sha256 .metadata.json .architecture.json; do
+            test -f "$ARTIFACT$suffix"
+            cp "$ARTIFACT$suffix" "$OUT/"
+          done
+          echo "dir=$OUT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-release-inputs
+          path: ${{ steps.collect.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 7
 
   verify-release-matrix:
     name: Verify complete signed release matrix
@@ -495,6 +507,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # macOS now builds on a hosted runner that cannot POST to the LAN
+      # receiver, so its outputs arrive through GitHub and are placed into the
+      # exact ci-artifacts path the receiver would have written for them.
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: macos-release-inputs
+          path: /mnt/hdd/ci-artifacts/${{ github.run_id }}/${{ github.run_attempt }}/macos
       - name: Prepare all verified backend downloads
         run: |
           RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"

@@ -110,7 +110,9 @@ def validate_runner(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", required=True)
+    # Optional: a hosted runner cannot reach the LAN artifact receiver. Omit it
+    # to run the runner-side checks only.
+    parser.add_argument("--server")
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
     parser.add_argument("--scratch-path", type=Path, required=True)
     parser.add_argument("--receiver-min-free-gib", type=float, default=100.0)
@@ -120,11 +122,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
 
-    receiver = fetch_health(
-        args.server,
-        minimum_free_bytes=int(args.receiver_min_free_gib * GIB),
-        minimum_free_percent=args.receiver_min_free_percent,
-    )
+    receiver: dict[str, object]
+    if args.server:
+        receiver = fetch_health(
+            args.server,
+            minimum_free_bytes=int(args.receiver_min_free_gib * GIB),
+            minimum_free_percent=args.receiver_min_free_percent,
+        )
+    else:
+        receiver = {
+            "checked": False,
+            "reason": "no --server given; runner-side checks only",
+        }
     runner = validate_runner(
         args.platform,
         args.scratch_path,
