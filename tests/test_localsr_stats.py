@@ -105,7 +105,9 @@ def test_salts_and_hashes_are_deleted_after_two_days(tmp_path):
     assert days == {"2026-09-16", "2026-09-17"}
     # A late line for a pruned day must not create a fresh salt and double count.
     assert not store.record(entry("/hit?p=/", ts=NOW), NOW + 2 * 86400)
-    assert store.db.execute("SELECT SUM(uniques) FROM daily WHERE kind='visitor'").fetchone()[0] == 3
+    assert (
+        store.db.execute("SELECT SUM(uniques) FROM daily WHERE kind='visitor'").fetchone()[0] == 3
+    )
 
 
 def test_ip_addresses_never_reach_the_database(tmp_path):
@@ -131,8 +133,12 @@ def test_dashboard_escapes_visitor_supplied_text(tmp_path):
 
 def test_summary_groups_downloads(tmp_path):
     store = stats.Store(tmp_path / "s.db")
-    for name in ("LocalSR-v0.1.1-beta-macOS-arm64.dmg", "LocalSR-v0.1.1-beta-macOS-arm64.app.tar.gz",
-                 "LocalSR-v0.1.1-beta-macOS-arm64.app.tar.gz.sig", "SHA256SUMS"):
+    for name in (
+        "LocalSR-v0.1.1-beta-macOS-arm64.dmg",
+        "LocalSR-v0.1.1-beta-macOS-arm64.app.tar.gz",
+        "LocalSR-v0.1.1-beta-macOS-arm64.app.tar.gz.sig",
+        "SHA256SUMS",
+    ):
         store.record(entry(f"/releases/v0.1.1-beta/{name}", 200), NOW)
     data = stats.summary(store.db, stats.day_of(NOW))
     assert data["totals"]["downloads"] == 2
@@ -164,7 +170,9 @@ def test_log_stream_end_to_end(tmp_path):
             if store.db.execute("SELECT COUNT(*) FROM daily").fetchone()[0]:
                 break
             time.sleep(0.02)
-        assert store.db.execute("SELECT SUM(requests) FROM daily WHERE kind='view'").fetchone()[0] == 1
+        assert (
+            store.db.execute("SELECT SUM(requests) FROM daily WHERE kind='view'").fetchone()[0] == 1
+        )
     finally:
         server.shutdown()
         server.server_close()

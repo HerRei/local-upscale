@@ -80,7 +80,7 @@ jobs:
           "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
           "$RUN_ROOT/environment/venv/bin/python" -m pip install \
             --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check ruff "vulture==2.14"
+          "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check "ruff==0.16.7" "vulture==2.14"
           cd "$RUN_ROOT/source"
           ACTIONLINT_ARCHIVE="$RUN_ROOT/environment/actionlint.tar.gz"
           curl --fail --silent --show-error --location \

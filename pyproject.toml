@@ -38,18 +38,16 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
-    "ruff>=0.1.0",
+    "ruff==0.16.7",
     "pyright==1.1.411",
     "vulture==2.14",
 ]
 video = [
     "omegaconf>=2.3.0",
-    # Modern platforms use the release that fixes the custom-pipeline RCEs.
-    "diffusers>=0.38.0,<0.39; platform_system != 'Darwin' or platform_machine != 'x86_64'",
-    # Intel macOS is limited to a PyTorch build without torch.xpu, which
-    # diffusers 0.36+ imports unconditionally. This legacy exception remains
-    # alpha-only and is recorded as an unresolved beta security gate.
-    "diffusers>=0.33.1,<0.36; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+    # The release that fixes the custom-pipeline RCEs. The older pin that Intel
+    # macOS needed is gone with that platform: PyTorch publishes no maintained
+    # wheels for it, so no LocalSR package targets it.
+    "diffusers>=0.38.0,<0.39",
     "rotary-embedding-torch>=0.5.3",
     "einops",
     "psutil",
