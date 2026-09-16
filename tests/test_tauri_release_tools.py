@@ -13,6 +13,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+def prepare_release_ref():
+    spec = importlib.util.spec_from_file_location(
+        "prepare_tauri_release_assets", ROOT / "scripts" / "prepare_tauri_release_assets.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CROSS_ALPHA_POLICY_REF = prepare_release_ref().CROSS_ALPHA_POLICY
+CROSS_ALPHA_VERSION_REF = prepare_release_ref().CROSS_ALPHA_VERSION
+
+
 def load_script(name: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
     assert spec and spec.loader
@@ -39,17 +53,17 @@ def write_pe(path: Path, machine: int) -> None:
 
 
 def test_unsigned_cross_policy_is_restricted_to_exact_non_beta_alpha() -> None:
-    manifest = {"release_policy": "v0.0.12-cross-alpha-exception"}
+    manifest = {"release_policy": CROSS_ALPHA_POLICY_REF}
     readiness = {"beta_ready": False}
 
     assert (
-        prepare_release.release_policy(manifest, readiness, "0.0.12-alpha")
+        prepare_release.release_policy(manifest, readiness, CROSS_ALPHA_VERSION_REF)
         == prepare_release.CROSS_ALPHA_POLICY
     )
     with pytest.raises(ValueError, match="restricted"):
-        prepare_release.release_policy(manifest, readiness, "0.0.13-alpha")
+        prepare_release.release_policy(manifest, readiness, "0.0.12-alpha")
     with pytest.raises(ValueError, match="non-beta"):
-        prepare_release.release_policy(manifest, {"beta_ready": True}, "0.0.12-alpha")
+        prepare_release.release_policy(manifest, {"beta_ready": True}, CROSS_ALPHA_VERSION_REF)
 
 
 def test_unsigned_cross_policy_requires_explicit_signing_warning() -> None:
@@ -77,7 +91,7 @@ def test_cross_built_macos_static_smoke_is_never_reported_as_runtime_pass() -> N
     evidence = {
         "passed": False,
         "mode": "cross-build-static",
-        "version": "0.0.12-alpha",
+        "version": CROSS_ALPHA_VERSION_REF,
         "architecture": "arm64",
         "static_verified": True,
         "runtime_tested": False,
@@ -85,13 +99,13 @@ def test_cross_built_macos_static_smoke_is_never_reported_as_runtime_pass() -> N
     }
     assert (
         prepare_release.validate_smoke_evidence(
-            "macos", evidence, prepare_release.CROSS_ALPHA_POLICY, "0.0.12-alpha"
+            "macos", evidence, prepare_release.CROSS_ALPHA_POLICY, CROSS_ALPHA_VERSION_REF
         )
         == evidence
     )
     with pytest.raises(ValueError, match="acceptable"):
         prepare_release.validate_smoke_evidence(
-            "windows", evidence, prepare_release.CROSS_ALPHA_POLICY, "0.0.12-alpha"
+            "windows", evidence, prepare_release.CROSS_ALPHA_POLICY, CROSS_ALPHA_VERSION_REF
         )
 
 
@@ -122,7 +136,7 @@ def test_release_matrix_rejects_weak_smoke_and_architecture_evidence() -> None:
             "linux",
             {"passed": True},
             prepare_release.SIGNED_POLICY,
-            "0.0.12-alpha",
+            CROSS_ALPHA_VERSION_REF,
         )
     with pytest.raises(ValueError, match="different artifact"):
         prepare_release.validate_architecture_evidence(

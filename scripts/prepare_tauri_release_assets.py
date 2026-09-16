@@ -19,7 +19,8 @@ EXPECTED_LIVE_MODELS = {
     "Best": "realplksr_nomoswebphoto_x4",
 }
 SIGNED_POLICY = "production-signed"
-CROSS_ALPHA_POLICY = "v0.0.12-cross-alpha-exception"
+CROSS_ALPHA_POLICY = "v0.0.13-cross-alpha-exception"
+CROSS_ALPHA_VERSION = "0.0.13-alpha"
 
 
 def sha256(path: Path) -> str:
@@ -112,8 +113,8 @@ def release_policy(
         return policy
     if policy != CROSS_ALPHA_POLICY:
         raise ValueError(f"unsupported release policy {policy!r}")
-    if version != "0.0.12-alpha":
-        raise ValueError("the unsigned cross-build exception is restricted to v0.0.12-alpha")
+    if version != CROSS_ALPHA_VERSION:
+        raise ValueError(f"the unsigned cross-build exception is restricted to {CROSS_ALPHA_VERSION}")
     if readiness is None or readiness.get("beta_ready") is not False:
         raise ValueError("the unsigned cross-build exception must be explicitly non-beta")
     return policy
@@ -138,7 +139,7 @@ def validate_signing_evidence(
         raise ValueError("incomplete Authenticode evidence")
     if expected in {"ad-hoc-alpha", "unsigned-alpha"}:
         if policy != CROSS_ALPHA_POLICY or platform not in {"macos", "windows"}:
-            raise ValueError("unsigned evidence is allowed only by the v0.0.12 cross-alpha policy")
+            raise ValueError("unsigned evidence is allowed only by the cross-alpha policy")
         if signing.get("production_signed") is not False or not signing.get("warning"):
             raise ValueError("unsigned alpha evidence must record its warning and unsigned state")
     return signing

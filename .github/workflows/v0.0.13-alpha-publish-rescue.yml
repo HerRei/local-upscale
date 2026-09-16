@@ -1,0 +1,49 @@
+name: v0.0.13 Alpha Publish Rescue
+
+# The v0.0.13-alpha release run 34889339156 built all eight targets, but its
+# verify job crashed on a stale release-policy constant that rejected the
+# v0.0.13 manifest. This workflow re-runs only the verification and publish
+# stages against the preserved artifact receiver directory of that completed
+# run. It rebuilds nothing, does not touch other workflows, and publishes the
+# existing, already-smoke-verified installers.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: localsr-macmini-heavy
+  cancel-in-progress: false
+
+env:
+  CI_ARTIFACT_SERVER: "http://192.168.9.134:8000"
+
+jobs:
+  publish-rescued-alpha:
+    name: Verify and publish the preserved v0.0.13 alpha matrix
+    runs-on: [self-hosted, Linux, X64, localsr-linux-builder]
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify and publish the preserved matrix
+        run: |
+          RUN_ROOT="/mnt/hdd/ci-artifacts/34889339156"
+          OUTPUT="$RUN_ROOT/rescue/tauri-v0.0.13-release-assets"
+          TAG="v0.0.13-alpha"
+          COMMIT="5c20e4b38f72ca11d96a2c68fee2162311c89a99"
+          test -f "docs/releases/$TAG.md"
+          "$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py "$RUN_ROOT" \
+            --manifest ci/v0.0.13-cross-alpha-artifacts.json --readiness ci/beta-readiness.json \
+            --tag "$TAG" --commit "$COMMIT" --output "$OUTPUT"
+          "$HOME/.venv-ci/bin/python3.11" scripts/verify_prepared_release.py "$OUTPUT" \
+            --manifest ci/v0.0.13-cross-alpha-artifacts.json --commit "$COMMIT"
+          "$HOME/.venv-ci/bin/python3.11" scripts/publish_tauri_release.py \
+            --tag "$TAG" --commit "$COMMIT" --title "LocalSR $TAG" \
+            --notes "docs/releases/$TAG.md" --output "$OUTPUT"
