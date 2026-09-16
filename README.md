@@ -81,10 +81,14 @@ because their checkpoint rights are unresolved.
 
 ## Privacy
 
-There is no account, telemetry or analytics. LocalSR connects to the network for
-two things: the update check at launch and the model downloads you start.
-*Copy diagnostics* includes versions, hardware and memory figures, never file
-names or media.
+There is no account, and the media you process never leaves your computer.
+LocalSR makes two kinds of network request: the update check at launch and the
+model downloads you start. The update check also sends a count — the version,
+platform and channel, with no identifier — so the project can tell how many
+installs are active; *Send an anonymous update-check count* in the Software
+Update dialog turns it off. *Copy diagnostics* includes versions, hardware and
+memory figures, never file names or media. The full description is on the
+[privacy page](https://herrei.github.io/localsr/privacy/).
 
 ## How it works
 
