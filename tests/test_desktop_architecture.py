@@ -88,12 +88,22 @@ def test_signed_release_uses_bounded_release_retention_on_every_platform() -> No
     workflow = (ROOT / ".github/workflows/desktop-release.yml").read_text()
 
     assert "ci_scratch.py" not in workflow
-    assert workflow.count("release_scratch.py start") == 3
-    assert workflow.count("release_scratch.py finish") == 3
-    assert workflow.count("--retain-hours 48") == 3
+    # Linux and Windows build on persistent self-hosted runners, so their
+    # release scratch needs explicit, bounded retention.
+    assert workflow.count("release_scratch.py start") == 2
+    assert workflow.count("release_scratch.py finish") == 2
+    assert workflow.count("--retain-hours 48") == 2
     assert "--platform linux" in workflow
     assert "--platform windows" in workflow
     assert "--platform macos" in workflow
+    # macOS builds on an ephemeral GitHub-hosted runner that is discarded with
+    # the job, so its scratch is bounded by construction and must stay under
+    # RUNNER_TEMP rather than persistent storage.
+    macos_job = workflow.split("  build-macos-arm64:", 1)[1].split("  verify-release-matrix:", 1)[0]
+    assert "runs-on: macos-latest" in macos_job
+    assert "release_scratch.py" not in macos_job
+    assert "$RUNNER_TEMP" in macos_job
+    assert "/Volumes/CISCRATCH" not in macos_job
 
 
 def test_release_builds_revalidate_runner_health_immediately_before_work() -> None:
@@ -119,7 +129,13 @@ def test_signed_macos_gate_fails_closed_without_an_unregistered_runner_label() -
     assert "[self-hosted, macOS, ARM64]" not in workflow
     assert '["self-hosted","macOS","ARM64"]' not in workflow
     assert workflow.count("A registered native macOS ARM64 runner is required") >= 3
-    assert workflow.count("localsr-macos-cross-builder") >= 2
+    # The signed macOS preflight and build must route to a label that always
+    # has capacity, or a release would queue forever. GitHub-hosted
+    # macos-latest is genuinely arm64 and never lacks a runner, so no
+    # self-hosted macOS label may remain in the release workflow.
+    assert workflow.count("macos-latest") >= 2
+    assert "self-hosted, macOS" not in workflow
+    assert '"self-hosted","macOS"' not in workflow
 
 
 def test_desktop_catalog_fails_closed_for_unresolved_checkpoint_rights() -> None:
