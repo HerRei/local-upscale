@@ -6,8 +6,8 @@
 
 - A user guide on the website, opened from Help → LocalSR User Guide and the app
   menu.
-- A one-time welcome on first launch that links the guide and discloses the
-  anonymous update-check count, with a button to turn it off.
+- A one-time welcome on first launch that links the guide, discloses the
+  anonymous update-check count and says where to turn it off.
 
 ### Changed
 
@@ -22,6 +22,8 @@
 
 - Open and Reveal acted on the last result written instead of the selected
   item's result.
+- The comparison handle followed the image's centre and zoom; it now stays in
+  the middle of the preview frame at a constant size.
 
 ## [0.1.2-beta] - 2026-09-16
 

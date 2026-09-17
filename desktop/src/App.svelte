@@ -1714,10 +1714,7 @@
     anonymousUpdateCount={settings.anonymous_update_count ?? true}
     on:anonymouscount={(event) => updateSettings({ anonymous_update_count: event.detail })}
   />
-  <WelcomeNotice
-    anonymousUpdateCount={settings.anonymous_update_count ?? true}
-    on:anonymouscount={(event) => updateSettings({ anonymous_update_count: event.detail })}
-  />
+  <WelcomeNotice anonymousUpdateCount={settings.anonymous_update_count ?? true} />
 
   <main class="workspace">
     <MediaQueue

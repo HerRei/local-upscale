@@ -1,13 +1,11 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
   import { openUserGuide } from './lib/api';
   import { updateState } from './lib/updates';
 
-  /** Whether the anonymous update-check count is on; the notice can turn it off. */
+  /** Whether the anonymous update-check count is on, so the notice describes it truthfully. */
   export let anonymousUpdateCount = true;
 
   const SEEN_KEY = 'localsr.welcome.seen';
-  const dispatch = createEventDispatcher<{ anonymouscount: boolean }>();
 
   function seen(): boolean {
     try {
@@ -44,19 +42,12 @@
       {#if counts}
         <span class="count"
           >{anonymousUpdateCount
-            ? 'At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel. No files, names or identifiers.'
+            ? 'At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn it off under Check for Updates in the … menu.'
             : 'The anonymous update-check count is off.'}</span
         >
       {/if}
     </div>
     <div class="buttons">
-      {#if counts && anonymousUpdateCount}
-        <button
-          class="notice-button"
-          type="button"
-          on:click={() => dispatch('anonymouscount', false)}>Turn Off Count</button
-        >
-      {/if}
       <button class="notice-button" type="button" on:click={() => void openUserGuide()}
         >User Guide</button
       >

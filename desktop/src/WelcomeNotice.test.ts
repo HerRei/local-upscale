@@ -34,16 +34,15 @@ it('welcomes a first launch, discloses the update count and opens the guide', as
   expect(api.openUserGuide).toHaveBeenCalledTimes(1);
 });
 
-it('turns the count off from the notice', async () => {
-  const user = userEvent.setup();
-  const turnedOff = vi.fn();
-  render(WelcomeNotice, {
-    props: { anonymousUpdateCount: true },
-    events: { anonymouscount: (event: CustomEvent<boolean>) => turnedOff(event.detail) },
-  });
+it('says where the count can be turned off without a button for it', () => {
+  render(WelcomeNotice, { anonymousUpdateCount: true });
+  expect(screen.getByText(/turn it off under Check for Updates/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /turn off/i })).toBeNull();
+});
 
-  await user.click(screen.getByRole('button', { name: 'Turn Off Count' }));
-  expect(turnedOff).toHaveBeenCalledWith(false);
+it('says the count is off when it is', () => {
+  render(WelcomeNotice, { anonymousUpdateCount: false });
+  expect(screen.getByText('The anonymous update-check count is off.')).toBeTruthy();
 });
 
 it('stays closed after Got It', async () => {
@@ -61,5 +60,4 @@ it('does not mention the count where no update feed is configured', () => {
   updateState.set({ ...emptyUpdateStatus, configured: true, managed_by_store: true });
   render(WelcomeNotice, { anonymousUpdateCount: true });
   expect(screen.queryByText(/anonymous count/)).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Turn Off Count' })).toBeNull();
 });
