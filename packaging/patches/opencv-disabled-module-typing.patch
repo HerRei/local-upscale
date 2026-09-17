@@ -15,7 +15,14 @@
              register_alias(node)
 --- a/setup.py
 +++ b/setup.py
-@@ -118,6 +118,7 @@
+@@ -112,12 +112,14 @@
+         "cv2": (
+             [r"bin/opencv_videoio_ffmpeg\d{4}%s\.dll" % ("_64" if is64 else "")]
+             if os.name == "nt"
++            and "-DWITH_FFMPEG=OFF" not in os.environ.get("CMAKE_ARGS", "")
+             else []
+         )
+         +
          (
              [r"lib/libOrbbecSDK.dylib", r"lib/libOrbbecSDK.\d.\d.dylib", r"lib/libOrbbecSDK.\d.\d.\d.dylib"]
              if platform.system() == "Darwin" and platform.machine() == "arm64"

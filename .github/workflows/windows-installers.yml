@@ -29,7 +29,9 @@ concurrency:
 jobs:
   installer:
     name: Build Windows x86_64 ${{ matrix.backend }} installer
-    runs-on: windows-2025
+    # windows-2025 ships only Visual Studio 2026, which scikit-build 0.18 (OpenCV's
+    # build) does not recognise; windows-2022 has Visual Studio 2022.
+    runs-on: windows-2022
     timeout-minutes: 330
     strategy:
       fail-fast: false
