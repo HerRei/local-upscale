@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.1.3-beta] - 2026-09-17
+
+### Added
+
+- A user guide on the website, opened from Help → LocalSR User Guide and the app
+  menu.
+- A one-time welcome on first launch that links the guide and discloses the
+  anonymous update-check count, with a button to turn it off.
+
+### Changed
+
+- The app is called LocalSR instead of LocalSR Next Preview. The bundle
+  identifier, data folders and update channel are unchanged; the Finder Quick
+  Action and Nautilus script are renamed to "Enhance with LocalSR" and the old
+  ones are removed when integrations are installed or uninstalled.
+- The macOS bundle declares macOS 14 as its minimum, matching its PyTorch
+  libraries (it said macOS 12).
+
+### Fixed
+
+- Open and Reveal acted on the last result written instead of the selected
+  item's result.
+
 ## [0.1.2-beta] - 2026-09-16
 
 ### Added

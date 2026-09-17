@@ -6,7 +6,7 @@ fetched on demand.
 
 | Package | Engine | Status | Tested on |
 | --- | --- | --- | --- |
-| macOS · Apple Silicon | MPS | Published (v0.1.2-beta) | MacBook Pro M1 Pro, 16 GB |
+| macOS · Apple Silicon | MPS | Published (v0.1.3-beta) | MacBook Pro M1 Pro, 16 GB |
 | Windows · x86-64 | CPU | Test builds only | Windows 11, Core i7-8550U |
 | Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Test builds only | Intel UHD 620, driver 24.20.100.6286 |
 | Windows · x86-64 | CUDA | Labs · no hardware run | — |

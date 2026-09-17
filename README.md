@@ -47,7 +47,7 @@ or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·
 
 ## Download
 
-**v0.1.2-beta** runs on Apple Silicon Macs with macOS 14 or later:
+**v0.1.3-beta** runs on Apple Silicon Macs with macOS 14 or later:
 [download the DMG](https://herrei.github.io/localsr/download/) (414 MB, signed and
 notarized). The app checks for updates at launch and verifies each update's
 signature before installing it.

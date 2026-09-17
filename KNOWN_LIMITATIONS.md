@@ -1,6 +1,6 @@
 # Known limitations
 
-These apply to v0.1.2-beta. Please read them before starting a long job.
+These apply to v0.1.3-beta. Please read them before starting a long job.
 
 ## Platforms
 

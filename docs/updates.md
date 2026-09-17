@@ -16,7 +16,7 @@ Store; its in-app updater is disabled.
 
 After a successful check, direct builds send one request to
 `https://macmini-ci.tail34a4e0.ts.net/ping/update-check?v=<version>&t=<platform key>&c=<channel>`,
-for example `v=0.1.2-beta&t=darwin-aarch64-mps-native&c=beta`. It carries no
+for example `v=0.1.3-beta&t=darwin-aarch64-mps-native&c=beta`. It carries no
 install or user ID and no cookies, times out after five seconds and never affects
 the check. The Mac mini counts active installs per day without storing the IP
 address (see `packaging/hosting/stats/`). Turn it off with **Send an anonymous
@@ -50,11 +50,11 @@ entry:
 
 ```json
 {
-  "version": "0.1.2-beta",
+  "version": "0.1.3-beta",
   "notes": "What changed and what to watch out for.",
   "platforms": {
     "darwin-aarch64-mps-native": {
-      "url": "https://downloads.example.org/LocalSR-v0.1.2-beta-macOS-arm64.app.tar.gz",
+      "url": "https://downloads.example.org/LocalSR-v0.1.3-beta-macOS-arm64.app.tar.gz",
       "signature": "BASE64_TAURI_SIGNATURE",
       "localsr": {
         "channel": "beta",

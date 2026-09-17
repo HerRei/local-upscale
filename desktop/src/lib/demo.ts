@@ -12,7 +12,7 @@ for (const model of catalog.video_models) {
 
 export function demoSnapshot(): AppSnapshot {
   return {
-    app_version: '0.1.2-beta',
+    app_version: '0.1.3-beta',
     protocol_version: 1,
     catalog,
     media: [],
