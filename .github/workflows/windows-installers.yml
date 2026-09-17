@@ -156,7 +156,10 @@ jobs:
         if: failure()
         with:
           name: logs-${{ matrix.id }}
-          path: C:\lm\work\logs\*
+          path: |
+            C:\lm\work\logs\*
+            C:\lm\opencv\build.log
+            C:\lm\opencv\build-report.json
           if-no-files-found: ignore
           retention-days: 14
 
