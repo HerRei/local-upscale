@@ -131,6 +131,11 @@ export async function detectExternalFFmpeg(): Promise<string[]> {
   return invoke<string[]>('detect_external_ffmpeg');
 }
 
+/** Open the LocalSR user guide on the project website. */
+export async function openUserGuide(): Promise<void> {
+  if (isTauri()) await invoke('open_user_guide');
+}
+
 /** Open ffmpeg.org's download page; installing FFmpeg stays the user's own action. */
 export async function openFfmpegDownloadPage(): Promise<void> {
   if (isTauri()) await invoke('open_ffmpeg_download_page');

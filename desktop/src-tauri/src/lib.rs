@@ -141,6 +141,7 @@ pub fn run() {
             commands::remove_model,
             commands::import_catalog_model,
             commands::open_result,
+            commands::open_user_guide,
             commands::reveal_result,
             commands::open_output_directory,
             commands::detect_external_ffmpeg,

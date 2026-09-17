@@ -11,6 +11,7 @@
   import UpdateMenuItem from './UpdateMenuItem.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
+  import WelcomeNotice from './WelcomeNotice.svelte';
   import { startUpdateWatcher } from './lib/updates';
   import BrandMark from './BrandMark.svelte';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
@@ -1677,6 +1678,14 @@
               role="menuitem"
               on:click={() => {
                 appMenuOpen = false;
+                void api.openUserGuide();
+              }}>User Guide</button
+            >
+            <button
+              class="app-menu-item"
+              role="menuitem"
+              on:click={() => {
+                appMenuOpen = false;
                 void copyDiagnostics();
               }}>Copy Diagnostics</button
             >
@@ -1702,6 +1711,10 @@
   />
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+    anonymousUpdateCount={settings.anonymous_update_count ?? true}
+    on:anonymouscount={(event) => updateSettings({ anonymous_update_count: event.detail })}
+  />
+  <WelcomeNotice
     anonymousUpdateCount={settings.anonymous_update_count ?? true}
     on:anonymouscount={(event) => updateSettings({ anonymous_update_count: event.detail })}
   />

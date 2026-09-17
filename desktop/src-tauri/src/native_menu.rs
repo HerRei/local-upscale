@@ -92,8 +92,12 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .item(&diagnostics)
         .build()?;
 
+    let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
-    let help_menu = SubmenuBuilder::new(manager, "Help").item(&github).build()?;
+    let help_menu = SubmenuBuilder::new(manager, "Help")
+        .item(&guide)
+        .item(&github)
+        .build()?;
 
     #[cfg(target_os = "macos")]
     let menu_builder = {
@@ -139,6 +143,10 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
 }
 
 pub fn dispatch(app: &AppHandle, id: &str) {
+    if id == "help.guide" {
+        let _ = open::that_detached(crate::commands::USER_GUIDE_URL);
+        return;
+    }
     if id == "help.github" {
         let _ = open::that_detached("https://github.com/HerRei/local-upscale");
         return;

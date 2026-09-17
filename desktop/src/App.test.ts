@@ -63,6 +63,7 @@ const api = vi.hoisted(() => ({
   openModelLicense: vi.fn(async () => undefined),
   openModelSource: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
+  openUserGuide: vi.fn(async () => undefined),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
   openOutputDirectory: vi.fn(async () => undefined),

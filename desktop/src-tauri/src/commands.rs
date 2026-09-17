@@ -1031,6 +1031,14 @@ pub fn detect_external_ffmpeg() -> Vec<String> {
 }
 
 /// Open the FFmpeg project's download page in the user's browser. Installing
+pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";
+
+#[tauri::command]
+pub fn open_user_guide() -> AppResult<()> {
+    open::that_detached(USER_GUIDE_URL)
+        .map_err(|error| AppError::Config(format!("could not open the user guide: {error}")))
+}
+
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.
 #[tauri::command]
 pub fn open_ffmpeg_download_page() -> AppResult<()> {
