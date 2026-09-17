@@ -50,8 +50,9 @@ MACOS_REPAIR_REQUIREMENTS = ["delocate==0.13.0"]
 LINUX_REPAIR_REQUIREMENTS = ["auditwheel==6.8.2", "patchelf==0.19.1.0"]
 WINDOWS_REPAIR_REQUIREMENTS = ["delvewheel==1.13.1"]
 
-# MSYS2 with the UCRT64 packages gcc, binutils, make, meson, ninja, cmake, pkgconf, nasm,
-# diffutils and zlib; GitHub's Windows runners ship it in C:\msys64.
+# MSYS2 with make, perl (libvpx's configure), diffutils and the UCRT64 packages gcc,
+# binutils, meson, ninja, cmake, pkgconf, nasm and zlib; GitHub's Windows runners ship it
+# in C:\msys64.
 MSYS2_ROOT = Path(os.environ.get("LOCALSR_MSYS2_ROOT", r"C:\msys64"))
 # What FFmpeg's DLLs may import on Windows: its own DLLs, Windows system libraries and the
 # Universal CRT, plus the zlib and winpthreads DLLs from MSYS2, which are copied next to
@@ -480,7 +481,7 @@ class Builder:
             if not (MSYS2_ROOT / "usr" / "bin" / "bash.exe").exists():
                 raise BuildError(f"MSYS2 was not found in {MSYS2_ROOT} (set LOCALSR_MSYS2_ROOT)")
             self.tool("lib.exe")  # from the MSVC developer environment
-            tools = "gcc make meson ninja cmake pkg-config nasm objdump"
+            tools = "gcc make perl meson ninja cmake pkg-config nasm objdump"
             missing = self.sh(
                 ["sh", "-c", f"for t in {tools}; do command -v $t >/dev/null || echo $t; done"],
                 cwd=self.work,
