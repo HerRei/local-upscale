@@ -4,10 +4,15 @@ These apply to v0.1.3-beta. Please read them before starting a long job.
 
 ## Platforms
 
-- Only the Apple Silicon macOS build is published. Windows and Linux builds exist
-  in the release pipeline but are held back: Windows until the royalty-free media
-  runtime builds there, Linux until the 5–6 GB GPU packages have a download host.
-  See [Platforms](docs/platforms.md).
+- Published packages: macOS on Apple Silicon, the Windows CPU installer and the
+  Linux CPU AppImage. CUDA, AMD ROCm, DirectML and Intel XPU packages are held
+  back; [Platforms](docs/platforms.md) explains why.
+- The macOS build is the most tested. The Windows and Linux packages pass the
+  codec policy and an automated smoke test of the installed app, but this release
+  has not been run through the manual desktop checks on those systems.
+- Only the macOS app updates itself. On Windows and Linux, download new versions
+  from the website. The Windows installer is not code-signed, so SmartScreen warns
+  before it runs.
 - NVIDIA and Intel XPU GPUs have not been tested on real hardware. Those engines
   are labelled Labs in the app.
 - A working launch does not prove GPU compatibility. Some operators fall back to

@@ -110,11 +110,15 @@ MinGW-w64 UCRT64 toolchain and PyAV with MSVC (`.github/workflows/windows-instal
   it under `withheld_targets`.
 - **CUDA (Linux and Windows)** — held until NVIDIA's redistribution terms are
   settled (questions 4 and 5 below) and a package has run on NVIDIA hardware.
+- **AMD ROCm (Linux)** — PyTorch's ROCm build bundles libnuma and elfutils (LGPL)
+  built outside Ubuntu, whose exact corresponding sources are not identified yet,
+  and AMD's closed-source `libhsa-amd-aqlprofile64`, whose redistribution terms are
+  unconfirmed.
 - **DirectML (Windows)** — not a licensing hold: its GPU results still miss the
   accuracy tolerance, so it stays a test build.
 
-Published packages: macOS (Apple Silicon), Linux CPU and AMD ROCm AppImages, and
-the Windows CPU installer.
+Published packages: macOS (Apple Silicon), the Linux CPU AppImage and the Windows
+CPU installer.
 
 ## What each download must publish
 
@@ -148,8 +152,11 @@ shipped on a guess.
    Fedora, whose legal review is conservative, has shipped both since. Settled.
 4. **NVIDIA's reverse-engineering terms next to LGPL FFmpeg.** The LGPL limits
    the terms on the work that uses FFmpeg, which is LocalSR (MIT) and PyAV (BSD);
-   NVIDIA's terms bind only NVIDIA's separately licensed libraries. Assessed as
-   low risk, but left open: CUDA packages are withheld.
+   NVIDIA's terms bind only NVIDIA's separately licensed libraries. The same
+   reasoning covers Intel's MKL, which PyTorch links into its x86 CPU builds under
+   a licence that also forbids reverse engineering. Assessed as low risk; CUDA
+   packages are still withheld until they have run on NVIDIA hardware and question
+   5 is settled.
 5. **cuDNN 9 Windows DLLs.** NVIDIA's license allows distributing cuDNN inside an
    application, and PyTorch's Windows CUDA wheels ship the same DLLs. Left open
    with question 4: Windows CUDA is withheld.

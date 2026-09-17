@@ -39,7 +39,8 @@ OPENCV_MARKER = re.compile(r"(^|/)cv2(/|$)")
 # with --extra-source NAME=PATH (an archive or directory).
 EXTRA_SOURCE_RULES = {
     "libraw": (
-        re.compile(r"(^|/)libraw(_r)?[.\-][^/]*$"),
+        # A separate library on macOS and Linux; linked into rawpy's extension on Windows.
+        re.compile(r"(^|/)libraw(_r)?[.\-][^/]*$|(^|/)rawpy/[^/]*\.pyd$"),
         "LibRaw (LGPL-2.1/CDDL-1.0) bundled by rawpy; use the matching rawpy sdist",
     ),
     "gcc-runtime": (

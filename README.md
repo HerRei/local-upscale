@@ -47,14 +47,15 @@ or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·
 
 ## Download
 
-**v0.1.3-beta** runs on Apple Silicon Macs with macOS 14 or later:
-[download the DMG](https://herrei.github.io/localsr/download/) (414 MB, signed and
-notarized). The app checks for updates at launch and verifies each update's
-signature before installing it.
+**v0.1.3-beta** is on the [download page](https://herrei.github.io/localsr/download/):
 
-Windows (CPU, DirectML, CUDA) and Linux (CPU, ROCm, CUDA) packages come out of
-the same pipeline but are not published yet. [Platforms](docs/platforms.md)
-explains why, and what has been tested on which hardware.
+- **macOS**, Apple Silicon, macOS 14 or later: a DMG (414 MB), signed and notarized.
+  The app checks for updates at launch and verifies each update's signature.
+- **Windows** 10 and 11, x86-64: a CPU installer, not code-signed.
+- **Linux** x86-64: a CPU AppImage.
+
+CUDA, AMD ROCm, DirectML and Intel XPU packages are held back.
+[Platforms](docs/platforms.md) explains why, and what has been tested where.
 
 No model weights are bundled. The Quick model (4.5 MB) downloads on first use,
 the others when you choose them.

@@ -217,6 +217,13 @@ def test_source_bundle_requires_libraw_and_gcc_runtime_sources(tmp_path: Path):
     assert set(report["components"]) >= {"libraw", "gcc-runtime"}
 
 
+def test_windows_rawpy_extension_needs_the_libraw_source(tmp_path: Path):
+    inventory = tmp_path / "worker-dist"
+    _touch(inventory / "engine/_internal/rawpy/_rawpy.cp311-win_amd64.pyd")
+    with pytest.raises(SystemExit, match="--extra-source libraw"):
+        build_source_bundle.build(_bundle_arguments(inventory, tmp_path / "out"))
+
+
 def test_windows_openblas_dll_needs_the_gcc_runtime_source(tmp_path: Path):
     inventory = tmp_path / "worker-dist"
     _touch(
