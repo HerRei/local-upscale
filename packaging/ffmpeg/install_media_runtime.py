@@ -11,7 +11,7 @@ codecs) and OpenCV (which bundles FFmpeg) with the allowlisted builds:
 
 Build directories are reused, so repeated runs are quick. On Windows the media build
 needs MSYS2 with the UCRT64 toolchain and the MSVC developer environment (see
-``build_lgpl_media.py``), and OpenCV's source patch needs ``patch.exe`` on PATH.
+``build_lgpl_media.py``), and OpenCV's source patch is applied with ``git apply``.
 """
 
 from __future__ import annotations

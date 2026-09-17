@@ -114,9 +114,6 @@ jobs:
       - name: Replace PyPI media wheels with the licensing-clean runtime
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          # OpenCV's source patch needs patch.exe; Git's copy goes last on PATH so its
-          # coreutils never shadow MSVC's link.exe.
-          $env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
           python packaging/ffmpeg/install_media_runtime.py --work-dir C:\lm --source-cache C:\lm\sources --jobs 4
 
       - name: Build, verify and smoke-test the installer

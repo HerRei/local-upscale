@@ -99,8 +99,9 @@ def main() -> None:
     args = parser.parse_args()
     if platform.system() not in {"Darwin", "Linux", "Windows"}:
         parser.error(f"Unsupported build platform: {platform.system()}")
-    if shutil.which("patch") is None:
-        parser.error("The 'patch' tool is required (on Windows use the one shipped with Git)")
+    windows = platform.system() == "Windows"
+    if shutil.which("git" if windows else "patch") is None:
+        parser.error("git is required on Windows" if windows else "The 'patch' tool is required")
     options = OPTIONS + platform_options()
     with args.source.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != SOURCE_SHA256:
@@ -114,17 +115,29 @@ def main() -> None:
         Path(__file__).resolve().parents[1]
         / "packaging/patches/opencv-disabled-module-typing.patch"
     )
-    patch_command = ["patch", "-p1", "--input", str(patch)]
-    pristine = (
-        subprocess.run(
-            patch_command + ["--dry-run", "--forward"], cwd=source, capture_output=True
-        ).returncode
-        == 0
-    )
-    if pristine:
-        subprocess.run(patch_command + ["--forward"], cwd=source, check=True)
+    # A Windows checkout can turn the patch's line endings into CRLF, which no longer
+    # match the LF sources in the archive.
+    root.mkdir(parents=True, exist_ok=True)
+    normalized = root / patch.name
+    normalized.write_bytes(patch.read_bytes().replace(b"\r\n", b"\n"))
+    patch = normalized
+    if windows:
+        # Windows runners put an old GNU patch (2.5.9) first on PATH, which crashes on
+        # this patch; git apply behaves the same everywhere outside a repository.
+        apply = ["git", "apply", "-p1"]
+        check_forward = apply + ["--check", str(patch)]
+        forward = apply + [str(patch)]
+        check_reverse = apply + ["--check", "--reverse", str(patch)]
     else:
-        subprocess.run(patch_command + ["--dry-run", "--reverse"], cwd=source, check=True)
+        patch_command = ["patch", "-p1", "--input", str(patch)]
+        check_forward = patch_command + ["--dry-run", "--forward"]
+        forward = patch_command + ["--forward"]
+        check_reverse = patch_command + ["--dry-run", "--reverse"]
+    pristine = subprocess.run(check_forward, cwd=source, capture_output=True).returncode == 0
+    if pristine:
+        subprocess.run(forward, cwd=source, check=True)
+    else:
+        subprocess.run(check_reverse, cwd=source, check=True)
     # CMake can leave files from previously enabled modules in its install
     # directory. Retain compiled objects, but always stage the wheel afresh.
     for installed in (source / "_skbuild").glob("*/cmake-install"):
