@@ -165,6 +165,10 @@ jobs:
             Write-Host "Installing NSIS via chocolatey..."
             choco install -y nsis
           }
+          if (Test-Path "C:\Program Files (x86)\NSIS") {
+            "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
+          }
           makensis.exe /VERSION
 
       - name: Verify Windows Visual C++ runtime
