@@ -133,7 +133,8 @@ jobs:
           python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 `
             --artifact-glob $artifact --report "$artifact.smoke.json"
           python scripts/verify_tauri_release_package.py $artifact `
-            --platform windows --architecture x86_64 --report "$artifact.architecture.json"
+            --platform windows --architecture x86_64 --smoke-report "$artifact.smoke.json" `
+            --report "$artifact.architecture.json"
           $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Out-File -FilePath "$artifact.sha256" -Encoding ascii
           # Corresponding source for exactly what the installer's engine contains.
