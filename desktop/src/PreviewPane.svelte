@@ -13,7 +13,14 @@
     tilePercentages,
     type OutputTile,
   } from './lib/progressive-preview';
-  import { clampPan, fitSize, panBounds, pointerCenteredPan, zoomLimits } from './lib/viewport';
+  import {
+    clampPan,
+    comparisonHandleTop,
+    fitSize,
+    panBounds,
+    pointerCenteredPan,
+    zoomLimits,
+  } from './lib/viewport';
   import type {
     MediaItem,
     VideoComparisonSources,
@@ -58,6 +65,9 @@
   let previewNaturalHeight = 1;
   let stageWidth = 1;
   let stageHeight = 1;
+  // The handle stays in the middle of the visible canvas and keeps its size
+  // at every zoom, instead of following the image's centre and scale.
+  $: compareHandleTop = comparisonHandleTop(canvasHeight, stageHeight, zoom, panY);
   let minZoom = 1;
   let maxZoom = 8;
   let actualPixelZoom = 1;
@@ -790,7 +800,7 @@
               aria-valuemax="100"
               aria-valuenow={Math.round(compare)}
               aria-valuetext={`${Math.round(compare)}% enhanced`}
-              style={`left: ${compare}%`}
+              style={`left: ${compare}%; --handle-top: ${compareHandleTop}%; --inverse-zoom: ${1 / zoom}`}
               on:pointerdown|stopPropagation={comparisonPointerDown}
               on:pointermove|stopPropagation={comparisonPointerMove}
               on:pointerup|stopPropagation={comparisonPointerUp}

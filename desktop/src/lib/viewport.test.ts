@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { clampPan, fitSize, panBounds, pointerCenteredPan, zoomLimits } from './viewport';
+import {
+  clampPan,
+  comparisonHandleTop,
+  fitSize,
+  panBounds,
+  pointerCenteredPan,
+  zoomLimits,
+} from './viewport';
 
 describe('preview viewport', () => {
   it('enlarges a small image to use the available canvas', () => {
@@ -35,5 +42,19 @@ describe('preview viewport', () => {
       x: bounds.x,
       y: -bounds.y,
     });
+  });
+
+  it('keeps the comparison handle in the middle of the visible canvas', () => {
+    // Fitted and centred: the canvas middle is the image middle.
+    expect(comparisonHandleTop(700, 400, 1, 0)).toBe(50);
+    // Zoomed in 3× and panned fully down: the 1200 px image starts at the
+    // canvas top, so the canvas middle (350 px) is 350 / 3 image px into its
+    // 400 px height, above the image middle.
+    expect(comparisonHandleTop(700, 400, 3, 250)).toBeCloseTo((350 / 3 / 400) * 100);
+    // Even with a pan beyond the bounds, where only the image's bottom 250 px
+    // show, the handle stays on the image, one radius above its lower edge.
+    expect(comparisonHandleTop(700, 400, 3, -700)).toBeCloseTo(((231 + 950) / 3 / 400) * 100);
+    // Zoomed out: the image is centred and smaller, so its middle is still used.
+    expect(comparisonHandleTop(700, 400, 0.5, 0)).toBe(50);
   });
 });

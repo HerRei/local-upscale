@@ -70,6 +70,33 @@ export function clampPan(point: Point, bounds: PanBounds): Point {
   };
 }
 
+/**
+ * Where the comparison handle sits along the image height, in percent of the
+ * unscaled stage. It follows the vertical middle of the visible canvas, not of
+ * the image, and stays on the visible part of the image so zooming and panning
+ * never push it out of view.
+ */
+export function comparisonHandleTop(
+  canvasHeight: number,
+  fittedHeight: number,
+  zoom: number,
+  panY: number,
+  handleRadius = 19,
+): number {
+  const height = positive(fittedHeight);
+  const scale = positive(zoom);
+  const canvas = positive(canvasHeight);
+  const top = canvas / 2 + panY - (height * scale) / 2;
+  const visibleTop = Math.max(0, top);
+  const visibleBottom = Math.min(canvas, top + height * scale);
+  const middle =
+    visibleBottom - visibleTop >= 2 * handleRadius
+      ? Math.max(visibleTop + handleRadius, Math.min(visibleBottom - handleRadius, canvas / 2))
+      : (visibleTop + visibleBottom) / 2;
+  const percent = ((middle - top) / scale / height) * 100;
+  return Math.max(0, Math.min(100, percent));
+}
+
 /** Keep the image coordinate below the pointer fixed while zooming. */
 export function pointerCenteredPan(
   current: Point,

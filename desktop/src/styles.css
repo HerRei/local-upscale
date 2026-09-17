@@ -679,12 +679,12 @@ input:focus-visible {
   z-index: 4;
   top: 0;
   bottom: 0;
-  width: 2px;
-  transform: translateX(-1px);
+  width: calc(2px * var(--inverse-zoom, 1));
+  transform: translateX(-50%);
   background: #f5f6f8;
   box-shadow:
-    -1px 0 rgba(0, 0, 0, 0.4),
-    1px 0 rgba(0, 0, 0, 0.4);
+    calc(-1px * var(--inverse-zoom, 1)) 0 rgba(0, 0, 0, 0.4),
+    calc(1px * var(--inverse-zoom, 1)) 0 rgba(0, 0, 0, 0.4);
   cursor: col-resize;
   outline: none;
 }
@@ -693,8 +693,9 @@ input:focus-visible {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -23px;
-  width: 48px;
+  left: 50%;
+  width: calc(48px * var(--inverse-zoom, 1));
+  transform: translateX(-50%);
 }
 .compare-line:focus-visible span {
   outline: 2px solid var(--accent);
@@ -703,9 +704,9 @@ input:focus-visible {
 .compare-line span {
   position: absolute;
   z-index: 1;
-  top: 50%;
+  top: var(--handle-top, 50%);
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--inverse-zoom, 1));
   display: grid;
   place-items: center;
   width: 38px;
