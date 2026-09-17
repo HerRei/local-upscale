@@ -83,11 +83,12 @@
     },
     {
       "id": "licensing-questions",
-      "status": "external-clarification",
+      "status": "manual-pass",
       "blocking": true,
       "scope": "legal",
-      "summary": "docs/licensing-media.md lists the open questions on demuxing patent-encumbered formats, running a user-installed FFmpeg, MPEG-2/AC-3 patent expiry and NVIDIA library terms.",
-      "next_action": "Put the questions to an IP lawyer before promoting the beta beyond a small circle of testers."
+      "summary": "Maintainer assessment without legal counsel (17 September 2026) in docs/licensing-media.md: demuxing, a user-installed FFmpeg, MPEG-2/AC-3 expiry and OS codecs are settled or negligible; NVIDIA's terms stay open, so CUDA packages are withheld.",
+      "next_action": "Revisit before publishing any CUDA package.",
+      "evidence": "docs/licensing-media.md#legal-assessment"
     },
     {
       "id": "untested-gpu-hardware",

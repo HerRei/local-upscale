@@ -99,48 +99,60 @@ Release builds fail closed when:
 PyAV and OpenCV wheels in one step; the Linux and macOS release jobs run it
 before freezing the worker.
 
-The Windows LGPL media build is not implemented yet, so Windows release jobs stop
-immediately and Windows previews are built only as private, never-distributed
-packages (`--private-preview-media`).
+On Windows the same recipe builds the codec libraries and FFmpeg with MSYS2's
+MinGW-w64 UCRT64 toolchain and PyAV with MSVC (`.github/workflows/windows-installers.yml`).
+`--private-preview-media` remains only for private, never-distributed previews.
 
 ## Withheld packages
 
 - **Intel XPU (Linux)** — Intel's oneAPI runtime license asks the distributor to
-  indemnify Intel and to prohibit reverse engineering, which conflicts with the
-  LGPL's relinking and debugging permissions. XPU support stays in the source;
-  `ci/tauri-targets.json` lists it under `withheld_targets`.
-- **All Windows packages** — until the Windows media build exists; Windows CUDA
-  additionally needs NVIDIA's confirmation for cuDNN 9 DLLs.
+  indemnify Intel. XPU support stays in the source; `ci/tauri-targets.json` lists
+  it under `withheld_targets`.
+- **CUDA (Linux and Windows)** — held until NVIDIA's redistribution terms are
+  settled (questions 4 and 5 below) and a package has run on NVIDIA hardware.
+- **DirectML (Windows)** — not a licensing hold: its GPU results still miss the
+  accuracy tolerance, so it stays a test build.
+
+Published packages: macOS (Apple Silicon), Linux CPU and AMD ROCm AppImages, and
+the Windows CPU installer.
 
 ## What each download must publish
 
 `scripts/build_source_bundle.py` assembles, from the binary's actual file
 inventory: LocalSR's source at the built commit, the media runtime's exact
 source archives, configure line and relinking instructions, the OpenCV source
-and recipe, Ubuntu source packages for bundled LGPL host libraries
-(`--apt-sources` on the Linux build host), bundled license texts,
+and recipe, the LibRaw and GCC runtime sources that wheels bundle
+(`packaging/extra-sources.json`), Ubuntu source packages for every library an
+AppImage bundles from the build host (`--apt-sources`), bundled license texts,
 `THIRD_PARTY_NOTICES.md`, the codec policy and a SHA-256 manifest. Host it on the
 same server as the binary.
 
 The About window and the Update dialog state: “This software uses libraries from
 the FFmpeg project under the LGPLv2.1.”
 
-## Open legal questions
+## Legal assessment
 
-This is engineering risk reduction, not legal advice. Before a public release,
-ask a Swiss IP lawyer (for example through IGE IP-Info or the Basel bar
-association's legal information desk):
+No lawyer was consulted. This is the maintainer's assessment for a free,
+non-commercial project, recorded on 17 September 2026; it is not legal advice.
+Where a question stays open, the affected packages are withheld rather than
+shipped on a guess.
 
-1. Does bundling an MP4/Matroska demuxer that merely reads (never decodes)
-   H.264/HEVC/AAC streams, in order to tell users that FFmpeg is needed, carry
-   patent risk in Switzerland, the EU or the US?
-2. Does offering a setting that runs a user-installed FFmpeg create indirect
-   infringement exposure?
-3. Are the MPEG-2 video and AC-3 audio patents fully expired in all download
-   regions (the policy includes them)?
-4. Can NVIDIA's reverse-engineering restrictions on its libraries coexist with the
-   LGPL's relinking and debugging permissions in one CUDA package?
-5. Written confirmation from NVIDIA for cuDNN 9 Windows DLLs.
-6. Does using the operating system's licensed H.264/HEVC/AAC codecs through
-   Apple's and Microsoft's public APIs need anything beyond their platform
-   licence terms?
+1. **Reading MP4/Matroska without decoding H.264/HEVC/AAC.** Codec patents claim
+   encoding and decoding methods, not parsing the container around the streams.
+   Negligible risk; the demuxers stay.
+2. **Running an FFmpeg the user installed.** LocalSR does not distribute those
+   codecs and calls a general-purpose tool the user chose, as Audacity has done
+   for years to stay clear of codec patents. Very low risk.
+3. **MPEG-2 video and AC-3 audio.** The patents have expired worldwide (the
+   United States in 2017 and 2018, the last other countries shortly after);
+   Fedora, whose legal review is conservative, has shipped both since. Settled.
+4. **NVIDIA's reverse-engineering terms next to LGPL FFmpeg.** The LGPL limits
+   the terms on the work that uses FFmpeg, which is LocalSR (MIT) and PyAV (BSD);
+   NVIDIA's terms bind only NVIDIA's separately licensed libraries. Assessed as
+   low risk, but left open: CUDA packages are withheld.
+5. **cuDNN 9 Windows DLLs.** NVIDIA's license allows distributing cuDNN inside an
+   application, and PyTorch's Windows CUDA wheels ship the same DLLs. Left open
+   with question 4: Windows CUDA is withheld.
+6. **Operating system codecs.** Apple and Microsoft license H.264, HEVC and AAC
+   for use through their public APIs, which every video application on those
+   systems relies on. Settled.
