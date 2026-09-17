@@ -49,8 +49,15 @@ jobs:
               try:
                   data = json.loads(text)
               except ValueError:
-                  print(f"== {path.name}: not JSON")
-                  continue
+                  # build_source_bundle.py prints its report after apt-get's output.
+                  start = text.rfind("\n{")
+                  try:
+                      data = json.loads(text[start + 1 :]) if start >= 0 else None
+                  except ValueError:
+                      data = None
+                  if data is None:
+                      print(f"== {path.name}: not JSON")
+                      continue
               print(f"== {path.name}")
               if isinstance(data, dict) and "passed" in data:
                   print("passed:", data["passed"], "failures:", data.get("failures"))
