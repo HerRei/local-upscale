@@ -1,0 +1,78 @@
+name: Attach release assets
+
+# Copies one reviewed package artifact from a finished Linux or Windows build run to a
+# GitHub release, inside GitHub rather than through a workstation. A dry run only
+# prints the package's codec-policy, smoke-test and source-bundle reports for review.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build run whose artifact to attach
+        required: true
+      artifact:
+        description: Artifact name, for example linux-x86_64-cpu
+        required: true
+      release_tag:
+        description: Release to attach the files to
+        required: true
+      dry_run:
+        description: Only print the reports
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  attach:
+    name: Attach ${{ inputs.artifact }} to ${{ inputs.release_tag }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: ${{ inputs.artifact }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: assets
+
+      - name: Print the package reports
+        run: |
+          ls -la assets
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in sorted(Path("assets").glob("*.json")):
+              text = path.read_text(encoding="utf-8-sig", errors="replace")
+              try:
+                  data = json.loads(text)
+              except ValueError:
+                  print(f"== {path.name}: not JSON")
+                  continue
+              print(f"== {path.name}")
+              if isinstance(data, dict) and "passed" in data:
+                  print("passed:", data["passed"], "failures:", data.get("failures"))
+              if isinstance(data, dict) and "components" in data:
+                  for name, value in data["components"].items():
+                      if isinstance(value, list):
+                          print(f"  {name}: {len(value)} entries")
+                          for item in value:
+                              print("    ", item)
+                      else:
+                          print(f"  {name}: {value}")
+          PY
+
+      - name: Upload packages, checksums and source bundles
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          shopt -s nullglob
+          files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.exe assets/*.sha256 \
+            assets/*-source-and-notices.tar.gz)
+          test "${#files[@]}" -gt 0
+          ls -la "${files[@]}"
+          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
