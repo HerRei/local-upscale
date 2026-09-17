@@ -128,6 +128,9 @@ analysis = Analysis(
         "matplotlib",
         "notebook",
         "pytest",
+        # GNU readline is GPL-3.0 and only serves interactive shells; the worker has
+        # none, and bundling it would put a GPL library in the process with PyTorch.
+        "readline",
         "tkinter",
         # Triton is only required for torch.compile/inductor. The packaged
         # worker does not enable that path, and linuxdeploy cannot patch
