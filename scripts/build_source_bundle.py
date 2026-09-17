@@ -20,12 +20,15 @@ present in the inventory but its source was not supplied.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,9 +130,60 @@ def apt_sources(libraries: list[str], tree: Path, destination: Path) -> list[str
         spec = source_package_spec(package, status)
         if spec in fetched:
             continue
-        subprocess.run(["apt-get", "source", "--download-only", spec], cwd=destination, check=True)
+        downloaded = subprocess.run(
+            ["apt-get", "source", "--download-only", spec], cwd=destination, check=False
+        )
+        if downloaded.returncode != 0:
+            # The runner image can carry a security update the mirror has superseded.
+            source, _, version = spec.partition("=")
+            snapshot_source(source, version, destination)
         fetched.append(spec)
     return fetched
+
+
+SNAPSHOT_ARCHIVE = "https://snapshot.ubuntu.com/ubuntu"
+SNAPSHOT_AGES_DAYS = (7, 14, 30, 60, 120, 240, 400)
+
+
+def dsc_files(dsc: str) -> list[tuple[str, str]]:
+    """(sha256, file name) pairs from a .dsc's Checksums-Sha256 field."""
+    files: list[tuple[str, str]] = []
+    in_field = False
+    for line in dsc.splitlines():
+        if line.startswith("Checksums-Sha256:"):
+            in_field = True
+            continue
+        if in_field and line.startswith(" "):
+            digest, _size, name = line.split()
+            files.append((digest, name))
+        elif in_field:
+            break
+    return files
+
+
+def snapshot_source(source: str, version: str, destination: Path) -> None:
+    """Fetch an exact source package version from snapshot.ubuntu.com, verifying digests."""
+    plain = version.split(":", 1)[-1]
+    prefix = source[:4] if source.startswith("lib") else source[0]
+    now = datetime.datetime.now(datetime.UTC)
+    for days in SNAPSHOT_AGES_DAYS:
+        stamp = (now - datetime.timedelta(days=days)).strftime("%Y%m%dT%H%M%SZ")
+        for component in ("main", "universe", "restricted", "multiverse"):
+            base = f"{SNAPSHOT_ARCHIVE}/{stamp}/pool/{component}/{prefix}/{source}/"
+            try:
+                with urllib.request.urlopen(f"{base}{source}_{plain}.dsc", timeout=60) as response:
+                    dsc = response.read()
+            except urllib.error.HTTPError:
+                continue
+            (destination / f"{source}_{plain}.dsc").write_bytes(dsc)
+            for digest, name in dsc_files(dsc.decode("utf-8", "replace")):
+                target = destination / name
+                with urllib.request.urlopen(base + name, timeout=600) as response:
+                    target.write_bytes(response.read())
+                if sha256(target) != digest:
+                    raise SystemExit(f"{name} from {base} does not match its .dsc digest")
+            return
+    raise SystemExit(f"no source package found for {source}={version}")
 
 
 def owning_packages(dpkg_search: str) -> set[str]:

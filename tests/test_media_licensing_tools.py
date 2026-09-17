@@ -168,6 +168,20 @@ def test_dpkg_search_output_skips_diversions_and_splits_owners():
     }
 
 
+def test_dsc_checksums_list_every_source_file():
+    dsc = (
+        "Format: 3.0 (quilt)\nSource: krb5\nVersion: 1.20.1-6ubuntu2.8\n"
+        "Checksums-Sha1:\n 11 10 krb5_1.20.1.orig.tar.gz\n"
+        "Checksums-Sha256:\n aa 8973449 krb5_1.20.1.orig.tar.gz\n"
+        " bb 153328 krb5_1.20.1-6ubuntu2.8.debian.tar.xz\n"
+        "Files:\n cc 8973449 krb5_1.20.1.orig.tar.gz\n"
+    )
+    assert build_source_bundle.dsc_files(dsc) == [
+        ("aa", "krb5_1.20.1.orig.tar.gz"),
+        ("bb", "krb5_1.20.1-6ubuntu2.8.debian.tar.xz"),
+    ]
+
+
 def test_source_package_spec_prefers_the_source_version():
     status = (
         "Package: libglib2.0-0t64\nSource: glib2.0 (2.80.0-6ubuntu3)\nVersion: 2.80.0-6ubuntu3.1\n"
