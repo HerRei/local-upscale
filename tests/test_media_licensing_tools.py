@@ -138,11 +138,20 @@ def test_source_bundle_collects_sources_licenses_and_manifest(tmp_path: Path):
     assert report["components"]["python-distribution-licenses"] == 1
 
 
-def test_source_bundle_requires_ubuntu_sources_for_lgpl_host_libraries(tmp_path: Path):
+def test_source_bundle_requires_ubuntu_sources_for_every_host_library(tmp_path: Path):
     inventory = tmp_path / "LocalSR.AppDir"
     _touch(inventory / "usr/lib/libwebkit2gtk-4.1.so.0")
     with pytest.raises(SystemExit, match="--apt-sources"):
         build_source_bundle.build(_bundle_arguments(inventory, tmp_path / "out"))
+    files = [
+        "usr/lib/libcairo.so.2",
+        "usr/lib/libgnutls.so.30.37.1",
+        "usr/lib/gstreamer-1.0/libgstvpx.so",
+        "usr/lib/LocalSR/engine/_internal/torch/lib/libtorch_cpu.so",
+        "usr/lib/LocalSR/engine/_internal/numpy/core/_multiarray_umath.cpython-311-x86_64-linux-gnu.so",
+        "usr/share/icons/hicolor/index.theme",
+    ]
+    assert build_source_bundle.host_libraries(files) == sorted(files[:4])
 
 
 def test_source_package_spec_prefers_the_source_version():

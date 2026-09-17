@@ -46,20 +46,11 @@ EXTRA_SOURCE_RULES = {
         "NumPy wheel was built with",
     ),
 }
-LGPL_HOST_LIBRARY_PREFIXES = (
-    "libwebkit2gtk",
-    "libjavascriptcoregtk",
-    "libgtk-3",
-    "libgdk-3",
-    "libglib-2.0",
-    "libgio-2.0",
-    "libgobject-2.0",
-    "libgstreamer-1.0",
-    "libgstbase-1.0",
-    "libsoup-3.0",
-    "libraw",
-    "libiconv",
-)
+# Shared libraries an AppDir carries from the build host. Tauri's AppImage bundles the
+# WebKitGTK/GTK stack with dozens of LGPL dependencies (cairo, pango, gnutls, libsoup,
+# GStreamer, ...), so rather than naming a subset, every library Debian packages provided
+# gets its source package; libraries no package owns (those inside wheels) are skipped.
+HOST_SHARED_LIBRARY = re.compile(r"(^|/)lib[^/]*\.so(\.[0-9]+)*$")
 
 
 def sha256(path: Path) -> str:
@@ -86,11 +77,9 @@ def needs_opencv_source(files: list[str]) -> bool:
     return any(OPENCV_MARKER.search(name) for name in files)
 
 
-def lgpl_host_libraries(files: list[str]) -> list[str]:
+def host_libraries(files: list[str]) -> list[str]:
     return sorted(
-        name
-        for name in files
-        if "/usr/lib/" in f"/{name}" and Path(name).name.startswith(LGPL_HOST_LIBRARY_PREFIXES)
+        name for name in files if "/usr/lib/" in f"/{name}" and HOST_SHARED_LIBRARY.search(name)
     )
 
 
@@ -119,7 +108,10 @@ def git_archive(commit: str, destination: Path) -> None:
 
 
 def apt_sources(libraries: list[str], tree: Path, destination: Path) -> list[str]:
-    """Download Ubuntu source packages for bundled host libraries (Linux only)."""
+    """Download Ubuntu source packages for bundled host libraries (Linux only).
+
+    Returns the ``source=version`` specs fetched; files no Debian package owns are ignored.
+    """
     packages: set[str] = set()
     for name in libraries:
         query = subprocess.run(
@@ -222,16 +214,16 @@ def build(arguments: argparse.Namespace) -> dict:
             raise SystemExit(f"--extra-source {name} does not exist: {supplied}")
         report["components"][name] = {"source": str(supplied)}
 
-    host = lgpl_host_libraries(files)
+    host = host_libraries(files)
     if host:
-        report["components"]["host-lgpl-libraries"] = host
+        report["components"]["host-libraries"] = host
         if arguments.apt_sources:
             report["components"]["ubuntu-source-packages"] = apt_sources(
                 host, tree, output / "ubuntu-sources"
             )
         elif not arguments.allow_missing_host_sources:
             raise SystemExit(
-                "the inventory bundles LGPL host libraries; run on the build host with "
+                "the inventory bundles host libraries; run on the build host with "
                 "--apt-sources to include their Ubuntu source packages"
             )
 
