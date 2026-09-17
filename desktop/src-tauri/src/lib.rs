@@ -154,7 +154,7 @@ pub fn run() {
             commands::uninstall_integrations,
         ])
         .build(compiled_context())
-        .expect("failed to build LocalSR Next Preview");
+        .expect("failed to build LocalSR");
 
     application.run(|app, event| {
         if matches!(&event, tauri::RunEvent::Exit) {
@@ -263,7 +263,7 @@ fn start_smoke_monitor(app: tauri::AppHandle, state: Arc<AppState>) {
         }
         if let Some(report_path) = env::var_os("LOCALSR_SMOKE_REPORT") {
             let report = serde_json::json!({
-                "app": "LocalSR Next Preview",
+                "app": "LocalSR",
                 "version": env!("CARGO_PKG_VERSION"),
                 "platform": env::consts::OS,
                 "architecture": env::consts::ARCH,

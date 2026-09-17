@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LocalSR Next Preview",
+  "productName": "LocalSR",
   "version": "0.1.2-beta",
   "identifier": "com.localsr.desktop.next",
   "build": {

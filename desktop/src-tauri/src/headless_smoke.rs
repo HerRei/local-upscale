@@ -43,7 +43,7 @@ pub fn run() -> i32 {
         ),
     };
     let report = json!({
-        "app": "LocalSR Next Preview",
+        "app": "LocalSR",
         "version": env!("CARGO_PKG_VERSION"),
         "platform": env::consts::OS,
         "architecture": env::consts::ARCH,
@@ -271,7 +271,7 @@ fn wait_for_handshake(
                         &json!({
                             "type": "handshake_request",
                             "data": {
-                                "client_name": "LocalSR Next Preview",
+                                "client_name": "LocalSR",
                                 "client_version": env!("CARGO_PKG_VERSION"),
                                 "protocol_version": PROTOCOL_VERSION,
                             }
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn packaged_worker_candidates_cover_windows_and_macos_bundle_layouts() {
         let candidates = worker_candidates(
-            Path::new("/install/LocalSR Next Preview.exe"),
+            Path::new("/install/LocalSR.exe"),
             "localsr-worker.exe",
             None,
             "LocalSR Beta",

@@ -269,7 +269,7 @@ def test_linuxdeploy_removes_plugin_copied_host_libraries_before_packaging(
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux packaging specific")
 def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: Path) -> None:
     appimage_dir = tmp_path / "bundle" / "appimage"
-    appdir = appimage_dir / "LocalSR Next Preview.AppDir"
+    appdir = appimage_dir / "LocalSR.AppDir"
     appdir.mkdir(parents=True)
     (appdir / "AppRun").write_text("#!/bin/sh\n", encoding="utf-8")
     image = appimage_dir / "LocalSR.AppImage"
@@ -370,7 +370,10 @@ def test_release_overlay_refuses_signed_but_unnotarized_macos(monkeypatch, tmp_p
         build.write_bundle_overlay(require_signing=True)
 
 
-@pytest.mark.parametrize("torch_version,minimum", [("2.13.0", "14.0"), ("2.2.2", "12.0")])
+@pytest.mark.parametrize(
+    "torch_version,minimum",
+    [("2.13.0", "14.0"), ("2.14.0", "14.0"), ("2.14.0+cpu", "14.0"), ("2.2.2", "12.0")],
+)
 def test_macos_overlay_preserves_the_runtime_deployment_floor(
     monkeypatch, tmp_path: Path, torch_version: str, minimum: str
 ) -> None:

@@ -29,7 +29,7 @@ def write_pe(path: Path, machine: int) -> None:
 
 
 def test_reads_the_declared_macos_bundle_executable(tmp_path: Path) -> None:
-    app = tmp_path / "LocalSR Next Preview.app"
+    app = tmp_path / "LocalSR.app"
     macos = app / "Contents" / "MacOS"
     macos.mkdir(parents=True)
     executable = macos / "localsr-next"
@@ -42,7 +42,7 @@ def test_reads_the_declared_macos_bundle_executable(tmp_path: Path) -> None:
 
 def test_selects_the_app_executable_not_the_uninstaller(tmp_path: Path) -> None:
     (tmp_path / "Uninstall.exe").write_bytes(b"uninstaller")
-    expected = tmp_path / "LocalSR Next Preview.exe"
+    expected = tmp_path / "LocalSR.exe"
     expected.write_bytes(b"app")
 
     assert smoke.installed_windows_executable(tmp_path) == expected
@@ -52,7 +52,7 @@ def test_selects_the_windows_host_instead_of_the_bundled_worker(tmp_path: Path) 
     engine = tmp_path / "engine"
     engine.mkdir()
     (engine / "localsr-worker.exe").write_bytes(b"worker")
-    expected = tmp_path / "LocalSR Next Preview.exe"
+    expected = tmp_path / "LocalSR.exe"
     expected.write_bytes(b"app")
 
     assert smoke.installed_windows_executable(tmp_path) == expected
@@ -112,7 +112,7 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
             install_argument = next(value for value in command if value.startswith("/D="))
             install_dir = Path(install_argument.removeprefix("/D="))
             install_dir.mkdir(parents=True)
-            write_pe(install_dir / "LocalSR Next Preview.exe", 0x8664)
+            write_pe(install_dir / "LocalSR.exe", 0x8664)
             worker = install_dir / "engine" / "localsr-worker.exe"
             write_pe(worker, 0x8664)
         elif command[1:] == ["--headless-smoke-test"]:
@@ -136,7 +136,7 @@ def test_macos_smoke_bypasses_single_instance_forwarding(tmp_path: Path, monkeyp
     artifact = tmp_path / "LocalSR.dmg"
     artifact.write_bytes(b"dmg")
     mount = tmp_path / "mounted"
-    app = mount / "LocalSR Next Preview.app"
+    app = mount / "LocalSR.app"
     executable = app / "Contents" / "MacOS" / "localsr-next"
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"host")

@@ -10,7 +10,10 @@ use serde::Serialize;
 use crate::error::{AppError, AppResult};
 
 #[cfg(any(target_os = "linux", test))]
-const DISPLAY_NAME: &str = "LocalSR Next Preview";
+const DISPLAY_NAME: &str = "LocalSR";
+/// Betas up to 0.1.2 installed their file-manager actions under this name.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LEGACY_DISPLAY_NAME: &str = "LocalSR Next Preview";
 #[cfg(target_os = "linux")]
 const LINUX_ICON_PNG: &[u8] = include_bytes!("../../../packaging/icons/LocalSR.png");
 
@@ -23,7 +26,7 @@ pub struct IntegrationStatus {
 }
 
 pub fn status() -> AppResult<IntegrationStatus> {
-    let installed = platform_marker()?.exists();
+    let installed = platform_marker()?.exists() || legacy_platform_marker()?.exists();
     Ok(IntegrationStatus {
         platform: std::env::consts::OS.into(),
         installed,
@@ -96,7 +99,26 @@ fn resolve_linux_executable(
 fn platform_marker() -> AppResult<PathBuf> {
     Ok(base_dirs()?
         .home_dir()
-        .join("Library/Services/Enhance with LocalSR Next Preview.workflow"))
+        .join("Library/Services/Enhance with LocalSR.workflow"))
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_platform_marker() -> AppResult<PathBuf> {
+    Ok(base_dirs()?.home_dir().join(format!(
+        "Library/Services/Enhance with {LEGACY_DISPLAY_NAME}.workflow"
+    )))
+}
+
+#[cfg(target_os = "linux")]
+fn legacy_platform_marker() -> AppResult<PathBuf> {
+    Ok(base_dirs()?.data_local_dir().join(format!(
+        "nautilus/scripts/Enhance with {LEGACY_DISPLAY_NAME}"
+    )))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn legacy_platform_marker() -> AppResult<PathBuf> {
+    platform_marker()
 }
 
 #[cfg(target_os = "windows")]
@@ -150,11 +172,11 @@ fn install_platform(executable: &Path) -> AppResult<()> {
         .ok_or_else(|| AppError::Config("install integrations from the packaged app".into()))?;
     if app.starts_with("/Volumes") {
         return Err(AppError::Config(
-            "move LocalSR Next Preview to Applications before installing Finder integrations"
-                .into(),
+            "move LocalSR to Applications before installing Finder integrations".into(),
         ));
     }
     install_symlink(executable, &home.join(".local/bin/localsr-next"))?;
+    remove_exact_tree(&legacy_platform_marker()?)?;
 
     let workflow = platform_marker()?;
     let contents = workflow.join("Contents");
@@ -174,6 +196,7 @@ fn install_platform(executable: &Path) -> AppResult<()> {
 fn uninstall_platform() -> AppResult<()> {
     remove_owned_symlink(&base_dirs()?.home_dir().join(".local/bin/localsr-next"))?;
     remove_exact_tree(&platform_marker()?)?;
+    remove_exact_tree(&legacy_platform_marker()?)?;
     let _ = Command::new("/System/Library/CoreServices/pbs")
         .arg("-update")
         .status();
@@ -191,10 +214,7 @@ fn install_platform(executable: &Path) -> AppResult<()> {
     for entry in windows_registry_entries(executable, &picker) {
         registry_add(&entry.key, entry.name.as_deref(), &entry.value)?;
     }
-    write_atomic(
-        &integration_root.join("installed"),
-        b"LocalSR Next Preview\n",
-    )?;
+    write_atomic(&integration_root.join("installed"), b"LocalSR\n")?;
     Ok(())
 }
 
@@ -248,9 +268,10 @@ fn install_platform(executable: &Path) -> AppResult<()> {
             linux_kde_service_menu(executable, &picker).as_bytes(),
         )?;
     }
+    remove_exact_file(&legacy_platform_marker()?)?;
     let nautilus = data
         .join("nautilus/scripts")
-        .join("Enhance with LocalSR Next Preview");
+        .join(format!("Enhance with {DISPLAY_NAME}"));
     write_atomic(&nautilus, linux_nautilus_script(&picker).as_bytes())?;
     fs::set_permissions(&nautilus, fs::Permissions::from_mode(0o755))?;
 
@@ -269,7 +290,8 @@ fn uninstall_platform() -> AppResult<()> {
         data.join("applications/localsr-next.desktop"),
         data.join("kservices5/ServiceMenus/localsr-next.desktop"),
         data.join("kio/servicemenus/localsr-next.desktop"),
-        data.join("nautilus/scripts/Enhance with LocalSR Next Preview"),
+        data.join(format!("nautilus/scripts/Enhance with {DISPLAY_NAME}")),
+        legacy_platform_marker()?,
         data.join("icons/hicolor/1024x1024/apps/localsr-next.png"),
     ] {
         remove_exact_file(&file)?;
@@ -409,7 +431,7 @@ fn macos_info_plist() -> String {
     r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>NSServices</key><array><dict>
-<key>NSMenuItem</key><dict><key>default</key><string>Enhance with LocalSR Next Preview</string></dict>
+<key>NSMenuItem</key><dict><key>default</key><string>Enhance with LocalSR</string></dict>
 <key>NSMessage</key><string>runWorkflowAsService</string>
 <key>NSSendFileTypes</key><array><string>public.image</string><string>public.movie</string><string>public.folder</string></array>
 </dict></array></dict></plist>
@@ -420,7 +442,7 @@ fn macos_info_plist() -> String {
 #[cfg(any(target_os = "macos", test))]
 fn macos_workflow(app: &Path) -> String {
     let script = format!(
-        "choice=$(osascript -e 'choose from list {{\"Active App Settings\", \"Quick Preset (Fast)\", \"Best Quality Preset\"}} with title \"LocalSR Next Preview\" with prompt \"Choose settings for the selected media:\"' 2>/dev/null) || exit 0\ncase \"$choice\" in\n  \"Quick Preset (Fast)\") preset='--preset quick' ;;\n  \"Best Quality Preset\") preset='--preset best' ;;\n  *) preset='' ;;\nesac\nopen -n -a {} --args $preset --auto-start \"$@\"",
+        "choice=$(osascript -e 'choose from list {{\"Active App Settings\", \"Quick Preset (Fast)\", \"Best Quality Preset\"}} with title \"LocalSR\" with prompt \"Choose settings for the selected media:\"' 2>/dev/null) || exit 0\ncase \"$choice\" in\n  \"Quick Preset (Fast)\") preset='--preset quick' ;;\n  \"Best Quality Preset\") preset='--preset best' ;;\n  *) preset='' ;;\nesac\nopen -n -a {} --args $preset --auto-start \"$@\"",
         shell_quote(app)
     );
     format!(
@@ -436,7 +458,7 @@ fn macos_workflow(app: &Path) -> String {
 fn linux_desktop_entry(executable: &Path) -> String {
     let executable = desktop_exec_quote(executable);
     format!(
-        "[Desktop Entry]\nVersion=1.0\nType=Application\nName={DISPLAY_NAME}\nGenericName=Local AI Image and Video Restoration\nComment=Enhance media locally with external AI models\nExec={executable} %F\nIcon=localsr-next\nTerminal=false\nCategories=Graphics;Photography;AudioVideo;Video;\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-ms-asf;video/x-flv;video/3gpp;video/3gpp2;video/ogg;video/x-msvideo;inode/directory;\nStartupNotify=true\nStartupWMClass=LocalSR Next Preview\nActions=QuickUpscale;BestQuality;\n\n[Desktop Action QuickUpscale]\nName=Quick Upscale\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action BestQuality]\nName=Best Quality Upscale\nExec={executable} --preset best --auto-start %F\n"
+        "[Desktop Entry]\nVersion=1.0\nType=Application\nName={DISPLAY_NAME}\nGenericName=Local AI Image and Video Restoration\nComment=Enhance media locally with external AI models\nExec={executable} %F\nIcon=localsr-next\nTerminal=false\nCategories=Graphics;Photography;AudioVideo;Video;\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-ms-asf;video/x-flv;video/3gpp;video/3gpp2;video/ogg;video/x-msvideo;inode/directory;\nStartupNotify=true\nStartupWMClass=LocalSR\nActions=QuickUpscale;BestQuality;\n\n[Desktop Action QuickUpscale]\nName=Quick Upscale\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action BestQuality]\nName=Best Quality Upscale\nExec={executable} --preset best --auto-start %F\n"
     )
 }
 
@@ -445,7 +467,7 @@ fn linux_kde_service_menu(executable: &Path, picker: &Path) -> String {
     let executable = desktop_exec_quote(executable);
     let picker = desktop_exec_quote(picker);
     format!(
-        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-ms-asf;video/x-flv;video/3gpp;video/3gpp2;video/ogg;inode/directory;\nActions=LocalSRNextActive;LocalSRNextQuick;LocalSRNextBest;LocalSRNextPicker;\nX-KDE-Submenu=Enhance with LocalSR Next Preview\nX-KDE-Icon=localsr-next\n\n[Desktop Action LocalSRNextActive]\nName=Active App Settings\nExec={executable} --auto-start %F\n\n[Desktop Action LocalSRNextQuick]\nName=Quick Preset (Fast)\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action LocalSRNextBest]\nName=Best Quality Preset\nExec={executable} --preset best --auto-start %F\n\n[Desktop Action LocalSRNextPicker]\nName=Choose Recipe…\nExec={picker} %F\n"
+        "[Desktop Entry]\nType=Service\nServiceTypes=KonqPopupMenu/Plugin\nMimeType=image/png;image/jpeg;image/webp;image/tiff;image/x-adobe-dng;video/mp4;video/quicktime;video/x-matroska;video/webm;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-ms-asf;video/x-flv;video/3gpp;video/3gpp2;video/ogg;inode/directory;\nActions=LocalSRNextActive;LocalSRNextQuick;LocalSRNextBest;LocalSRNextPicker;\nX-KDE-Submenu=Enhance with LocalSR\nX-KDE-Icon=localsr-next\n\n[Desktop Action LocalSRNextActive]\nName=Active App Settings\nExec={executable} --auto-start %F\n\n[Desktop Action LocalSRNextQuick]\nName=Quick Preset (Fast)\nExec={executable} --preset quick --auto-start %F\n\n[Desktop Action LocalSRNextBest]\nName=Best Quality Preset\nExec={executable} --preset best --auto-start %F\n\n[Desktop Action LocalSRNextPicker]\nName=Choose Recipe…\nExec={picker} %F\n"
     )
 }
 
@@ -455,9 +477,9 @@ fn linux_recipe_picker(executable: &Path) -> String {
         r#"#!/bin/sh
 choice=""
 if command -v zenity >/dev/null 2>&1; then
-  choice=$(printf '%s\n' 'Active App Settings' 'Quick Preset (Fast)' 'Best Quality Preset' | zenity --list --title='LocalSR Next Preview' --text='Choose settings:' --column='Available settings' --height=280 --width=380 2>/dev/null)
+  choice=$(printf '%s\n' 'Active App Settings' 'Quick Preset (Fast)' 'Best Quality Preset' | zenity --list --title='LocalSR' --text='Choose settings:' --column='Available settings' --height=280 --width=380 2>/dev/null)
 elif command -v kdialog >/dev/null 2>&1; then
-  choice=$(kdialog --combobox 'Choose settings:' 'Active App Settings' 'Quick Preset (Fast)' 'Best Quality Preset' --title 'LocalSR Next Preview' 2>/dev/null)
+  choice=$(kdialog --combobox 'Choose settings:' 'Active App Settings' 'Quick Preset (Fast)' 'Best Quality Preset' --title 'LocalSR' 2>/dev/null)
 fi
 case "$choice" in
   'Quick Preset (Fast)') exec {} --preset quick --auto-start "$@" ;;
@@ -510,7 +532,7 @@ fn windows_registry_entries(executable: &Path, picker: &Path) -> Vec<RegistryEnt
             RegistryEntry {
                 key: menu_root.into(),
                 name: Some("MUIVerb".into()),
-                value: "Enhance with LocalSR Next Preview".into(),
+                value: "Enhance with LocalSR".into(),
             },
             RegistryEntry {
                 key: menu_root.into(),
@@ -622,7 +644,7 @@ fn windows_recipe_picker(executable: &Path) -> String {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $choices = @('Active App Settings', 'Quick Preset (Fast)', 'Best Quality Preset')
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'LocalSR Next Preview'
+$form.Text = 'LocalSR'
 $form.Width = 390; $form.Height = 190; $form.StartPosition = 'CenterScreen'
 $combo = New-Object System.Windows.Forms.ComboBox
 $combo.Left = 20; $combo.Top = 25; $combo.Width = 335; $combo.DropDownStyle = 'DropDownList'
@@ -647,22 +669,21 @@ mod tests {
 
     #[test]
     fn generated_integrations_use_the_additive_binary_and_identity() {
-        let executable =
-            Path::new("/Applications/LocalSR Next Preview.app/Contents/MacOS/localsr-next");
+        let executable = Path::new("/Applications/LocalSR.app/Contents/MacOS/localsr-next");
         let desktop = linux_desktop_entry(executable);
-        assert!(desktop.contains("Name=LocalSR Next Preview"));
+        assert!(desktop.contains("Name=LocalSR\n"));
         assert!(desktop.contains("--preset quick --auto-start"));
-        assert!(desktop.contains(
-            "Exec=\"/Applications/LocalSR Next Preview.app/Contents/MacOS/localsr-next\" %F"
-        ));
+        assert!(
+            desktop.contains("Exec=\"/Applications/LocalSR.app/Contents/MacOS/localsr-next\" %F")
+        );
         assert!(desktop.contains("inode/directory"));
         assert!(desktop.contains("Icon=localsr-next"));
         assert!(!desktop.contains("%U"));
         assert!(!desktop.contains("Exec=localsr "));
 
-        let workflow = macos_workflow(Path::new("/Applications/LocalSR Next Preview.app"));
+        let workflow = macos_workflow(Path::new("/Applications/LocalSR.app"));
         assert!(workflow.contains("--preset best"));
-        assert!(workflow.contains("LocalSR Next Preview.app"));
+        assert!(workflow.contains("LocalSR.app"));
         assert!(workflow.contains("open -n -a"));
         assert!(macos_info_plist().contains("public.folder"));
 
@@ -709,7 +730,7 @@ mod tests {
         let mount = temporary.path().join("mount/usr/bin");
         fs::create_dir_all(&mount).unwrap();
         let current = mount.join("localsr-next");
-        let appimage = temporary.path().join("LocalSR Next Preview.AppImage");
+        let appimage = temporary.path().join("LocalSR.AppImage");
         let other_appimage = temporary.path().join("other.AppImage");
         let unrelated_mount = temporary.path().join("elsewhere");
         fs::write(&current, b"host").unwrap();

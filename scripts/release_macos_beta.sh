@@ -14,7 +14,7 @@ IDENTITY="Developer ID Application: Hermes Reisner (Z2TU844D84)"
 PROFILE=LocalSR-Z2TU844D84-notary
 OUT="$PWD/build/release-$VERSION"
 mkdir -p "$OUT"
-APP_NAME="LocalSR Next Preview.app"
+APP_NAME="LocalSR.app"
 HOST_BASE="https://macmini-ci.tail34a4e0.ts.net/releases/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build LocalSR Next Preview without changing the existing release artifacts."""
+"""Build the LocalSR desktop app without changing the existing release artifacts."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -705,8 +706,9 @@ def write_bundle_overlay(*, require_signing: bool = False, payload: Path | None 
     if sys.platform == "darwin":
         from importlib.metadata import version
 
-        # The maintained Torch 2.13 ARM wheels have a macOS 14 deployment floor.
-        if version("torch").split("+")[0].startswith("2.13."):
+        # Torch 2.13 and later ARM wheels have a macOS 14 deployment floor.
+        release = tuple(int(part) for part in re.findall(r"\d+", version("torch"))[:2])
+        if release >= (2, 13):
             bundle["macOS"] = {"minimumSystemVersion": "14.0"}
         apple_signing = os.environ.get("APPLE_SIGNING_IDENTITY") or os.environ.get(
             "APPLE_CERTIFICATE"
@@ -852,7 +854,7 @@ def main() -> int:
         if removed_linuxdeploy_symlinks:
             subprocess.run(["sudo", "ldconfig"], capture_output=True)
     print(
-        f"LocalSR Next Preview built for {platform.system()} {platform.machine()}. "
+        f"LocalSR built for {platform.system()} {platform.machine()}. "
         "This build uses the Tauri desktop and the separate Python inference worker.",
         flush=True,
     )

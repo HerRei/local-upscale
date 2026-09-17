@@ -537,7 +537,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
                 &json!({
                     "type": "handshake_request",
                     "data": {
-                        "client_name": "LocalSR Next Preview",
+                        "client_name": "LocalSR",
                         "client_version": env!("CARGO_PKG_VERSION"),
                         "protocol_version": PROTOCOL_VERSION
                     }

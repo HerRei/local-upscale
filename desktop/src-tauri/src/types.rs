@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const APP_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " · Next Preview");
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CatalogManifest {
