@@ -1341,6 +1341,53 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByLabelText('Before and after comparison')).toBeNull();
   });
 
+  it("opens and reveals the selected item's result, not the last one written", async () => {
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.runtime.last_output_path = '/private/second-output.png';
+    const completed = (id: string, created_at: number) => ({
+      id: `job-${id}`,
+      media_id: id,
+      media_name: `${id}.png`,
+      media_kind: 'image' as const,
+      status: 'completed' as const,
+      progress: 100,
+      output_path: `/private/${id}-output.png`,
+      error: '',
+      created_at,
+    });
+    snapshot.jobs = [completed('second', 2), completed('first', 1)];
+
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    expect(api.openResult).toHaveBeenLastCalledWith('/private/first-output.png');
+    await user.click(screen.getByRole('button', { name: 'Reveal' }));
+    expect(api.revealResult).toHaveBeenLastCalledWith('/private/first-output.png');
+  });
+
+  it('hides Open and Reveal while the selected item has no result', async () => {
+    const snapshot = readySnapshot([image('fresh', true), image('done')]);
+    snapshot.runtime.last_output_path = '/private/done-output.png';
+    snapshot.jobs = [
+      {
+        id: 'job-done',
+        media_id: 'done',
+        media_name: 'done.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/private/done-output.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+
+    await mountWith(snapshot);
+
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reveal' })).toBeNull();
+  });
+
   it('shows the comparison only when the completed result belongs to the selected media', async () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       width: 800,

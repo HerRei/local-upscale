@@ -216,6 +216,16 @@
   $: queuedCount = snapshot.jobs.filter((job) => job.status === 'queued').length;
   $: queueEta = queueTiming(snapshot);
   $: resultPreview = resultPreviewForSelectedMedia(snapshot);
+  // Open and Reveal follow the selected item. Jobs arrive newest first, so this
+  // is the selected item's latest result, not whichever job finished last.
+  $: selectedOutputPath =
+    selectedMedia && selectedMedia.id !== activeJobMediaId
+      ? (snapshot.jobs.find(
+          (job) =>
+            job.media_id === selectedMedia?.id && job.status === 'completed' && job.output_path,
+        )?.output_path ?? '')
+      : '';
+  $: selectedOutputName = selectedOutputPath.split(/[\\/]/).pop() ?? '';
   let imageComparisonKey = '';
   let imageComparisonError = '';
   $: completedImageJob =
@@ -2377,11 +2387,14 @@
         <i style={`width:${snapshot.runtime.progress}%`}></i>
       </div>{/if}
     <div class="status-actions">
-      {#if snapshot.runtime.last_output_path}<button
+      {#if selectedOutputPath}<button
           class="button"
-          on:click={() => api.revealResult(snapshot.runtime.last_output_path)}>Reveal</button
-        ><button class="button" on:click={() => api.openResult(snapshot.runtime.last_output_path)}
-          >Open</button
+          title={`Show ${selectedOutputName} in its folder`}
+          on:click={() => api.revealResult(selectedOutputPath)}>Reveal</button
+        ><button
+          class="button"
+          title={`Open ${selectedOutputName}`}
+          on:click={() => api.openResult(selectedOutputPath)}>Open</button
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}

@@ -300,6 +300,18 @@ impl Database {
             .optional()?)
     }
 
+    pub fn is_completed_output(&self, path: &str) -> AppResult<bool> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT 1 FROM jobs WHERE status='completed' AND output_path != '' AND output_path=?1 LIMIT 1",
+                [path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     pub fn next_queued_job(&self) -> AppResult<Option<PendingJob>> {
         Ok(self
             .connection
@@ -516,6 +528,9 @@ mod tests {
         assert!(jobs
             .iter()
             .any(|job| job.id == "finished" && job.output_path == "/tmp/result.png"));
+        assert!(db.is_completed_output("/tmp/result.png").unwrap());
+        assert!(!db.is_completed_output("/tmp/batch.png").unwrap());
+        assert!(!db.is_completed_output("").unwrap());
         assert_eq!(db.next_queued_job().unwrap().unwrap().id, "pending-0");
         db.record_job_duration("finished", 24.5).unwrap();
         db.record_job_duration("finished", f64::NAN).unwrap();

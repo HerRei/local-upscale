@@ -1909,14 +1909,21 @@ fn canonical_directory(path: &str) -> AppResult<PathBuf> {
     Ok(canonical)
 }
 
+/// Open and Reveal act on the selected item's result, which is often not the
+/// most recent output (a finished batch, or a result from an earlier session),
+/// so any completed job's output is allowed alongside the last one.
 fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
-    let expected = lock(&state.runtime)?.last_output_path.clone();
-    if expected.is_empty() {
+    let recorded = lock(&state.database)?.is_completed_output(requested)?;
+    let last_output = lock(&state.runtime)?.last_output_path.clone();
+    if !recorded && last_output.is_empty() {
         return Err(AppError::Validation("there is no completed output".into()));
     }
     let requested = fs::canonicalize(requested)?;
-    let expected = fs::canonicalize(expected)?;
-    if requested != expected || !requested.is_file() {
+    let is_last_output = !last_output.is_empty()
+        && fs::canonicalize(last_output)
+            .map(|expected| expected == requested)
+            .unwrap_or(false);
+    if !(recorded || is_last_output) || !requested.is_file() {
         return Err(AppError::Validation(
             "output path was not authorized".into(),
         ));
