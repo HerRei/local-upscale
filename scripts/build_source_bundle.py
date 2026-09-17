@@ -40,7 +40,8 @@ EXTRA_SOURCE_RULES = {
         "LibRaw (LGPL-2.1/CDDL-1.0) bundled by rawpy; use the matching rawpy sdist",
     ),
     "gcc-runtime": (
-        re.compile(r"(^|/)libquadmath[.\-][^/]*$"),
+        # A separate library on macOS and Linux; linked into the OpenBLAS DLL on Windows.
+        re.compile(r"(^|/)libquadmath[.\-][^/]*$|(^|/)libopenblas[^/]*gcc_[^/]*\.dll$"),
         "libquadmath (LGPL-2.1) bundled by NumPy's OpenBLAS; use the exact GCC source the "
         "NumPy wheel was built with",
     ),

@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_source_bundle  # noqa: E402
 import build_tauri_preview  # noqa: E402
+import fetch_extra_sources  # noqa: E402
 import verify_nvidia_redistributables as nvidia  # noqa: E402
 
 
@@ -177,3 +178,23 @@ def test_source_bundle_requires_libraw_and_gcc_runtime_sources(tmp_path: Path):
     assert (output / "extra-sources/libraw/rawpy-0.27.0.tar.gz").exists()
     assert (output / "extra-sources/gcc-runtime/README").exists()
     assert set(report["components"]) >= {"libraw", "gcc-runtime"}
+
+
+def test_windows_openblas_dll_needs_the_gcc_runtime_source(tmp_path: Path):
+    inventory = tmp_path / "worker-dist"
+    _touch(
+        inventory
+        / "engine/_internal/numpy.libs/libopenblas64__v0.3.23-293-gc2f4bdbb-gcc_10_3_0-2bde.dll"
+    )
+    with pytest.raises(SystemExit, match="--extra-source gcc-runtime"):
+        build_source_bundle.build(_bundle_arguments(inventory, tmp_path / "out"))
+
+
+def test_every_platform_registers_its_extra_sources():
+    registry = json.loads((ROOT / "packaging/extra-sources.json").read_text())
+    for platform in ("macos-arm64", "linux-x86_64", "windows-x86_64"):
+        names = [name for name, _ in fetch_extra_sources.entries_for(platform, registry)]
+        assert sorted(names) == ["gcc-runtime", "libraw"], platform
+        for _, entry in fetch_extra_sources.entries_for(platform, registry):
+            assert entry["url"].startswith("https://")
+            assert len(entry["sha256"]) == 64

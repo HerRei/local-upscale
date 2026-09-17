@@ -6,16 +6,41 @@
       "component": "LibRaw 0.22.1 (LGPL-2.1 or CDDL-1.0), bundled by rawpy 0.27.0",
       "url": "https://files.pythonhosted.org/packages/source/r/rawpy/rawpy-0.27.0.tar.gz",
       "sha256": "45251e46c1d891a62919a4ac200a9828f825e3c59f89cea2f1daee0900ff15ec",
-      "platforms": ["macos-arm64", "linux-x86_64", "windows-x86_64"],
+      "platforms": [
+        "macos-arm64",
+        "linux-x86_64",
+        "windows-x86_64"
+      ],
       "note": "The sdist contains external/LibRaw at the bundled version."
     },
     "gcc-runtime": {
       "component": "libquadmath (LGPL-2.1) from GCC 11.3.0, bundled by NumPy 1.26.4's OpenBLAS",
       "url": "https://github.com/isuruf/gcc/archive/refs/tags/gcc-11.3.0-2.tar.gz",
       "sha256": "988ea53f1ce77d057919dd2322cbe2d5e2b21a30e17c312cf6a4c2389c28c321",
-      "platforms": ["macos-arm64"],
-      "evidence": "numpy v1.26.4 tools/wheels/gfortran_utils.sh downloads gfortran from isuruf/gcc release gcc-11.3.0-2; tools/openblas_support.py selects openblas ...macosx_11_0_arm64-gf_5272328.",
-      "note": "Linux and Windows NumPy wheels use different toolchains; identify their exact GCC sources on those build hosts before publishing."
+      "platforms": [
+        "macos-arm64"
+      ],
+      "evidence": "numpy v1.26.4 tools/wheels/gfortran_utils.sh downloads gfortran from isuruf/gcc release gcc-11.3.0-2; tools/openblas_support.py selects openblas ...macosx_11_0_arm64-gf_5272328."
+    },
+    "gcc-runtime-linux": {
+      "extra_source": "gcc-runtime",
+      "component": "libquadmath (LGPL-2.1) from CentOS 7's GCC 4.8.5-44, bundled by NumPy 1.26.4's manylinux2014 wheel",
+      "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/gcc-4.8.5-44.el7.src.rpm",
+      "sha256": "642c4085f6af9565e39583e54a9d7a5d9e6b93dd8c8e9474aec8a892d6c7aa36",
+      "platforms": [
+        "linux-x86_64"
+      ],
+      "evidence": "numpy-1.26.4-cp311-cp311-manylinux2014_x86_64.whl ships numpy.libs/libquadmath-96973f99.so.0.0.0 next to an OpenBLAS whose objects carry 'GCC: (GNU) 4.8.5 20150623 (Red Hat 4.8.5-44)' and '10.2.1 (Red Hat 10.2.1-11)'. manylinux2014 is CentOS 7.9, where devtoolset-10 links libquadmath.so.0 from the system libquadmath package built from gcc-4.8.5-44.el7; libgfortran (GPL-3.0 with the runtime exception) needs no source."
+    },
+    "gcc-runtime-windows": {
+      "extra_source": "gcc-runtime",
+      "component": "libquadmath (LGPL-2.1) from GCC 10.3.0, statically linked into NumPy 1.26.4's Windows OpenBLAS DLL",
+      "url": "https://ftp.gnu.org/gnu/gcc/gcc-10.3.0/gcc-10.3.0.tar.xz",
+      "sha256": "64f404c1a650f27fc33da242e1f2df54952e3963a49e06e73f6940f3223ac344",
+      "platforms": [
+        "windows-x86_64"
+      ],
+      "evidence": "numpy-1.26.4-cp311-cp311-win_amd64.whl ships numpy.libs/libopenblas64__v0.3.23-293-gc2f4bdbb-gcc_10_3_0-*.dll, whose objects carry 'GCC: (Built by Jeroen for the R-project) 10.3.0' and quadmath symbols; that toolchain builds GCC 10.3.0."
     }
   }
 }
