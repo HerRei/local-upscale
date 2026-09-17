@@ -176,3 +176,40 @@ def test_log_stream_end_to_end(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_github_downloads_add_only_growth_to_the_daily_totals(tmp_path):
+    store = stats.Store(tmp_path / "s.db")
+    releases = [
+        {
+            "tag_name": "v0.1.2-beta",
+            "draft": False,
+            "assets": [
+                {"name": "LocalSR-v0.1.2-beta-macOS-arm64.dmg", "download_count": 6},
+                {"name": "SHA256SUMS", "download_count": 2},
+                {"name": "bad name/../x", "download_count": 9},
+            ],
+        },
+        {
+            "tag_name": "v0.0.12-alpha",
+            "draft": True,
+            "assets": [{"name": "a.dmg", "download_count": 4}],
+        },
+    ]
+    assets = stats.github_assets(releases)
+    assert assets == [
+        ("github/v0.1.2-beta/LocalSR-v0.1.2-beta-macOS-arm64.dmg", 6),
+        ("github/v0.1.2-beta/SHA256SUMS", 2),
+    ]
+    assert store.record_github(assets, NOW) == 8
+    assert store.record_github(assets, NOW + 3600) == 0
+    grown = [(assets[0][0], 9), (assets[1][0], 1)]
+    assert store.record_github(grown, NOW + 7200) == 3
+    counts = daily(store)
+    assert counts[("download", assets[0][0])] == (9, 9)
+    assert counts[("download", assets[1][0])] == (2, 2)
+    # A replaced asset starts again from its new total without counting.
+    assert store.record_github([(assets[1][0], 3)], NOW + 10800) == 2
+    summary = stats.summary(store.db, stats.day_of(NOW))
+    assert summary["totals"]["downloads"] == 9
+    assert {row["file"]: row["group"] for row in summary["downloads"]}[assets[0][0]] == "Installers"

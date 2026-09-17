@@ -1,0 +1,21 @@
+[Unit]
+Description=Add new LocalSR GitHub release downloads to the daily totals
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/hdd/localsr-stats
+
+[Service]
+Type=oneshot
+User=localsr-stats
+Group=localsr-stats
+ExecStart=/usr/bin/python3 /opt/localsr-stats/localsr_stats.py github --db /mnt/hdd/localsr-stats/stats.sqlite3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/mnt/hdd/localsr-stats
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0027
+Nice=15
+TimeoutStartSec=2min

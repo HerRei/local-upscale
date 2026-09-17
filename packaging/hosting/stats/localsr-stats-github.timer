@@ -1,0 +1,10 @@
+[Unit]
+Description=Read LocalSR GitHub release download totals every hour
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

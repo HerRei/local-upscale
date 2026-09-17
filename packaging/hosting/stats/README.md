@@ -1,14 +1,18 @@
 # LocalSR usage counts
 
-Installed on the Mac mini since 2026-09-15. Counts three things and keeps only daily totals:
+Installed on the Mac mini since 2026-09-15. Counts four things and keeps only daily totals:
 
 | What | Sent by | Request | Counted as |
 | --- | --- | --- | --- |
 | Website visits | `localsr/count.js` on herrei.github.io (skipped with DNT/GPC) | `GET /hit?p=<path>&r=<referring host>` | unique visitors per day, every page view, referring sites |
-| Downloads | anyone fetching release files | `GET /releases/...` (200/206) | one per file, per person, per day |
+| Downloads (Mac mini) | anyone fetching update files or older betas | `GET /releases/...` (200/206) | one per file, per person, per day |
+| Downloads (GitHub) | installers and source bundles on GitHub Releases | hourly read of the public releases API | growth of GitHub's per-file totals (every download) |
 | App use | app builds after 0.1.1-beta, can be turned off in Software Update | `GET /ping/update-check?v=&t=&c=` | active installs per day, by version/target/channel |
 
-All three go to `https://macmini-ci.tail34a4e0.ts.net` (Tailscale Funnel → Caddy on 127.0.0.1:8788).
+The first three go to `https://macmini-ci.tail34a4e0.ts.net` (Tailscale Funnel → Caddy on 127.0.0.1:8788).
+Since 2026-09-17 the download page links installers on GitHub, so `localsr-stats-github.timer`
+runs `localsr_stats.py github` every hour; it stores each asset's last total in `github_assets` and
+adds only the growth to `daily` under `github/<tag>/<file>`.
 
 ## How it works
 
@@ -41,7 +45,7 @@ sudo install -m 0644 /tmp/stats/*.service /tmp/stats/*.timer /etc/systemd/system
 /opt/localsr-downloads/caddy validate --config /tmp/stats/Caddyfile --adapter caddyfile
 sudo install -m 0644 /tmp/stats/Caddyfile /opt/localsr-downloads/Caddyfile
 sudo systemctl daemon-reload
-sudo systemctl enable --now localsr-stats.service localsr-stats-backup.timer
+sudo systemctl enable --now localsr-stats.service localsr-stats-backup.timer localsr-stats-github.timer
 sudo systemctl restart localsr-stats localsr-downloads
 sudo tailscale serve --bg --https=8443 http://127.0.0.1:8792   # once, tailnet only
 ```
@@ -53,4 +57,5 @@ The previous Caddyfile is kept as `/opt/localsr-downloads/Caddyfile.before-stats
 - Changing what is counted or kept means updating the website privacy page
   (`HerRei.github.io/localsr/privacy/`) and `docs/updates.md` in the same change.
 - New site pages must load `count.js`; `localsr/tools/validate_site.py` fails otherwise.
-- Moving downloads off the mini means moving this counter too, or download counts stop.
+- Installers moved to GitHub Releases on 2026-09-17; the hourly GitHub read keeps counting them.
+  Moving other downloads needs the same, or their counts stop.

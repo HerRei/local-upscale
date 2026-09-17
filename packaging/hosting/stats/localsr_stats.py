@@ -4,6 +4,8 @@
 Caddy streams its JSON access log to `serve` over loopback TCP. Nothing but
 daily totals is kept: repeat requests are recognised with a salted hash whose
 salt and hashes are deleted after two days, and IP addresses never reach disk.
+Installers served by GitHub Releases are counted by `github`, which adds the
+growth of GitHub's public per-file download totals to the same daily table.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.request
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +39,7 @@ CREATE TABLE IF NOT EXISTS daily(
     uniques INTEGER NOT NULL DEFAULT 0, requests INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(day, kind, key)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS github_assets(key TEXT PRIMARY KEY, total INTEGER NOT NULL);
 """
 # Today and yesterday stay deduplicated so late log lines are not counted twice.
 SEEN_DAYS = 2
@@ -48,6 +52,7 @@ TOKEN = re.compile(r"[A-Za-z0-9._+-]{1,80}")
 HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
 OWN_HOSTS = {"herrei.github.io"}
 MAX_LINE = 65536
+GITHUB_REPOSITORY = "HerRei/local-upscale"
 
 
 def day_of(ts: float) -> str:
@@ -163,6 +168,57 @@ class Store:
                 self.db.execute("ROLLBACK")
                 raise
         return True
+
+    def record_github(self, assets: list[tuple[str, int]], now: float | None = None) -> int:
+        """Add the growth of GitHub's cumulative per-file totals to today's downloads.
+
+        GitHub counts every download, so these rows carry totals, not unique people.
+        A total that shrinks (a replaced asset) resets the baseline without counting.
+        """
+        now = time.time() if now is None else now
+        day, added = day_of(now), 0
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                for key, total in assets:
+                    row = self.db.execute(
+                        "SELECT total FROM github_assets WHERE key = ?", (key,)
+                    ).fetchone()
+                    growth = total - (row[0] if row else 0)
+                    if growth > 0:
+                        self.db.execute(
+                            "INSERT INTO daily VALUES (?, 'download', ?, ?, ?) "
+                            "ON CONFLICT(day, kind, key) DO UPDATE SET "
+                            "uniques = uniques + excluded.uniques, "
+                            "requests = requests + excluded.requests",
+                            (day, key, growth, growth),
+                        )
+                        added += growth
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO github_assets VALUES (?, ?)", (key, total)
+                    )
+                self.db.execute(
+                    "INSERT OR REPLACE INTO meta VALUES ('last_github_poll', ?)", (str(int(now)),)
+                )
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+        return added
+
+
+def github_assets(releases: list) -> list[tuple[str, int]]:
+    """(daily key, cumulative download count) for every asset of published releases."""
+    assets = []
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft"):
+            continue
+        tag = str(release.get("tag_name") or "")
+        for asset in release.get("assets") or []:
+            name, total = str(asset.get("name") or ""), asset.get("download_count")
+            if TOKEN.fullmatch(tag) and TOKEN.fullmatch(name) and isinstance(total, int):
+                assets.append((f"github/{tag}/{name}", total))
+    return assets
 
 
 class LogHandler(socketserver.StreamRequestHandler):
@@ -310,7 +366,7 @@ td.bar{{position:relative;min-width:140px}}td.bar span{{position:absolute;inset:
 <div class=tiles>
 <div class=tile><b>{t['visitors']}</b>website visitors, all time<br><span class=mute>unique per day, summed</span></div>
 <div class=tile><b>{t['views']}</b>page views, all time</div>
-<div class=tile><b>{t['downloads']}</b>downloads, all time<br><span class=mute>per file, per person, per day</span></div>
+<div class=tile><b>{t['downloads']}</b>downloads, all time<br><span class=mute>Mac mini: per file, person and day · GitHub: every download</span></div>
 <div class=tile><b>{t['update_checks']}</b>app update checks, all time</div>
 </div>
 <h2>Last 30 days</h2><div class=wrap><table><thead><tr><th>Day</th><th>Visitors</th><th>Views</th>
@@ -388,6 +444,17 @@ def backup(args: argparse.Namespace) -> None:
     print(f"localsr-stats: wrote {target}")
 
 
+def poll_github(args: argparse.Namespace) -> None:
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{args.repository}/releases?per_page=100",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "localsr-stats"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        releases = json.load(response)
+    added = Store(args.db).record_github(github_assets(releases))
+    print(f"localsr-stats: {added} new GitHub downloads")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -399,8 +466,11 @@ def main(argv: list[str] | None = None) -> None:
     save.add_argument("--db", type=Path, required=True)
     save.add_argument("--dir", type=Path, required=True)
     save.add_argument("--keep", type=int, default=90)
+    github = sub.add_parser("github", help="add new GitHub release downloads to the totals")
+    github.add_argument("--db", type=Path, required=True)
+    github.add_argument("--repository", default=GITHUB_REPOSITORY)
     args = parser.parse_args(argv)
-    (run if args.command == "serve" else backup)(args)
+    {"serve": run, "backup": backup, "github": poll_github}[args.command](args)
 
 
 if __name__ == "__main__":
