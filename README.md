@@ -28,9 +28,11 @@ machine.
   illustration, and what to fix first. The plan card shows which model runs at
   each stage, its license, its size and whether it fits your hardware. Save the
   setup as a recipe.
-- **A model library with provenance.** Every checkpoint downloads on demand from
-  its author's release, is pinned by size and SHA-256, and is shown with its
-  license and source. Your own `.safetensors` models work too.
+- **A model library with provenance.** Checkpoints download on demand, mostly
+  from their authors' releases and otherwise from pinned mirrors checked against
+  the official files. Each is pinned by size and SHA-256 and shown with its
+  license and source ([provenance](docs/model-licenses.md)). Your own
+  `.safetensors` models work too.
 - **A queue that keeps you informed.** Images, videos and whole folders; real
   tiles and frame progress; estimates measured from completed work; side-by-side
   comparison, including synchronised video playback.

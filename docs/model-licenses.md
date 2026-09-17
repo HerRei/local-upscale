@@ -94,8 +94,9 @@ otherwise it accepts an exact user-supplied file after size and SHA-256 verifica
 
 ### HAT-S Face (`hat_s_x4_face`)
 
-- Exact file: `base_95k_interp_a0p1.pth` from the
-  [HAT-S Face asset release](https://github.com/HerRei/HAT/releases/tag/v1.0.0-face-interp).
+- Exact file: `base_95k_interp_a0p1.pth`, produced by the private HAT-S face fine-tune. Its
+  public release asset was withdrawn on 17 September 2026 because the training-data rights are
+  unresolved; the catalog keeps only its size and digest so a user-supplied copy can be verified.
 - Size: `40,484,805` bytes.
 - SHA-256: `92277daf002214307bea6f1e06b4fa745acdb7690728a0a9a619076e7bc8d7f2`.
 - The HAT implementation has Apache-2.0 source terms, but neither the asset release nor the private
@@ -126,6 +127,52 @@ RestoreFormer was considered for this role, but no exact checkpoint with indepen
 redistribution and training-data terms was established for this release. It is therefore not in the
 trusted auto-download catalog. This avoids presenting source-code licensing as if it also proved
 checkpoint rights.
+
+### HAT-S ×4 and HAT-L ×4 ImageNet (`hat_s_x4`, `hat_l_x4_imagenet`)
+
+- Official checkpoints: `HAT-S_SRx4.pth` and `HAT-L_SRx4_ImageNet-pretrain.pth` from the
+  XPixel Group's [HAT repository](https://github.com/XPixelGroup/HAT), which publishes them in
+  a Google Drive folder that cannot serve pinned, scriptable downloads.
+- Download route: an unchanged copy in the Hugging Face repository
+  [`jaideepsingh/upscale_models`](https://huggingface.co/jaideepsingh/upscale_models), pinned to
+  commit `867e7c0ad519aba5d36b5bb4ef4a4a91781914c4`. The mirror is not the author's release; the
+  pin and the digest check are what make it trustworthy.
+- Sizes: `81,089,561` and `165,774,123` bytes.
+- SHA-256: `a92f81bd2c0c1aaa371a6e4d6cac69e749fde2e36196885ee47a4a3667542c9a` and
+  `5992bd38522f2b8faf11ea4bd8ee08de92465bb66892166576999afc36d60043`. Both match the size and
+  digest [OpenModelDB](https://openmodeldb.info/) records for the official Google Drive files
+  (checked 17 September 2026), so the mirrored bytes are the official checkpoints.
+- Terms: [Apache-2.0](https://github.com/XPixelGroup/HAT/blob/main/LICENSE); the official
+  repository publishes the pretrained models with no separate asset terms.
+
+### SPAN NomosUni and RealPLKSR Denoise (`span_photo_x4`, `denoise_realplksr_1x`)
+
+- Exact assets: `4xNomosUni_span_multijpg.pth` and `1xDeNoise_realplksr_otf.pth` from Philip
+  Hofmann's own [models releases](https://github.com/Phhofm/models/releases) on GitHub.
+- Sizes: `4,546,346` and `29,559,554` bytes.
+- SHA-256: `3a9037c36de90e7825c030176c8e193dfd7897ef4b5df91b8bdc59ffb6ab65ca` and
+  `f4774fbe13ceaa9df390343c2baaa980061458ef27292fa6aca6740d87608a8e`.
+- Terms: CC BY 4.0. The NomosUni release states "License: CC BY 4.0". The Denoise release writes
+  "CC-BY-0.4", and the author's
+  [Hugging Face card](https://huggingface.co/Phips/1xDeNoise_realplksr_otf) for the same model
+  declares `cc-by-4.0`, which LocalSR records.
+
+### NAFNet SIDD and GoPro (`nafnet_sidd_width64`, `nafnet_gopro_deblur`)
+
+- Official checkpoints: `NAFNet-SIDD-width64.pth` and `NAFNet-GoPro-width64.pth` from
+  [megvii-research/NAFNet](https://github.com/megvii-research/NAFNet) (MIT), which links them on
+  Google Drive and Baidu.
+- SIDD route: the Hugging Face Space
+  [`chuxiaojie/NAFNet`](https://huggingface.co/spaces/chuxiaojie/NAFNet) run by co-author Xiaojie
+  Chu, pinned to commit `5964ed4955416df99210106b708e4a2df9e9eca0`; `464,154,961` bytes,
+  SHA-256 `cd685efaae01f7c4e9951f2deab05780079c8eb1e49ed664b72f6db04dabb445`.
+- GoPro route: the third-party Hugging Face mirror
+  [`mikestealth/nafnet-models`](https://huggingface.co/mikestealth/nafnet-models), pinned to commit
+  `9526c38b626f6e8ca0c02e4a282859ac84d240a2`; `271,778,961` bytes, SHA-256
+  `329d3ab4077b8d6b7ff61de376e483714667960bf85be027bf4335cda701196f`. No official digest exists to
+  compare against. The mirror's `NAFNet-REDS-width64.pth` is byte-identical to the co-author's copy,
+  which suggests unchanged files, but that is supporting evidence, not proof. A direct copy from the
+  official Drive folder should replace this route when one can be pinned.
 
 ### NomosWebPhoto and HFA2k (`realplksr_nomoswebphoto_x4`, `realplksr_hfa2k_anime_x4`)
 
