@@ -4,8 +4,10 @@ name: Linux AppImages
 # the disk space and glibc the licensing-clean media runtime needs. The media runtime
 # is built from the pinned LGPL sources, and build_tauri_preview.py refuses any media
 # runtime or AppImage outside packaging/ffmpeg/codec-policy.json; this workflow never
-# passes --private-preview-media. Given a release tag, the verified AppImages (split
-# into 1.9 GB parts when larger than GitHub's asset limit) are attached to it.
+# passes --private-preview-media. Each AppImage gets its corresponding source bundle
+# (LocalSR, the media runtime, OpenCV, LibRaw, the GCC runtime and Ubuntu sources for the
+# bundled LGPL host libraries). Given a release tag, the verified AppImages (split into
+# 1.9 GB parts when larger than GitHub's asset limit) and their bundles are attached.
 
 on:
   workflow_dispatch:
@@ -34,12 +36,15 @@ jobs:
           - id: linux-x86_64-cpu
             backend: CPU
             suffix: Linux-CPU-x86_64.AppImage
+            source: Linux-CPU-source-and-notices.tar.gz
           - id: linux-x86_64-cuda
             backend: CUDA
             suffix: Linux-CUDA-x86_64.AppImage
+            source: Linux-CUDA-source-and-notices.tar.gz
           - id: linux-x86_64-rocm
             backend: AMD-ROCm
             suffix: Linux-ROCm-x86_64.AppImage
+            source: Linux-ROCm-source-and-notices.tar.gz
     env:
       PIP_VERSION: "26.2.1"
     steps:
@@ -121,6 +126,21 @@ jobs:
             --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform linux --architecture x86_64 --report "/mnt/lsr/out/$NAME.architecture.json"
+          # Corresponding source for exactly what the AppImage contains.
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          mkdir -p /mnt/lsr/extract
+          (cd /mnt/lsr/extract && "$ARTIFACT" --appimage-extract > /dev/null)
+          mapfile -t EXTRA < <(python scripts/fetch_extra_sources.py --platform linux-x86_64 \
+            --destination /mnt/lsr/extra-sources)
+          SOURCE_NAME="LocalSR-v${VERSION}-${{ matrix.source }}"
+          python scripts/build_source_bundle.py --inventory /mnt/lsr/extract/squashfs-root \
+            --output /mnt/lsr/source --commit "$GITHUB_SHA" \
+            --media-source /mnt/lsr/lgpl-media/linux-x86_64/dist/corresponding-source \
+            --opencv-source /mnt/lsr/lgpl-media/linux-x86_64/opencv/corresponding-source \
+            "${EXTRA[@]}" --apt-sources > "/mnt/lsr/out/$SOURCE_NAME.json"
+          tar -C /mnt/lsr -czf "/mnt/lsr/out/$SOURCE_NAME" source
+          rm -rf /mnt/lsr/extract /mnt/lsr/source
           cd /mnt/lsr/out
           sha256sum "$NAME" > "$NAME.sha256"
           if [ "$(stat -c %s "$NAME")" -gt 2000000000 ]; then
@@ -156,6 +176,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           shopt -s nullglob
-          files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.AppImage.sha256)
+          files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.AppImage.sha256 \
+            assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0
           gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

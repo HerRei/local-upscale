@@ -1,0 +1,196 @@
+name: Windows installers
+
+# Builds the Windows CPU and DirectML NSIS installers on GitHub-hosted runners with the
+# licensing-clean media runtime: packaging/ffmpeg/build_lgpl_media.py builds FFmpeg and
+# its royalty-free codec libraries with MSYS2's UCRT64 toolchain and PyAV with MSVC,
+# OpenCV is built without FFmpeg, and build_tauri_preview.py refuses anything outside
+# packaging/ffmpeg/codec-policy.json; this workflow never passes --private-preview-media.
+# Each installer gets its corresponding source bundle. The installers are not
+# Authenticode-signed. Given a release tag, the verified installers and their bundles
+# are attached to it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release to attach the installers to (empty keeps them as artifacts)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    name: Build Windows x86_64 ${{ matrix.backend }} installer
+    runs-on: windows-2025
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x86_64-cpu
+            backend: CPU
+            suffix: Windows-CPU-x86_64.exe
+            source: Windows-CPU-source-and-notices.tar.gz
+          - id: windows-x86_64-directml
+            backend: DirectML
+            suffix: Windows-DirectML-x86_64.exe
+            source: Windows-DirectML-source-and-notices.tar.gz
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PIP_VERSION: "26.2.1"
+      LSR: C:\lsr
+    steps:
+      - name: Enable Win32 long paths
+        run: Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: stable
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+
+      - name: Install the MSYS2 UCRT64 toolchain for the media libraries
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Sy --noconfirm --needed make diffutils mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-zlib"
+
+      - name: Verify or install NSIS
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) { choco install -y nsis }
+          if (Test-Path "C:\Program Files (x86)\NSIS") {
+            "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
+          }
+          makensis.exe /VERSION
+          ./scripts/ensure_windows_vc_runtime.ps1
+
+      - name: Create the build environment
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force -Path $env:LSR, "$env:LSR\out" | Out-Null
+          python -m venv "$env:LSR\venv"
+          "$env:LSR\venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Validate release identity
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python scripts/check_release_version.py
+          python scripts/check_desktop_architecture.py
+          python scripts/export_desktop_catalog.py --check
+
+      - name: Install the locked backend
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check "pip==$env:PIP_VERSION"
+          python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" `
+            --cache-root "$env:LSR\wheelhouses" --report "$env:LSR\out\dependency-wheelhouse.json"
+          python -m pip check
+          npm ci --prefix desktop
+
+      - name: Replace PyPI media wheels with the licensing-clean runtime
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          # OpenCV's source patch needs patch.exe; Git's copy goes last on PATH so its
+          # coreutils never shadow MSVC's link.exe.
+          $env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
+          python packaging/ffmpeg/install_media_runtime.py --work-dir C:\lm --source-cache C:\lm\sources --jobs 4
+
+      - name: Build, verify and smoke-test the installer
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python scripts/build_tauri_preview.py --skip-checks --bundles nsis
+          $bundle = "desktop/src-tauri/target/release/bundle/nsis"
+          $sources = @(Get-ChildItem -Path $bundle -Filter '*.exe' -File)
+          if ($sources.Count -ne 1) { throw "Expected 1 NSIS installer, found $($sources.Count)" }
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          $name = "LocalSR-v$version-${{ matrix.suffix }}"
+          $artifact = Join-Path "$env:LSR\out" $name
+          Move-Item -LiteralPath $sources[0].FullName -Destination $artifact
+          python scripts/verify_codec_allowlist.py --tree build/tauri-preview/worker-dist --output "$artifact.codec-policy.json"
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 `
+            --artifact-glob $artifact --report "$artifact.smoke.json"
+          python scripts/verify_tauri_release_package.py $artifact `
+            --platform windows --architecture x86_64 --report "$artifact.architecture.json"
+          $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Out-File -FilePath "$artifact.sha256" -Encoding ascii
+          # Corresponding source for exactly what the installer's engine contains.
+          $extra = @(python scripts/fetch_extra_sources.py --platform windows-x86_64 --destination "$env:LSR\extra-sources")
+          $sourceName = "LocalSR-v$version-${{ matrix.source }}"
+          python scripts/build_source_bundle.py --inventory build/tauri-preview/worker-dist `
+            --output "$env:LSR\source" --commit $env:GITHUB_SHA `
+            --media-source C:\lm\dist\corresponding-source --opencv-source C:\lm\opencv\corresponding-source `
+            @extra | Out-File -FilePath "$env:LSR\out\$sourceName.json" -Encoding utf8
+          tar -C $env:LSR -czf "$env:LSR\out\$sourceName" source
+          Get-ChildItem "$env:LSR\out"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.id }}
+          path: C:\lsr\out\*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure()
+        with:
+          name: logs-${{ matrix.id }}
+          path: C:\lm\work\logs\*
+          if-no-files-found: ignore
+          retention-days: 14
+
+  attach:
+    name: Attach verified installers to the release
+    needs: installer
+    if: ${{ !cancelled() && inputs.release_tag != '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: assets
+          pattern: windows-x86_64-*
+          merge-multiple: true
+      - name: Upload the installers and their checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          shopt -s nullglob
+          files=()
+          for installer in assets/*.exe; do
+            # Attach only installers whose own checksum and smoke report exist.
+            if [ -f "$installer.sha256" ] && [ -f "$installer.smoke.json" ]; then
+              files+=("$installer" "$installer.sha256")
+            fi
+          done
+          files+=(assets/*-source-and-notices.tar.gz)
+          test "${#files[@]}" -gt 0
+          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
