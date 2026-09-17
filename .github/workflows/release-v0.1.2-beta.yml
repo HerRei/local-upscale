@@ -1,0 +1,216 @@
+name: Release v0.1.2-beta
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/v0.1.2-beta
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: localsr-release-v0.1.2-beta
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64 AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          echo "Initial disk space:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift
+          echo "Disk space after cleanup:"
+          df -h
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Install Linux system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils \
+            xvfb \
+            dbus-x11 \
+            librdmacm1 \
+            libibverbs1 \
+            nasm \
+            meson \
+            ninja-build \
+            cmake \
+            autoconf \
+            automake \
+            libtool \
+            zlib1g-dev \
+            patch \
+            squashfs-tools
+
+      - name: Install Python inference packager dependencies
+        run: |
+          python -m pip install --disable-pip-version-check "pip==26.2.1"
+          python -m pip install --disable-pip-version-check \
+            "torch==2.13.0" "torchvision==0.28.0" \
+            --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check \
+            -e ".[package,video,face]" "pyinstaller==6.22.2"
+          python -m pip check
+          npm ci --prefix desktop
+
+      - name: Replace PyPI media wheels with the licensing-clean runtime
+        run: |
+          python packaging/ffmpeg/install_media_runtime.py \
+            --work-dir "$RUNNER_TEMP/lgpl-media/linux-x86_64" \
+            --source-cache "$RUNNER_TEMP/lgpl-media/sources" \
+            --jobs 4
+
+      - name: Build Linux AppImage
+        run: |
+          python scripts/build_tauri_preview.py --skip-checks --bundles appimage
+
+      - name: Collect and test AppImage
+        run: |
+          OUTPUT_DIR="$RUNNER_TEMP/linux-release"
+          mkdir -p "$OUTPUT_DIR"
+          SOURCE=$(find desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage')
+          echo "Found source AppImage: $SOURCE"
+          test -n "$SOURCE"
+          cp "$SOURCE" "$OUTPUT_DIR/LocalSR-v0.1.2-beta-Linux-x86_64.AppImage"
+          cp "$SOURCE" "$OUTPUT_DIR/LocalSR-v0.1.2-beta-Linux-CPU-x86_64.AppImage"
+          chmod +x "$OUTPUT_DIR"/*.AppImage
+
+          echo "Running smoke test on packaged AppImage..."
+          python scripts/smoke_tauri_installer.py \
+            --backend CPU \
+            --timeout 600 \
+            --artifact-glob "$OUTPUT_DIR/LocalSR-v0.1.2-beta-Linux-x86_64.AppImage" \
+            --report "$OUTPUT_DIR/smoke-report.json"
+
+          cd "$OUTPUT_DIR"
+          sha256sum LocalSR-v0.1.2-beta-Linux-x86_64.AppImage > LocalSR-v0.1.2-beta-Linux-x86_64.AppImage.sha256
+          sha256sum LocalSR-v0.1.2-beta-Linux-CPU-x86_64.AppImage > LocalSR-v0.1.2-beta-Linux-CPU-x86_64.AppImage.sha256
+          cat *.sha256
+          ls -la "$OUTPUT_DIR"
+
+      - name: Upload Linux Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-artifacts
+          path: ${{ runner.temp }}/linux-release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    name: Build Windows x86_64 Installer
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enable Win32 long paths
+        run: |
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Initialize MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify or install NSIS
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing NSIS via chocolatey..."
+            choco install -y nsis
+          }
+          makensis.exe /VERSION
+
+      - name: Verify Windows Visual C++ runtime
+        run: |
+          ./scripts/ensure_windows_vc_runtime.ps1
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --disable-pip-version-check "pip==26.2.1"
+          python -m pip install --disable-pip-version-check "torch==2.13.0" "torchvision==0.28.0" --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==6.22.2"
+          python -m pip check
+          npm ci --prefix desktop
+
+      - name: Build Windows NSIS package
+        run: |
+          python scripts/build_tauri_preview.py --skip-checks --bundles nsis --private-preview-media
+
+      - name: Collect and test Windows installer
+        run: |
+          $outputDir = Join-Path $env:RUNNER_TEMP "windows-release"
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+          $sources = @(Get-ChildItem -Path "desktop/src-tauri/target/release/bundle/nsis" -Filter '*.exe' -File)
+          if ($sources.Count -ne 1) { throw "Expected 1 NSIS installer, found $($sources.Count)" }
+          $src = $sources[0].FullName
+          Write-Host "Found installer: $src"
+          Copy-Item -LiteralPath $src -Destination (Join-Path $outputDir "LocalSR-v0.1.2-beta-Windows-x86_64.exe")
+          Copy-Item -LiteralPath $src -Destination (Join-Path $outputDir "LocalSR-v0.1.2-beta-Windows-CPU-x86_64.exe")
+
+          $installer = Join-Path $outputDir "LocalSR-v0.1.2-beta-Windows-x86_64.exe"
+          $report = Join-Path $outputDir "smoke-report.json"
+          Write-Host "Running smoke test on packaged installer..."
+          python scripts/smoke_tauri_installer.py --backend CPU --timeout 600 --artifact-glob $installer --report $report
+
+          Set-Location $outputDir
+          $hash1 = (Get-FileHash -LiteralPath "LocalSR-v0.1.2-beta-Windows-x86_64.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash1  LocalSR-v0.1.2-beta-Windows-x86_64.exe" | Out-File -FilePath "LocalSR-v0.1.2-beta-Windows-x86_64.exe.sha256" -Encoding ascii
+          $hash2 = (Get-FileHash -LiteralPath "LocalSR-v0.1.2-beta-Windows-CPU-x86_64.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash2  LocalSR-v0.1.2-beta-Windows-CPU-x86_64.exe" | Out-File -FilePath "LocalSR-v0.1.2-beta-Windows-CPU-x86_64.exe.sha256" -Encoding ascii
+          Get-ChildItem
+          Get-Content *.sha256
+
+      - name: Upload Windows Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: ${{ runner.temp }}/windows-release/*
+          if-no-files-found: error
+          retention-days: 7
