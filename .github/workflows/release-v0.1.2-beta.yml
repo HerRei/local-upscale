@@ -117,7 +117,7 @@ jobs:
           ls -la "$OUTPUT_DIR"
 
       - name: Upload Linux Release Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-release-artifacts
           path: ${{ runner.temp }}/linux-release/*
@@ -212,7 +212,7 @@ jobs:
           Get-Content *.sha256
 
       - name: Upload Windows Release Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-release-artifacts
           path: ${{ runner.temp }}/windows-release/*
