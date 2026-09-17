@@ -62,24 +62,24 @@
       "status": "manual-required",
       "blocking": true,
       "scope": "windows",
-      "summary": "The royalty-free media runtime does not build on Windows yet, so no Windows package passes the codec gate. CPU and DirectML test builds passed installed acceptance on Windows 11 with an Intel UHD 620. CUDA also waits for NVIDIA's confirmation on cuDNN 9 DLL redistribution.",
-      "next_action": "Port packaging/ffmpeg/build_lgpl_media.py to Windows, rebuild the CPU and DirectML workers, repeat the installed checks and publish the direct installers with the SmartScreen notice."
+      "summary": "The Windows CPU installer of v0.1.3-beta is built on a GitHub-hosted runner with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC), passes verify_codec_allowlist, an installed-package smoke test and the architecture check, and ships its corresponding source. It is not Authenticode-signed, DirectML is still outside the GPU tolerance and CUDA is withheld.",
+      "next_action": "Repeat the manual desktop checks on a Windows PC, obtain a code-signing certificate, then finish DirectML and CUDA."
     },
     {
       "id": "linux-packages",
       "status": "manual-required",
       "blocking": true,
       "scope": "linux",
-      "summary": "CPU, CUDA and ROCm AppImages build with verified production update signatures. CPU and ROCm passed installed worker acceptance on Fedora 44. The GPU packages are 5 to 6 GB and need the release host.",
-      "next_action": "Rebuild from the released source, host the files, verify the installed upgrade and the folder dialog in a desktop session, then publish."
+      "summary": "The Linux CPU AppImage of v0.1.3-beta is built on a GitHub-hosted runner, passes verify_codec_allowlist, an installed-package smoke test and the architecture check, and ships corresponding source including Ubuntu sources for every bundled host library. ROCm and CUDA are withheld.",
+      "next_action": "Repeat the manual desktop checks on a Linux desktop, then settle the ROCm and CUDA items in docs/licensing-media.md."
     },
     {
       "id": "publication-and-certification",
       "status": "decision-required",
       "blocking": true,
       "scope": "distribution",
-      "summary": "macOS is published through the website. Windows and Linux downloads and the Microsoft Store listing (HerRei.LocalSR) are not published.",
-      "next_action": "Publish Windows and Linux once their gates pass; submit the Store package after the website release."
+      "summary": "macOS, the Windows CPU installer and the Linux CPU AppImage of v0.1.3-beta are published through the website and GitHub Releases. The Microsoft Store listing (HerRei.LocalSR) is not published.",
+      "next_action": "Submit the Store package once the Windows build is code-signed."
     },
     {
       "id": "licensing-questions",
