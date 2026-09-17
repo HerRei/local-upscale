@@ -1,6 +1,6 @@
 name: Linux AppImages
 
-# Builds the Linux CPU, NVIDIA CUDA and AMD ROCm AppImages on GitHub-hosted runners, which have
+# Builds the Linux CPU and AMD ROCm AppImages on GitHub-hosted runners, which have
 # the disk space and glibc the licensing-clean media runtime needs. The media runtime
 # is built from the pinned LGPL sources, and build_tauri_preview.py refuses any media
 # runtime or AppImage outside packaging/ffmpeg/codec-policy.json; this workflow never
@@ -8,6 +8,8 @@ name: Linux AppImages
 # (LocalSR, the media runtime, OpenCV, LibRaw, the GCC runtime and Ubuntu sources for the
 # bundled LGPL host libraries). Given a release tag, the verified AppImages (split into
 # 1.9 GB parts when larger than GitHub's asset limit) and their bundles are attached.
+# CUDA stays out until NVIDIA's redistribution terms and a hardware run are settled
+# (docs/licensing-media.md).
 
 on:
   workflow_dispatch:
@@ -37,10 +39,6 @@ jobs:
             backend: CPU
             suffix: Linux-CPU-x86_64.AppImage
             source: Linux-CPU-source-and-notices.tar.gz
-          - id: linux-x86_64-cuda
-            backend: CUDA
-            suffix: Linux-CUDA-x86_64.AppImage
-            source: Linux-CUDA-source-and-notices.tar.gz
           - id: linux-x86_64-rocm
             backend: AMD-ROCm
             suffix: Linux-ROCm-x86_64.AppImage

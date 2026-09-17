@@ -1,11 +1,13 @@
 name: Windows installers
 
-# Builds the Windows CPU and DirectML NSIS installers on GitHub-hosted runners with the
+# Builds the Windows CPU NSIS installer on GitHub-hosted runners with the
 # licensing-clean media runtime: packaging/ffmpeg/build_lgpl_media.py builds FFmpeg and
 # its royalty-free codec libraries with MSYS2's UCRT64 toolchain and PyAV with MSVC,
 # OpenCV is built without FFmpeg, and build_tauri_preview.py refuses anything outside
 # packaging/ffmpeg/codec-policy.json; this workflow never passes --private-preview-media.
-# Each installer gets its corresponding source bundle. The installers are not
+# DirectML and CUDA stay out for now: DirectML results still miss the accuracy tolerance
+# and CUDA waits for NVIDIA's terms (docs/licensing-media.md). Each installer gets its
+# corresponding source bundle. The installers are not
 # Authenticode-signed. Given a release tag, the verified installers and their bundles
 # are attached to it.
 
@@ -37,10 +39,6 @@ jobs:
             backend: CPU
             suffix: Windows-CPU-x86_64.exe
             source: Windows-CPU-source-and-notices.tar.gz
-          - id: windows-x86_64-directml
-            backend: DirectML
-            suffix: Windows-DirectML-x86_64.exe
-            source: Windows-DirectML-source-and-notices.tar.gz
     defaults:
       run:
         shell: pwsh
