@@ -965,7 +965,9 @@ class Builder:
             self.make_import_libraries()
             env["DISTUTILS_USE_SDK"] = "1"
             env["MSSdk"] = "1"
-            build_options = [f"--config-settings=--build-option=--ffmpeg-dir={self.prefix}"]
+            # setuptools splits build options with shlex, which would eat backslashes.
+            prefix = self.prefix.as_posix()
+            build_options = [f"--config-settings=--build-option=--ffmpeg-dir={prefix}"]
         else:
             # pkg-config must resolve the private prefix and nothing else.
             run(

@@ -115,12 +115,9 @@ def apt_sources(libraries: list[str], tree: Path, destination: Path) -> list[str
     packages: set[str] = set()
     for name in libraries:
         query = subprocess.run(
-            ["dpkg", "-S", Path(name).name], capture_output=True, text=True, check=False
+            ["dpkg", "-S", f"*/{Path(name).name}"], capture_output=True, text=True, check=False
         )
-        for line in query.stdout.splitlines():
-            package = line.split(":", 1)[0].strip()
-            if package:
-                packages.add(package)
+        packages.update(owning_packages(query.stdout))
     fetched: list[str] = []
     destination.mkdir(parents=True, exist_ok=True)
     for package in sorted(packages):
@@ -133,6 +130,17 @@ def apt_sources(libraries: list[str], tree: Path, destination: Path) -> list[str
         subprocess.run(["apt-get", "source", "--download-only", spec], cwd=destination, check=True)
         fetched.append(spec)
     return fetched
+
+
+def owning_packages(dpkg_search: str) -> set[str]:
+    """Package names from ``dpkg -S`` output, ignoring diversion notes."""
+    packages: set[str] = set()
+    for line in dpkg_search.splitlines():
+        if line.startswith("diversion by ") or ": " not in line:
+            continue
+        owners = line.split(": ", 1)[0]
+        packages.update(owner.strip().split(":")[0] for owner in owners.split(",") if owner.strip())
+    return packages
 
 
 def source_package_spec(package: str, status: str) -> str:
