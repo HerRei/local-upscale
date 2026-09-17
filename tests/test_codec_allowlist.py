@@ -305,3 +305,29 @@ def test_build_flags_configure_mismatch_warnings():
         "License: LGPL version 2.1 or later\n"
     )
     assert len(builder.configure_warnings(output)) == 2
+
+
+def test_build_converts_windows_paths_for_msys2():
+    assert builder.msys_path(r"C:\lsr\media\prefix") == "/c/lsr/media/prefix"
+    assert builder.msys_path(r"D:\a b\configure") == "/d/a b/configure"
+    assert builder.msys_path("/already/posix") == "/already/posix"
+
+
+def test_windows_build_uses_mingw_threads_and_static_codecs(policy):
+    selected, _ = builder.derive_component_selection(policy, configure_lists(policy))
+    args = builder.ffmpeg_configure_args("/c/lsr/prefix", selected, "Windows")
+    builder.check_forbidden_flags(args, policy)
+    assert args[0] == "--prefix=/c/lsr/prefix"
+    for required in (
+        "--target-os=mingw32",
+        "--enable-w32threads",
+        "--disable-pthreads",
+        "--pkg-config-flags=--static",
+        "--enable-shared",
+        "--disable-autodetect",
+    ):
+        assert required in args
+    assert not any("mediafoundation" in arg or "x264" in arg for arg in args)
+    assert builder.WINDOWS_SYSTEM_DLL.match("api-ms-win-crt-runtime-l1-1-0.dll")
+    assert builder.WINDOWS_SYSTEM_DLL.match("KERNEL32.dll")
+    assert not builder.WINDOWS_SYSTEM_DLL.match("libx264-164.dll")

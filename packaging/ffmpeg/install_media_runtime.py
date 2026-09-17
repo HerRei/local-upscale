@@ -9,8 +9,9 @@ codecs) and OpenCV (which bundles FFmpeg) with the allowlisted builds:
 3. both wheels are installed with ``--no-deps --force-reinstall``;
 4. ``scripts/verify_codec_allowlist.py`` must pass for that interpreter.
 
-Build directories are reused, so repeated runs are quick. Windows is not yet
-supported by the media build and fails closed.
+Build directories are reused, so repeated runs are quick. On Windows the media build
+needs MSYS2 with the UCRT64 toolchain and the MSVC developer environment (see
+``build_lgpl_media.py``), and OpenCV's source patch needs ``patch.exe`` on PATH.
 """
 
 from __future__ import annotations

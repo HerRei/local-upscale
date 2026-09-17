@@ -4,7 +4,13 @@
 The component set is derived from ``codec-policy.json`` next to this script and the
 pinned sources from ``sources.json``. The recipe is standard-library only; it drives
 meson/cmake/make/ninja, a private build virtual environment, and the platform wheel
-repair tool (``delocate-wheel`` on macOS, ``auditwheel`` on Linux).
+repair tool (``delocate-wheel`` on macOS, ``auditwheel`` on Linux, ``delvewheel`` on
+Windows).
+
+On Windows the codec libraries and FFmpeg are built with MSYS2's MinGW-w64 UCRT64
+toolchain (the codec libraries statically, FFmpeg as DLLs), ``lib.exe`` from the MSVC
+developer environment turns FFmpeg's export definitions into import libraries, and PyAV
+is compiled with MSVC against them, the same arrangement PyAV's own Windows wheels use.
 
 Outputs in ``--output-dir``:
 
@@ -12,8 +18,6 @@ Outputs in ``--output-dir``:
 * ``manifest.json``: platform, versions, hashes, configure line, runtime metadata,
 * ``corresponding-source/``: exact source archives, configure line, patches, this
   script, the policy, and rebuild/relink instructions.
-
-Windows is deliberately not implemented and fails closed.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 HERE = Path(__file__).resolve().parent
 POLICY_PATH = HERE / "codec-policy.json"
@@ -44,6 +48,20 @@ PYAV_VERSION = "18.1.0"
 BUILD_REQUIREMENTS = ["pip==26.2.1", "setuptools==80.9.0", "wheel==0.46.2", "cython==3.2.9"]
 MACOS_REPAIR_REQUIREMENTS = ["delocate==0.13.0"]
 LINUX_REPAIR_REQUIREMENTS = ["auditwheel==6.8.2", "patchelf==0.19.1.0"]
+WINDOWS_REPAIR_REQUIREMENTS = ["delvewheel==1.13.1"]
+
+# MSYS2 with the UCRT64 packages gcc, binutils, make, meson, ninja, cmake, pkgconf, nasm,
+# diffutils and zlib; GitHub's Windows runners ship it in C:\msys64.
+MSYS2_ROOT = Path(os.environ.get("LOCALSR_MSYS2_ROOT", r"C:\msys64"))
+# What FFmpeg's DLLs may import on Windows: its own DLLs, Windows system libraries and the
+# Universal CRT, plus the zlib and winpthreads DLLs from MSYS2, which are copied next to
+# FFmpeg (zlib and MIT licences).
+WINDOWS_SYSTEM_DLL = re.compile(
+    r"^(kernel32|user32|gdi32|advapi32|bcrypt|ole32|oleaut32|shell32|shlwapi|ws2_32|secur32"
+    r"|psapi|ucrtbase|msvcrt|api-ms-win-[a-z0-9-]+)\.dll$",
+    re.IGNORECASE,
+)
+WINDOWS_TOOLCHAIN_DLLS = ("zlib1.dll", "libwinpthread-1.dll")
 
 # FFmpeg's buffer/abuffer sources and sinks are part of libavfilter's public API; they are
 # always compiled and registered manually, so configure has no switch for them.
@@ -195,8 +213,16 @@ def derive_component_selection(
     return selected, notes
 
 
+def msys_path(path: str | os.PathLike) -> str:
+    """``C:\\work\\prefix`` -> ``/c/work/prefix``, the form MSYS2 shell tools expect."""
+    pure = PureWindowsPath(path)
+    if not pure.drive:
+        return pure.as_posix()
+    return "/" + pure.drive.rstrip(":").lower() + pure.as_posix()[len(pure.drive) :]
+
+
 def ffmpeg_configure_args(
-    prefix: Path, selected: dict[str, list[str]], system: str, extra: list[str] | None = None
+    prefix: str | Path, selected: dict[str, list[str]], system: str, extra: list[str] | None = None
 ) -> list[str]:
     args = [
         f"--prefix={prefix}",
@@ -223,6 +249,18 @@ def ffmpeg_configure_args(
         # -dead_strip_dylibs drops CoreFoundation/CoreMedia/CoreVideo, which configure
         # links into libavutil unconditionally although no Apple media API is enabled.
         args += [f"--extra-cflags={flag}", f"--extra-ldflags={flag} -Wl,-dead_strip_dylibs"]
+    if system == "Windows":
+        # MinGW-w64 UCRT build: FFmpeg's own Win32 threads instead of winpthreads, the
+        # static codec libraries resolved through pkg-config --static, and libgcc linked
+        # in rather than shipped as a DLL.
+        args += [
+            "--target-os=mingw32",
+            "--arch=x86_64",
+            "--disable-pthreads",
+            "--enable-w32threads",
+            "--pkg-config-flags=--static",
+            "--extra-ldflags=-static-libgcc",
+        ]
     if extra:
         args += extra
     return args
@@ -323,6 +361,7 @@ def extract_fresh(archive: Path, destination: Path) -> Path:
 class Builder:
     def __init__(self, args: argparse.Namespace) -> None:
         self.system = platform.system()
+        self.windows = self.system == "Windows"
         self.machine = platform.machine().lower()
         self.work = args.work_dir.resolve()
         self.output = args.output_dir.resolve()
@@ -376,6 +415,42 @@ class Builder:
             env["LD_LIBRARY_PATH"] = str(self.prefix / "lib")
         return env
 
+    def path(self, path: Path) -> str:
+        """A path argument for the native build tools (MSYS2 form on Windows)."""
+        return msys_path(path) if self.windows else str(path)
+
+    def sh(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        log_path: Path,
+        capture: bool = False,
+    ) -> str:
+        """Run a native build tool; on Windows inside an MSYS2 UCRT64 login shell."""
+        if not self.windows:
+            return run(command, cwd=cwd, env=env, log_path=log_path, capture=capture)
+        shell_env = dict(env)
+        pkgconfig = msys_path(self.prefix / "lib" / "pkgconfig")
+        shell_env.update(
+            {
+                "MSYSTEM": "UCRT64",
+                "CHERE_INVOKING": "1",
+                # A minimal PATH keeps MSVC's cl.exe and link.exe away from meson and cmake.
+                "MSYS2_PATH_TYPE": "minimal",
+                "CC": "gcc",
+                "CXX": "g++",
+                "PKG_CONFIG_LIBDIR": pkgconfig,
+                "PKG_CONFIG_PATH": pkgconfig,
+            }
+        )
+        script = f"cd {shlex.quote(msys_path(cwd))} && {shlex.join(command)}"
+        bash = str(MSYS2_ROOT / "usr" / "bin" / "bash.exe")
+        return run(
+            [bash, "-lc", script], cwd=cwd, env=shell_env, log_path=log_path, capture=capture
+        )
+
     def stamp_ok(self, step: str, signature: object) -> bool:
         stamp = self.stamps / f"{step}.json"
         return stamp.exists() and json.loads(stamp.read_text()) == signature
@@ -401,6 +476,21 @@ class Builder:
     # -- steps -------------------------------------------------------------
 
     def check_tools(self) -> None:
+        if self.windows:
+            if not (MSYS2_ROOT / "usr" / "bin" / "bash.exe").exists():
+                raise BuildError(f"MSYS2 was not found in {MSYS2_ROOT} (set LOCALSR_MSYS2_ROOT)")
+            self.tool("lib.exe")  # from the MSVC developer environment
+            tools = "gcc make meson ninja cmake pkg-config nasm objdump"
+            missing = self.sh(
+                ["sh", "-c", f"for t in {tools}; do command -v $t >/dev/null || echo $t; done"],
+                cwd=self.work,
+                env=self.env(),
+                log_path=self.logs / "tools.log",
+                capture=True,
+            ).split()
+            if missing:
+                raise BuildError(f"MSYS2 UCRT64 is missing build tools: {', '.join(missing)}")
+            return
         required = ["meson", "ninja", "cmake", "make", "pkg-config", "cc"]
         if self.machine in {"x86_64", "amd64", "i686", "i386"}:
             required.append("nasm")
@@ -417,7 +507,11 @@ class Builder:
             log(f"verified {entry['filename']} ({entry['sha256'][:12]}...)")
 
     def build_dav1d(self) -> None:
-        signature = {"sha256": self.sources["dav1d"]["sha256"], "target": MACOS_DEPLOYMENT_TARGET}
+        signature = {
+            "sha256": self.sources["dav1d"]["sha256"],
+            "target": MACOS_DEPLOYMENT_TARGET,
+            "system": self.system,
+        }
         if self.stamp_ok("dav1d", signature):
             return
         log("building dav1d")
@@ -425,15 +519,17 @@ class Builder:
         src = extract_fresh(self.archives["dav1d"], self.work / "src" / "dav1d")
         build = src / "build"
         lp = self.logs / "dav1d.log"
-        run(
+        # On Windows the codec libraries are linked statically into FFmpeg's DLLs.
+        library = "static" if self.windows else "shared"
+        self.sh(
             [
                 "meson",
                 "setup",
-                str(build),
-                f"--prefix={self.prefix}",
+                self.path(build),
+                f"--prefix={self.path(self.prefix)}",
                 "--libdir=lib",
                 "--buildtype=release",
-                "-Ddefault_library=shared",
+                f"-Ddefault_library={library}",
                 "-Denable_tools=false",
                 "-Denable_tests=false",
                 "-Denable_examples=false",
@@ -443,8 +539,8 @@ class Builder:
             env=env,
             log_path=lp,
         )
-        run(["ninja", "-C", str(build), f"-j{self.jobs}"], cwd=src, env=env, log_path=lp)
-        run(["ninja", "-C", str(build), "install"], cwd=src, env=env, log_path=lp)
+        self.sh(["ninja", "-C", self.path(build), f"-j{self.jobs}"], cwd=src, env=env, log_path=lp)
+        self.sh(["ninja", "-C", self.path(build), "install"], cwd=src, env=env, log_path=lp)
         self.fix_install_names()
         self.write_stamp("dav1d", signature)
 
@@ -453,9 +549,9 @@ class Builder:
             "-G",
             "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
-            f"-DCMAKE_INSTALL_PREFIX={self.prefix}",
+            f"-DCMAKE_INSTALL_PREFIX={self.path(self.prefix)}",
             "-DCMAKE_INSTALL_LIBDIR=lib",
-            "-DBUILD_SHARED_LIBS=ON",
+            f"-DBUILD_SHARED_LIBS={'OFF' if self.windows else 'ON'}",
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
         ]
         if self.system == "Darwin":
@@ -467,7 +563,11 @@ class Builder:
         return args
 
     def build_cmake_package(self, name: str, options: list[str]) -> None:
-        signature = {"sha256": self.sources[name]["sha256"], "options": options}
+        signature = {
+            "sha256": self.sources[name]["sha256"],
+            "options": options,
+            "common": self.cmake_common(),
+        }
         if self.stamp_ok(name, signature):
             return
         log(f"building {name}")
@@ -475,19 +575,27 @@ class Builder:
         src = extract_fresh(self.archives[name], self.work / "src" / name)
         build = src / "_build"
         lp = self.logs / f"{name}.log"
-        run(
-            ["cmake", "-S", str(src), "-B", str(build), *self.cmake_common(), *options],
+        self.sh(
+            [
+                "cmake",
+                "-S",
+                self.path(src),
+                "-B",
+                self.path(build),
+                *self.cmake_common(),
+                *options,
+            ],
             cwd=src,
             env=env,
             log_path=lp,
         )
-        run(
-            ["cmake", "--build", str(build), "--parallel", str(self.jobs)],
+        self.sh(
+            ["cmake", "--build", self.path(build), "--parallel", str(self.jobs)],
             cwd=src,
             env=env,
             log_path=lp,
         )
-        run(["cmake", "--install", str(build)], cwd=src, env=env, log_path=lp)
+        self.sh(["cmake", "--install", self.path(build)], cwd=src, env=env, log_path=lp)
         self.fix_install_names()
         self.write_stamp(name, signature)
 
@@ -509,7 +617,7 @@ class Builder:
         self.build_cmake_package(
             "opus",
             [
-                "-DOPUS_BUILD_SHARED_LIBRARY=ON",
+                f"-DOPUS_BUILD_SHARED_LIBRARY={'OFF' if self.windows else 'ON'}",
                 "-DOPUS_BUILD_TESTING=OFF",
                 "-DOPUS_BUILD_PROGRAMS=OFF",
                 "-DOPUS_INSTALL_PKG_CONFIG_MODULE=ON",
@@ -518,9 +626,12 @@ class Builder:
 
     def build_libvpx(self) -> None:
         options = [
-            f"--prefix={self.prefix}",
-            "--enable-shared",
-            "--disable-static",
+            f"--prefix={self.path(self.prefix)}",
+            *(
+                ["--target=x86_64-win64-gcc", "--as=nasm", "--disable-shared", "--enable-static"]
+                if self.windows
+                else ["--enable-shared", "--disable-static"]
+            ),
             "--disable-examples",
             "--disable-tools",
             "--disable-docs",
@@ -543,9 +654,9 @@ class Builder:
         build = src / "_build"
         build.mkdir()
         lp = self.logs / "libvpx.log"
-        run([str(src / "configure"), *options], cwd=build, env=env, log_path=lp)
-        run(["make", f"-j{self.jobs}"], cwd=build, env=env, log_path=lp)
-        run(["make", "install"], cwd=build, env=env, log_path=lp)
+        self.sh([self.path(src / "configure"), *options], cwd=build, env=env, log_path=lp)
+        self.sh(["make", f"-j{self.jobs}"], cwd=build, env=env, log_path=lp)
+        self.sh(["make", "install"], cwd=build, env=env, log_path=lp)
         self.fix_install_names()
         self.write_stamp("libvpx", signature)
 
@@ -586,8 +697,8 @@ class Builder:
     def list_configure_components(self, src: Path, env: dict[str, str]) -> dict[str, set[str]]:
         available = {}
         for kind, (option, _suffix) in COMPONENT_KINDS.items():
-            out = run(
-                [str(src / "configure"), f"--list-{option}s"],
+            out = self.sh(
+                [self.path(src / "configure"), f"--list-{option}s"],
                 cwd=src,
                 env=env,
                 log_path=self.logs / "ffmpeg-list.log",
@@ -605,9 +716,9 @@ class Builder:
         self.available_components = available
         selected, notes = derive_component_selection(self.policy, available)
         self.notes += notes
-        args = ffmpeg_configure_args(self.prefix, selected, self.system)
+        args = ffmpeg_configure_args(self.path(self.prefix), selected, self.system)
         check_forbidden_flags(args, self.policy)
-        self.ffmpeg_args = [str(src / "configure"), *args]
+        self.ffmpeg_args = [self.path(src / "configure"), *args]
         build = self.work / "build-ffmpeg"
         signature = {
             "sha256": self.sources["ffmpeg"]["sha256"],
@@ -624,14 +735,14 @@ class Builder:
         build.mkdir(parents=True)
         lp = self.logs / "ffmpeg.log"
         try:
-            output = run(self.ffmpeg_args, cwd=build, env=env, log_path=lp, capture=True)
+            output = self.sh(self.ffmpeg_args, cwd=build, env=env, log_path=lp, capture=True)
         except BuildError as exc:
             raise BuildError(f"{exc}\nSee {build / 'ffbuild' / 'config.log'}") from exc
         (build / "configure.out").write_text(output)
         self.inspect_ffmpeg_configuration(build, output)
         log("building FFmpeg")
-        run(["make", f"-j{self.jobs}"], cwd=build, env=env, log_path=lp)
-        run(["make", "install"], cwd=build, env=env, log_path=lp)
+        self.sh(["make", f"-j{self.jobs}"], cwd=build, env=env, log_path=lp)
+        self.sh(["make", "install"], cwd=build, env=env, log_path=lp)
         self.fix_install_names()
         self.write_stamp("ffmpeg", signature)
 
@@ -697,7 +808,9 @@ class Builder:
         lp = self.logs / "linkage.log"
         lib = self.prefix / "lib"
         problems = []
-        if self.system == "Darwin":
+        if self.windows:
+            problems = self.check_windows_linkage(env, lp)
+        elif self.system == "Darwin":
             allowed = (str(lib) + "/", "/usr/lib/", "/System/Library/")
             for dylib in sorted(lib.glob("*.dylib")):
                 if dylib.is_symlink():
@@ -725,6 +838,56 @@ class Builder:
         if problems:
             raise BuildError("Unexpected library linkage:\n  " + "\n  ".join(problems))
 
+    def check_windows_linkage(self, env: dict[str, str], log_path: Path) -> list[str]:
+        """Copy the MSYS2 runtime DLLs FFmpeg needs next to it; report any other import."""
+        bin_dir = self.prefix / "bin"
+        problems = []
+        for _ in range(2):  # a copied toolchain DLL may itself import another one
+            problems = []
+            for dll in sorted(bin_dir.glob("*.dll")):
+                out = self.sh(
+                    ["objdump", "-p", self.path(dll)],
+                    cwd=bin_dir,
+                    env=env,
+                    log_path=log_path,
+                    capture=True,
+                )
+                for needed in re.findall(r"DLL Name: (\S+)", out):
+                    if (bin_dir / needed).exists() or WINDOWS_SYSTEM_DLL.match(needed):
+                        continue
+                    toolchain = MSYS2_ROOT / "ucrt64" / "bin" / needed
+                    if needed.lower() in WINDOWS_TOOLCHAIN_DLLS and toolchain.exists():
+                        shutil.copy2(toolchain, bin_dir / needed)
+                        note = f"copied the MSYS2 runtime library {needed} next to FFmpeg"
+                        if note not in self.notes:
+                            self.notes.append(note)
+                        continue
+                    problems.append(f"{dll.name} -> {needed}")
+        return problems
+
+    def make_import_libraries(self) -> None:
+        """Windows: turn FFmpeg's export definitions into MSVC import libraries for PyAV."""
+        if not self.windows:
+            return
+        lib = self.prefix / "lib"
+        definitions = sorted(lib.glob("*-*.def"))
+        if not definitions:
+            raise BuildError(f"FFmpeg installed no .def export files in {lib}")
+        for definition in definitions:
+            name = re.sub(r"-\d+$", "", definition.stem)
+            run(
+                [
+                    self.tool("lib.exe"),
+                    "/nologo",
+                    "/machine:x64",
+                    f"/def:{definition}",
+                    f"/out:{lib / (name + '.lib')}",
+                ],
+                cwd=lib,
+                env=self.env(),
+                log_path=self.logs / "import-libraries.log",
+            )
+
     def uv_python_request(self) -> str:
         """An exact uv interpreter request for the host architecture.
 
@@ -736,10 +899,12 @@ class Builder:
         )
         if self.system == "Darwin":
             return f"cpython-3.11-macos-{arch}-none"
+        if self.windows:
+            return f"cpython-3.11-windows-{arch}-none"
         return f"cpython-3.11-linux-{arch}-gnu"
 
     def create_venv(self, path: Path, requirements: list[str]) -> Path:
-        python = path / "bin" / "python"
+        python = path / ("Scripts/python.exe" if self.windows else "bin/python")
         if not python.exists():
             uv = shutil.which("uv")
             lp = self.logs / "venv.log"
@@ -785,20 +950,29 @@ class Builder:
         return python
 
     def build_pyav(self) -> Path:
-        repair = MACOS_REPAIR_REQUIREMENTS if self.system == "Darwin" else LINUX_REPAIR_REQUIREMENTS
-        python = self.create_venv(self.work / "buildenv", BUILD_REQUIREMENTS + repair)
+        python = self.create_venv(
+            self.work / "buildenv", BUILD_REQUIREMENTS + self.repair_requirements()
+        )
         env = self.env()
         env["PATH"] = str(python.parent) + os.pathsep + env["PATH"]
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         env["PIP_NO_CACHE_DIR"] = "1"
         lp = self.logs / "pyav.log"
-        # pkg-config must resolve the private prefix and nothing else.
-        run(
-            ["pkg-config", "--cflags", "--libs", "libavcodec", "libavformat", "libavdevice"],
-            cwd=self.work,
-            env=env,
-            log_path=lp,
-        )
+        build_options = []
+        if self.windows:
+            # PyAV compiles with MSVC against the import libraries in <prefix>/lib.
+            self.make_import_libraries()
+            env["DISTUTILS_USE_SDK"] = "1"
+            env["MSSdk"] = "1"
+            build_options = [f"--config-settings=--build-option=--ffmpeg-dir={self.prefix}"]
+        else:
+            # pkg-config must resolve the private prefix and nothing else.
+            run(
+                ["pkg-config", "--cflags", "--libs", "libavcodec", "libavformat", "libavdevice"],
+                cwd=self.work,
+                env=env,
+                log_path=lp,
+            )
         src = extract_fresh(self.archives["pyav"], self.work / "src" / "pyav")
         raw = self.work / "wheel-raw"
         if raw.exists():
@@ -818,6 +992,7 @@ class Builder:
                 "--wheel-dir",
                 str(raw),
                 "--verbose",
+                *build_options,
                 str(src),
             ],
             cwd=src,
@@ -848,6 +1023,25 @@ class Builder:
                 env=env,
                 log_path=lp,
             )
+        elif self.windows:
+            # Original DLL names keep FFmpeg replaceable, as the relinking notes describe.
+            run(
+                [
+                    str(python),
+                    "-m",
+                    "delvewheel",
+                    "repair",
+                    "--add-path",
+                    str(self.prefix / "bin"),
+                    "--no-mangle-all",
+                    "-w",
+                    str(self.output),
+                    str(wheels[0]),
+                ],
+                cwd=self.work,
+                env=env,
+                log_path=lp,
+            )
         else:
             command = [str(python.parent / "auditwheel"), "repair", "-w", str(self.output)]
             if os.environ.get("AUDITWHEEL_PLAT"):
@@ -857,6 +1051,11 @@ class Builder:
         if len(repaired) != 1:
             raise BuildError(f"Expected one repaired wheel in {self.output}, found {repaired}")
         return repaired[0]
+
+    def repair_requirements(self) -> list[str]:
+        if self.system == "Darwin":
+            return MACOS_REPAIR_REQUIREMENTS
+        return WINDOWS_REPAIR_REQUIREMENTS if self.windows else LINUX_REPAIR_REQUIREMENTS
 
     def probe_wheel(self, wheel: Path) -> dict:
         """Install the repaired wheel into a clean venv and read its runtime metadata."""
@@ -965,17 +1164,8 @@ class Builder:
             "enabled_components": self.enabled_components,
             "policy_deviations": self.notes,
             "patches": [],
-            "python_build_requirements": BUILD_REQUIREMENTS
-            + (MACOS_REPAIR_REQUIREMENTS if self.system == "Darwin" else LINUX_REPAIR_REQUIREMENTS),
-            "build_tools": {
-                "cc": self.tool_version(["cc", "--version"]),
-                "meson": self.tool_version(["meson", "--version"]),
-                "ninja": self.tool_version(["ninja", "--version"]),
-                "cmake": self.tool_version(["cmake", "--version"]),
-                "make": self.tool_version(["make", "--version"]),
-                "pkg-config": self.tool_version(["pkg-config", "--version"]),
-                "nasm": self.tool_version(["nasm", "-v"]),
-            },
+            "python_build_requirements": BUILD_REQUIREMENTS + self.repair_requirements(),
+            "build_tools": self.build_tool_versions(),
             "av_version": runtime["av_version"],
             "ffmpeg_version_info": runtime["ffmpeg_version_info"],
             "av_library_versions": runtime["library_versions"],
@@ -983,6 +1173,30 @@ class Builder:
             "codecs_available": runtime["codecs_available"],
         }
         (self.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    def build_tool_versions(self) -> dict[str, str]:
+        commands = {
+            "cc": ["gcc" if self.windows else "cc", "--version"],
+            "meson": ["meson", "--version"],
+            "ninja": ["ninja", "--version"],
+            "cmake": ["cmake", "--version"],
+            "make": ["make", "--version"],
+            "pkg-config": ["pkg-config", "--version"],
+            "nasm": ["nasm", "-v"],
+        }
+        if not self.windows:
+            return {name: self.tool_version(command) for name, command in commands.items()}
+        bash = str(MSYS2_ROOT / "usr" / "bin" / "bash.exe")
+        env = {**self.env(), "MSYSTEM": "UCRT64", "MSYS2_PATH_TYPE": "minimal"}
+        versions = {}
+        for name, command in commands.items():
+            result = subprocess.run(
+                [bash, "-lc", shlex.join(command)], capture_output=True, text=True, env=env
+            )
+            text = (result.stdout or result.stderr).strip().splitlines()
+            versions[name] = text[0] if text else "unknown"
+        versions["lib.exe"] = shutil.which("lib.exe") or "unavailable"
+        return versions
 
     def readme(self, wheel: Path, configure_line: str) -> str:
         names = "\n".join(
@@ -1006,7 +1220,8 @@ permissively licensed codec libraries and PyAV itself.
 ## Rebuilding
 
 Requirements: a C/C++ toolchain, meson, ninja, cmake, make, pkg-config, Python 3.11+ and
-(optionally) uv; nasm on x86. Place the archives above in a directory and run:
+(optionally) uv; nasm on x86. On Windows: MSYS2 with the UCRT64 toolchain for the native
+libraries and the MSVC build tools (`lib.exe`, `cl.exe`) for PyAV. Place the archives above in a directory and run:
 
 ```
 python3 build_lgpl_media.py --source-cache <this directory> \\
@@ -1014,7 +1229,8 @@ python3 build_lgpl_media.py --source-cache <this directory> \\
 ```
 
 The script verifies every archive's SHA-256 before use (it downloads missing archives
-from the recorded URLs), builds dav1d, SVT-AV1, libvpx and Opus as shared libraries,
+from the recorded URLs), builds dav1d, SVT-AV1, libvpx and Opus (as shared libraries, or static ones linked into
+FFmpeg on Windows),
 configures FFmpeg with exactly the command in `ffmpeg-configure.txt` (paths differ by
 work directory), builds PyAV {PYAV_VERSION} against it and repairs the wheel.
 
@@ -1028,6 +1244,8 @@ the bundled `libav*`/`libsw*` libraries inside the installed wheel:
   ad hoc (`codesign --force --sign - <file>`).
 - Linux: the libraries live in `av.libs/` with hashed names; replace them keeping the
   names, or rebuild PyAV against your FFmpeg with `pip wheel --no-binary av`.
+- Windows: the DLLs (`avcodec-*.dll` and the others) live in `av.libs/` under their
+  original names; build FFmpeg with MSYS2 UCRT64 as the script does and replace them.
 
 Alternatively rebuild the whole stack with the script after editing the FFmpeg sources
 and recording your patch in `changes.diff`.
@@ -1063,14 +1281,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2, help="Parallel jobs")
     args = parser.parse_args(argv)
     system = platform.system()
-    if system == "Windows":
-        print(
-            "Windows LGPL media build is not implemented; "
-            "Windows releases stay blocked by verify_codec_allowlist",
-            file=sys.stderr,
-        )
-        return 2
-    if system not in {"Darwin", "Linux"}:
+    if system not in {"Darwin", "Linux", "Windows"}:
         print(f"Unsupported build platform: {system}", file=sys.stderr)
         return 2
     try:
