@@ -16,6 +16,10 @@ on:
       release_tag:
         description: Release to attach the files to
         required: true
+      only:
+        description: Attach only the files matching this glob, for example '*source-and-notices.tar.gz'
+        required: false
+        default: ""
       dry_run:
         description: Only print the reports
         type: boolean
@@ -76,10 +80,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          ONLY: ${{ inputs.only }}
         run: |
           shopt -s nullglob
-          files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.exe assets/*.sha256 \
-            assets/*-source-and-notices.tar.gz)
+          if [ -n "$ONLY" ]; then
+            mapfile -t files < <(compgen -G "assets/$ONLY" || true)
+          else
+            files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.exe assets/*.sha256 \
+              assets/*-source-and-notices.tar.gz)
+          fi
           test "${#files[@]}" -gt 0
           ls -la "${files[@]}"
-          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          # Uploading a few hundred megabytes answers HTTP 500 ("Error creating asset temp
+          # dir") or 504 often enough that one attempt is not enough. Each round uploads
+          # only the files the release does not already carry at the right size, so a
+          # half-finished attempt costs one round, not the whole set.
+          for attempt in 1 2 3 4 5; do
+            missing=()
+            published=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[] | [.name, .size, .state] | @tsv')
+            for file in "${files[@]}"; do
+              if ! printf '%s\n' "$published" | awk -F'\t' -v n="$(basename "$file")" \
+                -v s="$(stat -c %s "$file")" '$1==n && $2==s && $3=="uploaded" {found=1}
+                END {exit !found}'; then
+                missing+=("$file")
+              fi
+            done
+            if [ "${#missing[@]}" -eq 0 ]; then
+              echo "The release carries every file at its built size."
+              exit 0
+            fi
+            echo "Attempt $attempt: uploading ${missing[*]}"
+            gh release upload "$RELEASE_TAG" "${missing[@]}" --repo "$GITHUB_REPOSITORY" --clobber || true
+            sleep 30
+          done
+          echo "Some files never reached $RELEASE_TAG" >&2
+          exit 1
