@@ -62,23 +62,23 @@
       "status": "manual-required",
       "blocking": true,
       "scope": "windows",
-      "summary": "The Windows CPU installer of v0.1.3-beta is built on a GitHub-hosted runner with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC), passes verify_codec_allowlist, an installed-package smoke test and the architecture check, and ships its corresponding source. It is not Authenticode-signed, DirectML is still outside the GPU tolerance and CUDA is withheld.",
-      "next_action": "Repeat the manual desktop checks on a Windows PC, obtain a code-signing certificate, then finish DirectML and CUDA."
+      "summary": "The Windows CPU, DirectML and NVIDIA CUDA installers of v0.1.3-beta are built on GitHub-hosted runners with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC), pass verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check, and ship their corresponding source; the CUDA engine ships as verified parts beside its installer. None is Authenticode-signed. DirectML and CUDA are published labelled untested: DirectML is still outside the GPU tolerance and CUDA has not run on an NVIDIA GPU.",
+      "next_action": "Repeat the manual desktop checks on a Windows PC, obtain a code-signing certificate, run the CUDA installer on an NVIDIA GPU and bring DirectML within tolerance."
     },
     {
       "id": "linux-packages",
       "status": "manual-required",
       "blocking": true,
       "scope": "linux",
-      "summary": "The Linux CPU AppImage of v0.1.3-beta is built on a GitHub-hosted runner, passes verify_codec_allowlist, an installed-package smoke test and the architecture check, and ships corresponding source including Ubuntu sources for every bundled host library. ROCm and CUDA are withheld.",
-      "next_action": "Repeat the manual desktop checks on a Linux desktop, then settle the ROCm and CUDA items in docs/licensing-media.md."
+      "summary": "The Linux CPU, AMD ROCm and NVIDIA CUDA AppImages of v0.1.3-beta are built on GitHub-hosted runners, pass verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check, and ship corresponding source including Ubuntu sources for every bundled host library. The ROCm AppImage carries Ubuntu's own libnuma and libelf in place of the AlmaLinux copies in PyTorch's wheel. CUDA is published labelled untested; ROCm ran on a Radeon RX 9060 XT in earlier builds.",
+      "next_action": "Repeat the manual desktop checks on a Linux desktop, including the ROCm AppImage on the RX 9060 XT, and run the CUDA AppImage on an NVIDIA GPU."
     },
     {
       "id": "publication-and-certification",
       "status": "decision-required",
       "blocking": true,
       "scope": "distribution",
-      "summary": "macOS, the Windows CPU installer and the Linux CPU AppImage of v0.1.3-beta are published through the website and GitHub Releases. The Microsoft Store listing (HerRei.LocalSR) is not published.",
+      "summary": "macOS, the Windows CPU, DirectML and CUDA installers and the Linux CPU, ROCm and CUDA AppImages of v0.1.3-beta are published through the website and GitHub Releases. The Microsoft Store listing (HerRei.LocalSR) is not published.",
       "next_action": "Submit the Store package once the Windows build is code-signed."
     },
     {
@@ -95,7 +95,7 @@
       "status": "labs",
       "blocking": false,
       "scope": "cuda-xpu-other-directml",
-      "summary": "NVIDIA CUDA, Linux Intel XPU and DirectML adapters other than the UHD 620 have not run on physical hardware.",
+      "summary": "NVIDIA CUDA (published, labelled untested), Linux Intel XPU (withheld) and DirectML adapters other than the UHD 620 have not run on physical hardware.",
       "next_action": "Collect volunteer hardware reports before describing these engines as tested."
     },
     {

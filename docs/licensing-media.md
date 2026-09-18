@@ -91,9 +91,10 @@ Release builds fail closed when:
    nonfree FFmpeg build (`verify_codec_allowlist.py --tree`);
 3. a CUDA package contains an NVIDIA library without a verified redistribution
    basis (`scripts/verify_nvidia_redistributables.py`, policy in
-   `packaging/nvidia/redistributables.json`). cuFile and NVSHMEM are excluded;
-   cuDNN 9 Windows DLLs block Windows CUDA packages until NVIDIA confirms their
-   distribution in writing.
+   `packaging/nvidia/redistributables.json`, reviewed on 18 September 2026 against
+   NVIDIA's current CUDA Toolkit EULA, cuDNN supplement and NVSHMEM's Apache-2.0
+   release). Multi-GPU cuSOLVER and NVRTC's alternate build are not listed as
+   distributable and are left out.
 
 `packaging/ffmpeg/install_media_runtime.py` builds and installs the compliant
 PyAV and OpenCV wheels in one step; the Linux and macOS release jobs run it
@@ -108,17 +109,27 @@ MinGW-w64 UCRT64 toolchain and PyAV with MSVC (`.github/workflows/windows-instal
 - **Intel XPU (Linux)** — Intel's oneAPI runtime license asks the distributor to
   indemnify Intel. XPU support stays in the source; `ci/tauri-targets.json` lists
   it under `withheld_targets`.
-- **CUDA (Linux and Windows)** — held until NVIDIA's redistribution terms are
-  settled (questions 4 and 5 below) and a package has run on NVIDIA hardware.
-- **AMD ROCm (Linux)** — PyTorch's ROCm build bundles libnuma and elfutils (LGPL)
-  built outside Ubuntu, whose exact corresponding sources are not identified yet,
-  and AMD's closed-source `libhsa-amd-aqlprofile64`, whose redistribution terms are
-  unconfirmed.
-- **DirectML (Windows)** — not a licensing hold: its GPU results still miss the
-  accuracy tolerance, so it stays a test build.
 
-Published packages: macOS (Apple Silicon), the Linux CPU AppImage and the Windows
-CPU installer.
+Published packages: macOS (Apple Silicon); Windows CPU, DirectML and NVIDIA CUDA
+installers; Linux CPU, NVIDIA CUDA and AMD ROCm AppImages. The CUDA and DirectML
+packages are labelled untested wherever they are offered (see
+[Platforms](platforms.md#what-is-untested-or-withheld)).
+
+- **NVIDIA CUDA** — every build runs `scripts/verify_nvidia_redistributables.py`
+  against `packaging/nvidia/redistributables.json`: only libraries that NVIDIA's
+  CUDA Toolkit EULA (Attachment A) or cuDNN supplement identify as distributable may
+  be present (the current Attachment A also lists cuFile and nvJPEG, and NVSHMEM is
+  Apache-2.0), multi-GPU cuSOLVER and NVRTC's alternate build are removed, and no
+  driver library is bundled.
+- **AMD ROCm** — PyTorch's ROCm wheel carries libnuma (LGPL-2.1) and libelf
+  (elfutils, LGPL-3.0-or-later or GPL-2.0-or-later) built on AlmaLinux, some of them
+  twice under different file names. The build finds every copy by the soname inside
+  the file, replaces it with the build host's Ubuntu 24.04 build and link-checks every
+  library that uses them, and `build_source_bundle.py` refuses a package with any copy
+  whose GNU build ID is not Ubuntu's, so the Ubuntu source packages in the bundle
+  correspond exactly.
+  aqlprofile is MIT-licensed in [ROCm/rocm-systems](https://github.com/ROCm/rocm-systems);
+  its notice is in `THIRD_PARTY_NOTICES.md`.
 
 ## What each download must publish
 
@@ -139,7 +150,7 @@ the FFmpeg project under the LGPLv2.1.”
 No lawyer was consulted. This is the maintainer's assessment for a free,
 non-commercial project, recorded on 17 September 2026; it is not legal advice.
 Where a question stays open, the affected packages are withheld rather than
-shipped on a guess.
+shipped on a guess. Updated on 18 September 2026 for the GPU packages.
 
 1. **Reading MP4/Matroska without decoding H.264/HEVC/AAC.** Codec patents claim
    encoding and decoding methods, not parsing the container around the streams.
@@ -154,12 +165,14 @@ shipped on a guess.
    the terms on the work that uses FFmpeg, which is LocalSR (MIT) and PyAV (BSD);
    NVIDIA's terms bind only NVIDIA's separately licensed libraries. The same
    reasoning covers Intel's MKL, which PyTorch links into its x86 CPU builds under
-   a licence that also forbids reverse engineering. Assessed as low risk; CUDA
-   packages are still withheld until they have run on NVIDIA hardware and question
-   5 is settled.
-5. **cuDNN 9 Windows DLLs.** NVIDIA's license allows distributing cuDNN inside an
-   application, and PyTorch's Windows CUDA wheels ship the same DLLs. Left open
-   with question 4: Windows CUDA is withheld.
+   a licence that also forbids reverse engineering, and which the published CPU
+   packages already contain. Assessed as low risk and applied consistently: the CUDA
+   packages are published on the same basis, labelled untested because they have
+   not run on NVIDIA hardware.
+5. **cuDNN 9 Windows DLLs.** The license text inside the pinned wheels named only
+   `cudnn64_7.dll`, but NVIDIA's current cuDNN supplement (updated 2 September 2026)
+   makes "the runtime files .so and .dll" distributable without naming files.
+   Settled: the cuDNN 9 DLLs ship in the Windows CUDA package.
 6. **Operating system codecs.** Apple and Microsoft license H.264, HEVC and AAC
    for use through their public APIs, which every video application on those
    systems relies on. Settled.

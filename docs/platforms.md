@@ -8,11 +8,11 @@ fetched on demand.
 | --- | --- | --- | --- |
 | macOS · Apple Silicon | MPS | Published (v0.1.3-beta) | MacBook Pro M1 Pro, 16 GB |
 | Windows · x86-64 | CPU | Published (v0.1.3-beta) · not code-signed | Earlier builds: Windows 11, Core i7-8550U |
-| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Test builds only | Intel UHD 620, driver 24.20.100.6286 |
-| Windows · x86-64 | CUDA | Withheld | — |
+| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Published (v0.1.3-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
+| Windows · x86-64 | NVIDIA CUDA | Published (v0.1.3-beta) · **untested** · not code-signed | Not yet run on an NVIDIA GPU |
 | Linux · x86-64 | CPU | Published (v0.1.3-beta) | Earlier builds: Fedora 44 |
-| Linux · x86-64 | AMD ROCm | Withheld | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
-| Linux · x86-64 | NVIDIA CUDA | Withheld | — |
+| Linux · x86-64 | AMD ROCm | Published (v0.1.3-beta) | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
+| Linux · x86-64 | NVIDIA CUDA | Published (v0.1.3-beta) · **untested** | Not yet run on an NVIDIA GPU |
 | Linux · x86-64 | Intel XPU | Withheld | — |
 
 "Tested" means the recorded checks in [Testing](testing.md) passed on that
@@ -25,21 +25,27 @@ The Windows and Linux packages of v0.1.3-beta were built on GitHub-hosted runner
 allowlisted LGPL media runtime, passed the codec policy and an automated smoke test
 of the installed app, and ship with their corresponding-source bundles. They have
 not been through this release's manual desktop checks, and they do not update
-themselves yet.
+themselves yet. The CUDA and DirectML packages are published **untested**: they pass
+the same automated checks on runners without a GPU, but CUDA has never run on an
+NVIDIA GPU and DirectML has not produced results within the accuracy tolerance on
+one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in parts.
 
-## Why the other packages are not out
+## What is untested or withheld
 
-- **CUDA (Windows and Linux)** is withheld until NVIDIA's redistribution terms are
-  settled ([legal assessment](licensing-media.md#legal-assessment)) and a package
-  has run on NVIDIA hardware.
-- **AMD ROCm (Linux)** builds and passes the same checks, but PyTorch's ROCm build
-  bundles its own copies of libnuma and elfutils (LGPL), built outside Ubuntu, whose
-  exact sources are not identified yet, and AMD's closed-source aqlprofile library,
-  whose redistribution terms are unconfirmed. It is withheld until both are settled.
-- **DirectML** is moving from `torch-directml` (Torch 2.4.1) to ONNX Runtime
-  DirectML 1.24.4 on Torch 2.13; the new worker passed its source-level checks on
-  the UHD 620 PC, with NAFNet SIDD photo comparisons still outside the fixed GPU
-  tolerance, so it stays a test build.
+- **CUDA (Windows and Linux)** is published untested. It contains only the NVIDIA
+  libraries that NVIDIA's CUDA Toolkit EULA and cuDNN supplement identify as
+  distributable (`packaging/nvidia/redistributables.json`, checked on every build);
+  files the license does not list are left out. The Windows engine ships as verified parts next to
+  the installer. Nobody has run either package on an NVIDIA GPU yet.
+- **AMD ROCm (Linux).** PyTorch's ROCm wheel bundles libnuma and libelf built on
+  AlmaLinux. The package ships Ubuntu 24.04's own builds instead, found by soname under
+  every file name they appear as (every library that uses them is link-checked with
+  `ldd -r`), and its source bundle carries their Ubuntu sources. AMD's aqlprofile is MIT-licensed in
+  [ROCm/rocm-systems](https://github.com/ROCm/rocm-systems).
+- **DirectML** moved from `torch-directml` (Torch 2.4.1) to ONNX Runtime
+  DirectML 1.24.4 on Torch 2.13. It is published untested: the worker passed its
+  source-level checks on the UHD 620 PC, but NAFNet SIDD photo comparisons are still
+  outside the fixed GPU tolerance, so denoising results can differ from the CPU's.
 - **Intel XPU on Linux** is withheld because Intel's oneAPI runtime licence asks
   the distributor to indemnify Intel. The source keeps XPU support.
 - **Linux GTK advisory.** Tauri's GTK3 stack pulls in `glib` 0.18, which has the

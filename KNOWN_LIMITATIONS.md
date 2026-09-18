@@ -4,14 +4,18 @@ These apply to v0.1.3-beta. Please read them before starting a long job.
 
 ## Platforms
 
-- Published packages: macOS on Apple Silicon, the Windows CPU installer and the
-  Linux CPU AppImage. CUDA, AMD ROCm, DirectML and Intel XPU packages are held
-  back; [Platforms](docs/platforms.md) explains why.
+- Published packages: macOS on Apple Silicon; Windows CPU, DirectML and NVIDIA
+  CUDA installers; Linux CPU, AMD ROCm and NVIDIA CUDA AppImages. The CUDA and
+  DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU, and
+  DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
+  packages are held back; [Platforms](docs/platforms.md) explains why.
+- The CUDA and ROCm editions are several gigabytes and come in parts that must be
+  downloaded into one folder (see the download page).
 - The macOS build is the most tested. The Windows and Linux packages pass the
   codec policy and an automated smoke test of the installed app, but this release
   has not been run through the manual desktop checks on those systems.
 - Only the macOS app updates itself. On Windows and Linux, download new versions
-  from the website. The Windows installer is not code-signed, so SmartScreen warns
+  from the website. The Windows installers are not code-signed, so SmartScreen warns
   before it runs.
 - NVIDIA and Intel XPU GPUs have not been tested on real hardware. Those engines
   are labelled Labs in the app.

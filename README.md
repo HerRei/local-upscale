@@ -51,11 +51,14 @@ or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·
 
 - **macOS**, Apple Silicon, macOS 14 or later: a DMG (414 MB), signed and notarized.
   The app checks for updates at launch and verifies each update's signature.
-- **Windows** 10 and 11, x86-64: a CPU installer, not code-signed.
-- **Linux** x86-64: a CPU AppImage.
+- **Windows** 10 and 11, x86-64: a CPU installer, plus DirectML and NVIDIA CUDA
+  editions that are **untested** on those GPUs. None is code-signed.
+- **Linux** x86-64: a CPU AppImage, an AMD ROCm edition (tested on a Radeon
+  RX 9060 XT) and an NVIDIA CUDA edition (**untested**).
 
-CUDA, AMD ROCm, DirectML and Intel XPU packages are held back.
-[Platforms](docs/platforms.md) explains why, and what has been tested where.
+The CUDA and ROCm editions are larger than GitHub's 2 GB file limit and come in
+parts. Intel XPU packages are held back. [Platforms](docs/platforms.md) explains
+what has been tested where.
 
 No model weights are bundled. The Quick model (4.5 MB) downloads on first use,
 the others when you choose them.
