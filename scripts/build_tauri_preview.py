@@ -694,8 +694,10 @@ def use_distribution_libraries() -> list[Path]:
     """
     from build_source_bundle import DISTRIBUTION_ONLY_LIBRARIES, host_library_path
 
+    # CI links build/ to a larger disk, so compare fully resolved paths throughout.
+    engine = ENGINE_DIR.resolve()
     replaced: list[Path] = []
-    for bundled in sorted(ENGINE_DIR.rglob("*")):
+    for bundled in sorted(engine.rglob("*")):
         if bundled.name not in DISTRIBUTION_ONLY_LIBRARIES:
             continue
         real = bundled.resolve()
@@ -710,15 +712,13 @@ def use_distribution_libraries() -> list[Path]:
         real.chmod(real.stat().st_mode | 0o200)
         shutil.copyfile(host.resolve(), real)
         replaced.append(real)
-        print(f"Replaced {real.relative_to(ENGINE_DIR)} with the host's {host}", flush=True)
+        print(f"Replaced {bundled.relative_to(engine)} with the host's {host}", flush=True)
     if not replaced:
         return replaced
-    library_dirs = sorted(
-        {str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()}
-    )
+    library_dirs = sorted({str(path.parent) for path in engine.rglob("*.so*") if path.is_file()})
     environment = {**os.environ, "LD_LIBRARY_PATH": os.pathsep.join(library_dirs)}
     names = {path.name for path in replaced} | set(DISTRIBUTION_ONLY_LIBRARIES)
-    for library in sorted(ENGINE_DIR.rglob("*.so*")):
+    for library in sorted(engine.rglob("*.so*")):
         if not library.is_file() or library.is_symlink():
             continue
         dynamic = subprocess.run(
@@ -737,10 +737,10 @@ def use_distribution_libraries() -> list[Path]:
         ]
         if problems:
             raise SystemExit(
-                f"{library.relative_to(ENGINE_DIR)} does not link against the host's "
+                f"{library.relative_to(engine)} does not link against the host's "
                 "libraries:\n  " + "\n  ".join(problems)
             )
-        print(f"Link check passed: {library.relative_to(ENGINE_DIR)}", flush=True)
+        print(f"Link check passed: {library.relative_to(engine)}", flush=True)
     return replaced
 
 

@@ -162,14 +162,16 @@ analysis.binaries = TOC(
     for entry in analysis.binaries
     if not Path(entry[0]).name.lower().startswith("opencv_videoio_ffmpeg")
 )
-# cuFile and NVSHMEM are not redistributable under the licenses shipped in their
-# NVIDIA wheels (see packaging/nvidia/redistributables.json). PyTorch loads them
-# only for GPUDirect Storage and multi-GPU symmetric memory, which LocalSR does
-# not use.
+# PyTorch's Windows CUDA wheel also carries multi-GPU cuSOLVER and NVRTC's alternate
+# build, which the CUDA Toolkit EULA's Attachment A does not list as distributable
+# (packaging/nvidia/redistributables.json). PyTorch loads neither.
 analysis.binaries = TOC(
     entry
     for entry in analysis.binaries
-    if not Path(entry[0]).name.startswith(("libcufile", "libnvshmem", "nvshmem_"))
+    if not (
+        Path(entry[0]).name.lower().startswith(("cusolvermg", "libcusolvermg"))
+        or Path(entry[0]).name.lower().endswith(".alt.dll")
+    )
 )
 
 pyz = PYZ(analysis.pure)

@@ -10,13 +10,14 @@ own terms; this file is a distribution notice, not a replacement for their licen
   licenses and require the matching notices and applicable source/relinking materials.
 - **PyTorch / TorchVision** — BSD-style licenses from the PyTorch project.
 - **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 12.6 build uses (CUDA
-  Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX
-  and cuDNN). They are NVIDIA's software, included as the portions its
+  Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX,
+  cuFile, nvJPEG and cuDNN). They are NVIDIA's software, included as the portions its
   [CUDA Toolkit EULA](https://docs.nvidia.com/cuda/eula/index.html) and
   [cuDNN license](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html) identify
   as distributable, and remain under those terms: they are for use by LocalSR only, stay in
   object form and may not be separated for other use or reverse engineered. NCCL is
-  BSD-3-Clause. cuFile and NVSHMEM are removed, and no NVIDIA driver is included.
+  BSD-3-Clause and NVSHMEM is Apache-2.0 ([NVIDIA/nvshmem](https://github.com/NVIDIA/nvshmem));
+  their license texts are in the source bundle. No NVIDIA driver is included.
   `packaging/nvidia/redistributables.json` records the basis for each library.
 - **AMD ROCm package** — contains the ROCm runtime and math libraries PyTorch's ROCm 7.2 build
   uses (HIP, the HSA runtime, rocBLAS, hipBLAS/hipBLASLt, MIOpen, rocFFT, rocRAND, rocSOLVER,

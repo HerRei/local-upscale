@@ -57,6 +57,11 @@ def test_nvidia_policy_allows_attachment_a_and_rejects_unlisted_libraries():
             "engine/_internal/torch/lib/cudnn64_9.dll",
             "engine/_internal/torch/lib/cudnn_engines_precompiled64_9.dll",
             "_internal/nvidia/nccl/lib/libnccl.so.2",
+            "_internal/libcufile.so.0",
+            "_internal/libnvshmem_host.so.3",
+            "_internal/torchvision.libs/libcudart.45e7f3ed.so.12",
+            "_internal/torchvision.libs/libnvjpeg.e5f20359.so.12",
+            "_internal/torchvision/nvjpeg64_12.dll",
             "_internal/libcurl.so.4",
             "_internal/torch/cuda/nccl.py",
             "_internal/torch/_inductor/cutlass_mock_imports/cuda/cudart.py",
@@ -64,29 +69,37 @@ def test_nvidia_policy_allows_attachment_a_and_rejects_unlisted_libraries():
         policy,
     )
     assert report["ok"]
-    assert set(report["allowed"]) == {"cuBLAS", "cuDNN", "NCCL"}
+    assert set(report["allowed"]) == {
+        "cuBLAS",
+        "cuDNN",
+        "NCCL",
+        "cuFile",
+        "NVSHMEM",
+        "CUDA Runtime",
+        "nvJPEG",
+    }
 
     blocked = nvidia.classify(
         [
-            "_internal/nvidia/cufile/lib/libcufile.so.0",
-            "_internal/nvidia/nvshmem/lib/libnvshmem_host.so.3",
+            "_internal/torch/lib/cusolverMg64_11.dll",
+            "_internal/torch/lib/nvrtc64_120_0.alt.dll",
             "_internal/libcuda.so.1",
             "_internal/nvidia/unknown/lib/libnvfuture.so.1",
         ],
         policy,
     )
     assert not blocked["ok"]
-    assert {entry["component"] for entry in blocked["forbidden"]} == {
-        "cuFile / GPUDirect Storage",
-        "NVSHMEM",
-        "NVIDIA driver libraries",
+    assert {entry["component"] for entry in blocked["forbidden"]} == {"NVIDIA driver libraries"}
+    assert set(blocked["unknown"]) == {
+        "_internal/torch/lib/cusolverMg64_11.dll",
+        "_internal/torch/lib/nvrtc64_120_0.alt.dll",
     }
 
 
 def test_nvidia_verifier_cli_exit_status(tmp_path: Path, capsys):
     _touch(tmp_path / "engine/nvidia/cufft/lib/libcufft.so.11")
     assert nvidia.main([str(tmp_path)]) == 0
-    _touch(tmp_path / "engine/nvidia/cufile/lib/libcufile.so.0")
+    _touch(tmp_path / "engine/torch/lib/cusolverMg64_11.dll")
     assert nvidia.main([str(tmp_path)]) == 1
     assert "redistribution check failed" in capsys.readouterr().err
 
@@ -196,6 +209,24 @@ def test_build_swaps_in_the_hosts_libnuma_and_libelf(tmp_path: Path, monkeypatch
     assert (lib / "libelf.so.1").read_text() == "ubuntu libelf.so.1"
     assert (engine / "_internal/libnuma.so.1").is_symlink()
     assert "ldd" not in calls
+
+
+def test_swap_works_when_the_build_directory_is_a_symlink(tmp_path: Path, monkeypatch):
+    # CI links build/ to a larger disk (linux-appimages.yml).
+    _touch(tmp_path / "large-disk/engine/_internal/torch/lib/libdw.so.1", "almalinux")
+    (tmp_path / "build").symlink_to(tmp_path / "large-disk")
+    _touch(tmp_path / "host/libdw.so.1", "ubuntu")
+    monkeypatch.setattr(build_tauri_preview, "ENGINE_DIR", tmp_path / "build/engine")
+    monkeypatch.setattr(
+        build_source_bundle, "host_library_path", lambda name: tmp_path / "host" / name
+    )
+    monkeypatch.setattr(
+        build_tauri_preview.subprocess,
+        "run",
+        lambda command, **kwargs: argparse.Namespace(stdout="", stderr="", returncode=0),
+    )
+    assert len(build_tauri_preview.use_distribution_libraries()) == 1
+    assert (tmp_path / "large-disk/engine/_internal/torch/lib/libdw.so.1").read_text() == "ubuntu"
 
 
 def test_build_refuses_a_bundled_libnuma_the_host_lacks(tmp_path: Path, monkeypatch):

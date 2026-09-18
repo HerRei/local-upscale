@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "summary": "NVIDIA libraries a LocalSR CUDA package may contain, with the license basis for each. Anything NVIDIA-named that is not matched here fails the build. Reviewed 2026-09-15 against the license texts shipped in the pinned nvidia-*-cu12 wheels and https://docs.nvidia.com/cuda/eula/index.html, and on 2026-09-18 against NVIDIA's current cuDNN supplement, whose distributable portions are \"the runtime files .so and .dll\".",
+  "summary": "NVIDIA libraries a LocalSR CUDA package may contain, with the license basis for each. Anything NVIDIA-named that is not matched here fails the build. Reviewed 2026-09-15 against the license texts shipped in the pinned nvidia-*-cu12 wheels, and on 2026-09-18 against NVIDIA's current terms: the CUDA Toolkit EULA (https://docs.nvidia.com/cuda/eula/index.html, updated 2026-09-13), whose Attachment A now lists cuFile and nvJPEG and covers file names with embedded version information, the cuDNN supplement (updated 2026-09-02), and NVSHMEM's Apache-2.0 release. Copies renamed with an 8-hex-digit hash by auditwheel (torchvision.libs) are the same files.",
   "notice_required": "Distributable NVIDIA SDK portions may only be accessed by LocalSR, must stay in object form, must not be distributed stand-alone, and LocalSR's distribution terms must be consistent with NVIDIA's license restrictions.",
   "allowed": [
     {
       "component": "CUDA Runtime",
       "basis": "CUDA Toolkit EULA Attachment A",
       "patterns": [
-        "^libcudart\\.so",
+        "^libcudart(\\.[0-9a-f]{8})?\\.so",
         "^cudart64_[0-9]+\\.dll$"
       ]
     },
@@ -104,24 +104,32 @@
       "patterns": [
         "^libnccl\\.so"
       ]
-    }
-  ],
-  "forbidden": [
+    },
     {
-      "component": "cuFile / GPUDirect Storage",
-      "reason": "Not listed as distributable in the CUDA Toolkit EULA shipped with nvidia-cufile-cu12.",
+      "component": "cuFile",
+      "basis": "CUDA Toolkit EULA Attachment A (updated 2026-09-13): NVIDIA CUDA File IO Libraries, libcufile.so and libcufile_rdma.so",
       "patterns": [
-        "^libcufile"
+        "^libcufile(_rdma)?\\.so"
+      ]
+    },
+    {
+      "component": "nvJPEG",
+      "basis": "CUDA Toolkit EULA Attachment A: NVIDIA JPEG Library, libnvjpeg.so and nvjpeg.dll",
+      "patterns": [
+        "^libnvjpeg(\\.[0-9a-f]{8})?\\.so",
+        "^nvjpeg64_[0-9]+\\.dll$"
       ]
     },
     {
       "component": "NVSHMEM",
-      "reason": "Not listed as distributable in the license shipped with nvidia-nvshmem-cu12.",
+      "basis": "Apache-2.0: NVSHMEM v3.4.5 is published under Apache-2.0 at https://github.com/NVIDIA/nvshmem (tag v3.4.5-0)",
       "patterns": [
         "^libnvshmem",
         "^nvshmem_"
       ]
-    },
+    }
+  ],
+  "forbidden": [
     {
       "component": "NVIDIA driver libraries",
       "reason": "Driver libraries are provided by the user's installed driver and are never bundled.",
