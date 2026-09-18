@@ -1,14 +1,16 @@
 name: Linux AppImages
 
-# Builds the Linux CPU AppImage on GitHub-hosted runners, which have
-# the disk space and glibc the licensing-clean media runtime needs. The media runtime
-# is built from the pinned LGPL sources, and build_tauri_preview.py refuses any media
-# runtime or AppImage outside packaging/ffmpeg/codec-policy.json; this workflow never
-# passes --private-preview-media. Each AppImage gets its corresponding source bundle
-# (LocalSR, the media runtime, OpenCV, LibRaw, the GCC runtime and Ubuntu sources for the
-# bundled LGPL host libraries). Given a release tag, the verified AppImages (split into
-# 1.9 GB parts when larger than GitHub's asset limit) and their bundles are attached.
-# CUDA and ROCm stay out until the open items in docs/licensing-media.md are settled.
+# Builds the Linux CPU, NVIDIA CUDA and AMD ROCm AppImages on GitHub-hosted runners,
+# which have the disk space and glibc the licensing-clean media runtime needs. The media
+# runtime is built from the pinned LGPL sources, and build_tauri_preview.py refuses any
+# media runtime or AppImage outside packaging/ffmpeg/codec-policy.json; this workflow
+# never passes --private-preview-media. Each AppImage gets its corresponding source
+# bundle (LocalSR, the media runtime, OpenCV, LibRaw, the GCC runtime and Ubuntu sources
+# for the bundled LGPL host libraries). The ROCm wheel's own libnuma and libelf are
+# swapped for this runner's Ubuntu copies so those sources correspond, and every
+# AppImage must pass the NVIDIA redistribution policy. Given a release tag, the verified
+# AppImages (split into 1.9 GB parts when larger than GitHub's asset limit) and their
+# bundles are attached.
 
 on:
   workflow_dispatch:
@@ -38,6 +40,14 @@ jobs:
             backend: CPU
             suffix: Linux-CPU-x86_64.AppImage
             source: Linux-CPU-source-and-notices.tar.gz
+          - id: linux-x86_64-cuda
+            backend: CUDA
+            suffix: Linux-CUDA-x86_64.AppImage
+            source: Linux-CUDA-source-and-notices.tar.gz
+          - id: linux-x86_64-rocm
+            backend: AMD-ROCm
+            suffix: Linux-ROCm-x86_64.AppImage
+            source: Linux-ROCm-source-and-notices.tar.gz
     env:
       PIP_VERSION: "26.2.1"
     steps:
@@ -91,7 +101,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             xdg-utils xvfb dbus-x11 librdmacm1 libibverbs1 squashfs-tools \
-            nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch
+            nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch \
+            libnuma1 libelf1t64 libdw1t64
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
             --cache-root /mnt/lsr/wheelhouses --report /mnt/lsr/out/dependency-wheelhouse.json
@@ -124,6 +135,8 @@ jobs:
           sudo apt-get update
           mkdir -p /mnt/lsr/extract
           (cd /mnt/lsr/extract && "$ARTIFACT" --appimage-extract > /dev/null)
+          python scripts/verify_nvidia_redistributables.py /mnt/lsr/extract/squashfs-root \
+            > "/mnt/lsr/out/$NAME.nvidia.json"
           mapfile -t EXTRA < <(python scripts/fetch_extra_sources.py --platform linux-x86_64 \
             --destination /mnt/lsr/extra-sources)
           SOURCE_NAME="LocalSR-v${VERSION}-${{ matrix.source }}"

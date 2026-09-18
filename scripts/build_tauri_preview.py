@@ -676,6 +676,70 @@ def build_worker(target: str | None = None, private_preview_media: bool = False)
         raise SystemExit(f"worker build did not create {executable}")
     if sys.platform == "darwin":
         build_media_helper(target_arch)
+    if sys.platform.startswith("linux"):
+        use_distribution_libraries()
+
+
+# Symbol prefixes the swapped libraries export, for the link check below.
+DISTRIBUTION_SYMBOLS = re.compile(r"undefined symbol: (numa_|elf|gelf_|dwarf_|dwfl_|dwelf_)")
+
+
+def use_distribution_libraries() -> list[Path]:
+    """Replace bundled LGPL system libraries with the build host's Ubuntu copies.
+
+    PyTorch's ROCm wheel carries libnuma and libelf built on AlmaLinux, whose exact
+    sources are not published beside them. The host's copies have the same sonames, and
+    their Ubuntu source packages go into the source bundle, which refuses any other copy.
+    ``ldd -r`` then proves every library that uses them still finds each symbol.
+    """
+    from build_source_bundle import DISTRIBUTION_ONLY_LIBRARIES, host_library_path
+
+    replaced: list[Path] = []
+    for bundled in sorted(ENGINE_DIR.rglob("*")):
+        if bundled.name not in DISTRIBUTION_ONLY_LIBRARIES:
+            continue
+        real = bundled.resolve()
+        if real in replaced or not real.is_file():
+            continue
+        host = host_library_path(bundled.name)
+        if host is None:
+            raise SystemExit(
+                f"the worker bundles {bundled.name}; install the Ubuntu package that "
+                "provides it on the build host so its copy can be swapped in"
+            )
+        real.chmod(real.stat().st_mode | 0o200)
+        shutil.copyfile(host.resolve(), real)
+        replaced.append(real)
+        print(f"Replaced {real.relative_to(ENGINE_DIR)} with the host's {host}", flush=True)
+    if not replaced:
+        return replaced
+    library_dirs = sorted({str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()})
+    environment = {**os.environ, "LD_LIBRARY_PATH": os.pathsep.join(library_dirs)}
+    names = {path.name for path in replaced} | set(DISTRIBUTION_ONLY_LIBRARIES)
+    for library in sorted(ENGINE_DIR.rglob("*.so*")):
+        if not library.is_file() or library.is_symlink():
+            continue
+        dynamic = subprocess.run(
+            ["readelf", "-d", str(library)], capture_output=True, text=True, check=False
+        ).stdout
+        if not any(f"[{name}]" in dynamic for name in names):
+            continue
+        linked = subprocess.run(
+            ["ldd", "-r", str(library)], capture_output=True, text=True, env=environment
+        )
+        problems = [
+            line.strip()
+            for line in (linked.stdout + linked.stderr).splitlines()
+            if DISTRIBUTION_SYMBOLS.search(line)
+            or ("not found" in line and any(name in line for name in names))
+        ]
+        if problems:
+            raise SystemExit(
+                f"{library.relative_to(ENGINE_DIR)} does not link against the host's "
+                "libraries:\n  " + "\n  ".join(problems)
+            )
+        print(f"Link check passed: {library.relative_to(ENGINE_DIR)}", flush=True)
+    return replaced
 
 
 def build_media_helper(target_arch: str | None) -> None:

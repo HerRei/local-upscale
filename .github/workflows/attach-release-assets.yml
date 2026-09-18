@@ -1,7 +1,8 @@
 name: Attach release assets
 
-# Copies one reviewed package artifact from a finished Linux or Windows build run to a
-# GitHub release, inside GitHub rather than through a workstation. A dry run only
+# Copies one reviewed package artifact (packages, engine parts, checksums and source
+# bundle) from a finished Linux or Windows build run to a GitHub release, inside GitHub
+# rather than through a workstation. A dry run only
 # prints the package's codec-policy, smoke-test and source-bundle reports for review.
 
 on:
@@ -34,6 +35,14 @@ jobs:
     name: Attach ${{ inputs.artifact }} to ${{ inputs.release_tag }}
     runs-on: ubuntu-24.04
     steps:
+      # A ROCm artifact is about 10 GB, more than the runner's root disk has spare.
+      - name: Keep the download on the large disk
+        run: |
+          sudo mkdir -p /mnt/assets
+          sudo chown "$(id -u):$(id -g)" /mnt/assets
+          ln -s /mnt/assets assets
+          df -h / /mnt
+
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: ${{ inputs.artifact }}
@@ -87,6 +96,7 @@ jobs:
             mapfile -t files < <(compgen -G "assets/$ONLY" || true)
           else
             files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.exe assets/*.sha256 \
+              assets/*.engine.tar.gz.part-* \
               assets/*-source-and-notices.tar.gz)
           fi
           test "${#files[@]}" -gt 0

@@ -54,6 +54,8 @@ def test_nvidia_policy_allows_attachment_a_and_rejects_unlisted_libraries():
         [
             "_internal/nvidia/cublas/lib/libcublas.so.12",
             "_internal/nvidia/cudnn/lib/libcudnn_cnn.so.9",
+            "engine/_internal/torch/lib/cudnn64_9.dll",
+            "engine/_internal/torch/lib/cudnn_engines_precompiled64_9.dll",
             "_internal/nvidia/nccl/lib/libnccl.so.2",
             "_internal/libcurl.so.4",
             "_internal/torch/cuda/nccl.py",
@@ -62,13 +64,12 @@ def test_nvidia_policy_allows_attachment_a_and_rejects_unlisted_libraries():
         policy,
     )
     assert report["ok"]
-    assert set(report["allowed"]) == {"cuBLAS", "cuDNN (Linux)", "NCCL"}
+    assert set(report["allowed"]) == {"cuBLAS", "cuDNN", "NCCL"}
 
     blocked = nvidia.classify(
         [
             "_internal/nvidia/cufile/lib/libcufile.so.0",
             "_internal/nvidia/nvshmem/lib/libnvshmem_host.so.3",
-            "engine/cudnn64_9.dll",
             "_internal/libcuda.so.1",
             "_internal/nvidia/unknown/lib/libnvfuture.so.1",
         ],
@@ -78,7 +79,6 @@ def test_nvidia_policy_allows_attachment_a_and_rejects_unlisted_libraries():
     assert {entry["component"] for entry in blocked["forbidden"]} == {
         "cuFile / GPUDirect Storage",
         "NVSHMEM",
-        "cuDNN (Windows DLLs)",
         "NVIDIA driver libraries",
     }
 
@@ -152,6 +152,57 @@ def test_source_bundle_requires_ubuntu_sources_for_every_host_library(tmp_path: 
         "usr/share/icons/hicolor/index.theme",
     ]
     assert build_source_bundle.host_libraries(files) == sorted(files[:4])
+
+
+def test_bundled_libnuma_must_be_the_hosts_ubuntu_copy(tmp_path: Path, monkeypatch):
+    host = tmp_path / "host/libnuma.so.1"
+    _touch(host, "ubuntu build")
+    monkeypatch.setattr(build_source_bundle, "host_library_path", lambda name: host)
+    tree = tmp_path / "LocalSR.AppDir"
+    name = "usr/lib/LocalSR/engine/_internal/torch/lib/libnuma.so.1"
+    _touch(tree / name, "almalinux build")
+    with pytest.raises(SystemExit, match="not the build host's Ubuntu copy"):
+        build_source_bundle.verify_distribution_copies([name], tree)
+    _touch(tree / name, "ubuntu build")
+    assert build_source_bundle.verify_distribution_copies([name, "usr/lib/libz.so.1"], tree) == [
+        name
+    ]
+
+
+def test_build_swaps_in_the_hosts_libnuma_and_libelf(tmp_path: Path, monkeypatch):
+    engine = tmp_path / "engine"
+    for name in ("libnuma.so.1", "libelf.so.1"):
+        _touch(tmp_path / "host" / name, f"ubuntu {name}")
+        _touch(engine / "_internal/torch/lib" / name, f"almalinux {name}")
+    (engine / "_internal/libnuma.so.1").symlink_to("torch/lib/libnuma.so.1")
+    _touch(engine / "_internal/torch/lib/libtorch_cpu.so", "unrelated")
+    monkeypatch.setattr(build_tauri_preview, "ENGINE_DIR", engine)
+    monkeypatch.setattr(build_source_bundle, "host_library_path", lambda name: tmp_path / "host" / name)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command[0])
+        # Nothing in this engine links against the swapped libraries.
+        return argparse.Namespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(build_tauri_preview.subprocess, "run", fake_run)
+    replaced = build_tauri_preview.use_distribution_libraries()
+
+    assert sorted(path.name for path in replaced) == ["libelf.so.1", "libnuma.so.1"]
+    lib = engine / "_internal/torch/lib"
+    assert (lib / "libnuma.so.1").read_text() == "ubuntu libnuma.so.1"
+    assert (lib / "libelf.so.1").read_text() == "ubuntu libelf.so.1"
+    assert (engine / "_internal/libnuma.so.1").is_symlink()
+    assert "ldd" not in calls
+
+
+def test_build_refuses_a_bundled_libnuma_the_host_lacks(tmp_path: Path, monkeypatch):
+    engine = tmp_path / "engine"
+    _touch(engine / "_internal/torch/lib/libnuma.so.1", "almalinux")
+    monkeypatch.setattr(build_tauri_preview, "ENGINE_DIR", engine)
+    monkeypatch.setattr(build_source_bundle, "host_library_path", lambda name: None)
+    with pytest.raises(SystemExit, match="install the Ubuntu package"):
+        build_tauri_preview.use_distribution_libraries()
 
 
 def test_dpkg_search_output_skips_diversions_and_splits_owners():

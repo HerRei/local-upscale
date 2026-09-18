@@ -1,15 +1,16 @@
 name: Windows installers
 
-# Builds the Windows CPU NSIS installer on GitHub-hosted runners with the
-# licensing-clean media runtime: packaging/ffmpeg/build_lgpl_media.py builds FFmpeg and
-# its royalty-free codec libraries with MSYS2's UCRT64 toolchain and PyAV with MSVC,
-# OpenCV is built without FFmpeg, and build_tauri_preview.py refuses anything outside
-# packaging/ffmpeg/codec-policy.json; this workflow never passes --private-preview-media.
-# DirectML and CUDA stay out for now: DirectML results still miss the accuracy tolerance
-# and CUDA waits for NVIDIA's terms (docs/licensing-media.md). Each installer gets its
-# corresponding source bundle. The installers are not
-# Authenticode-signed. Given a release tag, the verified installers and their bundles
-# are attached to it.
+# Builds the Windows CPU, DirectML and NVIDIA CUDA NSIS installers on GitHub-hosted
+# runners with the licensing-clean media runtime: packaging/ffmpeg/build_lgpl_media.py
+# builds FFmpeg and its royalty-free codec libraries with MSYS2's UCRT64 toolchain and
+# PyAV with MSVC, OpenCV is built without FFmpeg, and build_tauri_preview.py refuses
+# anything outside packaging/ffmpeg/codec-policy.json; this workflow never passes
+# --private-preview-media. The CUDA engine is too large for one installer, so it ships
+# as verified parts that sit next to it, and it must pass the NVIDIA redistribution
+# policy. DirectML and CUDA have not been tested on those GPUs (docs/platforms.md).
+# Each installer gets its corresponding source bundle. The installers are not
+# Authenticode-signed. Given a release tag, the verified installers, engine parts and
+# bundles are attached to it.
 
 on:
   workflow_dispatch:
@@ -41,6 +42,14 @@ jobs:
             backend: CPU
             suffix: Windows-CPU-x86_64.exe
             source: Windows-CPU-source-and-notices.tar.gz
+          - id: windows-x86_64-directml
+            backend: DirectML
+            suffix: Windows-DirectML-x86_64.exe
+            source: Windows-DirectML-source-and-notices.tar.gz
+          - id: windows-x86_64-cuda
+            backend: CUDA
+            suffix: Windows-CUDA-x86_64.exe
+            source: Windows-CUDA-source-and-notices.tar.gz
     defaults:
       run:
         shell: pwsh
@@ -121,16 +130,29 @@ jobs:
       - name: Build, verify and smoke-test the installer
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          python scripts/build_tauri_preview.py --skip-checks --bundles nsis
-          $bundle = "desktop/src-tauri/target/release/bundle/nsis"
-          $sources = @(Get-ChildItem -Path $bundle -Filter '*.exe' -File)
-          if ($sources.Count -ne 1) { throw "Expected 1 NSIS installer, found $($sources.Count)" }
           $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
           $name = "LocalSR-v$version-${{ matrix.suffix }}"
           $artifact = Join-Path "$env:LSR\out" $name
+          $buildArgs = @('--skip-checks', '--bundles', 'nsis')
+          # Hosted runners have no GPU; the installed-package smoke test still probes the backend.
+          if ("${{ matrix.backend }}" -eq "DirectML") { $env:LOCALSR_SKIP_DIRECTML_PROBE = "1" }
+          if ("${{ matrix.backend }}" -eq "CUDA") {
+            $buildArgs += @('--external-engine-prefix', "$([IO.Path]::GetFileNameWithoutExtension($name)).engine.tar.gz")
+          }
+          python scripts/build_tauri_preview.py @buildArgs
+          $bundle = "desktop/src-tauri/target/release/bundle/nsis"
+          $sources = @(Get-ChildItem -Path $bundle -Filter '*.exe' -File)
+          if ($sources.Count -ne 1) { throw "Expected 1 NSIS installer, found $($sources.Count)" }
           Move-Item -LiteralPath $sources[0].FullName -Destination $artifact
+          if ("${{ matrix.backend }}" -eq "CUDA") {
+            # The installer finds its engine parts in its own folder.
+            Get-ChildItem -LiteralPath build\tauri-preview\engine-payload -Filter '*.part-*' -File |
+              Copy-Item -Destination "$env:LSR\out"
+          }
           python scripts/verify_codec_allowlist.py --tree build/tauri-preview/worker-dist --output "$artifact.codec-policy.json"
-          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 `
+          python scripts/verify_nvidia_redistributables.py build/tauri-preview/worker-dist |
+            Out-File -FilePath "$artifact.nvidia.json" -Encoding utf8
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 1800 `
             --artifact-glob $artifact --report "$artifact.smoke.json"
           python scripts/verify_tauri_release_package.py $artifact `
             --platform windows --architecture x86_64 --smoke-report "$artifact.smoke.json" `
@@ -192,6 +214,6 @@ jobs:
               files+=("$installer" "$installer.sha256")
             fi
           done
-          files+=(assets/*-source-and-notices.tar.gz)
+          files+=(assets/*.engine.tar.gz.part-* assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0
           gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

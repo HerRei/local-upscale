@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "summary": "NVIDIA libraries a LocalSR CUDA package may contain, with the license basis for each. Anything NVIDIA-named that is not matched here fails the build. Reviewed 2026-09-15 against the license texts shipped in the pinned nvidia-*-cu12 wheels and https://docs.nvidia.com/cuda/eula/index.html.",
+  "summary": "NVIDIA libraries a LocalSR CUDA package may contain, with the license basis for each. Anything NVIDIA-named that is not matched here fails the build. Reviewed 2026-09-15 against the license texts shipped in the pinned nvidia-*-cu12 wheels and https://docs.nvidia.com/cuda/eula/index.html, and on 2026-09-18 against NVIDIA's current cuDNN supplement, whose distributable portions are \"the runtime files .so and .dll\".",
   "notice_required": "Distributable NVIDIA SDK portions may only be accessed by LocalSR, must stay in object form, must not be distributed stand-alone, and LocalSR's distribution terms must be consistent with NVIDIA's license restrictions.",
   "allowed": [
     {
@@ -84,10 +84,11 @@
       ]
     },
     {
-      "component": "cuDNN (Linux)",
-      "basis": "cuDNN supplement: runtime .so files are distributable",
+      "component": "cuDNN",
+      "basis": "cuDNN supplement, section 2 (docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html, updated 2026-09-02): \"the runtime files .so and .dll\" are distributable",
       "patterns": [
-        "^libcudnn(_[a-z_]+)?\\.so"
+        "^libcudnn(_[a-z_]+)?\\.so",
+        "^cudnn(_[a-z_]+)?64_[0-9]+\\.dll$"
       ]
     },
     {
@@ -119,13 +120,6 @@
       "patterns": [
         "^libnvshmem",
         "^nvshmem_"
-      ]
-    },
-    {
-      "component": "cuDNN (Windows DLLs)",
-      "reason": "The cuDNN supplement names only cudnn64_7.dll; cuDNN 9 DLL names need written confirmation from NVIDIA (nvidia-compute-license-questions@nvidia.com) before distribution.",
-      "patterns": [
-        "^cudnn.*\\.dll$"
       ]
     },
     {

@@ -50,6 +50,12 @@ EXTRA_SOURCE_RULES = {
         "NumPy wheel was built with",
     ),
 }
+# LGPL libraries a Linux package may only carry as the build host's own Ubuntu copies,
+# so that the Ubuntu source fetched for them is their exact corresponding source.
+# PyTorch's ROCm wheel bundles copies built on AlmaLinux; build_tauri_preview.py swaps
+# in the host's, and verify_distribution_copies refuses a package where that did not
+# happen.
+DISTRIBUTION_ONLY_LIBRARIES = ("libnuma.so.1", "libelf.so.1", "libdw.so.1")
 # Shared libraries an AppDir carries from the build host. Tauri's AppImage bundles the
 # WebKitGTK/GTK stack with dozens of LGPL dependencies (cairo, pango, gnutls, libsoup,
 # GStreamer, ...), so rather than naming a subset, every library Debian packages provided
@@ -85,6 +91,39 @@ def host_libraries(files: list[str]) -> list[str]:
     return sorted(
         name for name in files if "/usr/lib/" in f"/{name}" and HOST_SHARED_LIBRARY.search(name)
     )
+
+
+def host_library_path(soname: str) -> Path | None:
+    """The build host's copy of ``soname`` for this architecture, from ``ldconfig -p``."""
+    listing = subprocess.run(
+        ["ldconfig", "-p"], capture_output=True, text=True, check=False
+    ).stdout
+    for line in listing.splitlines():
+        name, _, rest = line.strip().partition(" ")
+        if name == soname and "x86-64" in rest and "=> " in rest:
+            path = Path(rest.split("=> ", 1)[1].strip())
+            if path.is_file():
+                return path
+    return None
+
+
+def verify_distribution_copies(files: list[str], tree: Path) -> list[str]:
+    """Refuse bundled DISTRIBUTION_ONLY_LIBRARIES that are not the host's Ubuntu copies."""
+    checked: list[str] = []
+    for name in files:
+        soname = Path(name).name
+        if soname not in DISTRIBUTION_ONLY_LIBRARIES:
+            continue
+        bundled = (tree / name).resolve()
+        host = host_library_path(soname)
+        if host is None or not bundled.is_file() or sha256(bundled) != sha256(host.resolve()):
+            raise SystemExit(
+                f"{name} is not the build host's Ubuntu copy of {soname}, so the Ubuntu "
+                "source in this bundle would not correspond to it; build the package with "
+                "build_tauri_preview.py, which swaps in the host's library"
+            )
+        checked.append(name)
+    return checked
 
 
 def collect_licenses(tree: Path, destination: Path) -> list[str]:
@@ -281,6 +320,9 @@ def build(arguments: argparse.Namespace) -> dict:
     if host:
         report["components"]["host-libraries"] = host
         if arguments.apt_sources:
+            report["components"]["distribution-copies"] = verify_distribution_copies(
+                files, tree
+            )
             report["components"]["ubuntu-source-packages"] = apt_sources(
                 host, tree, output / "ubuntu-sources"
             )

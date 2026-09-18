@@ -9,6 +9,23 @@ own terms; this file is a distribution notice, not a replacement for their licen
   WebKitGTK/GTK/GStreamer libraries from Ubuntu 24.04; these include LGPL and other
   licenses and require the matching notices and applicable source/relinking materials.
 - **PyTorch / TorchVision** — BSD-style licenses from the PyTorch project.
+- **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 12.6 build uses (CUDA
+  Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX
+  and cuDNN). They are NVIDIA's software, included as the portions its
+  [CUDA Toolkit EULA](https://docs.nvidia.com/cuda/eula/index.html) and
+  [cuDNN license](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html) identify
+  as distributable, and remain under those terms: they are for use by LocalSR only, stay in
+  object form and may not be separated for other use or reverse engineered. NCCL is
+  BSD-3-Clause. cuFile and NVSHMEM are removed, and no NVIDIA driver is included.
+  `packaging/nvidia/redistributables.json` records the basis for each library.
+- **AMD ROCm package** — contains the ROCm runtime and math libraries PyTorch's ROCm 7.2 build
+  uses (HIP, the HSA runtime, rocBLAS, hipBLAS/hipBLASLt, MIOpen, rocFFT, rocRAND, rocSOLVER,
+  rocSPARSE, RCCL, AOTriton, aqlprofile and the ROCm profiling and SMI libraries), published by
+  AMD under MIT, BSD, University of Illinois/NCSA and Apache-2.0-with-LLVM-exception terms in
+  [ROCm's repositories](https://github.com/ROCm/rocm-systems); the MIT notice they share is
+  reproduced below. Its libnuma (LGPL-2.1) and libelf (elfutils, LGPL-3.0-or-later or
+  GPL-2.0-or-later) are Ubuntu 24.04's own builds, and the ROCm source bundle carries their
+  Ubuntu source packages. libdrm is MIT.
 - **Windows DirectML engine** — ONNX is Apache-2.0; ONNX Runtime is MIT and ships its own
   third-party notices. The DirectML build uses ONNX 1.22.0, ONNX Runtime DirectML 1.24.4 and
   Torch 2.13.0 CPU for loading and conversion; `ml_dtypes` is Apache-2.0. The provider DLLs
@@ -69,3 +86,22 @@ own terms; this file is a distribution notice, not a replacement for their licen
 
 Review upstream license files and current terms before redistributing LocalSR or using outputs in a
 commercial workflow.
+
+## AMD ROCm MIT notice
+
+Copyright (C) Advanced Micro Devices, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
