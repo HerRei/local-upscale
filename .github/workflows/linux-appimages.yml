@@ -136,7 +136,7 @@ jobs:
           mkdir -p /mnt/lsr/extract
           (cd /mnt/lsr/extract && "$ARTIFACT" --appimage-extract > /dev/null)
           python scripts/verify_nvidia_redistributables.py /mnt/lsr/extract/squashfs-root \
-            > "/mnt/lsr/out/$NAME.nvidia.json"
+            | tee "/mnt/lsr/out/$NAME.nvidia.json"
           mapfile -t EXTRA < <(python scripts/fetch_extra_sources.py --platform linux-x86_64 \
             --destination /mnt/lsr/extra-sources)
           SOURCE_NAME="LocalSR-v${VERSION}-${{ matrix.source }}"

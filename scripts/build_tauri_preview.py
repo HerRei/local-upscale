@@ -503,6 +503,27 @@ def prune_patent_encumbered_media(appdir: Path) -> list[Path]:
     return removed
 
 
+def remove_host_provided_libraries(appdir: Path) -> list[Path]:
+    """Remove driver and host-graphics libraries that linuxdeploy must never bundle.
+
+    The linuxdeploy wrapper excludes them, but only when Tauri's linuxdeploy is
+    already cached; on a fresh runner Tauri downloads it mid-build and they slip in.
+    That includes the stub libcuda.so.1 this script compiles for dependency
+    resolution, which would shadow the user's NVIDIA driver, and Wayland libraries
+    that make WebKit abort on newer desktops.
+    """
+    names = {*LINUXDEPLOY_DRIVER_LIBRARIES, *LINUXDEPLOY_HOST_GRAPHICS_LIBRARIES}
+    removed: list[Path] = []
+    for library_dir in (appdir / "usr" / "lib", appdir / "usr" / "lib" / "x86_64-linux-gnu"):
+        if not library_dir.is_dir():
+            continue
+        for library in sorted(library_dir.iterdir()):
+            if library.name in names and (library.is_file() or library.is_symlink()):
+                library.unlink()
+                removed.append(library)
+    return removed
+
+
 def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Path]:
     """Rebuild Linux AppImage payloads with system gzip-capable mksquashfs.
 
@@ -538,6 +559,8 @@ def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Pa
             f"Removed {len(removed)} patent-encumbered media plugin/library files from the AppDir.",
             flush=True,
         )
+    for library in remove_host_provided_libraries(appdir):
+        print(f"Removed host-provided {library.relative_to(appdir)} from the AppDir.", flush=True)
     verify = subprocess.run(
         [
             sys.executable,

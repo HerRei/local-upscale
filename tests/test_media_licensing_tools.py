@@ -342,3 +342,20 @@ def test_every_platform_registers_its_extra_sources():
         for _, entry in fetch_extra_sources.entries_for(platform, registry):
             assert entry["url"].startswith("https://")
             assert len(entry["sha256"]) == 64
+
+
+def test_appimage_never_keeps_driver_stubs_or_host_wayland(tmp_path: Path):
+    appdir = tmp_path / "LocalSR.AppDir"
+    drop = [
+        _touch(appdir / "usr/lib/libcuda.so.1", "stub"),
+        _touch(appdir / "usr/lib/librdmacm.so.1", "stub"),
+        _touch(appdir / "usr/lib/libwayland-client.so.0"),
+        _touch(appdir / "usr/lib/libwayland-egl.so.1"),
+    ]
+    keep = [
+        _touch(appdir / "usr/lib/libwebkit2gtk-4.1.so.0"),
+        _touch(appdir / "usr/lib/LocalSR/engine/_internal/torch/lib/libcaffe2_nvrtc.so"),
+    ]
+    removed = build_tauri_preview.remove_host_provided_libraries(appdir)
+    assert sorted(removed) == sorted(drop)
+    assert all(path.exists() for path in keep)
