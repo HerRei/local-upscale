@@ -56,6 +56,9 @@ EXTRA_SOURCE_RULES = {
 # in the host's, and verify_distribution_copies refuses a package where that did not
 # happen.
 DISTRIBUTION_ONLY_LIBRARIES = ("libnuma.so.1", "libelf.so.1", "libdw.so.1")
+# The ROCm engine also carries copies under other file names (libnuma.so, libelf.so),
+# so candidates are matched by name and identified by the soname inside the file.
+DISTRIBUTION_ONLY_CANDIDATE = re.compile(r"^lib(numa|elf|dw)([.\-][^/]*)?\.so")
 # Shared libraries an AppDir carries from the build host. Tauri's AppImage bundles the
 # WebKitGTK/GTK stack with dozens of LGPL dependencies (cairo, pango, gnutls, libsoup,
 # GStreamer, ...), so rather than naming a subset, every library Debian packages provided
@@ -129,12 +132,34 @@ def same_build(bundled: Path, host: Path) -> bool:
     return ours is not None and ours == build_id(host)
 
 
+def elf_soname(path: Path) -> str | None:
+    """The SONAME recorded in an ELF shared library, or None."""
+    try:
+        dynamic = subprocess.run(
+            ["readelf", "-d", str(path)], capture_output=True, text=True, check=False
+        ).stdout
+    except FileNotFoundError:
+        return None
+    match = re.search(r"Library soname: \[([^\]]+)\]", dynamic)
+    return match.group(1) if match else None
+
+
+def distribution_library(path: Path) -> str | None:
+    """The DISTRIBUTION_ONLY_LIBRARIES soname ``path`` provides, whatever it is called."""
+    if path.name in DISTRIBUTION_ONLY_LIBRARIES:
+        return path.name
+    if not DISTRIBUTION_ONLY_CANDIDATE.match(path.name) or not path.resolve().is_file():
+        return None
+    soname = elf_soname(path.resolve())
+    return soname if soname in DISTRIBUTION_ONLY_LIBRARIES else None
+
+
 def verify_distribution_copies(files: list[str], tree: Path) -> list[str]:
     """Refuse bundled DISTRIBUTION_ONLY_LIBRARIES that are not the host's Ubuntu builds."""
     checked: list[str] = []
     for name in files:
-        soname = Path(name).name
-        if soname not in DISTRIBUTION_ONLY_LIBRARIES:
+        soname = distribution_library(tree / name)
+        if soname is None:
             continue
         bundled = (tree / name).resolve()
         host = host_library_path(soname)

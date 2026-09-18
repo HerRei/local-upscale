@@ -715,27 +715,34 @@ def use_distribution_libraries() -> list[Path]:
     their Ubuntu source packages go into the source bundle, which refuses any other copy.
     ``ldd -r`` then proves every library that uses them still finds each symbol.
     """
-    from build_source_bundle import DISTRIBUTION_ONLY_LIBRARIES, host_library_path
+    from build_source_bundle import (
+        DISTRIBUTION_ONLY_LIBRARIES,
+        distribution_library,
+        host_library_path,
+    )
 
     # CI links build/ to a larger disk, so compare fully resolved paths throughout.
     engine = ENGINE_DIR.resolve()
     replaced: list[Path] = []
     for bundled in sorted(engine.rglob("*")):
-        if bundled.name not in DISTRIBUTION_ONLY_LIBRARIES:
+        soname = distribution_library(bundled)
+        if soname is None:
             continue
         real = bundled.resolve()
         if real in replaced or not real.is_file():
             continue
-        host = host_library_path(bundled.name)
+        host = host_library_path(soname)
         if host is None:
             raise SystemExit(
-                f"the worker bundles {bundled.name}; install the Ubuntu package that "
-                "provides it on the build host so its copy can be swapped in"
+                f"the worker bundles {soname} as {bundled.name}; install the Ubuntu package "
+                "that provides it on the build host so its copy can be swapped in"
             )
         real.chmod(real.stat().st_mode | 0o200)
         shutil.copyfile(host.resolve(), real)
         replaced.append(real)
-        print(f"Replaced {bundled.relative_to(engine)} with the host's {host}", flush=True)
+        print(
+            f"Replaced {bundled.relative_to(engine)} ({soname}) with the host's {host}", flush=True
+        )
     if not replaced:
         return replaced
     library_dirs = sorted({str(path.parent) for path in engine.rglob("*.so*") if path.is_file()})

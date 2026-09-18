@@ -359,3 +359,43 @@ def test_appimage_never_keeps_driver_stubs_or_host_wayland(tmp_path: Path):
     removed = build_tauri_preview.remove_host_provided_libraries(appdir)
     assert sorted(removed) == sorted(drop)
     assert all(path.exists() for path in keep)
+
+
+def test_unversioned_copies_of_distribution_libraries_are_swapped_and_checked(
+    tmp_path: Path, monkeypatch
+):
+    # PyTorch's ROCm engine also carries libnuma.so and libelf.so as regular files.
+    engine = tmp_path / "engine"
+    lib = engine / "_internal/torch/lib"
+    for name in ("libnuma.so.1", "libnuma.so", "libelf.so", "libdrm.so.2"):
+        _touch(lib / name, f"almalinux {name}")
+    _touch(tmp_path / "host/libnuma.so.1", "ubuntu libnuma")
+    _touch(tmp_path / "host/libelf.so.1", "ubuntu libelf")
+    sonames = {
+        "libnuma.so": "libnuma.so.1",
+        "libelf.so": "libelf.so.1",
+        "libdrm.so.2": "libdrm.so.2",
+    }
+    monkeypatch.setattr(build_source_bundle, "elf_soname", lambda path: sonames.get(path.name))
+    monkeypatch.setattr(
+        build_source_bundle, "host_library_path", lambda name: tmp_path / "host" / name
+    )
+    monkeypatch.setattr(build_tauri_preview, "ENGINE_DIR", engine)
+    monkeypatch.setattr(
+        build_tauri_preview.subprocess,
+        "run",
+        lambda command, **kwargs: argparse.Namespace(stdout="", stderr="", returncode=0),
+    )
+    monkeypatch.setattr(build_source_bundle, "build_id", lambda path: None)
+
+    files = [f"_internal/torch/lib/{n}" for n in ("libnuma.so.1", "libnuma.so", "libelf.so")]
+    with pytest.raises(SystemExit, match="libnuma.so is not"):
+        build_source_bundle.verify_distribution_copies(files[1:2], engine)
+
+    replaced = build_tauri_preview.use_distribution_libraries()
+
+    assert sorted(path.name for path in replaced) == ["libelf.so", "libnuma.so", "libnuma.so.1"]
+    assert (lib / "libnuma.so").read_text() == "ubuntu libnuma"
+    assert (lib / "libelf.so").read_text() == "ubuntu libelf"
+    assert (lib / "libdrm.so.2").read_text() == "almalinux libdrm.so.2"
+    assert build_source_bundle.verify_distribution_copies(files, engine) == files
