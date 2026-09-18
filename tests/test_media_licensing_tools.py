@@ -182,6 +182,22 @@ def test_bundled_libnuma_must_be_the_hosts_ubuntu_copy(tmp_path: Path, monkeypat
     ]
 
 
+def test_linuxdeploys_rpath_patched_copy_counts_as_the_hosts_build(tmp_path: Path, monkeypatch):
+    # linuxdeploy rewrites RPATH in the host libraries it bundles; the build ID stays.
+    host = _touch(tmp_path / "host/libdw.so.1", "ubuntu build")
+    monkeypatch.setattr(build_source_bundle, "host_library_path", lambda name: host)
+    tree = tmp_path / "LocalSR.AppDir"
+    _touch(tree / "usr/lib/libdw.so.1", "ubuntu build, RPATH=$ORIGIN")
+    ids = {"ubuntu build": "4f1e", "ubuntu build, RPATH=$ORIGIN": "4f1e", "almalinux": "9c2a"}
+    monkeypatch.setattr(build_source_bundle, "build_id", lambda path: ids[path.read_text()])
+    assert build_source_bundle.verify_distribution_copies(["usr/lib/libdw.so.1"], tree) == [
+        "usr/lib/libdw.so.1"
+    ]
+    _touch(tree / "usr/lib/libdw.so.1", "almalinux")
+    with pytest.raises(SystemExit, match="not the build host's Ubuntu copy"):
+        build_source_bundle.verify_distribution_copies(["usr/lib/libdw.so.1"], tree)
+
+
 def test_build_swaps_in_the_hosts_libnuma_and_libelf(tmp_path: Path, monkeypatch):
     engine = tmp_path / "engine"
     for name in ("libnuma.so.1", "libelf.so.1"):

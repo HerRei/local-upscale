@@ -105,8 +105,32 @@ def host_library_path(soname: str) -> Path | None:
     return None
 
 
+def build_id(path: Path) -> str | None:
+    """The ELF file's GNU build ID, which the linker derives from the build's output."""
+    try:
+        notes = subprocess.run(
+            ["readelf", "-n", str(path)], capture_output=True, text=True, check=False
+        ).stdout
+    except FileNotFoundError:  # no binutils: fall back to comparing bytes only
+        return None
+    match = re.search(r"Build ID:\s*([0-9a-f]+)", notes)
+    return match.group(1) if match else None
+
+
+def same_build(bundled: Path, host: Path) -> bool:
+    """Whether ``bundled`` is the same build as ``host``.
+
+    linuxdeploy rewrites the RPATH of every host library it copies into an AppDir,
+    which changes the bytes but not the GNU build ID that identifies the build.
+    """
+    if sha256(bundled) == sha256(host):
+        return True
+    ours = build_id(bundled)
+    return ours is not None and ours == build_id(host)
+
+
 def verify_distribution_copies(files: list[str], tree: Path) -> list[str]:
-    """Refuse bundled DISTRIBUTION_ONLY_LIBRARIES that are not the host's Ubuntu copies."""
+    """Refuse bundled DISTRIBUTION_ONLY_LIBRARIES that are not the host's Ubuntu builds."""
     checked: list[str] = []
     for name in files:
         soname = Path(name).name
@@ -114,7 +138,7 @@ def verify_distribution_copies(files: list[str], tree: Path) -> list[str]:
             continue
         bundled = (tree / name).resolve()
         host = host_library_path(soname)
-        if host is None or not bundled.is_file() or sha256(bundled) != sha256(host.resolve()):
+        if host is None or not bundled.is_file() or not same_build(bundled, host.resolve()):
             raise SystemExit(
                 f"{name} is not the build host's Ubuntu copy of {soname}, so the Ubuntu "
                 "source in this bundle would not correspond to it; build the package with "
