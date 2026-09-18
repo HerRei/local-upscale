@@ -713,7 +713,9 @@ def use_distribution_libraries() -> list[Path]:
         print(f"Replaced {real.relative_to(ENGINE_DIR)} with the host's {host}", flush=True)
     if not replaced:
         return replaced
-    library_dirs = sorted({str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()})
+    library_dirs = sorted(
+        {str(path.parent) for path in ENGINE_DIR.rglob("*.so*") if path.is_file()}
+    )
     environment = {**os.environ, "LD_LIBRARY_PATH": os.pathsep.join(library_dirs)}
     names = {path.name for path in replaced} | set(DISTRIBUTION_ONLY_LIBRARIES)
     for library in sorted(ENGINE_DIR.rglob("*.so*")):

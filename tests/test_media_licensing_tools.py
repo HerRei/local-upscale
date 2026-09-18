@@ -177,7 +177,9 @@ def test_build_swaps_in_the_hosts_libnuma_and_libelf(tmp_path: Path, monkeypatch
     (engine / "_internal/libnuma.so.1").symlink_to("torch/lib/libnuma.so.1")
     _touch(engine / "_internal/torch/lib/libtorch_cpu.so", "unrelated")
     monkeypatch.setattr(build_tauri_preview, "ENGINE_DIR", engine)
-    monkeypatch.setattr(build_source_bundle, "host_library_path", lambda name: tmp_path / "host" / name)
+    monkeypatch.setattr(
+        build_source_bundle, "host_library_path", lambda name: tmp_path / "host" / name
+    )
     calls = []
 
     def fake_run(command, **kwargs):

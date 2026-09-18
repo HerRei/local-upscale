@@ -95,9 +95,7 @@ def host_libraries(files: list[str]) -> list[str]:
 
 def host_library_path(soname: str) -> Path | None:
     """The build host's copy of ``soname`` for this architecture, from ``ldconfig -p``."""
-    listing = subprocess.run(
-        ["ldconfig", "-p"], capture_output=True, text=True, check=False
-    ).stdout
+    listing = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, check=False).stdout
     for line in listing.splitlines():
         name, _, rest = line.strip().partition(" ")
         if name == soname and "x86-64" in rest and "=> " in rest:
@@ -320,9 +318,7 @@ def build(arguments: argparse.Namespace) -> dict:
     if host:
         report["components"]["host-libraries"] = host
         if arguments.apt_sources:
-            report["components"]["distribution-copies"] = verify_distribution_copies(
-                files, tree
-            )
+            report["components"]["distribution-copies"] = verify_distribution_copies(files, tree)
             report["components"]["ubuntu-source-packages"] = apt_sources(
                 host, tree, output / "ubuntu-sources"
             )
