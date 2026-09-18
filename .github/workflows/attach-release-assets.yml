@@ -103,21 +103,26 @@ jobs:
           ls -la "${files[@]}"
           # Uploading a few hundred megabytes answers HTTP 500 ("Error creating asset temp
           # dir") or 504 often enough that one attempt is not enough. Each round uploads
-          # only the files the release does not already carry at the right size, so a
-          # half-finished attempt costs one round, not the whole set.
+          # only the files the release does not already carry with the same SHA-256 (a
+          # replaced checksum file has the same size as the old one), so a half-finished
+          # attempt costs one round, not the whole set.
+          declare -A want
+          for file in "${files[@]}"; do
+            want["$file"]="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
+          done
           for attempt in 1 2 3 4 5; do
             missing=()
             published=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              --jq '.assets[] | [.name, .size, .state] | @tsv')
+              --jq '.assets[] | [.name, .digest, .state] | @tsv')
             for file in "${files[@]}"; do
               if ! printf '%s\n' "$published" | awk -F'\t' -v n="$(basename "$file")" \
-                -v s="$(stat -c %s "$file")" '$1==n && $2==s && $3=="uploaded" {found=1}
+                -v d="${want[$file]}" '$1==n && $2==d && $3=="uploaded" {found=1}
                 END {exit !found}'; then
                 missing+=("$file")
               fi
             done
             if [ "${#missing[@]}" -eq 0 ]; then
-              echo "The release carries every file at its built size."
+              echo "The release carries every file with its built SHA-256."
               exit 0
             fi
             echo "Attempt $attempt: uploading ${missing[*]}"
