@@ -17,6 +17,9 @@ import build_tauri_preview  # noqa: E402
 import fetch_extra_sources  # noqa: E402
 import verify_nvidia_redistributables as nvidia  # noqa: E402
 
+# The swap runs only when building Linux packages; Windows needs extra privileges for symlinks.
+linux_symlinks = pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+
 
 def _touch(path: Path, text: str = "x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,6 +201,7 @@ def test_linuxdeploys_rpath_patched_copy_counts_as_the_hosts_build(tmp_path: Pat
         build_source_bundle.verify_distribution_copies(["usr/lib/libdw.so.1"], tree)
 
 
+@linux_symlinks
 def test_build_swaps_in_the_hosts_libnuma_and_libelf(tmp_path: Path, monkeypatch):
     engine = tmp_path / "engine"
     for name in ("libnuma.so.1", "libelf.so.1"):
@@ -227,6 +231,7 @@ def test_build_swaps_in_the_hosts_libnuma_and_libelf(tmp_path: Path, monkeypatch
     assert "ldd" not in calls
 
 
+@linux_symlinks
 def test_swap_works_when_the_build_directory_is_a_symlink(tmp_path: Path, monkeypatch):
     # CI links build/ to a larger disk (linux-appimages.yml).
     _touch(tmp_path / "large-disk/engine/_internal/torch/lib/libdw.so.1", "almalinux")
