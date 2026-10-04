@@ -4,6 +4,14 @@ import sys
 
 
 def main():
+    if sys.argv[1:2] == ["--edit-probe"]:
+        from localsr.worker.edit_guard import probe
+
+        raise SystemExit(probe(sys.argv[2:]))
+    if sys.argv[1:2] == ["--edit-guard"]:
+        from localsr.worker.edit_guard import main as edit_guard_main
+
+        raise SystemExit(edit_guard_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--video-playback-preview"]:
         from localsr.core.video_playback import main as playback_main
 

@@ -40,6 +40,11 @@ pub async fn download_model(
             .find(|model| model.model_id == model_id)
         {
             DownloadTarget::Video(Box::new(model.clone()))
+        } else if let Some(model) = crate::editing::catalog(&state.paths)?
+            .into_iter()
+            .find(|model| model.model_id == model_id)
+        {
+            DownloadTarget::Edit(Box::new(model))
         } else {
             return Err(AppError::Validation("unknown model identifier".into()));
         }
@@ -123,6 +128,7 @@ pub fn cancel_download(state: &AppState, model_id: &str) -> AppResult<()> {
 enum DownloadTarget {
     Image(Box<CatalogModel>),
     Video(Box<CatalogVideoModel>),
+    Edit(Box<crate::editing::EditModel>),
 }
 
 impl DownloadTarget {
@@ -133,6 +139,10 @@ impl DownloadTarget {
                 model.terms_acceptance_required,
             ),
             Self::Video(model) => (
+                model.automated_download_allowed,
+                model.terms_acceptance_required,
+            ),
+            Self::Edit(model) => (
                 model.automated_download_allowed,
                 model.terms_acceptance_required,
             ),
@@ -179,39 +189,69 @@ impl DownloadTarget {
                 .await
             }
             Self::Video(model) => {
-                safe_model_filename(&model.family)?;
-                let total = model.files.iter().map(|file| file.size_bytes).sum();
-                let mut completed = 0;
-                for file in &model.files {
-                    check_cancel(cancellation)?;
-                    safe_model_filename(&file.filename)?;
-                    let destination = state
-                        .paths
-                        .model_root
-                        .join(&model.family)
-                        .join(&file.filename);
-                    if verified_file(&destination, file.size_bytes, &file.sha256) {
-                        completed += file.size_bytes;
-                        continue;
-                    }
-                    download_video_file(
-                        &client,
-                        app,
-                        state,
-                        model_id,
-                        file,
-                        &destination,
-                        completed,
-                        total,
-                        cancellation,
-                    )
-                    .await?;
-                    completed += file.size_bytes;
-                }
-                Ok(())
+                download_bundle(
+                    &client,
+                    state,
+                    app,
+                    model_id,
+                    &model.family,
+                    &model.files,
+                    cancellation,
+                )
+                .await
+            }
+            Self::Edit(model) => {
+                download_bundle(
+                    &client,
+                    state,
+                    app,
+                    model_id,
+                    &model.family,
+                    &model.files,
+                    cancellation,
+                )
+                .await
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn download_bundle(
+    client: &Client,
+    state: &Arc<AppState>,
+    app: &AppHandle,
+    model_id: &str,
+    family: &str,
+    files: &[ModelFile],
+    cancellation: &AtomicBool,
+) -> AppResult<()> {
+    safe_model_filename(family)?;
+    let total = files.iter().map(|file| file.size_bytes).sum();
+    let mut completed = 0;
+    for file in files {
+        check_cancel(cancellation)?;
+        safe_model_filename(&file.filename)?;
+        let destination = state.paths.model_root.join(family).join(&file.filename);
+        if verified_file(&destination, file.size_bytes, &file.sha256) {
+            completed += file.size_bytes;
+            continue;
+        }
+        download_video_file(
+            client,
+            app,
+            state,
+            model_id,
+            file,
+            &destination,
+            completed,
+            total,
+            cancellation,
+        )
+        .await?;
+        completed += file.size_bytes;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

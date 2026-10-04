@@ -1,5 +1,6 @@
 import rawCatalog from '../../src-tauri/resources/model-catalog.json';
-import type { AppSnapshot, CatalogManifest } from './types';
+import rawEditModels from '../../../src/localsr/core/edit_catalog.json';
+import type { AppSnapshot, CatalogManifest, EditModel } from './types';
 
 const catalog = structuredClone(rawCatalog) as unknown as CatalogManifest;
 for (const model of catalog.models) {
@@ -9,6 +10,12 @@ for (const model of catalog.video_models) {
   model.total_size_bytes = model.files.reduce((total, file) => total + file.size_bytes, 0);
   model.installed = false;
 }
+
+const editModels: EditModel[] = rawEditModels.map((model) => ({
+  ...model,
+  installed: false,
+  total_size_bytes: model.files.reduce((total, file) => total + file.size_bytes, 0),
+}));
 
 export function demoSnapshot(): AppSnapshot {
   return {
@@ -51,6 +58,10 @@ export function demoSnapshot(): AppSnapshot {
       content: 'photo',
       fixes: [],
       preset_pins: {},
+      edit_model_id: '',
+      edit_max_dimension: 512,
+      edit_steps: 40,
+      edit_seed: 42,
     },
     recipes: [],
     capabilities: {
@@ -97,5 +108,6 @@ export function demoSnapshot(): AppSnapshot {
       thermal_status: 'Not exposed by this backend',
     },
     latest_benchmark: null,
+    edit: { models: structuredClone(editModels), runtime_path: '' },
   };
 }

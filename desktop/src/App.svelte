@@ -18,6 +18,17 @@
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
   import {
+    EDIT_FIT_LABELS,
+    editDevice,
+    editDimensions,
+    editFamilyLabel,
+    editFitFor,
+    editHardwareLabel,
+    editModelFits,
+    editSizeLimit,
+    recommendAnyEditModel,
+  } from './lib/editing';
+  import {
     FIT_LABELS,
     FIX_LABELS,
     applyWorkerEnvelope,
@@ -40,6 +51,7 @@
     BenchmarkRender,
     CatalogModel,
     CatalogVideoModel,
+    EditModel,
     FixKind,
     IntegrationStatus,
     LaunchIntent,
@@ -53,6 +65,8 @@
 
   let snapshot: AppSnapshot = demoSnapshot();
   let booting = true;
+  let editPrompt = '';
+  let editRuntimeOverride = '';
   let benchmarkRenders: BenchmarkRender[] = [];
   let benchmarkDevice = '';
   let benchmarkSetup: 'idle' | 'downloading' | 'starting' = 'idle';
@@ -92,7 +106,7 @@
   const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
   let libraryOpen = false;
   let libraryContext: {
-    slot: 'primary' | 'fix' | 'face' | 'browse';
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit';
     fix?: Exclude<FixKind, 'faces'>;
   } = { slot: 'browse' };
   let startingJob = false;
@@ -106,6 +120,36 @@
     );
 
   $: settings = snapshot.settings;
+  // Editing: the Qwen bundle, the GPU it runs on and whether this computer can start it.
+  $: editModels = snapshot.edit.models;
+  $: editingDevice = editDevice(snapshot.capabilities, settings);
+  $: editModel = editModels.find((model) => model.model_id === settings.edit_model_id);
+  $: editFit = editModel ? editFitFor(editModel, snapshot.capabilities, editingDevice) : 'unknown';
+  $: editSizeAllowed = editSizeLimit(snapshot.capabilities, editingDevice);
+  $: editRuntime = editRuntimeOverride || snapshot.edit.runtime_path;
+  $: editSupported = snapshot.engine?.features.includes('image_edit') === true;
+  $: editBlockReason =
+    settings.task !== 'edit'
+      ? ''
+      : !editingDevice
+        ? 'Editing needs Apple Silicon or a CUDA/ROCm GPU; none was detected.'
+        : !editSupported
+          ? 'This engine cannot edit yet. Update LocalSR.'
+          : !editRuntime
+            ? 'The editing runtime is missing from this build.'
+            : !editModel
+              ? 'Choose an editing model.'
+              : editFit === 'too_heavy'
+                ? `${editModel.name} needs ${editingDevice.id === 'mps' ? `${editModel.min_unified_memory_gb} GB of unified memory` : `a GPU with ${editModel.min_vram_gb} GB`} and ${editHardwareLabel(snapshot.capabilities, editingDevice)}. ${editModels.some((model) => editModelFits(model, snapshot.capabilities, editingDevice)) ? 'Pick a smaller model under Change….' : 'No listed model fits this computer yet.'}`
+                : '';
+  $: editReady =
+    settings.task !== 'edit' ||
+    (!editBlockReason &&
+      Boolean(editModel?.installed) &&
+      editPrompt.trim().length > 0 &&
+      editPrompt.length <= 4000 &&
+      settings.edit_max_dimension <= editSizeAllowed &&
+      (!editModel?.terms_acceptance_required || termsAccepted));
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
   $: compatibleModels = modelsForTask(snapshot, settings.task);
   $: selectedModel = compatibleModels.find(
@@ -170,12 +214,15 @@
     settings.selected_model_id === '__custom__' &&
     Boolean(settings.custom_model_path) &&
     !settings.custom_model_path.toLowerCase().endsWith('.safetensors');
-  $: modelReady = usingTemporalVideo
-    ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
-    : settings.selected_model_id === '__custom__'
-      ? Boolean(settings.custom_model_path) &&
-        (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
-      : Boolean(selectedModel?.installed);
+  $: modelReady =
+    settings.task === 'edit'
+      ? editReady
+      : usingTemporalVideo
+        ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
+        : settings.selected_model_id === '__custom__'
+          ? Boolean(settings.custom_model_path) &&
+            (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
+          : Boolean(selectedModel?.installed);
   $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
   $: preprocessReady =
     settings.task !== 'upscale' ||
@@ -195,11 +242,12 @@
     ? snapshot.media.filter((media) => (settings.task === 'video') === (media.kind === 'video'))
     : [];
   $: queueableMedia = runnableMedia.filter((media) => !inflightMediaIds.has(media.id));
-  $: queueSelection = settings.batch_mode
-    ? queueableMedia
-    : selectedMedia && mediaMatchesTask && !inflightMediaIds.has(selectedMedia.id)
-      ? [selectedMedia]
-      : [];
+  $: queueSelection =
+    settings.batch_mode && settings.task !== 'edit'
+      ? queueableMedia
+      : selectedMedia && mediaMatchesTask && !inflightMediaIds.has(selectedMedia.id)
+        ? [selectedMedia]
+        : [];
   $: canQueue =
     !startingJob &&
     !cancelling &&
@@ -213,7 +261,8 @@
     preprocessReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   $: canStart = !snapshot.runtime.active_job_id && canQueue;
-  $: canAppendToQueue = Boolean(snapshot.runtime.active_job_id) && canQueue;
+  $: canAppendToQueue =
+    Boolean(snapshot.runtime.active_job_id) && canQueue && settings.task !== 'edit';
   $: queuedCount = snapshot.jobs.filter((job) => job.status === 'queued').length;
   $: queueEta = queueTiming(snapshot);
   $: resultPreview = resultPreviewForSelectedMedia(snapshot);
@@ -257,16 +306,19 @@
         )?.output_path ?? '')
       : '';
   $: outputDimensions = selectedMedia
-    ? settings.task === 'denoise'
-      ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
-      : usingTemporalVideo &&
-          settings.video_target_resolution &&
-          selectedMedia.width > 0 &&
-          selectedMedia.height > 0
-        ? `${Math.floor((selectedMedia.width * settings.video_target_resolution) / Math.min(selectedMedia.width, selectedMedia.height) / 2) * 2} × ${Math.floor((selectedMedia.height * settings.video_target_resolution) / Math.min(selectedMedia.width, selectedMedia.height) / 2) * 2} · SDR`
-        : `${selectedMedia.width * settings.output_scale} × ${selectedMedia.height * settings.output_scale} · ${settings.output_scale}×`
+    ? settings.task === 'edit'
+      ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
+      : settings.task === 'denoise'
+        ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
+        : usingTemporalVideo &&
+            settings.video_target_resolution &&
+            selectedMedia.width > 0 &&
+            selectedMedia.height > 0
+          ? `${Math.floor((selectedMedia.width * settings.video_target_resolution) / Math.min(selectedMedia.width, selectedMedia.height) / 2) * 2} × ${Math.floor((selectedMedia.height * settings.video_target_resolution) / Math.min(selectedMedia.width, selectedMedia.height) / 2) * 2} · SDR`
+          : `${selectedMedia.width * settings.output_scale} × ${selectedMedia.height * settings.output_scale} · ${settings.output_scale}×`
     : '—';
-  $: currentDownloadTarget = usingTemporalVideo ? selectedVideoModel : selectedModel;
+  $: currentDownloadTarget =
+    settings.task === 'edit' ? editModel : usingTemporalVideo ? selectedVideoModel : selectedModel;
   $: quickModel = settings.task
     ? choosePresetModel(snapshot, settings.task, 'quick', settings.content, settings.preset_pins)
     : undefined;
@@ -288,6 +340,7 @@
     faceEnabled,
     usingTemporalVideo,
     selectedVideoModel,
+    editModel,
   });
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
@@ -325,7 +378,13 @@
     hdrModelCompatible &&
     (!usingTemporalVideo || !temporalUnavailableReason);
   $: startVerb =
-    settings.task === 'video' ? 'start video' : settings.task === 'denoise' ? 'restore' : 'upscale';
+    settings.task === 'video'
+      ? 'start video'
+      : settings.task === 'denoise'
+        ? 'restore'
+        : settings.task === 'edit'
+          ? 'edit'
+          : 'upscale';
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id,
   );
@@ -337,17 +396,21 @@
     ? unreadyMedia.probe_status === 'failed'
       ? `“${unreadyMedia.name}” cannot be processed: ${unreadyMedia.error}`
       : `Preparing preview… Wait for “${unreadyMedia.name}” before starting.`
-    : settings.batch_mode
-      ? queueableMedia.length === 0 && runnableMedia.length > 0
-        ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
-        : runnableMedia.length === snapshot.media.length
-          ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
-          : `${queueableMedia.length} ${settings.task === 'video' ? 'video' : 'image'} item${queueableMedia.length === 1 ? '' : 's'} can be queued with this setup; select the other media type to configure it separately.`
-      : !selectedMedia
-        ? 'Single processes only the selected item.'
-        : mediaMatchesTask
-          ? `Single processes only “${selectedMedia.name}”.`
-          : `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`;
+    : settings.batch_mode && settings.task === 'edit'
+      ? selectedMedia
+        ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
+        : 'Edit processes only the selected image.'
+      : settings.batch_mode
+        ? queueableMedia.length === 0 && runnableMedia.length > 0
+          ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
+          : runnableMedia.length === snapshot.media.length
+            ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
+            : `${queueableMedia.length} ${settings.task === 'video' ? 'video' : 'image'} item${queueableMedia.length === 1 ? '' : 's'} can be queued with this setup; select the other media type to configure it separately.`
+        : !selectedMedia
+          ? 'Single processes only the selected item.'
+          : mediaMatchesTask
+            ? `Single processes only “${selectedMedia.name}”.`
+            : `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`;
 
   onMount(() => {
     const unlisteners: (() => void)[] = [];
@@ -589,8 +652,28 @@
     pendingRuntimePulse = undefined;
   }
 
+  /** Keep a valid bundle chosen: the saved one, or the largest that fits this computer. */
+  function ensureEditModel(): void {
+    const device = editDevice(snapshot.capabilities, snapshot.settings);
+    const current = snapshot.edit.models.find(
+      (model) => model.model_id === snapshot.settings.edit_model_id,
+    );
+    const anyFits = snapshot.edit.models.some((model) =>
+      editModelFits(model, snapshot.capabilities, device),
+    );
+    // Keep the saved choice unless it cannot start here while another bundle can.
+    if (current && (editModelFits(current, snapshot.capabilities, device) || !anyFits)) return;
+    const model = recommendAnyEditModel(snapshot.edit.models, snapshot.capabilities, device);
+    if (model && model.model_id !== current?.model_id)
+      updateSettings({ edit_model_id: model.model_id, edit_steps: 0 });
+  }
+
   function chooseInitialModel(): void {
     const task = snapshot.settings.task;
+    if (task === 'edit') {
+      ensureEditModel();
+      return;
+    }
     if (!task || snapshot.settings.selected_model_id) return;
     resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
   }
@@ -615,7 +698,7 @@
   ): void {
     const current = { ...snapshot.settings, ...patch };
     const task = current.task;
-    if (!task) return;
+    if (!task || task === 'edit') return;
     const quality: 'quick' | 'best' =
       current.quality === 'quick' || current.quality === 'best' ? current.quality : 'best';
     const fix = current.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
@@ -703,13 +786,13 @@
     libraryOpen = false;
   }
 
-  function openLibrary(slot: 'primary' | 'fix' | 'face' | 'browse'): void {
+  function openLibrary(slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit'): void {
     const fix = settings.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
     libraryContext = slot === 'fix' ? { slot, fix } : { slot };
     libraryOpen = true;
   }
 
-  async function removeModel(model: CatalogModel): Promise<void> {
+  async function removeModel(model: CatalogModel | EditModel): Promise<void> {
     try {
       await api.removeModel(model.model_id);
       await refresh();
@@ -720,7 +803,7 @@
 
   /** Download several catalog models one after another, then refresh. */
   async function downloadModels(
-    models: (CatalogModel | CatalogVideoModel | undefined)[],
+    models: (CatalogModel | CatalogVideoModel | EditModel | undefined)[],
   ): Promise<boolean> {
     preparing = true;
     try {
@@ -741,7 +824,9 @@
   /** Fetch every missing stage the catalog allows, then start without another click. */
   async function prepareAndStart(): Promise<void> {
     if (!canPrepare) return;
-    const targets = downloads.stages.map((stage) => stage.model ?? stage.videoModel);
+    const targets = downloads.stages.map(
+      (stage) => stage.model ?? stage.videoModel ?? stage.editModel,
+    );
     if (!(await downloadModels(targets))) return;
     await tick();
     if (canStart) await start();
@@ -779,6 +864,14 @@
   function setTask(task: TaskKind): void {
     if (selectedMedia && (task === 'video') !== (selectedMedia.kind === 'video')) return;
     if (task !== 'video') lastImageTask = task;
+    if (task === 'edit') {
+      // Editing leaves the upscale and restore setup untouched for when you switch back.
+      updateSettings({ task, enable_face_model: false });
+      termsAccepted = false;
+      faceTermsAccepted = false;
+      ensureEditModel();
+      return;
+    }
     const models = modelsForTask(snapshot, task);
     // Keep a manual choice that still fits the task; otherwise the active
     // recipe (Quick until one is chosen) resolves the plan for the new task.
@@ -929,7 +1022,7 @@
   }
 
   function applyPreset(kind: 'quick' | 'best'): void {
-    if (!settings.task) {
+    if (!settings.task || settings.task === 'edit') {
       showModal('Choose a task', 'Select Upscale, Restore, or Video before applying a recipe.');
       return;
     }
@@ -937,7 +1030,7 @@
   }
 
   async function runDownload(
-    target: CatalogModel | CatalogVideoModel | undefined = currentDownloadTarget,
+    target: CatalogModel | CatalogVideoModel | EditModel | undefined = currentDownloadTarget,
     accepted = termsAccepted,
   ): Promise<void> {
     if (!target) return;
@@ -968,6 +1061,10 @@
 
   async function start(mediaIds?: string[]): Promise<void> {
     if ((!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
+    if (settings.task === 'edit') {
+      await startEdit();
+      return;
+    }
     const ids = mediaIds ?? queueSelection.map((media) => media.id);
     if (!ids.length) return;
     if (exportNeedsExternalFFmpeg(settings, snapshot.capabilities)) {
@@ -1015,6 +1112,60 @@
     } finally {
       startingJob = false;
     }
+  }
+
+  /** One image, one native Qwen pass; the worker checks memory again before loading. */
+  async function startEdit(): Promise<void> {
+    if (!selectedMedia || !editModel || !editingDevice) return;
+    startingJob = true;
+    try {
+      await api.startEdit({
+        media_id: selectedMedia.id,
+        model_id: editModel.model_id,
+        prompt: editPrompt.trim(),
+        runtime_path: editRuntime,
+        device: editingDevice.id,
+        max_dimension: Math.min(settings.edit_max_dimension, editSizeAllowed),
+        steps: settings.edit_steps || editModel.default_steps,
+        seed: settings.edit_seed,
+        accepted_terms: termsAccepted,
+        output_directory: settings.output_directory,
+      });
+      page = 'preview';
+      await refresh();
+    } catch (error) {
+      showModal('Could not start the edit', String(error));
+    } finally {
+      startingJob = false;
+    }
+  }
+
+  async function chooseEditRuntime(): Promise<void> {
+    const path = await api.chooseEditRuntime();
+    if (path) editRuntimeOverride = path;
+  }
+
+  function useEditModel(model: EditModel): void {
+    // A new model brings its own step count; a chosen override is reset with it.
+    updateSettings({ edit_model_id: model.model_id, edit_steps: 0 });
+    termsAccepted = false;
+    libraryOpen = false;
+  }
+
+  function isEditModelId(modelId: string): boolean {
+    return snapshot.edit.models.some((model) => model.model_id === modelId);
+  }
+
+  function openAnyLicense(modelId: string): Promise<void> {
+    return isEditModelId(modelId)
+      ? api.openEditLink(modelId, 'license')
+      : api.openModelLicense(modelId);
+  }
+
+  function openAnySource(modelId: string): Promise<void> {
+    return isEditModelId(modelId)
+      ? api.openEditLink(modelId, 'source')
+      : api.openModelSource(modelId);
   }
 
   async function cancelWork(): Promise<void> {
@@ -1765,9 +1916,11 @@
         <span
           >{settingsLocked
             ? 'Locked during processing'
-            : settings.task
-              ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${settings.task === 'denoise' ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
-              : 'Choose a task'}</span
+            : settings.task === 'edit'
+              ? (editModel?.name ?? 'Choose a model')
+              : settings.task
+                ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${settings.task === 'denoise' ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
+                : 'Choose a task'}</span
         >
       </div>
       <div
@@ -1809,6 +1962,11 @@
                 class:active={settings.task === 'denoise'}
                 on:click={() => setTask('denoise')}
                 ><b>Restore</b><span>Noise, blur, JPEG</span></button
+              >
+              <button
+                disabled={selectedMedia?.kind === 'video'}
+                class:active={settings.task === 'edit'}
+                on:click={() => setTask('edit')}><b>Edit</b><span>Describe a change</span></button
               >
               <button
                 disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'}
@@ -1881,108 +2039,122 @@
           {/if}
 
           {#if settings.task}
-            <section class="control-section recipes">
-              <span class="eyebrow">QUALITY</span>
-              {#if firstRun && quickModel}
-                <div class="notice first-run" role="note" aria-label="Get started">
-                  <b>Models aren’t bundled</b>
-                  <p>
-                    LocalSR downloads the models you pick once, checks them, and keeps them on this
-                    computer. Your images never leave it.
-                  </p>
-                  <div class="actions-row">
-                    <button
-                      class="button primary compact"
-                      type="button"
-                      disabled={Boolean(activeDownload) || preparing}
-                      on:click={() => void downloadModels([quickModel])}
-                      >Get Quick · {formatBytes(quickModel.size_bytes)}</button
-                    >
-                    {#if bestModel && bestModel.model_id !== quickModel.model_id}
+            {#if settings.task === 'edit'}
+              <section class="control-section" aria-label="Edit prompt">
+                <span class="eyebrow">WHAT TO CHANGE</span>
+                <textarea
+                  class="edit-prompt"
+                  aria-label="What to change"
+                  rows="4"
+                  maxlength="4000"
+                  placeholder="Replace the background with a sunset beach. Keep the person and their clothing unchanged."
+                  bind:value={editPrompt}></textarea>
+              </section>
+            {:else}
+              <section class="control-section recipes">
+                <span class="eyebrow">QUALITY</span>
+                {#if firstRun && quickModel}
+                  <div class="notice first-run" role="note" aria-label="Get started">
+                    <b>Models aren’t bundled</b>
+                    <p>
+                      LocalSR downloads the models you pick once, checks them, and keeps them on
+                      this computer. Your images never leave it.
+                    </p>
+                    <div class="actions-row">
                       <button
-                        class="button compact"
+                        class="button primary compact"
                         type="button"
                         disabled={Boolean(activeDownload) || preparing}
-                        on:click={() => void downloadModels([quickModel, bestModel])}
-                        >Quick + Best · {formatBytes(
-                          quickModel.size_bytes + bestModel.size_bytes,
-                        )}</button
+                        on:click={() => void downloadModels([quickModel])}
+                        >Get Quick · {formatBytes(quickModel.size_bytes)}</button
                       >
-                    {/if}
+                      {#if bestModel && bestModel.model_id !== quickModel.model_id}
+                        <button
+                          class="button compact"
+                          type="button"
+                          disabled={Boolean(activeDownload) || preparing}
+                          on:click={() => void downloadModels([quickModel, bestModel])}
+                          >Quick + Best · {formatBytes(
+                            quickModel.size_bytes + bestModel.size_bytes,
+                          )}</button
+                        >
+                      {/if}
+                    </div>
                   </div>
-                </div>
-              {/if}
-              <div class="recipe-grid" role="group" aria-label="Quality">
-                <button
-                  class="quick"
-                  class:active={activeQuality === 'quick'}
-                  aria-pressed={activeQuality === 'quick'}
-                  on:click={() => applyPreset('quick')}
-                  ><b>Quick</b><span>{recipeSubtitle(quickModel, 'Fast and efficient')}</span
-                  >{#if quickModel}<small>{recipeAvailability(quickModel)}</small>{/if}</button
-                >
-                <button
-                  class="best"
-                  class:active={activeQuality === 'best'}
-                  aria-pressed={activeQuality === 'best'}
-                  on:click={() => applyPreset('best')}
-                  ><b>Best</b><span>{recipeSubtitle(bestModel, 'Maximum quality')}</span
-                  >{#if bestModel}<small>{recipeAvailability(bestModel)}</small>{/if}</button
-                >
-              </div>
-              <div class="recipe-tools">
-                {#each snapshot.recipes as recipe (recipe.id)}
-                  <div class="saved-recipe">
-                    <button
-                      class:active={activeRecipeIds.has(recipe.id)}
-                      aria-pressed={activeRecipeIds.has(recipe.id)}
-                      disabled={Boolean(selectedMedia) &&
-                        (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
-                      on:click={() => applyRecipe(recipe)}
-                      ><b>{recipe.name}</b><span
-                        >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
-                      ></button
-                    ><button
-                      aria-label={`Delete ${recipe.name}`}
-                      on:click={async () => {
-                        await api.deleteRecipe(recipe.id);
-                        await refresh();
-                      }}
-                      ><svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
-                      ></button
-                    >
-                  </div>
-                {/each}
-                {#if recipeEditorOpen}
-                  <div class="recipe-input">
-                    <input
-                      aria-label="Recipe name"
-                      placeholder="Name this setup"
-                      bind:value={recipeName}
-                      on:keydown={(event) => {
-                        if (event.key === 'Enter') void addRecipe();
-                        if (event.key === 'Escape') recipeEditorOpen = false;
-                      }}
-                    /><button on:click={addRecipe}>Save</button>
-                  </div>
-                {:else}
-                  <button class="save-recipe" type="button" on:click={openRecipeEditor}
-                    >＋ Save current setup as recipe</button
-                  >
                 {/if}
-              </div>
-            </section>
+                <div class="recipe-grid" role="group" aria-label="Quality">
+                  <button
+                    class="quick"
+                    class:active={activeQuality === 'quick'}
+                    aria-pressed={activeQuality === 'quick'}
+                    on:click={() => applyPreset('quick')}
+                    ><b>Quick</b><span>{recipeSubtitle(quickModel, 'Fast and efficient')}</span
+                    >{#if quickModel}<small>{recipeAvailability(quickModel)}</small>{/if}</button
+                  >
+                  <button
+                    class="best"
+                    class:active={activeQuality === 'best'}
+                    aria-pressed={activeQuality === 'best'}
+                    on:click={() => applyPreset('best')}
+                    ><b>Best</b><span>{recipeSubtitle(bestModel, 'Maximum quality')}</span
+                    >{#if bestModel}<small>{recipeAvailability(bestModel)}</small>{/if}</button
+                  >
+                </div>
+                <div class="recipe-tools">
+                  {#each snapshot.recipes as recipe (recipe.id)}
+                    <div class="saved-recipe">
+                      <button
+                        class:active={activeRecipeIds.has(recipe.id)}
+                        aria-pressed={activeRecipeIds.has(recipe.id)}
+                        disabled={Boolean(selectedMedia) &&
+                          (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
+                        on:click={() => applyRecipe(recipe)}
+                        ><b>{recipe.name}</b><span
+                          >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
+                        ></button
+                      ><button
+                        aria-label={`Delete ${recipe.name}`}
+                        on:click={async () => {
+                          await api.deleteRecipe(recipe.id);
+                          await refresh();
+                        }}
+                        ><svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          ><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
+                        ></button
+                      >
+                    </div>
+                  {/each}
+                  {#if recipeEditorOpen}
+                    <div class="recipe-input">
+                      <input
+                        aria-label="Recipe name"
+                        placeholder="Name this setup"
+                        bind:value={recipeName}
+                        on:keydown={(event) => {
+                          if (event.key === 'Enter') void addRecipe();
+                          if (event.key === 'Escape') recipeEditorOpen = false;
+                        }}
+                      /><button on:click={addRecipe}>Save</button>
+                    </div>
+                  {:else}
+                    <button class="save-recipe" type="button" on:click={openRecipeEditor}
+                      >＋ Save current setup as recipe</button
+                    >
+                  {/if}
+                </div>
+              </section>
+            {/if}
 
-            {#if !usingTemporalVideo}
+            {#if !usingTemporalVideo && settings.task !== 'edit'}
               <section
                 class="control-section"
                 aria-label={settings.task === 'denoise' ? 'What to fix' : 'Your image'}
@@ -2055,14 +2227,21 @@
 
             <section class="control-section model-section" aria-label="Model plan">
               <div class="eyebrow eyebrow-row">
-                <span>{activeQuality === 'custom' ? 'MODEL · CHOSEN BY YOU' : 'MODEL'}</span>
+                <span
+                  >{activeQuality === 'custom' && settings.task !== 'edit'
+                    ? 'MODEL · CHOSEN BY YOU'
+                    : 'MODEL'}</span
+                >
                 <span class="eyebrow-actions">
-                  {#if activeQuality === 'custom' && bestModel}<button
+                  {#if activeQuality === 'custom' && bestModel && settings.task !== 'edit'}<button
                       class="link-button"
                       type="button"
                       on:click={() => applyPreset('best')}>Back to Best</button
                     >{/if}
-                  <button class="link-button" type="button" on:click={() => openLibrary('primary')}
+                  <button
+                    class="link-button"
+                    type="button"
+                    on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
                     >Change…</button
                   >
                 </span>
@@ -2097,6 +2276,7 @@
 
               <div class="plan" role="list" aria-label="Stages">
                 {#each plan as stage (stage.kind)}
+                  {@const target = stage.model ?? stage.videoModel ?? stage.editModel}
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
                     <div class="plan-copy">
@@ -2105,10 +2285,16 @@
                           ? displayName(stage.model)
                           : stage.videoModel
                             ? stage.videoModel.name
-                            : 'Your checkpoint'}
+                            : stage.editModel
+                              ? editFamilyLabel(stage.editModel.family)
+                              : 'Your checkpoint'}
                       </div>
                       <div class="meta">
-                        {#if stage.model}
+                        {#if stage.editModel}
+                          {stage.editModel.quantization} · {stage.editModel.license_name} · {formatBytes(
+                            stage.editModel.total_size_bytes,
+                          )}{editFit !== 'unknown' ? ` · ${EDIT_FIT_LABELS[editFit]}` : ''}
+                        {:else if stage.model}
                           {stage.model.license_name}{stage.model.support_tier === 'labs'
                             ? ' · Labs'
                             : ''} · {formatBytes(stage.model.size_bytes)}{fitFor(
@@ -2185,8 +2371,8 @@
                               ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
                               : 'Choose externally downloaded face checkpoint…'}
                         </button>
-                      {:else if (stage.model || stage.videoModel) && !stage.installed}
-                        {#if stage.model?.terms_acceptance_required}
+                      {:else if target && !stage.installed}
+                        {#if (stage.model ?? stage.editModel)?.terms_acceptance_required}
                           <label class="terms"
                             ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model
                             license and restrictions.</label
@@ -2197,19 +2383,16 @@
                           class:primary={stage.canDownload}
                           disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
                             preparing ||
-                            (Boolean(activeDownload) &&
-                              activeDownload !== (stage.model ?? stage.videoModel)?.model_id)}
-                          on:click={() => runDownload(stage.model ?? stage.videoModel)}
+                            (Boolean(activeDownload) && activeDownload !== target.model_id)}
+                          on:click={() => runDownload(target)}
                         >
-                          {activeDownload === (stage.model ?? stage.videoModel)?.model_id
+                          {activeDownload === target.model_id
                             ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
                             : stage.canDownload
                               ? `Download ${formatBytes(stage.sizeBytes)}`
                               : 'Choose externally downloaded checkpoint…'}
                         </button>
-                        {#if activeDownload === (stage.model ?? stage.videoModel)?.model_id}<div
-                            class="download-track"
-                          >
+                        {#if activeDownload === target.model_id}<div class="download-track">
                             <i style={`width:${snapshot.runtime.download_progress}%`}></i>
                           </div>{/if}
                       {/if}
@@ -2217,7 +2400,7 @@
                     <span class="state" class:ok={stage.installed} class:warn={stage.needsFile}
                       >{stage.installed
                         ? '✓ On this computer'
-                        : activeDownload === (stage.model ?? stage.videoModel)?.model_id
+                        : activeDownload === target?.model_id
                           ? `${Math.round(snapshot.runtime.download_progress)}%`
                           : stage.needsFile
                             ? 'Needs your file'
@@ -2226,6 +2409,24 @@
                   </div>
                 {/each}
               </div>
+              {#if settings.task === 'edit'}
+                {#if editModel?.terms_acceptance_required && editModel.installed}
+                  <label class="terms"
+                    ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the Qwen Research
+                    License and accept it for this edit.</label
+                  >
+                {/if}
+                {#if editBlockReason}
+                  <p class="inline-warning" role="status">
+                    {editBlockReason}
+                    {#if !editRuntime && editingDevice && editSupported}<button
+                        class="link-button"
+                        type="button"
+                        on:click={chooseEditRuntime}>Choose runtime…</button
+                      >{/if}
+                  </p>
+                {/if}
+              {/if}
               {#if faceEnabled && faceModel}
                 <div class="range-row">
                   <label for="face-fidelity"
@@ -2251,26 +2452,29 @@
                   platform. The normal model still works.
                 </p>
               {/if}
-              <p class="model-note">
-                {#if activeQuality === 'custom'}
-                  Chosen by you. Quick and Best re-resolve from the catalog when you pick them
-                  again.
-                {:else if downloads.stages.length}
-                  {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
-                  'illustration'
-                    ? 'illustrations'
-                    : 'photos'}. {downloads.stages.length === 1
-                    ? 'One download'
-                    : `${downloads.stages.length} downloads`}
-                  ({formatBytes(downloads.bytes)}) happen{downloads.stages.length === 1 ? 's' : ''} when
-                  you press Start; each file's SHA-256 is checked before it is used.
-                {:else}
-                  {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
-                  'illustration'
-                    ? 'illustrations'
-                    : 'photos'}. Everything this job needs is on this computer.
-                {/if}
-              </p>
+              {#if settings.task !== 'edit'}
+                <p class="model-note">
+                  {#if activeQuality === 'custom'}
+                    Chosen by you. Quick and Best re-resolve from the catalog when you pick them
+                    again.
+                  {:else if downloads.stages.length}
+                    {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
+                    'illustration'
+                      ? 'illustrations'
+                      : 'photos'}. {downloads.stages.length === 1
+                      ? 'One download'
+                      : `${downloads.stages.length} downloads`}
+                    ({formatBytes(downloads.bytes)}) happen{downloads.stages.length === 1
+                      ? 's'
+                      : ''} when you press Start; each file's SHA-256 is checked before it is used.
+                  {:else}
+                    {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
+                    'illustration'
+                      ? 'illustrations'
+                      : 'photos'}. Everything this job needs is on this computer.
+                  {/if}
+                </p>
+              {/if}
               {#if usingTemporalVideo}
                 <VideoMemory
                   lowMemory={settings.video_low_memory ?? true}
@@ -2315,6 +2519,7 @@
             <AdvancedSettings
               {settings}
               {selectedModel}
+              {editModel}
               capabilities={snapshot.capabilities}
               {usingTemporalVideo}
               {updateSettings}
@@ -2338,18 +2543,22 @@
                 <div>
                   <dt>Model</dt>
                   <dd>
-                    {usingTemporalVideo
-                      ? selectedVideoModel?.name
-                      : (selectedModel?.name ??
-                        (settings.selected_model_id === '__custom__' ? 'Custom' : '—'))}
+                    {settings.task === 'edit'
+                      ? (editModel?.name ?? '—')
+                      : usingTemporalVideo
+                        ? selectedVideoModel?.name
+                        : (selectedModel?.name ??
+                          (settings.selected_model_id === '__custom__' ? 'Custom' : '—'))}
                   </dd>
                 </div>
                 <div>
                   <dt>Device</dt>
                   <dd>
-                    {snapshot.capabilities.devices.find(
-                      (device) => device.id === settings.device_id,
-                    )?.name ?? 'Detecting'}
+                    {settings.task === 'edit'
+                      ? (editingDevice?.name ?? 'None supported')
+                      : (snapshot.capabilities.devices.find(
+                          (device) => device.id === settings.device_id,
+                        )?.name ?? 'Detecting')}
                   </dd>
                 </div>
               </dl>
@@ -2432,7 +2641,9 @@
               ? 'Start selected video'
               : settings.task === 'denoise'
                 ? 'Restore selected'
-                : 'Upscale selected'}</button
+                : settings.task === 'edit'
+                  ? 'Edit selected'
+                  : 'Upscale selected'}</button
         >
       {/if}
     </div>
@@ -2456,13 +2667,14 @@
     busy={settingsLocked || preparing}
     close={() => (libraryOpen = false)}
     useForJob={useModelForJob}
+    {useEditModel}
     pin={pinPreset}
-    download={(model) => runDownload(model, false)}
+    download={(model, accepted) => runDownload(model, accepted ?? false)}
     importFile={(model, accepted) => runDownload(model, accepted)}
     remove={removeModel}
     chooseCustom={chooseCustomModel}
-    openLicense={api.openModelLicense}
-    openSource={api.openModelSource}
+    openLicense={openAnyLicense}
+    openSource={openAnySource}
   />
 {/if}
 

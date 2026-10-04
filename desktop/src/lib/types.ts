@@ -1,4 +1,4 @@
-export type TaskKind = 'upscale' | 'denoise' | 'video';
+export type TaskKind = 'upscale' | 'denoise' | 'edit' | 'video';
 export type MediaKind = 'image' | 'video' | 'unknown';
 export type JobStatus =
   | 'queued'
@@ -65,6 +65,43 @@ export interface ModelFile {
   size_bytes: number;
   sha256: string;
   download_url: string;
+}
+
+export interface EditModel {
+  model_id: string;
+  name: string;
+  family: string;
+  quantization: string;
+  files: ModelFile[];
+  min_unified_memory_gb: number;
+  min_vram_gb: number;
+  default_steps: number;
+  cfg_scale: number;
+  license_name: string;
+  license_url: string;
+  source_url: string;
+  terms_acceptance_required: boolean;
+  automated_download_allowed: boolean;
+  installed: boolean;
+  total_size_bytes: number;
+}
+
+export interface EditSetup {
+  models: EditModel[];
+  runtime_path: string;
+}
+
+export interface StartEditInput {
+  media_id: string;
+  model_id: string;
+  prompt: string;
+  runtime_path: string;
+  device: string;
+  max_dimension: number;
+  steps: number;
+  seed: number;
+  accepted_terms: boolean;
+  output_directory: string;
 }
 
 export interface CatalogVideoModel {
@@ -260,6 +297,12 @@ export interface UiSettings {
   content: Exclude<ContentKind, 'face'>;
   fixes: FixKind[];
   preset_pins: Record<string, string>;
+  // Image editing: the chosen Qwen bundle, the longest output edge in pixels
+  // and the sampler settings. The prompt is kept in memory only.
+  edit_model_id: string;
+  edit_max_dimension: number;
+  edit_steps: number;
+  edit_seed: number;
 }
 
 export interface VideoMemoryStatus {
@@ -413,6 +456,7 @@ export interface AppSnapshot {
   engine: EngineInfo | null;
   runtime: RuntimeStatus;
   latest_benchmark: BenchmarkResult | null;
+  edit: EditSetup;
 }
 
 export interface WorkerEnvelope {

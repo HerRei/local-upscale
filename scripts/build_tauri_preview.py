@@ -667,6 +667,19 @@ def build_worker(target: str | None = None, private_preview_media: bool = False)
         environment["LOCALSR_PRIVATE_PREVIEW_MEDIA"] = "1"
     if target_arch := worker_target_arch(target):
         environment["LOCALSR_TARGET_ARCH"] = target_arch
+    import torch
+    from build_edit_runtime import build as build_edit_runtime
+
+    editing_backend = (
+        "MPS"
+        if sys.platform == "darwin"
+        else "ROCM"
+        if torch.version.hip
+        else "CUDA"
+        if torch.version.cuda
+        else "CPU"
+    )
+    build_edit_runtime(editing_backend, ROOT / ".cache/edit-runtime", arch=target_arch)
     run(
         [
             sys.executable,

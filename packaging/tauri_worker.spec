@@ -29,11 +29,16 @@ datas = spandrel_datas + [
         str(SOURCE / "localsr" / "core" / "benchmark_references.json"),
         "localsr/core",
     ),
+    (str(SOURCE / "localsr" / "core" / "edit_catalog.json"), "localsr/core"),
     (
         str(SOURCE / "localsr" / "video_models" / "seedvr2"),
         "localsr/video_models/seedvr2",
     ),
 ]
+edit_runtime = ROOT / ".cache" / "edit-runtime"
+if not edit_runtime.is_dir():
+    raise RuntimeError("Build the native editing runtime with scripts/build_edit_runtime.py first")
+datas += [(str(edit_runtime), "edit")]
 # Diffusers checks installed distribution versions when SeedVR2 is imported.
 # Bundling importable modules alone leaves the packaged temporal engine broken.
 datas += copy_metadata("diffusers", recursive=True)

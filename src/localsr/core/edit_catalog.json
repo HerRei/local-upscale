@@ -1,0 +1,348 @@
+[
+  {
+    "model_id": "qwen_edit_2511_q2_k",
+    "name": "Qwen Image Edit 2511 \u00b7 Q2_K",
+    "family": "qwen-image-edit-2511",
+    "quantization": "Q2_K",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "qwen-image-edit-2511-Q2_K.gguf",
+        "size_bytes": 7468022368,
+        "sha256": "a3d09042b64657970654941aa08d895de29b4d98edf3632a89e70d4d6e23c47c",
+        "download_url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q2_K.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen2.5-VL-7B-Instruct.Q2_K.gguf",
+        "size_bytes": 3015939072,
+        "sha256": "4270c2e32ebe44595c4c140149ce858793409e6af0f81f2785d760d29ef9d393",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.Q2_K.gguf"
+      },
+      {
+        "role": "vision",
+        "filename": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "size_bytes": 853119712,
+        "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "qwen_image_vae.safetensors",
+        "size_bytes": 253806246,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "download_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "default_steps": 40,
+    "cfg_scale": 2.5,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511/blob/main/LICENSE",
+    "source_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 24,
+    "min_vram_gb": 8
+  },
+  {
+    "model_id": "qwen_edit_2511_q3_k_s",
+    "name": "Qwen Image Edit 2511 \u00b7 Q3_K_S",
+    "family": "qwen-image-edit-2511",
+    "quantization": "Q3_K_S",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "qwen-image-edit-2511-Q3_K_S.gguf",
+        "size_bytes": 9218914912,
+        "sha256": "d613d933c54ea2cace72bc556f803137c45363513677268283c08a5480a99309",
+        "download_url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q3_K_S.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf",
+        "size_bytes": 4683072512,
+        "sha256": "0f00a930ba3108b6861ddadf74d8ebbd82e257c63eba728e62c3e8970f5eed94",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf"
+      },
+      {
+        "role": "vision",
+        "filename": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "size_bytes": 853119712,
+        "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "qwen_image_vae.safetensors",
+        "size_bytes": 253806246,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "download_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "default_steps": 40,
+    "cfg_scale": 2.5,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511/blob/main/LICENSE",
+    "source_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 24,
+    "min_vram_gb": 12
+  },
+  {
+    "model_id": "qwen_edit_2511_q4_k_m",
+    "name": "Qwen Image Edit 2511 \u00b7 Q4_K_M",
+    "family": "qwen-image-edit-2511",
+    "quantization": "Q4_K_M",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "qwen-image-edit-2511-Q4_K_M.gguf",
+        "size_bytes": 13244758624,
+        "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723",
+        "download_url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q4_K_M.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf",
+        "size_bytes": 4683072512,
+        "sha256": "0f00a930ba3108b6861ddadf74d8ebbd82e257c63eba728e62c3e8970f5eed94",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf"
+      },
+      {
+        "role": "vision",
+        "filename": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "size_bytes": 853119712,
+        "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "qwen_image_vae.safetensors",
+        "size_bytes": 253806246,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "download_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "default_steps": 40,
+    "cfg_scale": 2.5,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511/blob/main/LICENSE",
+    "source_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 32,
+    "min_vram_gb": 16
+  },
+  {
+    "model_id": "qwen_edit_2511_q5_k_m",
+    "name": "Qwen Image Edit 2511 \u00b7 Q5_K_M",
+    "family": "qwen-image-edit-2511",
+    "quantization": "Q5_K_M",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "qwen-image-edit-2511-Q5_K_M.gguf",
+        "size_bytes": 15027501664,
+        "sha256": "c257def934d25562e1dcb7e8710eb5457a23c1ae7218f7a5ea3174e773421d29",
+        "download_url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q5_K_M.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf",
+        "size_bytes": 4683072512,
+        "sha256": "0f00a930ba3108b6861ddadf74d8ebbd82e257c63eba728e62c3e8970f5eed94",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf"
+      },
+      {
+        "role": "vision",
+        "filename": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "size_bytes": 853119712,
+        "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "qwen_image_vae.safetensors",
+        "size_bytes": 253806246,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "download_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "default_steps": 40,
+    "cfg_scale": 2.5,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511/blob/main/LICENSE",
+    "source_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 32,
+    "min_vram_gb": 20
+  },
+  {
+    "model_id": "qwen_edit_2511_q6_k",
+    "name": "Qwen Image Edit 2511 \u00b7 Q6_K",
+    "family": "qwen-image-edit-2511",
+    "quantization": "Q6_K",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "qwen-image-edit-2511-Q6_K.gguf",
+        "size_bytes": 16852417120,
+        "sha256": "fdc28e5b8f7d9cfe0399fd1700c375f25f000fc4159bbdb0d4a809ae898eb759",
+        "download_url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q6_K.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf",
+        "size_bytes": 4683072512,
+        "sha256": "0f00a930ba3108b6861ddadf74d8ebbd82e257c63eba728e62c3e8970f5eed94",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf"
+      },
+      {
+        "role": "vision",
+        "filename": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "size_bytes": 853119712,
+        "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "qwen_image_vae.safetensors",
+        "size_bytes": 253806246,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "download_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "default_steps": 40,
+    "cfg_scale": 2.5,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511/blob/main/LICENSE",
+    "source_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 36,
+    "min_vram_gb": 20
+  },
+  {
+    "model_id": "qwen_edit_2511_q8_0",
+    "name": "Qwen Image Edit 2511 \u00b7 Q8_0",
+    "family": "qwen-image-edit-2511",
+    "quantization": "Q8_0",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "qwen-image-edit-2511-Q8_0.gguf",
+        "size_bytes": 21761817184,
+        "sha256": "ab4f0622fb002fccaaa679a2ecce6fd1b3190d8ea28a5b7b2b17b8669bc24afa",
+        "download_url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q8_0.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf",
+        "size_bytes": 4683072512,
+        "sha256": "0f00a930ba3108b6861ddadf74d8ebbd82e257c63eba728e62c3e8970f5eed94",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf"
+      },
+      {
+        "role": "vision",
+        "filename": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "size_bytes": 853119712,
+        "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57",
+        "download_url": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/cfa2baa09946b211c107e6e104948987a64dd2c1/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "qwen_image_vae.safetensors",
+        "size_bytes": 253806246,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "download_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "default_steps": 40,
+    "cfg_scale": 2.5,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511/blob/main/LICENSE",
+    "source_url": "https://huggingface.co/Qwen/Qwen-Image-Edit-2511",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 48,
+    "min_vram_gb": 24
+  },
+  {
+    "model_id": "flux2_klein_4b_q4_0",
+    "name": "FLUX.2 klein 4B \u00b7 Q4_0",
+    "family": "flux2-klein-4b",
+    "quantization": "Q4_0",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "flux-2-klein-4b-Q4_0.gguf",
+        "size_bytes": 2460378560,
+        "sha256": "d1023499ef3f2f82ff7c50e6778495195c1b6cc34835741778868428111f9ff4",
+        "download_url": "https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/3b1f5a9dc3abb32238b053aeb3d823c30afdacbd/flux-2-klein-4b-Q4_0.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen3-4B-Q4_K_M.gguf",
+        "size_bytes": 2497281312,
+        "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
+        "download_url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/22c9fc8a8c7700b76a1789366280a6a5a1ad1120/Qwen3-4B-Q4_K_M.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "flux2-vae.safetensors",
+        "size_bytes": 336211292,
+        "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+        "download_url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/5f526678002e43af5551dadb73ce2e8c91b43afe/split_files/vae/flux2-vae.safetensors"
+      }
+    ],
+    "default_steps": 4,
+    "cfg_scale": 1.0,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/blob/main/LICENSE.md",
+    "source_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 16,
+    "min_vram_gb": 8
+  },
+  {
+    "model_id": "flux2_klein_4b_q8_0",
+    "name": "FLUX.2 klein 4B \u00b7 Q8_0",
+    "family": "flux2-klein-4b",
+    "quantization": "Q8_0",
+    "files": [
+      {
+        "role": "diffusion",
+        "filename": "flux-2-klein-4b-Q8_0.gguf",
+        "size_bytes": 4300629440,
+        "sha256": "0bba6951258ec8f92d51114a8fa13e66828297bfff58a738f52729b3ef66fa28",
+        "download_url": "https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/3b1f5a9dc3abb32238b053aeb3d823c30afdacbd/flux-2-klein-4b-Q8_0.gguf"
+      },
+      {
+        "role": "text_encoder",
+        "filename": "Qwen3-4B-Q8_0.gguf",
+        "size_bytes": 4280405792,
+        "sha256": "eed555233267a33c7e8ee31682762cc7751b3f6d224039086e0e846f05fffa5d",
+        "download_url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/22c9fc8a8c7700b76a1789366280a6a5a1ad1120/Qwen3-4B-Q8_0.gguf"
+      },
+      {
+        "role": "vae",
+        "filename": "flux2-vae.safetensors",
+        "size_bytes": 336211292,
+        "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+        "download_url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/5f526678002e43af5551dadb73ce2e8c91b43afe/split_files/vae/flux2-vae.safetensors"
+      }
+    ],
+    "default_steps": 4,
+    "cfg_scale": 1.0,
+    "license_name": "Apache-2.0",
+    "license_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/blob/main/LICENSE.md",
+    "source_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true,
+    "min_unified_memory_gb": 16,
+    "min_vram_gb": 8
+  }
+]

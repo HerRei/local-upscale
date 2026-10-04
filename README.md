@@ -20,6 +20,11 @@ machine.
 - **Upscale** photos, illustrations, screenshots and anime by 2×, 3× or 4×.
 - **Restore** before upscaling: remove noise, motion blur and JPEG artifacts,
   with an optional face-aware pass.
+- **Edit** an image by describing the change, with local Qwen Image Edit 2511,
+  or FLUX.2 klein 4B (for 16 GB computers) GGUF bundles. Each
+  bundle states what it needs on a Mac and on a Windows/Linux GPU, and a
+  disposable, memory-guarded runtime loads it ([editing](docs/image-editing.md));
+  the capacity profiles still need real-inference validation on more hardware.
 - **Video.** Every image model runs frame by frame with the source timing,
   rotation and audio preserved. Phone and camera recordings open directly on
   macOS. SeedVR2 3B adds temporal consistency, and HLG/PQ HDR can be kept

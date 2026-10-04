@@ -12,6 +12,11 @@ pub fn work_profile(
     let Ok(mut message) = serde_json::from_str::<Value>(request) else {
         return (String::new(), 0.0);
     };
+    // Editing has denoising steps and bounded output dimensions, not the source
+    // image's restoration tiles. Do not borrow tile-based timing estimates.
+    if message["type"] == "edit_job_request" {
+        return (String::new(), 0.0);
+    }
     let video = message["type"] == "video_job_request";
     let Some(data) = message.get_mut("data").and_then(Value::as_object_mut) else {
         return (String::new(), 0.0);
@@ -76,6 +81,16 @@ pub fn work_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_steps_do_not_reuse_restoration_tile_estimates() {
+        let request =
+            json!({"type":"edit_job_request", "data":{"steps":40,"max_dimension":512}}).to_string();
+        assert_eq!(
+            work_profile(&request, 4000, 3000, 0, ""),
+            (String::new(), 0.0)
+        );
+    }
 
     #[test]
     fn only_matching_models_and_devices_share_measured_work() {

@@ -115,6 +115,7 @@ def _engine_features() -> list[str]:
         "cancellation",
         "progressive_preview",
         "benchmark_v1",
+        "image_edit",
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
@@ -357,6 +358,32 @@ class WorkerServer:
                         face_path = data.get("face_model_path")
                         if face_path:
                             self.engine.release_model(face_path)
+
+                elif req_type == "edit_job_request":
+                    job_id = str(data.get("job_id") or "")
+                    self._activate_job(job_id)
+                    try:
+                        # Restoration caches and native Qwen weights must never coexist.
+                        self.model_adapter.release()
+                        self.engine.release_model()
+                        gc.collect()
+                        import torch
+
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        elif torch.backends.mps.is_available():
+                            torch.mps.empty_cache()
+                        from localsr.core.image_edit import run_edit_job
+
+                        send_message(JobStarted(job_id=job_id))
+                        run_edit_job(data, self.cancel_event, send_message)
+                    except InterruptedError:
+                        send_message(JobCancelled(job_id=job_id))
+                    except Exception as error:  # Process boundary keeps the queue alive.
+                        traceback.print_exc(file=sys.stderr)
+                        send_message(JobFailed(job_id=job_id, error_message=str(error)))
+                    finally:
+                        self._deactivate_job(job_id)
 
                 elif req_type == "video_job_request":
                     if self.active_job_id is not None:

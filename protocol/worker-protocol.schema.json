@@ -9,6 +9,7 @@
     { "$ref": "#/$defs/emptyRequest" },
     { "$ref": "#/$defs/pathRequest" },
     { "$ref": "#/$defs/jobRequest" },
+    { "$ref": "#/$defs/editJobRequest" },
     { "$ref": "#/$defs/videoJobRequest" },
     { "$ref": "#/$defs/benchmarkRequest" },
     { "$ref": "#/$defs/cancelRequest" },
@@ -17,6 +18,35 @@
     { "$ref": "#/$defs/workerResponse" }
   ],
   "$defs": {
+    "editJobRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "edit_job_request" },
+          "data": {
+            "type": "object",
+            "required": ["job_id", "image_path", "output_path", "model_id", "bundle_dir", "runtime_path", "prompt", "device"],
+            "properties": {
+              "job_id": { "type": "string", "minLength": 1 },
+              "image_path": { "type": "string", "minLength": 1 },
+              "output_path": { "type": "string", "minLength": 1 },
+              "model_id": { "type": "string", "minLength": 1 },
+              "bundle_dir": { "type": "string", "minLength": 1 },
+              "runtime_path": { "type": "string", "minLength": 1 },
+              "prompt": { "type": "string", "minLength": 1, "maxLength": 4000 },
+              "device": { "type": "string", "minLength": 1 },
+              "max_dimension": { "enum": [512, 768, 1024] },
+              "steps": { "type": "integer", "minimum": 1, "maximum": 60 },
+              "seed": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+              "accepted_terms": { "type": "boolean" },
+              "scratch_directory": { "type": ["string", "null"] },
+              "output_temporary_directory": { "type": ["string", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }}
+      ]
+    },
     "envelope": {
       "type": "object",
       "required": ["type", "data"],

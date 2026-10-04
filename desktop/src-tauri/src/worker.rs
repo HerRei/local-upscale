@@ -658,12 +658,14 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
-            runtime.status_title = "Enhancing".into();
+            let editing = string(data, "unit") == "steps";
+            runtime.status_title = if editing { "Editing" } else { "Enhancing" }.into();
             let remaining = number(data, "estimated_remaining_seconds");
             runtime.status_detail = format!(
-                "{} of {} tiles{}",
+                "{} of {} {}{}",
                 integer(data, "completed_tiles"),
                 integer(data, "total_tiles"),
+                if editing { "steps" } else { "tiles" },
                 eta_suffix(remaining)
             );
             runtime.elapsed_seconds = number(data, "elapsed_seconds");
@@ -674,7 +676,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             } else {
                 0.0
             };
-            runtime.throughput_unit = "tiles/s".into();
+            runtime.throughput_unit = if editing { "steps/s" } else { "tiles/s" }.into();
             runtime.active_tile_size = integer(data, "active_tile_size") as u32;
             runtime.device_free_memory = integer(data, "device_free_memory");
             runtime.device_allocated_memory = integer(data, "device_allocated_memory");
@@ -1064,14 +1066,6 @@ pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<Pat
 }
 
 fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
-    if let Some(path) = crate::updates::active_engine(&_state.paths) {
-        return Ok(WorkerCommand {
-            program: path,
-            arguments: Vec::new(),
-            working_directory: None,
-            python_path: None,
-        });
-    }
     #[cfg(debug_assertions)]
     {
         if let Some(path) =
@@ -1090,6 +1084,16 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
                 "LOCALSR_WORKER does not point to a file".into(),
             ));
         }
+    }
+    // An explicit development worker takes precedence over a cached installed
+    // engine; release builds still use the signed active engine as before.
+    if let Some(path) = crate::updates::active_engine(&_state.paths) {
+        return Ok(WorkerCommand {
+            program: path,
+            arguments: Vec::new(),
+            working_directory: None,
+            python_path: None,
+        });
     }
 
     let executable_name = if cfg!(windows) {
@@ -1235,6 +1239,7 @@ fn stage_label(kind: &str) -> &'static str {
         "restore" => "Restoring",
         "upscale" => "Upscaling",
         "face_restore" => "Restoring faces",
+        "edit" => "Preparing edit",
         _ => "Processing",
     }
 }

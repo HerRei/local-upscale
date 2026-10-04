@@ -135,6 +135,9 @@ _.daemon_threads  # set on a ThreadingHTTPServer instance
 
 # Dataclass field serialized through asdict(); removing it breaks the protocol.
 _.media  # protocol/messages.py CapabilitiesInfo
+EditJobRequest  # protocol/messages.py: the edit request shape, built by the desktop app
+runtime_path  # EditJobRequest
+accepted_terms  # EditJobRequest
 
 # Public display helper on the codec bridge, kept by decision.
 _.describe  # core/media_bridge.py MediaBridge

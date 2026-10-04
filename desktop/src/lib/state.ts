@@ -4,6 +4,7 @@ import type {
   CatalogVideoModel,
   ContentKind,
   DeviceInfo,
+  EditModel,
   FixKind,
   Quality,
   TaskKind,
@@ -121,10 +122,11 @@ export const FIT_LABELS: Record<Fit, string> = {
 };
 
 export interface PlanStage {
-  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
+  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video' | 'edit';
   label: string;
   model?: CatalogModel;
   videoModel?: CatalogVideoModel;
+  editModel?: EditModel;
   custom?: string;
   installed: boolean;
   /** Missing, and the catalog allows LocalSR to fetch it. */
@@ -147,9 +149,26 @@ export function resolvePlan(
     faceEnabled: boolean;
     usingTemporalVideo: boolean;
     selectedVideoModel?: CatalogVideoModel;
+    editModel?: EditModel;
   },
 ): PlanStage[] {
   const stages: PlanStage[] = [];
+  if (settings.task === 'edit') {
+    // One native Qwen pass; the bundle is a set of files that download together.
+    const model = options.editModel;
+    if (model) {
+      stages.push({
+        kind: 'edit',
+        label: 'Edit',
+        editModel: model,
+        installed: model.installed,
+        canDownload: !model.installed && model.automated_download_allowed,
+        needsFile: !model.installed && !model.automated_download_allowed,
+        sizeBytes: model.installed ? 0 : model.total_size_bytes,
+      });
+    }
+    return stages;
+  }
   const byId = (id: string): CatalogModel | undefined =>
     snapshot.catalog.models.find((model) => model.model_id === id);
   const stageFor = (
@@ -395,6 +414,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
         restore: 'Restoring',
         upscale: 'Upscaling',
         face_restore: 'Restoring faces',
+        edit: 'Preparing edit',
       };
       const kind = String(data.stage_kind ?? '');
       next.runtime.status_title = `${labels[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
@@ -406,15 +426,15 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       break;
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
-      next.runtime.status_title = 'Enhancing';
-      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} tiles${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
+      next.runtime.status_title = data.unit === 'steps' ? 'Editing' : 'Enhancing';
+      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} ${data.unit === 'steps' ? 'steps' : 'tiles'}${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.throughput =
         next.runtime.elapsed_seconds > 0
           ? Number(data.completed_tiles ?? 0) / next.runtime.elapsed_seconds
           : 0;
-      next.runtime.throughput_unit = 'tiles/s';
+      next.runtime.throughput_unit = data.unit === 'steps' ? 'steps/s' : 'tiles/s';
       next.runtime.active_tile_size = Number(data.active_tile_size ?? 0);
       next.runtime.device_free_memory = Number(data.device_free_memory ?? 0);
       next.runtime.device_allocated_memory = Number(data.device_allocated_memory ?? 0);

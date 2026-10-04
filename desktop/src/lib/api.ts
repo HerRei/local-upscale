@@ -13,6 +13,7 @@ import type {
   VideoComparisonSources,
   VideoComparisonProgress,
   WorkerEnvelope,
+  StartEditInput,
 } from './types';
 
 export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window;
@@ -112,6 +113,18 @@ export const clearMedia = (): Promise<void> => invoke('clear_media');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
+export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
+export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
+  invoke('open_edit_link', { modelId, link });
+export async function chooseEditRuntime(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const selection = await open({
+    multiple: false,
+    directory: false,
+    title: 'Choose the sd-cli image editing runtime',
+  });
+  return typeof selection === 'string' ? selection : null;
+}
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });

@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.cache/
 .coverage
 htmlcov/
 build/
@@ -33,6 +34,7 @@ desktop/src-tauri/gen/
 *.pth
 *.pt
 *.safetensors
+*.gguf
 /models/
 # The SeedVR2 text-conditioning embeddings are source, not downloaded weights.
 !src/localsr/video_models/seedvr2/pos_emb.safetensors

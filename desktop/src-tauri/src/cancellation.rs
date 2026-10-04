@@ -28,7 +28,7 @@ impl Cancellation {
         self.requested_at = None;
         self.resetting = false;
         let video = message["type"] == "video_job_request";
-        if video || message["type"] == "job_request" {
+        if video || message["type"] == "job_request" || message["type"] == "edit_job_request" {
             if let Some(output) = message["data"][if video {
                 "output_video_path"
             } else {
@@ -148,5 +148,20 @@ mod tests {
         assert!(control.expired(now + CANCEL_GRACE));
         control.finish().unwrap();
         assert!(!control.expired(now + CANCEL_GRACE));
+    }
+
+    #[test]
+    fn edit_cancellation_cleans_only_owned_scratch_and_preserves_existing_images() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("existing.png");
+        fs::write(&output, b"existing image").unwrap();
+        let mut message = json!({"type":"edit_job_request","data":{"output_path":output}});
+        let mut control = Cancellation::default();
+        control.prepare("edit", &mut message).unwrap();
+        let scratch = PathBuf::from(message["data"]["scratch_directory"].as_str().unwrap());
+        fs::write(scratch.join("reference.png"), b"temporary reference").unwrap();
+        control.finish().unwrap();
+        assert!(!scratch.exists());
+        assert_eq!(fs::read(output).unwrap(), b"existing image");
     }
 }

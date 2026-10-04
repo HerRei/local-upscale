@@ -8,6 +8,7 @@ New here? Start with the [project README](../README.md) and the
 | Guide | What it covers |
 | --- | --- |
 | [Models](models/README.md) | The catalog, Quick and Best, licenses, importing your own checkpoints |
+| [Image editing](image-editing.md) | The Edit task, Qwen bundles, memory needs per platform and the memory guards |
 | [Video](video-support.md) | Formats, timing, rotation, audio, HDR, SeedVR2 and the other Labs features |
 | [Platforms](platforms.md) | Engines per operating system, what has been tested on which hardware |
 | [Metadata and colour](metadata.md) | EXIF, ICC profiles, RAW input, alpha channels |

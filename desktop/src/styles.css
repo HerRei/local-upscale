@@ -901,6 +901,9 @@ input:focus-visible {
   grid-template-columns: 1fr 1fr;
   gap: 7px;
 }
+.task-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .task-grid button,
 .recipe-grid button {
   min-height: 62px;
@@ -2359,6 +2362,30 @@ input[type='text'],
   font-size: calc(11px * var(--ui-scale));
   line-height: 1.45;
 }
+.edit-prompt {
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  padding: 9px 10px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--recess);
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.45;
+}
+.edit-prompt::placeholder {
+  color: var(--tertiary);
+}
+.edit-prompt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.field-grid input[type='number'] {
+  width: 100%;
+  margin-top: 4px;
+}
 
 /* Model library sheet */
 .library-backdrop {
@@ -2592,6 +2619,7 @@ input[type='text'],
   margin: 0;
 }
 .facts {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;

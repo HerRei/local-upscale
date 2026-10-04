@@ -88,6 +88,23 @@ own terms; this file is a distribution notice, not a replacement for their licen
 Review upstream license files and current terms before redistributing LocalSR or using outputs in a
 commercial workflow.
 
+- **Native Qwen editing runtime** — stable-diffusion.cpp and GGML (MIT), pinned to
+  `3f8527a46c54ecf4cb4ed6003da8e8982283c73c`. Its retained licenses, third-party
+  notices and source revision are bundled under `engine/_internal/edit/`.
+  Source: https://github.com/leejet/stable-diffusion.cpp.
+- **Qwen Image Edit 2511** — Qwen (Apache-2.0), with GGUF diffusion quantizations
+  by Unsloth, matching Qwen2.5-VL text/vision encoders and the Qwen Image VAE.
+  Source: https://huggingface.co/Qwen/Qwen-Image-Edit-2511.
+- **FLUX.2 klein 4B** — Black Forest Labs (Apache-2.0), with GGUF diffusion
+  quantizations by leejet, the Qwen3-4B text encoder (Qwen, Apache-2.0, GGUF by
+  Unsloth) and the FLUX.2 autoencoder as published by Comfy-Org (Apache-2.0).
+  Qwen Image 2.1 is not offered: its Qwen Research License permits research and
+  evaluation only.
+  Source: https://huggingface.co/black-forest-labs/FLUX.2-klein-4B.
+  Editing weights are separate, optional, checksum-pinned downloads and are never
+  included in installers. Exact revisions and component digests are in
+  `src/localsr/core/edit_catalog.json`.
+
 ## AMD ROCm MIT notice
 
 Copyright (C) Advanced Micro Devices, Inc.

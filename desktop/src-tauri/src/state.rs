@@ -57,6 +57,8 @@ pub struct AppState {
     pub engine: Mutex<Option<EngineInfo>>,
     pub runtime: Mutex<RuntimeStatus>,
     pub latest_benchmark: Mutex<Option<BenchmarkResult>>,
+    /// The native editing executable found at startup, or empty.
+    pub edit_runtime: Mutex<String>,
     pub worker: WorkerControl,
     pub scheduler: Mutex<()>,
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -88,6 +90,7 @@ impl AppState {
             engine: Mutex::new(None),
             runtime: Mutex::new(RuntimeStatus::default()),
             latest_benchmark: Mutex::new(latest_benchmark),
+            edit_runtime: Mutex::new(String::new()),
             worker: WorkerControl::default(),
             scheduler: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
@@ -111,6 +114,10 @@ impl AppState {
         let engine = lock(&self.engine)?.clone();
         let runtime = lock(&self.runtime)?.clone();
         let latest_benchmark = lock(&self.latest_benchmark)?.clone();
+        let edit = crate::editing::EditSetup {
+            models: crate::editing::catalog(&self.paths)?,
+            runtime_path: lock(&self.edit_runtime)?.clone(),
+        };
 
         Ok(AppSnapshot {
             app_version: APP_VERSION.into(),
@@ -124,6 +131,7 @@ impl AppState {
             engine,
             runtime,
             latest_benchmark,
+            edit,
         })
     }
 

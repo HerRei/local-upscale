@@ -1,10 +1,18 @@
 <script lang="ts">
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
+  import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
-  import type { CapabilityInfo, CatalogModel, UiSettings, VideoCodec } from './lib/types';
+  import type {
+    CapabilityInfo,
+    CatalogModel,
+    EditModel,
+    UiSettings,
+    VideoCodec,
+  } from './lib/types';
 
   export let settings: UiSettings;
   export let selectedModel: CatalogModel | undefined;
+  export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
   export let usingTemporalVideo: boolean;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
@@ -14,6 +22,7 @@
   let ffmpegNote = '';
 
   $: codec = settings.video_codec ?? 'av1';
+  $: editSizeAllowed = editSizeLimit(capabilities, editDevice(capabilities, settings));
   $: externalCodec = codec === 'h264' || codec === 'hevc';
   $: system = systemCodecs(capabilities);
   $: foundFfmpeg = detectedFfmpeg(capabilities);
@@ -52,12 +61,65 @@
 
 <section class="control-section">
   <button class="disclosure" on:click={() => (advanced = !advanced)}
-    ><span>Advanced</span><b>{advanced ? '⌃' : '⌄'}</b><small>Model, output, hardware</small
+    ><span>Advanced</span><b>{advanced ? '⌃' : '⌄'}</b><small
+      >{settings.task === 'edit'
+        ? 'Size, steps, seed, output, hardware'
+        : 'Model, output, hardware'}</small
     ></button
   >
   {#if advanced}
     <div class="advanced-controls">
-      {#if settings.task !== 'denoise' && !(usingTemporalVideo && settings.video_target_resolution)}
+      {#if settings.task === 'edit'}
+        <div class="field-row">
+          <label for="edit-size">Edit size</label><select
+            id="edit-size"
+            value={Math.min(settings.edit_max_dimension, editSizeAllowed)}
+            on:change={(event) =>
+              updateSettings({ edit_max_dimension: Number(event.currentTarget.value) })}
+            >{#each [512, 768, 1024] as size}<option value={size} disabled={size > editSizeAllowed}
+                >{size} px · longest edge{size > editSizeAllowed
+                  ? ' · needs more memory'
+                  : ''}</option
+              >{/each}</select
+          >
+        </div>
+        <div class="field-grid">
+          <label
+            >Steps<input
+              type="number"
+              min="1"
+              max="60"
+              value={settings.edit_steps || editModel?.default_steps || 40}
+              on:change={(event) =>
+                updateSettings({
+                  edit_steps: Math.min(
+                    60,
+                    Math.max(1, Math.round(Number(event.currentTarget.value)) || 40),
+                  ),
+                })}
+            /></label
+          ><label
+            >Seed<input
+              type="number"
+              min="0"
+              max="2147483647"
+              value={settings.edit_seed}
+              on:change={(event) =>
+                updateSettings({
+                  edit_seed: Math.min(
+                    2147483647,
+                    Math.max(0, Math.round(Number(event.currentTarget.value)) || 0),
+                  ),
+                })}
+            /></label
+          >
+        </div>
+        <p class="model-description">
+          {editModel
+            ? `${editModel.name} is tuned for ${editModel.default_steps} steps.`
+            : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
+        </p>
+      {:else if settings.task !== 'denoise' && !(usingTemporalVideo && settings.video_target_resolution)}
         <div class="field-row">
           <label for="scale">Output scale</label><select
             id="scale"
@@ -70,7 +132,7 @@
           >
         </div>
       {/if}
-      {#if settings.task !== 'video'}
+      {#if settings.task !== 'video' && settings.task !== 'edit'}
         <div class="field-row">
           <label for="format">Format</label><select
             id="format"
@@ -108,7 +170,7 @@
               updateSettings({ preserve_metadata: event.currentTarget.checked })}
           /> Preserve safe metadata and color profile</label
         >
-      {:else}
+      {:else if settings.task === 'video'}
         <div class="field-row">
           <label for="video-codec">Video format</label><select
             id="video-codec"
@@ -216,9 +278,12 @@
       <div class="field-row">
         <label for="device">Hardware</label><select
           id="device"
-          value={settings.device_id}
+          value={settings.task === 'edit'
+            ? (editDevice(capabilities, settings)?.id ?? '')
+            : settings.device_id}
           on:change={(event) => updateSettings({ device_id: event.currentTarget.value })}
-          >{#each capabilities.devices as device}<option value={device.id}>{device.name}</option
+          >{#each settings.task === 'edit' ? editingDevices(capabilities) : capabilities.devices as device}<option
+              value={device.id}>{device.name}</option
             >{/each}</select
         >
       </div>
@@ -241,7 +306,7 @@
           ></select
         >
       </div>
-      {#if !usingTemporalVideo}
+      {#if !usingTemporalVideo && settings.task !== 'edit'}
         <div class="field-grid">
           <label
             >Tile<select
@@ -267,21 +332,21 @@
           >
         </div>
       {/if}
-      {#if !usingTemporalVideo}<label class="check-row"
+      {#if !usingTemporalVideo && settings.task !== 'edit'}<label class="check-row"
           ><input
             type="checkbox"
             checked={settings.safe_memory}
             on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })}
           /> Safe memory mode</label
         >{/if}
-      <label class="check-row"
-        ><input
-          type="checkbox"
-          checked={settings.enable_live_preview}
-          on:change={(event) =>
-            updateSettings({ enable_live_preview: event.currentTarget.checked })}
-        /> Show sampled enhanced previews (max 2 fps)</label
-      >
+      {#if settings.task !== 'edit'}<label class="check-row"
+          ><input
+            type="checkbox"
+            checked={settings.enable_live_preview}
+            on:change={(event) =>
+              updateSettings({ enable_live_preview: event.currentTarget.checked })}
+          /> Show sampled enhanced previews (max 2 fps)</label
+        >{/if}
       <div class="hardware-card">
         <span
           >{capabilities.system_memory_pressure_level === 'unknown'

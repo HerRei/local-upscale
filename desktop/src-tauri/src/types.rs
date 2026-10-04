@@ -312,10 +312,32 @@ pub struct UiSettings {
     pub content: String,
     pub fixes: Vec<String>,
     pub preset_pins: BTreeMap<String, String>,
+    // Image editing: the chosen Qwen bundle, the longest output edge and the
+    // sampler settings. The prompt itself is never persisted.
+    #[serde(default)]
+    pub edit_model_id: String,
+    #[serde(default = "default_edit_dimension")]
+    pub edit_max_dimension: u32,
+    #[serde(default = "default_edit_steps")]
+    pub edit_steps: u32,
+    #[serde(default = "default_edit_seed")]
+    pub edit_seed: u32,
 }
 
 fn default_anonymous_update_count() -> bool {
     true
+}
+
+fn default_edit_dimension() -> u32 {
+    512
+}
+
+fn default_edit_steps() -> u32 {
+    40
+}
+
+fn default_edit_seed() -> u32 {
+    42
 }
 
 fn default_low_memory() -> bool {
@@ -368,6 +390,10 @@ impl Default for UiSettings {
             content: "photo".into(),
             fixes: Vec::new(),
             preset_pins: BTreeMap::new(),
+            edit_model_id: String::new(),
+            edit_max_dimension: default_edit_dimension(),
+            edit_steps: default_edit_steps(),
+            edit_seed: default_edit_seed(),
         }
     }
 }
@@ -561,6 +587,7 @@ pub struct AppSnapshot {
     pub engine: Option<EngineInfo>,
     pub runtime: RuntimeStatus,
     pub latest_benchmark: Option<BenchmarkResult>,
+    pub edit: crate::editing::EditSetup,
 }
 
 #[derive(Clone, Debug, Deserialize)]

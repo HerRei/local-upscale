@@ -4,6 +4,7 @@ mod commands;
 mod database;
 mod distribution;
 mod downloads;
+mod editing;
 mod engine_payload;
 mod error;
 mod headless_smoke;
@@ -93,6 +94,7 @@ pub fn run() {
                 lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
+            *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
             native_menu::install(app, &lock(&state.recipes)?)?;
             if let Err(error) = worker::start_worker(state.clone(), app.handle().clone()) {
                 if let Ok(mut runtime) = state.runtime.lock() {
@@ -128,6 +130,8 @@ pub fn run() {
             commands::save_recipe,
             commands::delete_recipe,
             commands::start_jobs,
+            commands::open_edit_link,
+            commands::start_edit,
             commands::start_benchmark,
             commands::export_benchmark,
             commands::prepare_video_comparison,

@@ -80,6 +80,27 @@ class JobRequest:
 
 
 @dataclass
+class EditJobRequest:
+    job_id: str
+    image_path: str
+    output_path: str
+    model_id: str
+    bundle_dir: str
+    runtime_path: str
+    prompt: str
+    device: str
+    max_dimension: int = 512
+    steps: int = 40
+    seed: int = 42
+    accepted_terms: bool = False
+    scratch_directory: str | None = None
+    output_temporary_directory: str | None = None
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "edit_job_request", "data": asdict(self)})
+
+
+@dataclass
 class VideoJobRequest:
     """Run frame-by-frame or temporal video restoration in the worker.
 
@@ -240,6 +261,7 @@ class ProgressUpdate:
     mps_tensor_allocated_memory: int = 0
     mps_driver_allocated_memory: int = 0
     mps_recommended_max_memory: int = 0
+    unit: str = "tiles"
 
     def to_json(self) -> str:
         return json.dumps({"type": "progress", "data": asdict(self)})

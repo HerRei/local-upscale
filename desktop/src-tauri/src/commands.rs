@@ -31,6 +31,97 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 ];
 const MAX_MEDIA_ITEMS: usize = 10_000;
 
+/// Open an editing bundle's license or source page in the browser.
+#[tauri::command]
+pub fn open_edit_link(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+    link: String,
+) -> AppResult<()> {
+    let model = crate::editing::catalog(&state.paths)?
+        .into_iter()
+        .find(|m| m.model_id == model_id)
+        .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
+    let url = match link.as_str() {
+        "license" => model.license_url,
+        "source" => model.source_url,
+        _ => return Err(AppError::Validation("Unknown link.".into())),
+    };
+    open::that(url).map_err(|error| AppError::Validation(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_edit(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    input: crate::editing::StartEditInput,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
+    ensure_queue_idle(&state)?;
+    if lock(&state.runtime)?.worker != "ready" {
+        return Err(AppError::Validation(
+            "Wait for the editing worker to become ready.".into(),
+        ));
+    }
+    if !lock(&state.engine)?
+        .as_ref()
+        .is_some_and(|engine| engine.features.iter().any(|f| f == "image_edit"))
+    {
+        return Err(AppError::Validation(
+            "This worker does not support editing. Update LocalSR.".into(),
+        ));
+    }
+    let model = crate::editing::catalog(&state.paths)?
+        .into_iter()
+        .find(|model| model.model_id == input.model_id)
+        .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
+    crate::editing::validate(&input, &model).map_err(AppError::Validation)?;
+    if !lock(&state.capabilities)?
+        .devices
+        .iter()
+        .any(|device| device.id == input.device)
+    {
+        return Err(AppError::Validation(
+            "The selected editing GPU is unavailable.".into(),
+        ));
+    }
+    let runtime = fs::canonicalize(&input.runtime_path)?;
+    if !runtime.is_file() {
+        return Err(AppError::Validation(
+            "Choose the native editing runtime.".into(),
+        ));
+    }
+    let media = lock(&state.database)?
+        .get_media(&input.media_id)?
+        .ok_or_else(|| AppError::Validation("Choose an image to edit.".into()))?;
+    if media.kind != "image" || media.probe_status != "ready" || !Path::new(&media.path).is_file() {
+        return Err(AppError::Validation(
+            "Wait for a valid image preview before editing.".into(),
+        ));
+    }
+    let directory = prepare_output_directory(&state, &input.output_directory)?;
+    let id = Uuid::new_v4().to_string();
+    let stem = Path::new(&media.path)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let output = directory.join(format!("{stem}_localsr_edit_{}.png", &id[..8]));
+    let request = json!({"type": "edit_job_request", "data": {
+        "job_id": id, "image_path": media.path, "output_path": output.to_string_lossy(),
+        "model_id": model.model_id,
+        "bundle_dir": state.paths.model_root.join(&model.family).to_string_lossy(),
+        "runtime_path": runtime.to_string_lossy(), "prompt": input.prompt,
+        "device": input.device, "max_dimension": input.max_dimension,
+        "steps": input.steps, "seed": input.seed, "accepted_terms": input.accepted_terms,
+    }});
+    lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
+    worker::dispatch_next_locked(&state, &app)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn bootstrap(state: State<'_, Arc<AppState>>) -> AppResult<AppSnapshot> {
     state.snapshot()
@@ -848,23 +939,36 @@ pub fn remove_model(
     }
     let path = {
         let catalog = lock(&state.catalog)?;
-        let model = catalog
+        match catalog
             .models
             .iter()
             .find(|model| model.model_id == model_id)
-            .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
-        if !model.installed {
-            return Err(AppError::Validation("the model is not installed".into()));
+        {
+            Some(model) if !model.installed => {
+                return Err(AppError::Validation("the model is not installed".into()));
+            }
+            Some(model) => Some(
+                state
+                    .paths
+                    .model_root
+                    .join(crate::catalog::safe_model_filename(&model.filename)?),
+            ),
+            None => None,
         }
-        state
-            .paths
-            .model_root
-            .join(crate::catalog::safe_model_filename(&model.filename)?)
     };
-    if path.is_file() {
-        fs::remove_file(&path)?;
+    match path {
+        Some(path) => {
+            if path.is_file() {
+                fs::remove_file(&path)?;
+            }
+            state.refresh_catalog()?;
+        }
+        // Editing bundles live beside the catalog; shared components survive.
+        None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
+            return Err(AppError::Validation("unknown image model".into()));
+        }
+        None => {}
     }
-    state.refresh_catalog()?;
     emit_state_changed(&app);
     Ok(())
 }
@@ -1301,9 +1405,22 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         ));
     }
     if !settings.task.is_empty()
-        && !matches!(settings.task.as_str(), "upscale" | "denoise" | "video")
+        && !matches!(
+            settings.task.as_str(),
+            "upscale" | "denoise" | "edit" | "video"
+        )
     {
         return Err(AppError::Validation("unknown task".into()));
+    }
+    // Zero steps means the chosen model's own default.
+    if !matches!(settings.edit_max_dimension, 512 | 768 | 1024)
+        || settings.edit_steps > 60
+        || settings.edit_seed > i32::MAX as u32
+        || settings.edit_model_id.len() > 64
+    {
+        return Err(AppError::Validation(
+            "unsupported edit size, step count, seed or model".into(),
+        ));
     }
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")

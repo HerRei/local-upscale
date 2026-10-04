@@ -45,6 +45,9 @@ const api = vi.hoisted(() => ({
   cancelDownload: vi.fn(async () => undefined),
   removeModel: vi.fn(async () => undefined),
   importCatalogModel: vi.fn(async () => undefined),
+  startEdit: vi.fn(async () => undefined),
+  openEditLink: vi.fn(async () => undefined),
+  chooseEditRuntime: vi.fn(async (): Promise<string | null> => null),
   saveRecipe: vi.fn(async () => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
@@ -178,6 +181,136 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
 async function chooseTask(user: ReturnType<typeof userEvent.setup>, name: RegExp): Promise<void> {
   await user.click(screen.getByRole('button', { name }));
 }
+
+/** A Mac with an editing engine, the native runtime and every Qwen bundle installed. */
+function editSnapshot(unifiedGb: number): AppSnapshot {
+  const snapshot = readySnapshot([image('photo', true)]);
+  snapshot.capabilities.system_ram_total = unifiedGb * 1024 ** 3;
+  snapshot.capabilities.devices[0].total_memory = unifiedGb * 1024 ** 3;
+  snapshot.engine!.features.push('image_edit');
+  snapshot.edit.runtime_path = '/engine/edit/sd-cli';
+  snapshot.edit.models.forEach((model) => (model.installed = true));
+  return snapshot;
+}
+
+describe('Edit task', () => {
+  it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
+    const user = await mountWith(editSnapshot(26));
+    await chooseTask(user, /^Edit\s?Describe a change$/);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ task: 'edit', edit_model_id: 'qwen_edit_2511_q3_k_s' }),
+    );
+    expect(screen.getAllByText('Qwen Image Edit 2511 · Q3_K_S').length).toBeGreaterThan(0);
+    expect(screen.getByText(/^Q3_K_S · Apache-2.0 · [\d.]+ GB · Fits this computer$/)).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Quality' })).toBeNull();
+    const start = screen.getByRole('button', { name: 'Edit selected' }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    await user.type(screen.getByLabelText('What to change'), 'Make the sky dramatic');
+    expect(start.disabled).toBe(false);
+    await user.click(start);
+    expect(api.startEdit).toHaveBeenCalledWith({
+      media_id: 'photo',
+      model_id: 'qwen_edit_2511_q3_k_s',
+      prompt: 'Make the sky dramatic',
+      runtime_path: '/engine/edit/sd-cli',
+      device: 'mps',
+      max_dimension: 512,
+      steps: 40,
+      seed: 42,
+      accepted_terms: false,
+      output_directory: '',
+    });
+    expect(api.startJobs).not.toHaveBeenCalled();
+  });
+
+  it('downloads a missing bundle from the footer before the first edit', async () => {
+    const snapshot = editSnapshot(26);
+    snapshot.edit.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await user.click(screen.getByRole('button', { name: /^Download [\d.]+ GB, then edit$/ }));
+    expect(api.downloadModel).toHaveBeenCalledWith('qwen_edit_2511_q3_k_s', false);
+    expect(api.startEdit).not.toHaveBeenCalled();
+  });
+
+  it('falls back to FLUX.2 klein on a 16 GB Mac, with its own step count', async () => {
+    const user = await mountWith(editSnapshot(16));
+    await chooseTask(user, /^Edit\s?Describe a change$/);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        task: 'edit',
+        edit_model_id: 'flux2_klein_4b_q8_0',
+        edit_steps: 0,
+      }),
+    );
+    expect(screen.getByText('FLUX.2 klein 4B')).toBeTruthy();
+    expect(screen.getByText(/^Q8_0 · Apache-2.0 · [\d.]+ GB · Fits this computer$/)).toBeTruthy();
+    await user.type(screen.getByLabelText('What to change'), 'Add snow');
+    await user.click(screen.getByRole('button', { name: 'Edit selected' }));
+    expect(api.startEdit).toHaveBeenCalledWith(
+      expect.objectContaining({ model_id: 'flux2_klein_4b_q8_0', steps: 4, max_dimension: 512 }),
+    );
+  });
+
+  it('says plainly when no bundle fits this computer', async () => {
+    const user = await mountWith(editSnapshot(8));
+    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await user.type(screen.getByLabelText('What to change'), 'Add snow');
+    expect(screen.getByRole('status').textContent?.replace(/\s+/g, ' ')).toContain(
+      'FLUX.2 klein 4B · Q4_0 needs 16 GB of unified memory and this Mac has 8 GB of unified memory. No listed model fits this computer yet.',
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Edit selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('asks for license acceptance in the library before fetching a restricted bundle', async () => {
+    const snapshot = editSnapshot(26);
+    snapshot.edit.models.forEach((model) => (model.installed = false));
+    const restricted = snapshot.edit.models.find(
+      (model) => model.model_id === 'flux2_klein_4b_q8_0',
+    )!;
+    restricted.terms_acceptance_required = true;
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByText('Choosing for Edit')).toBeTruthy();
+    expect(within(dialog).getByText('FLUX.2 KLEIN 4B')).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: /^Q8_0 16 GB unified memory/ }));
+    expect(within(dialog).getByText('Research license · review the terms')).toBeTruthy();
+    const download = within(dialog).getByRole('button', {
+      name: /^Download [\d.]+ GB$/,
+    }) as HTMLButtonElement;
+    expect(download.disabled).toBe(true);
+    await user.click(within(dialog).getByRole('checkbox'));
+    expect(download.disabled).toBe(false);
+    await user.click(download);
+    expect(api.downloadModel).toHaveBeenCalledWith('flux2_klein_4b_q8_0', true);
+    await user.click(within(dialog).getByRole('button', { name: 'Use for this job' }));
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ edit_model_id: 'flux2_klein_4b_q8_0' }),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
+  });
+
+  it('shows Mac and Windows/Linux memory needs in the library and removes a bundle', async () => {
+    const user = await mountWith(editSnapshot(26));
+    await user.click(screen.getByRole('button', { name: 'Model library' }));
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(dialog).getByRole('button', { name: /^Edit with a prompt/ }));
+    await user.click(within(dialog).getByRole('button', { name: /^Q8_0 48 GB unified memory/ }));
+    expect(within(dialog).getByText('48 GB unified memory')).toBeTruthy();
+    expect(within(dialog).getByText('24 GB GPU memory')).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        'Too heavy for this computer · this Mac has 26 GB of unified memory',
+      ),
+    ).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
+    expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');
+  });
+});
 
 it.each(['realplksr_nomoswebphoto_x4', 'realplksr_hfa2k_anime_x4'])(
   'downloads %s using its declared license and the selected model identity',
