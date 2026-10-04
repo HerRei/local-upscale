@@ -52,13 +52,13 @@ or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·
 
 ## Download
 
-**v0.1.3-beta** is on the [download page](https://herrei.github.io/localsr/download/):
+The [download page](https://herrei.github.io/localsr/download/) has:
 
-- **macOS**, Apple Silicon, macOS 14 or later: a DMG (414 MB), signed and notarized.
-  The app checks for updates at launch and verifies each update's signature.
-- **Windows** 10 and 11, x86-64: a CPU installer, plus DirectML and NVIDIA CUDA
+- **macOS** (v0.1.4-beta), Apple Silicon, macOS 14 or later: a DMG (414 MB), signed and
+  notarized. The app checks for updates at launch and verifies each update's signature.
+- **Windows** (v0.1.3-beta) 10 and 11, x86-64: a CPU installer, plus DirectML and NVIDIA CUDA
   editions that are **untested** on those GPUs. None is code-signed.
-- **Linux** x86-64: a CPU AppImage, an AMD ROCm edition (tested on a Radeon
+- **Linux** (v0.1.3-beta) x86-64: a CPU AppImage, an AMD ROCm edition (tested on a Radeon
   RX 9060 XT) and an NVIDIA CUDA edition (**untested**).
 
 The CUDA and ROCm editions are larger than GitHub's 2 GB file limit and come in

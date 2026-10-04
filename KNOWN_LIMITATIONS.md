@@ -1,11 +1,12 @@
 # Known limitations
 
-These apply to v0.1.3-beta. Please read them before starting a long job.
+These apply to v0.1.4-beta. Please read them before starting a long job.
 
 ## Platforms
 
-- Published packages: macOS on Apple Silicon; Windows CPU, DirectML and NVIDIA
-  CUDA installers; Linux CPU, AMD ROCm and NVIDIA CUDA AppImages. The CUDA and
+- Published packages: macOS on Apple Silicon (v0.1.4-beta); Windows CPU, DirectML
+  and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
+  (still v0.1.3-beta, without image editing). The CUDA and
   DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU, and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
   packages are held back; [Platforms](docs/platforms.md) explains why.
@@ -65,6 +66,19 @@ These apply to v0.1.3-beta. Please read them before starting a long job.
 - The two HAT face companions must be imported manually because their
   checkpoint rights are unresolved. Video face processing reuses masks across
   frames and is not motion tracking.
+
+## Image editing
+
+- Edit is new in v0.1.4-beta, experimental and published for macOS only. Its memory
+  profiles are derived estimates, not measured fits: on the 16 GB M1 Pro used
+  for development the memory guard stopped both test edits because other apps
+  left too little memory free, so no real edit has been validated yet. Close
+  other apps before editing.
+- A 16 GB Mac can use FLUX.2 klein 4B; Qwen Image Edit 2511 needs 24 GB or more.
+  Edits are limited to 512, 768 or 1024 px on the longest side, one image at a
+  time, and the result is a new PNG.
+- The editing models are separate downloads of 5 to 26 GB. Qwen Image 2.1 is
+  not offered because its license allows research and evaluation only.
 
 ## Models
 

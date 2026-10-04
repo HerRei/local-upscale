@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.4-beta] - 2026-10-04
+
+### Added
+
+- **Edit**, a third task beside Upscale and Restore: describe a change and a
+  local diffusion editor writes it as a new PNG next to the original. It runs
+  a pinned stable-diffusion.cpp build on Metal in a separate process that a
+  memory supervisor stops before the Mac starts to swap. Experimental: no real
+  edit has been validated on the 16 GB development Mac yet.
+- An "Edit with a prompt" group in the model library with Qwen Image Edit 2511
+  (six sizes, 24 GB Macs and up) and FLUX.2 klein 4B (two sizes, for 16 GB
+  Macs), all Apache-2.0. Each bundle shows what it needs and whether it fits;
+  every file is pinned to an upstream revision and SHA-256.
+
 ## [0.1.3-beta] - 2026-09-17
 
 ### Added
