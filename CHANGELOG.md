@@ -2,6 +2,15 @@
 
 ## [0.1.6-beta] - 2026-10-08
 
+### Added
+
+- More photo formats: HEIC/HEIF (including Fujifilm and Canon .hif) and JPEG XL
+  on macOS, decoded by the system; AVIF, JPEG 2000 and GIF everywhere; and camera
+  RAW beyond DNG (Canon CR2/CR3, Nikon NEF, Sony ARW, Fujifilm RAF, Olympus ORF,
+  Panasonic RW2, Pentax PEF and more) through LibRaw. No new codec is shipped:
+  HEVC stays with Apple's licensed decoder, and the rest use decoders already in
+  the app.
+
 ### Fixed
 
 - Edit runs on 16 GB Macs. The memory guard read only free plus inactive pages
