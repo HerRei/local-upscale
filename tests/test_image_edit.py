@@ -529,11 +529,15 @@ def test_guard_treats_worker_pipe_eof_as_cancellation(monkeypatch, tmp_path):
 
 # The phase markers of a real FLUX.2 klein 4B run (sd-cli 3f8527a, 512 px).
 FLUX_LOG = """[INFO   ] diffusion_engine.cpp:732  - loading diffusion model from 'flux-2-klein-4b-Q4_0.gguf'
+  |###############################################   | 100/108 - 552.20MB/s
 [INFO   ] model_loader.cpp:1383 - loading tensors completed, taking 0.41s
+  |========>                                         | 1/6 - 3.90s/it
 [INFO   ] image.cpp:398  - encode_first_stage completed, taking 21.16s
+  |##################################################| 298/298 - 0.00MB/s
 [INFO   ] model_loader.cpp:1383 - loading tensors completed, taking 0.21s
 [INFO   ] image.cpp:529  - get_learned_condition completed, taking 21.99s
 [INFO   ] image.cpp:866  - generating image: 1/1 - seed 42
+  |##################################################| 149/149 - 0.07MB/s
   |============>                                     | 1/4 - 13.32s/it
   |=========================>                        | 2/4 - 7.40s/it
   |==================================================| 4/4 - 7.40s/it
@@ -573,6 +577,7 @@ def test_edit_progress_follows_the_runtime_log_and_never_stands_still():
     ):
         assert expected in labels
     assert tracker.completed_steps == 4
+    assert not any("149" in label or "298" in label for label in labels)
     # Phases without a counter still creep forward while time passes.
     stuck = image_edit.EditProgress(4, clock=lambda: now[0])
     stuck.enter(2)

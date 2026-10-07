@@ -1896,9 +1896,7 @@
     <PreviewPane
       bind:this={previewPane}
       modelLabel={settings.task === 'edit'
-        ? editModel
-          ? `${editModel.name} · ${editModel.quantization}`
-          : 'Editing model'
+        ? (editModel?.name ?? 'Editing model')
         : usingTemporalVideo
           ? (selectedVideoModel?.name ?? 'Video model')
           : (selectedModel?.name ?? 'Model')}

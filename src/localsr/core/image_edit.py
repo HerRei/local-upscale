@@ -136,6 +136,7 @@ class EditProgress:
         self.count = (0, 0)
         self.completed_steps = 0
         self.fraction = 0.0
+        self.shown = 0.0
 
     def enter(self, phase: int) -> None:
         if phase > self.phase:
@@ -148,11 +149,17 @@ class EditProgress:
         for phase, marker in self.MARKERS:
             if marker in line and (phase != 2 or self.phase == 1):
                 self.enter(phase)
-        match = re.search(r"\b(\d+)\s*/\s*(\d+)\b", line)
-        if match and self.phase in (4, 5) and int(match[2]) > 0:
-            self.count = (int(match[1]), int(match[2]))
-            if self.phase == 4:
-                self.completed_steps = int(match[1])
+        # Compute bars end in s/it or it/s (sampling steps, VAE tiles); tensor
+        # loading prints its own "149/149 - 0.07MB/s" bars, which are not progress.
+        match = re.search(r"\|\s*(\d+)\s*/\s*(\d+)\s*-\s*[\d.]+\s*(?:s/it|it/s)", line)
+        if not match or int(match[2]) <= 0:
+            return
+        done, total = int(match[1]), int(match[2])
+        if self.phase == 4 and total == self.steps:
+            self.count = (done, total)
+            self.completed_steps = done
+        elif self.phase in (2, 5):
+            self.count = (done, total)
 
     def snapshot(self) -> tuple[float, str]:
         """(percentage, label) for the current moment."""
@@ -166,7 +173,9 @@ class EditProgress:
             # About two thirds of the phase after 15 s, never quite all of it.
             within = 0.9 * (1 - math.exp(-(self.clock() - self.since) / 15))
         before = sum(weight for _, weight in self.PHASES[: self.phase])
-        percentage = min(99.0, 100 * (before + share * within))
+        # Never move the bar backwards.
+        self.shown = max(self.shown, min(99.0, 100 * (before + share * within)))
+        percentage = self.shown
         if self.phase == 4 and total:
             label = f"Editing · step {done} of {total}"
         elif self.phase == 5 and total:
