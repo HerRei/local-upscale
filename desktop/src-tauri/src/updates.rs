@@ -677,17 +677,28 @@ fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 pub fn active_engine(paths: &crate::paths::AppPaths) -> Option<PathBuf> {
-    active_engine_for_distribution(paths, crate::distribution::managed_by_store())
+    active_engine_for_distribution(
+        paths,
+        crate::distribution::managed_by_store(),
+        option_env!("LOCALSR_ENGINE_ID").unwrap_or(""),
+    )
 }
+/// The engine an in-app update installed, if this host was built for it.
+///
+/// An update writes its engine and a host compiled with the same engine id. A
+/// host installed from a disk image over an updated copy has a different id
+/// and must use the engine bundled with it: otherwise 0.1.6 ran the 0.1.5
+/// engine that an earlier update had left active.
 fn active_engine_for_distribution(
     paths: &crate::paths::AppPaths,
     managed_by_store: bool,
+    bundled_engine_id: &str,
 ) -> Option<PathBuf> {
     if managed_by_store {
         return None;
     }
     let id = fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?;
-    if !safe_id(&id) {
+    if !safe_id(&id) || (!bundled_engine_id.is_empty() && id != bundled_engine_id) {
         return None;
     }
     let executable = paths
@@ -952,11 +963,48 @@ mod tests {
         fs::write(&engine, b"previous engine").unwrap();
         fs::write(paths.next_root.join("active-engine.txt"), b"previous").unwrap();
         assert_eq!(
-            active_engine_for_distribution(&paths, false),
+            active_engine_for_distribution(&paths, false, "previous"),
             Some(engine.clone())
         );
-        assert_eq!(active_engine_for_distribution(&paths, true), None);
+        assert_eq!(
+            active_engine_for_distribution(&paths, true, "previous"),
+            None
+        );
         assert_eq!(fs::read(engine).unwrap(), b"previous engine");
+    }
+
+    #[test]
+    fn a_host_from_another_release_ignores_the_engine_an_update_left_active() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let engine = paths
+            .next_root
+            .join("engines/macos-arm64-mps-old/engine")
+            .join(if cfg!(windows) {
+                "localsr-worker.exe"
+            } else {
+                "localsr-worker"
+            });
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        fs::write(&engine, b"old engine").unwrap();
+        fs::write(
+            paths.next_root.join("active-engine.txt"),
+            b"macos-arm64-mps-old",
+        )
+        .unwrap();
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "macos-arm64-mps-new"),
+            None
+        );
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "macos-arm64-mps-old"),
+            Some(engine.clone())
+        );
+        // Development builds carry no engine id and keep using the installed engine.
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, ""),
+            Some(engine)
+        );
     }
 
     #[test]
