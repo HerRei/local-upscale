@@ -63,6 +63,10 @@ or media.
 
 - **macOS, M1 Pro 16 GB.** All cases with v0.1.1-beta, plus the in-app update
   from 0.1.0-beta.
+- **macOS disk image, v0.1.5-beta (macOS 26.6.1, M1 Pro).** The signed, notarized
+  DMG opens in Finder as the drag window: LocalSR left, Applications right, the
+  arrow between them on the icon row, LocalSR as the volume icon. The builder's
+  read-only check passed (contents, Applications link, app signature).
 - **Windows 11, i7-8550U, Intel UHD 620.** All cases with the CPU and DirectML
   test builds: HAT-S and SPAN images and short video, separate CPU and iGPU
   benchmarks, and upgrades through six package versions. The DirectML run
