@@ -1,10 +1,10 @@
 # Known limitations
 
-These apply to v0.1.4-beta. Please read them before starting a long job.
+These apply to v0.1.5-beta. Please read them before starting a long job.
 
 ## Platforms
 
-- Published packages: macOS on Apple Silicon (v0.1.4-beta); Windows CPU, DirectML
+- Published packages: macOS on Apple Silicon (v0.1.5-beta); Windows CPU, DirectML
   and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
   (still v0.1.3-beta, without image editing). The CUDA and
   DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU, and

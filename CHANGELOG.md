@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.5-beta] - 2026-10-08
+
+### Changed
+
+- The macOS disk image opens as a drag-to-Applications window: LocalSR on the
+  left, the Applications shortcut on the right and an arrow between them, with
+  the LocalSR icon as the volume icon. Built with dmgbuild
+  (`scripts/make_macos_dmg.py`).
+
+### Fixed
+
+- The terracotta pixel in the app icon and the in-app tile logo is centred
+  between its crop marks; it sat right of and below the middle.
+
 ## [0.1.4-beta] - 2026-10-04
 
 ### Added
