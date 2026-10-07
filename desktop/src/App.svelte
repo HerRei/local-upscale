@@ -1895,10 +1895,17 @@
 
     <PreviewPane
       bind:this={previewPane}
-      modelLabel={usingTemporalVideo
-        ? (selectedVideoModel?.name ?? 'Video model')
-        : (selectedModel?.name ?? 'Model')}
+      modelLabel={settings.task === 'edit'
+        ? editModel
+          ? `${editModel.name} · ${editModel.quantization}`
+          : 'Editing model'
+        : usingTemporalVideo
+          ? (selectedVideoModel?.name ?? 'Video model')
+          : (selectedModel?.name ?? 'Model')}
       activityLabel={snapshot.runtime.status_title}
+      activityDetail={settings.task === 'edit' ? snapshot.runtime.status_detail : ''}
+      activityProgress={snapshot.runtime.progress}
+      editing={settings.task === 'edit'}
       processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
       activeTileSize={snapshot.runtime.active_tile_size}
       {selectedMedia}
@@ -2574,9 +2581,10 @@
       <i class:working={Boolean(snapshot.runtime.active_job_id)}></i>
       <div>
         <strong
-          >{booting ? 'Starting' : snapshot.runtime.status_title}{queuedCount
-            ? ` · ${queuedCount} queued`
-            : ''}</strong
+          >{booting ? 'Starting' : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+          snapshot.runtime.progress > 0
+            ? ` · ${Math.round(snapshot.runtime.progress)}%`
+            : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
           >{booting
             ? 'Opening the trusted desktop control plane.'

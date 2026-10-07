@@ -100,8 +100,85 @@ def validate_request(data: dict) -> dict:
     return model
 
 
-def verify_bundle(model: dict, directory: Path, cancel: threading.Event) -> dict[str, Path]:
+class EditProgress:
+    """Turns the native runtime's log into a phase label and a moving percentage.
+
+    Measured with FLUX.2 klein 4B at 512 px on a 16 GB M1 Pro (127 s): the photo
+    and the instruction take about 20 s each without a counter, the four
+    sampling steps 35 s, and the tiled decode 48 s in six parts. Phases without a
+    counter creep forward with time so the bar never stands still.
+    """
+
+    PHASES = (
+        ("Checking the model files", 0.04),
+        ("Loading the model", 0.03),
+        ("Reading the photo", 0.14),
+        ("Reading your instruction", 0.14),
+        ("Editing", 0.38),
+        ("Finishing the image", 0.24),
+        ("Saving", 0.03),
+    )
+    # Log markers that start each phase after the first two.
+    MARKERS = (
+        (2, "loading tensors completed"),
+        (3, "encode_first_stage completed"),
+        (4, "get_learned_condition completed"),
+        (5, "sampling completed"),
+        (6, "decode_first_stage completed"),
+    )
+
+    def __init__(self, steps: int, clock=time.monotonic):
+        self.steps = steps
+        self.clock = clock
+        self.phase = 0
+        self.since = clock()
+        self.count = (0, 0)
+        self.completed_steps = 0
+        self.fraction = 0.0
+
+    def enter(self, phase: int) -> None:
+        if phase > self.phase:
+            self.phase, self.since, self.count = phase, self.clock(), (0, 0)
+
+    def checked(self, fraction: float) -> None:
+        self.fraction = max(self.fraction, min(1.0, fraction))
+
+    def feed(self, line: str) -> None:
+        for phase, marker in self.MARKERS:
+            if marker in line and (phase != 2 or self.phase == 1):
+                self.enter(phase)
+        match = re.search(r"\b(\d+)\s*/\s*(\d+)\b", line)
+        if match and self.phase in (4, 5) and int(match[2]) > 0:
+            self.count = (int(match[1]), int(match[2]))
+            if self.phase == 4:
+                self.completed_steps = int(match[1])
+
+    def snapshot(self) -> tuple[float, str]:
+        """(percentage, label) for the current moment."""
+        label, share = self.PHASES[self.phase]
+        done, total = self.count
+        if self.phase == 0:
+            within = self.fraction
+        elif total:
+            within = done / total
+        else:
+            # About two thirds of the phase after 15 s, never quite all of it.
+            within = 0.9 * (1 - math.exp(-(self.clock() - self.since) / 15))
+        before = sum(weight for _, weight in self.PHASES[: self.phase])
+        percentage = min(99.0, 100 * (before + share * within))
+        if self.phase == 4 and total:
+            label = f"Editing · step {done} of {total}"
+        elif self.phase == 5 and total:
+            label = f"Finishing the image · part {done} of {total}"
+        return percentage, label
+
+
+def verify_bundle(
+    model: dict, directory: Path, cancel: threading.Event, progress=None
+) -> dict[str, Path]:
     paths = {}
+    total = sum(entry["size_bytes"] for entry in model["files"]) or 1
+    hashed = 0
     for entry in model["files"]:
         path = directory / entry["filename"]
         if not path.is_file() or path.stat().st_size != entry["size_bytes"]:
@@ -114,6 +191,9 @@ def verify_bundle(model: dict, directory: Path, cancel: threading.Event) -> dict
                 if cancel.is_set():
                     raise InterruptedError("Editing cancelled.")
                 digest.update(block)
+                hashed += len(block)
+                if progress is not None:
+                    progress(hashed / total)
         if digest.hexdigest() != entry["sha256"]:
             raise ValueError(f"Editing model checksum failed: {path.name}. Download it again.")
         paths[entry["role"]] = path
@@ -222,7 +302,38 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     runtime = check_runtime(str(data.get("runtime_path", "")))
     job_id = str(data["job_id"])
     emit(StageStarted(job_id, 0, 1, "edit", model["name"]))
-    files = verify_bundle(model, Path(data["bundle_dir"]), cancel)
+    tracker = EditProgress(steps)
+    last_report = [0.0]
+
+    def report(force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - last_report[0] < 0.5:
+            return
+        last_report[0] = now
+        percentage, label = tracker.snapshot()
+        emit(
+            ProgressUpdate(
+                job_id,
+                tracker.completed_steps,
+                steps,
+                percentage,
+                now - started,
+                0.0,
+                0,
+                system_ram_available=sampler(device).available_ram,
+                unit="steps",
+                detail=label,
+            )
+        )
+
+    report(force=True)
+
+    def checked(fraction: float) -> None:
+        tracker.checked(fraction)
+        report()
+
+    files = verify_bundle(model, Path(data["bundle_dir"]), cancel, checked)
+    tracker.enter(1)
     # Re-admit after the potentially long checksum pass, without trusting stale free RAM.
     initial = sampler(device)
     plan = plan_edit(model, initial, data.get("max_dimension", 512))
@@ -281,7 +392,6 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             guard_command += ["-m", "localsr.worker"]
         guard_command += ["--edit-guard", str(specification)]
         logs = deque(maxlen=12)
-        progress = [0, 0]
         process = subprocess.Popen(
             guard_command,
             stdin=subprocess.PIPE,
@@ -297,9 +407,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                 if character in "\r\n":
                     if buffer:
                         logs.append(buffer[-400:])
-                        match = re.search(r"\b(\d+)\s*/\s*(\d+)\b", buffer)
-                        if match and int(match[2]) == steps:
-                            progress[:] = [int(match[1]), int(match[2])]
+                        tracker.feed(buffer)
                     buffer = ""
                 elif len(buffer) < 4096:
                     buffer += character
@@ -315,25 +423,16 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                     except subprocess.TimeoutExpired:
                         stop_process(process)
                     raise InterruptedError("Editing cancelled.")
-                completed, total = progress
-                elapsed = time.monotonic() - started
-                emit(
-                    ProgressUpdate(
-                        job_id,
-                        completed,
-                        total or steps,
-                        min(99.0, 100 * completed / max(1, total)),
-                        elapsed,
-                        0.0,
-                        0,
-                        system_ram_available=sampler(device).available_ram,
-                        unit="steps",
-                    )
-                )
+                report(force=True)
             reader.join(timeout=1)
             if process.returncode == 130 or cancel.is_set():
                 raise InterruptedError("Editing cancelled.")
             if process.returncode != 0:
+                # The guard explains a memory stop in its last line; show that, not
+                # the runtime's log, which only says where the model had got to.
+                guard = [line for line in logs if line.startswith("Editing stopped")]
+                if process.returncode == 75 and guard:
+                    raise MemoryError(guard[-1])
                 detail = "\n".join(logs)
                 raise RuntimeError(f"Editing stopped (exit {process.returncode}). {detail}")
             if not result.is_file():

@@ -78,6 +78,21 @@ def estimate_edit_memory(model: dict, unified: bool, limit: int) -> int:
     return int(max(conditioning, sampling) * 1.1)
 
 
+def _sysctl_int(name: str) -> int | None:
+    """An integer sysctl on macOS, read in-process (no subprocess, no timeout)."""
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    except OSError:
+        return None
+    value = ctypes.c_int64(0)
+    size = ctypes.c_size_t(ctypes.sizeof(value))
+    if libc.sysctlbyname(name.encode(), ctypes.byref(value), ctypes.byref(size), None, 0):
+        return None
+    return value.value
+
+
 def read_host_memory(unified: bool = False) -> EditMemory:
     import psutil
 
@@ -86,21 +101,11 @@ def read_host_memory(unified: bool = False) -> EditMemory:
     pressure = "unknown"
     obtainable = 0
     if unified:
-        import subprocess
-
-        try:
-            result = subprocess.run(
-                ["sysctl", "-n", "kern.memorystatus_vm_pressure_level", "kern.memorystatus_level"],
-                capture_output=True,
-                text=True,
-                timeout=1,
-                check=True,
-            )
-            level, free_percent = result.stdout.split()[:2]
-            pressure = {"1": "low", "2": "warning", "4": "critical"}.get(level, "unknown")
-            obtainable = int(ram.total) * min(100, max(0, int(free_percent))) // 100
-        except (OSError, subprocess.SubprocessError, ValueError):
-            pass
+        level = _sysctl_int("kern.memorystatus_vm_pressure_level")
+        free_percent = _sysctl_int("kern.memorystatus_level")
+        pressure = {1: "low", 2: "warning", 4: "critical"}.get(level, "unknown")
+        if free_percent is not None:
+            obtainable = int(ram.total) * min(100, max(0, free_percent)) // 100
     return EditMemory(
         int(ram.total),
         int(ram.available),
@@ -126,7 +131,9 @@ def read_edit_memory(device: str) -> EditMemory:
 
 
 def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> EditPlan:
-    if memory.pressure in {"warning", "critical", "high"}:
+    if memory.pressure in {"critical", "high"} or (
+        not memory.unified and memory.pressure == "warning"
+    ):
         raise MemoryError("Memory pressure is high. Close other apps before editing.")
     reserve = reserve_for(memory.total_ram, memory.unified)
     limit = min(1024, max_dimension)
@@ -170,18 +177,54 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
     return EditPlan(required, reserve, budget, limit, process_limit)
 
 
-def check_edit_pressure(memory: EditMemory, plan: EditPlan, initial_swap: int, rss: int):
-    """Stop when the system runs short, starts to swap, or the editor outgrows its limit.
+# On unified memory macOS compresses and swaps to make room, and "warning"
+# pressure is routine while a model loads (measured: a FLUX.2 klein edit raised it
+# at 34% free with no swap). The edit stops only when the Mac is in trouble.
+HEAVY_SWAP = 2 * GIB
+SUSTAINED_WARNING_SECONDS = 30.0
+WARNING_SWAP = 512 * 1024**2
 
-    ``rss`` is the editor's own memory: its physical footprint on macOS, where
+
+def check_edit_pressure(
+    memory: EditMemory,
+    plan: EditPlan,
+    initial_swap: int,
+    used: int,
+    warning_seconds: float = 0.0,
+    critical_samples: int = 1,
+):
+    """Stop the edit when the system is in trouble or the editor runs away.
+
+    ``used`` is the editor's own memory: its physical footprint on macOS, where
     memory-mapped weights are clean pages the system can drop, else its RSS.
+    ``warning_seconds`` is how long pressure has stayed at warning or above, and
+    ``critical_samples`` how many consecutive samples have been critical.
     """
-    if (
-        memory.free_ram < plan.reserve_ram
-        or memory.swap_used > initial_swap + 512 * 1024**2
-        or memory.pressure in {"warning", "critical", "high"}
-        or rss > plan.process_limit
-    ):
-        raise MemoryError(
-            "Editing stopped to protect system memory. Close apps or use a smaller model."
+    swapped = memory.swap_used - initial_swap
+    advice = "Close apps or choose a smaller model, and retry."
+    if used > plan.process_limit:
+        reason = (
+            f"the editor used {used / GIB:.1f} GiB, more than its "
+            f"{plan.process_limit / GIB:.1f} GiB limit"
         )
+    elif memory.unified:
+        if memory.pressure == "critical" and critical_samples >= 2:
+            reason = "macOS reported critical memory pressure"
+        elif swapped > HEAVY_SWAP:
+            reason = f"the Mac swapped {swapped / GIB:.1f} GiB to disk"
+        elif warning_seconds >= SUSTAINED_WARNING_SECONDS and swapped > WARNING_SWAP:
+            reason = (
+                f"memory pressure stayed high for {warning_seconds:.0f} s "
+                f"while the Mac swapped {swapped / GIB:.1f} GiB"
+            )
+        else:
+            return
+    elif memory.free_ram < plan.reserve_ram:
+        reason = f"only {memory.free_ram / GIB:.1f} GiB of memory was left"
+    elif swapped > WARNING_SWAP:
+        reason = f"the system swapped {swapped / GIB:.1f} GiB"
+    elif memory.pressure in {"warning", "critical", "high"}:
+        reason = "memory pressure became high"
+    else:
+        return
+    raise MemoryError(f"Editing stopped to protect system memory: {reason}. {advice}")

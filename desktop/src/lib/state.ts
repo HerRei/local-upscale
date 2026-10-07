@@ -427,7 +427,10 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
       next.runtime.status_title = data.unit === 'steps' ? 'Editing' : 'Enhancing';
-      next.runtime.status_detail = `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} ${data.unit === 'steps' ? 'steps' : 'tiles'}${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
+      // Editing names its phase; most of an edit happens outside the steps.
+      next.runtime.status_detail = data.detail
+        ? String(data.detail)
+        : `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} ${data.unit === 'steps' ? 'steps' : 'tiles'}${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.throughput =

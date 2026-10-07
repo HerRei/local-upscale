@@ -35,6 +35,10 @@
   export let compactHidden = false;
   export let modelLabel = '';
   export let activityLabel = '';
+  // Editing names its phase and reports an overall percentage; tiles do not exist.
+  export let activityDetail = '';
+  export let activityProgress = 0;
+  export let editing = false;
   export let processing = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
@@ -733,7 +737,8 @@
           Comparison unavailable: {comparisonError}
         </p>{/if}
       {#if processing}
-        <div class="model-activity" role="status">
+        {#if editing}<div class="edit-sweep" aria-hidden="true"></div>{/if}
+        <div class="model-activity" class:with-progress={editing} role="status">
           <i></i><span
             >{modelLabel} · {activityLabel
               ? `${activityLabel}${progressiveFrame >= 0 ? ` · Frame ${progressiveFrame + 1}` : ''}`
@@ -743,6 +748,11 @@
               ? ' · SDR display preview'
               : ''}</span
           >
+          {#if editing}<small
+              >{activityDetail || 'Starting…'} · {Math.round(activityProgress)}%</small
+            ><b class="activity-track"
+              ><em style={`width:${Math.max(2, Math.min(100, activityProgress))}%`}></em></b
+            >{/if}
         </div>
       {/if}
       {#if videoComparison}
@@ -978,8 +988,72 @@
     border-top-color: #b9ccff;
     animation: model-spin 1s linear infinite;
   }
+  .model-activity.with-progress {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    row-gap: 6px;
+    min-width: 260px;
+  }
+  .model-activity small {
+    grid-column: 2;
+    color: #9fb3e6;
+    font-size: 11px;
+  }
+  .activity-track {
+    grid-column: 1 / -1;
+    position: relative;
+    display: block;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: #2a3554;
+  }
+  .activity-track em {
+    position: relative;
+    display: block;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #346dd7, #7ea9ff);
+    transition: width 0.5s ease;
+  }
+  .activity-track em::after,
+  .edit-sweep {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 35%,
+      rgba(214, 226, 255, 0.55) 50%,
+      transparent 65%
+    );
+    background-size: 250% 100%;
+    animation: sweep 1.6s linear infinite;
+  }
+  .edit-sweep {
+    z-index: 7;
+    pointer-events: none;
+    background: linear-gradient(
+      100deg,
+      transparent 40%,
+      rgba(185, 204, 255, 0.07) 50%,
+      transparent 60%
+    );
+    background-size: 250% 100%;
+    animation-duration: 3.2s;
+  }
   .active-tile {
     animation: tile-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes sweep {
+    from {
+      background-position: 125% 0;
+    }
+    to {
+      background-position: -125% 0;
+    }
   }
   .source-image.waiting-frame {
     visibility: hidden;
@@ -997,7 +1071,9 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .model-activity i,
-    .active-tile {
+    .active-tile,
+    .activity-track em::after,
+    .edit-sweep {
       animation: none;
     }
   }

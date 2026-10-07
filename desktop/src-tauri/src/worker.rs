@@ -661,13 +661,20 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let editing = string(data, "unit") == "steps";
             runtime.status_title = if editing { "Editing" } else { "Enhancing" }.into();
             let remaining = number(data, "estimated_remaining_seconds");
-            runtime.status_detail = format!(
-                "{} of {} {}{}",
-                integer(data, "completed_tiles"),
-                integer(data, "total_tiles"),
-                if editing { "steps" } else { "tiles" },
-                eta_suffix(remaining)
-            );
+            // Editing spends most of its time outside the sampling steps; the
+            // worker then names the phase it is in.
+            let detail = string(data, "detail");
+            runtime.status_detail = if detail.is_empty() {
+                format!(
+                    "{} of {} {}{}",
+                    integer(data, "completed_tiles"),
+                    integer(data, "total_tiles"),
+                    if editing { "steps" } else { "tiles" },
+                    eta_suffix(remaining)
+                )
+            } else {
+                detail
+            };
             runtime.elapsed_seconds = number(data, "elapsed_seconds");
             runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
             let completed = integer(data, "completed_tiles") as f64;

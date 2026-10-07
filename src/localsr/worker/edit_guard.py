@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from localsr.core.edit_memory import EditPlan, check_edit_pressure, read_host_memory
@@ -139,6 +140,8 @@ def main(args=None) -> int:
             creationflags=0x08000000 if os.name == "nt" else 0,
         )
         watched = psutil.Process(process.pid)
+        warning_since = None
+        critical_samples = 0
         while process.poll() is None:
             if cancelled.wait(0.25):
                 return 130
@@ -146,7 +149,19 @@ def main(args=None) -> int:
                 used = process_memory(watched)
             except psutil.NoSuchProcess:
                 break
-            check_edit_pressure(read_host_memory(spec["unified"]), plan, spec["swap_used"], used)
+            memory = read_host_memory(spec["unified"])
+            now = time.monotonic()
+            raised = memory.pressure in {"warning", "critical"}
+            warning_since = (warning_since or now) if raised else None
+            critical_samples = critical_samples + 1 if memory.pressure == "critical" else 0
+            check_edit_pressure(
+                memory,
+                plan,
+                spec["swap_used"],
+                used,
+                warning_seconds=now - warning_since if warning_since else 0.0,
+                critical_samples=critical_samples,
+            )
         return process.wait()
     except MemoryError as error:
         print(str(error), file=sys.stderr, flush=True)

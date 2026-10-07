@@ -262,6 +262,8 @@ class ProgressUpdate:
     mps_driver_allocated_memory: int = 0
     mps_recommended_max_memory: int = 0
     unit: str = "tiles"
+    # A short phase label for jobs whose units say little on their own (editing).
+    detail: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "progress", "data": asdict(self)})

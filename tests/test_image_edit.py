@@ -122,21 +122,23 @@ def test_measured_flux_klein_run_does_not_trip_the_supervisor():
 def test_host_memory_reads_the_macos_free_level(monkeypatch):
     from localsr.core import edit_memory
 
-    def sysctl(command, **_):
-        assert command[-2:] == ["kern.memorystatus_vm_pressure_level", "kern.memorystatus_level"]
-        return subprocess.CompletedProcess(command, 0, stdout="1\n71\n")
-
-    monkeypatch.setattr(subprocess, "run", sysctl)
+    values = {"kern.memorystatus_vm_pressure_level": 2, "kern.memorystatus_level": 71}
+    monkeypatch.setattr(edit_memory, "_sysctl_int", values.get)
     memory = edit_memory.read_host_memory(unified=True)
-    assert memory.pressure == "low"
+    assert memory.pressure == "warning"
     assert memory.obtainable_ram == memory.total_ram * 71 // 100 == memory.free_ram
 
-    def broken(command, **_):
-        raise subprocess.TimeoutExpired(command, 1)
-
-    monkeypatch.setattr(subprocess, "run", broken)
+    monkeypatch.setattr(edit_memory, "_sysctl_int", lambda _: None)
     memory = edit_memory.read_host_memory(unified=True)
     assert memory.obtainable_ram == 0 and memory.free_ram == memory.available_ram
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS sysctl")
+def test_sysctl_reads_the_real_free_level():
+    from localsr.core import edit_memory
+
+    assert 0 <= edit_memory._sysctl_int("kern.memorystatus_level") <= 100
+    assert edit_memory._sysctl_int("kern.memorystatus_vm_pressure_level") in {1, 2, 4}
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS footprint")
@@ -158,20 +160,71 @@ def test_pressure_or_busy_gpu_refuses_loading(memory):
         plan_edit(model(), memory)
 
 
+MAC_PLAN = EditPlan(16 * GIB, 2 * GIB, 10 * GIB, 512, 16 * GIB)
+MAC_RUNNING = EditMemory(24 * GIB, 4 * GIB, 0, unified=True, pressure="low", obtainable_ram=6 * GIB)
+
+
 @pytest.mark.parametrize(
-    "change,rss",
+    "change,used,warning_seconds,critical_samples,reason",
     [
-        ({"available_ram": 2 * GIB}, 0),
-        ({"swap_used": GIB}, 0),
-        ({"pressure": "warning"}, 0),
-        ({}, 17 * GIB),
+        ({"pressure": "critical"}, 0, 1.0, 2, "critical memory pressure"),
+        ({"swap_used": 3 * GIB}, 0, 0.0, 0, "swapped 3.0 GiB"),
+        ({"pressure": "warning", "swap_used": GIB}, 0, 31.0, 0, "stayed high for 31 s"),
+        ({}, 17 * GIB, 0.0, 0, "more than its 16.0 GiB limit"),
     ],
 )
-def test_runtime_pressure_swap_and_process_growth_stop_editing(change, rss):
-    initial = EditMemory(24 * GIB, 23 * GIB, unified=True)
+def test_mac_supervisor_stops_only_when_the_system_is_in_trouble(
+    change, used, warning_seconds, critical_samples, reason
+):
+    with pytest.raises(MemoryError, match=reason):
+        check_edit_pressure(
+            replace(MAC_RUNNING, **change),
+            MAC_PLAN,
+            0,
+            used,
+            warning_seconds=warning_seconds,
+            critical_samples=critical_samples,
+        )
+
+
+@pytest.mark.parametrize(
+    "change,warning_seconds,critical_samples",
+    [
+        # Compression and some swap are how a unified-memory Mac makes room.
+        ({"pressure": "warning"}, 120.0, 0),
+        ({"swap_used": GIB}, 0.0, 0),
+        ({"pressure": "critical"}, 0.0, 1),
+        ({"obtainable_ram": GIB // 2, "available_ram": GIB // 4}, 0.0, 0),
+    ],
+)
+def test_mac_supervisor_lets_macos_compress_and_swap_a_little(
+    change, warning_seconds, critical_samples
+):
+    check_edit_pressure(
+        replace(MAC_RUNNING, **change),
+        MAC_PLAN,
+        0,
+        4 * GIB,
+        warning_seconds=warning_seconds,
+        critical_samples=critical_samples,
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"available_ram": 2 * GIB}, {"swap_used": GIB}, {"pressure": "warning"}],
+)
+def test_gpu_host_supervisor_keeps_its_reserve(change):
+    initial = EditMemory(64 * GIB, 60 * GIB, gpu_total=16 * GIB, gpu_free=12 * GIB)
     plan = EditPlan(16 * GIB, 4 * GIB, 10 * GIB, 512, 16 * GIB)
     with pytest.raises(MemoryError, match="protect system memory"):
-        check_edit_pressure(replace(initial, **change), plan, 0, rss)
+        check_edit_pressure(replace(initial, **change), plan, 0, 0)
+
+
+def test_mac_admission_accepts_warning_pressure_but_not_critical():
+    plan_edit(model("Q4_0", "flux2-klein-4b"), replace(BUSY_16GB_MAC, pressure="warning"))
+    with pytest.raises(MemoryError, match="pressure"):
+        plan_edit(model("Q4_0", "flux2-klein-4b"), replace(BUSY_16GB_MAC, pressure="critical"))
 
 
 def test_bundle_verification_is_streamed_and_rejects_corruption(tmp_path):
@@ -472,3 +525,58 @@ def test_guard_treats_worker_pipe_eof_as_cancellation(monkeypatch, tmp_path):
     path = tmp_path / "guard.json"
     path.write_text(json.dumps(spec))
     assert edit_guard.main([str(path)]) == 130
+
+
+# The phase markers of a real FLUX.2 klein 4B run (sd-cli 3f8527a, 512 px).
+FLUX_LOG = """[INFO   ] diffusion_engine.cpp:732  - loading diffusion model from 'flux-2-klein-4b-Q4_0.gguf'
+[INFO   ] model_loader.cpp:1383 - loading tensors completed, taking 0.41s
+[INFO   ] image.cpp:398  - encode_first_stage completed, taking 21.16s
+[INFO   ] model_loader.cpp:1383 - loading tensors completed, taking 0.21s
+[INFO   ] image.cpp:529  - get_learned_condition completed, taking 21.99s
+[INFO   ] image.cpp:866  - generating image: 1/1 - seed 42
+  |============>                                     | 1/4 - 13.32s/it
+  |=========================>                        | 2/4 - 7.40s/it
+  |==================================================| 4/4 - 7.40s/it
+[INFO   ] image.cpp:899  - sampling completed, taking 35.53s
+[INFO   ] image.cpp:554  - decoding 1 latents
+  |========>                                         | 1/6 - 8.53s/it
+  |==================================================| 6/6 - 7.88s/it
+[INFO   ] image.cpp:624  - decode_first_stage completed, taking 48.45s
+[INFO   ] main.cpp:497  - save result image 0 to 'result.png'"""
+
+
+def test_edit_progress_follows_the_runtime_log_and_never_stands_still():
+    now = [0.0]
+    tracker = image_edit.EditProgress(4, clock=lambda: now[0])
+    seen = []
+
+    def look():
+        seen.append(tracker.snapshot())
+        return seen[-1]
+
+    tracker.checked(0.5)
+    assert look()[1] == "Checking the model files"
+    tracker.enter(1)
+    assert look()[1] == "Loading the model"
+    for line in FLUX_LOG.splitlines():
+        before = look()[0]
+        now[0] += 10  # time passes inside every phase
+        assert look()[0] >= before, "the bar never moves backwards"
+        tracker.feed(line)
+    labels = [label for _, label in seen]
+    for expected in (
+        "Reading the photo",
+        "Reading your instruction",
+        "Editing · step 2 of 4",
+        "Finishing the image · part 1 of 6",
+        "Saving",
+    ):
+        assert expected in labels
+    assert tracker.completed_steps == 4
+    # Phases without a counter still creep forward while time passes.
+    stuck = image_edit.EditProgress(4, clock=lambda: now[0])
+    stuck.enter(2)
+    first = stuck.snapshot()[0]
+    now[0] += 20
+    assert stuck.snapshot()[0] > first
+    assert all(percentage <= 99 for percentage, _ in seen)
