@@ -7,6 +7,7 @@ import {
   editDimensions,
   editFitFor,
   editHardwareLabel,
+  editPeakEstimate,
   editSizeLimit,
   recommendAnyEditModel,
   recommendEditModel,
@@ -91,16 +92,34 @@ describe('Edit helpers', () => {
     expect(editDevice(capabilities, { device_id: 'cpu' })).toBeUndefined();
   });
 
-  it('prefers the Qwen editor, falls back to FLUX.2 klein, then to the smallest bundle', () => {
+  it.each([
+    [8, 'flux2_klein_4b_q4_0'],
+    [16, 'flux2_klein_4b_q4_0'],
+    [24, 'flux2_klein_4b_q8_0'],
+    [32, 'flux2_klein_4b_q8_0'],
+    [36, 'qwen_edit_2511_q3_k_s'],
+    [48, 'qwen_edit_2511_q4_k_m'],
+    [64, 'qwen_edit_2511_q6_k'],
+    [96, 'qwen_edit_2511_q8_0'],
+  ])('starts a %s GB Mac with %s, leaving most memory to the system', (gb, modelId) => {
     const capabilities = demoSnapshot().capabilities;
-    const pick = (gb: number): string | undefined => {
-      capabilities.system_ram_total = gb * EDIT_GIB;
-      return recommendAnyEditModel(models, capabilities, gpu('mps', gb))?.model_id;
-    };
-    expect(pick(36)).toBe('qwen_edit_2511_q6_k');
-    expect(pick(24)).toBe('qwen_edit_2511_q3_k_s');
-    expect(pick(16)).toBe('flux2_klein_4b_q8_0');
-    expect(pick(8)).toBe('flux2_klein_4b_q4_0');
+    capabilities.system_ram_total = Number(gb) * EDIT_GIB;
+    const model = recommendAnyEditModel(models, capabilities, gpu('mps', Number(gb)));
+    expect(model?.model_id).toBe(modelId);
+    if (Number(gb) >= 16)
+      expect(editPeakEstimate(model!)).toBeLessThanOrEqual(Number(gb) * EDIT_GIB * 0.35);
+  });
+
+  it('keeps the largest fitting bundle on a dedicated GPU', () => {
+    const capabilities = demoSnapshot().capabilities;
+    expect(recommendAnyEditModel(models, capabilities, gpu('cuda:0', 24))?.model_id).toBe(
+      'qwen_edit_2511_q8_0',
+    );
+  });
+
+  it('estimates the measured FLUX.2 klein Q4_0 edit like the worker', () => {
+    const q4 = models.find((model) => model.model_id === 'flux2_klein_4b_q4_0')!;
+    expect(editPeakEstimate(q4) / EDIT_GIB).toBeCloseTo(4.51, 1);
   });
 
   it('fits the edit inside the limit on a 32-pixel grid, like the worker', () => {

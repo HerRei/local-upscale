@@ -195,7 +195,8 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
 
 describe('Edit task', () => {
   it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
-    const user = await mountWith(editSnapshot(26));
+    // 36 GB: the Qwen editor fits within the share of memory a default may use.
+    const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit\s?Describe a change$/);
     expect(api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ task: 'edit', edit_model_id: 'qwen_edit_2511_q3_k_s' }),
@@ -224,7 +225,7 @@ describe('Edit task', () => {
   });
 
   it('downloads a missing bundle from the footer before the first edit', async () => {
-    const snapshot = editSnapshot(26);
+    const snapshot = editSnapshot(36);
     snapshot.edit.models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Edit\s?Describe a change$/);
@@ -233,22 +234,22 @@ describe('Edit task', () => {
     expect(api.startEdit).not.toHaveBeenCalled();
   });
 
-  it('falls back to FLUX.2 klein on a 16 GB Mac, with its own step count', async () => {
+  it('starts a 16 GB Mac on FLUX.2 klein Q4_0, with its own step count', async () => {
     const user = await mountWith(editSnapshot(16));
     await chooseTask(user, /^Edit\s?Describe a change$/);
     expect(api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
         task: 'edit',
-        edit_model_id: 'flux2_klein_4b_q8_0',
+        edit_model_id: 'flux2_klein_4b_q4_0',
         edit_steps: 0,
       }),
     );
     expect(screen.getByText('FLUX.2 klein 4B')).toBeTruthy();
-    expect(screen.getByText(/^Q8_0 · Apache-2.0 · [\d.]+ GB · Fits this computer$/)).toBeTruthy();
+    expect(screen.getByText(/^Q4_0 · Apache-2.0 · [\d.]+ GB · Fits this computer$/)).toBeTruthy();
     await user.type(screen.getByLabelText('What to change'), 'Add snow');
     await user.click(screen.getByRole('button', { name: 'Edit selected' }));
     expect(api.startEdit).toHaveBeenCalledWith(
-      expect.objectContaining({ model_id: 'flux2_klein_4b_q8_0', steps: 4, max_dimension: 512 }),
+      expect.objectContaining({ model_id: 'flux2_klein_4b_q4_0', steps: 4, max_dimension: 512 }),
     );
   });
 

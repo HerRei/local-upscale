@@ -91,12 +91,53 @@ export function recommendEditModel(
   );
 }
 
-/** The first preferred family with a fitting bundle, its largest; otherwise the smallest bundle of all. */
+/** Share of a Mac's unified memory the default editing model plans to use. */
+export const MAC_DEFAULT_EDIT_SHARE = 0.35;
+
+/**
+ * Resident memory at the heaviest phase of a 512 px edit on unified memory,
+ * as the worker estimates it (edit_memory.estimate_edit_memory): the encoders,
+ * or the transformer with the VAE and 1.5 GiB of working buffers, plus 10%.
+ */
+export function editPeakEstimate(model: EditModel): number {
+  const size = (role: string): number =>
+    model.files
+      .filter((file) => file.role === role)
+      .reduce((total, file) => total + file.size_bytes, 0);
+  const conditioning = size('text_encoder') + size('vision');
+  const sampling = size('vae') + 1.5 * EDIT_GIB + size('diffusion');
+  return Math.max(conditioning, sampling) * 1.1;
+}
+
+/**
+ * The bundle a computer starts with. On a Mac: the preferred family's largest
+ * bundle that stays within 35% of unified memory, leaving the rest to macOS and
+ * open apps (16 GB → FLUX.2 klein Q4_0, 24–32 GB → FLUX.2 klein Q8_0, 36 GB →
+ * Qwen Q3_K_S, 48 GB → Q4_K_M, 64 GB → Q6_K, 96 GB → Q8_0). Qwen at 2 bits is
+ * left to an explicit choice: FLUX.2 klein Q8_0 is the faster default there.
+ * A dedicated GPU, and a Mac where nothing fits the share, take the preferred
+ * family's largest bundle that fits; otherwise the smallest bundle of all.
+ */
 export function recommendAnyEditModel(
   models: EditModel[],
   capabilities: CapabilityInfo,
   device?: DeviceInfo,
 ): EditModel | undefined {
+  if (device?.id === 'mps') {
+    const budget = capabilities.system_ram_total * MAC_DEFAULT_EDIT_SHARE;
+    for (const family of EDIT_FAMILIES) {
+      const comfortable = models
+        .filter(
+          (model) =>
+            model.family === family.id &&
+            model.quantization !== 'Q2_K' &&
+            editModelFits(model, capabilities, device) &&
+            editPeakEstimate(model) <= budget,
+        )
+        .at(-1);
+      if (comfortable) return comfortable;
+    }
+  }
   for (const family of EDIT_FAMILIES) {
     const fit = models
       .filter((model) => model.family === family.id && editModelFits(model, capabilities, device))
