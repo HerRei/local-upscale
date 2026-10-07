@@ -81,11 +81,17 @@ starting profiles.
 
 ## Memory and lifecycle
 
-- Cached restoration models are released before Qwen admission; the queue runs
+- Cached restoration models are released before an edit is admitted; the queue runs
   one inference job at a time.
-- Current available host RAM is checked before any runtime starts, after bundle
+- Free host memory is checked before any runtime starts, after bundle
   verification, and again in the guard immediately before the native process starts.
-- Host memory reserve: the larger of 4 GiB or 10% of physical RAM. The estimate
+  On a Mac "free" is the system's own free level (`kern.memorystatus_level`, the
+  figure `memory_pressure` prints), which counts file cache and compressible memory
+  macOS hands out without pressure; elsewhere it is the available RAM the OS reports.
+  psutil's macOS figure (free plus inactive pages) reads about 5.5 GiB on a busy
+  16 GB Mac that macOS itself reports as 70% free.
+- Host memory reserve: on a Mac the larger of 2 GiB or 10% of physical RAM, beside
+  a dedicated GPU the larger of 4 GiB or 10%. The estimate
   is the heaviest phase with 10% headroom: the encoders, or the transformer (on
   unified memory) with the VAE and a working set for activations (1.5 GiB on
   unified memory, 1 GiB beside a dedicated GPU, scaled with the edit size). The
@@ -97,9 +103,16 @@ starting profiles.
 - CPU offload, mapped weights, disabled prefetch, two CPU threads, Flash
   Attention and tiled VAE encoding/decoding are enabled. Edit 2511 explicitly enables
   `qwen_image_zero_cond_t=true`, as required by the runtime's model documentation.
-- A small supervisor checks host availability, pressure, swap growth and native
-  RSS every 250 ms. It stops the child when the reserve is crossed, swap grows
-  by more than 512 MiB, memory pressure becomes high, or estimated RSS is exceeded.
+- A small supervisor checks free memory, pressure, swap growth and the native
+  process's memory every 250 ms. It stops the child when free memory falls below
+  the reserve, swap grows by more than 512 MiB, memory pressure reaches warning,
+  or the process outgrows its limit. On a Mac the process is measured by its
+  physical footprint, since the memory-mapped weights are clean pages the system
+  can drop; elsewhere by RSS.
+- Measured on the 16 GB M1 Pro with other apps open (8 October 2026): FLUX.2 klein
+  4B Q4_0 at 512 × 352 px took about 130 s, peaked at a 2.6 GiB footprint (6.4 GiB
+  RSS including mapped weights), kept pressure normal and did not swap; the free
+  level fell from 71% to 40%.
   Its stdin pipe also detects cancellation, worker restart or worker death.
 - Native weights live only in the disposable process. On success, cancellation,
   pressure failure or runtime error the process is reaped and temporary files are

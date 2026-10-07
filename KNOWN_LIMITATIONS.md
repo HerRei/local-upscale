@@ -68,11 +68,12 @@ These apply to v0.1.5-beta. Please read them before starting a long job.
 
 ## Image editing
 
-- Edit is new in v0.1.4-beta, experimental and published for macOS only. Its memory
-  profiles are derived estimates, not measured fits: on the 16 GB M1 Pro used
-  for development the memory guard stopped both test edits because other apps
-  left too little memory free, so no real edit has been validated yet. Close
-  other apps before editing.
+- Edit is experimental and published for macOS only. One configuration is
+  validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro, about two
+  minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
+  the Qwen bundles and larger edit sizes have not run on real hardware yet; their
+  memory profiles are estimates. Up to v0.1.5-beta the memory guard misread free
+  memory on Macs and refused edits that fit.
 - A 16 GB Mac can use FLUX.2 klein 4B; Qwen Image Edit 2511 needs 24 GB or more.
   Edits are limited to 512, 768 or 1024 px on the longest side, one image at a
   time, and the result is a new PNG.

@@ -1,4 +1,4 @@
-"""Qwen editing in a disposable native GGUF process, with guarded admission."""
+"""Image editing in a disposable native GGUF process, with guarded admission."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def edit_catalog() -> list[dict]:
 def validate_request(data: dict) -> dict:
     model = next((m for m in edit_catalog() if m["model_id"] == data.get("model_id")), None)
     if model is None:
-        raise ValueError("Unknown Qwen editing model.")
+        raise ValueError("Unknown editing model.")
     prompt = data.get("prompt", "")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000 or "\0" in prompt:
         raise ValueError("Describe the edit in 1–4000 characters.")
@@ -105,7 +105,9 @@ def verify_bundle(model: dict, directory: Path, cancel: threading.Event) -> dict
     for entry in model["files"]:
         path = directory / entry["filename"]
         if not path.is_file() or path.stat().st_size != entry["size_bytes"]:
-            raise FileNotFoundError("The Qwen bundle is incomplete. Download all components again.")
+            raise FileNotFoundError(
+                "The editing model is incomplete. Download all components again."
+            )
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             while block := stream.read(1024**2):
@@ -113,7 +115,7 @@ def verify_bundle(model: dict, directory: Path, cancel: threading.Event) -> dict
                     raise InterruptedError("Editing cancelled.")
                 digest.update(block)
         if digest.hexdigest() != entry["sha256"]:
-            raise ValueError(f"Qwen component checksum failed: {path.name}. Download it again.")
+            raise ValueError(f"Editing model checksum failed: {path.name}. Download it again.")
         paths[entry["role"]] = path
     return paths
 
@@ -126,7 +128,7 @@ def check_runtime(path: str) -> Path:
     if help_result.returncode != 0 or any(
         flag not in help_result.stdout + help_result.stderr for flag in REQUIRED_FLAGS
     ):
-        raise ValueError("The editing runtime is too old. Install the bundled Qwen runtime.")
+        raise ValueError("The editing runtime is too old. Reinstall LocalSR to restore it.")
     return runtime
 
 
@@ -333,7 +335,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                 raise InterruptedError("Editing cancelled.")
             if process.returncode != 0:
                 detail = "\n".join(logs)
-                raise RuntimeError(f"Qwen editing stopped (exit {process.returncode}). {detail}")
+                raise RuntimeError(f"Editing stopped (exit {process.returncode}). {detail}")
             if not result.is_file():
                 raise RuntimeError("The editing runtime returned no image.")
             with Image.open(result) as image:

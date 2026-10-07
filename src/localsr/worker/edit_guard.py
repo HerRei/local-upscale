@@ -37,6 +37,43 @@ def stop_process(process):
             process.wait(timeout=2)
 
 
+def process_memory(process) -> int:
+    """The editor's own memory: physical footprint on macOS, RSS elsewhere.
+
+    On macOS RSS includes the memory-mapped weights, clean pages the system drops
+    under pressure at no cost; the footprint is what Activity Monitor shows. A
+    FLUX.2 klein 4B edit on a 16 GB Mac peaked at 6.4 GiB RSS and 2.6 GiB footprint.
+    """
+    if sys.platform == "darwin":
+        import ctypes
+
+        class RUsageInfo(ctypes.Structure):
+            _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [
+                (name, ctypes.c_uint64)
+                for name in (
+                    "user_time",
+                    "system_time",
+                    "idle_wakeups",
+                    "interrupt_wakeups",
+                    "pageins",
+                    "wired_size",
+                    "resident_size",
+                    "phys_footprint",
+                    "start_abstime",
+                    "exit_abstime",
+                )
+            ]
+
+        usage = RUsageInfo()
+        try:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+            if libproc.proc_pid_rusage(process.pid, 0, ctypes.byref(usage)) == 0:
+                return int(usage.phys_footprint)
+        except OSError:
+            pass
+    return process.memory_info().rss
+
+
 def reset_dll_search():
     if os.name == "nt" and getattr(sys, "frozen", False):
         import ctypes
@@ -93,7 +130,7 @@ def main(args=None) -> int:
         # Recheck immediately before spawning, including time spent verifying files.
         memory = read_host_memory(spec["unified"])
         check_edit_pressure(memory, plan, spec["swap_used"], 0)
-        if memory.available_ram < plan.required_ram + plan.reserve_ram:
+        if memory.free_ram < plan.required_ram + plan.reserve_ram:
             raise MemoryError("Available memory changed before loading. Close apps and retry.")
         process = subprocess.Popen(
             spec["command"],
@@ -106,10 +143,10 @@ def main(args=None) -> int:
             if cancelled.wait(0.25):
                 return 130
             try:
-                rss = watched.memory_info().rss
+                used = process_memory(watched)
             except psutil.NoSuchProcess:
                 break
-            check_edit_pressure(read_host_memory(spec["unified"]), plan, spec["swap_used"], rss)
+            check_edit_pressure(read_host_memory(spec["unified"]), plan, spec["swap_used"], used)
         return process.wait()
     except MemoryError as error:
         print(str(error), file=sys.stderr, flush=True)

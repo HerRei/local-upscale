@@ -31,8 +31,8 @@ def test_mac_profiles_admit_at_their_tier_and_refuse_below_it(selected):
     capacity = selected["min_unified_memory_gb"]
     memory = EditMemory(capacity * GIB, int(capacity * 0.70 * GIB), unified=True)
     plan = plan_edit(selected, memory)
-    assert plan.required_ram + plan.reserve_ram <= memory.available_ram
-    assert plan.reserve_ram >= 4 * GIB
+    assert plan.required_ram + plan.reserve_ram <= memory.free_ram
+    assert plan.reserve_ram >= 2 * GIB
     assert plan.gpu_budget <= memory.total_ram * 0.60
     assert plan.process_limit >= plan.required_ram
     assert plan.max_dimension == 512
@@ -86,6 +86,64 @@ def test_advertised_total_ram_does_not_authorize_loading_on_a_busy_mac(monkeypat
         image_edit.run_edit_job(
             request, threading.Event(), lambda _: None, sampler=lambda _: memory
         )
+
+
+# Measured on the 16 GB M1 Pro (2026-10-08) with other apps open: psutil reported
+# 5.5 GiB available while macOS reported 71% free; the FLUX.2 klein 4B Q4_0 edit at
+# 512 px ran in 128 s with a 2.6 GiB footprint, no pressure and no swap, and the
+# free level bottomed out at 40% (psutil: 3.2 GiB).
+BUSY_16GB_MAC = EditMemory(
+    16 * GIB,
+    int(5.5 * GIB),
+    int(0.34 * GIB),
+    unified=True,
+    pressure="low",
+    obtainable_ram=16 * GIB * 71 // 100,
+)
+
+
+def test_busy_16gb_mac_admits_flux_klein_when_macos_reports_it_free():
+    plan = plan_edit(model("Q4_0", "flux2-klein-4b"), BUSY_16GB_MAC)
+    assert plan.reserve_ram == 2 * GIB
+    assert plan.gpu_budget == plan.required_ram
+    # Without the macOS free level, psutil's figure alone stays conservative.
+    with pytest.raises(MemoryError, match="currently available"):
+        plan_edit(model("Q4_0", "flux2-klein-4b"), replace(BUSY_16GB_MAC, obtainable_ram=0))
+
+
+def test_measured_flux_klein_run_does_not_trip_the_supervisor():
+    plan = plan_edit(model("Q4_0", "flux2-klein-4b"), BUSY_16GB_MAC)
+    lowest = replace(
+        BUSY_16GB_MAC, available_ram=int(3.16 * GIB), obtainable_ram=16 * GIB * 40 // 100
+    )
+    check_edit_pressure(lowest, plan, BUSY_16GB_MAC.swap_used, int(2.57 * GIB))
+
+
+def test_host_memory_reads_the_macos_free_level(monkeypatch):
+    from localsr.core import edit_memory
+
+    def sysctl(command, **_):
+        assert command[-2:] == ["kern.memorystatus_vm_pressure_level", "kern.memorystatus_level"]
+        return subprocess.CompletedProcess(command, 0, stdout="1\n71\n")
+
+    monkeypatch.setattr(subprocess, "run", sysctl)
+    memory = edit_memory.read_host_memory(unified=True)
+    assert memory.pressure == "low"
+    assert memory.obtainable_ram == memory.total_ram * 71 // 100 == memory.free_ram
+
+    def broken(command, **_):
+        raise subprocess.TimeoutExpired(command, 1)
+
+    monkeypatch.setattr(subprocess, "run", broken)
+    memory = edit_memory.read_host_memory(unified=True)
+    assert memory.obtainable_ram == 0 and memory.free_ram == memory.available_ram
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS footprint")
+def test_supervisor_measures_the_macos_footprint():
+    import psutil
+
+    assert 0 < edit_guard.process_memory(psutil.Process()) <= psutil.Process().memory_info().rss * 2
 
 
 @pytest.mark.parametrize(
