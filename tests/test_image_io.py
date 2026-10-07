@@ -218,3 +218,51 @@ def test_cancel_during_encode_cleans_owned_scratch_and_preserves_existing_output
         )
     assert destination.read_bytes() == b"previous output"
     assert not list(scratch.iterdir())
+
+
+def test_avif_and_jpeg_2000_decode_through_pillow(tmp_path):
+    for name, fmt in (("photo.avif", "AVIF"), ("scan.jp2", "JPEG2000")):
+        path = tmp_path / name
+        Image.new("RGB", (64, 48), (200, 30, 30)).save(path, format=fmt)
+        data = ImageManager().load(str(path))
+        assert data["tensor"].shape == (3, 48, 64)
+
+
+def test_gif_transparency_survives_as_alpha(tmp_path):
+    path = tmp_path / "logo.gif"
+    image = Image.new("P", (8, 8), 0)
+    image.putpalette([0, 0, 0, 255, 0, 0] + [0] * 762)
+    image.paste(1, (2, 2, 6, 6))
+    image.save(path, transparency=0)
+    data = ImageManager().load(str(path))
+    assert data["alpha_image"] is not None
+    assert data["alpha_image"].getextrema() == (0, 255)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is decoded by macOS")
+def test_heic_decodes_through_macos_without_a_spurious_alpha_channel(tmp_path):
+    import subprocess
+
+    source = tmp_path / "source.png"
+    Image.new("RGB", (120, 80), (30, 90, 200)).save(source)
+    heic = tmp_path / "IMG_0001.HEIC"
+    subprocess.run(
+        ["/usr/bin/sips", "-s", "format", "heic", str(source), "--out", str(heic)],
+        check=True,
+        capture_output=True,
+    )
+    data = ImageManager().load(str(heic))
+    assert data["tensor"].shape == (3, 80, 120)
+    assert data["alpha_image"] is None
+    red, green, blue = (float(channel.mean()) for channel in data["tensor"])
+    assert blue > green > red  # the colour survives HEVC and the profile conversion
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is decoded by macOS")
+def test_unreadable_heic_reports_that_macos_could_not_decode_it(tmp_path):
+    from localsr.core.image_io import open_image
+
+    broken = tmp_path / "broken.heic"
+    broken.write_bytes(b"not an image")
+    with pytest.raises(OSError, match="macOS could not decode broken.heic"):
+        open_image(broken)

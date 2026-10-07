@@ -24,7 +24,19 @@ use crate::{
     worker,
 };
 
-const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "dng"];
+// Keep in step with src/localsr/core/image_formats.py.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "gif", "avif", "jp2", "j2k",
+    // Camera RAW, developed by LibRaw.
+    "dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef", "srw",
+    "3fr", "iiq", "erf", "rwl", "mrw", "mef", "mos", "dcr", "kdc",
+];
+/// HEIC/HEIF (HEVC inside) and JPEG XL are decoded by macOS, which licenses the
+/// codec; LocalSR ships no decoder of its own for them.
+#[cfg(target_os = "macos")]
+const SYSTEM_IMAGE_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jxl"];
+#[cfg(not(target_os = "macos"))]
+const SYSTEM_IMAGE_EXTENSIONS: &[&str] = &[];
 const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "m4v", "mkv", "webm", "avi", "mpg", "mpeg", "mpe", "vob", "ts", "mts", "m2ts",
     "wmv", "asf", "flv", "f4v", "3gp", "3g2", "ogv", "divx",
@@ -1956,7 +1968,9 @@ fn unique_output_path(
 
 fn media_kind(path: &Path) -> Option<&'static str> {
     let extension = extension(path)?;
-    if IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+    if IMAGE_EXTENSIONS.contains(&extension.as_str())
+        || SYSTEM_IMAGE_EXTENSIONS.contains(&extension.as_str())
+    {
         Some("image")
     } else if VIDEO_EXTENSIONS.contains(&extension.as_str()) {
         Some("video")
@@ -2245,6 +2259,11 @@ mod tests {
     fn extension_matching_is_case_insensitive_and_bounded() {
         assert_eq!(media_kind(Path::new("A.DNG")), Some("image"));
         assert_eq!(media_kind(Path::new("pixel.BMP")), Some("image"));
+        assert_eq!(media_kind(Path::new("DSCF0001.RAF")), Some("image"));
+        assert_eq!(media_kind(Path::new("IMG_0001.CR3")), Some("image"));
+        assert_eq!(media_kind(Path::new("photo.avif")), Some("image"));
+        let heic = media_kind(Path::new("IMG_0001.HEIC"));
+        assert_eq!(heic, cfg!(target_os = "macos").then_some("image"));
         assert_eq!(media_kind(Path::new("clip.MKV")), Some("video"));
         assert_eq!(media_kind(Path::new("notes.txt")), None);
     }

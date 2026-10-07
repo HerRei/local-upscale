@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
+from localsr.core.image_io import open_image
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
 from localsr.worker.edit_guard import native_environment, stop_process
 
@@ -345,7 +346,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     with tempfile.TemporaryDirectory(prefix="localsr-edit-", dir=scratch or output.parent) as work:
         work = Path(work)
         reference, result = work / "reference.png", work / "result.png"
-        with Image.open(data["image_path"]) as source:
+        with open_image(data["image_path"]) as source:
             if source.width * source.height > 100_000_000:
                 raise ValueError("The source image is too large for a safe edit.")
             image = ImageOps.exif_transpose(source)
