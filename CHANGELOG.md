@@ -310,6 +310,10 @@ The first macOS beta build, given to a few testers. Superseded the same day by
 - Full release verification now rejects duplicate archive digests in addition to validating the
   expected PE, ELF, and Mach-O content.
 
+## [0.0.4 to 0.0.6-alpha] - 2026-08-22
+
+These builds were tagged without their own changelog sections.
+
 ### Added
 
 - SeedVR2-3B temporal video upscaling (experimental): the Upscale Video task now offers
@@ -329,8 +333,8 @@ The first macOS beta build, given to a few testers. Superseded the same day by
   frame with optional temporal-median de-flicker, encodes to MP4 with atomic writes, and
   reports per-frame progress with a live ETA. Clips show their first frame on the canvas
   and duration/frame-count in the queue; batch mode processes the files matching the active
-  task. Face-aware companion pairing applies to video too. Temporal (clip-based) models are
-  the next phase — see docs/video-upscaling-plan.md.
+  task. Face-aware companion pairing applies to video too. Temporal (clip-based) models were
+  the next phase.
 
 ### Changed
 

@@ -148,7 +148,6 @@ the Microsoft Store package is signed by the Store.
 
 ### Runners
 
-The Mac mini's `macmini-macos-x64` runner starts on its own: Docker starts at
-boot, the guest restarts automatically and a login service starts the runner.
-The `macOS Runner Boot Maintenance` workflow can move the listener to a
-pre-login LaunchDaemon. The Windows runner scripts live in `infra/windows/`.
+macOS jobs run on GitHub's hosted Apple Silicon runners; the Mac mini's macOS
+guest is Intel and no longer runs jobs. The Windows runner scripts live in
+`infra/windows/`.

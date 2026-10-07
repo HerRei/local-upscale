@@ -3,7 +3,8 @@
 ## Status
 
 Accepted. Introduced alongside the Slint host in 0.0.10-alpha; since 0.1.0-beta the Tauri host
-is the only desktop interface.
+is the only desktop interface. The coexistence and alpha-publication rules below describe the
+transition and no longer apply.
 
 ## Context
 

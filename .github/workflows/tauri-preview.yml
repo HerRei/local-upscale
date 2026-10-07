@@ -150,9 +150,10 @@ jobs:
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
     strategy:
       fail-fast: false
-      # All three guests run on one physical Mac mini. Keep even the regular
-      # preview verification below the host's thermal and memory contention
-      # threshold instead of compiling in all guests at once.
+      # The Linux and Windows guests share one physical Mac mini (macOS runs on a
+      # hosted runner). Keep even the regular preview verification below the
+      # host's thermal and memory contention threshold instead of compiling in
+      # both guests at once.
       max-parallel: 1
       matrix:
         include:

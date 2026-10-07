@@ -88,7 +88,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
 Review upstream license files and current terms before redistributing LocalSR or using outputs in a
 commercial workflow.
 
-- **Native Qwen editing runtime** — stable-diffusion.cpp and GGML (MIT), pinned to
+- **Native image-editing runtime** — stable-diffusion.cpp and GGML (MIT), pinned to
   `3f8527a46c54ecf4cb4ed6003da8e8982283c73c`. Its retained licenses, third-party
   notices and source revision are bundled under `engine/_internal/edit/`.
   Source: https://github.com/leejet/stable-diffusion.cpp.

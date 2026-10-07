@@ -7,7 +7,8 @@ These apply to v0.1.5-beta. Please read them before starting a long job.
 - Published packages: macOS on Apple Silicon (v0.1.5-beta); Windows CPU, DirectML
   and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
   (still v0.1.3-beta, without image editing). The CUDA and
-  DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU, and
+  DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU (the app
+  labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
   packages are held back; [Platforms](docs/platforms.md) explains why.
 - The CUDA and ROCm editions are several gigabytes and come in parts that must be
@@ -17,9 +18,7 @@ These apply to v0.1.5-beta. Please read them before starting a long job.
   has not been run through the manual desktop checks on those systems.
 - Only the macOS app updates itself. On Windows and Linux, download new versions
   from the website. The Windows installers are not code-signed, so SmartScreen warns
-  before it runs.
-- NVIDIA and Intel XPU GPUs have not been tested on real hardware. Those engines
-  are labelled Labs in the app.
+  before it runs; the Microsoft Store edition, when it ships, is signed by the Store.
 - A working launch does not prove GPU compatibility. Some operators fall back to
   the CPU (for example `aten::roll` on DirectML), and drivers vary.
 
@@ -92,9 +91,6 @@ These apply to v0.1.5-beta. Please read them before starting a long job.
 
 - macOS updates are downloaded and verified in the app. Settings, recipes and
   the queue are backed up before an update is installed.
-- Direct Windows installers for the beta will not be Authenticode signed, so
-  SmartScreen will warn. The Microsoft Store edition, when it ships, is signed by
-  the Store.
 - Uninstalling the Store edition can delete its data folder, including settings
   and recipes. Back it up first; downloaded models live in the shared
   `LocalSR/models` folder and survive.

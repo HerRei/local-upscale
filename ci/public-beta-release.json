@@ -23,7 +23,7 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "coverage": "labs",
-      "package": "not-built",
+      "package": "published",
       "signing": "unsigned-direct-installer"
     },
     {
@@ -32,7 +32,7 @@
       "architecture": "x86_64",
       "backend": "CPU",
       "coverage": "main-path",
-      "package": "test-builds-only",
+      "package": "published",
       "signing": "unsigned-direct-installer"
     },
     {
@@ -41,7 +41,7 @@
       "architecture": "x86_64",
       "backend": "DirectML",
       "coverage": "main-path",
-      "package": "test-builds-only",
+      "package": "published",
       "signing": "unsigned-direct-installer",
       "store": "HerRei.LocalSR",
       "tested_adapters": ["Intel UHD 620"]
@@ -52,7 +52,7 @@
       "architecture": "x86_64",
       "backend": "CPU",
       "coverage": "main-path",
-      "package": "built-unpublished",
+      "package": "published",
       "signing": "sha256-and-update-signature"
     },
     {
@@ -61,7 +61,7 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "coverage": "labs",
-      "package": "built-unpublished",
+      "package": "published",
       "signing": "sha256-and-update-signature"
     },
     {
@@ -70,7 +70,7 @@
       "architecture": "x86_64",
       "backend": "AMD-ROCm",
       "coverage": "main-path",
-      "package": "built-unpublished",
+      "package": "published",
       "signing": "sha256-and-update-signature"
     }
   ]

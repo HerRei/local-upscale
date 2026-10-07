@@ -189,3 +189,21 @@ retained notices; it does not imply the author's endorsement of LocalSR.
 
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
+
+## Image-editing models
+
+The Edit task's bundles are listed in `src/localsr/core/edit_catalog.json` with the exact
+upstream revision, byte size and SHA-256 of every component; [Image editing](image-editing.md)
+describes the bundles and what they need.
+
+- **Qwen Image Edit 2511** — [Qwen](https://huggingface.co/Qwen/Qwen-Image-Edit-2511),
+  Apache-2.0, with GGUF diffusion quantizations by Unsloth, the matching Qwen2.5-VL text and
+  vision encoders and the Qwen Image VAE.
+- **FLUX.2 klein 4B** — [Black Forest Labs](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
+  Apache-2.0, with GGUF diffusion quantizations by leejet, the Qwen3-4B text encoder (Qwen,
+  Apache-2.0, GGUF by Unsloth) and the FLUX.2 autoencoder as published by Comfy-Org (Apache-2.0).
+- **Qwen Image 2.1** is not offered: its Qwen Research License permits research and evaluation
+  only.
+
+Editing weights are optional downloads, verified like every other model and never included in
+installers.

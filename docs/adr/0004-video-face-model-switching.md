@@ -6,6 +6,11 @@ Accepted and implemented with `hat_s_x4_face` (α=0.10, `base_95k_interp_a0p1.pt
 `hat_l_x4_face` (α=0.25, `hat_l_x4_face_task4.pth`). Each pairs reciprocally with its own stock
 variant.
 
+The implementation departs from the decision text below: the choice is made per tile, not per
+frame (mean face overlap of at least 0.85 uses the face model, at most 0.15 the stock one, and
+tiles in between run both and blend them; `src/localsr/core/face_compositing.py`), the protocol
+has no `face_threshold` field, and there is no separate toggle. The v0.0.11 cross-build it mentions no longer exists.
+
 Amended for v0.0.11-alpha: the processing design and fidelity-controlled spatial blend remain
 implemented, but independent rights for the exact checkpoint/training data are not verified. The
 checkpoint is no longer a trusted automatic download; the app accepts only a hash-matching

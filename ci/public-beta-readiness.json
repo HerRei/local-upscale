@@ -86,8 +86,8 @@
       "status": "manual-pass",
       "blocking": true,
       "scope": "legal",
-      "summary": "Maintainer assessment without legal counsel (17 September 2026) in docs/licensing-media.md: demuxing, a user-installed FFmpeg, MPEG-2/AC-3 expiry and OS codecs are settled or negligible; NVIDIA's terms stay open, so CUDA packages are withheld.",
-      "next_action": "Revisit before publishing any CUDA package.",
+      "summary": "Maintainer assessment without legal counsel (17 September 2026) in docs/licensing-media.md: demuxing, a user-installed FFmpeg, MPEG-2/AC-3 expiry and OS codecs are settled or negligible; NVIDIA's terms were assessed as low risk on the same basis as Intel's MKL, and the CUDA packages are published, labelled untested.",
+      "next_action": "Put the open questions to a lawyer before a stable release.",
       "evidence": "docs/licensing-media.md#legal-assessment"
     },
     {

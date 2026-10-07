@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Accepted; amended by ADR 0005 and ADR 0007. The Tauri host replaced Slint in 0.1.0-beta, so
+the Slint-specific notes below are historical, and the tasks are now Upscale, Restore and Edit.
 
 ## Context
 

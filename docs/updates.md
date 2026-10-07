@@ -2,10 +2,12 @@
 
 ## In the app
 
-**About → Update LocalSR** lets you choose the Stable or Beta channel, check for
-a compatible release, read its notes and total download size, download it, and
-install and restart. The beta also checks its feed once at launch and shows a
-notice when a newer build exists. Downloads can run while jobs are processing;
+**Check for Updates…** in the LocalSR menu (the **…** button beside Performance;
+the item reads **Update LocalSR…** once a newer build is waiting) opens Software
+Update: choose the Stable or Beta channel, check for a compatible release, read
+its notes and total download size, download it, and install and restart. The
+beta also checks its feed once at launch and shows a notice when a newer build
+exists. Downloads can run while jobs are processing;
 installation waits until the queue, any cancellation and any model download have
 finished, and the native host enforces that as well as the interface.
 

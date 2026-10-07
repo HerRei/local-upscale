@@ -1,4 +1,4 @@
-# Local Qwen image editing
+# Image editing
 
 **Edit** is a task in the Enhance pane, beside Upscale and Restore. Select an
 image, choose Edit, write what should change, and press **Edit selected**. The
@@ -6,7 +6,7 @@ result is a new PNG in the output folder; the original stays intact. Progress,
 cancellation and the before/after preview use the same queue as every other job.
 Edit works on the selected image only; batches are not supported yet.
 
-The model row under **Model** shows the chosen Qwen bundle with its license, its
+The model row under **Model** shows the chosen editing bundle with its license, its
 download size and whether it fits this computer. **Change…** opens the model
 library on the **Edit with a prompt** group, where every bundle lists what it
 needs on a Mac (unified memory) and on Windows or Linux (GPU memory), whether it
