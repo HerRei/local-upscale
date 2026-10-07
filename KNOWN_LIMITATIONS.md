@@ -30,6 +30,10 @@ These apply to v0.1.6-beta. Please read them before starting a long job.
   format. An FFmpeg on your PATH or in Homebrew is used automatically; LocalSR
   shows the install command when a file needs one. The reasons are in
   [Media formats and licensing](docs/licensing-media.md).
+- HEIC/HEIF and JPEG XL photos open on macOS only, where the system decodes
+  them; Windows and Linux would need an HEVC decoder LocalSR does not ship.
+  Animated GIFs and HEIC bursts use their first image, and camera RAW files
+  other than DNG lose their EXIF date and author.
 - The default video export is AV1. Some older players and editors cannot open it;
   VP9 and lossless FFV1 are built in. H.264/HEVC export uses macOS's encoders
   (MP4 only) or your FFmpeg, from a temporary lossless copy that needs extra

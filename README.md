@@ -44,7 +44,9 @@ machine.
 - **Automation and benchmarks.** A `localsr` command for scripts and watch
   folders, and separate CPU and GPU benchmarks.
 
-Inputs: JPEG, PNG, WebP, TIFF and DNG camera RAW; MP4/MOV, MKV/WebM, AVI,
+Inputs: JPEG, PNG, WebP, TIFF, AVIF, GIF, BMP and JPEG 2000; HEIC/HEIF and JPEG
+XL on macOS (decoded by the system); camera RAW (DNG, Canon CR2/CR3, Nikon NEF,
+Sony ARW, Fujifilm RAF, Olympus ORF, Panasonic RW2 and more); MP4/MOV, MKV/WebM, AVI,
 MPEG/VOB, transport streams, WMV, FLV, 3GP and OGV. Outputs: PNG, JPEG, TIFF and
 WebP; AV1, VP9 or lossless FFV1 video, and H.264/HEVC through macOS's own codecs
 or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·

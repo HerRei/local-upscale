@@ -1,5 +1,6 @@
 import io
 import os
+import subprocess
 import tempfile
 import threading
 import warnings
@@ -10,12 +11,56 @@ import numpy as np
 import torch
 from PIL import Image, ImageCms, ImageOps
 
-from localsr.core.image_formats import is_raw_input
+from localsr.core.image_formats import is_raw_input, is_system_decoded
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 
 
-def _develop_dng(path: str) -> np.ndarray:
+def _decode_with_macos(path: str) -> Image.Image:
+    """Decode HEIC/HEIF or JPEG XL with macOS (ImageIO, through /usr/bin/sips).
+
+    LocalSR ships no HEVC decoder: Apple licenses its own for apps that use the
+    system API. sips applies the orientation to the pixels and keeps the colour
+    profile and the descriptive EXIF tags; a 10-bit photo arrives as a 16-bit
+    TIFF that Pillow reads as 8-bit RGBA.
+    """
+    with tempfile.TemporaryDirectory(prefix="localsr-decode-") as work:
+        target = Path(work) / "decoded.tiff"
+        try:
+            result = subprocess.run(
+                ["/usr/bin/sips", "-s", "format", "tiff", str(path), "--out", str(target)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise OSError(f"macOS could not decode {Path(path).name}: {error}") from error
+        if result.returncode != 0 or not target.is_file():
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise OSError(
+                f"macOS could not decode {Path(path).name}"
+                + (f": {detail[-1][:200]}" if detail else ".")
+            )
+        image = Image.open(io.BytesIO(target.read_bytes()))
+        image.load()
+    if image.mode == "RGBA" and image.getchannel("A").getextrema() == (255, 255):
+        # sips always writes an alpha channel; an opaque one is not transparency.
+        icc, exif = image.info.get("icc_profile"), image.getexif()
+        image = image.convert("RGB")
+        if icc:
+            image.info["icc_profile"] = icc
+        image.getexif().update(exif)
+    return image
+
+
+def open_image(path: str | Path) -> Image.Image:
+    """Open a still image: through macOS for HEIC/HEIF and JPEG XL, else Pillow."""
+    if is_system_decoded(path):
+        return _decode_with_macos(str(path))
+    return Image.open(path)
+
+
+def _develop_raw(path: str) -> np.ndarray:
     # Keep LibRaw out of the GUI process. ImageManager is instantiated by the
     # isolated worker for real jobs, and the import occurs only for RAW input.
     import rawpy
@@ -50,12 +95,14 @@ class ImageManager:
         # separate from the LibRaw pixel decode below.
         metadata_img = None
         try:
-            metadata_img = Image.open(path)
+            metadata_img = open_image(path)
         except (OSError, SyntaxError, ValueError) as error:
             if not is_raw:
                 raise
+            # Pillow reads DNG's TIFF structure but not most other RAW containers;
+            # their pixels still come from LibRaw below.
             warnings.warn(
-                f"Could not read DNG metadata: {error}",
+                f"Could not read RAW metadata: {error}",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -82,7 +129,7 @@ class ImageManager:
 
         if is_raw:
             try:
-                rgb = _develop_dng(path)
+                rgb = _develop_raw(path)
                 img = Image.fromarray(rgb)
                 converted_icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
             finally:
@@ -114,7 +161,9 @@ class ImageManager:
 
         self.original_mode = img.mode
 
-        # Handle Alpha
+        # Handle Alpha. Palette and grey images (GIF, PNG) keep their transparency.
+        if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+            img = img.convert("RGBA")
         if img.mode == "RGBA":
             self.alpha_channel = img.getchannel("A")
             img = img.convert("RGB")
