@@ -32,7 +32,9 @@ def render_icon(size: int, compact: bool = False) -> Image.Image:
     inset, radius = (u(40), u(210)) if compact else (u(100), u(185))
     frame_start, frame_end = (u(236), u(788)) if compact else (u(300), u(724))
     arm, stroke = (u(170), u(84)) if compact else (u(118), u(46))
-    pixel_size, pixel_center = (u(190), u(560)) if compact else (u(112), u(566))
+    # The pixel sits in the exact centre of the frame (frame_start + frame_end) / 2.
+    pixel_size = u(190) if compact else u(112)
+    pixel_center = (frame_start + frame_end) / 2
 
     image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     body = (inset, inset, canvas - inset, canvas - inset)
@@ -49,7 +51,9 @@ def render_icon(size: int, compact: bool = False) -> Image.Image:
         t = (y - inset) / max(1, canvas - inset * 2)
         paper_draw.line(
             (inset, y, canvas - inset, y),
-            fill=tuple(round(a + (b - a) * t) for a, b in zip(PAPER_TOP, PAPER_BOTTOM, strict=True)),
+            fill=tuple(
+                round(a + (b - a) * t) for a, b in zip(PAPER_TOP, PAPER_BOTTOM, strict=True)
+            ),
         )
     mask = Image.new("L", (canvas, canvas), 0)
     ImageDraw.Draw(mask).rounded_rectangle(body, radius=radius, fill=255)
