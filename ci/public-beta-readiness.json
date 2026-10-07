@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "release": "0.1.5-beta",
+  "release": "0.1.6-beta",
   "beta_ready": false,
   "gates": [
     {
@@ -78,7 +78,7 @@
       "status": "decision-required",
       "blocking": true,
       "scope": "distribution",
-      "summary": "macOS v0.1.5-beta and the Windows CPU, DirectML and CUDA installers and Linux CPU, ROCm and CUDA AppImages of v0.1.3-beta are published through the website and GitHub Releases. The Microsoft Store listing (HerRei.LocalSR) is not published.",
+      "summary": "macOS v0.1.6-beta and the Windows CPU, DirectML and CUDA installers and Linux CPU, ROCm and CUDA AppImages of v0.1.3-beta are published through the website and GitHub Releases. The Microsoft Store listing (HerRei.LocalSR) is not published.",
       "next_action": "Submit the Store package once the Windows build is code-signed."
     },
     {

@@ -63,6 +63,10 @@ or media.
 
 - **macOS, M1 Pro 16 GB.** All cases with v0.1.1-beta, plus the in-app update
   from 0.1.0-beta.
+- **Edit, v0.1.6-beta guard (macOS 26.6.1, M1 Pro 16 GB, other apps open).**
+  FLUX.2 klein 4B Q4_0, "make it a sunrise" on a 2048 × 1494 photo at 512 px:
+  admitted at 5.4 GiB psutil / 11.0 GiB macOS free, about 130 s, 2.6 GiB peak
+  footprint, pressure normal throughout, no swap growth, result written.
 - **macOS disk image, v0.1.5-beta (macOS 26.6.1, M1 Pro).** The signed, notarized
   DMG opens in Finder as the drag window: LocalSR left, Applications right, the
   arrow between them on the icon row, LocalSR as the volume icon. The builder's

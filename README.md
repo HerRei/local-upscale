@@ -54,7 +54,7 @@ or an FFmpeg you install. [Metadata and colour](docs/metadata.md) ·
 
 The [download page](https://herrei.github.io/localsr/download/) has:
 
-- **macOS** (v0.1.5-beta), Apple Silicon, macOS 14 or later: a DMG (410 MB), signed and
+- **macOS** (v0.1.6-beta), Apple Silicon, macOS 14 or later: a DMG (410 MB), signed and
   notarized. The app checks for updates at launch and verifies each update's signature.
 - **Windows** (v0.1.3-beta) 10 and 11, x86-64: a CPU installer, plus DirectML and NVIDIA CUDA
   editions that are **untested** on those GPUs. None is code-signed.

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.6-beta] - 2026-10-08
+
+### Fixed
+
+- Edit runs on 16 GB Macs. The memory guard read only free plus inactive pages
+  and kept a 4 GiB reserve, so it refused FLUX.2 klein 4B on a 16 GB M1 Pro that
+  macOS reported as 71% free, and its supervisor would have stopped the edit
+  as soon as that figure dipped. It now uses macOS's own free level, a 2 GiB
+  reserve on Macs, and the editor's physical footprint. Measured: about two
+  minutes per 512 px edit, 2.6 GiB footprint, no swap.
+- Editing error messages no longer call FLUX.2 klein bundles "Qwen".
+
 ## [0.1.5-beta] - 2026-10-08
 
 ### Changed
