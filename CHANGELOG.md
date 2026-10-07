@@ -11,6 +11,22 @@
   reserve on Macs, and the editor's physical footprint. Measured: about two
   minutes per 512 px edit, 2.6 GiB footprint, no swap.
 - Editing error messages no longer call FLUX.2 klein bundles "Qwen".
+- The live memory guard no longer stops an edit at the first "warning"
+  pressure sample: macOS raises it routinely while a model loads (measured at
+  34% free with no swap). On Macs it now stops on critical pressure, more than
+  2 GiB of new swap, or warning pressure lasting 30 s while swapping, and the
+  error says which.
+- A newer app installed from the disk image over one that had updated itself
+  kept running the engine that update had installed, so 0.1.6 ran the 0.1.5
+  engine. The host now uses an installed engine only when it was built for it.
+
+### Changed
+
+- Edit shows its phase (reading the photo, reading your instruction, step k of
+  n, finishing the image) with a moving progress bar on the canvas and the
+  status bar, instead of "0 of 4 steps" for most of the edit.
+- A Mac starts Edit with the best bundle that stays within 35% of its memory:
+  FLUX.2 klein Q4_0 on 16 GB, Q8_0 on 24–32 GB, Qwen from 36 GB.
 
 ## [0.1.5-beta] - 2026-10-08
 

@@ -13,9 +13,19 @@ needs on a Mac (unified memory) and on Windows or Linux (GPU memory), whether it
 fits the current hardware, and the largest edit size this computer starts with.
 The **Edit size** control below the model row offers 512, 768 and 1024 px; sizes
 above this computer's profile are disabled. **Advanced** holds the step count,
-the seed, the output folder and the GPU. LocalSR picks the largest bundle of
-Qwen Image Edit 2511 that fits when Edit is chosen for the first time; if none
-fits, the smallest is shown with the reason it cannot start.
+the seed, the output folder and the GPU. When Edit is chosen for the first
+time, a Mac starts with the best bundle whose estimated peak stays within 35% of
+its unified memory, so macOS and open apps keep the rest: FLUX.2 klein Q4_0 on
+16 GB, Q8_0 on 24–32 GB, then Qwen Q3_K_S (36 GB), Q4_K_M (48 GB), Q6_K (64 GB)
+and Q8_0 (96 GB). Qwen at 2 bits is never the automatic choice. A dedicated GPU
+starts with the largest Qwen bundle its memory holds. A saved choice is kept as
+long as it fits; if nothing fits, the smallest bundle is shown with the reason it
+cannot start.
+
+While an edit runs, the canvas and the status bar name its phase (checking the
+model files, loading, reading the photo, reading your instruction, the sampling
+steps, finishing the image in parts, saving) with an overall percentage. Phases
+without a counter of their own advance with time so the bar never stands still.
 
 The catalog contains two families: Qwen Image Edit 2511 in six GGUF sizes and
 FLUX.2 klein 4B in two sizes. FLUX.2 klein
@@ -104,11 +114,17 @@ starting profiles.
   Attention and tiled VAE encoding/decoding are enabled. Edit 2511 explicitly enables
   `qwen_image_zero_cond_t=true`, as required by the runtime's model documentation.
 - A small supervisor checks free memory, pressure, swap growth and the native
-  process's memory every 250 ms. It stops the child when free memory falls below
-  the reserve, swap grows by more than 512 MiB, memory pressure reaches warning,
-  or the process outgrows its limit. On a Mac the process is measured by its
-  physical footprint, since the memory-mapped weights are clean pages the system
-  can drop; elsewhere by RSS.
+  process's memory every 250 ms and names the reason when it stops an edit. On a
+  Mac, compressing memory and some swapping are how macOS makes room, and
+  "warning" pressure is routine while a model loads, so the edit stops only on
+  critical pressure (two samples in a row), when swap grows by more than 2 GiB,
+  when warning pressure lasts 30 s while swap grows by more than 512 MiB, or
+  when the process outgrows its limit. Beside a dedicated GPU it stops when free
+  host memory falls below the reserve, swap grows by more than 512 MiB, pressure
+  reaches warning, or the process outgrows its limit. On a Mac the process is
+  measured by its physical footprint, since the memory-mapped weights are clean
+  pages the system can drop; elsewhere by RSS. The kernel figures are read
+  in-process (`sysctlbyname`), never by spawning `sysctl`.
 - Measured on the 16 GB M1 Pro with other apps open (8 October 2026): FLUX.2 klein
   4B Q4_0 at 512 × 352 px took about 130 s, peaked at a 2.6 GiB footprint (6.4 GiB
   RSS including mapped weights), kept pressure normal and did not swap; the free
