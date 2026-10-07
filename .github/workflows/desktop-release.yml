@@ -100,7 +100,7 @@ jobs:
           persist-credentials: false
       - name: Revalidate release runner immediately before build
         run: python3 scripts/release_runner_preflight.py --server "$CI_ARTIFACT_SERVER" --platform linux --scratch-path /ci-scratch --scratch-min-free-gib 15 --require-tool python3 --require-tool curl --require-tool git
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -223,7 +223,7 @@ jobs:
           ./scripts/ensure_windows_vc_runtime.ps1
           ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
           py -3.11 scripts/release_runner_preflight.py --server $env:CI_ARTIFACT_SERVER --platform windows --scratch-path C:\ --scratch-min-free-gib 20 --require-tool py --require-tool git
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -364,7 +364,7 @@ jobs:
           python3 scripts/release_runner_preflight.py \
             --platform macos --scratch-path "$RUNNER_TEMP" --scratch-min-free-gib 10 \
             --require-tool python3 --require-tool git --require-tool codesign --require-tool xcrun
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
