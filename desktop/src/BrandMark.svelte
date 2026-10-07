@@ -21,8 +21,8 @@
   />
   <rect
     class="pixel"
-    x={variant === 'tile' ? 11.6 : 9.25}
-    y={variant === 'tile' ? 11.6 : 9.25}
+    x={variant === 'tile' ? 10.2 : 9.25}
+    y={variant === 'tile' ? 10.2 : 9.25}
     width={variant === 'tile' ? 3.6 : 5.5}
     height={variant === 'tile' ? 3.6 : 5.5}
     rx="1"
