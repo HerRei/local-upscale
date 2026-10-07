@@ -15,7 +15,8 @@ PROFILE=LocalSR-Z2TU844D84-notary
 OUT="$PWD/build/release-$VERSION"
 mkdir -p "$OUT"
 APP_NAME="LocalSR.app"
-HOST_BASE="https://macmini-ci.tail34a4e0.ts.net/releases/v$VERSION"
+# The update feed points at the GitHub release assets; copies on the Mac mini are a fallback.
+HOST_BASE="https://github.com/HerRei/local-upscale/releases/download/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 
 test -z "$(git status --porcelain -- src desktop packaging scripts pyproject.toml)" || { echo "uncommitted source changes"; exit 1; }
@@ -30,6 +31,7 @@ for required in build/lgpl-media/dist/corresponding-source build/lgpl-media/open
     exit 1
   }
 done
+python -c 'import dmgbuild' 2>/dev/null || { echo "missing dmgbuild: uv pip install --python .venv/bin/python 'dmgbuild>=1.6.7,<2'"; exit 1; }
 COMMIT=$(git rev-parse HEAD)
 export LOCALSR_UPDATE_PUBLIC_KEY="$(tr -d '\n' < packaging/updates/production.pub)"
 export LOCALSR_UPDATE_BACKEND=mps
@@ -66,15 +68,13 @@ spctl --assess --type execute --verbose=2 "$APP"
 
 step "disk image"
 DMG="$OUT/LocalSR-v$VERSION-macOS-arm64.dmg"
-STAGE="$OUT/dmg-stage"
-rm -rf "$STAGE" "$DMG" && mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/$APP_NAME" && ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "LocalSR $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" > /dev/null
+# The drag-to-Applications window: app, Applications shortcut and the arrow background.
+python scripts/make_macos_dmg.py --app "$APP" --out "$DMG" --volname "LocalSR $VERSION" > "$OUT/dmg-build.log" 2>&1
 codesign --force --sign "$IDENTITY" --timestamp "$DMG"
 notarize "$DMG" "$OUT/notary-dmg.json"
 xcrun stapler staple "$DMG" && xcrun stapler validate "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
-rm -rf "$STAGE" "$OUT/notarize-app.zip"
+rm -f "$OUT/notarize-app.zip"
 
 step "signed update archive"
 UPDATE="$OUT/LocalSR-v$VERSION-macOS-arm64.app.tar.gz"

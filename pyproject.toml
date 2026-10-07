@@ -56,6 +56,8 @@ video = [
     "gguf",
 ]
 package = ["pyinstaller>=6.21.0,<7", "pillow>=10.0.0"]
+# scripts/make_macos_dmg.py: the drag-to-Applications disk image.
+macos-release = ["dmgbuild>=1.6.7,<2"]
 face = [
     # 4.10 is the newest line with both macOS 12 x86_64 and arm64 wheels
     # while remaining compatible with the NumPy 1.x runtime required by the

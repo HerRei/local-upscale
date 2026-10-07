@@ -27,6 +27,14 @@ source, and writes `beta.json`, `release.json` and `SHA256SUMS` under
 entries: the updater strips the bundle name from every path, so a hidden
 `._LocalSR.app` entry becomes an empty path and the install fails.
 
+The disk image opens as one Finder window with LocalSR on the left, the
+Applications shortcut on the right and an arrow between them.
+`scripts/make_macos_dmg.py` builds it with dmgbuild (the `macos-release` extra:
+`uv pip install --python .venv/bin/python 'dmgbuild>=1.6.7,<2'`); the layout
+constants live there, and `packaging/macos/installer/build_background.py`
+renders the 1x and 2x backgrounds from them. Re-render and commit the
+backgrounds after changing the layout.
+
 The script needs the media runtime's corresponding source in this checkout —
 `build/lgpl-media/{dist,opencv}/corresponding-source` and the tarballs in
 `build/extra-sources/` — and refuses to start without them, because they are
