@@ -48,7 +48,7 @@ video = [
     # The release that fixes the custom-pipeline RCEs. The older pin that Intel
     # macOS needed is gone with that platform: PyTorch publishes no maintained
     # wheels for it, so no LocalSR package targets it.
-    "diffusers>=0.38.0,<0.39",
+    "diffusers>=0.38.0,<0.41",
     "rotary-embedding-torch>=0.5.3",
     "einops",
     "psutil",
