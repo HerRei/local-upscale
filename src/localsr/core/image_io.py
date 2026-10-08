@@ -60,6 +60,13 @@ def open_image(path: str | Path) -> Image.Image:
     return Image.open(path)
 
 
+def open_photo(path: str | Path) -> Image.Image:
+    """Open any supported still image as pixels: camera RAW is developed by LibRaw."""
+    if is_raw_input(path):
+        return Image.fromarray(_develop_raw(str(path)))
+    return open_image(path)
+
+
 def _develop_raw(path: str) -> np.ndarray:
     # Keep LibRaw out of the GUI process. ImageManager is instantiated by the
     # isolated worker for real jobs, and the import occurs only for RAW input.

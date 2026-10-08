@@ -266,3 +266,18 @@ def test_unreadable_heic_reports_that_macos_could_not_decode_it(tmp_path):
     broken.write_bytes(b"not an image")
     with pytest.raises(OSError, match="macOS could not decode broken.heic"):
         open_image(broken)
+
+
+def test_open_photo_develops_camera_raw_for_editing(tmp_path, monkeypatch):
+    from localsr.core.image_io import open_photo
+
+    path = tmp_path / "DSCF0001.RAF"
+    path.write_bytes(b"not a TIFF, as most RAW containers are not")
+    fake_raw = FakeRawDecode(np.full((4, 6, 3), 90, dtype=np.uint8))
+    monkeypatch.setitem(
+        sys.modules,
+        "rawpy",
+        SimpleNamespace(imread=lambda _path: fake_raw, ColorSpace=SimpleNamespace(sRGB=object())),
+    )
+    with open_photo(path) as image:
+        assert image.size == (6, 4) and image.mode == "RGB"
