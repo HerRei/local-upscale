@@ -124,7 +124,7 @@
     padding: 14px;
     background: rgba(106, 137, 221, 0.07);
     border: 1px solid rgba(106, 137, 221, 0.3);
-    border-radius: 9px;
+    border-radius: var(--radius);
     font-size: 12px;
   }
   .memory-panel.failed {

@@ -8,6 +8,10 @@ own terms; this file is a distribution notice, not a replacement for their licen
   MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. macOS uses WKWebView and Windows uses WebView2. The Linux AppImages bundle
   WebKitGTK/GTK/GStreamer libraries from Ubuntu 24.04; these include LGPL and other
   licenses and require the matching notices and applicable source/relinking materials.
+- **IBM Plex Sans** — Copyright © 2017 IBM Corp., with Reserved Font Name "Plex", under the
+  SIL Open Font License 1.1. The interface bundles the unmodified variable font from IBM's
+  `@ibm/plex-sans-variable` 0.2.0 package; the license text is in
+  `desktop/src/assets/fonts/OFL.txt`.
 - **PyTorch / TorchVision** — BSD-style licenses from the PyTorch project.
 - **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 12.6 build uses (CUDA
   Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX,

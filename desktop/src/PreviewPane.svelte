@@ -913,7 +913,7 @@
     align-items: center;
     gap: 12px;
     padding: 12px;
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: #171e30ed;
     color: #c3d1fa;
   }
@@ -958,7 +958,7 @@
     right: 16px;
     bottom: 16px;
     padding: 12px;
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: #351918;
     color: #ffc6bd;
   }
@@ -975,7 +975,7 @@
     background: #171e30ed;
     color: #c3d1fa;
     border: 1px solid #506da3;
-    border-radius: 6px;
+    border-radius: var(--radius);
     font-size: 11px;
     pointer-events: none;
   }

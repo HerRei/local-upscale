@@ -189,8 +189,8 @@
     overflow: auto;
     background: #222224;
     padding: 26px;
-    border: 1px solid #505665;
-    border-radius: 14px;
+    border: 1px solid #4a4a4d;
+    border-radius: var(--radius-surface);
     box-shadow: 0 18px 70px #0008;
   }
   h2 {
@@ -201,7 +201,7 @@
   }
   .detail {
     font-size: 12px;
-    color: #aeb7c9;
+    color: #a3a3a6;
   }
   .count {
     display: block;
@@ -218,10 +218,10 @@
     margin-top: 24px;
   }
   .notice {
-    background: #283346;
-    border: 1px solid #4f6894;
+    background: #2a2a2c;
+    border: 1px solid #4a4a4d;
     padding: 12px;
-    border-radius: 8px;
+    border-radius: var(--radius);
   }
   .error {
     color: #f0b2aa;

@@ -51,7 +51,7 @@
     position: absolute;
     inset: 10% 2%;
     border-radius: 50%;
-    background: radial-gradient(ellipse, #467eea2e, transparent 68%);
+    background: radial-gradient(ellipse, #ffffff0d, transparent 68%);
     animation: halo 7s ease-in-out infinite;
   }
   .back-frame {

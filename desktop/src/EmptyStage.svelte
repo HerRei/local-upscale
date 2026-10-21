@@ -129,7 +129,7 @@
     place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 20px;
+    border-radius: var(--radius-surface);
     background: transparent;
     color: inherit;
     font: inherit;
@@ -144,7 +144,7 @@
     stroke: rgba(255, 255, 255, 0.26);
   }
   .well:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--focus);
     outline-offset: 3px;
   }
   .edge {
@@ -176,7 +176,7 @@
     height: 144px;
     margin-bottom: 4px;
     overflow: hidden;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     box-shadow:
       0 18px 40px -14px rgba(0, 0, 0, 0.7),
       0 0 0 1px rgba(255, 255, 255, 0.08);
@@ -195,7 +195,6 @@
     width: 2px;
     margin-left: -1px;
     background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 0 12px rgba(78, 140, 255, 0.8);
   }
   .divider::after {
     content: '';
@@ -213,7 +212,7 @@
     position: absolute;
     top: 8px;
     padding: 4px 6px;
-    border-radius: 5px;
+    border-radius: var(--radius);
     background: rgba(13, 13, 15, 0.72);
     color: #e3e3e6;
     font-size: calc(10px * var(--ui-scale));
@@ -254,7 +253,7 @@
     color: #414143;
   }
   .dropping .well {
-    background: rgba(78, 140, 255, 0.07);
+    background: rgba(255, 255, 255, 0.039);
   }
   .dropping .edge rect {
     stroke: var(--accent);

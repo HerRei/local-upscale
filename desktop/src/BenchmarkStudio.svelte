@@ -180,7 +180,7 @@
   .render-studio {
     margin: 16px 0;
     border: 1px solid #424854;
-    border-radius: 10px;
+    border-radius: var(--radius-surface);
     overflow: hidden;
     background: #1c1c1e;
   }

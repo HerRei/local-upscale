@@ -380,7 +380,7 @@
     align-items: center;
     gap: 10px;
     padding: 12px 16px;
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: #171e30ed;
     color: #c3d1fa;
     pointer-events: none;

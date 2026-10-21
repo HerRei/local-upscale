@@ -71,7 +71,7 @@
     padding: 14px;
     transform: translateX(-50%);
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 14px;
+    border-radius: var(--radius-surface);
     background: rgba(35, 35, 37, 0.9);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
@@ -106,7 +106,7 @@
   .notice-button {
     padding: 6px 11px;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 7px;
+    border-radius: var(--radius);
     background: rgba(255, 255, 255, 0.08);
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));

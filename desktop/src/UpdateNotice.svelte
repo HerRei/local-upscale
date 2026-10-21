@@ -105,7 +105,7 @@
     width: min(440px, calc(100vw - 28px));
     padding: 12px 12px 12px 14px;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 14px;
+    border-radius: var(--radius-surface);
     background: rgba(35, 35, 37, 0.86);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
@@ -118,7 +118,7 @@
     place-items: center;
     width: 34px;
     height: 34px;
-    border-radius: 9px;
+    border-radius: var(--radius);
     background: var(--accent);
     box-shadow: inset 0 1px rgba(255, 255, 255, 0.25);
   }
@@ -175,7 +175,7 @@
   .notice-button {
     padding: 6px 11px;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 7px;
+    border-radius: var(--radius);
     background: rgba(255, 255, 255, 0.08);
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));

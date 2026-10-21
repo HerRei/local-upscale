@@ -52,7 +52,7 @@
       <strong>Add media to begin</strong>
       <p>Images, camera RAW, or video clips. A folder becomes a batch.</p>
       <div class="empty-actions">
-        <button class="button primary" disabled={benchmarkRunning} on:click={() => addFiles(false)}
+        <button class="button" disabled={benchmarkRunning} on:click={() => addFiles(false)}
           >Add Files…</button
         >
         <button class="button" disabled={benchmarkRunning} on:click={addFolder}>Add Folder…</button>
