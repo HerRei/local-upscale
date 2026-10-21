@@ -85,7 +85,6 @@
 </script>
 
 <div class="empty-stage" class:dropping>
-  <div class="glow" aria-hidden="true"><i></i><i></i><i></i></div>
   <button
     class="well"
     type="button"
@@ -122,42 +121,6 @@
     place-items: center;
     overflow: hidden;
     text-align: center;
-  }
-  .glow {
-    position: absolute;
-    inset: -20%;
-    filter: blur(56px);
-    opacity: 0.26;
-    transition: opacity 0.3s;
-    pointer-events: none;
-  }
-  .glow i {
-    position: absolute;
-    border-radius: 50%;
-  }
-  .glow i:nth-child(1) {
-    width: 46%;
-    height: 46%;
-    left: 18%;
-    top: 22%;
-    background: #2f6fe8;
-    animation: drift-a 16s ease-in-out infinite alternate;
-  }
-  .glow i:nth-child(2) {
-    width: 38%;
-    height: 38%;
-    right: 16%;
-    top: 34%;
-    background: #1fa6a0;
-    animation: drift-b 19s ease-in-out infinite alternate;
-  }
-  .glow i:nth-child(3) {
-    width: 30%;
-    height: 30%;
-    left: 40%;
-    bottom: 14%;
-    background: #243a78;
-    animation: drift-a 23s ease-in-out infinite alternate-reverse;
   }
   .well {
     position: absolute;
@@ -290,9 +253,6 @@
     margin-right: 14px;
     color: #414143;
   }
-  .dropping .glow {
-    opacity: 0.6;
-  }
   .dropping .well {
     background: rgba(78, 140, 255, 0.07);
   }
@@ -303,27 +263,11 @@
   .dropping .shot {
     box-shadow:
       0 18px 40px -14px rgba(0, 0, 0, 0.7),
-      0 0 0 2px var(--accent),
-      0 0 40px rgba(78, 140, 255, 0.35);
-  }
-  @keyframes drift-a {
-    to {
-      transform: translate(12%, -8%) scale(1.1);
-    }
-  }
-  @keyframes drift-b {
-    to {
-      transform: translate(-14%, 10%) scale(0.92);
-    }
+      0 0 0 2px var(--accent);
   }
   @media (max-height: 520px) {
     .shot {
       display: none;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .glow i {
-      animation: none;
     }
   }
 </style>
