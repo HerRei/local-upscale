@@ -23,7 +23,7 @@ with your original. The models run on your computer; your photos stay there too.
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 and instructions for each platform:
 
-- **macOS v0.1.7-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
+- **macOS v0.2.0-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
   by Apple, with signed updates in the app.
 - **Windows v0.1.3-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
   CUDA editions; the GPU editions are labelled untested. Installers are unsigned.

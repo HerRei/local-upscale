@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.2.0-beta] - 2026-10-22
+
+A redesigned window for people opening LocalSR for the first time.
+
+### Changed
+
+- One way to download. The button that starts work also fetches the model it
+  needs and says so ("Download 4 MB, then upscale"). The per-model download
+  buttons, the first-run download notice and the separate license box with its
+  own download button are gone; a model's license is a one-line credit with
+  source and terms links.
+- Plain choices. Quick and Best are described by their result instead of by
+  model name. Upscale, Restore and Edit form one switch with a single caption.
+  Upscale handles videos too; the separate Upscale Video task is gone. Ready
+  models carry no label, and the plan only mentions a download when one is
+  needed.
+- No top bar. On wide windows the pane headings form the title row and the
+  window buttons sit beside Media; narrow windows keep a slim bar to switch
+  panes. Models opens from View › Models… (⇧⌘M) and the Change… link,
+  Performance and Diagnostics from the View menu, and Check for Updates… from
+  the LocalSR menu (Help on Windows and Linux).
+- A quieter look. IBM Plex Sans ships with the app, so every platform shows the
+  same typeface. Corners are square (2 px for controls, 4 px for panels),
+  panels are neutral grey, and colour appears only on the button that starts
+  work and its progress, in the terracotta of the logo. Section labels are
+  title case, and nothing is smaller than 10 px.
+- The media list adds files with a + button, shows Single/Batch only when there
+  are two or more items, and reveals remove buttons on hover. A one-line
+  summary of the next job (size, scale, hardware) sits beside Start.
+
+### Fixed
+
+- New installations start on the GPU (Apple silicon, CUDA or ROCm). The default
+  was the CPU, so a first upscale on a Mac ran several times slower than it
+  needed to until Hardware was changed under Advanced.
+- Choosing Best no longer shows two download buttons for the same file with two
+  different sizes (one counted 1,000,000 bytes per MB, the other 1,048,576).
+- Three tests that failed only on Windows (executable bit, FFmpeg stand-in,
+  tiny-frame AV1 encode) now pass there.
+
 ## [0.1.7-beta] - 2026-10-21
 
 ### Fixed

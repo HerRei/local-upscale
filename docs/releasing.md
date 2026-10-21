@@ -1,6 +1,6 @@
 # Releasing
 
-Current release: **v0.1.7-beta** for macOS. Release notes live in
+Current release: **v0.2.0-beta** for macOS. Release notes live in
 [`releases/`](releases/), one file per tag; the release workflow uses that file
 as the GitHub release body.
 
