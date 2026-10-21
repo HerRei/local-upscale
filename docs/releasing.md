@@ -50,12 +50,17 @@ file resumes at the wrong offset.
 
 After the build:
 
+Public installers, source bundles and updater files use
+`https://downloads.hermesr.duckdns.org/releases/v<version>/`. The Infomaniak
+VPS relays encrypted traffic over WireGuard to the Mac mini. GitHub Releases
+is a mirror and transfer source; it is not the primary download host.
+
 1. Copy the DMG, the update archive and its signature, the engine payload and
    its parts, the source bundle and `SHA256SUMS` to the download host. A direct
    `scp` through the Tailscale relay runs at about 750 KB/s; uploading them to a
    **draft** GitHub release and running `gh release download` on the host is far
-   faster and creates no tag. Delete that draft afterwards — publishing it would
-   create the tag and start the full release workflow.
+   faster and creates no tag. A temporary transfer draft can be removed afterward;
+   the actual release draft is published once its exact files are verified.
 2. Verify the copies on the host with `shasum -a 256 -c SHA256SUMS`.
 3. Install the previous version on a test Mac and confirm that the update
    downloads, installs and relaunches on the new version.
