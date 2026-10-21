@@ -325,6 +325,8 @@
   $: bestModel = settings.task
     ? choosePresetModel(snapshot, settings.task, 'best', settings.content, settings.preset_pins)
     : undefined;
+  $: quickDownload = presetDownload('quick', snapshot, settings);
+  $: bestDownload = presetDownload('best', snapshot, settings);
   // Settings saved before the model library exist without a quality; infer it
   // from the selection so Quick/Best light up correctly after an update.
   $: activeQuality = ((): Quality => {
@@ -407,8 +409,9 @@
             : (activeDevice?.name ?? 'detecting hardware')
         }`
       : '';
-  $: taskCaption =
-    settings.task === 'denoise'
+  $: taskCaption = !settings.task
+    ? ''
+    : settings.task === 'denoise'
       ? 'Removes noise, blur and JPEG artifacts at the same size.'
       : settings.task === 'edit'
         ? 'Describe a change in words.'
@@ -714,9 +717,26 @@
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
   }
 
-  function recipeAvailability(model: CatalogModel | undefined): string {
-    if (!model) return '';
-    return model.installed ? '' : `${formatBytes(model.size_bytes)} download`;
+  /** What choosing Quick or Best would still download, fix-first stage included. */
+  function presetDownload(quality: 'quick' | 'best', current: AppSnapshot, ui: UiSettings): string {
+    const task = ui.task;
+    if (!task || task === 'edit') return '';
+    const fix = ui.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
+    const models =
+      task === 'denoise'
+        ? [
+            (fix ? chooseFixModel(current, fix, quality) : undefined) ??
+              choosePresetModel(current, task, quality),
+          ]
+        : [
+            choosePresetModel(current, task, quality, ui.content, ui.preset_pins),
+            task === 'upscale' && fix ? chooseFixModel(current, fix, quality) : undefined,
+          ];
+    const bytes = models.reduce(
+      (total, model) => total + (model && !model.installed ? model.size_bytes : 0),
+      0,
+    );
+    return bytes ? `${formatBytes(bytes)} download` : '';
   }
 
   /**
@@ -1954,7 +1974,7 @@
                 on:click={() => setTask('edit')}>Edit</button
               >
             </div>
-            <p class="task-caption">{taskCaption}</p>
+            {#if taskCaption}<p class="task-caption">{taskCaption}</p>{/if}
           </section>
 
           {#if settings.task === 'video' && selectedMedia?.hdr_format}
@@ -2045,9 +2065,8 @@
                     class:active={activeQuality === 'quick'}
                     aria-pressed={activeQuality === 'quick'}
                     on:click={() => applyPreset('quick')}
-                    ><b>Quick</b><span>{qualityBlurb('quick')}</span
-                    >{#if recipeAvailability(quickModel)}<small
-                        >{recipeAvailability(quickModel)}</small
+                    ><b>Quick</b><span>{qualityBlurb('quick')}</span>{#if quickDownload}<small
+                        >{quickDownload}</small
                       >{/if}</button
                   >
                   <button
@@ -2055,9 +2074,8 @@
                     class:active={activeQuality === 'best'}
                     aria-pressed={activeQuality === 'best'}
                     on:click={() => applyPreset('best')}
-                    ><b>Best</b><span>{qualityBlurb('best')}</span
-                    >{#if recipeAvailability(bestModel)}<small
-                        >{recipeAvailability(bestModel)}</small
+                    ><b>Best</b><span>{qualityBlurb('best')}</span>{#if bestDownload}<small
+                        >{bestDownload}</small
                       >{/if}</button
                   >
                 </div>

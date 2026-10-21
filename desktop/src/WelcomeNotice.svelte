@@ -54,7 +54,7 @@
       <button class="notice-button" type="button" on:click={() => void openUserGuide()}
         >User Guide</button
       >
-      <button class="notice-button primary" type="button" on:click={close}>Got It</button>
+      <button class="notice-button" type="button" on:click={close}>Got It</button>
     </div>
   </section>
 {/if}
@@ -115,11 +115,5 @@
   }
   .notice-button:hover {
     background: rgba(255, 255, 255, 0.13);
-  }
-  .notice-button.primary {
-    border-color: rgba(0, 0, 0, 0.25);
-    background: var(--accent);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.22);
-    color: #fff;
   }
 </style>
