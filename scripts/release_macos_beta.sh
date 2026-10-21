@@ -6,7 +6,9 @@
 # sets the text the update dialog shows for this entry.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+# Keep the compiler, linker and SDK from the same selected toolchain. An older
+# Command Line Tools linker cannot read a newer macOS SDK's library stubs.
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 export PATH="$HOME/.cargo/bin:$(brew --prefix rustup)/bin:$PWD/.venv/bin:$PATH"
 VERSION=$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
 SHORT_VERSION=${VERSION%%-*}

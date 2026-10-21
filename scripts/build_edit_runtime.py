@@ -160,8 +160,7 @@ def build(backend: str, destination: Path, source: Path | None = None, arch: str
         options += [f"-DCMAKE_OSX_ARCHITECTURES={arch}"]
     if sys.platform == "darwin":
         options += ["-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0"]
-        # Link against the SDK of the active toolchain (the release script selects
-        # the Command Line Tools). A build directory configured earlier against
+        # Link against the SDK of the selected toolchain. A build directory configured against
         # a newer Xcode SDK fails at link time ("tapi error: unknown
         # architecture"), so a changed SDK starts a fresh build directory.
         sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
