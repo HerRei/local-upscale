@@ -7,11 +7,11 @@
   <div class="halo"></div>
   <svg viewBox="0 0 280 180" focusable="false">
     <g class="back-frame">
-      <rect x="69" y="29" width="148" height="102" rx="14" />
+      <rect x="69" y="29" width="148" height="102" rx="4" />
       <path d="M85 43h10m12 0h10m12 0h10m12 0h10m12 0h10m12 0h6" />
     </g>
     <g class="picture-frame">
-      <rect class="picture" x="50" y="45" width="164" height="110" rx="14" />
+      <rect class="picture" x="50" y="45" width="164" height="110" rx="4" />
       <path class="mountain" d="M63 135l36-40 27 26 21-20 54 40H63z" />
       <path class="ridge" d="M63 135l36-40 27 26 21-20 54 40" />
       <g class="sun-group">
@@ -19,7 +19,7 @@
         <circle class="sun" cx="172" cy="77" r="10" />
       </g>
       <path class="scan" d="M64 59v82" />
-      <rect class="sheen" x="50" y="45" width="164" height="110" rx="14" />
+      <rect class="sheen" x="50" y="45" width="164" height="110" rx="4" />
     </g>
     <g class="play">
       <circle class="play-ring" cx="213" cy="134" r="24" />
@@ -27,9 +27,9 @@
       <path class="play-mark" d="M208 124v20l15-10z" />
     </g>
     <g class="pixels">
-      <rect class="pixel-a" x="35" y="74" width="6" height="6" rx="2" />
-      <rect class="pixel-b" x="231" y="63" width="9" height="9" rx="3" />
-      <rect class="pixel-c" x="91" y="166" width="5" height="5" rx="2" />
+      <rect class="pixel-a" x="35" y="74" width="6" height="6" rx="0" />
+      <rect class="pixel-b" x="231" y="63" width="9" height="9" rx="0" />
+      <rect class="pixel-c" x="91" y="166" width="5" height="5" rx="0" />
     </g>
     <path class="spark" d="M231 25v12m-6-6h12" />
   </svg>

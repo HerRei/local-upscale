@@ -92,7 +92,7 @@
     on:pointerdown|stopPropagation
     on:click={addFiles}
   >
-    <svg class="edge" aria-hidden="true"><rect width="100%" height="100%" rx="20" /></svg>
+    <svg class="edge" aria-hidden="true"><rect width="100%" height="100%" rx="4" /></svg>
     <span class="content">
       <span class="shot" bind:this={shot} aria-hidden="true">
         <canvas bind:this={canvas}></canvas>
