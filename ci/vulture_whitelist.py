@@ -83,6 +83,7 @@ BenchmarkRequest
 MediaProbeRequest
 
 # Framework callbacks and third-party object attributes.
+_.MAX_IMAGE_PIXELS  # Pillow reads this only in the isolated export-preview child
 _.forward  # torch.nn.Module
 _.do_GET  # http.server handler
 _.do_POST  # http.server handler

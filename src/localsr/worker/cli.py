@@ -4,6 +4,11 @@ import sys
 
 
 def main():
+    if sys.argv[1:2] == ["--large-result-preview"]:
+        from localsr.worker.result_preview import large_result_main
+
+        large_result_main()
+        return
     if sys.argv[1:2] == ["--edit-probe"]:
         from localsr.worker.edit_guard import probe
 

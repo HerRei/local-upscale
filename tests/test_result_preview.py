@@ -1,12 +1,14 @@
 import base64
 import io
 import json
+import os
 import queue
 import threading
 
+import pytest
 from PIL import Image
 
-from localsr.protocol.messages import PreviewReady
+from localsr.protocol.messages import PreviewFailed, PreviewReady
 from localsr.worker.result_preview import ResultPreviewService, render_result_preview
 
 
@@ -114,3 +116,75 @@ def test_preview_failure_keeps_the_original_path(tmp_path):
     result = render_result_preview({"image_path": str(tmp_path / "missing.png")})
     assert result.image_path.endswith("missing.png")
     assert result.error_message
+
+
+@pytest.mark.parametrize("extension", ["png", "jpg", "tiff", "webp"])
+def test_large_export_previews_in_a_child_without_changing_input_limits(
+    tmp_path, monkeypatch, extension
+):
+    path = tmp_path / f"finished.{extension}"
+    Image.new("RGB", (320, 160), (180, 40, 20)).save(path)
+    original = path.read_bytes()
+    # Reproduce the same rejection as a 24 MP photo enlarged 4×, without a
+    # several-hundred-megapixel allocation in the routine test suite.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10000)
+    with pytest.raises(Image.DecompressionBombError):
+        Image.open(path)
+    result = render_result_preview({"image_path": str(path), "max_dimension": 96})
+    assert isinstance(result, PreviewReady)
+    assert (result.width, result.height) == (320, 160)
+    assert Image.MAX_IMAGE_PIXELS == 10000
+    with pytest.raises(Image.DecompressionBombError):
+        Image.open(path)
+    with Image.open(io.BytesIO(base64.b64decode(result.jpeg_base64))) as preview:
+        assert preview.size == (96, 48)
+    assert path.read_bytes() == original
+
+
+def test_large_preview_decoder_failure_is_nonfatal(tmp_path, monkeypatch):
+    import subprocess
+
+    path = tmp_path / "finished.png"
+    Image.new("RGB", (320, 160)).save(path)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10000)
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 180)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    result = render_result_preview({"image_path": str(path)})
+    assert isinstance(result, PreviewFailed)
+    assert result.image_path == str(path)
+    assert Image.MAX_IMAGE_PIXELS == 10000
+
+
+def test_revisiting_result_reuses_preview_until_file_changes(tmp_path, monkeypatch):
+    import localsr.worker.result_preview as module
+
+    path = tmp_path / "finished.png"
+    Image.new("RGB", (320, 160), "red").save(path)
+    emitted = queue.Queue()
+    calls = []
+    real_render = module.render_result_preview
+
+    def render(data):
+        calls.append(data)
+        return real_render(data)
+
+    monkeypatch.setattr(module, "render_result_preview", render)
+    service = ResultPreviewService(emitted.put)
+    request = {"image_path": str(path), "max_dimension": 96}
+    try:
+        service.submit(request)
+        first = emitted.get(timeout=5)
+        service.submit({**request, "comparison": True})
+        assert emitted.get(timeout=5) == first
+        assert len(calls) == 1
+        Image.new("RGB", (320, 160), "blue").save(path)
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        service.submit(request)
+        assert emitted.get(timeout=5).jpeg_base64 != first.jpeg_base64
+        assert len(calls) == 2
+    finally:
+        service.close()

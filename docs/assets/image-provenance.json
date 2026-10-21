@@ -1,0 +1,54 @@
+{
+  "photographer": "Tim Ziegelbaum",
+  "source_page": "https://unsplash.com/photos/modern-apartment-building-with-colorful-balconies-against-blue-sky-n4bofMDUS_Y",
+  "source_image": "https://images.unsplash.com/photo-1760905662814-d1288d915ab5?auto=format&fit=max&w=2400&q=95",
+  "source_sha256": "519a56ab2a7736280c7a3d0253d79faa4c225699592aa5e24f1b55742f96a070",
+  "license": "Unsplash License",
+  "license_url": "https://unsplash.com/license",
+  "subject": "Unité d’Habitation, Marseille, France",
+  "source_dimensions": [
+    2268,
+    4032
+  ],
+  "source_crop_xyxy": [
+    0,
+    1900,
+    2268,
+    3034
+  ],
+  "input_preparation": "Selected landscape crop resized with Pillow Lanczos; no added blur or noise.",
+  "input_dimensions": [
+    480,
+    240
+  ],
+  "output_dimensions": [
+    1920,
+    960
+  ],
+  "detail_crop_input_xyxy": [
+    96,
+    32,
+    256,
+    112
+  ],
+  "pipeline": "LocalSR automation CLI, process",
+  "localsr_commit": "e4dfa2870708ac8c864b04079ae756b70d5e9873",
+  "model_id": "span_photo_x4",
+  "model_name": "SPAN 4x NomosUni — Quick",
+  "model_author": "Philip Hofmann",
+  "model_url": "https://github.com/Phhofm/models/releases/tag/4xNomosUni_span_multijpg",
+  "model_license": "CC BY 4.0",
+  "model_sha256": "3a9037c36de90e7825c030176c8e193dfd7897ef4b5df91b8bdc59ffb6ab65ca",
+  "device": "mps",
+  "precision": "fp32",
+  "tile_size": 256,
+  "halo": 16,
+  "output_encoding": "Lossless WebP, no additional sharpening or color adjustment",
+  "assets": {
+    "marseille-detail-input.png": "441ea0ea2270cb413426bcb92dd91ce541658f4a4fab252a41278e63215af358",
+    "marseille-detail-output.webp": "062b1da7793854517b37405ccd5f5273058fbeaa344892501b5041e1ec76435e",
+    "marseille-input.png": "0a03af5b4b56b0b8cf6b37042536c9c107a36f14a6090192ded5d5d8a06c39a9",
+    "marseille-output.webp": "65cd68af40f9621152ae2d5f37221d62310a92df90714bdf35d026f7385d7cdd",
+    "marseille-print.webp": "5415a24e80524d55c3be099ed2ef61def5e089a945986666be0b25390010b2a7"
+  }
+}

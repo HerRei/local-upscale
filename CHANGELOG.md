@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.7-beta] - 2026-10-21
+
+### Fixed
+
+- Large upscales appear in the comparison view after saving. A 12 MP photo
+  enlarged 4× produces a 195 MP image, which Pillow used to reject as too large
+  when reopening it for a preview. Completed exports now use a separate decoder
+  when needed and return a preview of at most 2048 pixels on the longest side.
+  The saved image keeps its full resolution.
+- Duplicate requests for the same result reuse its preview. Replacing the file
+  refreshes the preview automatically.
+
+### Changed
+
+- Rewrote the README in plain language, with a real before-and-after example
+  and a new screenshot of the model library.
+
 ## [0.1.6-beta] - 2026-10-08
 
 ### Added

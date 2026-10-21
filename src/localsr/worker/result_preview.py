@@ -2,6 +2,10 @@
 
 import base64
 import io
+import json
+import os
+import subprocess
+import sys
 import threading
 import warnings
 
@@ -46,8 +50,56 @@ def render_result_preview(data):
                 height=height,
                 jpeg_base64=base64.b64encode(encoded.getvalue()).decode("ascii"),
             )
+    except Image.DecompressionBombError:
+        # A normal camera photo enlarged 4× can exceed Pillow's input limit.
+        # These are completed, host-authorized exports. Decode them separately
+        # so the input decoder's limit stays intact, including during inference.
+        return _render_large_result(data)
     except Exception as error:  # noqa: BLE001 - a bad preview must not stop the worker
         return PreviewFailed(image_path=path, error_message=str(error))
+
+
+def _render_large_result(data):
+    command = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        command += ["-m", "localsr.worker"]
+    command += ["--large-result-preview"]
+    options = {}
+    if os.name == "nt":
+        options["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        result = subprocess.run(
+            command,
+            input=json.dumps(data),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            **options,
+        )
+        if result.returncode:
+            raise OSError(
+                "The image preview could not be decoded. Your saved image is still available."
+            )
+        message = json.loads(result.stdout)
+        if message["type"] == "preview_ready":
+            return PreviewReady(**message["data"])
+        return PreviewFailed(**message["data"])
+    except subprocess.TimeoutExpired:
+        return PreviewFailed(
+            image_path=str(data.get("image_path", "")),
+            error_message="The preview is taking too long. Your saved image is still available.",
+        )
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return PreviewFailed(image_path=str(data.get("image_path", "")), error_message=str(error))
+
+
+def large_result_main():
+    """Codec-only child for completed exports, never for source image imports."""
+    # This setting belongs only to this short-lived process. The worker retains
+    # Pillow's default checks and receives only a JPEG of at most 2048×2048.
+    Image.MAX_IMAGE_PIXELS = None
+    message = render_result_preview(json.load(sys.stdin))
+    print(message.to_json(), flush=True)
 
 
 class ResultPreviewService:
@@ -59,6 +111,8 @@ class ResultPreviewService:
         self.pending = {}
         self.closed = False
         self.thread = None
+        self.cached_key = None
+        self.cached_preview = None
 
     def submit(self, data):
         if not isinstance(data, dict):
@@ -91,7 +145,25 @@ class ResultPreviewService:
                 if self.closed:
                     return
                 data = self.pending.pop(True if True in self.pending else False)
-            message = render_result_preview(data)
+            # The host may request a completion and selection preview together.
+            # Keep just the latest result, and invalidate it if the file changes.
+            try:
+                stat = os.stat(str(data.get("image_path", "")))
+                key = (
+                    data.get("image_path"),
+                    data.get("max_dimension", 1600),
+                    stat.st_mtime_ns,
+                    stat.st_ctime_ns,
+                    stat.st_size,
+                )
+            except OSError:
+                key = None
+            if key is not None and key == self.cached_key:
+                message = self.cached_preview
+            else:
+                message = render_result_preview(data)
+                if isinstance(message, PreviewReady):
+                    self.cached_key, self.cached_preview = key, message
             with self.condition:
                 if self.closed:
                     return
