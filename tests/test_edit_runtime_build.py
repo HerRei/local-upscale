@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 import zipfile
 from pathlib import Path
 
@@ -40,7 +41,8 @@ def test_only_verified_native_executables_and_libraries_are_extracted(monkeypatc
     destination.mkdir()
     assert build.unpack_verified_release(asset, destination) == {"sd-cli", "native.so.1"}
     assert not (destination / "weights.gguf").exists()
-    assert (destination / "sd-cli").stat().st_mode & 0o111
+    if os.name != "nt":  # Windows has no executable bit
+        assert (destination / "sd-cli").stat().st_mode & 0o111
 
 
 @pytest.mark.parametrize("name", ["../sd-cli", "/sd-cli", "C:\\bin\\sd-cli.exe", "..\\sd-cli.exe"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -260,9 +261,14 @@ def test_user_ffmpeg_selection_is_validated(tmp_path, monkeypatch):
     assert load_external_ffmpeg("") is None
     with pytest.raises(ExternalFFmpegError, match="not an executable"):
         load_external_ffmpeg(str(tmp_path / "missing"))
-    impostor = tmp_path / "ffmpeg"
-    impostor.write_text("#!/bin/sh\necho hello\n")
-    impostor.chmod(0o755)
+    # Windows runs a batch file directly but not a shell script.
+    if os.name == "nt":
+        impostor = tmp_path / "ffmpeg.cmd"
+        impostor.write_text("@echo hello\r\n")
+    else:
+        impostor = tmp_path / "ffmpeg"
+        impostor.write_text("#!/bin/sh\necho hello\n")
+        impostor.chmod(0o755)
     with pytest.raises(ExternalFFmpegError, match="does not identify as FFmpeg"):
         load_external_ffmpeg(str(impostor))
 

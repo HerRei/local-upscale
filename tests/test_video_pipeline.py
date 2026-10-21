@@ -180,11 +180,12 @@ def test_encode_video_atomic_rename_no_tmp_left_on_failure(tmp_path):
     unrelated.write_text("belongs to the user", encoding="utf-8")
 
     def bad_frames():
-        yield np.full((10, 10, 3), 100, dtype=np.uint8)
+        yield np.full((64, 64, 3), 100, dtype=np.uint8)
         raise RuntimeError("simulated mid-encode failure")
 
+    # SVT-AV1 fails to allocate for tiny frames on the Windows runner.
     with pytest.raises(RuntimeError, match="simulated"):
-        encode_video(bad_frames(), str(destination), fps=5.0, width=10, height=10)
+        encode_video(bad_frames(), str(destination), fps=5.0, width=64, height=64)
     assert not destination.exists()
     assert unrelated.read_text(encoding="utf-8") == "belongs to the user"
     assert not list(tmp_path.glob(".broken.mp4.localsr-*.tmp"))
