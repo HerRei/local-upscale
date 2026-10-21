@@ -95,7 +95,7 @@
     line-height: 1.45;
   }
   .text .count {
-    font-size: calc(11.5px * var(--ui-scale));
+    font-size: calc(12px * var(--ui-scale));
   }
   .buttons {
     display: flex;

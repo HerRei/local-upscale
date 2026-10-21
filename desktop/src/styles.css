@@ -1562,7 +1562,7 @@ input[type='text'],
   left: 50%;
   transform: translateX(-50%);
   color: var(--tertiary);
-  font-size: 8px;
+  font-size: 10px;
 }
 .benchmark-facts {
   display: grid;

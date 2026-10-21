@@ -229,7 +229,7 @@
   }
   .title {
     font-size: calc(21px * var(--ui-scale));
-    font-weight: 650;
+    font-weight: 600;
     letter-spacing: -0.015em;
   }
   .subtitle {

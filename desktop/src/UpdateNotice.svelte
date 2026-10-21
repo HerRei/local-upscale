@@ -137,12 +137,12 @@
     min-width: 0;
   }
   .text b {
-    font-size: calc(12.5px * var(--ui-scale));
+    font-size: calc(13px * var(--ui-scale));
     font-weight: 600;
   }
   .text span {
     color: var(--secondary);
-    font-size: calc(11.5px * var(--ui-scale));
+    font-size: calc(12px * var(--ui-scale));
   }
   .text .error {
     color: #f0b2aa;
@@ -169,7 +169,7 @@
   }
   .percent {
     color: var(--secondary);
-    font-size: calc(11.5px * var(--ui-scale));
+    font-size: calc(12px * var(--ui-scale));
     font-variant-numeric: tabular-nums;
   }
   .notice-button {
