@@ -48,6 +48,11 @@ textarea {
 button {
   cursor: pointer;
 }
+/* Semibold is the heaviest weight in the interface. */
+b,
+strong {
+  font-weight: 600;
+}
 button:focus-visible,
 select:focus-visible,
 input:focus-visible {
