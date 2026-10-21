@@ -35,9 +35,8 @@
     <div class="text">
       <b id="welcome-title">Welcome to LocalSR</b>
       <span
-        >Drop photos or videos in the middle, choose Upscale, Restore or Upscale Video under
-        Enhance, then start with the blue button at the bottom right. The user guide explains
-        models, batches, video and where results are saved.</span
+        >Drop photos or videos in the middle, pick Upscale, Restore or Edit on the right, then
+        press the blue button. The model a task needs downloads the first time you use it.</span
       >
       {#if counts}
         <span class="count"

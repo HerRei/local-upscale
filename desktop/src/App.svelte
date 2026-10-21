@@ -26,6 +26,7 @@
     editHardwareLabel,
     editModelFits,
     editSizeLimit,
+    editVariantName,
     recommendAnyEditModel,
   } from './lib/editing';
   import {
@@ -678,13 +679,18 @@
     resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
   }
 
-  function recipeSubtitle(model: CatalogModel | undefined, fallback: string): string {
-    return model ? displayName(model) : fallback;
+  // Quick and Best describe the result; the model behind them is named once, under Model.
+  function qualityBlurb(quality: 'quick' | 'best'): string {
+    if (settings.task === 'denoise')
+      return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
+    if (settings.task === 'video')
+      return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
+    return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
   }
 
   function recipeAvailability(model: CatalogModel | undefined): string {
     if (!model) return '';
-    return model.installed ? 'On this computer' : `${formatBytes(model.size_bytes)} download`;
+    return model.installed ? 'Ready' : `${formatBytes(model.size_bytes)} download`;
   }
 
   /**
@@ -1785,14 +1791,8 @@
       <button
         class="button compact"
         type="button"
-        title="Browse, download, pin and remove models"
-        on:click={() => openLibrary('browse')}>Model library</button
-      >
-      <button
-        class="button compact benchmark-shortcut"
-        type="button"
-        title="Benchmark this computer, watch live memory, copy diagnostics"
-        on:click={showPerformance}>Performance</button
+        title="Download, choose and remove models"
+        on:click={() => openLibrary('browse')}>Models</button
       >
       <div class="app-menu">
         <button
@@ -1831,6 +1831,14 @@
                 appMenuOpen = false;
                 void api.openUserGuide();
               }}>User Guide</button
+            >
+            <button
+              class="app-menu-item"
+              role="menuitem"
+              on:click={() => {
+                appMenuOpen = false;
+                showPerformance();
+              }}>Performance</button
             >
             <button
               class="app-menu-item"
@@ -1955,12 +1963,14 @@
         >
           <section class="control-section">
             <span class="eyebrow">TASK</span>
+            <!-- Video follows the selection: a selected video is upscaled as video. -->
             <div class="task-grid">
               <button
-                disabled={selectedMedia?.kind === 'video'}
-                class:active={settings.task === 'upscale'}
-                on:click={() => setTask('upscale')}
-                ><b>Upscale</b><span>Photos and artwork</span></button
+                class:active={settings.task === 'upscale' || settings.task === 'video'}
+                on:click={() => setTask(selectedMedia?.kind === 'video' ? 'video' : 'upscale')}
+                ><b>Upscale</b><span
+                  >{selectedMedia?.kind === 'video' ? 'Video · SDR or HDR' : 'Photos and artwork'}</span
+                ></button
               >
               <button
                 disabled={selectedMedia?.kind === 'video'}
@@ -1972,13 +1982,6 @@
                 disabled={selectedMedia?.kind === 'video'}
                 class:active={settings.task === 'edit'}
                 on:click={() => setTask('edit')}><b>Edit</b><span>Describe a change</span></button
-              >
-              <button
-                disabled={Boolean(selectedMedia) && selectedMedia.kind !== 'video'}
-                class="video-task"
-                class:active={settings.task === 'video'}
-                on:click={() => setTask('video')}
-                ><b>Upscale Video</b><span>Local video · HLG / PQ / SDR</span></button
               >
             </div>
           </section>
@@ -2057,43 +2060,21 @@
               </section>
             {:else}
               <section class="control-section recipes">
-                <span class="eyebrow">QUALITY</span>
-                {#if firstRun && quickModel}
-                  <div class="notice first-run" role="note" aria-label="Get started">
-                    <b>Models aren’t bundled</b>
-                    <p>
-                      LocalSR downloads the models you pick once, checks them, and keeps them on
-                      this computer. Your images never leave it.
-                    </p>
-                    <div class="actions-row">
-                      <button
-                        class="button primary compact"
-                        type="button"
-                        disabled={Boolean(activeDownload) || preparing}
-                        on:click={() => void downloadModels([quickModel])}
-                        >Get Quick · {formatBytes(quickModel.size_bytes)}</button
-                      >
-                      {#if bestModel && bestModel.model_id !== quickModel.model_id}
-                        <button
-                          class="button compact"
-                          type="button"
-                          disabled={Boolean(activeDownload) || preparing}
-                          on:click={() => void downloadModels([quickModel, bestModel])}
-                          >Quick + Best · {formatBytes(
-                            quickModel.size_bytes + bestModel.size_bytes,
-                          )}</button
-                        >
-                      {/if}
-                    </div>
-                  </div>
-                {/if}
+                <div class="eyebrow eyebrow-row">
+                  <span>QUALITY</span>
+                  {#if !recipeEditorOpen}<span class="eyebrow-actions"
+                      ><button class="link-button" type="button" on:click={openRecipeEditor}
+                        >Save as recipe…</button
+                      ></span
+                    >{/if}
+                </div>
                 <div class="recipe-grid" role="group" aria-label="Quality">
                   <button
                     class="quick"
                     class:active={activeQuality === 'quick'}
                     aria-pressed={activeQuality === 'quick'}
                     on:click={() => applyPreset('quick')}
-                    ><b>Quick</b><span>{recipeSubtitle(quickModel, 'Fast and efficient')}</span
+                    ><b>Quick</b><span>{qualityBlurb('quick')}</span
                     >{#if quickModel}<small>{recipeAvailability(quickModel)}</small>{/if}</button
                   >
                   <button
@@ -2101,7 +2082,7 @@
                     class:active={activeQuality === 'best'}
                     aria-pressed={activeQuality === 'best'}
                     on:click={() => applyPreset('best')}
-                    ><b>Best</b><span>{recipeSubtitle(bestModel, 'Maximum quality')}</span
+                    ><b>Best</b><span>{qualityBlurb('best')}</span
                     >{#if bestModel}<small>{recipeAvailability(bestModel)}</small>{/if}</button
                   >
                 </div>
@@ -2150,10 +2131,6 @@
                         }}
                       /><button on:click={addRecipe}>Save</button>
                     </div>
-                  {:else}
-                    <button class="save-recipe" type="button" on:click={openRecipeEditor}
-                      >＋ Save current setup as recipe</button
-                    >
                   {/if}
                 </div>
               </section>
@@ -2295,23 +2272,24 @@
                               : 'Your checkpoint'}
                       </div>
                       <div class="meta">
+                        <!-- Licenses live in the model library; only exceptions show here. -->
                         {#if stage.editModel}
-                          {stage.editModel.quantization} · {stage.editModel.license_name} · {formatBytes(
-                            stage.editModel.total_size_bytes,
-                          )}{editFit !== 'unknown' ? ` · ${EDIT_FIT_LABELS[editFit]}` : ''}
-                        {:else if stage.model}
-                          {stage.model.license_name}{stage.model.support_tier === 'labs'
-                            ? ' · Labs'
-                            : ''} · {formatBytes(stage.model.size_bytes)}{fitFor(
-                            stage.model,
-                            activeDevice,
-                          ) !== 'unknown'
-                            ? ` · ${FIT_LABELS[fitFor(stage.model, activeDevice)]}`
+                          {editVariantName(stage.editModel)}{editFit !== 'unknown' &&
+                          editFit !== 'runs'
+                            ? ` · ${EDIT_FIT_LABELS[editFit]}`
                             : ''}
+                        {:else if stage.model}
+                          {[
+                            stage.model.support_tier === 'labs' ? 'Labs' : '',
+                            stage.model.commercial_use_allowed === false ? 'Non-commercial' : '',
+                            ['heavy', 'too_heavy'].includes(fitFor(stage.model, activeDevice))
+                              ? FIT_LABELS[fitFor(stage.model, activeDevice)]
+                              : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
                         {:else if stage.videoModel}
-                          {stage.videoModel.license_name} · Labs · {formatBytes(
-                            stage.videoModel.total_size_bytes,
-                          )}
+                          Labs
                         {:else}
                           <span class="path-text"
                             >{settings.custom_model_path ||
@@ -2377,26 +2355,27 @@
                               : 'Choose externally downloaded face checkpoint…'}
                         </button>
                       {:else if target && !stage.installed}
+                        <!-- A downloadable model is fetched by the Start button; this row only
+                             asks for what Start cannot do on its own. -->
                         {#if (stage.model ?? stage.editModel)?.terms_acceptance_required}
                           <label class="terms"
                             ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model
                             license and restrictions.</label
                           >
                         {/if}
-                        <button
-                          class="button full"
-                          class:primary={stage.canDownload}
-                          disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
-                            preparing ||
-                            (Boolean(activeDownload) && activeDownload !== target.model_id)}
-                          on:click={() => runDownload(target)}
-                        >
-                          {activeDownload === target.model_id
-                            ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
-                            : stage.canDownload
-                              ? `Download ${formatBytes(stage.sizeBytes)}`
+                        {#if !stage.canDownload || activeDownload === target.model_id}
+                          <button
+                            class="button full"
+                            disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
+                              preparing ||
+                              (Boolean(activeDownload) && activeDownload !== target.model_id)}
+                            on:click={() => runDownload(target)}
+                          >
+                            {activeDownload === target.model_id
+                              ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
                               : 'Choose externally downloaded checkpoint…'}
-                        </button>
+                          </button>
+                        {/if}
                         {#if activeDownload === target.model_id}<div class="download-track">
                             <i style={`width:${snapshot.runtime.download_progress}%`}></i>
                           </div>{/if}
@@ -2404,7 +2383,7 @@
                     </div>
                     <span class="state" class:ok={stage.installed} class:warn={stage.needsFile}
                       >{stage.installed
-                        ? '✓ On this computer'
+                        ? '✓ Ready'
                         : activeDownload === target?.model_id
                           ? `${Math.round(snapshot.runtime.download_progress)}%`
                           : stage.needsFile
@@ -2457,27 +2436,12 @@
                   platform. The normal model still works.
                 </p>
               {/if}
-              {#if settings.task !== 'edit'}
+              {#if activeQuality === 'custom' && settings.task !== 'edit'}
+                <p class="model-note">Chosen by you. Pick Quick or Best to go back.</p>
+              {:else if downloads.stages.length}
                 <p class="model-note">
-                  {#if activeQuality === 'custom'}
-                    Chosen by you. Quick and Best re-resolve from the catalog when you pick them
-                    again.
-                  {:else if downloads.stages.length}
-                    {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
-                    'illustration'
-                      ? 'illustrations'
-                      : 'photos'}. {downloads.stages.length === 1
-                      ? 'One download'
-                      : `${downloads.stages.length} downloads`}
-                    ({formatBytes(downloads.bytes)}) happen{downloads.stages.length === 1
-                      ? 's'
-                      : ''} when you press Start; each file's SHA-256 is checked before it is used.
-                  {:else}
-                    {activeQuality === 'best' ? 'Best' : 'Quick'} for {settings.content ===
-                    'illustration'
-                      ? 'illustrations'
-                      : 'photos'}. Everything this job needs is on this computer.
-                  {/if}
+                  Models download once when you start ({formatBytes(downloads.bytes)}) and stay on
+                  this computer. Your {settings.task === 'video' ? 'videos' : 'photos'} never leave it.
                 </p>
               {/if}
               {#if usingTemporalVideo}
@@ -2546,18 +2510,7 @@
                   <dd>{outputDimensions}</dd>
                 </div>
                 <div>
-                  <dt>Model</dt>
-                  <dd>
-                    {settings.task === 'edit'
-                      ? (editModel?.name ?? '—')
-                      : usingTemporalVideo
-                        ? selectedVideoModel?.name
-                        : (selectedModel?.name ??
-                          (settings.selected_model_id === '__custom__' ? 'Custom' : '—'))}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Device</dt>
+                  <dt>Runs on</dt>
                   <dd>
                     {settings.task === 'edit'
                       ? (editingDevice?.name ?? 'None supported')

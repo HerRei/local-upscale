@@ -2600,6 +2600,32 @@ input[type='text'],
 .dots i.f {
   background: #c8cbd1;
 }
+.row.dimmed .name,
+.row.dimmed .role {
+  opacity: 0.55;
+}
+.row .name .tech {
+  margin-left: 7px;
+  color: var(--tertiary);
+  font:
+    500 calc(10px * var(--ui-scale)) ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.list-more {
+  flex: 0 0 auto;
+  margin: 10px 16px 16px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: #9dc0fd;
+  text-align: left;
+  font-size: calc(12px * var(--ui-scale));
+}
+.list-more:hover {
+  color: var(--text);
+}
 .row .right {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));

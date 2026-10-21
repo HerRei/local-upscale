@@ -24,6 +24,18 @@ export const EDIT_FIT_LABELS: Record<Fit, string> = {
   unknown: '',
 };
 
+/**
+ * A plain name for a quantization. People choose between sizes, not GGUF
+ * formats; the technical name stays in the library's details.
+ */
+export function editVariantName(model: Pick<EditModel, 'quantization'>): string {
+  const bits = Number(/^Q(\d)/i.exec(model.quantization)?.[1] ?? 0);
+  if (bits >= 8) return 'Full detail';
+  if (bits >= 5) return 'High detail';
+  if (bits === 4) return 'Balanced';
+  return bits ? 'Compact' : model.quantization;
+}
+
 export function editFamilyLabel(family: string): string {
   return EDIT_FAMILIES.find((candidate) => candidate.id === family)?.label ?? family;
 }

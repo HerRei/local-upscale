@@ -18,6 +18,7 @@
     editHardwareLabel,
     editRuntimeLabel,
     editSizeLimit,
+    editVariantName,
   } from './lib/editing';
   import type {
     AppSnapshot,
@@ -66,6 +67,7 @@
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
   let selectedId = '';
   let termsAccepted = false;
+  let showHeavyEdit = false;
 
   $: models = snapshot.catalog.models;
   $: videoModels = snapshot.catalog.video_models;
@@ -74,6 +76,17 @@
   $: editLimit = editSizeLimit(snapshot.capabilities, editGpu);
   $: editFit = (model: EditModel) => editFitFor(model, snapshot.capabilities, editGpu);
   $: installedEditModels = editModels.filter((model) => model.installed);
+  // Variants that cannot run here stay out of the way until asked for.
+  $: onMac = editGpu?.id === 'mps';
+  $: editFamilies = EDIT_FAMILIES.map((family) => {
+    const members = editModels.filter((model) => model.family === family.id);
+    return {
+      ...family,
+      fitting: members.filter((model) => editFit(model) !== 'too_heavy'),
+      heavy: members.filter((model) => editFit(model) === 'too_heavy'),
+    };
+  }).sort((left, right) => Number(right.fitting.length > 0) - Number(left.fitting.length > 0));
+  $: heavyEditCount = editFamilies.reduce((total, family) => total + family.heavy.length, 0);
   $: isUpscaler = (model: CatalogModel): boolean =>
     model.native_scale > 1 && !model.purposes.includes('face');
   $: jobModels = ((): CatalogModel[] => {
@@ -194,7 +207,9 @@
   $: selectedEdit =
     editModels.find((model) => model.model_id === selectedId) ??
     (group === 'edit'
-      ? (editModels.find((model) => model.model_id === settings.edit_model_id) ?? editModels[0])
+      ? (editModels.find((model) => model.model_id === settings.edit_model_id) ??
+        editFamilies.flatMap((family) => family.fitting)[0] ??
+        editModels[0])
       : undefined);
   $: selected = selectedEdit
     ? undefined
@@ -280,10 +295,8 @@
         >
       {/if}
       <div class="sheet-right">
-        <span
-          >Catalog {snapshot.catalog.catalog_revision.slice(0, 7)} · {models.length +
-            videoModels.length +
-            editModels.length} models</span
+        <span title={`Catalog ${snapshot.catalog.catalog_revision.slice(0, 7)}`}
+          >{installedBytes ? `${formatBytes(installedBytes)} on this computer` : ''}</span
         >
         <button class="close" type="button" aria-label="Close model library" on:click={close}
           ><svg
@@ -348,44 +361,63 @@
             </button>
           {/each}
         {:else if group === 'edit'}
-          {#each EDIT_FAMILIES as family (family.id)}
-            <div class="list-head">
-              {family.label.toUpperCase()}<span>{family.summary}</span>
-            </div>
-            {#each editModels.filter((model) => model.family === family.id) as model (model.model_id)}
+          {#each editFamilies as family (family.id)}
+            {@const shown = showHeavyEdit ? [...family.fitting, ...family.heavy] : family.fitting}
+            {#if shown.length}
+              <div class="list-head">
+                {family.label.toUpperCase()}<span>{family.summary.split(' · ')[0]}</span>
+              </div>
+            {/if}
+            {#each shown as model (model.model_id)}
               <button
                 class="row"
+                class:dimmed={editFit(model) === 'too_heavy'}
                 type="button"
                 class:selected={selectedEdit?.model_id === model.model_id}
                 aria-pressed={selectedEdit?.model_id === model.model_id}
                 on:click={() => selectRow(model)}
               >
                 <div>
-                  <div class="name">{model.quantization}</div>
+                  <div class="name">
+                    {editVariantName(model)}<small class="tech">{model.quantization}</small>
+                  </div>
                   <div class="role">
-                    {model.min_unified_memory_gb} GB unified memory on a Mac · {model.min_vram_gb} GB
-                    GPU memory on Windows and Linux
+                    {editFit(model) === 'too_heavy'
+                      ? `Needs ${onMac ? `a Mac with ${model.min_unified_memory_gb} GB` : `${model.min_vram_gb} GB of GPU memory`}`
+                      : onMac
+                        ? `Needs ${model.min_unified_memory_gb} GB of memory`
+                        : `Needs ${model.min_vram_gb} GB of GPU memory`}
                   </div>
-                  <div class="pills">
-                    {#if settings.edit_model_id === model.model_id}<span class="pill quick"
-                        >Chosen</span
-                      >{/if}
-                    <span class="pill" class:warn={model.terms_acceptance_required}
-                      >{model.license_name}</span
-                    >
-                    {#if editFit(model) === 'too_heavy'}<span class="pill bad">Too heavy</span
-                      >{:else if editFit(model) === 'runs'}<span class="pill ok">Fits here</span
-                      >{/if}
-                  </div>
+                  {#if settings.edit_model_id === model.model_id || model.terms_acceptance_required}
+                    <div class="pills">
+                      {#if settings.edit_model_id === model.model_id}<span class="pill quick"
+                          >Chosen</span
+                        >{/if}
+                      {#if model.terms_acceptance_required}<span class="pill warn"
+                          >{model.license_name}</span
+                        >{/if}
+                    </div>
+                  {/if}
                 </div>
                 <div class="right">
                   <b>{formatBytes(model.total_size_bytes)}</b>{#if model.installed}<span class="ok"
                       >Installed</span
-                    >{:else}<span>Not downloaded</span>{/if}
+                    >{/if}
                 </div>
               </button>
             {/each}
           {/each}
+          {#if heavyEditCount}
+            <button
+              class="list-more"
+              type="button"
+              aria-expanded={showHeavyEdit}
+              on:click={() => (showHeavyEdit = !showHeavyEdit)}
+              >{showHeavyEdit
+                ? 'Hide models that need more memory'
+                : `Show ${heavyEditCount} more that need more memory than this computer has`}</button
+            >
+          {/if}
         {:else if group === 'own'}
           <div class="list-head">YOUR OWN FILE</div>
           <div class="own-file">
@@ -443,20 +475,23 @@
                 <div>
                   <div class="name">{displayName(model)}</div>
                   <div class="role">{model.role || model.description}</div>
-                  <div class="pills">
-                    {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
-                    {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
-                    {#if model.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
-                    <span class="pill" class:warn={model.commercial_use_allowed !== true}
-                      >{rightsLabel(model)}</span
-                    >
-                    {#if fitFor(model, device) === 'heavy'}<span class="pill warn">Heavy here</span
-                      >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
-                        >Too heavy</span
-                      >{:else if fitFor(model, device) === 'runs'}<span class="pill ok"
-                        >Runs well</span
-                      >{/if}
-                  </div>
+                  <!-- Badges mark exceptions only: a license that limits use, a model that
+                       will struggle here. Everything else is in the details. -->
+                  {#if model.model_id === quickId || model.model_id === bestId || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
+                    <div class="pills">
+                      {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
+                      {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
+                      {#if model.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
+                      {#if model.commercial_use_allowed !== true}<span class="pill warn"
+                          >{rightsLabel(model)}</span
+                        >{/if}
+                      {#if fitFor(model, device) === 'heavy'}<span class="pill warn"
+                          >Heavy here</span
+                        >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
+                          >Too heavy</span
+                        >{/if}
+                    </div>
+                  {/if}
                 </div>
                 <div class="meters" aria-hidden="true">
                   <div class="meter">
@@ -476,9 +511,7 @@
                 <div class="right">
                   <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
                       >Installed</span
-                    >{:else if !model.automated_download_allowed}<span>Your file</span>{:else}<span
-                      >Not downloaded</span
-                    >{/if}
+                    >{:else if !model.automated_download_allowed}<span>Your file</span>{/if}
                 </div>
               </button>
             {/if}
@@ -563,20 +596,12 @@
             <div class="role">
               {editFamilyLabel(selectedEdit.family)} · {selectedEdit.files.length} components
             </div>
-            <div class="pills">
-              <span class="pill" class:warn={selectedEdit.terms_acceptance_required}
-                >{selectedEdit.license_name}</span
-              >
-              {#if fit !== 'unknown'}<span
-                  class="pill"
-                  class:ok={fit === 'runs'}
-                  class:bad={fit === 'too_heavy'}>{EDIT_FIT_LABELS[fit]}</span
-                >{/if}
-            </div>
           </div>
           <p class="model-description">
-            {EDIT_FAMILIES.find((family) => family.id === selectedEdit.family)?.summary}. Smaller
-            quantizations download faster and need less memory; they can lose some edit fidelity.
+            {EDIT_FAMILIES.find((family) => family.id === selectedEdit.family)?.summary.split(
+              ' · ',
+            )[0]}. {editVariantName(selectedEdit)} size: smaller sizes download faster and need less
+            memory, but can lose some edit fidelity.
           </p>
           <dl class="facts">
             <div>
@@ -584,12 +609,12 @@
               <dd>{formatBytes(selectedEdit.total_size_bytes)}</dd>
             </div>
             <div>
-              <dt>Mac</dt>
-              <dd>{selectedEdit.min_unified_memory_gb} GB unified memory</dd>
-            </div>
-            <div>
-              <dt>Windows · Linux</dt>
-              <dd>{selectedEdit.min_vram_gb} GB GPU memory</dd>
+              <dt>Needs</dt>
+              <dd>
+                {onMac
+                  ? `${selectedEdit.min_unified_memory_gb} GB memory`
+                  : `${selectedEdit.min_vram_gb} GB GPU memory`}
+              </dd>
             </div>
             <div>
               <dt>Largest edit here</dt>
@@ -604,12 +629,7 @@
               )}
             </div>
           {/if}
-          <p class="model-description">
-            A Mac's GPU shares the system memory, so the whole bundle has to fit in unified memory.
-            On Windows and Linux the diffusion model needs that much GPU memory and the text encoder
-            runs from system RAM. These are starting profiles; free memory is checked again before
-            the model loads.
-          </p>
+
           <dl class="kv">
             <div>
               <dt>License</dt>
@@ -631,6 +651,10 @@
                   on:click={() => void openSource(selectedEdit.model_id)}>Model source ↗</button
                 >
               </dd>
+            </div>
+            <div>
+              <dt>Format</dt>
+              <dd>GGUF {selectedEdit.quantization} · {selectedEdit.files.length} files</dd>
             </div>
             <div>
               <dt>Runtime</dt>
@@ -694,17 +718,9 @@
           <div>
             <h3>{displayName(selected)}</h3>
             <div class="role">{selected.role || selected.name}</div>
-            <div class="pills">
-              {#if selected.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
-              <span class="pill">{selected.license_name}</span>
-              {#if fitFor(selected, device) !== 'unknown'}<span
-                  class="pill"
-                  class:ok={fitFor(selected, device) === 'runs'}
-                  class:warn={fitFor(selected, device) === 'heavy'}
-                  class:bad={fitFor(selected, device) === 'too_heavy'}
-                  >{FIT_LABELS[fitFor(selected, device)].split(' · ')[0]}</span
-                >{/if}
-            </div>
+            {#if selected.support_tier === 'labs'}<div class="pills">
+                <span class="pill labs">Labs</span>
+              </div>{/if}
           </div>
           <p class="model-description">{selected.description}</p>
           <dl class="facts">
@@ -723,14 +739,6 @@
             <div>
               <dt>Speed</dt>
               <dd>{speedLabel(selected)}</dd>
-            </div>
-            <div>
-              <dt>Architecture</dt>
-              <dd>{selected.architecture} · Spandrel</dd>
-            </div>
-            <div>
-              <dt>Author</dt>
-              <dd>{selected.author}</dd>
             </div>
           </dl>
           {#if device && fitFor(selected, device) !== 'unknown'}
@@ -761,6 +769,14 @@
                   on:click={() => void openSource(selected.model_id)}>Model source ↗</button
                 >
               </dd>
+            </div>
+            <div>
+              <dt>Author</dt>
+              <dd>{selected.author}</dd>
+            </div>
+            <div>
+              <dt>Architecture</dt>
+              <dd>{selected.architecture} · Spandrel</dd>
             </div>
             <div>
               <dt>File</dt>
