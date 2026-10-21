@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BrandMark from './BrandMark.svelte';
   import { openUserGuide } from './lib/api';
   import { updateState } from './lib/updates';
 
@@ -6,6 +7,9 @@
   export let anonymousUpdateCount = true;
 
   const SEEN_KEY = 'localsr.welcome.seen';
+  // Check for Updates lives in the app menu on macOS and under Help elsewhere.
+  const updatesMenu =
+    typeof navigator !== 'undefined' && /Mac/.test(navigator.platform) ? 'LocalSR' : 'Help';
 
   function seen(): boolean {
     try {
@@ -33,15 +37,15 @@
 {#if visible}
   <section class="welcome-notice" aria-labelledby="welcome-title">
     <div class="text">
-      <b id="welcome-title">Welcome to LocalSR</b>
+      <b id="welcome-title"><BrandMark size={16} />Welcome to LocalSR</b>
       <span
-        >Drop photos or videos in the middle, pick Upscale, Restore or Edit on the right, then
-        press the blue button. The model a task needs downloads the first time you use it.</span
+        >Drop photos or videos in the middle, pick Upscale, Restore or Edit on the right, then press
+        the blue button. The model a task needs downloads the first time you use it.</span
       >
       {#if counts}
         <span class="count"
           >{anonymousUpdateCount
-            ? 'At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn it off under Check for Updates in the … menu.'
+            ? `At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn it off under Check for Updates in the ${updatesMenu} menu.`
             : 'The anonymous update-check count is off.'}</span
         >
       {/if}
@@ -79,6 +83,9 @@
     gap: 5px;
   }
   .text b {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-size: calc(13px * var(--ui-scale));
     font-weight: 600;
   }

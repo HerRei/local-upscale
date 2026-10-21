@@ -335,7 +335,7 @@
 
       <section class="list" aria-label="Models">
         {#if group === 'video'}
-          <div class="list-head">VIDEO · LABS<span>SeedVR2 engines</span></div>
+          <div class="list-head">Video · Labs<span>SeedVR2 engines</span></div>
           {#each videoModels as model (model.model_id)}
             <button
               class="row"
@@ -365,7 +365,7 @@
             {@const shown = showHeavyEdit ? [...family.fitting, ...family.heavy] : family.fitting}
             {#if shown.length}
               <div class="list-head">
-                {family.label.toUpperCase()}<span>{family.summary.split(' · ')[0]}</span>
+                {family.label}<span>{family.summary.split(' · ')[0]}</span>
               </div>
             {/if}
             {#each shown as model (model.model_id)}
@@ -419,7 +419,7 @@
             >
           {/if}
         {:else if group === 'own'}
-          <div class="list-head">YOUR OWN FILE</div>
+          <div class="list-head">Your own file</div>
           <div class="own-file">
             <p>
               Use a checkpoint you already have. Safetensors is strongly recommended; pickle-based
@@ -436,7 +436,7 @@
               ? 'FOR THIS JOB'
               : group === 'installed'
                 ? `INSTALLED · ${formatBytes(installedBytes)}`
-                : groups.find((item) => item.id === group)?.label.toUpperCase()}<span
+                : groups.find((item) => item.id === group)?.label}<span
               >{group === 'job' ? 'sorted by quality' : ''}</span
             >
           </div>
@@ -600,8 +600,8 @@
           <p class="model-description">
             {EDIT_FAMILIES.find((family) => family.id === selectedEdit.family)?.summary.split(
               ' · ',
-            )[0]}. {editVariantName(selectedEdit)} size: smaller sizes download faster and need less
-            memory, but can lose some edit fidelity.
+            )[0]}. {editVariantName(selectedEdit)} size: smaller sizes download faster and need less memory,
+            but can lose some edit fidelity.
           </p>
           <dl class="facts">
             <div>

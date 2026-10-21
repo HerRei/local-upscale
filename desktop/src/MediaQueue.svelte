@@ -21,16 +21,27 @@
 </script>
 
 <aside class="media-pane pane" class:compact-hidden={compactHidden}>
-  <div class="pane-heading">
-    <h1>Media</h1>
-    <span class="pane-heading-meta"
-      >{items.length ? `${items.length} item${items.length === 1 ? '' : 's'}` : 'No media'}</span
-    >
+  <div class="pane-heading" data-tauri-drag-region>
+    <h1 data-tauri-drag-region>Media</h1>
+    <span class="pane-heading-meta" data-tauri-drag-region>{items.length || ''}</span>
     {#if items.length}
       <button
-        class="button primary compact add-media"
+        class="icon-button add-media"
+        title="Add Media…"
+        aria-label="Add Media…"
         disabled={locked || benchmarkRunning}
-        on:click={() => addFiles(false)}>＋ Add Media</button
+        on:click={() => addFiles(false)}
+        ><svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
+        ></button
       >
     {/if}
   </div>
@@ -48,19 +59,23 @@
       </div>
     </div>
   {:else}
-    <div class="segmented">
-      <button
-        disabled={Boolean(activeJobId)}
-        class:active={!batchMode}
-        on:click={() => setBatchMode(false)}>Single</button
-      >
-      <button
-        disabled={Boolean(activeJobId)}
-        class:active={batchMode}
-        on:click={() => setBatchMode(true)}>Batch</button
-      >
-    </div>
-    <p class="mode-scope" class:warning={!batchMode && scopeWarning}>{singleScopeMessage}</p>
+    {#if items.length > 1}
+      <div class="segmented">
+        <button
+          disabled={Boolean(activeJobId)}
+          class:active={!batchMode}
+          on:click={() => setBatchMode(false)}>Single</button
+        >
+        <button
+          disabled={Boolean(activeJobId)}
+          class:active={batchMode}
+          on:click={() => setBatchMode(true)}>Batch</button
+        >
+      </div>
+      <p class="mode-scope" class:warning={!batchMode && scopeWarning}>{singleScopeMessage}</p>
+    {:else if scopeWarning}
+      <p class="mode-scope warning">{singleScopeMessage}</p>
+    {/if}
     <div class="media-list">
       {#each items as media (media.id)}
         <div class="media-row" class:selected={media.selected}>
@@ -123,12 +138,12 @@
   {#if items.length}
     <div class="media-actions">
       <button
-        class="button"
+        class="button ghost"
         title="Add every image in a folder as a batch"
         disabled={benchmarkRunning || Boolean(activeJobId)}
         on:click={addFolder}>Add Folder…</button
       >
-      <button class="button danger ghost" disabled={Boolean(activeJobId)} on:click={clearMedia}
+      <button class="button ghost" disabled={Boolean(activeJobId)} on:click={clearMedia}
         >Clear</button
       >
     </div>

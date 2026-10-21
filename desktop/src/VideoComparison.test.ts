@@ -61,7 +61,7 @@ describe('video comparison player', () => {
     expect(speed.selectedOptions[0].textContent).toBe('1×');
     expect(screen.getByText('Original')).toBeTruthy();
     expect(screen.getByText('Enhanced')).toBeTruthy();
-    expect(screen.getByText('VIDEO · COMPARISON')).toBeTruthy();
+    expect(screen.getByText('Video · comparison')).toBeTruthy();
   });
 
   it('keeps audio enabled only on the enhanced stream', () => {

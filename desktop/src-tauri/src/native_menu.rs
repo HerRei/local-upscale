@@ -84,9 +84,14 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let diagnostics = MenuItemBuilder::with_id("view.performance", "Performance and Diagnostics…")
         .accelerator("CmdOrCtrl+Shift+D")
         .build(manager)?;
+    let models = MenuItemBuilder::with_id("view.models", "Models…")
+        .accelerator("CmdOrCtrl+Shift+M")
+        .build(manager)?;
     let view_menu = SubmenuBuilder::new(manager, "View")
         .item(&fit)
         .item(&actual)
+        .separator()
+        .item(&models)
         .separator()
         .item(&refresh)
         .item(&diagnostics)
@@ -94,9 +99,19 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
 
     let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
+    // macOS keeps update checks in the app menu; elsewhere they sit under Help.
+    let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
+    #[cfg(target_os = "macos")]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
         .item(&github)
+        .build()?;
+    #[cfg(not(target_os = "macos"))]
+    let help_menu = SubmenuBuilder::new(manager, "Help")
+        .item(&guide)
+        .item(&github)
+        .separator()
+        .item(&updates)
         .build()?;
 
     #[cfg(target_os = "macos")]
@@ -111,6 +126,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
                 ),
                 ..Default::default()
             }))
+            .item(&updates)
             .separator()
             .services()
             .separator()

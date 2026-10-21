@@ -363,7 +363,7 @@
       <i aria-hidden="true"></i>Loading video comparison…
     </div>
   {/if}
-  <span class="video-labs">VIDEO · COMPARISON</span>
+  <span class="video-labs">Video · comparison</span>
 </div>
 
 <style>

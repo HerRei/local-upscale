@@ -8,12 +8,10 @@
   import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
   import LicenseDownload from './LicenseDownload.svelte';
-  import UpdateMenuItem from './UpdateMenuItem.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
-  import { startUpdateWatcher } from './lib/updates';
-  import BrandMark from './BrandMark.svelte';
+  import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -103,7 +101,6 @@
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
   let livePreviewWarning = '';
   let preparing = false;
-  let appMenuOpen = false;
   const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
   let libraryOpen = false;
   let libraryContext: {
@@ -389,6 +386,26 @@
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id,
   );
+  // While idle, the status bar says what Start will produce, next to the button that does it.
+  $: idleSummary =
+    selectedMedia &&
+    snapshot.runtime.status_title === 'Ready' &&
+    !booting &&
+    (canStart || canPrepare)
+      ? `${selectedMedia.width} × ${selectedMedia.height} → ${outputDimensions} · ${
+          settings.task === 'edit'
+            ? (editingDevice?.name ?? 'no supported GPU')
+            : (activeDevice?.name ?? 'detecting hardware')
+        }`
+      : '';
+  $: taskCaption =
+    settings.task === 'denoise'
+      ? 'Removes noise, blur and JPEG artifacts at the same size.'
+      : settings.task === 'edit'
+        ? 'Describe a change in words.'
+        : selectedMedia?.kind === 'video' || settings.task === 'video'
+          ? 'Enlarges video, SDR or HDR.'
+          : 'Enlarges photos and artwork with new detail.';
   $: benchmarkHardware = snapshot.capabilities.devices.find(
     (device) => device.id === benchmarkDevice,
   );
@@ -690,7 +707,7 @@
 
   function recipeAvailability(model: CatalogModel | undefined): string {
     if (!model) return '';
-    return model.installed ? 'Ready' : `${formatBytes(model.size_bytes)} download`;
+    return model.installed ? '' : `${formatBytes(model.size_bytes)} download`;
   }
 
   /**
@@ -1562,6 +1579,12 @@
         case 'view.performance':
           showPerformance();
           break;
+        case 'view.models':
+          openLibrary('browse');
+          break;
+        case 'app.updates':
+          updateDialogOpen.set(true);
+          break;
       }
     } catch (error) {
       showModal('Native action failed', String(error));
@@ -1759,15 +1782,6 @@
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
 >
 
-<svelte:window
-  on:pointerdown={(event) => {
-    if (appMenuOpen && !(event.target as HTMLElement).closest('.app-menu')) appMenuOpen = false;
-  }}
-  on:keydown={(event) => {
-    if (event.key === 'Escape' && appMenuOpen) appMenuOpen = false;
-  }}
-/>
-
 <div
   class="app-shell"
   class:booting
@@ -1775,11 +1789,8 @@
   class:queue-timing-visible={Boolean(queueEta)}
   style={`--ui-scale:${settings.interface_scale / 100}`}
 >
+  <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
   <header class="toolbar" data-tauri-drag-region>
-    <div class="brand" data-tauri-drag-region>
-      <BrandMark size={16} />
-      <b>LocalSR<span class="brand-dot" aria-hidden="true">.</span></b>
-    </div>
     <nav class="compact-nav" aria-label="Workspace">
       <button class:active={page === 'media'} on:click={() => (page = 'media')}
         >Media <span>{snapshot.media.length}</span></button
@@ -1787,82 +1798,6 @@
       <button class:active={page === 'preview'} on:click={() => (page = 'preview')}>Preview</button>
       <button class:active={page === 'enhance'} on:click={() => (page = 'enhance')}>Enhance</button>
     </nav>
-    <div class="toolbar-actions">
-      <button
-        class="button compact"
-        type="button"
-        title="Download, choose and remove models"
-        on:click={() => openLibrary('browse')}>Models</button
-      >
-      <div class="app-menu">
-        <button
-          class="button compact ghost app-menu-button"
-          type="button"
-          aria-label="LocalSR menu"
-          aria-haspopup="menu"
-          aria-expanded={appMenuOpen}
-          on:click={() => (appMenuOpen = !appMenuOpen)}
-          ><svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            aria-hidden="true"
-            ><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle
-              cx="19"
-              cy="12"
-              r="2"
-            /></svg
-          ></button
-        >
-        {#if appMenuOpen}
-          <div class="app-menu-panel" role="menu" aria-label="LocalSR">
-            <div class="app-menu-head">
-              <BrandMark variant="tile" size={32} />
-              <div><b>LocalSR</b><span>{snapshot.app_version}</span></div>
-            </div>
-            <UpdateMenuItem onOpen={() => (appMenuOpen = false)} />
-            <div class="app-menu-separator" role="separator"></div>
-            <button
-              class="app-menu-item"
-              role="menuitem"
-              on:click={() => {
-                appMenuOpen = false;
-                void api.openUserGuide();
-              }}>User Guide</button
-            >
-            <button
-              class="app-menu-item"
-              role="menuitem"
-              on:click={() => {
-                appMenuOpen = false;
-                showPerformance();
-              }}>Performance</button
-            >
-            <button
-              class="app-menu-item"
-              role="menuitem"
-              on:click={() => {
-                appMenuOpen = false;
-                void copyDiagnostics();
-              }}>Copy Diagnostics</button
-            >
-            <button
-              class="app-menu-item"
-              role="menuitem"
-              on:click={() => {
-                appMenuOpen = false;
-                void showIntegrations();
-              }}>System Integrations…</button
-            >
-            <p class="app-menu-foot">
-              Everything runs on this computer. Models keep their own licenses.
-            </p>
-          </div>
-        {/if}
-      </div>
-    </div>
   </header>
 
   <UpdateNotice
@@ -1924,13 +1859,15 @@
     />
 
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>
-      <div class="pane-heading">
-        <h1>Enhance</h1>
-        <span
+      <div class="pane-heading" data-tauri-drag-region>
+        <h1 data-tauri-drag-region>Enhance</h1>
+        <span data-tauri-drag-region
           >{settingsLocked
             ? 'Locked during processing'
             : settings.task === 'edit'
-              ? (editModel?.name ?? 'Choose a model')
+              ? editModel
+                ? editFamilyLabel(editModel.family)
+                : 'Choose a model'
               : settings.task
                 ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${settings.task === 'denoise' ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
                 : 'Choose a task'}</span
@@ -1962,34 +1899,35 @@
           aria-label="Processing settings"
         >
           <section class="control-section">
-            <span class="eyebrow">TASK</span>
+            <span class="eyebrow">Task</span>
             <!-- Video follows the selection: a selected video is upscaled as video. -->
-            <div class="task-grid">
+            <div class="seg-inline task-switch" role="group" aria-label="Task">
               <button
+                aria-pressed={settings.task === 'upscale' || settings.task === 'video'}
                 class:active={settings.task === 'upscale' || settings.task === 'video'}
                 on:click={() => setTask(selectedMedia?.kind === 'video' ? 'video' : 'upscale')}
-                ><b>Upscale</b><span
-                  >{selectedMedia?.kind === 'video' ? 'Video · SDR or HDR' : 'Photos and artwork'}</span
-                ></button
+                >Upscale</button
               >
               <button
+                aria-pressed={settings.task === 'denoise'}
                 disabled={selectedMedia?.kind === 'video'}
                 class:active={settings.task === 'denoise'}
-                on:click={() => setTask('denoise')}
-                ><b>Restore</b><span>Noise, blur, JPEG</span></button
+                on:click={() => setTask('denoise')}>Restore</button
               >
               <button
+                aria-pressed={settings.task === 'edit'}
                 disabled={selectedMedia?.kind === 'video'}
                 class:active={settings.task === 'edit'}
-                on:click={() => setTask('edit')}><b>Edit</b><span>Describe a change</span></button
+                on:click={() => setTask('edit')}>Edit</button
               >
             </div>
+            <p class="task-caption">{taskCaption}</p>
           </section>
 
           {#if settings.task === 'video' && selectedMedia?.hdr_format}
             <section class="control-section" aria-label="HDR conversion">
               <span class="eyebrow"
-                >{preservingHdr ? 'HDR INPUT · HDR OUTPUT · LABS' : 'HDR INPUT · SDR OUTPUT'}</span
+                >{preservingHdr ? 'HDR input · HDR output · Labs' : 'HDR input · SDR output'}</span
               >
               <label class="field-label" for="hdr-output">Colour output</label>
               <select
@@ -2041,7 +1979,7 @@
 
           {#if settings.task === 'video' && selectedMedia?.audio_warning}
             <section class="control-section" aria-label="Audio compatibility">
-              <span class="eyebrow">AUDIO COMPATIBILITY</span>
+              <span class="eyebrow">Audio compatibility</span>
               <p class="model-description">{selectedMedia.audio_warning}</p>
             </section>
           {/if}
@@ -2049,7 +1987,7 @@
           {#if settings.task}
             {#if settings.task === 'edit'}
               <section class="control-section" aria-label="Edit prompt">
-                <span class="eyebrow">WHAT TO CHANGE</span>
+                <span class="eyebrow">What to change</span>
                 <textarea
                   class="edit-prompt"
                   aria-label="What to change"
@@ -2061,7 +1999,7 @@
             {:else}
               <section class="control-section recipes">
                 <div class="eyebrow eyebrow-row">
-                  <span>QUALITY</span>
+                  <span>Quality</span>
                   {#if !recipeEditorOpen}<span class="eyebrow-actions"
                       ><button class="link-button" type="button" on:click={openRecipeEditor}
                         >Save as recipe…</button
@@ -2075,7 +2013,9 @@
                     aria-pressed={activeQuality === 'quick'}
                     on:click={() => applyPreset('quick')}
                     ><b>Quick</b><span>{qualityBlurb('quick')}</span
-                    >{#if quickModel}<small>{recipeAvailability(quickModel)}</small>{/if}</button
+                    >{#if recipeAvailability(quickModel)}<small
+                        >{recipeAvailability(quickModel)}</small
+                      >{/if}</button
                   >
                   <button
                     class="best"
@@ -2083,7 +2023,9 @@
                     aria-pressed={activeQuality === 'best'}
                     on:click={() => applyPreset('best')}
                     ><b>Best</b><span>{qualityBlurb('best')}</span
-                    >{#if bestModel}<small>{recipeAvailability(bestModel)}</small>{/if}</button
+                    >{#if recipeAvailability(bestModel)}<small
+                        >{recipeAvailability(bestModel)}</small
+                      >{/if}</button
                   >
                 </div>
                 <div class="recipe-tools">
@@ -2142,7 +2084,7 @@
                 aria-label={settings.task === 'denoise' ? 'What to fix' : 'Your image'}
               >
                 <span class="eyebrow"
-                  >{settings.task === 'denoise' ? 'WHAT TO FIX' : 'YOUR IMAGE'}</span
+                  >{settings.task === 'denoise' ? 'What to fix' : 'Your image'}</span
                 >
                 {#if settings.task !== 'denoise'}
                   <span class="field-label" id="content-label">Content</span>
@@ -2211,8 +2153,8 @@
               <div class="eyebrow eyebrow-row">
                 <span
                   >{activeQuality === 'custom' && settings.task !== 'edit'
-                    ? 'MODEL · CHOSEN BY YOU'
-                    : 'MODEL'}</span
+                    ? 'Model · chosen by you'
+                    : 'Model'}</span
                 >
                 <span class="eyebrow-actions">
                   {#if activeQuality === 'custom' && bestModel && settings.task !== 'edit'}<button
@@ -2381,14 +2323,12 @@
                           </div>{/if}
                       {/if}
                     </div>
-                    <span class="state" class:ok={stage.installed} class:warn={stage.needsFile}
-                      >{stage.installed
-                        ? '✓ Ready'
-                        : activeDownload === target?.model_id
-                          ? `${Math.round(snapshot.runtime.download_progress)}%`
-                          : stage.needsFile
-                            ? 'Needs your file'
-                            : formatBytes(stage.sizeBytes)}</span
+                    <span class="state" class:warn={stage.needsFile}
+                      >{activeDownload === target?.model_id
+                        ? `${Math.round(snapshot.runtime.download_progress)}%`
+                        : stage.needsFile && !stage.installed
+                          ? 'Needs your file'
+                          : ''}</span
                     >
                   </div>
                 {/each}
@@ -2440,8 +2380,10 @@
                 <p class="model-note">Chosen by you. Pick Quick or Best to go back.</p>
               {:else if downloads.stages.length}
                 <p class="model-note">
-                  Models download once when you start ({formatBytes(downloads.bytes)}) and stay on
-                  this computer. Your {settings.task === 'video' ? 'videos' : 'photos'} never leave it.
+                  Models download once when you start and stay on this computer. Your {settings.task ===
+                  'video'
+                    ? 'videos'
+                    : 'photos'} never leave it.
                 </p>
               {/if}
               {#if usingTemporalVideo}
@@ -2495,32 +2437,6 @@
               {chooseOutput}
               refreshCapabilities={api.refreshCapabilities}
             />
-
-            <section class="control-section summary-card">
-              <span class="eyebrow">SUMMARY</span>
-              <dl>
-                <div>
-                  <dt>Input</dt>
-                  <dd>
-                    {selectedMedia ? `${selectedMedia.width} × ${selectedMedia.height}` : '—'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Output</dt>
-                  <dd>{outputDimensions}</dd>
-                </div>
-                <div>
-                  <dt>Runs on</dt>
-                  <dd>
-                    {settings.task === 'edit'
-                      ? (editingDevice?.name ?? 'None supported')
-                      : (snapshot.capabilities.devices.find(
-                          (device) => device.id === settings.device_id,
-                        )?.name ?? 'Detecting')}
-                  </dd>
-                </div>
-              </dl>
-            </section>
           {/if}
         </fieldset>
       </div>
@@ -2539,7 +2455,7 @@
         ><span
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : snapshot.runtime.status_detail}</span
+            : idleSummary || snapshot.runtime.status_detail}</span
         >
         {#if queueEta}<span
             class="queue-eta"

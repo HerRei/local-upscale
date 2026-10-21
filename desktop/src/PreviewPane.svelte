@@ -704,9 +704,9 @@
 </script>
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
-  <div class="preview-header">
-    <div>
-      <strong>{selectedMedia?.name ?? 'Preview'}</strong>
+  <div class="preview-header" data-tauri-drag-region>
+    <div data-tauri-drag-region>
+      <strong data-tauri-drag-region>{selectedMedia?.name ?? 'Preview'}</strong>
       <span
         >{selectedMedia
           ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
@@ -821,7 +821,7 @@
             </div>
           {/if}
         </div>
-        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">VIDEO · LOCAL UPSCALING</span
+        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
             class="zoom-hud"

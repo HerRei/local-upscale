@@ -2,7 +2,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import UpdateMenuItem from './UpdateMenuItem.svelte';
 import UpdateNotice from './UpdateNotice.svelte';
 import {
   emptyUpdateStatus,
@@ -83,18 +82,4 @@ it('hides a dismissed version until a newer one appears', async () => {
   expect(screen.queryByText('LocalSR 0.0.13-beta.2 is available')).toBeNull();
   updateState.set({ ...available, version: '0.0.13-beta.3' });
   expect(await screen.findByText('LocalSR 0.0.13-beta.3 is available')).toBeTruthy();
-});
-
-it('shows update state in the app menu and opens Software Update', async () => {
-  updateState.set(available);
-  const onOpen = vi.fn();
-  const user = userEvent.setup();
-  render(UpdateMenuItem, { onOpen });
-  const item = screen.getByRole('menuitem', { name: /Update LocalSR…/ });
-  expect(item.textContent).toContain('0.0.13-beta.2');
-  await user.click(item);
-  expect(onOpen).toHaveBeenCalled();
-  let open = false;
-  updateDialogOpen.subscribe((value) => (open = value))();
-  expect(open).toBe(true);
 });

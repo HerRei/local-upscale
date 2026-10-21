@@ -62,9 +62,7 @@
 <section class="control-section">
   <button class="disclosure" on:click={() => (advanced = !advanced)}
     ><span>Advanced</span><b>{advanced ? '⌃' : '⌄'}</b><small
-      >{settings.task === 'edit'
-        ? 'Size, steps, seed, output, hardware'
-        : 'Model, output, hardware'}</small
+      >{settings.task === 'edit' ? 'Size, steps, seed, hardware' : 'Scale, format, hardware'}</small
     ></button
   >
   {#if advanced}

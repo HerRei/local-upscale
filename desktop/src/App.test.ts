@@ -87,7 +87,7 @@ const api = vi.hoisted(() => ({
         undefined,
   ),
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
-  listenForNativeMenu: vi.fn(async () => () => undefined),
+  listenForNativeMenu: vi.fn(async (_handler: (action: string) => void) => () => undefined),
   listenForLaunchIntent: vi.fn(async () => () => undefined),
   listenForFileDrops: vi.fn(async () => () => undefined),
 }));
@@ -174,8 +174,19 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
   api.bootstrap.mockResolvedValue(structuredClone(snapshot));
   api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
   render(App);
-  await screen.findByText('The isolated inference engine is ready.');
+  // While idle the status bar shows what Start will produce, so wait for the title.
+  await waitFor(() =>
+    expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Ready/),
+  );
   return userEvent.setup();
+}
+
+let nativeMenu: ((action: string) => void) | undefined;
+
+/** Models and Performance live in the native menu bar; tests send its actions directly. */
+async function chooseMenuItem(action: string): Promise<void> {
+  await waitFor(() => expect(nativeMenu).toBeTruthy());
+  nativeMenu!(action);
 }
 
 async function chooseTask(user: ReturnType<typeof userEvent.setup>, name: RegExp): Promise<void> {
@@ -197,12 +208,13 @@ describe('Edit task', () => {
   it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
     // 36 GB: the Qwen editor fits within the share of memory a default may use.
     const user = await mountWith(editSnapshot(36));
-    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await chooseTask(user, /^Edit$/);
     expect(api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ task: 'edit', edit_model_id: 'qwen_edit_2511_q3_k_s' }),
     );
-    expect(screen.getAllByText('Qwen Image Edit 2511 · Q3_K_S').length).toBeGreaterThan(0);
-    expect(screen.getByText(/^Q3_K_S · Apache-2.0 · [\d.]+ GB · Fits this computer$/)).toBeTruthy();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Qwen Image Edit 2511')).toBeTruthy();
+    expect(within(stages).getByText('Compact')).toBeTruthy();
     expect(screen.queryByRole('group', { name: 'Quality' })).toBeNull();
     const start = screen.getByRole('button', { name: 'Edit selected' }) as HTMLButtonElement;
     expect(start.disabled).toBe(true);
@@ -228,7 +240,7 @@ describe('Edit task', () => {
     const snapshot = editSnapshot(36);
     snapshot.edit.models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await chooseTask(user, /^Edit$/);
     await user.click(screen.getByRole('button', { name: /^Download [\d.]+ GB, then edit$/ }));
     expect(api.downloadModel).toHaveBeenCalledWith('qwen_edit_2511_q3_k_s', false);
     expect(api.startEdit).not.toHaveBeenCalled();
@@ -236,7 +248,7 @@ describe('Edit task', () => {
 
   it('starts a 16 GB Mac on FLUX.2 klein Q4_0, with its own step count', async () => {
     const user = await mountWith(editSnapshot(16));
-    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await chooseTask(user, /^Edit$/);
     expect(api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
         task: 'edit',
@@ -244,8 +256,9 @@ describe('Edit task', () => {
         edit_steps: 0,
       }),
     );
-    expect(screen.getByText('FLUX.2 klein 4B')).toBeTruthy();
-    expect(screen.getByText(/^Q4_0 · Apache-2.0 · [\d.]+ GB · Fits this computer$/)).toBeTruthy();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('FLUX.2 klein 4B')).toBeTruthy();
+    expect(within(stages).getByText('Balanced')).toBeTruthy();
     await user.type(screen.getByLabelText('What to change'), 'Add snow');
     await user.click(screen.getByRole('button', { name: 'Edit selected' }));
     expect(api.startEdit).toHaveBeenCalledWith(
@@ -255,7 +268,7 @@ describe('Edit task', () => {
 
   it('says plainly when no bundle fits this computer', async () => {
     const user = await mountWith(editSnapshot(8));
-    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await chooseTask(user, /^Edit$/);
     await user.type(screen.getByLabelText('What to change'), 'Add snow');
     expect(screen.getByRole('status').textContent?.replace(/\s+/g, ' ')).toContain(
       'FLUX.2 klein 4B · Q4_0 needs 16 GB of unified memory and this Mac has 8 GB of unified memory. No listed model fits this computer yet.',
@@ -273,12 +286,14 @@ describe('Edit task', () => {
     )!;
     restricted.terms_acceptance_required = true;
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Edit\s?Describe a change$/);
+    await chooseTask(user, /^Edit$/);
     await user.click(screen.getByRole('button', { name: 'Change…' }));
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText('Choosing for Edit')).toBeTruthy();
-    expect(within(dialog).getByText('FLUX.2 KLEIN 4B')).toBeTruthy();
-    await user.click(within(dialog).getByRole('button', { name: /^Q8_0 16 GB unified memory/ }));
+    expect(within(dialog).getByText('FLUX.2 klein 4B')).toBeTruthy();
+    await user.click(
+      within(dialog).getByRole('button', { name: /^Full detail\s*Q8_0\s*Needs 16 GB of memory/ }),
+    );
     expect(within(dialog).getByText('Research license · review the terms')).toBeTruthy();
     const download = within(dialog).getByRole('button', {
       name: /^Download [\d.]+ GB$/,
@@ -297,17 +312,22 @@ describe('Edit task', () => {
 
   it('shows Mac and Windows/Linux memory needs in the library and removes a bundle', async () => {
     const user = await mountWith(editSnapshot(26));
-    await user.click(screen.getByRole('button', { name: 'Model library' }));
+    await chooseMenuItem('view.models');
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(dialog).getByRole('button', { name: /^Edit with a prompt/ }));
-    await user.click(within(dialog).getByRole('button', { name: /^Q8_0 48 GB unified memory/ }));
-    expect(within(dialog).getByText('48 GB unified memory')).toBeTruthy();
-    expect(within(dialog).getByText('24 GB GPU memory')).toBeTruthy();
+    // Sizes that need more memory than this Mac has wait behind one link.
     expect(
-      within(dialog).getByText(
-        'Too heavy for this computer · this Mac has 26 GB of unified memory',
-      ),
-    ).toBeTruthy();
+      within(dialog).queryByRole('button', {
+        name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/,
+      }),
+    ).toBeNull();
+    await user.click(
+      within(dialog).getByRole('button', { name: /^Show \d+ more that need more memory/ }),
+    );
+    await user.click(
+      within(dialog).getByRole('button', { name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/ }),
+    );
+    expect(within(dialog).getByText('48 GB memory')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
     expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');
   });
@@ -344,7 +364,11 @@ beforeEach(() => {
   api.downloadModel.mockReset().mockResolvedValue(undefined);
   api.listenForWorker.mockResolvedValue(() => undefined);
   api.listenForStateChange.mockResolvedValue(() => undefined);
-  api.listenForNativeMenu.mockResolvedValue(() => undefined);
+  nativeMenu = undefined;
+  api.listenForNativeMenu.mockImplementation(async (handler) => {
+    nativeMenu = handler;
+    return () => undefined;
+  });
   api.listenForLaunchIntent.mockResolvedValue(() => undefined);
   api.listenForFileDrops.mockResolvedValue(() => undefined);
   api.takeLaunchIntents.mockResolvedValue([]);
@@ -483,16 +507,14 @@ describe('LocalSR desktop interface', () => {
     expect(
       screen.getByRole('button', { name: /drop them here or click to choose files/ }),
     ).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '＋ Add Media' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add Media…' })).toBeNull();
     expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
   });
 
-  it('makes the real benchmark discoverable and starts it from the toolbar', async () => {
+  it('makes the real benchmark discoverable and starts it from the View menu', async () => {
     const user = await mountWith(readySnapshot());
 
-    const shortcut = screen.getByRole('button', { name: 'Performance' });
-    shortcut.focus();
-    await user.keyboard('{Enter}');
+    await chooseMenuItem('view.performance');
 
     expect(await screen.findByRole('heading', { name: 'Performance & Diagnostics' })).toBeTruthy();
     expect(screen.getByText('Apple GPU (Metal)')).toBeTruthy();
@@ -504,7 +526,7 @@ describe('LocalSR desktop interface', () => {
 
   it('runs the selected CPU independently of the enhancement GPU', async () => {
     const user = await mountWith(readySnapshot());
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const dialog = await screen.findByRole('dialog');
     await user.selectOptions(
       within(dialog).getByRole('combobox', { name: 'Benchmark device' }),
@@ -525,7 +547,7 @@ describe('LocalSR desktop interface', () => {
         }),
     );
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const dialog = within(screen.getByRole('dialog'));
     const device = dialog.getByRole('combobox', { name: 'Benchmark device' });
     await user.selectOptions(device, 'cpu');
@@ -544,7 +566,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
     api.downloadModel.mockRejectedValueOnce(new Error('download cancelled'));
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const dialog = within(screen.getByRole('dialog'));
     await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
     expect((await dialog.findByRole('alert')).textContent).toContain('download cancelled');
@@ -558,7 +580,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot();
     snapshot.runtime.download_model_id = 'seedvr2_3b_fp8';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const dialog = within(screen.getByRole('dialog'));
     expect(
       dialog.getByText('Wait for the current model download to finish before benchmarking.'),
@@ -572,7 +594,7 @@ describe('LocalSR desktop interface', () => {
   it('keeps benchmark launch errors visible beside a retryable button', async () => {
     api.startBenchmark.mockRejectedValueOnce(new Error('selected device unavailable'));
     const user = await mountWith(readySnapshot());
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const dialog = within(screen.getByRole('dialog'));
     await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
     expect((await dialog.findByRole('alert')).textContent).toContain('selected device unavailable');
@@ -588,7 +610,7 @@ describe('LocalSR desktop interface', () => {
       ...navigator,
       clipboard: { writeText: vi.fn(async () => undefined) },
     });
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
 
     callback({
@@ -719,7 +741,7 @@ describe('LocalSR desktop interface', () => {
     };
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    await chooseMenuItem('view.performance');
     const dialog = await screen.findByRole('dialog');
 
     expect(dialog.classList.contains('performance-modal')).toBe(true);
@@ -736,7 +758,7 @@ describe('LocalSR desktop interface', () => {
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
     const user = await mountWith(readySnapshot([image('first', true)]));
-    await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
 
     const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
@@ -754,7 +776,7 @@ describe('LocalSR desktop interface', () => {
       const snapshot = readySnapshot([media]);
       snapshot.settings.batch_mode = batch;
       const user = await mountWith(snapshot);
-      await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
+      await chooseTask(user, /^Upscale$/);
       expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
       expect(screen.getAllByText('Preparing preview…').length).toBe(2);
       expect(screen.queryByText('Inspecting…')).toBeNull();
@@ -804,7 +826,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'video';
     snapshot.settings.batch_mode = true;
     const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
+    await chooseTask(user, /^Upscale$/);
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     callback({
       type: 'media_probe_progress',
@@ -922,7 +944,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('first', true)]);
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: '＋ Save current setup as recipe' }));
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     const name = screen.getByRole('textbox', { name: 'Recipe name' });
     expect(document.activeElement).toBe(name);
     await user.type(name, 'Portrait cleanup');
@@ -962,16 +984,14 @@ describe('LocalSR desktop interface', () => {
 
   it('exposes image recipes, hardware controls, and installed face companions', async () => {
     const user = await mountWith(readySnapshot());
-    await chooseTask(user, /Upscale\s*Photos and artwork/i);
+    await chooseTask(user, /^Upscale$/);
 
-    expect(screen.getByRole('button', { name: /^Quick\s*SPAN ×4 NomosUni/i })).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: /^Best\s*RealPLKSR ×4 NomosWebPhoto/i }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Quick\s*Fast, clean result/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Best\s*Finest detail, slower/i })).toBeTruthy();
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Change…' })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
     const hardware = screen.getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
@@ -1024,14 +1044,14 @@ describe('LocalSR desktop interface', () => {
   );
 
   it('labels experimental engines separately from standard video', async () => {
-    const user = await mountWith(readySnapshot());
-    await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
+    const user = await mountWith(readySnapshot([video('clip', true)]));
+    await chooseTask(user, /^Upscale$/);
 
     const engine = screen.getByLabelText('Video engine');
     expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
     expect(within(engine).getByRole('option', { name: /SeedVR2-3B — Labs/i })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
@@ -1058,7 +1078,7 @@ describe('LocalSR desktop interface', () => {
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(true);
-      expect(screen.getByRole('button', { name: /^Download / }).matches(':disabled')).toBe(true);
+      expect(screen.queryByRole('button', { name: /^Download / })).toBeNull();
       await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
@@ -1075,7 +1095,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('group', { name: 'Processing settings' }).matches(':disabled')).toBe(
       true,
     );
-    expect(screen.getByRole('button', { name: '＋ Add Media' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Add Media…' }).matches(':disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(
       true,
     );
@@ -1086,20 +1106,21 @@ describe('LocalSR desktop interface', () => {
 
   it('disables media-incompatible task cards', async () => {
     await mountWith(readySnapshot([image('photo', true)]));
-    expect(
-      (screen.getByRole('button', { name: /Upscale Video/i }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    expect(screen.getByText('Enlarges photos and artwork with new detail.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
 
     cleanup();
     await mountWith(readySnapshot([video('clip', true)]));
-    expect(
-      (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-    expect(
-      (screen.getByRole('button', { name: /Restore\s*Noise, blur, JPEG/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    // A selected video turns Upscale into video upscaling; the image-only tasks step aside.
+    expect((screen.getByRole('button', { name: 'Upscale' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.getByText('Enlarges video, SDR or HDR.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it('preserves every executable backend id from worker discovery to job settings', async () => {
@@ -1148,8 +1169,8 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     const user = await mountWith(snapshot);
-    await chooseTask(user, /Upscale\s*Photos and artwork/i);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Model, output, hardware/i }));
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
     const hardware = screen.getByLabelText('Hardware');
 
     for (const name of [
@@ -1191,7 +1212,7 @@ describe('LocalSR desktop interface', () => {
       }
       snapshot.settings.device_id = device;
       const user = await mountWith(snapshot);
-      await chooseTask(user, /Upscale\s*Photos and artwork/i);
+      await chooseTask(user, /^Upscale$/);
 
       const start = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
       expect(start.disabled).toBe(false);
@@ -1213,7 +1234,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Batch' }));
-    await chooseTask(user, /Upscale\s*Photos and artwork/i);
+    await chooseTask(user, /^Upscale$/);
 
     const start = screen.getByRole('button', { name: 'Start 2 items' });
     await user.click(start);
@@ -1236,17 +1257,12 @@ describe('LocalSR desktop interface', () => {
 
     const start = screen.getByRole('button', { name: 'Start 1 item' }) as HTMLButtonElement;
     expect(start.disabled).toBe(false);
-    expect(
-      (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-    expect(
-      (
-        screen.getByRole('button', {
-          name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i,
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(false);
+    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: /^Upscale$/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     await user.click(start);
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
@@ -1287,10 +1303,9 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Single' }));
 
     expect(screen.getByText(/Single processes only “selected-video.mp4”/i)).toBeTruthy();
-    expect(
-      (screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     expect(
       (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement).disabled,
     ).toBe(false);
@@ -1320,22 +1335,17 @@ describe('LocalSR desktop interface', () => {
 
     await screen.findAllByText('opened-photo.png');
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: /Upscale\s*Photos and artwork/i }).classList,
-      ).toContain('active'),
+      expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' })),
     );
-    expect(
-      (
-        screen.getByRole('button', {
-          name: /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i,
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expect(screen.getByRole('button', { name: /^Upscale$/ }).classList).toContain('active');
+    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
   });
 
   it('locks the single/batch scope for an active queue', async () => {
-    const snapshot = readySnapshot([image('first', true)]);
+    const snapshot = readySnapshot([image('first', true), image('second')]);
     snapshot.settings.task = 'upscale';
     snapshot.runtime.active_job_id = 'running-job';
     await mountWith(snapshot);
@@ -1363,7 +1373,6 @@ describe('LocalSR desktop interface', () => {
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Performance' }).matches(':disabled')).toBe(false);
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
@@ -1379,7 +1388,7 @@ describe('LocalSR desktop interface', () => {
     api.chooseMediaFiles.mockResolvedValueOnce(['/private/second.png']);
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: '＋ Add Media' }));
+    await user.click(screen.getByRole('button', { name: 'Add Media…' }));
 
     await waitFor(() => expect(api.addMedia).toHaveBeenCalledWith(['/private/second.png'], false));
   });
@@ -1724,9 +1733,10 @@ describe('LocalSR desktop interface', () => {
     expect(stages[0].textContent).toContain('FBCNN Color');
     expect(stages[1].textContent).toContain('Upscale ×4');
     expect(stages[1].textContent).toContain('RealPLKSR ×4 NomosWebPhoto');
-    expect(stages[1].textContent).toContain('On this computer');
+    // A ready model needs no label; only the missing stage says anything.
+    expect(stages[1].textContent).not.toMatch(/MB|Ready/);
     expect(
-      screen.getByRole('button', { name: /^Best\s*RealPLKSR ×4 NomosWebPhoto/, pressed: true }),
+      screen.getByRole('button', { name: /^Best\s*Finest detail/, pressed: true }),
     ).toBeTruthy();
 
     const start = screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ });
@@ -1750,7 +1760,7 @@ describe('LocalSR desktop interface', () => {
     );
     expect(screen.getByText('Quick · Illustration')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: '＋ Save current setup as recipe' }));
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(api.saveRecipe).toHaveBeenCalledWith(
@@ -1799,7 +1809,7 @@ describe('LocalSR desktop interface', () => {
     expect(within(library).getByText('Apache-2.0 ↗')).toBeTruthy();
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
-    expect(screen.getByText('MODEL · CHOSEN BY YOU')).toBeTruthy();
+    expect(screen.getByText('Model · chosen by you')).toBeTruthy();
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({ selected_model_id: 'hat_l_x4_imagenet', quality: 'custom' }),
@@ -1841,18 +1851,18 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(api.removeModel).toHaveBeenCalledWith('span_photo_x4'));
   });
 
-  it('explains the one-time download on first run and fetches Quick on request', async () => {
+  it('explains the one-time download on first run and fetches it from Start', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.catalog.models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
-    const note = screen.getByRole('note', { name: 'Get started' });
-    expect(note.textContent).toContain('Models aren’t bundled');
-    await user.click(within(note).getByRole('button', { name: /^Get Quick · \d+(\.\d+)? MB/ }));
-    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
-    expect(
+    // One place offers the download: the Start button, with the note beside the model.
+    expect(screen.getByText(/Models download once when you start/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^(Download|Get) /i })).toHaveLength(1);
+    await user.click(
       screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
-    ).toBeTruthy();
+    );
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
   });
 
   it('keeps Best selected when the content type changes', async () => {
@@ -1938,7 +1948,7 @@ it('asks for FFmpeg before starting an H.264 export instead of failing later', a
   snapshot.settings.video_codec = 'h264';
   snapshot.settings.external_ffmpeg_path = '';
   const user = await mountWith(snapshot);
-  await chooseTask(user, /Upscale Video\s*Local video · HLG \/ PQ \/ SDR/i);
+  await chooseTask(user, /^Upscale$/);
   await user.click(screen.getByRole('button', { name: 'Start selected video' }));
   expect(
     await screen.findByRole('dialog', { name: 'H.264 and HEVC export needs FFmpeg' }),
