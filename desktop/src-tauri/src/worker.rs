@@ -16,7 +16,9 @@ use crate::{
     error::{AppError, AppResult},
     settings,
     state::{emit_state_changed, lock, AppState},
-    types::{BenchmarkResult, CapabilityInfo, EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
+    types::{
+        BenchmarkResult, CapabilityInfo, DeviceInfo, EngineInfo, WorkerEnvelope, PROTOCOL_VERSION,
+    },
 };
 
 struct WorkerCommand {
@@ -568,7 +570,18 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             }
         }
         "capabilities_info" => {
-            *lock(&state.capabilities)? = serde_json::from_value::<CapabilityInfo>(data.clone())?;
+            let capabilities = serde_json::from_value::<CapabilityInfo>(data.clone())?;
+            if state.choose_device.swap(false, Ordering::SeqCst) {
+                if let Some(device) = first_run_device(&capabilities.devices) {
+                    let mut settings = lock(&state.settings)?;
+                    if settings.device_id == "cpu" {
+                        settings.device_id = device;
+                        drop(settings);
+                        state.persist_settings()?;
+                    }
+                }
+            }
+            *lock(&state.capabilities)? = capabilities;
         }
         "media_info" => {
             let path = string(data, "media_path");
@@ -1298,9 +1311,38 @@ fn completion_preview_request(envelope: &WorkerEnvelope) -> Option<Value> {
     }
 }
 
+/// The device a new installation starts on: Apple's GPU or a CUDA/ROCm card.
+/// DirectML stays opt-in because it is untested.
+fn first_run_device(devices: &[DeviceInfo]) -> Option<String> {
+    devices
+        .iter()
+        .find(|device| device.id == "mps" || device.id == "cuda" || device.id.starts_with("cuda:"))
+        .map(|device| device.id.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_installation_starts_on_the_gpu_but_not_on_directml() {
+        let device = |id: &str| DeviceInfo {
+            id: id.into(),
+            ..DeviceInfo::default()
+        };
+        assert_eq!(
+            first_run_device(&[device("cpu"), device("mps")]).as_deref(),
+            Some("mps")
+        );
+        assert_eq!(
+            first_run_device(&[device("cpu"), device("cuda:0")]).as_deref(),
+            Some("cuda:0")
+        );
+        assert_eq!(
+            first_run_device(&[device("cpu"), device("directml:0")]),
+            None
+        );
+    }
 
     #[test]
     fn protocol_values_are_tolerant_of_missing_optional_fields() {

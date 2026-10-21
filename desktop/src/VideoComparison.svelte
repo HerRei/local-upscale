@@ -381,15 +381,15 @@
     gap: 10px;
     padding: 12px 16px;
     border-radius: var(--radius);
-    background: #171e30ed;
-    color: #c3d1fa;
+    background: #1e1e1eed;
+    color: #d1d1d1;
     pointer-events: none;
   }
   .video-loading i {
     width: 16px;
     height: 16px;
-    border: 2px solid #a6c0ff40;
-    border-top-color: #b9ccff;
+    border: 2px solid #bfbfbf40;
+    border-top-color: #cccccc;
     border-radius: 50%;
     animation: loading-spin 1s linear infinite;
   }

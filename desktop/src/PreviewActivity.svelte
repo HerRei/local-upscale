@@ -60,7 +60,7 @@
     height: 6px;
     flex: 0 0 6px;
     border-radius: 50%;
-    background: #83adff;
+    background: #aaaaaa;
     animation: pulse 1.5s ease-in-out infinite;
   }
   p.elapsed {

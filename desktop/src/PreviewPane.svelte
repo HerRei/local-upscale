@@ -424,7 +424,7 @@
       progressiveVisible = true;
       return true;
     }
-    context.fillStyle = '#111722';
+    context.fillStyle = '#171717';
     context.fillRect(0, 0, size.width, size.height);
     try {
       const source = await loadHtmlImage(sourcePreview);
@@ -914,8 +914,8 @@
     gap: 12px;
     padding: 12px;
     border-radius: var(--radius);
-    background: #171e30ed;
-    color: #c3d1fa;
+    background: #1e1e1eed;
+    color: #d1d1d1;
   }
   .playback-preparation > span:nth-child(2) {
     flex: 1;
@@ -924,8 +924,8 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    border: 2px solid #a6c0ff40;
-    border-top-color: #b9ccff;
+    border: 2px solid #bfbfbf40;
+    border-top-color: #cccccc;
     border-radius: 50%;
     animation: playback-spin 1s linear infinite;
   }
@@ -936,7 +936,7 @@
     right: 12px;
     z-index: 8;
     pointer-events: none;
-    background: #171e30ed;
+    background: #1e1e1eed;
     padding: 6px 10px;
     font-size: 12px;
   }
@@ -972,9 +972,9 @@
     gap: 8px;
     max-width: calc(100% - 24px);
     padding: 8px 10px;
-    background: #171e30ed;
-    color: #c3d1fa;
-    border: 1px solid #506da3;
+    background: #1e1e1eed;
+    color: #d1d1d1;
+    border: 1px solid #6b6b6b;
     border-radius: var(--radius);
     font-size: 11px;
     pointer-events: none;
@@ -984,8 +984,8 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    border: 2px solid #a6c0ff40;
-    border-top-color: #b9ccff;
+    border: 2px solid #bfbfbf40;
+    border-top-color: #cccccc;
     animation: model-spin 1s linear infinite;
   }
   .model-activity.with-progress {
@@ -997,7 +997,7 @@
   }
   .model-activity small {
     grid-column: 2;
-    color: #9fb3e6;
+    color: #b2b2b2;
     font-size: 11px;
   }
   .activity-track {
@@ -1007,7 +1007,7 @@
     height: 4px;
     overflow: hidden;
     border-radius: 2px;
-    background: #2a3554;
+    background: #353535;
   }
   .activity-track em {
     position: relative;
@@ -1026,7 +1026,7 @@
     background: linear-gradient(
       100deg,
       transparent 35%,
-      rgba(214, 226, 255, 0.55) 50%,
+      rgba(226, 226, 226, 0.55) 50%,
       transparent 65%
     );
     background-size: 250% 100%;
@@ -1038,7 +1038,7 @@
     background: linear-gradient(
       100deg,
       transparent 40%,
-      rgba(185, 204, 255, 0.07) 50%,
+      rgba(204, 204, 204, 0.07) 50%,
       transparent 60%
     );
     background-size: 250% 100%;
@@ -1065,8 +1065,8 @@
   }
   @keyframes tile-pulse {
     50% {
-      border-color: #d5e0ff;
-      background: #8cabff25;
+      border-color: #e0e0e0;
+      background: #aaaaaa25;
     }
   }
   @media (prefers-reduced-motion: reduce) {

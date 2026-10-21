@@ -60,11 +60,11 @@
     animation: back-float 7s ease-in-out infinite;
   }
   .back-frame rect {
-    fill: #25324c;
-    stroke: #53709d;
+    fill: #313131;
+    stroke: #6d6d6d;
   }
   .back-frame path {
-    stroke: #88a8d5;
+    stroke: #a4a4a4;
     stroke-width: 3;
     stroke-linecap: round;
   }
@@ -72,24 +72,24 @@
     animation: float 6s ease-in-out infinite;
   }
   .picture {
-    fill: #202938;
-    stroke: #7596c9;
+    fill: #282828;
+    stroke: #939393;
     stroke-width: 1.5;
   }
   .mountain {
-    fill: #36557c;
+    fill: #515151;
   }
   .ridge {
     fill: none;
-    stroke: #96bce8;
+    stroke: #b7b7b7;
     stroke-width: 2;
     stroke-linejoin: round;
   }
   .sun {
-    fill: #a0c8fa;
+    fill: #c3c3c3;
   }
   .sun-glow {
-    fill: #a0c8fa;
+    fill: #c3c3c3;
     opacity: 0.18;
     transform-origin: 172px 77px;
     animation: glow 4s ease-in-out infinite;
@@ -105,13 +105,13 @@
     animation: play-float 5s ease-in-out infinite;
   }
   .play circle:not(.play-ring) {
-    fill: #497be0;
-    stroke: #a7c8ff;
+    fill: #787878;
+    stroke: #c5c5c5;
     stroke-width: 1.5;
   }
   .play-ring {
     fill: none;
-    stroke: #6f98f0;
+    stroke: #969696;
     stroke-width: 1.5;
     opacity: 0;
     transform-origin: 213px 134px;
@@ -121,7 +121,7 @@
     fill: white;
   }
   .pixels rect {
-    fill: #739bea;
+    fill: #989898;
   }
   .pixel-a {
     animation:
@@ -139,7 +139,7 @@
       breathe 5.5s ease-in-out -3s infinite;
   }
   .spark {
-    stroke: #9fbfec;
+    stroke: #bbbbbb;
     stroke-width: 2;
     stroke-linecap: round;
     transform-origin: 231px 31px;
@@ -147,7 +147,7 @@
   }
   .scan {
     opacity: 0;
-    stroke: #b2d6ff;
+    stroke: #d1d1d1;
     stroke-width: 2;
     animation: scan 8s ease-in-out infinite;
   }

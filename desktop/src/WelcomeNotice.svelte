@@ -40,7 +40,7 @@
       <b id="welcome-title"><BrandMark size={16} />Welcome to LocalSR</b>
       <span
         >Drop photos or videos in the middle, pick Upscale, Restore or Edit on the right, then press
-        the blue button. The model a task needs downloads the first time you use it.</span
+        the button at the bottom right. The model a task needs downloads the first time you use it.</span
       >
       {#if counts}
         <span class="count"

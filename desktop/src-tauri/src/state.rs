@@ -63,6 +63,9 @@ pub struct AppState {
     pub scheduler: Mutex<()>,
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub launch_intents: Mutex<Vec<LaunchIntent>>,
+    /// Set when no settings file existed at launch: the first device report
+    /// then replaces the CPU default with the computer's GPU.
+    pub choose_device: AtomicBool,
 }
 
 impl AppState {
@@ -74,6 +77,7 @@ impl AppState {
         crate::update_storage::before_version(&paths, &crate::distribution::profile_version())?;
         let database = Database::open(&paths.database)?;
         let catalog = load_catalog(&paths)?;
+        let first_run = !paths.settings.exists();
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
         Ok(Self {
@@ -95,6 +99,7 @@ impl AppState {
             scheduler: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
             launch_intents: Mutex::new(Vec::new()),
+            choose_device: AtomicBool::new(first_run),
         })
     }
 

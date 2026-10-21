@@ -120,7 +120,7 @@
         const rect = canvasTileRect(tile, canvas);
         if (rect) {
           context.drawImage(image, rect.x, rect.y, rect.width, rect.height);
-          context.strokeStyle = '#80a1ff66';
+          context.strokeStyle = '#a1a1a166';
           context.lineWidth = 1;
           context.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
         }
@@ -195,7 +195,7 @@
   header span,
   footer,
   p {
-    color: #a5adbd;
+    color: #acacac;
   }
   .render-stage {
     position: relative;
@@ -218,9 +218,9 @@
   .active-tile {
     position: absolute;
     box-sizing: border-box;
-    border: 2px solid #8dabff;
-    background: #779cff18;
-    box-shadow: inset 0 0 20px #7f9dff30;
+    border: 2px solid #ababab;
+    background: #9b9b9b18;
+    box-shadow: inset 0 0 20px #9e9e9e30;
     animation: pulse 1.2s ease-in-out infinite;
   }
   .waiting {
@@ -231,13 +231,13 @@
     align-items: center;
     justify-content: center;
     font-size: 13px;
-    color: #a5adbd;
+    color: #acacac;
   }
   .working {
     width: 16px;
     height: 16px;
-    border: 2px solid #6887ce40;
-    border-top-color: #91adff;
+    border: 2px solid #86868640;
+    border-top-color: #adadad;
     border-radius: 50%;
     animation: spin 1s linear infinite;
   }
@@ -249,8 +249,8 @@
   }
   @keyframes pulse {
     50% {
-      border-color: #d5e0ff;
-      background: #8cabff38;
+      border-color: #e0e0e0;
+      background: #aaaaaa38;
     }
   }
   @keyframes spin {

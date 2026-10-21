@@ -224,7 +224,6 @@
   }
   .chip.after {
     right: 8px;
-    color: #b9d0ff;
   }
   .title {
     font-size: calc(21px * var(--ui-scale));

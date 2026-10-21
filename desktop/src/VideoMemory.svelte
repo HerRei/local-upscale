@@ -122,8 +122,8 @@
   .memory-panel {
     margin: 16px 0;
     padding: 14px;
-    background: rgba(106, 137, 221, 0.07);
-    border: 1px solid rgba(106, 137, 221, 0.3);
+    background: rgba(136, 136, 136, 0.07);
+    border: 1px solid rgba(136, 136, 136, 0.3);
     border-radius: var(--radius);
     font-size: 12px;
   }
@@ -138,7 +138,7 @@
     font-size: 13px;
   }
   input {
-    accent-color: #6b91f2;
+    accent-color: #909090;
   }
   p {
     color: #b1b1b4;
@@ -158,7 +158,7 @@
     border-top: 1px solid #3c3c3e;
   }
   .reading-title span {
-    color: #a9bdec;
+    color: #bcbcbc;
   }
   dl {
     margin: 12px 0 0;
