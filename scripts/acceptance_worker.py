@@ -104,9 +104,10 @@ class Worker:
 
 def make_video(path):
     with av.open(str(path), "w") as container:
-        video = container.add_stream("libx264", rate=12)
+        # Royalty-free codecs only: the development runtime has no x264 or AAC encoder.
+        video = container.add_stream("libvpx-vp9", rate=12)
         video.width, video.height, video.pix_fmt = 96, 64, "yuv420p"
-        audio = container.add_stream("aac", rate=48000)
+        audio = container.add_stream("libopus", rate=48000)
         for index in range(24):
             rgb = np.zeros((64, 96, 3), dtype=np.uint8)
             rgb[:, :, 0] = 30 + index * 7
@@ -173,7 +174,7 @@ def run(worker, root, model_path, device):
         assert alpha.min() == 0 and alpha.max() == 255
     passed("odd-size-transparent-image-unicode-path", dimensions=[258, 194])
 
-    video = root / "moving colours ü.mov"
+    video = root / "moving colours ü.mkv"
     make_video(video)
     output = root / "trimmed ü.mp4"
     job = VideoJobRequest(
