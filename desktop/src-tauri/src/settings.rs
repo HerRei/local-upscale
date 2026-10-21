@@ -88,7 +88,7 @@ fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
 pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppResult<()> {
     // Never overwrite an unreadable or future-version document with defaults.
     if paths.settings.exists() && read_document(&paths.settings).is_none() {
-        return Err(AppError::Config("Settings need recovery. The original file has been preserved; use Update LocalSR → Recover settings before saving changes.".into()));
+        return Err(AppError::Config("Settings need recovery. The original file has been preserved; open Check for Updates… and press Recover settings before saving changes.".into()));
     }
     fs::create_dir_all(&paths.next_root)?;
     let document = SettingsDocument {

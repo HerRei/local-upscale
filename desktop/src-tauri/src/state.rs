@@ -77,7 +77,7 @@ impl AppState {
         crate::update_storage::before_version(&paths, &crate::distribution::profile_version())?;
         let database = Database::open(&paths.database)?;
         let catalog = load_catalog(&paths)?;
-        let first_run = !paths.settings.exists();
+        let first_run = !paths.settings.exists() && !paths.legacy_settings.exists();
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
         Ok(Self {

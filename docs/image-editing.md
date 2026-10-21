@@ -6,11 +6,13 @@ result is a new PNG in the output folder; the original stays intact. Progress,
 cancellation and the before/after preview use the same queue as every other job.
 Edit works on the selected image only; batches are not supported yet.
 
-The model row under **Model** shows the chosen editing bundle with its license, its
-download size and whether it fits this computer. **Change…** opens the model
-library on the **Edit with a prompt** group, where every bundle lists what it
-needs on a Mac (unified memory) and on Windows or Linux (GPU memory), whether it
-fits the current hardware, and the largest edit size this computer starts with.
+The model row under **Model** shows the chosen editing bundle and its size
+variant; when the bundle is not on this computer yet, the start button names the
+download ("Download 5.3 GB, then edit"). **Change…** opens the model library on
+the **Edit with a prompt** group, which groups the bundles by model family and
+lists the sizes that fit this computer, with the memory each needs and the
+largest edit size it starts with. Heavier sizes stay behind **Show … more that
+need more memory than this computer has**.
 The **Edit size** control below the model row offers 512, 768 and 1024 px; sizes
 above this computer's profile are disabled. **Advanced** holds the step count,
 the seed, the output folder and the GPU. When Edit is chosen for the first

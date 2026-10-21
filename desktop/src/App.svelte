@@ -101,6 +101,8 @@
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
   let livePreviewWarning = '';
   let preparing = false;
+  let preparingCancelled = false;
+  let preparingModelId = '';
   const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
   let libraryOpen = false;
   let libraryContext: {
@@ -374,7 +376,8 @@
     queueSelection.length > 0 &&
     queueSelection.every((media) => media.probe_status === 'ready') &&
     hdrModelCompatible &&
-    (!usingTemporalVideo || !temporalUnavailableReason);
+    (!usingTemporalVideo || !temporalUnavailableReason) &&
+    (settings.task !== 'edit' || !editBlockReason);
   $: startVerb =
     settings.task === 'video'
       ? 'start video'
@@ -387,9 +390,15 @@
     (device) => device.id === settings.device_id,
   );
   // While idle, the status bar says what Start will produce, next to the button that does it.
+  // A finished job keeps its own message while its result is selected.
   $: idleSummary =
     selectedMedia &&
-    snapshot.runtime.status_title === 'Ready' &&
+    (['Ready', 'Model ready', 'Download paused', 'Cancelled'].includes(
+      snapshot.runtime.status_title,
+    ) ||
+      (snapshot.runtime.status_title === 'Complete' && !selectedOutputPath)) &&
+    !activeDownload &&
+    !preparing &&
     !booting &&
     (canStart || canPrepare)
       ? `${selectedMedia.width} × ${selectedMedia.height} → ${outputDimensions} · ${
@@ -829,18 +838,40 @@
     models: (CatalogModel | CatalogVideoModel | EditModel | undefined)[],
   ): Promise<boolean> {
     preparing = true;
+    preparingCancelled = false;
     try {
       for (const model of models) {
+        if (preparingCancelled) return false;
         if (!model || model.installed || !model.automated_download_allowed) continue;
+        preparingModelId = model.model_id;
         await api.downloadModel(model.model_id, false);
       }
       await refresh();
-      return true;
+      return !preparingCancelled;
     } catch (error) {
-      showModal('Download failed', String(error));
+      if (!preparingCancelled) showModal('Download failed', String(error));
       return false;
     } finally {
       preparing = false;
+      preparingModelId = '';
+    }
+  }
+
+  /** Stop the downloads Start began; nothing starts afterwards. */
+  async function cancelPreparation(): Promise<void> {
+    preparingCancelled = true;
+    // The host registers a download a moment after Start asks for it.
+    for (let attempt = 0; attempt < 30 && preparing; attempt += 1) {
+      const modelId = activeDownload || preparingModelId;
+      if (modelId) {
+        try {
+          await api.cancelDownload(modelId);
+          return;
+        } catch {
+          // Not registered yet; try again shortly.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
@@ -1046,7 +1077,7 @@
 
   function applyPreset(kind: 'quick' | 'best'): void {
     if (!settings.task || settings.task === 'edit') {
-      showModal('Choose a task', 'Select Upscale, Restore, or Video before applying a recipe.');
+      showModal('Choose a task', 'Select Upscale or Restore before applying a preset.');
       return;
     }
     resolveRecipe({ quality: kind });
@@ -1552,10 +1583,12 @@
           break;
         case 'file.start':
           if (canStart) await start();
+          else if (canPrepare) await prepareAndStart();
           else showModal('Cannot start yet', singleScopeMessage);
           break;
         case 'file.cancel':
-          await api.cancelJobs();
+          if (preparing) await cancelPreparation();
+          else await api.cancelJobs();
           break;
         case 'file.integrations':
           await showIntegrations();
@@ -2493,14 +2526,13 @@
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
           >{cancelling ? 'Cancelling…' : 'Cancel queue'}</button
         >
-      {:else if canPrepare || preparing}
-        <button
-          class="button primary start"
-          disabled={preparing}
-          on:click={() => void prepareAndStart()}
-          >{preparing
-            ? 'Downloading…'
-            : `Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
+      {:else if preparing}
+        <button class="button danger start" on:click={() => void cancelPreparation()}
+          >{preparingCancelled ? 'Cancelling…' : 'Cancel download'}</button
+        >
+      {:else if canPrepare}
+        <button class="button primary start" on:click={() => void prepareAndStart()}
+          >{`Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
         >
       {:else}
         <button class="button primary start" disabled={!canStart} on:click={() => start()}

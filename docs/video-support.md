@@ -142,8 +142,8 @@ additional image detail.
 Its **Output resolution** control either follows the chosen scale or sets the
 shorter edge to 256, 512, 720, 1080, 1440 or 2160 pixels. The inspector explicitly
 warns when this reduces the source dimensions and loses fine detail. A smaller requested output
-downsamples a large input on CPU before buffering or GPU upload; the summary shows
-the actual output dimensions. Existing settings keep their selected scale. The
+downsamples a large input on CPU before buffering or GPU upload; the line beside
+the start button shows the actual output dimensions. Existing settings keep their selected scale. The
 stream holds one model window including context instead of 33 fresh frames, and
 reuses models on CPU between clips so the VAE and diffusion weights do not both
 remain resident on the GPU. MPS checkpoint dtype conversion also happens on CPU

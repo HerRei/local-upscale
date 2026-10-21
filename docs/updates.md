@@ -2,9 +2,8 @@
 
 ## In the app
 
-**Check for Updates…** in the LocalSR menu (the **…** button beside Performance;
-the item reads **Update LocalSR…** once a newer build is waiting) opens Software
-Update: choose the Stable or Beta channel, check for a compatible release, read
+**Check for Updates…** in the LocalSR menu (the Help menu on Windows and Linux)
+opens Software Update: choose the Stable or Beta channel, check for a compatible release, read
 its notes and total download size, download it, and install and restart. The
 beta also checks its feed once at launch and shows a notice when a newer build
 exists. Downloads can run while jobs are processing;

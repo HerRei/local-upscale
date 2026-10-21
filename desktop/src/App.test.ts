@@ -1748,6 +1748,35 @@ describe('LocalSR desktop interface', () => {
     expect(api.downloadModel).toHaveBeenCalledTimes(1);
   });
 
+  it('turns Start into a cancel button while it downloads, and does not start afterwards', async () => {
+    const snapshot = readySnapshot([image('frame', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'best';
+    snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
+    snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!.installed = false;
+    let failDownload!: (error: Error) => void;
+    api.downloadModel.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          failDownload = reject;
+        }),
+    );
+    api.cancelDownload.mockImplementationOnce(async () => {
+      failDownload(new Error('download cancelled'));
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Download [\d.]+ MB, then upscale$/ }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
+    await waitFor(() =>
+      expect(api.cancelDownload).toHaveBeenCalledWith('realplksr_nomoswebphoto_x4'),
+    );
+    await screen.findByRole('button', { name: /^Download [\d.]+ MB, then upscale$/ });
+    expect(api.startJobs).not.toHaveBeenCalled();
+    expect(screen.queryByText('Download failed')).toBeNull();
+  });
+
   it('resolves Quick and Best for illustrations and keeps the choice in the recipe', async () => {
     const snapshot = readySnapshot([image('frame', true)]);
     const user = await mountWith(snapshot);

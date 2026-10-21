@@ -113,6 +113,13 @@
       0 18px 46px rgba(0, 0, 0, 0.5);
     animation: arrive 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1);
   }
+  /* Wide windows have no top bar: float over the preview, clear of the Enhance pane. */
+  @media (min-width: 1280px) {
+    .update-notice {
+      top: 64px;
+      right: calc(340px + 14px);
+    }
+  }
   .glyph {
     display: grid;
     place-items: center;

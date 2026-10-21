@@ -577,7 +577,9 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
                     if settings.device_id == "cpu" {
                         settings.device_id = device;
                         drop(settings);
-                        state.persist_settings()?;
+                        if let Err(error) = state.persist_settings() {
+                            eprintln!("Could not save the first-run device: {error}");
+                        }
                     }
                 }
             }
