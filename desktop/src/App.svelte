@@ -7,7 +7,7 @@
   import FFmpegNotice from './FFmpegNotice.svelte';
   import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
-  import LicenseDownload from './LicenseDownload.svelte';
+  import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
@@ -2259,17 +2259,11 @@
                           >
                         {/if}
                       {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
-                        {#key stage.model.model_id}<LicenseDownload
-                            model={stage.model}
-                            disabled={settingsLocked ||
-                              preparing ||
-                              (Boolean(activeDownload) && activeDownload !== stage.model.model_id)}
-                            downloading={activeDownload === stage.model.model_id}
-                            progress={snapshot.runtime.download_progress}
-                            download={() => runDownload(stage.model)}
-                            openLicense={() => api.openModelLicense(stage.model!.model_id)}
-                            openSource={() => api.openModelSource(stage.model!.model_id)}
-                          />{/key}
+                        <ModelCredit
+                          model={stage.model}
+                          openLicense={() => api.openModelLicense(stage.model!.model_id)}
+                          openSource={() => api.openModelSource(stage.model!.model_id)}
+                        />
                       {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
                         <p class="model-description">
                           Optional companion pass for faces. The exact checkpoint's redistribution

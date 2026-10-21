@@ -346,8 +346,10 @@ it.each(['realplksr_nomoswebphoto_x4', 'realplksr_hfa2k_anime_x4'])(
     await user.click(screen.getByRole('button', { name: /License terms/ }));
     expect(api.openModelSource).toHaveBeenCalledWith(modelId);
     expect(api.openModelLicense).toHaveBeenCalledWith(modelId);
-    await user.click(screen.getByRole('button', { name: /^Download [\d.]+ MB$/ }));
-    expect(api.downloadModel).toHaveBeenCalledWith(modelId, false);
+    // One download control: the Start button.
+    expect(screen.getAllByRole('button', { name: /^Download / })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: /^Download [\d.]+ MB, then upscale$/ }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith(modelId, false));
     expect(api.importCatalogModel).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).toBeNull();
   },
