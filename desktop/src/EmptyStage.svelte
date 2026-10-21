@@ -244,15 +244,15 @@
     margin: -10px 0 0 -10px;
     border: 1.5px solid #fff;
     border-radius: 50%;
-    background: rgba(20, 22, 27, 0.9);
+    background: rgba(22, 22, 24, 0.9);
   }
   .chip {
     position: absolute;
     top: 8px;
     padding: 4px 6px;
     border-radius: 5px;
-    background: rgba(12, 13, 16, 0.72);
-    color: #dfe3ea;
+    background: rgba(13, 13, 15, 0.72);
+    color: #e3e3e6;
     font-size: calc(10px * var(--ui-scale));
     font-weight: 600;
     line-height: 1;
@@ -288,7 +288,7 @@
   .capabilities span + span::before {
     content: '·';
     margin-right: 14px;
-    color: #3c4149;
+    color: #414143;
   }
   .dropping .glow {
     opacity: 0.6;

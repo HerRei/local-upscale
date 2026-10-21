@@ -141,12 +141,12 @@
     accent-color: #6b91f2;
   }
   p {
-    color: #adb1ba;
+    color: #b1b1b4;
     line-height: 1.5;
     margin: 9px 0 0;
   }
   strong {
-    color: #e2e5ec;
+    color: #e5e5e8;
   }
   .reading-title {
     display: flex;
@@ -155,7 +155,7 @@
     justify-content: space-between;
     padding-top: 13px;
     margin-top: 13px;
-    border-top: 1px solid #383c46;
+    border-top: 1px solid #3c3c3e;
   }
   .reading-title span {
     color: #a9bdec;
@@ -171,7 +171,7 @@
     margin-top: 7px;
   }
   dt {
-    color: #adb1ba;
+    color: #b1b1b4;
   }
   dd {
     margin: 0;

@@ -280,9 +280,9 @@
     <div class="sheet-head">
       <h2 id="library-title">Model library</h2>
       {#if context.slot === 'edit'}
-        <span class="pill quick">Choosing for Edit</span>
+        <span class="sheet-context">Choosing for Edit</span>
       {:else if context.slot !== 'browse' && context.task}
-        <span class="pill quick"
+        <span class="sheet-context"
           >Choosing for {context.task === 'video'
             ? 'Video'
             : context.task === 'denoise'
@@ -433,7 +433,7 @@
         {:else}
           <div class="list-head">
             {group === 'job'
-              ? 'FOR THIS JOB'
+              ? 'For this job'
               : group === 'installed'
                 ? `INSTALLED · ${formatBytes(installedBytes)}`
                 : groups.find((item) => item.id === group)?.label}<span

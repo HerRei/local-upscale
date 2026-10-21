@@ -72,7 +72,7 @@
     transform: translateX(-50%);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 14px;
-    background: rgba(32, 35, 41, 0.9);
+    background: rgba(35, 35, 37, 0.9);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
       inset 0 1px rgba(255, 255, 255, 0.06),
@@ -118,7 +118,7 @@
   }
   .notice-button.primary {
     border-color: rgba(0, 0, 0, 0.25);
-    background: linear-gradient(#5b95ff, #3f7cf2);
+    background: var(--accent);
     box-shadow: inset 0 1px rgba(255, 255, 255, 0.22);
     color: #fff;
   }

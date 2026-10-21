@@ -187,7 +187,7 @@
     width: min(590px, 100%);
     max-height: 85vh;
     overflow: auto;
-    background: #202226;
+    background: #222224;
     padding: 26px;
     border: 1px solid #505665;
     border-radius: 14px;

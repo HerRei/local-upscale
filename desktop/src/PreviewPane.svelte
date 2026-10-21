@@ -1015,7 +1015,7 @@
     height: 100%;
     overflow: hidden;
     border-radius: 2px;
-    background: linear-gradient(90deg, #346dd7, #7ea9ff);
+    background: var(--accent-hi);
     transition: width 0.5s ease;
   }
   .activity-track em::after,

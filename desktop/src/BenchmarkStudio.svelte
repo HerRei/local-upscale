@@ -182,7 +182,7 @@
     border: 1px solid #424854;
     border-radius: 10px;
     overflow: hidden;
-    background: #191c23;
+    background: #1c1c1e;
   }
   header,
   footer {
@@ -202,7 +202,7 @@
     margin: 0 auto;
     width: min(calc(100% - 32px), calc(280px * var(--render-ratio)));
     aspect-ratio: var(--render-ratio);
-    background: #10141d;
+    background: #141416;
     overflow: hidden;
   }
   canvas,

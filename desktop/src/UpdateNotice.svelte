@@ -106,7 +106,7 @@
     padding: 12px 12px 12px 14px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 14px;
-    background: rgba(32, 35, 41, 0.86);
+    background: rgba(35, 35, 37, 0.86);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
       inset 0 1px rgba(255, 255, 255, 0.06),
@@ -119,7 +119,7 @@
     width: 34px;
     height: 34px;
     border-radius: 9px;
-    background: linear-gradient(#5b95ff, #3f7cf2);
+    background: var(--accent);
     box-shadow: inset 0 1px rgba(255, 255, 255, 0.25);
   }
   .glyph svg {
@@ -187,7 +187,7 @@
   }
   .notice-button.primary {
     border-color: rgba(0, 0, 0, 0.25);
-    background: linear-gradient(#5b95ff, #3f7cf2);
+    background: var(--accent);
     box-shadow: inset 0 1px rgba(255, 255, 255, 0.22);
     color: #fff;
   }
