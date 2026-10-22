@@ -2619,12 +2619,12 @@
       tabindex="-1"
     >
       <h2 id="modal-title">{modalTitle}</h2>
-      <p>{modalMessage}</p>
+      <p class="modal-message">{modalMessage}</p>
       {#if modalKind === 'performance'}
         <section class="benchmark-panel" aria-labelledby="benchmark-title">
           <div class="benchmark-heading">
             <div>
-              <span class="eyebrow">BENCHMARK V2.1</span>
+              <span class="eyebrow">Benchmark v2.1</span>
               <h3 id="benchmark-title">CPU & GPU Benchmarks</h3>
             </div>
             <span class="benchmark-private">100% local</span>

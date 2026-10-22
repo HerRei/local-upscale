@@ -1343,10 +1343,13 @@ input[type='text'],
   font-size: calc(16px * var(--ui-scale));
 }
 .modal p {
-  white-space: pre-wrap;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.5;
+}
+/* Messages can carry line breaks; paragraphs written in markup must not keep source indentation. */
+.modal p.modal-message {
+  white-space: pre-wrap;
 }
 .modal textarea {
   width: 100%;
@@ -1432,9 +1435,9 @@ input[type='text'],
 }
 .benchmark-private {
   padding: 4px 8px;
-  border: 1px solid rgba(109, 176, 127, 0.24);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: rgba(109, 176, 127, 0.09);
+  background: transparent;
   color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
   font-weight: 600;
