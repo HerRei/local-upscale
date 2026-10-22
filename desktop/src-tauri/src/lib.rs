@@ -96,6 +96,7 @@ pub fn run() {
             app.manage(state.clone());
             *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
             native_menu::install(app, &lock(&state.recipes)?)?;
+            fit_main_window(app.handle());
             if let Err(error) = worker::start_worker(state.clone(), app.handle().clone()) {
                 if let Ok(mut runtime) = state.runtime.lock() {
                     runtime.worker = "failed".into();
@@ -233,6 +234,36 @@ fn enqueue_launch_intent(app: &tauri::AppHandle, intent: LaunchIntent) {
     }
     let _ = app.emit("launch-intent-available", ());
     focus_main_window(app);
+}
+
+/// Shrinks the window to the screen's work area. The configured 1380 × 860 is taller
+/// than a 1366 × 768 laptop or a 1280 × 800 display, where the status bar with the
+/// start button would sit under the taskbar or the Dock.
+fn fit_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(Some(monitor)), Ok(outer), Ok(inner)) = (
+        window.current_monitor(),
+        window.outer_size(),
+        window.inner_size(),
+    ) else {
+        return;
+    };
+    let area = monitor.work_area();
+    if outer.width <= area.size.width && outer.height <= area.size.height {
+        return;
+    }
+    let frame_width = outer.width.saturating_sub(inner.width);
+    let frame_height = outer.height.saturating_sub(inner.height);
+    let width = inner.width.min(area.size.width.saturating_sub(frame_width));
+    let height = inner
+        .height
+        .min(area.size.height.saturating_sub(frame_height));
+    let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+    let left = area.position.x + (area.size.width.saturating_sub(width + frame_width) / 2) as i32;
+    let top = area.position.y + (area.size.height.saturating_sub(height + frame_height) / 2) as i32;
+    let _ = window.set_position(tauri::PhysicalPosition::new(left, top));
 }
 
 fn focus_main_window(app: &tauri::AppHandle) {
