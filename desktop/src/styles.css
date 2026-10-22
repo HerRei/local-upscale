@@ -1873,13 +1873,13 @@ input[type='text'],
 .performance-section-heading {
   margin: 0 2px 7px;
 }
+/* A finished video sits on the photo stage: the same checkered canvas, divider, zoom HUD and
+   Original chip. Playback is a HUD drawn like the zoom one, on its own row under the frame. */
 .video-comparison {
   position: absolute;
   inset: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  overflow: hidden;
-  background: #09090b;
   touch-action: none;
 }
 .video-viewport {
@@ -1887,30 +1887,54 @@ input[type='text'],
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #060608;
 }
-.video-viewport.zoomed {
+.video-viewport.pannable {
   cursor: grab;
 }
 .video-viewport.panning {
   cursor: grabbing;
 }
-.video-viewport video {
-  transform-origin: center;
-  will-change: transform;
+.video-viewport.comparing {
+  cursor: col-resize;
 }
-.video-zoom {
+.video-stage video,
+.enhanced-clip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.video-stage video {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+}
+.enhanced-clip {
+  overflow: hidden;
+}
+.video-hud {
   display: flex;
   align-items: center;
-  padding: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: var(--radius);
-  background: rgba(24, 24, 26, 0.9);
+  gap: 8px;
+  padding: 0 14px 14px;
 }
-.video-zoom button,
-.video-zoom span {
-  min-width: 30px;
-  height: 26px;
+.video-hud .zoom-hud {
+  position: static;
+  flex: none;
+}
+.video-transport {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: rgba(24, 24, 26, 0.82);
+}
+.video-transport button {
+  min-width: 34px;
+  min-height: 28px;
   display: grid;
   place-items: center;
   border: 0;
@@ -1918,132 +1942,78 @@ input[type='text'],
   background: transparent;
   color: #dcdcdf;
   font-size: calc(11px * var(--ui-scale));
-}
-.video-zoom span {
-  min-width: 46px;
-  color: var(--secondary);
   font-variant-numeric: tabular-nums;
 }
-.video-zoom button:hover:not(:disabled),
-.video-zoom button.active {
+.video-transport button:hover {
   background: rgba(255, 255, 255, 0.11);
 }
-.video-zoom button:disabled {
-  cursor: default;
-  opacity: 0.35;
+.transport-play svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
 }
-.video-viewport > video,
-.enhanced-clip,
-.enhanced-clip video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  background: #060608;
+.transport-rate {
+  min-width: 40px;
 }
-.enhanced-clip {
-  overflow: hidden;
-  background: transparent;
-}
-.video-label {
-  position: absolute;
-  z-index: 3;
-  top: 12px;
-  padding: 5px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: var(--radius);
-  background: rgba(16, 16, 18, 0.76);
-  color: #f1f1f4;
-  font-size: calc(11px * var(--ui-scale));
-  backdrop-filter: blur(8px);
-}
-.original-label {
-  left: 12px;
-}
-.enhanced-label {
-  right: 12px;
-}
-.video-divider {
-  position: absolute;
-  z-index: 4;
-  top: 0;
-  bottom: 0;
-  width: 48px;
-  margin-left: -24px;
-  cursor: ew-resize;
-  outline: 0;
-  touch-action: none;
-}
-.video-divider::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 23px;
-  width: 2px;
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.24),
-    0 0 10px rgba(0, 0, 0, 0.5);
-}
-.video-divider span {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  transform: translate(-50%, -50%);
-  border: 2px solid rgba(255, 255, 255, 0.72);
-  border-radius: 50%;
-  background: #28282a;
-  color: white;
-  font-size: 22px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.42);
-}
-.video-divider.held {
-  opacity: 0;
-  pointer-events: none;
-}
-.video-divider:focus-visible span,
-.video-divider.dragging span {
-  border-color: #bdbdbd;
-  box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.198),
-    0 4px 18px rgba(0, 0, 0, 0.42);
-}
-.video-controls {
-  z-index: 5;
-  min-height: 48px;
-  display: grid;
-  grid-template-columns: auto minmax(100px, 1fr) auto auto auto;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  background: #1c1c1e;
-}
-.video-controls input {
-  min-width: 80px;
-  accent-color: #cfcfcf;
-}
-.video-controls > span,
-.video-controls label {
-  white-space: nowrap;
+.transport-time {
+  min-width: 44px;
+  padding: 0 6px;
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
 }
-.video-controls label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* A 2 px track like the divider, filled to the playhead, with a square-cut thumb. */
+.transport-scrubber {
+  flex: 1;
+  min-width: 60px;
+  height: 28px;
+  margin: 0 4px;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.video-controls select {
-  width: auto;
-  min-height: 30px;
-  padding-right: 22px;
+.transport-scrubber:focus-visible {
+  outline: none;
+}
+.transport-scrubber::-webkit-slider-runnable-track {
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    #ececec var(--played, 0%),
+    rgba(255, 255, 255, 0.18) var(--played, 0%)
+  );
+}
+.transport-scrubber::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: #f6f6f9;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  -webkit-appearance: none;
+}
+.transport-scrubber:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.transport-scrubber::-moz-range-track {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.transport-scrubber::-moz-range-progress {
+  height: 2px;
+  background: #ececec;
+}
+.transport-scrubber::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: #f6f6f9;
 }
 .video-error,
 .video-comparison-load-error {
@@ -2060,15 +2030,6 @@ input[type='text'],
   background: rgba(48, 18, 20, 0.94);
   color: #ffc2c4;
   font-size: calc(12px * var(--ui-scale));
-}
-.video-labs {
-  position: absolute;
-  z-index: 6;
-  right: 11px;
-  bottom: 58px;
-  color: var(--secondary);
-  font-size: calc(10px * var(--ui-scale));
-  font-weight: 600;
 }
 
 @media (max-width: 700px) {
