@@ -273,13 +273,21 @@ def snapshot_source(source: str, version: str, destination: Path) -> None:
     raise SystemExit(f"no source package found for {source}={version}")
 
 
+# Bundled host libraries come from the system library directories. A file with the same
+# name elsewhere (Chrome keeps its own library copies under /opt on GitHub's runners) is
+# not ours.
+SYSTEM_LIBRARY_DIRECTORIES = ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
+
+
 def owning_packages(dpkg_search: str) -> set[str]:
-    """Package names from ``dpkg -S`` output, ignoring diversion notes."""
+    """Package names from ``dpkg -S`` output for system library paths, ignoring diversions."""
     packages: set[str] = set()
     for line in dpkg_search.splitlines():
         if line.startswith("diversion by ") or ": " not in line:
             continue
-        owners = line.split(": ", 1)[0]
+        owners, path = line.split(": ", 1)
+        if not path.strip().startswith(SYSTEM_LIBRARY_DIRECTORIES):
+            continue
         packages.update(owner.strip().split(":")[0] for owner in owners.split(",") if owner.strip())
     return packages
 

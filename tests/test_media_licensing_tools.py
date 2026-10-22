@@ -265,6 +265,7 @@ def test_dpkg_search_output_skips_diversions_and_splits_owners():
         "diversion by libreadline8t64 to: /lib/x86_64-linux-gnu/libhistory.so.8.2.usr-is-merged\n"
         "libreadline8t64:amd64: /usr/lib/x86_64-linux-gnu/libhistory.so.8\n"
         "libgtk-3-0t64:amd64, libgtk-3-common: /usr/lib/x86_64-linux-gnu/libgtk-3.so.0\n"
+        "google-chrome-stable: /opt/google/chrome/libvulkan.so.1\n"
     )
     assert build_source_bundle.owning_packages(output) == {
         "libreadline8t64",
