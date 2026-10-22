@@ -1,3 +1,3 @@
-# The human-facing version string; PEP 440 normalizes it to 0.2.0b0. The release
+# The human-facing version string; PEP 440 normalizes it to 0.2.1b0. The release
 # checks compare it with pyproject.toml, the npm/Cargo/Tauri versions and the tag.
-__version__ = "0.2.0-beta"
+__version__ = "0.2.1-beta"

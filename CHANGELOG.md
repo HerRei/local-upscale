@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.1-beta] - 2026-10-22
+
+Comparison controls that stay out of the way.
 
 ### Changed
 
