@@ -6,7 +6,7 @@ These apply to v0.2.0-beta. Please read them before starting a long job.
 
 - Published packages: macOS on Apple Silicon (v0.2.0-beta); Windows CPU, DirectML
   and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
-  (still v0.1.3-beta, without image editing). The CUDA and
+  (v0.2.0-beta; image editing is Mac only). The CUDA and
   DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU (the app
   labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU

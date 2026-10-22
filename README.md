@@ -39,10 +39,12 @@ and instructions for each platform:
 
 - **macOS v0.2.0-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
   by Apple, with signed updates in the app.
-- **Windows v0.1.3-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
+- **Windows v0.2.0-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
   CUDA editions; the GPU editions are labelled untested. Installers are unsigned.
-- **Linux v0.1.3-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
-  ROCm has been tested on a Radeon RX 9060 XT; CUDA is untested.
+- **Linux v0.2.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
+  ROCm was tested on a Radeon RX 9060 XT with earlier builds; CUDA is untested.
+
+Editing with a prompt is available on the Mac only.
 
 The larger GPU editions come in parts. The download page explains how to put
 these together. See [platform support](docs/platforms.md) for the testing details.
