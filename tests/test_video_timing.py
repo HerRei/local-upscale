@@ -248,13 +248,10 @@ def test_display_transform_matches_ffmpeg_autorotate(tmp_path, angle, flip, tran
 def test_display_transform_rejects_perspective_and_scaling(change):
     from localsr.core.video_io import _display_transform
 
-    class MatrixData(bytes):
-        type = SimpleNamespace(name="DISPLAYMATRIX")
-
     matrix = np.diag([1 << 16, 1 << 16, 1 << 30]).astype(np.int32)
     row, col, value = change
     matrix[row, col] = value
-    frame = SimpleNamespace(side_data=[MatrixData(matrix.tobytes())])
+    frame = SimpleNamespace(side_data={"DISPLAYMATRIX": matrix.tobytes()})
     with pytest.raises(ValueError, match="display transform"):
         _display_transform(frame)
 

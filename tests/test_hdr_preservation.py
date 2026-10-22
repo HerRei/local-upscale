@@ -74,7 +74,7 @@ def test_ten_bit_export_retains_more_than_8bit_levels_and_bt2020_samples(
             32, frame.planes[0].line_size // 2
         )[:, :1024]
         assert np.unique(y).size > 700
-        assert not any(sd.type.name == "DOVI_METADATA" for sd in frame.side_data)
+        assert frame.side_data.get("DOVI_METADATA") is None
     decoded = next(decode_timed_frames(str(output), hdr_mode="preserve")).rgb
     assert decoded.dtype == np.float32
     np.testing.assert_allclose(decoded, ramp, atol=0.003)

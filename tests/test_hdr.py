@@ -153,10 +153,8 @@ def test_hdr_preview_and_export_keep_timing_audio_and_explicit_sdr_tags(
             stream.codec_context.color_range,
         ) == (1, 1, 1, 1)
         frame = next(container.decode(stream))
-        assert not any(
-            data.type.name in {"DOVI_METADATA", "MASTERING_DISPLAY_METADATA"}
-            for data in frame.side_data
-        )
+        assert frame.side_data.get("DOVI_METADATA") is None
+        assert frame.side_data.get("MASTERING_DISPLAY_METADATA") is None
         # Compare the round trip in BT.709, allowing AV1/chroma quantization.
         rgb = frame.reformat(format="rgb24", src_colorspace="ITU709").to_ndarray()
         assert np.abs(rgb.astype(float) - decoded[1].rgb).mean() < 8
