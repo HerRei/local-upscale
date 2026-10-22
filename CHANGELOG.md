@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The comparison divider stays where it is on screen while you zoom and pan,
+  with the same line and handle at every zoom; both images move under it, so a
+  deep zoom still shows before and after side by side. Fit keeps the divider
+  where you put it.
+- Hold M, or press and hold **Original** next to the zoom controls, to show the
+  original across the whole view; release to return to the comparison. Works
+  for images and videos.
+
 ## [0.2.0-beta] - 2026-10-22
 
 A redesigned window for people opening LocalSR for the first time.

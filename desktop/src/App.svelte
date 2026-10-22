@@ -1622,7 +1622,7 @@
           applyPreset('best');
           break;
         case 'view.fit':
-          resetView();
+          previewPane?.fitView();
           break;
         case 'view.actual':
           previewPane?.actualSize();

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, render, waitFor } from '@testing-library/svelte';
-import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { boundedPreviewSize, canvasTileRect } from './lib/progressive-preview';
 import PreviewPane from './PreviewPane.svelte';
 import type { MediaItem, WorkerEnvelope } from './lib/types';
@@ -455,4 +455,95 @@ it('shows overlapping SeedVR2 regions over the source without inventing a HAT gr
     'job',
   );
   await waitFor(() => expect(container.querySelector('.active-tile')).toBeNull());
+});
+
+describe('image comparison', () => {
+  const photo: MediaItem = {
+    id: 'photo',
+    path: '/photo.jpg',
+    name: 'photo.jpg',
+    kind: 'image',
+    width: 2000,
+    height: 1000,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+
+  async function renderComparison() {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const rendered = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: 'data:image/png;base64,result',
+      completedVideoOutput: '',
+    });
+    // 2000 x 1000 fitted into 800 x 600 minus the 56 px margin.
+    await waitFor(() =>
+      expect(rendered.container.querySelector<HTMLElement>('.image-stage')?.style.width).toBe(
+        '744px',
+      ),
+    );
+    const clip = () =>
+      Number(
+        /inset\(0 0 0 ([\d.]+)%\)/.exec(
+          rendered.container.querySelector('.result-image')?.getAttribute('style') ?? '',
+        )?.[1],
+      );
+    return { ...rendered, clip };
+  }
+
+  it('keeps the divider in place on screen while zooming into a corner', async () => {
+    const { container, clip } = await renderComparison();
+    const divider = screen.getByRole('slider', { name: 'Before and after comparison' });
+    expect(divider.style.left).toBe('400px');
+    expect(clip()).toBe(50);
+    const canvas = container.querySelector('.canvas-well') as HTMLElement;
+    for (let step = 0; step < 16; step += 1) {
+      await fireEvent.wheel(canvas, { deltaY: -100, clientX: 100, clientY: 300 });
+    }
+    expect(screen.getByRole('group', { name: 'Preview zoom' }).textContent).toContain('613%');
+    // Same place, same size; the image moved under it toward its left part.
+    expect(divider.style.left).toBe('400px');
+    expect(divider.style.top).toBe('0px');
+    expect(divider.style.height).toBe('600px');
+    expect(clip()).toBeLessThan(25);
+    expect(divider.getAttribute('aria-valuenow')).toBe('50');
+    await fireEvent.keyDown(divider, { key: 'ArrowRight' });
+    expect(divider.getAttribute('aria-valuenow')).toBe('51');
+    expect(divider.style.left).toBe('408px');
+  });
+
+  it('shows the original across the view while M or the Original button is held', async () => {
+    const { container, clip } = await renderComparison();
+    const chip = () => container.querySelector('.original-chip');
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(chip()?.textContent).toBe('Original');
+    expect(clip()).toBe(100);
+    await fireEvent.keyUp(window, { key: 'm' });
+    expect(chip()).toBeNull();
+    expect(clip()).toBe(50);
+    // Command-M minimizes the window; it does not flip the comparison.
+    await fireEvent.keyDown(window, { key: 'm', metaKey: true });
+    expect(chip()).toBeNull();
+    const button = screen.getByRole('button', { name: 'Original' });
+    await fireEvent.pointerDown(button, { button: 0, pointerId: 1 });
+    expect(chip()).toBeTruthy();
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    await fireEvent.pointerUp(button, { pointerId: 1 });
+    expect(chip()).toBeNull();
+  });
 });

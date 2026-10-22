@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clampPan,
-  comparisonHandleTop,
+  comparisonGeometry,
   fitSize,
   panBounds,
   pointerCenteredPan,
@@ -44,17 +44,35 @@ describe('preview viewport', () => {
     });
   });
 
-  it('keeps the comparison handle in the middle of the visible canvas', () => {
-    // Fitted and centred: the canvas middle is the image middle.
-    expect(comparisonHandleTop(700, 400, 1, 0)).toBe(50);
-    // Zoomed in 3× and panned fully down: the 1200 px image starts at the
-    // canvas top, so the canvas middle (350 px) is 350 / 3 image px into its
-    // 400 px height, above the image middle.
-    expect(comparisonHandleTop(700, 400, 3, 250)).toBeCloseTo((350 / 3 / 400) * 100);
-    // Even with a pan beyond the bounds, where only the image's bottom 250 px
-    // show, the handle stays on the image, one radius above its lower edge.
-    expect(comparisonHandleTop(700, 400, 3, -700)).toBeCloseTo(((231 + 950) / 3 / 400) * 100);
-    // Zoomed out: the image is centred and smaller, so its middle is still used.
-    expect(comparisonHandleTop(700, 400, 0.5, 0)).toBe(50);
+  it('keeps the comparison divider where it is on screen at every zoom', () => {
+    const canvas = { width: 1000, height: 700 };
+    const fitted = { width: 800, height: 400 };
+    const fit = comparisonGeometry(canvas, fitted, 1, { x: 0, y: 0 }, 50);
+    expect(fit).toMatchObject({ x: 500, percent: 50, top: 150, bottom: 550, handleY: 350 });
+    expect(fit.imagePercent).toBe(50);
+    expect(fit.enhancedPercent).toBe(50);
+
+    // 8x zoom on the image's left edge: the divider has not moved, it now cuts
+    // the image 500 of 6400 px from its left, and still splits the view.
+    const left = comparisonGeometry(canvas, fitted, 8, { x: 2700, y: 0 }, 50);
+    expect(left).toMatchObject({ x: 500, top: 0, bottom: 700, enhancedPercent: 50 });
+    expect(left.imagePercent).toBeCloseTo((500 / 6400) * 100);
+    // Panned to the right edge, the same screen position shows the right edge.
+    const right = comparisonGeometry(canvas, fitted, 8, { x: -2700, y: 0 }, 50);
+    expect(right.x).toBe(500);
+    expect(right.imagePercent).toBeCloseTo(((5400 + 500) / 6400) * 100);
+  });
+
+  it('holds the comparison divider on the visible part of the image', () => {
+    const canvas = { width: 1000, height: 700 };
+    const fitted = { width: 800, height: 400 };
+    // The canvas margin left of the fitted image is not part of the comparison.
+    const edge = comparisonGeometry(canvas, fitted, 1, { x: 0, y: 0 }, 2);
+    expect(edge).toMatchObject({ x: 100, percent: 10, imagePercent: 0, enhancedPercent: 100 });
+    // Zoomed in 3x and panned fully down, the handle stays in the canvas middle.
+    expect(comparisonGeometry(canvas, fitted, 3, { x: 0, y: 250 }, 50).handleY).toBe(350);
+    // Only the image's bottom 250 px show: the handle stays on them, one radius up.
+    const bottom = comparisonGeometry(canvas, fitted, 3, { x: 0, y: -700 }, 50);
+    expect(bottom).toMatchObject({ top: 0, bottom: 250, handleY: 231 });
   });
 });

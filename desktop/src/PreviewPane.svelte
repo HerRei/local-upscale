@@ -15,7 +15,7 @@
   } from './lib/progressive-preview';
   import {
     clampPan,
-    comparisonHandleTop,
+    comparisonGeometry,
     fitSize,
     panBounds,
     pointerCenteredPan,
@@ -69,9 +69,19 @@
   let previewNaturalHeight = 1;
   let stageWidth = 1;
   let stageHeight = 1;
-  // The handle stays in the middle of the visible canvas and keeps its size
-  // at every zoom, instead of following the image's centre and scale.
-  $: compareHandleTop = comparisonHandleTop(canvasHeight, stageHeight, zoom, panY);
+  // The divider keeps its place on screen and its size at every zoom; both
+  // images move under it, so a deep zoom still shows before and after.
+  $: comparison = comparisonGeometry(
+    { width: canvasWidth, height: canvasHeight },
+    { width: stageWidth, height: stageHeight },
+    zoom,
+    { x: panX, y: panY },
+    compare,
+  );
+  // Holding M (or the Original button) shows the original across the view.
+  let showingOriginal = false;
+  $: canShowOriginal = Boolean(resultPreview || videoComparison);
+  $: if (!canShowOriginal) showingOriginal = false;
   let minZoom = 1;
   let maxZoom = 8;
   let actualPixelZoom = 1;
@@ -538,32 +548,71 @@
   }
 
   function pointerNearComparison(event: PointerEvent): boolean {
-    if (!canvasWell || !resultPreview) return false;
+    if (!canvasWell || !resultPreview || showingOriginal) return false;
     const rectangle = canvasWell.getBoundingClientRect();
-    const visualWidth = stageWidth * zoom;
-    const visualHeight = stageHeight * zoom;
-    const left = rectangle.left + rectangle.width / 2 + panX - visualWidth / 2;
-    const top = rectangle.top + rectangle.height / 2 + panY - visualHeight / 2;
-    const divider = left + visualWidth * (compare / 100);
+    const y = event.clientY - rectangle.top;
     return (
-      event.clientY >= top &&
-      event.clientY <= top + visualHeight &&
-      Math.abs(event.clientX - divider) <= 32
+      y >= comparison.top &&
+      y <= comparison.bottom &&
+      Math.abs(event.clientX - rectangle.left - comparison.x) <= 32
     );
+  }
+
+  /** A new divider position, held on the visible part of the image. */
+  function placedComparison(percent: number): number {
+    return comparisonGeometry(
+      { width: canvasWidth, height: canvasHeight },
+      { width: stageWidth, height: stageHeight },
+      zoom,
+      { x: panX, y: panY },
+      percent,
+    ).percent;
   }
 
   function updateComparisonFromPointer(clientX: number): void {
     if (!canvasWell) return;
     const rectangle = canvasWell.getBoundingClientRect();
-    const visualWidth = Math.max(1, stageWidth * zoom);
-    const left = rectangle.left + rectangle.width / 2 + panX - visualWidth / 2;
-    compare = comparisonFromPointer(clientX, left, visualWidth);
+    compare = placedComparison(comparisonFromPointer(clientX, rectangle.left, rectangle.width));
   }
 
   function compareKeyDown(event: KeyboardEvent): void {
-    const next = comparisonFromKey(compare, event.key);
+    // Keys step through the visible image, the range the slider reports.
+    const next = comparisonFromKey(100 - comparison.enhancedPercent, event.key);
     if (next === null) return;
-    compare = next;
+    const x = comparison.left + ((comparison.right - comparison.left) * next) / 100;
+    compare = (x / canvasWidth) * 100;
+    event.preventDefault();
+  }
+
+  function holdsOriginalKey(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === 'm' && !event.metaKey && !event.ctrlKey && !event.altKey;
+  }
+
+  function windowKeyDown(event: KeyboardEvent): void {
+    if (!canShowOriginal || !holdsOriginalKey(event)) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
+    showingOriginal = true;
+    event.preventDefault();
+  }
+
+  function windowKeyUp(event: KeyboardEvent): void {
+    if (event.key.toLowerCase() === 'm') showingOriginal = false;
+  }
+
+  function holdOriginal(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    showingOriginal = true;
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  }
+
+  function releaseOriginal(): void {
+    showingOriginal = false;
+  }
+
+  function originalButtonKey(event: KeyboardEvent, held: boolean): void {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    showingOriginal = held;
     event.preventDefault();
   }
 
@@ -622,11 +671,17 @@
     if (request) void api.cancelVideoComparison(request).catch(() => {});
   }
 
+  /** New media or a new result: fit it and centre the divider. */
   export function resetView(): void {
+    compare = 50;
+    fitView();
+  }
+
+  /** Fit keeps the divider where it was put. */
+  export function fitView(): void {
     zoom = 1;
     panX = 0;
     panY = 0;
-    compare = 50;
     updateViewport(true);
   }
 
@@ -703,6 +758,8 @@
   }
 </script>
 
+<svelte:window on:keydown={windowKeyDown} on:keyup={windowKeyUp} on:blur={releaseOriginal} />
+
 <section class="preview-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header" data-tauri-drag-region>
     <div data-tauri-drag-region>
@@ -761,6 +818,7 @@
             originalSrc={videoComparison.original_url}
             enhancedSrc={videoComparison.enhanced_url}
             bind:compare
+            bind:showOriginal={showingOriginal}
             on:compatibilityneeded={compatiblePlayback}
           />
         {/key}
@@ -796,31 +854,35 @@
           {#if resultPreview}
             <img
               class="result-image"
-              style={`clip-path: inset(0 0 0 ${compare}%)`}
+              style={`clip-path: inset(0 0 0 ${showingOriginal ? 100 : comparison.imagePercent}%)`}
               src={resultPreview}
               alt="Enhanced result"
               draggable="false"
             />
-            <div
-              class="compare-line"
-              role="slider"
-              tabindex="0"
-              aria-label="Before and after comparison"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow={Math.round(compare)}
-              aria-valuetext={`${Math.round(100 - compare)}% enhanced`}
-              style={`left: ${compare}%; --handle-top: ${compareHandleTop}%; --inverse-zoom: ${1 / zoom}`}
-              on:pointerdown|stopPropagation={comparisonPointerDown}
-              on:pointermove|stopPropagation={comparisonPointerMove}
-              on:pointerup|stopPropagation={comparisonPointerUp}
-              on:pointercancel|stopPropagation={comparisonPointerUp}
-              on:keydown={compareKeyDown}
-            >
-              <span aria-hidden="true">↔</span>
-            </div>
           {/if}
         </div>
+        {#if resultPreview}
+          <div
+            class="compare-line"
+            class:held={showingOriginal}
+            role="slider"
+            tabindex="0"
+            aria-label="Before and after comparison"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
+            aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
+            style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
+            on:pointerdown|stopPropagation={comparisonPointerDown}
+            on:pointermove|stopPropagation={comparisonPointerMove}
+            on:pointerup|stopPropagation={comparisonPointerUp}
+            on:pointercancel|stopPropagation={comparisonPointerUp}
+            on:keydown={compareKeyDown}
+          >
+            <span aria-hidden="true">↔</span>
+          </div>
+          {#if showingOriginal}<span class="original-chip" role="status">Original</span>{/if}
+        {/if}
         {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
@@ -843,12 +905,25 @@
               disabled={zoom >= maxZoom}
               on:click={() => setZoom(zoom * 1.25)}>＋</button
             >
-            <button class:active={Math.abs(zoom - 1) < 0.001} on:click={resetView}>Fit</button>
+            <button class:active={Math.abs(zoom - 1) < 0.001} on:click={fitView}>Fit</button>
             <button
               class:active={Math.abs(zoom - actualPixelZoom) < 0.001}
               title="One source pixel per screen pixel"
               on:click={() => setZoom(actualPixelZoom)}>1:1</button
             >
+            {#if resultPreview}<i class="hud-divider" aria-hidden="true"></i><button
+                class="hold-original"
+                class:active={showingOriginal}
+                aria-pressed={showingOriginal}
+                title="Hold to show the original (M)"
+                on:pointerdown={holdOriginal}
+                on:pointerup={releaseOriginal}
+                on:pointercancel={releaseOriginal}
+                on:lostpointercapture={releaseOriginal}
+                on:keydown={(event) => originalButtonKey(event, true)}
+                on:keyup={(event) => originalButtonKey(event, false)}
+                on:blur={releaseOriginal}>Original</button
+              >{/if}
           </div>{/if}
       {:else}
         {#if selectedMedia.probe_status === 'pending'}

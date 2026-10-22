@@ -517,7 +517,8 @@ input:focus-visible {
   gap: 6px;
 }
 .preview-badges span,
-.labs-chip {
+.labs-chip,
+.original-chip {
   padding: 4px 8px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: var(--radius);
@@ -612,19 +613,22 @@ input:focus-visible {
     inset 0 0 0 1px rgba(19, 19, 19, 0.55),
     0 0 8px rgba(255, 255, 255, 0.193);
 }
+/* Canvas coordinates: the line and handle keep their size at every zoom. */
 .compare-line {
   position: absolute;
   z-index: 4;
-  top: 0;
-  bottom: 0;
-  width: calc(2px * var(--inverse-zoom, 1));
+  width: 2px;
   transform: translateX(-50%);
   background: #f6f6f9;
   box-shadow:
-    calc(-1px * var(--inverse-zoom, 1)) 0 rgba(0, 0, 0, 0.4),
-    calc(1px * var(--inverse-zoom, 1)) 0 rgba(0, 0, 0, 0.4);
+    -1px 0 rgba(0, 0, 0, 0.4),
+    1px 0 rgba(0, 0, 0, 0.4);
   cursor: col-resize;
   outline: none;
+}
+.compare-line.held {
+  opacity: 0;
+  pointer-events: none;
 }
 .compare-line::before {
   content: '';
@@ -632,7 +636,7 @@ input:focus-visible {
   top: 0;
   bottom: 0;
   left: 50%;
-  width: calc(48px * var(--inverse-zoom, 1));
+  width: 48px;
   transform: translateX(-50%);
 }
 .compare-line:focus-visible span {
@@ -644,7 +648,7 @@ input:focus-visible {
   z-index: 1;
   top: var(--handle-top, 50%);
   left: 50%;
-  transform: translate(-50%, -50%) scale(var(--inverse-zoom, 1));
+  transform: translate(-50%, -50%);
   display: grid;
   place-items: center;
   width: 38px;
@@ -657,6 +661,7 @@ input:focus-visible {
 }
 .zoom-hud {
   position: absolute;
+  z-index: 5;
   right: 14px;
   top: 14px;
   display: flex;
@@ -689,6 +694,21 @@ input:focus-visible {
 .zoom-hud span {
   min-width: 52px;
   color: var(--secondary);
+}
+.zoom-hud .hold-original {
+  padding: 0 8px;
+}
+.hud-divider {
+  width: 1px;
+  margin: 5px 3px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.original-chip {
+  position: absolute;
+  z-index: 5;
+  left: 14px;
+  top: 14px;
+  pointer-events: none;
 }
 .labs-chip {
   position: absolute;
@@ -1965,6 +1985,17 @@ input[type='text'],
   color: white;
   font-size: 22px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.42);
+}
+.video-divider.held {
+  opacity: 0;
+  pointer-events: none;
+}
+.video-zoom .hold-original {
+  padding: 0 8px;
+}
+.video-zoom .hud-divider {
+  align-self: stretch;
+  margin: 4px 3px;
 }
 .video-divider:focus-visible span,
 .video-divider.dragging span {
