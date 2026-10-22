@@ -77,6 +77,13 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let actual = MenuItemBuilder::with_id("view.actual", "Actual Pixels (1:1)")
         .accelerator("CmdOrCtrl+Alt+0")
         .build(manager)?;
+    // Same choices as the preview header's Original | Split | Enhanced switch.
+    let show_original =
+        MenuItemBuilder::with_id("view.compare-original", "Show Original").build(manager)?;
+    let show_split =
+        MenuItemBuilder::with_id("view.compare-split", "Show Split Comparison").build(manager)?;
+    let show_enhanced =
+        MenuItemBuilder::with_id("view.compare-enhanced", "Show Enhanced").build(manager)?;
     let refresh = MenuItemBuilder::with_id("view.refresh-hardware", "Refresh Hardware Status")
         .build(manager)?;
     // A single ampersand is interpreted as a Windows mnemonic by the native
@@ -90,6 +97,10 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let view_menu = SubmenuBuilder::new(manager, "View")
         .item(&fit)
         .item(&actual)
+        .separator()
+        .item(&show_original)
+        .item(&show_split)
+        .item(&show_enhanced)
         .separator()
         .item(&models)
         .separator()

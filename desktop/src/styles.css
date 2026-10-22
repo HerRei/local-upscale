@@ -516,7 +516,7 @@ input:focus-visible {
   display: flex;
   gap: 6px;
 }
-.preview-badges span,
+.preview-badges button,
 .labs-chip,
 .original-chip {
   padding: 4px 8px;
@@ -525,6 +525,18 @@ input:focus-visible {
   background: rgba(24, 24, 26, 0.78);
   color: #d0d0d3;
   font-size: calc(11px * var(--ui-scale));
+}
+/* The legend is also the switch: same pills, the chosen view raised. */
+.preview-badges button {
+  color: var(--secondary);
+}
+.preview-badges button:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.preview-badges button.active {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: var(--raised);
+  color: var(--text);
 }
 .canvas-well {
   position: relative;
@@ -694,14 +706,6 @@ input:focus-visible {
 .zoom-hud span {
   min-width: 52px;
   color: var(--secondary);
-}
-.zoom-hud .hold-original {
-  padding: 0 8px;
-}
-.hud-divider {
-  width: 1px;
-  margin: 5px 3px;
-  background: rgba(255, 255, 255, 0.12);
 }
 .original-chip {
   position: absolute;
@@ -1989,13 +1993,6 @@ input[type='text'],
 .video-divider.held {
   opacity: 0;
   pointer-events: none;
-}
-.video-zoom .hold-original {
-  padding: 0 8px;
-}
-.video-zoom .hud-divider {
-  align-self: stretch;
-  margin: 4px 3px;
 }
 .video-divider:focus-visible span,
 .video-divider.dragging span {

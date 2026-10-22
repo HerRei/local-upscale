@@ -527,23 +527,47 @@ describe('image comparison', () => {
     expect(divider.style.left).toBe('408px');
   });
 
-  it('shows the original across the view while M or the Original button is held', async () => {
-    const { container, clip } = await renderComparison();
+  it('switches between original, split and enhanced from the header and peeks with M', async () => {
+    const { container, clip, component } = await renderComparison();
     const chip = () => container.querySelector('.original-chip');
+    const divider = () => container.querySelector('.compare-line') as HTMLElement;
+    const option = (name: string) => screen.getByRole('radio', { name });
+    expect(screen.getByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
+    expect(option('Split').getAttribute('aria-checked')).toBe('true');
+
+    await fireEvent.click(option('Enhanced'));
+    expect(option('Enhanced').getAttribute('aria-checked')).toBe('true');
+    expect(option('Split').getAttribute('aria-checked')).toBe('false');
+    expect(clip()).toBe(0);
+    expect(divider().classList.contains('held')).toBe(true);
+    expect(divider().getAttribute('tabindex')).toBe('-1');
+    expect(chip()).toBeNull();
+
+    // Holding M peeks at the original from any view, then returns to it.
     await fireEvent.keyDown(window, { key: 'm' });
     expect(chip()?.textContent).toBe('Original');
     expect(clip()).toBe(100);
+    expect(option('Enhanced').getAttribute('aria-checked')).toBe('true');
     await fireEvent.keyUp(window, { key: 'm' });
     expect(chip()).toBeNull();
-    expect(clip()).toBe(50);
+    expect(clip()).toBe(0);
     // Command-M minimizes the window; it does not flip the comparison.
     await fireEvent.keyDown(window, { key: 'm', metaKey: true });
     expect(chip()).toBeNull();
-    const button = screen.getByRole('button', { name: 'Original' });
-    await fireEvent.pointerDown(button, { button: 0, pointerId: 1 });
-    expect(chip()).toBeTruthy();
-    expect(button.getAttribute('aria-pressed')).toBe('true');
-    await fireEvent.pointerUp(button, { pointerId: 1 });
+
+    await fireEvent.click(option('Original'));
+    expect(chip()?.textContent).toBe('Original');
+    expect(clip()).toBe(100);
+    await fireEvent.click(option('Split'));
     expect(chip()).toBeNull();
+    expect(clip()).toBe(50);
+    expect(divider().getAttribute('tabindex')).toBe('0');
+
+    // The View menu sets the same switch; a new result starts in Split again.
+    component.setComparisonView('enhanced');
+    await waitFor(() => expect(clip()).toBe(0));
+    component.resetView();
+    await waitFor(() => expect(option('Split').getAttribute('aria-checked')).toBe('true'));
+    expect(clip()).toBe(50);
   });
 });

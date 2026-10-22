@@ -59,25 +59,30 @@ describe('video comparison player', () => {
     const speed = screen.getByRole('combobox', { name: 'Playback speed' }) as HTMLSelectElement;
     expect(speed.value).toBe('1');
     expect(speed.selectedOptions[0].textContent).toBe('1×');
-    expect(screen.getByText('Original', { selector: '.video-label' })).toBeTruthy();
+    expect(screen.getByText('Original')).toBeTruthy();
     expect(screen.getByText('Enhanced')).toBeTruthy();
     expect(screen.getByText('Video · comparison')).toBeTruthy();
   });
 
-  it('shows the whole original frame while Original is held', async () => {
-    const { container } = render(VideoComparison, {
+  it('follows the chosen comparison view', async () => {
+    const { container, rerender } = render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',
       enhancedSrc: 'asset://localhost/enhanced.mp4',
     });
     const clip = () => container.querySelector('.enhanced-clip')?.getAttribute('style');
-    const button = screen.getByRole('button', { name: 'Original' });
+    const divider = () => container.querySelector('.video-divider') as HTMLElement;
     expect(clip()).toContain('inset(0 0 0 50%)');
-    await fireEvent.pointerDown(button, { button: 0, pointerId: 1 });
+    await rerender({ view: 'original' });
     expect(clip()).toContain('inset(0 0 0 100%)');
     expect(screen.queryByText('Enhanced')).toBeNull();
-    await fireEvent.pointerUp(button, { pointerId: 1 });
+    expect(divider().getAttribute('tabindex')).toBe('-1');
+    await rerender({ view: 'enhanced' });
+    expect(clip()).toContain('inset(0 0 0 0%)');
+    expect(screen.queryByText('Original')).toBeNull();
+    await rerender({ view: 'split' });
     expect(clip()).toContain('inset(0 0 0 50%)');
     expect(screen.getByText('Enhanced')).toBeTruthy();
+    expect(divider().getAttribute('tabindex')).toBe('0');
   });
 
   it('keeps audio enabled only on the enhanced stream', () => {

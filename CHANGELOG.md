@@ -8,9 +8,11 @@
   with the same line and handle at every zoom; both images move under it, so a
   deep zoom still shows before and after side by side. Fit keeps the divider
   where you put it.
-- Hold M, or press and hold **Original** next to the zoom controls, to show the
-  original across the whole view; release to return to the comparison. Works
-  for images and videos.
+- The Original and Enhanced labels above the preview are now a switch:
+  **Original | Split | Enhanced** shows the whole original, the divider, or the
+  whole result, and stays on your choice until the next result, which starts in
+  Split. The same three views are in the View menu. Hold M to peek at the
+  original from any view. Works for images and videos.
 
 ## [0.2.0-beta] - 2026-10-22
 

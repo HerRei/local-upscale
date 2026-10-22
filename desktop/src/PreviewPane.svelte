@@ -78,10 +78,20 @@
     { x: panX, y: panY },
     compare,
   );
-  // Holding M (or the Original button) shows the original across the view.
-  let showingOriginal = false;
-  $: canShowOriginal = Boolean(resultPreview || videoComparison);
-  $: if (!canShowOriginal) showingOriginal = false;
+  // The header switch keeps a view; holding M peeks at the original from any of them.
+  type ComparisonView = 'original' | 'split' | 'enhanced';
+  const comparisonViews: { id: ComparisonView; label: string; title: string }[] = [
+    { id: 'original', label: 'Original', title: 'Show only the original · hold M to peek' },
+    { id: 'split', label: 'Split', title: 'Original left, result right · drag the divider' },
+    { id: 'enhanced', label: 'Enhanced', title: 'Show only the result' },
+  ];
+  let comparisonView: ComparisonView = 'split';
+  let holdingOriginal = false;
+  $: canCompare = Boolean(resultPreview || videoComparison);
+  $: if (!canCompare) holdingOriginal = false;
+  $: shownView = holdingOriginal ? 'original' : comparisonView;
+  $: resultClip =
+    shownView === 'original' ? 100 : shownView === 'enhanced' ? 0 : comparison.imagePercent;
   let minZoom = 1;
   let maxZoom = 8;
   let actualPixelZoom = 1;
@@ -548,7 +558,7 @@
   }
 
   function pointerNearComparison(event: PointerEvent): boolean {
-    if (!canvasWell || !resultPreview || showingOriginal) return false;
+    if (!canvasWell || !resultPreview || shownView !== 'split') return false;
     const rectangle = canvasWell.getBoundingClientRect();
     const y = event.clientY - rectangle.top;
     return (
@@ -589,31 +599,20 @@
   }
 
   function windowKeyDown(event: KeyboardEvent): void {
-    if (!canShowOriginal || !holdsOriginalKey(event)) return;
+    if (!canCompare || !holdsOriginalKey(event)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
-    showingOriginal = true;
+    holdingOriginal = true;
     event.preventDefault();
   }
 
   function windowKeyUp(event: KeyboardEvent): void {
-    if (event.key.toLowerCase() === 'm') showingOriginal = false;
+    if (event.key.toLowerCase() === 'm') holdingOriginal = false;
   }
 
-  function holdOriginal(event: PointerEvent): void {
-    if (event.button !== 0) return;
-    showingOriginal = true;
-    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  }
-
-  function releaseOriginal(): void {
-    showingOriginal = false;
-  }
-
-  function originalButtonKey(event: KeyboardEvent, held: boolean): void {
-    if (event.key !== ' ' && event.key !== 'Enter') return;
-    showingOriginal = held;
-    event.preventDefault();
+  /** The View menu's comparison commands; they do nothing without a result. */
+  export function setComparisonView(view: ComparisonView): void {
+    if (canCompare) comparisonView = view;
   }
 
   async function loadVideoComparison(key: string, forceCompatible = false): Promise<void> {
@@ -671,9 +670,10 @@
     if (request) void api.cancelVideoComparison(request).catch(() => {});
   }
 
-  /** New media or a new result: fit it and centre the divider. */
+  /** New media or a new result: fit it and return to a centred split. */
   export function resetView(): void {
     compare = 50;
+    comparisonView = 'split';
     fitView();
   }
 
@@ -758,7 +758,11 @@
   }
 </script>
 
-<svelte:window on:keydown={windowKeyDown} on:keyup={windowKeyUp} on:blur={releaseOriginal} />
+<svelte:window
+  on:keydown={windowKeyDown}
+  on:keyup={windowKeyUp}
+  on:blur={() => (holdingOriginal = false)}
+/>
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header" data-tauri-drag-region>
@@ -770,8 +774,18 @@
           : 'No media selected'}</span
       >
     </div>
-    {#if resultPreview || videoComparison}
-      <div class="preview-badges"><span>Original</span><span>Enhanced</span></div>
+    {#if canCompare}
+      <div class="preview-badges" role="radiogroup" aria-label="Comparison view">
+        {#each comparisonViews as option (option.id)}
+          <button
+            role="radio"
+            aria-checked={comparisonView === option.id}
+            class:active={comparisonView === option.id}
+            title={option.title}
+            on:click={() => (comparisonView = option.id)}>{option.label}</button
+          >
+        {/each}
+      </div>
     {/if}
   </div>
 
@@ -818,7 +832,7 @@
             originalSrc={videoComparison.original_url}
             enhancedSrc={videoComparison.enhanced_url}
             bind:compare
-            bind:showOriginal={showingOriginal}
+            view={shownView}
             on:compatibilityneeded={compatiblePlayback}
           />
         {/key}
@@ -854,7 +868,7 @@
           {#if resultPreview}
             <img
               class="result-image"
-              style={`clip-path: inset(0 0 0 ${showingOriginal ? 100 : comparison.imagePercent}%)`}
+              style={`clip-path: inset(0 0 0 ${resultClip}%)`}
               src={resultPreview}
               alt="Enhanced result"
               draggable="false"
@@ -864,9 +878,10 @@
         {#if resultPreview}
           <div
             class="compare-line"
-            class:held={showingOriginal}
+            class:held={shownView !== 'split'}
             role="slider"
-            tabindex="0"
+            tabindex={shownView === 'split' ? 0 : -1}
+            aria-hidden={shownView !== 'split'}
             aria-label="Before and after comparison"
             aria-valuemin="0"
             aria-valuemax="100"
@@ -881,7 +896,8 @@
           >
             <span aria-hidden="true">↔</span>
           </div>
-          {#if showingOriginal}<span class="original-chip" role="status">Original</span>{/if}
+          {#if shownView === 'original'}<span class="original-chip" role="status">Original</span
+            >{/if}
         {/if}
         {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
           >{/if}
@@ -911,19 +927,6 @@
               title="One source pixel per screen pixel"
               on:click={() => setZoom(actualPixelZoom)}>1:1</button
             >
-            {#if resultPreview}<i class="hud-divider" aria-hidden="true"></i><button
-                class="hold-original"
-                class:active={showingOriginal}
-                aria-pressed={showingOriginal}
-                title="Hold to show the original (M)"
-                on:pointerdown={holdOriginal}
-                on:pointerup={releaseOriginal}
-                on:pointercancel={releaseOriginal}
-                on:lostpointercapture={releaseOriginal}
-                on:keydown={(event) => originalButtonKey(event, true)}
-                on:keyup={(event) => originalButtonKey(event, false)}
-                on:blur={releaseOriginal}>Original</button
-              >{/if}
           </div>{/if}
       {:else}
         {#if selectedMedia.probe_status === 'pending'}

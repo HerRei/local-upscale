@@ -59,7 +59,8 @@ be much larger.
 - **Clean up noise, blur and JPEG artifacts** before enlarging. Face restoration
   is available with compatible models.
 - **Watch the result take shape.** Finished tiles appear as the job runs. When
-  it finishes, drag the comparison slider to see what changed. It stays in
+  it finishes, drag the comparison slider to see what changed, or switch
+  between Original, Split and Enhanced above the preview. The slider stays in
   place while you zoom in, and holding M shows the original. Large exports
   get a smaller preview while the saved file keeps every pixel.
 - **Process a folder** or build a queue of images and videos. Save a setup as a

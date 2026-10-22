@@ -1627,6 +1627,15 @@
         case 'view.actual':
           previewPane?.actualSize();
           break;
+        case 'view.compare-original':
+          previewPane?.setComparisonView('original');
+          break;
+        case 'view.compare-split':
+          previewPane?.setComparisonView('split');
+          break;
+        case 'view.compare-enhanced':
+          previewPane?.setComparisonView('enhanced');
+          break;
         case 'view.refresh-hardware':
           await api.refreshCapabilities();
           scheduleRefresh();

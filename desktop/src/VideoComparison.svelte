@@ -7,8 +7,9 @@
   export let originalSrc: string;
   export let enhancedSrc: string;
   export let compare = 50;
-  // Held from the Original button here or the M key in the preview pane.
-  export let showOriginal = false;
+  // Chosen in the preview header; holding M there shows the original.
+  export let view: 'original' | 'split' | 'enhanced' = 'split';
+  $: clip = view === 'original' ? 100 : view === 'enhanced' ? 0 : compare;
 
   let viewport: HTMLDivElement;
   let original: HTMLVideoElement;
@@ -157,18 +158,6 @@
     event.preventDefault();
   }
 
-  function holdOriginal(event: PointerEvent): void {
-    if (event.button !== 0) return;
-    showOriginal = true;
-    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  }
-
-  function originalButtonKey(event: KeyboardEvent, held: boolean): void {
-    if (event.key !== ' ' && event.key !== 'Enter') return;
-    showOriginal = held;
-    event.preventDefault();
-  }
-
   async function togglePlayback(): Promise<void> {
     playbackError = '';
     try {
@@ -274,7 +263,7 @@
       on:loadeddata={() => (originalLoaded = true)}
       on:error={(event) => mediaError('Original', event)}
     ></video>
-    <div class="enhanced-clip" style={`clip-path: inset(0 0 0 ${showOriginal ? 100 : compare}%)`}>
+    <div class="enhanced-clip" style={`clip-path: inset(0 0 0 ${clip}%)`}>
       <!-- Captions remain embedded in user media; LocalSR does not invent an external track URL. -->
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
@@ -295,14 +284,15 @@
         on:error={(event) => mediaError('Enhanced', event)}
       ></video>
     </div>
-    <span class="video-label original-label">Original</span>
-    {#if !showOriginal}<span class="video-label enhanced-label">Enhanced</span>{/if}
+    {#if view !== 'enhanced'}<span class="video-label original-label">Original</span>{/if}
+    {#if view !== 'original'}<span class="video-label enhanced-label">Enhanced</span>{/if}
     <div
       class="video-divider"
-      class:held={showOriginal}
+      class:held={view !== 'split'}
       class:dragging
       role="slider"
-      tabindex="0"
+      tabindex={view === 'split' ? 0 : -1}
+      aria-hidden={view !== 'split'}
       aria-label="Video before and after comparison"
       aria-valuemin="0"
       aria-valuemax="100"
@@ -366,20 +356,6 @@
         on:click={() => setZoom(zoom * 1.25)}>＋</button
       >
       <button type="button" class:active={zoom === 1} on:click={resetZoom}>Fit</button>
-      <i class="hud-divider" aria-hidden="true"></i><button
-        type="button"
-        class="hold-original"
-        class:active={showOriginal}
-        aria-pressed={showOriginal}
-        title="Hold to show the original (M)"
-        on:pointerdown={holdOriginal}
-        on:pointerup={() => (showOriginal = false)}
-        on:pointercancel={() => (showOriginal = false)}
-        on:lostpointercapture={() => (showOriginal = false)}
-        on:keydown={(event) => originalButtonKey(event, true)}
-        on:keyup={(event) => originalButtonKey(event, false)}
-        on:blur={() => (showOriginal = false)}>Original</button
-      >
     </div>
   </div>
   {#if playbackError}
