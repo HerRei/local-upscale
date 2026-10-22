@@ -570,4 +570,15 @@ describe('image comparison', () => {
     await waitFor(() => expect(option('Split').getAttribute('aria-checked')).toBe('true'));
     expect(clip()).toBe(50);
   });
+
+  it('shows the zoom controls only while the pointer is over the image', async () => {
+    const { container } = await renderComparison();
+    const zoom = screen.getByRole('group', { name: 'Preview zoom' });
+    const canvas = container.querySelector('.canvas-well') as HTMLElement;
+    expect(zoom.classList.contains('shown')).toBe(false);
+    await fireEvent.pointerEnter(canvas);
+    expect(zoom.classList.contains('shown')).toBe(true);
+    await fireEvent.pointerLeave(canvas);
+    expect(zoom.classList.contains('shown')).toBe(false);
+  });
 });

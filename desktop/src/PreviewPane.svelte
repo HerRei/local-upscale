@@ -56,6 +56,7 @@
   let panX = 0;
   let panY = 0;
   let dragging = false;
+  let pointerOverCanvas = false;
   let draggingComparison = false;
   let dragStartX = 0;
   let dragStartY = 0;
@@ -775,7 +776,7 @@
       >
     </div>
     {#if canCompare}
-      <div class="preview-badges" role="radiogroup" aria-label="Comparison view">
+      <div class="view-switch" role="radiogroup" aria-label="Comparison view">
         {#each comparisonViews as option (option.id)}
           <button
             role="radio"
@@ -798,6 +799,8 @@
     role="application"
     aria-label="Media comparison canvas"
     on:wheel={onWheel}
+    on:pointerenter={() => (pointerOverCanvas = true)}
+    on:pointerleave={() => (pointerOverCanvas = false)}
     on:pointerdown={pointerDown}
     on:pointermove={pointerMove}
     on:pointerup={pointerUp}
@@ -903,6 +906,7 @@
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
             class="zoom-hud"
+            class:shown={pointerOverCanvas}
             role="group"
             aria-label="Preview zoom"
             on:pointerdown|stopPropagation

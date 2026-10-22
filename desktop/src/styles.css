@@ -512,11 +512,6 @@ input:focus-visible {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.preview-badges {
-  display: flex;
-  gap: 6px;
-}
-.preview-badges button,
 .labs-chip,
 .original-chip {
   padding: 4px 8px;
@@ -526,17 +521,25 @@ input:focus-visible {
   color: #d0d0d3;
   font-size: calc(11px * var(--ui-scale));
 }
-/* The legend is also the switch: same pills, the chosen view raised. */
-.preview-badges button {
+/* The comparison switch is three quiet words; the chosen view is underlined. */
+.view-switch {
+  display: flex;
+  gap: 2px;
+}
+.view-switch button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
 }
-.preview-badges button:hover:not(.active) {
-  background: rgba(255, 255, 255, 0.06);
-}
-.preview-badges button.active {
-  border-color: rgba(255, 255, 255, 0.24);
-  background: var(--raised);
+.view-switch button:hover {
   color: var(--text);
+}
+.view-switch button.active {
+  color: var(--text);
+  box-shadow: inset 0 -1px 0 var(--text);
 }
 .canvas-well {
   position: relative;
@@ -671,18 +674,28 @@ input:focus-visible {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
   font-size: 15px;
 }
+/* Zoom stays out of sight until the pointer is over the image (or a key focuses it). */
 .zoom-hud {
   position: absolute;
   z-index: 5;
   right: 14px;
-  top: 14px;
+  bottom: 14px;
   display: flex;
   min-height: 34px;
   padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius);
-  background: rgba(24, 24, 26, 0.9);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  background: rgba(24, 24, 26, 0.82);
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+.zoom-hud.shown,
+.zoom-hud:focus-within {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .zoom-hud {
+    transition: none;
+  }
 }
 .zoom-hud button,
 .zoom-hud span {
