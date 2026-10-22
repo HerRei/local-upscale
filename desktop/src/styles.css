@@ -1922,10 +1922,10 @@ input[type='text'],
   backdrop-filter: blur(8px);
 }
 .original-label {
-  right: 12px;
+  left: 12px;
 }
 .enhanced-label {
-  left: 12px;
+  right: 12px;
 }
 .video-divider {
   position: absolute;

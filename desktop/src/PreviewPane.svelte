@@ -714,7 +714,7 @@
       >
     </div>
     {#if resultPreview || videoComparison}
-      <div class="preview-badges"><span>Enhanced</span><span>Original</span></div>
+      <div class="preview-badges"><span>Original</span><span>Enhanced</span></div>
     {/if}
   </div>
 
@@ -796,7 +796,7 @@
           {#if resultPreview}
             <img
               class="result-image"
-              style={`clip-path: inset(0 ${100 - compare}% 0 0)`}
+              style={`clip-path: inset(0 0 0 ${compare}%)`}
               src={resultPreview}
               alt="Enhanced result"
               draggable="false"
@@ -809,7 +809,7 @@
               aria-valuemin="0"
               aria-valuemax="100"
               aria-valuenow={Math.round(compare)}
-              aria-valuetext={`${Math.round(compare)}% enhanced`}
+              aria-valuetext={`${Math.round(100 - compare)}% enhanced`}
               style={`left: ${compare}%; --handle-top: ${compareHandleTop}%; --inverse-zoom: ${1 / zoom}`}
               on:pointerdown|stopPropagation={comparisonPointerDown}
               on:pointermove|stopPropagation={comparisonPointerMove}

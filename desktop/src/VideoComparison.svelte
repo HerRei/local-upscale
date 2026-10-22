@@ -260,7 +260,7 @@
       on:loadeddata={() => (originalLoaded = true)}
       on:error={(event) => mediaError('Original', event)}
     ></video>
-    <div class="enhanced-clip" style={`clip-path: inset(0 ${100 - compare}% 0 0)`}>
+    <div class="enhanced-clip" style={`clip-path: inset(0 0 0 ${compare}%)`}>
       <!-- Captions remain embedded in user media; LocalSR does not invent an external track URL. -->
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
@@ -292,7 +292,7 @@
       aria-valuemin="0"
       aria-valuemax="100"
       aria-valuenow={Math.round(compare)}
-      aria-valuetext={`${Math.round(compare)}% enhanced`}
+      aria-valuetext={`${Math.round(100 - compare)}% enhanced`}
       style={`left:${compare}%`}
       on:pointerdown={pointerDown}
       on:pointermove={pointerMove}
