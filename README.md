@@ -18,6 +18,20 @@ with your original. The models run on your computer; your photos stay there too.
 [Tim Ziegelbaum](https://unsplash.com/photos/modern-apartment-building-with-colorful-balconies-against-blue-sky-n4bofMDUS_Y).
 [Image credits and processing details](docs/assets/README.md).*
 
+## New in 0.2: a calmer window
+
+![The LocalSR window: a photo of Marseille balconies compared before and after a 4× upscale, with the media list on the left and the task, quality and model settings on the right](docs/assets/localsr-window.webp)
+
+Version 0.2 redesigns the window for people who open LocalSR for the first
+time. There is one way to start: add a photo, choose Quick or Best and press
+the button at the bottom right. If a model is missing, that button says so
+("Download 4 MB, then upscale") and does both. Quick and Best are described by
+what you get rather than by model name, Upscale handles videos too, and the
+top bar is gone: the model library, performance and updates live in the menu
+bar. The app ships IBM Plex Sans, uses square corners and neutral greys, and
+keeps colour for the button that starts work. New installations start on the
+GPU. [Release notes](docs/releases/v0.2.0-beta.md).
+
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
@@ -68,7 +82,7 @@ its download size, license, source and estimated memory use. LocalSR checks
 curated downloads against their expected size and SHA-256 checksum before use.
 You can also import your own compatible `.safetensors` files.
 
-![LocalSR's model library, showing photo upscalers and the selected model's license, source and memory estimate](docs/assets/localsr-model-library.png)
+![LocalSR's model library, showing the photo upscalers with their quality, speed and size, and the Best model's license, source, memory estimate and download button](docs/assets/localsr-model-library.webp)
 
 Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by
 Philip Hofmann under CC BY 4.0. The library also includes HAT, Real-ESRGAN,

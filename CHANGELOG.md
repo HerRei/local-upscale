@@ -7,15 +7,15 @@ A redesigned window for people opening LocalSR for the first time.
 ### Changed
 
 - One way to download. The button that starts work also fetches the model it
-  needs and says so ("Download 4 MB, then upscale"). The per-model download
-  buttons, the first-run download notice and the separate license box with its
-  own download button are gone; a model's license is a one-line credit with
-  source and terms links.
+  needs and says so ("Download 4 MB, then upscale"); while it downloads it
+  cancels. The per-model download buttons, the first-run download notice and
+  the separate license box with its own download button are gone; a model's
+  license is a one-line credit with source and terms links.
 - Plain choices. Quick and Best are described by their result instead of by
-  model name. Upscale, Restore and Edit form one switch with a single caption.
-  Upscale handles videos too; the separate Upscale Video task is gone. Ready
-  models carry no label, and the plan only mentions a download when one is
-  needed.
+  model name, and each card names the download that preset still needs (fix
+  stage included). Upscale, Restore and Edit form one switch with a single
+  caption. Upscale handles videos too; the separate Upscale Video task is gone.
+  Ready models carry no label.
 - No top bar. On wide windows the pane headings form the title row and the
   window buttons sit beside Media; narrow windows keep a slim bar to switch
   panes. Models opens from View › Models… (⇧⌘M) and the Change… link,
@@ -23,12 +23,17 @@ A redesigned window for people opening LocalSR for the first time.
   the LocalSR menu (Help on Windows and Linux).
 - A quieter look. IBM Plex Sans ships with the app, so every platform shows the
   same typeface. Corners are square (2 px for controls, 4 px for panels),
-  panels are neutral grey, and colour appears only on the button that starts
-  work and its progress, in the terracotta of the logo. Section labels are
-  title case, and nothing is smaller than 10 px.
+  panels are neutral grey, native controls ignore the system accent colour, and
+  colour appears only on the button that starts work and its progress, in the
+  terracotta of the logo. Section labels are title case, and nothing is smaller
+  than 10 px. The Software Update and Performance dialogs follow the same type
+  sizes.
+- Comparisons put the original on the left and the result on the right, for
+  images and video, matching their labels.
 - The media list adds files with a + button, shows Single/Batch only when there
   are two or more items, and reveals remove buttons on hover. A one-line
-  summary of the next job (size, scale, hardware) sits beside Start.
+  summary of the next job (size, scale, hardware) sits beside Start. With one
+  item, or in Edit, the button names the task instead of counting items.
 
 ### Fixed
 
@@ -37,8 +42,14 @@ A redesigned window for people opening LocalSR for the first time.
   needed to until Hardware was changed under Advanced.
 - Choosing Best no longer shows two download buttons for the same file with two
   different sizes (one counted 1,000,000 bytes per MB, the other 1,048,576).
+- The first window fits the screen's work area. On a 1366 × 768 laptop or a
+  1280 × 800 display the bottom bar with the start button sat under the taskbar.
+- Edit no longer offers a download when the edit cannot run on this computer.
+- Linux CUDA and ROCm AppImages build again: the source collector mistook files
+  Chrome keeps under /opt on the build runner for bundled libraries.
 - Three tests that failed only on Windows (executable bit, FFmpeg stand-in,
-  tiny-frame AV1 encode) now pass there.
+  tiny-frame AV1 encode) now pass there, and the packaged-worker acceptance run
+  builds its video from royalty-free codecs.
 
 ## [0.1.7-beta] - 2026-10-21
 

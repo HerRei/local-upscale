@@ -16,12 +16,15 @@ These are the same verified assets used on the LocalSR website. Exact source,
 crop, model checksum, device, settings and asset hashes are in
 [`image-provenance.json`](image-provenance.json).
 
-## Model library
+## Window and model library
 
-`localsr-model-library.png` is an unedited capture of LocalSR v0.1.6-beta on
-macOS, taken on 21 October 2026 on an M1 Pro with 16 GB of memory. It shows the
-photo upscalers and the license, source and memory estimate for RealPLKSR
-NomosWebPhoto. The library's interface is unchanged in v0.1.7-beta.
+`localsr-window.webp` and `localsr-model-library.webp` are unedited captures of
+LocalSR v0.2.0-beta on macOS 26, taken on 22 October 2026 on an M1 Pro with
+16 GB of memory, in a fresh profile, saved as lossless WebP. The window shows a
+480 × 300 crop of the Marseille photo above after a 4× upscale with Quick
+(SPAN NomosUni), original on the left and result on the right; the library
+shows the photo upscalers and the Best model's license, source and memory
+estimate.
 
 ## Earlier screenshot
 
