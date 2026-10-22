@@ -261,6 +261,8 @@
     preprocessReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   $: canStart = !snapshot.runtime.active_job_id && canQueue;
+  // Edit always takes the selected image, and one item is no batch to count.
+  $: batchLabel = settings.batch_mode && settings.task !== 'edit' && snapshot.media.length > 1;
   $: canAppendToQueue =
     Boolean(snapshot.runtime.active_job_id) && canQueue && settings.task !== 'edit';
   $: queuedCount = snapshot.jobs.filter((job) => job.status === 'queued').length;
@@ -2537,9 +2539,7 @@
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}
-          >{settings.batch_mode
-            ? `Add ${queueSelection.length} to queue`
-            : 'Add selected to queue'}</button
+          >{batchLabel ? `Add ${queueSelection.length} to queue` : 'Add selected to queue'}</button
         >
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
           >{cancelling ? 'Cancelling…' : 'Cancel queue'}</button
@@ -2554,7 +2554,7 @@
         >
       {:else}
         <button class="button primary start" disabled={!canStart} on:click={() => start()}
-          >{settings.batch_mode
+          >{batchLabel
             ? `Start ${queueSelection.length} item${queueSelection.length === 1 ? '' : 's'}`
             : settings.task === 'video'
               ? 'Start selected video'

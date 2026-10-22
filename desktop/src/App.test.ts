@@ -782,9 +782,8 @@ describe('LocalSR desktop interface', () => {
       expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
       expect(screen.getAllByText('Preparing preview…').length).toBe(2);
       expect(screen.queryByText('Inspecting…')).toBeNull();
-      const button = screen.getByRole('button', {
-        name: batch ? 'Start 1 item' : 'Start selected video',
-      });
+      // One item is not counted as a batch, whichever mode is on.
+      const button = screen.getByRole('button', { name: 'Start selected video' });
       expect(button.hasAttribute('disabled')).toBe(true);
 
       const failed = structuredClone(snapshot);
@@ -798,9 +797,7 @@ describe('LocalSR desktop interface', () => {
       });
       expect(await screen.findByRole('heading', { name: 'Preview unavailable' })).toBeTruthy();
       expect(
-        screen
-          .getByRole('button', { name: batch ? 'Start 1 item' : 'Start selected video' })
-          .hasAttribute('disabled'),
+        screen.getByRole('button', { name: 'Start selected video' }).hasAttribute('disabled'),
       ).toBe(true);
       expect(api.startJobs).not.toHaveBeenCalled();
     },
@@ -871,9 +868,9 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText(/exported as 8-bit SDR/)).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Audio compatibility' })).toBeTruthy();
     expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Start 1 item' }).hasAttribute('disabled')).toBe(
-      false,
-    );
+    expect(
+      screen.getByRole('button', { name: 'Start selected video' }).hasAttribute('disabled'),
+    ).toBe(false);
   });
 
   it('switches SeedVR2 to SDR, preserves the custom HDR option, and submits the chosen resolution', async () => {
