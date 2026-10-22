@@ -714,7 +714,7 @@
       >
     </div>
     {#if resultPreview || videoComparison}
-      <div class="preview-badges"><span>Original</span><span>Enhanced</span></div>
+      <div class="preview-badges"><span>Enhanced</span><span>Original</span></div>
     {/if}
   </div>
 
