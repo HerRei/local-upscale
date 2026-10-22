@@ -133,7 +133,7 @@
         </div>
       {/if}
       {#if error}<p role="alert" class="error">{error}</p>{/if}
-      <div class="actions">
+      <div class="update-actions">
         {#if status.managed_by_store}<button
             class="button primary"
             disabled={processing || working}
@@ -183,21 +183,34 @@
     place-items: center;
     padding: 24px;
   }
+  /* Matches the app's other dialogs (.modal in styles.css). */
   .update-dialog {
-    width: min(590px, 100%);
+    width: min(560px, 100%);
     max-height: 85vh;
     overflow: auto;
-    background: #222224;
-    padding: 26px;
-    border: 1px solid #4a4a4d;
+    background: #232325;
+    padding: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: var(--radius-surface);
-    box-shadow: 0 18px 70px #0008;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+    font-size: calc(13px * var(--ui-scale));
   }
   h2 {
-    margin-top: 0;
+    margin: 0 0 9px;
+    font-size: calc(16px * var(--ui-scale));
+  }
+  h3 {
+    margin: 14px 0 6px;
+    font-size: calc(13px * var(--ui-scale));
   }
   p {
+    margin: 0 0 10px;
+    color: var(--secondary);
     line-height: 1.5;
+  }
+  label {
+    display: block;
+    margin-top: 12px;
   }
   .detail {
     font-size: 12px;
@@ -210,12 +223,15 @@
   .notes {
     white-space: pre-wrap;
   }
-  .actions {
+  .update-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
     justify-content: flex-end;
-    margin-top: 24px;
+    margin-top: 18px;
+  }
+  .update-actions .button {
+    min-width: 70px;
   }
   .notice {
     background: #2a2a2c;
@@ -230,7 +246,7 @@
     width: 100%;
   }
   select {
-    margin: 10px 0;
+    margin: 6px 0 0;
   }
   .notice label {
     display: flex;

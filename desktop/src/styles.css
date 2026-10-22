@@ -8,6 +8,8 @@
 }
 
 :root {
+  /* Native checkboxes, radios and progress bars ignore the system accent colour. */
+  accent-color: #cfcfcf;
   /* IBM Plex Sans, bundled unmodified (OFL 1.1, see assets/fonts/OFL.txt), so every platform
      renders the same face. */
   font-family:
