@@ -67,6 +67,14 @@ def source_frames(path: Path):
     return [frame for frame in decode_timed_frames(str(path))]
 
 
+def clean_runtime_only(codec: str) -> None:
+    """The conversion route exists for the licensing-clean runtime, not PyPI's PyAV."""
+    if codec in av.codecs_available:
+        pytest.skip(
+            f"PyPI's PyAV decodes {codec} itself; run packaging/ffmpeg/install_media_runtime.py"
+        )
+
+
 def test_payloads_pack_and_unpack_rows_including_odd_sizes():
     rgb = np.random.default_rng(1).integers(0, 255, (33, 35, 3), dtype=np.uint8)
     frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
@@ -193,9 +201,9 @@ def test_h264_round_trip_keeps_timing_pixels_and_audio(tmp_path, bridge):
     assert bridge.system.readable(str(exported))
 
     # The bundled runtime cannot open it; the system codecs can.
-    if "h264" not in av.codecs_available:
-        with pytest.raises(media_bridge.UndecodableVideoError, match="patent-licensed"):
-            probe_video_preview(str(exported))
+    clean_runtime_only("h264")
+    with pytest.raises(media_bridge.UndecodableVideoError, match="patent-licensed"):
+        probe_video_preview(str(exported))
     probe, jpeg = probe_video_preview(str(exported), external_ffmpeg=bridge)
     assert (probe.width, probe.height, probe.codec) == (48, 32, "external")
     assert probe.frame_count == len(frames) and jpeg.startswith(b"\xff\xd8")
@@ -238,6 +246,7 @@ def test_aac_audio_travels_through_the_system_codecs(tmp_path, bridge):
         raise
     info = bridge.system.probe(str(exported))
     assert info["audio"]["codec"] == "aac" and info["audio"]["channels"] == 1
+    clean_runtime_only("aac")
     with decodable_source(str(exported), ffmpeg=bridge, temporary_directory=str(tmp_path)) as (
         frame_path,
         audio_path,
@@ -397,6 +406,7 @@ def test_undecodable_container_reports_what_was_tried(tmp_path, bridge):
 def test_cancellation_stops_a_conversion(tmp_path, bridge):
     import threading
 
+    clean_runtime_only("h264")
     source = make_vfr(tmp_path / "source.mp4")
     exported = tmp_path / "phone.mp4"
     try:
