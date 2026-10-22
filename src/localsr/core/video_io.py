@@ -74,18 +74,19 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
     our standalone output is rebased to that image's bounds. Keep rejecting
     perspective, scaling and arbitrary rotations instead of changing geometry.
     """
-    for side_data in frame.side_data:
-        if side_data.type.name != "DISPLAYMATRIX":
-            continue
-        matrix = np.frombuffer(side_data, dtype=np.int32).reshape(3, 3)
-        # FFmpeg/ISO BMFF stores [a b u; c d v; x y w]. The bottom-row
-        # x/y values are 16.16 translations, commonly used by iPhone MOVs to
-        # keep a rotated portrait in positive coordinates. They are not
-        # perspective terms (u/v), and do not change its normalized pixels.
-        if matrix[0, 2] or matrix[1, 2] or matrix[2, 2] != 1 << 30:
-            raise ValueError("Video display transform includes unsupported perspective or scale.")
-        return display_turns(matrix[:2, :2].astype(float) / 65536)
-    return 0, False
+    # Look up by name: iterating side_data yields SideData before PyAV 19 and
+    # Type keys from 19 on, while .values() fails before 19.
+    side_data = frame.side_data.get("DISPLAYMATRIX")
+    if side_data is None:
+        return 0, False
+    matrix = np.frombuffer(side_data, dtype=np.int32).reshape(3, 3)
+    # FFmpeg/ISO BMFF stores [a b u; c d v; x y w]. The bottom-row
+    # x/y values are 16.16 translations, commonly used by iPhone MOVs to
+    # keep a rotated portrait in positive coordinates. They are not
+    # perspective terms (u/v), and do not change its normalized pixels.
+    if matrix[0, 2] or matrix[1, 2] or matrix[2, 2] != 1 << 30:
+        raise ValueError("Video display transform includes unsupported perspective or scale.")
+    return display_turns(matrix[:2, :2].astype(float) / 65536)
 
 
 def display_turns(basis: np.ndarray) -> tuple[int, bool]:
