@@ -67,6 +67,6 @@ boundaries, read [video support](../video-support.md).
 ## Your own models
 
 Supported `.safetensors` checkpoints can be imported. Unverified pickle or
-TorchScript files are blocked by default; the explicit override is described in
-[the security policy](../../SECURITY.md). Check your model's license, architecture,
+TorchScript files are blocked by default; set
+`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` only for files whose publisher you trust. Check your model's license, architecture,
 scale and colour assumptions before using it.

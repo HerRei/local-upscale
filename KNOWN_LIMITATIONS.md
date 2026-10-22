@@ -90,7 +90,7 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
   you choose it, so the first use of a model needs a network connection.
 - Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
   `.ckpt` files can run code when loaded and are refused unless you set
-  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`; see [SECURITY.md](SECURITY.md).
+  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` for files whose publisher you trust.
 
 ## Installation and updates
 

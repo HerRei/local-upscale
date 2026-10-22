@@ -7,6 +7,7 @@ and enhancing video. Choose an image, pick Quick or Best, and compare the result
 with your original. The models run on your computer; your photos stay there too.
 
 [**Download LocalSR**](https://herrei.github.io/localsr/download/) ·
+[Try it in your browser](https://herrei.github.io/localsr/demo/) ·
 [Website](https://herrei.github.io/localsr/) · [User guide](https://herrei.github.io/localsr/guide/) ·
 [Changelog](CHANGELOG.md)
 
