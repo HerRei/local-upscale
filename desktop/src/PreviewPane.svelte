@@ -117,6 +117,7 @@
   let activeTileWidth = 0;
   let activeTileHeight = 0;
   let videoComparison: VideoComparisonSources | null = null;
+  let videoPlayer: VideoComparison | undefined;
   let videoComparisonKey = '';
   let videoComparisonError = '';
   let disposed = false;
@@ -181,7 +182,8 @@
   });
 
   export function actualSize(): void {
-    setZoom(actualPixelZoom);
+    if (videoPlayer) videoPlayer.actualSize();
+    else setZoom(actualPixelZoom);
   }
 
   export function allowPreviewRetry(): void {
@@ -680,6 +682,7 @@
 
   /** Fit keeps the divider where it was put. */
   export function fitView(): void {
+    videoPlayer?.fitView();
     zoom = 1;
     panX = 0;
     panY = 0;
@@ -832,7 +835,10 @@
       {#if videoComparison}
         {#key videoComparisonKey}
           <VideoComparison
+            bind:this={videoPlayer}
             originalSrc={videoComparison.original_url}
+            sourceWidth={selectedMedia.width}
+            sourceHeight={selectedMedia.height}
             enhancedSrc={videoComparison.enhanced_url}
             bind:compare
             view={shownView}

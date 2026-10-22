@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- A finished video is compared like a photo: it sits on the same canvas, the
+  divider stops at the edges of the frame, and the zoom controls (now with
+  1:1) appear while the pointer is over it. Fit to Window and Actual Pixels in
+  the View menu work for videos too. Playback controls sit below the frame in
+  the same style: play and pause, a thin scrubber, and the speed, which cycles
+  through 0.5×, 1×, 1.5× and 2×. Space plays and pauses.
+
+### Fixed
+
+- Videos whose track carries a rotation (display matrix) no longer stop the
+  engine when it runs with PyAV 19 or later.
+
 ## [0.2.1-beta] - 2026-10-22
 
 Comparison controls that stay out of the way.

@@ -56,12 +56,10 @@ describe('video comparison player', () => {
     expect(divider.getAttribute('aria-valuenow')).toBe('100');
 
     expect(screen.getByRole('slider', { name: 'Video position' })).toBeTruthy();
-    const speed = screen.getByRole('combobox', { name: 'Playback speed' }) as HTMLSelectElement;
-    expect(speed.value).toBe('1');
-    expect(speed.selectedOptions[0].textContent).toBe('1×');
-    expect(screen.getByText('Original')).toBeTruthy();
-    expect(screen.getByText('Enhanced')).toBeTruthy();
-    expect(screen.getByText('Video · comparison')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Playback speed' }).textContent).toBe('1×');
+    // Like a photo comparison, a split view carries no side labels.
+    expect(screen.queryByText('Original')).toBeNull();
+    expect(screen.queryByText('Enhanced')).toBeNull();
   });
 
   it('follows the chosen comparison view', async () => {
@@ -70,18 +68,17 @@ describe('video comparison player', () => {
       enhancedSrc: 'asset://localhost/enhanced.mp4',
     });
     const clip = () => container.querySelector('.enhanced-clip')?.getAttribute('style');
-    const divider = () => container.querySelector('.video-divider') as HTMLElement;
+    const divider = () => container.querySelector('.compare-line') as HTMLElement;
     expect(clip()).toContain('inset(0 0 0 50%)');
     await rerender({ view: 'original' });
     expect(clip()).toContain('inset(0 0 0 100%)');
-    expect(screen.queryByText('Enhanced')).toBeNull();
+    expect(screen.getByText('Original')).toBeTruthy();
     expect(divider().getAttribute('tabindex')).toBe('-1');
     await rerender({ view: 'enhanced' });
     expect(clip()).toContain('inset(0 0 0 0%)');
     expect(screen.queryByText('Original')).toBeNull();
     await rerender({ view: 'split' });
     expect(clip()).toContain('inset(0 0 0 50%)');
-    expect(screen.getByText('Enhanced')).toBeTruthy();
     expect(divider().getAttribute('tabindex')).toBe('0');
   });
 
@@ -123,9 +120,9 @@ describe('video comparison player', () => {
     await fireEvent.timeUpdate(videos[1]);
     expect(videos[0].currentTime).toBe(3);
 
-    await fireEvent.change(screen.getByRole('combobox', { name: 'Playback speed' }), {
-      target: { value: '1.5' },
-    });
+    const speed = screen.getByRole('button', { name: 'Playback speed' });
+    await fireEvent.click(speed);
+    expect(speed.textContent).toBe('1.5×');
     expect(videos[0].playbackRate).toBe(1.5);
     expect(videos[1].playbackRate).toBe(1.5);
 
@@ -134,41 +131,92 @@ describe('video comparison player', () => {
     expect(videos[1].getAttribute('src')).toBeNull();
   });
 
-  it('zooms the playing comparison with the wheel and the zoom group, and pans when zoomed', async () => {
+  it('zooms like a photo: wheel, zoom HUD, Fit and 1:1, and pans when zoomed', async () => {
+    canvasRect(800, 450);
     const { container } = render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',
       enhancedSrc: 'asset://localhost/enhanced.mp4',
+      sourceWidth: 1600,
+      sourceHeight: 900,
     });
     const viewport = container.querySelector('.video-viewport') as HTMLDivElement;
-    vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
-      left: 0,
-      top: 0,
-      width: 800,
-      height: 450,
-      right: 800,
-      bottom: 450,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-    const videos = container.querySelectorAll('video');
+    const stage = () => (container.querySelector('.video-stage') as HTMLElement).style.transform;
     const readZoom = () => screen.getByRole('group', { name: 'Video zoom' }).textContent;
     expect(readZoom()).toContain('100%');
     await fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     expect(readZoom()).toContain('125%');
-    expect(videos[0].style.transform).toContain('scale(1.25)');
-    expect(videos[1].style.transform).toBe(videos[0].style.transform);
+    expect(stage()).toContain('scale(1.25)');
     await fireEvent.wheel(viewport, { deltaY: -100, clientX: 400, clientY: 225 });
-    expect(readZoom()).toContain('144%');
-    await fireEvent.pointerDown(viewport, { button: 0, clientX: 400, clientY: 225, pointerId: 1 });
-    await fireEvent.pointerMove(viewport, { clientX: 460, clientY: 235, pointerId: 1 });
+    expect(readZoom()).toContain('140%');
+    // Away from the divider a drag pans both streams as one layer.
+    await fireEvent.pointerDown(viewport, { button: 0, clientX: 200, clientY: 225, pointerId: 1 });
+    await fireEvent.pointerMove(viewport, { clientX: 260, clientY: 235, pointerId: 1 });
     await fireEvent.pointerUp(viewport, { pointerId: 1 });
-    expect(videos[0].style.transform).toContain('translate(60px, 10px)');
+    expect(stage()).toContain('translate(calc(-50% + 60px), calc(-50% + 10px))');
     await fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
     expect(readZoom()).toContain('100%');
-    expect(videos[0].style.transform).toContain('translate(0px, 0px) scale(1)');
+    expect(stage()).toContain('translate(calc(-50% + 0px), calc(-50% + 0px)) scale(1)');
     expect((screen.getByRole('button', { name: 'Zoom out' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+    // 1600 source pixels fitted into 744 px of canvas: 1:1 is 228%.
+    await fireEvent.click(screen.getByRole('button', { name: '1:1' }));
+    expect(readZoom()).toContain('228%');
+  });
+
+  it('holds the divider on the frame and drags it from anywhere on its line', async () => {
+    canvasRect(800, 450);
+    const { container } = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+      sourceWidth: 1600,
+      sourceHeight: 900,
+    });
+    const viewport = container.querySelector('.video-viewport') as HTMLDivElement;
+    const divider = screen.getByRole('slider', { name: 'Video before and after comparison' });
+    // The fitted frame is 700.4 × 394 px, centred: the line spans its height only.
+    expect(divider.style.top).toBe('28px');
+    expect(divider.style.height).toBe('394px');
+    await fireEvent.pointerDown(viewport, { button: 0, clientX: 410, clientY: 100, pointerId: 1 });
+    await fireEvent.pointerMove(viewport, { clientX: 225, clientY: 100, pointerId: 1 });
+    await fireEvent.pointerUp(viewport, { pointerId: 1 });
+    expect(divider.getAttribute('aria-valuenow')).toBe('25');
+    // Past the frame's edge the divider stops on it.
+    await fireEvent.pointerDown(viewport, { button: 0, clientX: 225, clientY: 100, pointerId: 2 });
+    await fireEvent.pointerMove(viewport, { clientX: 5, clientY: 100, pointerId: 2 });
+    await fireEvent.pointerUp(viewport, { pointerId: 2 });
+    expect(divider.getAttribute('aria-valuenow')).toBe('0');
+    expect(parseFloat(divider.style.left)).toBeCloseTo(49.78, 2);
+  });
+
+  it('plays and pauses with Space unless a control has focus', async () => {
+    const { container } = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+    });
+    const videos = container.querySelectorAll('video');
+    Object.defineProperty(videos[1], 'paused', { configurable: true, value: true });
+    await fireEvent.keyDown(document.body, { key: ' ' });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Pause comparison' })).toBeTruthy();
+    const input = document.createElement('input');
+    document.body.append(input);
+    await fireEvent.keyDown(input, { key: ' ' });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
+    input.remove();
   });
 });
+
+function canvasRect(width: number, height: number): void {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    left: 0,
+    top: 0,
+    width,
+    height,
+    right: width,
+    bottom: height,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+}
