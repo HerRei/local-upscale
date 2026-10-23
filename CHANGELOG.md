@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.2-beta] - 2026-10-23
+
+Videos compared the way photos are.
 
 ### Changed
 

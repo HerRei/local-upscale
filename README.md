@@ -39,16 +39,21 @@ preview switches between the whole original, the divider and the whole result,
 and holding M shows the original from any view.
 [Release notes](docs/releases/v0.2.1-beta.md).
 
+0.2.2 compares a finished video the way it compares a photo: the same
+canvas, a divider that stops at the edges of the frame, zoom with 1:1, and
+playback controls below the picture. Space plays and pauses.
+[Release notes](docs/releases/v0.2.2-beta.md).
+
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 and instructions for each platform:
 
-- **macOS v0.2.1-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
+- **macOS v0.2.2-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
   by Apple, with signed updates in the app.
-- **Windows v0.2.1-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
+- **Windows v0.2.2-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
   CUDA editions; the GPU editions are labelled untested. Installers are unsigned.
-- **Linux v0.2.1-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
+- **Linux v0.2.2-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   ROCm was tested on a Radeon RX 9060 XT with earlier builds; CUDA is untested.
 
 Editing with a prompt is available on the Mac only.

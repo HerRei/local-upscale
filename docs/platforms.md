@@ -6,13 +6,13 @@ fetched on demand.
 
 | Package | Engine | Status | Tested on |
 | --- | --- | --- | --- |
-| macOS · Apple Silicon | MPS | Published (v0.2.1-beta) | MacBook Pro M1 Pro, 16 GB |
-| Windows · x86-64 | CPU | Published (v0.2.1-beta) · not code-signed | Windows 11 virtual machine, 4 cores (v0.2.0-beta); earlier builds: Core i7-8550U |
-| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Published (v0.2.1-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
-| Windows · x86-64 | NVIDIA CUDA | Published (v0.2.1-beta) · **untested** · not code-signed | Not yet run on an NVIDIA GPU |
-| Linux · x86-64 | CPU | Published (v0.2.1-beta) | Earlier builds: Fedora 44 |
-| Linux · x86-64 | AMD ROCm | Published (v0.2.1-beta) | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
-| Linux · x86-64 | NVIDIA CUDA | Published (v0.2.1-beta) · **untested** | Not yet run on an NVIDIA GPU |
+| macOS · Apple Silicon | MPS | Published (v0.2.2-beta) | MacBook Pro M1 Pro, 16 GB |
+| Windows · x86-64 | CPU | Published (v0.2.2-beta) · not code-signed | Windows 11 virtual machine, 4 cores (v0.2.0-beta); earlier builds: Core i7-8550U |
+| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Published (v0.2.2-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
+| Windows · x86-64 | NVIDIA CUDA | Published (v0.2.2-beta) · **untested** · not code-signed | Not yet run on an NVIDIA GPU |
+| Linux · x86-64 | CPU | Published (v0.2.2-beta) | Earlier builds: Fedora 44 |
+| Linux · x86-64 | AMD ROCm | Published (v0.2.2-beta) | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
+| Linux · x86-64 | NVIDIA CUDA | Published (v0.2.2-beta) · **untested** | Not yet run on an NVIDIA GPU |
 | Linux · x86-64 | Intel XPU | Withheld | — |
 
 "Tested" means the recorded checks in [Testing](testing.md) passed on that
@@ -20,12 +20,12 @@ machine with that package: images, video with audio, cancellation, worker
 recovery, benchmarks and, where applicable, an installed upgrade. It does not
 mean every model and resolution works on every GPU of that family.
 
-The Windows and Linux packages of v0.2.1-beta were built on GitHub-hosted runners
+The Windows and Linux packages of v0.2.2-beta were built on GitHub-hosted runners
 (`.github/workflows/windows-installers.yml` and `linux-appimages.yml`) with the
 allowlisted LGPL media runtime, passed the codec policy and an automated smoke test
 of the installed app, and ship with their corresponding-source bundles. The Windows
 CPU installer of v0.2.0-beta was also installed and used in a Windows 11 virtual
-machine; v0.2.1-beta changes only the preview's comparison controls on top of it. None of them
+machine; v0.2.1-beta and v0.2.2-beta change only the preview's comparison and video playback on top of it. None of them
 update themselves yet. The CUDA and DirectML packages are published **untested**: they pass
 the same automated checks on runners without a GPU, but CUDA has never run on an
 NVIDIA GPU and DirectML has not produced results within the accuracy tolerance on
