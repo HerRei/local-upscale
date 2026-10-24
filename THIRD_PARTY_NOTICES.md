@@ -17,7 +17,8 @@ own terms; this file is a distribution notice, not a replacement for their licen
   uses it to convert supported checkpoints into Core ML programs on the user's Mac; Core ML
   itself is part of macOS and not distributed by LocalSR. Its Python dependencies in the
   worker are protobuf (BSD-3-Clause), attrs and cattrs (MIT) and pyaml (WTFPL), and their
-  license files are included in the frozen worker.
+  license files are included in the frozen worker. The converted programs run through
+  PyObjC (pyobjc-core, pyobjc-framework-Cocoa and pyobjc-framework-CoreML, MIT).
 - **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 12.6 build uses (CUDA
   Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX,
   cuFile, nvJPEG and cuDNN). They are NVIDIA's software, included as the portions its

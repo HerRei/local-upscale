@@ -22,7 +22,13 @@
   let advanced = false;
   let ffmpegNote = '';
 
-  $: codec = settings.video_codec ?? 'av1';
+  $: codec = settings.video_codec ?? 'auto';
+  // Mirrors automatic_video_codec in the worker: the Mac's hardware HEVC
+  // encoder for SDR MP4, LocalSR's AV1 otherwise.
+  $: automaticHardware =
+    Boolean(system) &&
+    (settings.video_container ?? 'mp4') === 'mp4' &&
+    settings.video_hdr_mode !== 'preserve';
   $: editSizeAllowed = editSizeLimit(capabilities, editDevice(capabilities, settings));
   $: externalCodec = codec === 'h264' || codec === 'hevc';
   $: system = systemCodecs(capabilities);
@@ -175,8 +181,10 @@
             id="video-codec"
             value={codec}
             on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
-            ><option value="av1">AV1 · recommended</option><option value="vp9">VP9</option><option
-              value="ffv1">FFV1 · lossless, MKV</option
+            ><option value="auto"
+              >Automatic · {automaticHardware ? 'HEVC, hardware encoder' : 'AV1'}</option
+            ><option value="av1">AV1</option><option value="vp9">VP9</option><option value="ffv1"
+              >FFV1 · lossless, MKV</option
             ><option value="h264">H.264 · {codecSuffix}</option><option value="hevc"
               >HEVC · {codecSuffix}</option
             ></select

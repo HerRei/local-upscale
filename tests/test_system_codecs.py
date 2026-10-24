@@ -223,6 +223,45 @@ def test_h264_round_trip_keeps_timing_pixels_and_audio(tmp_path, bridge):
     assert not list(tmp_path.glob("localsr-media-*"))
 
 
+def test_whole_clips_stream_straight_into_the_system_encoder(tmp_path, bridge):
+    source = make_vfr(tmp_path / "source.mp4")
+    frames = source_frames(source)
+    make_tone(tmp_path / "tone.mkv")
+    exported = tmp_path / "streamed.mp4"
+    stages = []
+    try:
+        encode_video(
+            iter(frames),
+            str(exported),
+            fps=25,
+            width=48,
+            height=32,
+            video_codec="h264",
+            container_format="mp4",
+            crf=4,
+            audio_source=str(tmp_path / "tone.mkv"),
+            external_ffmpeg=bridge,
+            stage_callback=stages.append,
+            stream_to_system=True,
+        )
+    except SystemCodecsError as error:
+        encoder_or_skip(error)
+    # No lossless master and no separate encoding stage: frames went straight in.
+    assert stages == []
+    info = bridge.system.probe(str(exported))
+    assert info["video"]["codec"] == "avc1" and info["audio"]["codec"] == "aac"
+    with decodable_source(str(exported), ffmpeg=bridge, temporary_directory=str(tmp_path)) as (
+        frame_path,
+        _audio_path,
+    ):
+        back = source_frames(Path(frame_path))
+        assert [float(f.timestamp) for f in back] == pytest.approx(timestamps(source), abs=0.002)
+        for original, decoded in zip(frames, back, strict=True):
+            assert np.abs(original.rgb.astype(int) - decoded.rgb.astype(int)).mean() < 12
+    assert not list(tmp_path.glob("localsr-media-*"))
+    assert not list(tmp_path.glob("*.external*"))
+
+
 def test_aac_audio_travels_through_the_system_codecs(tmp_path, bridge):
     source = make_vfr(tmp_path / "source.mp4")
     frames = source_frames(source)

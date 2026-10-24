@@ -1,5 +1,6 @@
 """Core ML backend: fixed tile windows, the gate and fallbacks, and a real conversion."""
 
+import importlib.util
 import json
 import re
 import threading
@@ -42,7 +43,7 @@ def regular_input(img, tile):
 def test_fixed_window_matches_the_regular_grid_for_full_tiles():
     img = image(64, 64)
     for tile in generate_tiles(64, 64, 16, 4, 2):
-        window, top, left = _fixed_window(img, tile, 24)
+        window, top, left = _fixed_window(img, tile, (24, 24))
         assert (top, left) == (4, 4)
         torch.testing.assert_close(window, regular_input(img, tile), rtol=0, atol=0)
 
@@ -50,7 +51,7 @@ def test_fixed_window_matches_the_regular_grid_for_full_tiles():
 def test_fixed_window_fills_edge_tiles_with_real_pixels():
     img = image(30, 40)
     for tile in generate_tiles(40, 30, 16, 4, 2):
-        window, top, left = _fixed_window(img, tile, 32)
+        window, top, left = _fixed_window(img, tile, (32, 32))
         assert window.shape == (3, 32, 32)
         core = window[:, top : top + tile.core_h, left : left + tile.core_w]
         expected = img[
@@ -65,7 +66,7 @@ def test_fixed_window_fills_edge_tiles_with_real_pixels():
 def test_fixed_window_pads_an_image_smaller_than_the_window():
     img = image(10, 12)
     tile = next(generate_tiles(12, 10, 16, 4, 1))
-    window, top, left = _fixed_window(img, tile, 32)
+    window, top, left = _fixed_window(img, tile, (32, 32))
     assert window.shape == (3, 32, 32) and (top, left) == (4, 4)
     torch.testing.assert_close(window[:, 4:14, 4:16], img, rtol=0, atol=0)
     # LocalSR's reflected halo at the border, then replicated fill.
@@ -75,14 +76,14 @@ def test_fixed_window_pads_an_image_smaller_than_the_window():
 
 def test_fixed_window_refuses_a_tile_larger_than_the_window():
     tile = next(generate_tiles(64, 64, 32, 8, 1))
-    assert _fixed_window(image(64, 64), tile, 40) is None
+    assert _fixed_window(image(64, 64), tile, (40, 40)) is None
 
 
 class FixedShapeModel:
     """A pointwise x2 model that only accepts one input shape."""
 
     def __init__(self, side):
-        self.fixed_input_side = side
+        self.fixed_input_shape = (side, side)
         self.input_device = torch.device("cpu")
         self.shapes = []
 
@@ -120,6 +121,109 @@ def test_engine_feeds_fixed_shape_models_one_shape_and_stitches_exactly():
     np.testing.assert_allclose(output, expected, atol=0)
 
 
+class WholeFrameModel(FixedShapeModel):
+    """A fixed-shape model that also takes a whole frame per call."""
+
+    def __init__(self):
+        super().__init__(32)
+        self.prepared = []
+
+    def whole_frame_shape(self, height, width, halo):
+        return (-(-(height + 2 * halo) // 16) * 16, -(-(width + 2 * halo) // 16) * 16)
+
+    def prepare_tiles(self, tile_size, halo, frame=None):
+        self.prepared.append(frame)
+        if frame is not None:
+            self.fixed_input_shape = self.whole_frame_shape(*frame, halo)
+
+
+def test_whole_frame_mode_runs_a_video_frame_in_one_call():
+    img = image(30, 40)
+    model = WholeFrameModel()
+    engine = InferenceEngine(model_adapter=None)
+    engine._loaded_models["fake"] = (model, torch.device("cpu"), torch.float32)
+    engine._active_path = "fake"
+    engine._sync_legacy_fields()
+    info = SimpleNamespace(
+        architecture="Fake",
+        scale=2,
+        out_channels=3,
+        size_requirements_mult=1,
+        size_requirements_min=0,
+    )
+    output = engine.process_frame(
+        img,
+        info,
+        tile_size=16,
+        halo=4,
+        cancel_event=threading.Event(),
+        progress_callback=lambda *_: None,
+        safe_memory=False,
+        float_output=True,
+        whole_frame=True,
+    )
+    assert model.shapes == [(48, 48)] and model.prepared == [(30, 40)]
+    expected = F.interpolate(img[None], scale_factor=2, mode="nearest")[0].numpy()
+    np.testing.assert_allclose(output, expected, atol=0)
+    # Video frames come back with interleaved pixels; the CHW result is a view.
+    assert output.transpose(1, 2, 0).flags.c_contiguous
+
+
+def test_prefetch_keeps_order_and_reraises_the_producers_error():
+    from localsr.core.video_pipeline import _prefetch
+
+    threads = []
+
+    def items():
+        threads.append(threading.current_thread().name)
+        yield from range(5)
+        raise ValueError("decoder failed")
+
+    received = []
+    with pytest.raises(ValueError, match="decoder failed"):
+        for item in _prefetch(items(), 2):
+            received.append(item)
+    assert received == [0, 1, 2, 3, 4]
+    assert threads == ["localsr-video-prefetch"]
+
+
+def test_prefetch_stops_its_producer_when_the_consumer_stops():
+    from localsr.core.video_pipeline import _prefetch
+
+    produced, closed = [], threading.Event()
+
+    def items():
+        try:
+            for index in range(1000):
+                produced.append(index)
+                yield index
+        finally:
+            closed.set()
+
+    frames = _prefetch(items(), 2)
+    assert next(frames) == 0
+    frames.close()
+    assert closed.is_set() and len(produced) < 10
+
+
+def test_automatic_video_format_prefers_the_system_hardware_encoder():
+    from localsr.core.media_bridge import automatic_video_codec
+    from localsr.core.system_codecs import SystemCodecsError
+
+    class System:
+        def encoder_for(self, codec, *, hdr=False, container="mp4"):
+            if container != "mp4":
+                raise SystemCodecsError("MP4 only")
+            return "hevc_videotoolbox"
+
+    bridge = SimpleNamespace(system=System())
+    assert automatic_video_codec(bridge, "mp4", "tone_map") == "hevc"
+    assert automatic_video_codec(bridge, "mkv", "tone_map") == "av1"
+    assert automatic_video_codec(bridge, "mp4", "preserve") == "av1"
+    assert automatic_video_codec(SimpleNamespace(system=None), "mp4", "tone_map") == "av1"
+    assert automatic_video_codec(None, "mp4", "tone_map") == "av1"
+
+
 # Gate and fallback logic, with fake Core ML programs --------------------------
 
 
@@ -128,9 +232,9 @@ class FakeProgram:
     conversions = 0
     fail_conversion = False
 
-    def __init__(self, root, architecture, identity, side):
-        self.side = side
-        self.key = (identity, side)
+    def __init__(self, root, architecture, identity, shape):
+        self.shape = shape
+        self.key = (identity, shape)
         self.compiled = SimpleNamespace(exists=lambda: True)
         self.verdicts = FakeProgram.stores.setdefault(self.key, {})
         self.compiled_ready = False
@@ -203,8 +307,8 @@ def fake_coreml(monkeypatch):
         def __truediv__(self, _name):
             return SimpleNamespace(exists=lambda: True)
 
-    def program(root, architecture, identity, side):
-        value = FakeProgram(root, architecture, identity, side)
+    def program(root, architecture, identity, shape):
+        value = FakeProgram(root, architecture, identity, shape)
         value.compiled = Compiled()
         return value
 
@@ -223,10 +327,11 @@ def run(descriptor, side_tile=16, halo=4):
     return descriptor(image(20, 20)[None])
 
 
-def padded_reference(original, sample, side):
+def padded_reference(original, sample, shape):
     """What a fixed-shape program computes when called directly on a smaller input."""
+    shape = shape if isinstance(shape, tuple) else (shape, shape)
     height, width = sample.shape[-2:]
-    padded = F.pad(sample, (0, side - width, 0, side - height), mode="replicate")
+    padded = F.pad(sample, (0, shape[1] - width, 0, shape[0] - height), mode="replicate")
     return original(padded)[..., : height * original.scale, : width * original.scale]
 
 
@@ -242,8 +347,8 @@ def test_matching_core_ml_is_accepted_stored_and_reused(fake_coreml):
     torch.testing.assert_close(first, expected)
     torch.testing.assert_close(second, expected)
     assert converted.model.active_unit == NEURAL_ENGINE
-    assert converted.fixed_input_side == 32
-    verdict = FakeProgram.stores[("abc", 32)][NEURAL_ENGINE]
+    assert converted.fixed_input_shape == (32, 32)
+    verdict = FakeProgram.stores[("abc", (32, 32))][NEURAL_ENGINE]
     assert verdict["accepted"] and verdict["psnr"] is None  # identical output
     assert any("runs on the Neural Engine" in message for message in messages)
     # A second wrapper (a later job) trusts the stored verdict: no second gate.
@@ -259,11 +364,11 @@ def test_mismatch_falls_through_to_the_next_unit_then_pytorch(fake_coreml):
     )
     output = run(converted)
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
-    verdicts = FakeProgram.stores[("def", 32)]
+    verdicts = FakeProgram.stores[("def", (32, 32))]
     assert not verdicts[NEURAL_ENGINE]["accepted"] and not verdicts[CORE_ML_GPU]["accepted"]
     assert converted.model.active_unit is None
     # Once ruled out, tiles go back to LocalSR's regular grid and the GPU.
-    assert converted.fixed_input_side is None and converted.input_device is None
+    assert converted.fixed_input_shape is None and converted.input_device is None
 
 
 def test_gpu_unit_is_used_when_the_neural_engine_does_not_match(fake_coreml):
@@ -284,7 +389,7 @@ def test_slower_core_ml_keeps_pytorch(fake_coreml, monkeypatch):
     )
     converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="jk")
     run(converted)
-    verdict = FakeProgram.stores[("jk", 32)][NEURAL_ENGINE]
+    verdict = FakeProgram.stores[("jk", (32, 32))][NEURAL_ENGINE]
     assert verdict == {**verdict, "accepted": False, "reason": "slower than PyTorch"}
     assert converted.model.active_unit is None
 
@@ -310,7 +415,7 @@ def test_conversion_failure_rules_out_every_unit_once(fake_coreml, monkeypatch):
     output = run(converted)
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
     assert FakeProgram.conversions == 1
-    assert set(FakeProgram.stores[("lm", 32)]) == {NEURAL_ENGINE, CORE_ML_GPU}
+    assert set(FakeProgram.stores[("lm", (32, 32))]) == {NEURAL_ENGINE, CORE_ML_GPU}
 
 
 def test_runtime_errors_and_compile_timeouts_fall_back(fake_coreml):
@@ -320,7 +425,7 @@ def test_runtime_errors_and_compile_timeouts_fall_back(fake_coreml):
     )
     output = run(converted)
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
-    verdicts = FakeProgram.stores[("no", 32)]
+    verdicts = FakeProgram.stores[("no", (32, 32))]
     assert "compile timeout" in verdicts[NEURAL_ENGINE]["reason"]
     assert "ANE error" in verdicts[CORE_ML_GPU]["reason"]
 
@@ -339,7 +444,7 @@ def test_a_broken_coremltools_falls_back_instead_of_failing(fake_coreml, monkeyp
 
     monkeypatch.setattr(coreml_runtime, "_Program", broken)
     converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="b")
-    assert converted.fixed_input_side is None
+    assert converted.fixed_input_shape is None
     torch.testing.assert_close(run(converted), fake_coreml.original(image(20, 20)[None]))
     assert fake_coreml.runners == []
 
@@ -349,12 +454,26 @@ def test_realesrgan_keeps_pytorch_above_its_measured_size(fake_coreml):
         tiny_descriptor("ESRGAN"), units=(NEURAL_ENGINE,), identity="big"
     )
     converted.prepare_tiles(512, 32)  # 576 px
-    assert converted.fixed_input_side is None
+    assert converted.fixed_input_shape is None
     converted = CoreMLImageDescriptor(
         tiny_descriptor("ESRGAN"), units=(NEURAL_ENGINE,), identity="ok"
     )
     converted.prepare_tiles(512, 16)  # 544 px
-    assert converted.fixed_input_side == 544
+    assert converted.fixed_input_shape == (544, 544)
+
+
+def test_spans_whole_frames_get_their_own_rectangular_program(fake_coreml):
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="wf")
+    assert converted.whole_frame_shape(20, 30, 4) == (32, 48)
+    assert converted.whole_frame_shape(2000, 2000, 16) is None  # beyond SPAN's limit
+    converted.prepare_tiles(16, 4, frame=(20, 30))
+    assert converted.fixed_input_shape == (32, 48)
+    sample = image(20, 30)[None]
+    torch.testing.assert_close(
+        converted(sample), padded_reference(fake_coreml.original, sample, (32, 48))
+    )
+    esrgan = CoreMLImageDescriptor(tiny_descriptor("ESRGAN"), units=(NEURAL_ENGINE,), identity="e")
+    assert esrgan.whole_frame_shape(20, 30, 4) is None
 
 
 def test_cancellation_stops_before_core_ml_runs(fake_coreml):
@@ -456,4 +575,8 @@ def test_real_conversion_runs_and_matches_pytorch(tmp_path, monkeypatch):
     assert error < 1e-4
     verdicts = json.loads(next(tmp_path.glob("SPAN-*/verdicts.json")).read_text())
     assert verdicts[next(iter(verdicts))]["accepted"]
+    if importlib.util.find_spec("CoreML") is not None:
+        # Predictions go through PyObjC, which releases the GIL.
+        state = next(iter(converted.model.states.values()))
+        assert isinstance(state["runner"], coreml_runtime._NativeRunner)
     assert converted.model.active_unit in {NEURAL_ENGINE, CORE_ML_GPU}

@@ -9,6 +9,7 @@ changing the decode/encode/cancel/progress plumbing here.
 
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from collections import deque
@@ -40,6 +41,55 @@ def rgb_to_tensor(rgb: np.ndarray) -> torch.Tensor:
     """Convert an HxWx3 uint8 RGB array to a (3, H, W) float32 tensor in [0, 1]."""
     arr = rgb.astype(np.float32) / 255.0
     return torch.from_numpy(arr).permute(2, 0, 1)
+
+
+def _prefetch(items, depth: int):
+    """Run an iterator on a background thread, up to ``depth`` items ahead.
+
+    Decoding, restoring and encoding then overlap instead of taking turns: the
+    encoder and large array copies release the GIL while the next frame is
+    restored on the Neural Engine or GPU. Items and the producer's exception
+    arrive in order; closing the consumer stops the producer after its current
+    item.
+    """
+    buffer: queue.Queue = queue.Queue(maxsize=depth)
+    stopped = threading.Event()
+    finished = object()
+
+    def offer(entry) -> bool:
+        while not stopped.is_set():
+            try:
+                buffer.put(entry, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def produce() -> None:
+        try:
+            for item in items:
+                if not offer((item, None)):
+                    return
+            offer((finished, None))
+        except BaseException as error:  # noqa: BLE001 - re-raised by the consumer
+            offer((finished, error))
+
+    worker = threading.Thread(target=produce, name="localsr-video-prefetch", daemon=True)
+    worker.start()
+    try:
+        while True:
+            item, error = buffer.get()
+            if item is finished:
+                if error is not None:
+                    raise error
+                return
+            yield item
+    finally:
+        stopped.set()
+        worker.join()
+        close = getattr(items, "close", None)
+        if callable(close):
+            close()
 
 
 def _deflicker_frames(
@@ -279,12 +329,15 @@ def _run_video_job(
         nonlocal cached_face_mask
         nonlocal frames_since_detection
 
-        decoded = decode_timed_frames(
-            config.video_path,
-            start_frame=config.start_frame,
-            end_frame=config.end_frame,
-            cancel_event=cancel_event,
-            hdr_mode=config.hdr_mode,
+        decoded = _prefetch(
+            decode_timed_frames(
+                config.video_path,
+                start_frame=config.start_frame,
+                end_frame=config.end_frame,
+                cancel_event=cancel_event,
+                hdr_mode=config.hdr_mode,
+            ),
+            4,
         )
         for output_frame_index, source_frame in enumerate(decoded):
             rgb = source_frame.rgb
@@ -385,6 +438,7 @@ def _run_video_job(
                             progress_callback=tile_progress,
                             safe_memory=config.safe_memory,
                             tile_callback=observed_tile,
+                            whole_frame=True,
                             **float_options,
                         )
                 else:
@@ -397,6 +451,7 @@ def _run_video_job(
                         progress_callback=tile_progress,
                         safe_memory=config.safe_memory,
                         tile_callback=observed_tile,
+                        whole_frame=True,
                         **float_options,
                     )
             except InterruptedError:
@@ -447,6 +502,8 @@ def _run_video_job(
         output_frames = _deflicker_frames(frame_generator(), config.deflicker_window, cancel_event)
     else:
         output_frames = frame_generator()
+    # Restore the next frames while the encoder writes the previous ones.
+    output_frames = _prefetch(output_frames, 2)
 
     # The encoder consumes the generator directly so frames never accumulate
     # in memory beyond what PyAV's internal buffers hold. Compatible audio and
@@ -476,6 +533,9 @@ def _run_video_job(
         temporary_directory=config.temporary_directory,
         external_ffmpeg=config.external_ffmpeg,
         stage_callback=stage_cb,
+        # A whole clip can stream into the system's hardware encoder; trims keep
+        # the lossless master, which carries their trimmed audio.
+        stream_to_system=config.start_frame is None and config.end_frame is None,
     )
 
     completed_at = time.perf_counter()

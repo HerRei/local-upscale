@@ -13,6 +13,19 @@
   slower. Hardware lists the Neural Engine as its own entry, the default on Macs
   that support it; Apple GPU (Metal) keeps everything on the GPU. Before a job, the
   status bar names the unit the selected model will use.
+- Videos upscale about twice as fast on the Neural Engine: Quick runs each frame in
+  one call instead of tiles, and decoding, upscaling and encoding overlap.
+- A new *Automatic* video format, now the default, hands frames straight to the
+  Mac's hardware HEVC encoder while the next ones are upscaled, and uses AV1
+  elsewhere. A 15-second iPhone clip at 4× took 2 minutes instead of 5 on an
+  M1 Pro.
+- Videos play in the preview before they are upscaled, with the same controls as a
+  finished comparison.
+
+### Fixed
+
+- The zoom controls beside the video playback bar no longer disappear and leave a
+  gap when the pointer leaves the video.
 
 ## [0.2.2-beta] - 2026-10-23
 

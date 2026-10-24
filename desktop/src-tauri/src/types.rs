@@ -291,6 +291,9 @@ pub struct UiSettings {
     // Royalty-free AV1/VP9/FFV1 are bundled; H.264/HEVC use the user's FFmpeg.
     #[serde(default = "default_video_codec")]
     pub video_codec: String,
+    // Set once the old AV1 default has moved to "auto"; false in older files.
+    #[serde(default)]
+    pub automatic_video_format: bool,
     // An FFmpeg executable the user installed; LocalSR never bundles one.
     #[serde(default)]
     pub external_ffmpeg_path: String,
@@ -359,7 +362,8 @@ fn default_hdr_mode() -> String {
 }
 
 pub(crate) fn default_video_codec() -> String {
-    "av1".into()
+    // The worker picks the fastest format the computer can write.
+    "auto".into()
 }
 
 impl Default for UiSettings {
@@ -386,6 +390,7 @@ impl Default for UiSettings {
             deflicker_window: 3,
             video_container: "mp4".into(),
             video_codec: default_video_codec(),
+            automatic_video_format: true,
             external_ffmpeg_path: String::new(),
             video_hdr_mode: default_hdr_mode(),
             video_target_resolution: 0,

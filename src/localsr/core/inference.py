@@ -83,9 +83,9 @@ def _resolve_torch_device(device_str: str) -> torch.device:
 
 
 def _fixed_window(
-    img_tensor: torch.Tensor, tile, side: int
+    img_tensor: torch.Tensor, tile, shape: tuple[int, int]
 ) -> tuple[torch.Tensor, int, int] | None:
-    """Cut a side x side input around a tile's core from real image pixels.
+    """Cut a fixed (height, width) input around a tile's core from real image pixels.
 
     Fixed-shape backends (Core ML) would otherwise pad a smaller edge tile with
     replicated pixels, which large receptive fields notice. The window keeps
@@ -95,10 +95,10 @@ def _fixed_window(
     """
     halo = tile.core_x - (tile.halo_x - tile.pad_left)
     _, height, width = img_tensor.shape
-    if tile.core_w + 2 * halo > side or tile.core_h + 2 * halo > side:
+    if tile.core_h + 2 * halo > shape[0] or tile.core_w + 2 * halo > shape[1]:
         return None
 
-    def axis(length: int, core_start: int, core_size: int):
+    def axis(length: int, core_start: int, core_size: int, side: int):
         virtual = length + 2 * halo
         start = core_start + halo - (side - core_size) // 2
         start = max(0, min(start, virtual - side))
@@ -115,8 +115,8 @@ def _fixed_window(
             core_start + halo - start,
         )
 
-    y0, y1, top, bottom, extra_bottom, core_top = axis(height, tile.core_y, tile.core_h)
-    x0, x1, left, right, extra_right, core_left = axis(width, tile.core_x, tile.core_w)
+    y0, y1, top, bottom, extra_bottom, core_top = axis(height, tile.core_y, tile.core_h, shape[0])
+    x0, x1, left, right, extra_right, core_left = axis(width, tile.core_x, tile.core_w, shape[1])
     window = img_tensor[:, y0:y1, x0:x1]
     if top or bottom or left or right:
         mode = (
@@ -272,12 +272,18 @@ class InferenceEngine:
         if callable(setter):
             setter(self.status_callback)
 
-    def prepare_tiles(self, tile_size: int, halo: int, path: str | None = None) -> None:
-        """Tell a fixed-shape backend the largest tile it will receive."""
+    def prepare_tiles(
+        self,
+        tile_size: int,
+        halo: int,
+        path: str | None = None,
+        frame: tuple[int, int] | None = None,
+    ) -> None:
+        """Tell a fixed-shape backend the largest tile (or whole frame) it will receive."""
         entry = self._loaded_models.get(path or self._active_path or "")
         prepare = getattr(entry[0], "prepare_tiles", None) if entry is not None else None
         if callable(prepare):
-            prepare(tile_size, halo)
+            prepare(tile_size, halo, frame)
 
     @property
     def active_backend_id(self):
@@ -460,9 +466,9 @@ class InferenceEngine:
         and the face-aware pipeline. It handles halo extraction, padding,
         divisibility, inference, and halo/padding stripping.
         """
-        fixed_side = getattr(model, "fixed_input_side", None)
-        if fixed_side:
-            window = _fixed_window(img_tensor, tile, int(fixed_side))
+        fixed_shape = getattr(model, "fixed_input_shape", None)
+        if fixed_shape:
+            window = _fixed_window(img_tensor, tile, fixed_shape)
             if window is not None:
                 tile_input, core_top, core_left = window
                 return self._infer_tile(
@@ -604,7 +610,7 @@ class InferenceEngine:
             if hook is not None:
                 hook.remove()
 
-        if torch.isnan(out_device).any() or torch.isinf(out_device).any():
+        if not torch.isfinite(out_device).all():
             raise ValueError("Model produced NaN or Infinity. Precision might be unsupported.")
 
         out_cpu = out_device.squeeze(0).to(torch.float32).cpu()
@@ -641,8 +647,13 @@ class InferenceEngine:
         precision: torch.dtype | None = None,
         tile_callback: Callable[..., None] | None = None,
         float_output: bool = False,
+        whole_frame: bool = False,
     ) -> np.ndarray:
         """Process a single frame using the already-loaded model.
+
+        ``whole_frame`` lets a fixed-shape backend that supports it run the frame
+        in one call instead of tiles; video frames share one size, so a single
+        program serves the whole job.
 
         Returns a uint8 (C, H*scale, W*scale) numpy array. Memory-mapped
         OutputWriter is avoided here because video frames are transient —
@@ -659,18 +670,29 @@ class InferenceEngine:
         _, h, w = img_tensor.shape
         scale = model_info.scale
         out_channels = model_info.out_channels
-        out_shape = (out_channels, h * scale, w * scale)
         output_dtype = np.float32 if float_output else np.uint8
-        out_array = np.zeros(out_shape, dtype=output_dtype)
+
+        def new_output() -> np.ndarray:
+            # A (C, H, W) view of (H, W, C) memory: video encoders want
+            # interleaved pixels, which then need no transposing copy.
+            return np.zeros((h * scale, w * scale, out_channels), dtype=output_dtype).transpose(
+                2, 0, 1
+            )
+
+        out_array = new_output()
 
         current_tile_size = tile_size
         min_tile_size = 64 if safe_memory else 4
+        frame_shape = getattr(model, "whole_frame_shape", None)
+        whole = bool(whole_frame and callable(frame_shape) and frame_shape(h, w, halo))
+        if whole:
+            current_tile_size = max(w, h)
 
         while current_tile_size >= min_tile_size:
             try:
                 tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                 total_tiles = len(tiles)
-                self.prepare_tiles(current_tile_size, halo)
+                self.prepare_tiles(current_tile_size, halo, frame=(h, w) if whole else None)
 
                 for i, t in enumerate(tiles):
                     if cancel_event.is_set():
@@ -762,7 +784,7 @@ class InferenceEngine:
                             current_tile_size,
                         )
                     # Re-initialize output array cleanly
-                    out_array = np.zeros(out_shape, dtype=output_dtype)
+                    out_array = new_output()
                     continue
                 raise
 

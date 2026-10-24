@@ -251,7 +251,7 @@ export interface Recipe {
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
-export type VideoCodec = 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
+export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
 
 export interface RecipeStage {
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
@@ -285,6 +285,8 @@ export interface UiSettings {
   video_low_memory?: boolean;
   video_container: 'mp4' | 'mkv';
   video_codec: VideoCodec;
+  /** Set once the old AV1 default moved to 'auto'; kept so it is not repeated. */
+  automatic_video_format?: boolean;
   external_ffmpeg_path: string;
   video_crf: number;
   /** Direct builds send version, platform and channel after an update check. Defaults to true. */

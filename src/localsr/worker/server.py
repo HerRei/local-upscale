@@ -1081,6 +1081,16 @@ class WorkerServer:
         # stack trace, and frame-by-frame stays available.
         from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
 
+        if data.get("video_codec") == "auto":
+            from localsr.core.media_bridge import automatic_video_codec, load_media_bridge
+
+            codec = automatic_video_codec(
+                load_media_bridge(data.get("external_ffmpeg")),
+                str(data.get("container", "mp4")),
+                str(data.get("hdr_mode", "reject")),
+            )
+            data = {**data, "video_codec": codec}
+            send_message(LogMessage(level="info", message=f"Automatic video format: {codec}"))
         model_kind = str(data.get("model_kind", "spandrel_image"))
         if model_kind == "seedvr2" and str(data.get("device", "")).split(":", 1)[0] in {
             "directml",

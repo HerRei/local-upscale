@@ -56,7 +56,7 @@ export function exportNeedsExternalFFmpeg(
   settings: UiSettings,
   capabilities?: CapabilityInfo | null,
 ): boolean {
-  const codec = settings.video_codec ?? 'av1';
+  const codec = settings.video_codec ?? 'auto';
   return (
     settings.task === 'video' &&
     (codec === 'h264' || codec === 'hevc') &&

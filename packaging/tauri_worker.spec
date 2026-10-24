@@ -77,7 +77,16 @@ if sys.platform == "darwin" and find_spec("coremltools") is not None:
     coreml_datas, coreml_binaries, coreml_hidden = collect_all("coremltools")
     datas += coreml_datas
     spandrel_binaries += coreml_binaries
-    for distribution in ("coremltools", "protobuf", "attrs", "cattrs", "pyaml"):
+    # PyObjC runs the converted programs without holding the GIL.
+    for package in ("objc", "Foundation", "CoreFoundation", "CoreML"):
+        package_datas, package_binaries, package_hidden = collect_all(package)
+        datas += package_datas
+        spandrel_binaries += package_binaries
+        coreml_hidden += package_hidden
+    for distribution in (
+        "coremltools", "protobuf", "attrs", "cattrs", "pyaml",
+        "pyobjc-core", "pyobjc-framework-Cocoa", "pyobjc-framework-CoreML",
+    ):
         datas += copy_metadata(distribution)
 hiddenimports = sorted(
     set(

@@ -286,7 +286,7 @@ pub fn save_recipe(
         || (!recipe.video_codec.is_empty()
             && !matches!(
                 recipe.video_codec.as_str(),
-                "av1" | "vp9" | "ffv1" | "h264" | "hevc"
+                "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
             ))
         || recipe
             .jpeg_quality
@@ -1465,7 +1465,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
         || !matches!(
             settings.video_codec.as_str(),
-            "av1" | "vp9" | "ffv1" | "h264" | "hevc"
+            "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
         )
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")

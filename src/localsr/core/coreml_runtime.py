@@ -55,9 +55,13 @@ COMPUTE_UNITS = {
 NEURAL_ENGINE_SPEED_MARGIN = 1.3
 MINIMUM_PSNR = 45.0
 # Converting large shapes exhausted 16 GB of memory for RRDBNet (768 px failed,
-# 512 px was measured). Larger user tile sizes keep PyTorch instead.
-MAXIMUM_SIDE = 576
-MAXIMUM_SIDES = {"ESRGAN": 544}
+# 512 px was measured), so larger user tiles keep PyTorch. SPAN is small enough
+# to convert whole video frames.
+MAXIMUM_PIXELS = 576 * 576
+MAXIMUM_PIXELS_BY_ARCHITECTURE = {"ESRGAN": 544 * 544, "SPAN": 2_400_000}
+# Every frame of a video has the same size, so these run one call per frame
+# instead of overlapping tiles: fewer pixels and calls (SPAN on an M1 Pro: 1.4-2.2x).
+WHOLE_FRAME_ARCHITECTURES = {"SPAN"}
 SIDE_ALIGNMENT = 16
 LOAD_TIMEOUT_SECONDS = 180.0
 # Bump when the conversion recipe changes so stale programs are not reused.
@@ -151,21 +155,92 @@ def _move_tensor_attributes(module: torch.nn.Module, device: torch.device) -> No
                 setattr(child, name, value.to(device))
 
 
+_UNIT_CODES = {"CPU_ONLY": 0, "CPU_AND_GPU": 1, "ALL": 2, "CPU_AND_NE": 3}
+_ARRAY_TYPES = {65552: np.float16, 65568: np.float32}
+
+
+class _NativeRunner:
+    """Predict through Core ML's Objective-C API (PyObjC).
+
+    coremltools holds the GIL for the whole prediction, so nothing else in the
+    worker (decoding, the encoder hand-off) can run while the Neural Engine
+    works; Core ML called through PyObjC releases it. It also hands back the
+    program's FP16 output directly, which halves the time per call.
+    """
+
+    def __init__(self, path: Path, unit: str):
+        import CoreML
+        import Foundation
+
+        configuration = CoreML.MLModelConfiguration.alloc().init()
+        configuration.setComputeUnits_(_UNIT_CODES[unit])
+        model, error = CoreML.MLModel.modelWithContentsOfURL_configuration_error_(
+            Foundation.NSURL.fileURLWithPath_(str(path)), configuration, None
+        )
+        if model is None:
+            raise RuntimeError(str(error))
+        constraint = model.modelDescription().inputDescriptionsByName()["image"]
+        shape = [int(value) for value in constraint.multiArrayConstraint().shape()]
+        array, error = CoreML.MLMultiArray.alloc().initWithShape_dataType_error_(
+            shape, CoreML.MLMultiArrayDataTypeFloat32, None
+        )
+        if array is None:
+            raise RuntimeError(str(error))
+        features, error = CoreML.MLDictionaryFeatureProvider.alloc().initWithDictionary_error_(
+            {"image": array}, None
+        )
+        if features is None:
+            raise RuntimeError(str(error))
+        self.model, self.array, self.features = model, array, features
+        self.input = self._view(array, np.float32)
+
+    @staticmethod
+    def _view(array, dtype) -> np.ndarray:
+        shape = [int(value) for value in array.shape()]
+        strides = [int(value) for value in array.strides()]
+        item = np.dtype(dtype).itemsize
+        raw = np.frombuffer(array.dataPointer().as_buffer(strides[0] * shape[0] * item), dtype)
+        return np.lib.stride_tricks.as_strided(
+            raw, shape=shape, strides=[stride * item for stride in strides]
+        )
+
+    def predict(self, inputs: dict) -> dict:
+        import objc
+
+        np.copyto(self.input, inputs["image"])
+        # Core ML returns autoreleased outputs (about 100 MB for a whole frame).
+        # Worker threads have no run loop to drain them, so drain per call.
+        with objc.autorelease_pool():
+            output, error = self.model.predictionFromFeatures_error_(self.features, None)
+            if output is None:
+                raise RuntimeError(str(error))
+            result = output.featureValueForName_("restored").multiArrayValue()
+            # Copy while Core ML still owns the buffer, keeping its FP16; PyTorch's
+            # copy is multithreaded, and the engine casts to FP32 once afterwards.
+            view = self._view(result, _ARRAY_TYPES[int(result.dataType())])
+            restored = torch.from_numpy(view).clone()
+            del view, result, output
+        return {"restored": restored}
+
+
 def _load_compiled(path: Path, unit: str, timeout: float):
     """Load a compiled program; the Neural Engine compiles it on first load.
 
     That compile can run for minutes on some graphs and cannot be interrupted,
     so it runs on a daemon thread and the job continues on PyTorch on timeout.
     """
-    import coremltools as ct
-
     result: dict[str, object] = {}
 
     def load():
         try:
-            result["model"] = ct.models.CompiledMLModel(
-                str(path), compute_units=getattr(ct.ComputeUnit, unit)
-            )
+            try:
+                result["model"] = _NativeRunner(path, unit)
+            except ImportError:
+                import coremltools as ct
+
+                result["model"] = ct.models.CompiledMLModel(
+                    str(path), compute_units=getattr(ct.ComputeUnit, unit)
+                )
         except Exception as error:  # noqa: BLE001
             result["error"] = error
 
@@ -182,14 +257,14 @@ def _load_compiled(path: Path, unit: str, timeout: float):
 class _Program:
     """One converted shape of one checkpoint, with its stored verdicts."""
 
-    def __init__(self, root: Path, architecture: str, identity: str, side: int):
+    def __init__(self, root: Path, architecture: str, identity: str, shape: tuple[int, int]):
         import coremltools as ct
 
         self.architecture = architecture
-        self.side = side
+        self.shape = shape
         self.chip = _chip_name()
         self.macos = platform.mac_ver()[0]
-        self.prefix = f"{architecture}-{identity[:16]}-{side}-"
+        self.prefix = f"{architecture}-{identity[:16]}-{shape[0]}x{shape[1]}-"
         name = (
             f"{self.prefix}r{RECIPE_VERSION}"
             f"-ct{ct.__version__}-torch{torch.__version__.split('+')[0]}"
@@ -219,7 +294,7 @@ class _Program:
         verdicts[self._verdict_key(unit)] = {
             **verdict,
             "unit": unit,
-            "side": self.side,
+            "shape": list(self.shape),
             "chip": self.chip,
             "macos": self.macos,
             "recorded": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -261,7 +336,7 @@ class _Program:
             started = time.perf_counter()
             _move_tensor_attributes(source, torch.device("cpu"))
             with torch.inference_mode(False), torch.no_grad():
-                example = torch.rand(1, input_channels, self.side, self.side)
+                example = torch.rand(1, input_channels, *self.shape)
                 traced = torch.jit.trace(source, example, check_trace=False)
             program = ct.convert(
                 traced,
@@ -283,9 +358,9 @@ class _Program:
             else:
                 os.replace(staging, self.directory)
             logger.info(
-                "Converted %s for Core ML at %s px in %.1f s",
+                "Converted %s for Core ML at %sx%s px in %.1f s",
                 self.architecture,
-                self.side,
+                *self.shape,
                 time.perf_counter() - started,
             )
         finally:
@@ -308,40 +383,68 @@ class _CoreMLImage(torch.nn.Module):
         self.minimum = int(getattr(requirements, "minimum", 0) or 0)
         multiple = int(getattr(requirements, "multiple_of", 1) or 1)
         self.alignment = math.lcm(SIDE_ALIGNMENT, multiple)
-        self.maximum_side = MAXIMUM_SIDES.get(self.architecture, MAXIMUM_SIDE)
+        self.maximum_pixels = MAXIMUM_PIXELS_BY_ARCHITECTURE.get(self.architecture, MAXIMUM_PIXELS)
         self.units = units
         self.identity = identity
         self.source_descriptor = descriptor
-        self.side: int | None = None
+        # (height, width) of the one input shape Core ML runs at.
+        self.shape: tuple[int, int] | None = None
         self.cancel_event: threading.Event | None = None
         self.status_callback: Callable[[str], None] | None = None
-        # side -> {"program", "runner", "unit", "pending", "remaining"}
-        self.states: OrderedDict[int, dict] = OrderedDict()
+        # shape -> {"program", "runner", "unit", "pending", "remaining"}
+        self.states: OrderedDict[tuple[int, int], dict] = OrderedDict()
         self.active_unit: str | None = None
 
     # Engine hooks ---------------------------------------------------------
-    def prepare(self, tile_size: int, halo: int) -> None:
-        side = _align(max(tile_size + 2 * halo, self.minimum, 1), self.alignment)
-        if self.side is None or side > self.side:
-            self.side = side
+    def _shape_for(self, height: int, width: int) -> tuple[int, int]:
+        return (
+            _align(max(height, self.minimum, 1), self.alignment),
+            _align(max(width, self.minimum, 1), self.alignment),
+        )
 
-    def fixed_side(self) -> int | None:
-        """The input shape Core ML runs at, or None once it is ruled out."""
-        side = self.side
-        if side is None or side > self.maximum_side:
+    def prepare(self, tile_size: int, halo: int, frame: tuple[int, int] | None = None) -> None:
+        """Choose the input shape: a square tile, or a whole (height, width) frame."""
+        if frame is not None:
+            shape = self._shape_for(frame[0] + 2 * halo, frame[1] + 2 * halo)
+        else:
+            side = tile_size + 2 * halo
+            shape = self._shape_for(side, side)
+        current = self.shape
+        # Keep a larger existing program for smaller tiles (the OOM retry), but not
+        # one so much larger that padding would waste most of the work.
+        if (
+            current is None
+            or shape[0] > current[0]
+            or shape[1] > current[1]
+            or current[0] * current[1] > 1.5 * shape[0] * shape[1]
+        ):
+            self.shape = shape
+
+    def whole_frame_shape(self, height: int, width: int, halo: int) -> tuple[int, int] | None:
+        """The program shape for one whole frame, if this model can run it."""
+        if self.architecture not in WHOLE_FRAME_ARCHITECTURES:
             return None
-        state = self._state(side)
+        shape = self._shape_for(height + 2 * halo, width + 2 * halo)
+        return shape if self._usable(shape) else None
+
+    def _usable(self, shape: tuple[int, int]) -> bool:
+        if shape[0] * shape[1] > self.maximum_pixels:
+            return False
+        state = self._state(shape)
         if state["program"] is None:
-            return None
+            return False
         if state["runner"] is not None:
-            return side
+            return True
         program: _Program = state["program"]
-        if any(
+        return any(
             (verdict := program.verdict(unit)) is None or verdict.get("accepted")
             for unit in state["remaining"]
-        ):
-            return side
-        return None
+        )
+
+    def fixed_shape(self) -> tuple[int, int] | None:
+        """The input shape Core ML runs at, or None once it is ruled out."""
+        shape = self.shape
+        return shape if shape is not None and self._usable(shape) else None
 
     def _status(self, message: str) -> None:
         logger.info(message)
@@ -363,22 +466,24 @@ class _CoreMLImage(torch.nn.Module):
     def _predict(self, runner, image: torch.Tensor) -> torch.Tensor:
         array = image.detach().to("cpu", torch.float32).contiguous().numpy()
         output = runner.predict({"image": array})["restored"]
+        if isinstance(output, torch.Tensor):
+            return output
         return torch.from_numpy(np.asarray(output, dtype=np.float32))
 
-    def _pad(self, image: torch.Tensor, side: int) -> torch.Tensor:
+    def _pad(self, image: torch.Tensor, shape: tuple[int, int]) -> torch.Tensor:
         height, width = image.shape[-2:]
-        if height == side and width == side:
+        if (height, width) == shape:
             return image
         # Replicate like LocalSR's own size-multiple padding: right and bottom.
-        return F.pad(image, (0, side - width, 0, side - height), mode="replicate")
+        return F.pad(image, (0, shape[1] - width, 0, shape[0] - height), mode="replicate")
 
-    def _state(self, side: int) -> dict:
-        state = self.states.get(side)
+    def _state(self, shape: tuple[int, int]) -> dict:
+        state = self.states.get(shape)
         if state is not None:
-            self.states.move_to_end(side)
+            self.states.move_to_end(shape)
             return state
         try:
-            program = _Program(cache_directory(), self.architecture, self.identity, side)
+            program = _Program(cache_directory(), self.architecture, self.identity, shape)
         except Exception:  # noqa: BLE001
             # A broken coremltools installation must not fail the job.
             logger.warning("Core ML is unavailable; using PyTorch", exc_info=True)
@@ -390,7 +495,7 @@ class _CoreMLImage(torch.nn.Module):
             "pending": False,
             "remaining": list(self.units) if program is not None else [],
         }
-        self.states[side] = state
+        self.states[shape] = state
         while len(self.states) > 2:
             self.states.popitem(last=False)
         return state
@@ -514,17 +619,17 @@ class _CoreMLImage(torch.nn.Module):
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         self._check_cancelled()
         height, width = image.shape[-2:]
-        side = self.side
-        if side is None:
-            side = _align(max(height, width, self.minimum, 1), self.alignment)
-            self.side = side
-        if height > side or width > side or side > self.maximum_side:
+        shape = self.shape
+        if shape is None:
+            side = max(height, width)
+            shape = self.shape = self._shape_for(side, side)
+        if height > shape[0] or width > shape[1] or shape[0] * shape[1] > self.maximum_pixels:
             # Larger recovery crops and tile sizes keep PyTorch.
             return self._run_fallback(image)
-        state = self._state(side)
+        state = self._state(shape)
         if state["runner"] is None and state["remaining"]:
             self._next_runner(state)
-        padded = self._pad(image, side)
+        padded = self._pad(image, shape)
         while state["runner"] is not None:
             self._check_cancelled()
             try:
@@ -571,13 +676,16 @@ class CoreMLImageDescriptor:
     def set_status_callback(self, callback):
         self.model.status_callback = callback
 
-    def prepare_tiles(self, tile_size: int, halo: int) -> None:
-        self.model.prepare(tile_size, halo)
+    def prepare_tiles(self, tile_size: int, halo: int, frame: tuple[int, int] | None = None):
+        self.model.prepare(tile_size, halo, frame)
+
+    def whole_frame_shape(self, height: int, width: int, halo: int) -> tuple[int, int] | None:
+        return self.model.whole_frame_shape(height, width, halo)
 
     @property
-    def fixed_input_side(self) -> int | None:
-        return self.model.fixed_side()
+    def fixed_input_shape(self) -> tuple[int, int] | None:
+        return self.model.fixed_shape()
 
     @property
     def input_device(self) -> torch.device | None:
-        return torch.device("cpu") if self.model.fixed_side() is not None else None
+        return torch.device("cpu") if self.model.fixed_shape() is not None else None

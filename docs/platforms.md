@@ -86,6 +86,17 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   (FP16 rounding) and 46 dB for RealPLKSR, where the edge windows differ most. Against
   an untiled reference the Core ML path is the closer one for RealPLKSR and
   Real-ESRGAN, because their receptive field exceeds the halo.
+- **Video on the Neural Engine.** Frames of a video share one size, so SPAN runs
+  each frame in one Core ML call (a rectangular program converted once per frame
+  size) instead of overlapping tiles. Programs run through Core ML's Objective-C
+  API (PyObjC), which releases Python's GIL, unlike coremltools; decoding,
+  restoring and encoding then overlap on separate threads. The *Automatic* video
+  format, the default, streams frames straight into the Mac's hardware HEVC
+  encoder (VideoToolbox, MP4, SDR) without the lossless intermediate the H.264/HEVC
+  exports otherwise use; MKV, HDR preservation and trimmed clips keep AV1 or the
+  intermediate. No Apple chip encodes AV1 in hardware. Measured on the M1 Pro with
+  a 15-second 720×1280 iPhone clip upscaled 4× with SPAN (461 frames): 1.58 frames
+  per second with tiles and AV1 before, 3.6 now (2 minutes 8 seconds).
 - **DirectML.** Any DXGI adapter with D3D12 support can be selected; only the
   UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
   DirectML implementation.
