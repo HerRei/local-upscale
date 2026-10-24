@@ -8,6 +8,8 @@ from pathlib import Path
 
 import torch
 
+from .coreml_runtime import coreml_available
+
 logger = logging.getLogger(__name__)
 
 
@@ -240,6 +242,8 @@ def get_capability_report() -> dict:
                 "supports_fp16": True,
                 "recommended_tile_sizes": _recommended_tiles(free),
                 "is_integrated": True,
+                # Supported models also run through Core ML on the Neural Engine.
+                "neural_engine": coreml_available(),
             }
         )
 

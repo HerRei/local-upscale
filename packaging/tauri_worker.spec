@@ -69,10 +69,21 @@ if find_spec("onnxruntime") is not None:
         except PackageNotFoundError:
             continue
     onnx_hidden += ["onnxruntime", "torch.onnx"]
+coreml_hidden = []
+if sys.platform == "darwin" and find_spec("coremltools") is not None:
+    # Core ML conversion and execution on Apple silicon. coremltools swallows a
+    # failed import of its native modules, so collect the whole package and
+    # let the worker smoke test predict once.
+    coreml_datas, coreml_binaries, coreml_hidden = collect_all("coremltools")
+    datas += coreml_datas
+    spandrel_binaries += coreml_binaries
+    for distribution in ("coremltools", "protobuf", "attrs", "cattrs", "pyaml"):
+        datas += copy_metadata(distribution)
 hiddenimports = sorted(
     set(
         spandrel_hidden
         + onnx_hidden
+        + coreml_hidden
         + collect_submodules("spandrel")
         + [
             "PIL._tkinter_finder",

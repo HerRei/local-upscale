@@ -22,6 +22,7 @@ from localsr.core.pipeline import (
     resolve_image_pipeline,
 )
 from localsr.protocol.messages import (
+    EngineStatus,
     JobCancelled,
     JobCompleted,
     LivePreviewWarning,
@@ -51,6 +52,10 @@ class ImageJobRunner:
 
     def run(self, job_id: str, data: Mapping[str, Any]) -> None:
         started_at = time.monotonic()
+        self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
+        self.engine.status_callback = lambda message: self.emit(
+            EngineStatus(job_id=job_id, message=message)
+        )
         pipeline = resolve_image_pipeline(
             raw_stages=data.get("stages"),
             model_path=str(data["model_path"]),

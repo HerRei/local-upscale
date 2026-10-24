@@ -21,6 +21,12 @@ These apply to v0.2.2-beta. Please read them before starting a long job.
   before it runs; the Microsoft Store edition, when it ships, is signed by the Store.
 - A working launch does not prove GPU compatibility. Some operators fall back to
   the CPU (for example `aten::roll` on DirectML), and drivers vary.
+- On Apple Silicon, the first job with a Neural Engine model (Quick photo, Real-ESRGAN,
+  JPEG cleanup, Best photo) and tile size spends up to about a minute preparing it,
+  using up to about 4 GB of memory while it does.
+  Its results differ from the GPU path by FP16 rounding, and only the M1 Pro has
+  been measured; newer Macs choose between the Neural Engine and the GPU on their
+  first tile.
 
 ## Media formats
 

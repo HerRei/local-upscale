@@ -337,6 +337,15 @@
             on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })}
           /> Safe memory mode</label
         >{/if}
+      {#if !usingTemporalVideo && settings.task !== 'edit' && settings.device_id === 'mps'}<label
+          class="check-row"
+          title="Runs supported models through Core ML on the Neural Engine, or on the GPU through Core ML, when that matches the normal result and is not slower. The first run of a model prepares it once."
+          ><input
+            type="checkbox"
+            checked={settings.neural_engine ?? true}
+            on:change={(event) => updateSettings({ neural_engine: event.currentTarget.checked })}
+          /> Use the Neural Engine for supported models</label
+        >{/if}
       {#if settings.task !== 'edit'}<label class="check-row"
           ><input
             type="checkbox"

@@ -551,6 +551,8 @@ def process_frame_face_aware(
 
     tiles = list(generate_tiles(w, h, tile_size, halo, scale))
     total_tiles = len(tiles)
+    engine.prepare_tiles(tile_size, halo, general_model_path)
+    engine.prepare_tiles(tile_size, halo, face_model_path)
 
     def identity_core_for(tile) -> np.ndarray:
         """Return the source core bicubic-resampled to the model output size."""

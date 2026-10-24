@@ -1523,6 +1523,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         video_target_resolution: input.video_target_resolution,
         video_low_memory: input.video_low_memory,
         video_crf: input.video_crf,
+        neural_engine: input.neural_engine,
         enable_face_model: input.enable_face_model,
         face_fidelity: input.face_fidelity,
         enable_live_preview: input.enable_live_preview,
@@ -1762,6 +1763,7 @@ fn build_job_message(
                 "jpeg_quality": input.jpeg_quality,
                 "preserve_metadata": input.preserve_metadata,
                 "safe_memory": input.safe_memory,
+                "neural_engine": input.neural_engine,
                 "preview_enabled": input.enable_live_preview,
                 "preview_max_fps": 2.0,
                 "preview_max_dimension": 320,
@@ -1800,6 +1802,7 @@ fn build_job_message(
                 "halo": input.halo,
                 "precision": input.precision,
                 "safe_memory": input.safe_memory,
+                "neural_engine": input.neural_engine,
                 "keyframe_interval": null,
                 "start_frame": null,
                 "end_frame": null,
@@ -1852,6 +1855,7 @@ fn build_job_message(
                     "halo": input.halo,
                     "precision": input.precision,
                     "safe_memory": input.safe_memory,
+                    "neural_engine": input.neural_engine,
                     "keyframe_interval": null,
                     "start_frame": null,
                     "end_frame": null,
@@ -2196,6 +2200,7 @@ mod tests {
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            neural_engine: true,
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,
@@ -2349,6 +2354,7 @@ mod tests {
         assert_eq!(message["data"]["scratch_directory"], "/app-owned/work");
         assert_eq!(message["data"]["stages"].as_array().unwrap().len(), 1);
         assert_eq!(message["data"]["stages"][0]["kind"], "upscale");
+        assert_eq!(message["data"]["neural_engine"], true);
 
         // Probed average FPS is metadata, not a request to retime a VFR clip.
         let mut video = media.clone();
@@ -2365,6 +2371,19 @@ mod tests {
         .unwrap();
         assert_eq!(video_message["type"], "video_job_request");
         assert!(video_message["data"]["fps"].is_null());
+        assert_eq!(video_message["data"]["neural_engine"], true);
+        let mut without_neural_engine = input("video");
+        without_neural_engine.neural_engine = false;
+        let gpu_message = build_job_message(
+            "gpu-job",
+            &video,
+            Path::new("/output/gpu.mp4"),
+            Path::new("/app-owned/work"),
+            &without_neural_engine,
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(gpu_message["data"]["neural_engine"], false);
         assert_eq!(video_message["data"]["hdr_mode"], "tone_map");
         let mut hdr_input = input("video");
         hdr_input.video_hdr_mode = "preserve".into();
@@ -2412,6 +2431,16 @@ mod tests {
         .unwrap();
         assert_eq!(smaller_message["data"]["target_resolution"], 512);
         assert_eq!(smaller_message["data"]["video_low_memory"], false);
+        let mut old_settings = serde_json::to_value(UiSettings::default()).unwrap();
+        old_settings
+            .as_object_mut()
+            .unwrap()
+            .remove("neural_engine");
+        assert!(
+            serde_json::from_value::<UiSettings>(old_settings)
+                .unwrap()
+                .neural_engine
+        );
         let mut old_memory_settings = serde_json::to_value(UiSettings::default()).unwrap();
         old_memory_settings
             .as_object_mut()

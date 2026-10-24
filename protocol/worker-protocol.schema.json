@@ -156,7 +156,8 @@
         "allow_unverified_checkpoint": { "type": ["boolean", "null"] },
         "preview_enabled": { "type": "boolean" },
         "preview_max_fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
-        "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 }
+        "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 },
+        "neural_engine": { "type": "boolean" }
       }
     },
     "pipelineStage": {
@@ -346,6 +347,7 @@
                 "live_preview_warning",
                 "log",
                 "warning",
+                "engine_status",
                 "job_completed",
                 "job_cancelled",
                 "job_failed",

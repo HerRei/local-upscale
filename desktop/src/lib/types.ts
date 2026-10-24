@@ -275,6 +275,7 @@ export interface UiSettings {
   halo: number;
   precision: string;
   safe_memory: boolean;
+  neural_engine?: boolean;
   deflicker: boolean;
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
@@ -482,6 +483,7 @@ export interface StartBatchInput {
   halo: number;
   precision: string;
   safe_memory: boolean;
+  neural_engine?: boolean;
   deflicker: boolean;
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';

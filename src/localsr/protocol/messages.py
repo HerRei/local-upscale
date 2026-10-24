@@ -74,6 +74,8 @@ class JobRequest:
     scratch_directory: str | None = None
     output_temporary_directory: str | None = None
     stages: list[dict[str, object]] | None = None
+    # Apple silicon: run supported models through Core ML on the Neural Engine.
+    neural_engine: bool = True
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})
@@ -147,6 +149,7 @@ class VideoJobRequest:
     preview_max_dimension: int = 320
 
     hdr_mode: str = "reject"
+    neural_engine: bool = True
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})
@@ -405,6 +408,17 @@ class WarningMessage:
 
     def to_json(self) -> str:
         return json.dumps({"type": "warning", "data": asdict(self)})
+
+
+@dataclass
+class EngineStatus:
+    """Which backend runs a job's model, e.g. a one-time Core ML preparation."""
+
+    job_id: str
+    message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "engine_status", "data": asdict(self)})
 
 
 @dataclass

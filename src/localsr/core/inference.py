@@ -82,6 +82,54 @@ def _resolve_torch_device(device_str: str) -> torch.device:
     return torch.device(device_str)
 
 
+def _fixed_window(
+    img_tensor: torch.Tensor, tile, side: int
+) -> tuple[torch.Tensor, int, int] | None:
+    """Cut a side x side input around a tile's core from real image pixels.
+
+    Fixed-shape backends (Core ML) would otherwise pad a smaller edge tile with
+    replicated pixels, which large receptive fields notice. The window keeps
+    LocalSR's reflected halo at image borders and fills the rest of the shape
+    with neighbouring pixels; only an image smaller than the window is padded.
+    Returns the window and the core's offset inside it.
+    """
+    halo = tile.core_x - (tile.halo_x - tile.pad_left)
+    _, height, width = img_tensor.shape
+    if tile.core_w + 2 * halo > side or tile.core_h + 2 * halo > side:
+        return None
+
+    def axis(length: int, core_start: int, core_size: int):
+        virtual = length + 2 * halo
+        start = core_start + halo - (side - core_size) // 2
+        start = max(0, min(start, virtual - side))
+        low, high = start - halo, start - halo + side
+        reflect_before = max(0, -low)
+        reflect_after = max(0, min(high, length + halo) - length)
+        replicate_after = max(0, high - (length + halo))
+        return (
+            max(low, 0),
+            min(high, length),
+            reflect_before,
+            reflect_after,
+            replicate_after,
+            core_start + halo - start,
+        )
+
+    y0, y1, top, bottom, extra_bottom, core_top = axis(height, tile.core_y, tile.core_h)
+    x0, x1, left, right, extra_right, core_left = axis(width, tile.core_x, tile.core_w)
+    window = img_tensor[:, y0:y1, x0:x1]
+    if top or bottom or left or right:
+        mode = (
+            "replicate"
+            if max(left, right) >= window.shape[2] or max(top, bottom) >= window.shape[1]
+            else "reflect"
+        )
+        window = F.pad(window, (left, right, top, bottom), mode=mode)
+    if extra_bottom or extra_right:
+        window = F.pad(window, (0, extra_right, 0, extra_bottom), mode="replicate")
+    return window, core_top, core_left
+
+
 def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | None:
     """Apply a hard allocator ceiling and return its fraction of device capacity."""
     if device.type in {"cuda", "xpu"}:
@@ -124,6 +172,11 @@ class InferenceEngine:
         self._loaded_model_path: str | None = None
         self._loaded_device: torch.device | None = None
         self._loaded_precision: torch.dtype | None = None
+        # On Apple silicon, supported architectures run through Core ML on the
+        # Neural Engine. Jobs set this from the user's setting; benchmarks
+        # measure PyTorch and turn it off.
+        self.neural_engine_enabled = True
+        self.status_callback: Callable[[str], None] | None = None
 
     @property
     def active_model(self):
@@ -169,6 +222,12 @@ class InferenceEngine:
             if precision_str == "fp16" and model_info.half_supported and onnx_device_index is None
             else torch.float32
         )
+        coreml_units: tuple[str, ...] = ()
+        if onnx_device_index is None and device.type == "mps" and self.neural_engine_enabled:
+            from .coreml_runtime import coreml_units_for
+
+            coreml_units = coreml_units_for(str(getattr(model_info, "architecture", "")))
+        backend_id = f"{device_str}+coreml" if coreml_units else device_str
 
         # Already cached? Just switch active.
         if model_path in self._loaded_models:
@@ -176,10 +235,11 @@ class InferenceEngine:
             if (
                 cached_device == device
                 and cached_precision == precision
-                and self._loaded_backend_ids.get(model_path) == device_str
+                and self._loaded_backend_ids.get(model_path) == backend_id
             ):
                 self._active_path = model_path
                 self._sync_legacy_fields()
+                self._attach_status(cached_model)
                 return device, precision
             # Precision/device changed — drop the stale cache entry and reload.
             del self._loaded_models[model_path]
@@ -190,17 +250,34 @@ class InferenceEngine:
         if not any(d == device for _, d, _ in self._loaded_models.values()):
             _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
 
-        if onnx_device_index is None:
-            model, _ = self.model_adapter.load(model_path, device, precision)
-        else:
+        if onnx_device_index is not None:
             model, _ = self.model_adapter.load(
                 model_path, device, precision, onnx_device_index=onnx_device_index
             )
+        elif coreml_units:
+            model, _ = self.model_adapter.load(
+                model_path, device, precision, coreml_units=coreml_units
+            )
+        else:
+            model, _ = self.model_adapter.load(model_path, device, precision)
         self._loaded_models[model_path] = (model, device, precision)
-        self._loaded_backend_ids[model_path] = device_str
+        self._loaded_backend_ids[model_path] = backend_id
         self._active_path = model_path
         self._sync_legacy_fields()
+        self._attach_status(model)
         return device, precision
+
+    def _attach_status(self, model) -> None:
+        setter = getattr(model, "set_status_callback", None)
+        if callable(setter):
+            setter(self.status_callback)
+
+    def prepare_tiles(self, tile_size: int, halo: int, path: str | None = None) -> None:
+        """Tell a fixed-shape backend the largest tile it will receive."""
+        entry = self._loaded_models.get(path or self._active_path or "")
+        prepare = getattr(entry[0], "prepare_tiles", None) if entry is not None else None
+        if callable(prepare):
+            prepare(tile_size, halo)
 
     @property
     def active_backend_id(self):
@@ -383,6 +460,23 @@ class InferenceEngine:
         and the face-aware pipeline. It handles halo extraction, padding,
         divisibility, inference, and halo/padding stripping.
         """
+        fixed_side = getattr(model, "fixed_input_side", None)
+        if fixed_side:
+            window = _fixed_window(img_tensor, tile, int(fixed_side))
+            if window is not None:
+                tile_input, core_top, core_left = window
+                return self._infer_tile(
+                    tile_input,
+                    tile,
+                    model_info,
+                    device,
+                    precision,
+                    model,
+                    core_top,
+                    core_left,
+                    float_output=float_output,
+                )
+
         tile_input = img_tensor[
             :, tile.halo_y : tile.halo_y + tile.halo_h, tile.halo_x : tile.halo_x + tile.halo_w
         ]
@@ -406,6 +500,36 @@ class InferenceEngine:
                     mode="reflect",
                 )
 
+        return self._infer_tile(
+            tile_input,
+            tile,
+            model_info,
+            device,
+            precision,
+            model,
+            halo,
+            halo,
+            float_output=float_output,
+        )
+
+    def _infer_tile(
+        self,
+        tile_input: torch.Tensor,
+        tile,
+        model_info,
+        device: torch.device,
+        precision: torch.dtype,
+        model,
+        core_top: int,
+        core_left: int,
+        *,
+        float_output: bool = False,
+    ) -> np.ndarray:
+        """Run one prepared tile input and return its core output.
+
+        ``core_top``/``core_left`` locate the tile's core inside the input; the
+        halo on the regular grid, or a larger offset inside a fixed window.
+        """
         mult = model_info.size_requirements_mult
         min_size = model_info.size_requirements_min
         square = getattr(model_info, "size_requirements_square", False)
@@ -423,7 +547,12 @@ class InferenceEngine:
         if pad_w > 0 or pad_h > 0:
             tile_input = F.pad(tile_input, (0, pad_w, 0, pad_h), mode="replicate")
 
-        tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
+        staging = getattr(model, "input_device", None)
+        if staging is not None:
+            # Core ML reads CPU memory; skip the round trip through the GPU.
+            tile_input_device = tile_input.unsqueeze(0).to(staging, torch.float32)
+        else:
+            tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
 
         hook = None
         architecture = getattr(model_info, "architecture", "").lower()
@@ -436,8 +565,8 @@ class InferenceEngine:
                 scale = model_info.scale
                 core = output[
                     ...,
-                    halo * scale : (halo + tile.core_h) * scale,
-                    halo * scale : (halo + tile.core_w) * scale,
+                    core_top * scale : (core_top + tile.core_h) * scale,
+                    core_left * scale : (core_left + tile.core_w) * scale,
                 ]
                 if architecture == "span":
                     if _span_output_is_unstable(core):
@@ -445,8 +574,8 @@ class InferenceEngine:
                     return
                 source_core = _args[0][
                     ...,
-                    halo : halo + tile.core_h,
-                    halo : halo + tile.core_w,
+                    core_top : core_top + tile.core_h,
+                    core_left : core_left + tile.core_w,
                 ]
                 # Some unstable crops remain inside the nominal range but
                 # introduce large coloured checker patterns on neutral scans.
@@ -490,8 +619,8 @@ class InferenceEngine:
 
         out_core = out_cpu[
             :,
-            halo * scale : out_cpu.shape[1] - halo * scale,
-            halo * scale : out_cpu.shape[2] - halo * scale,
+            core_top * scale : (core_top + tile.core_h) * scale,
+            core_left * scale : (core_left + tile.core_w) * scale,
         ]
 
         if float_output:
@@ -541,6 +670,7 @@ class InferenceEngine:
             try:
                 tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                 total_tiles = len(tiles)
+                self.prepare_tiles(current_tile_size, halo)
 
                 for i, t in enumerate(tiles):
                     if cancel_event.is_set():
@@ -676,6 +806,7 @@ class InferenceEngine:
                 try:
                     tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                     total_tiles = len(tiles)
+                    self.prepare_tiles(current_tile_size, halo)
 
                     for i, t in enumerate(tiles):
                         if cancel_event.is_set():

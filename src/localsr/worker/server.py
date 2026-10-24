@@ -50,6 +50,7 @@ from localsr.protocol.messages import (
     BenchmarkTile,
     CapabilitiesInfo,
     EngineInfo,
+    EngineStatus,
     JobCancelled,
     JobFailed,
     JobStarted,
@@ -465,6 +466,10 @@ class WorkerServer:
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
         """Authenticate and execute the fixed, production-path benchmark."""
+        # Benchmark scores describe the PyTorch device path; a first-use Core
+        # ML conversion inside the warm-up would also distort them.
+        self.engine.neural_engine_enabled = False
+        self.engine.status_callback = None
         workload = str(data.get("workload") or "v1")
         if workload == "v2":
             self._run_benchmark_v2(job_id, data)
@@ -1108,6 +1113,10 @@ class WorkerServer:
 
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
+        self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
+        self.engine.status_callback = lambda message: send_message(
+            EngineStatus(job_id=job_id, message=message)
+        )
 
         face_info = None
         face_model_path = data.get("face_model_path")

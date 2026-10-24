@@ -1165,6 +1165,7 @@
       halo: settings.halo,
       precision: settings.precision,
       safe_memory: settings.safe_memory,
+      neural_engine: settings.neural_engine ?? true,
       deflicker: settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,

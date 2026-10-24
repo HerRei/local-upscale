@@ -298,6 +298,9 @@ pub struct UiSettings {
     #[serde(default = "default_low_memory")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    // Apple silicon: run supported models through Core ML on the Neural Engine.
+    #[serde(default = "default_neural_engine")]
+    pub neural_engine: bool,
     // Direct builds send version, platform and channel after an update check.
     #[serde(default = "default_anonymous_update_count")]
     pub anonymous_update_count: bool,
@@ -344,6 +347,10 @@ fn default_low_memory() -> bool {
     true
 }
 
+fn default_neural_engine() -> bool {
+    true
+}
+
 fn default_hdr_mode() -> String {
     "tone_map".into()
 }
@@ -381,6 +388,7 @@ impl Default for UiSettings {
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            neural_engine: true,
             anonymous_update_count: true,
             enable_face_model: false,
             face_fidelity: 70,
@@ -637,6 +645,8 @@ pub struct StartBatchInput {
     #[serde(default = "default_low_memory")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    #[serde(default = "default_neural_engine")]
+    pub neural_engine: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,

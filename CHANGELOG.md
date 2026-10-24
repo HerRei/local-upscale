@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- On Apple Silicon, Quick photo (SPAN), Real-ESRGAN and JPEG cleanup (FBCNN) run on
+  the Neural Engine, and Best photo (RealPLKSR) runs on the GPU through Core ML,
+  for images and videos alike. On a MacBook Pro M1 Pro that is two to three times
+  as fast per tile with a fraction of the energy. The first job with each model
+  and tile size prepares it once; the app then checks the first tile against the
+  usual result and keeps the GPU path whenever Core ML does not match or is
+  slower. Advanced settings has a switch to turn it off.
+
 ## [0.2.2-beta] - 2026-10-23
 
 Videos compared the way photos are.
