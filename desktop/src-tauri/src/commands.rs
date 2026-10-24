@@ -286,7 +286,7 @@ pub fn save_recipe(
         || (!recipe.video_codec.is_empty()
             && !matches!(
                 recipe.video_codec.as_str(),
-                "av1" | "vp9" | "ffv1" | "h264" | "hevc"
+                "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
             ))
         || recipe
             .jpeg_quality
@@ -766,17 +766,16 @@ fn video_comparison_sources(
             .ok_or_else(|| AppError::Validation("the selected video is no longer queued".into()))?;
         if media.kind != "video" {
             return Err(AppError::Validation(
-                "video comparison is available only for completed video jobs".into(),
+                "video playback is available only for videos".into(),
             ));
         }
-        let output = database
-            .latest_completed_output_for_media(media_id)?
-            .ok_or_else(|| AppError::Validation("this video has no completed output".into()))?;
-        (PathBuf::from(media.path), PathBuf::from(output))
+        // Before a job finishes there is no output: play the source alone.
+        let output = database.latest_completed_output_for_media(media_id)?;
+        (PathBuf::from(media.path), output.map(PathBuf::from))
     };
     let original = fs::canonicalize(original)?;
-    let enhanced = fs::canonicalize(enhanced)?;
-    if !original.is_file() || !enhanced.is_file() {
+    let enhanced = enhanced.map(fs::canonicalize).transpose()?;
+    if !original.is_file() || enhanced.as_ref().is_some_and(|path| !path.is_file()) {
         return Err(AppError::Validation(
             "the original or enhanced video is no longer available".into(),
         ));
@@ -804,13 +803,13 @@ fn video_comparison_sources(
         }
     };
     let original = playback(original)?;
-    let enhanced = playback(enhanced)?;
+    let enhanced = enhanced.map(&mut playback).transpose()?;
     if cancel.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(AppError::Validation(
             "Playback conversion cancelled.".into(),
         ));
     }
-    allow_video_preview_pair(&app.asset_protocol_scope(), &original, &enhanced)?;
+    allow_video_preview_pair(&app.asset_protocol_scope(), &original, enhanced.as_deref())?;
     // WebKitGTK cannot reliably play media through a custom URI scheme.
     // A private loopback stream provides normal HTTP byte-range seeking.
     #[cfg(target_os = "linux")]
@@ -822,14 +821,19 @@ fn video_comparison_sources(
         let server = server.as_ref().expect("media server was initialized");
         (
             Some(server.url_for(&original)?),
-            Some(server.url_for(&enhanced)?),
+            enhanced
+                .as_deref()
+                .map(|path| server.url_for(path))
+                .transpose()?,
         )
     };
     #[cfg(not(target_os = "linux"))]
     let (original_url, enhanced_url) = (None, None);
     Ok(VideoComparisonSources {
         original_path: original.to_string_lossy().into_owned(),
-        enhanced_path: enhanced.to_string_lossy().into_owned(),
+        enhanced_path: enhanced
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         original_url,
         enhanced_url,
         playback_note: if converted {
@@ -852,9 +856,10 @@ pub fn cancel_video_comparison(
 fn allow_video_preview_pair(
     scope: &tauri::scope::fs::Scope,
     original: &Path,
-    enhanced: &Path,
+    enhanced: Option<&Path>,
 ) -> AppResult<()> {
-    // Authorize only these two canonical files for this app session. Tauri's
+    // Authorize only these canonical files (the source, and the result once
+    // there is one) for this app session. Tauri's
     // forbid_file is a permanent deny, not the inverse of allow_file: revoking
     // on selection change prevented every subsequent visit to the same video.
     // The unmounted player releases its media elements; no folder is authorized.
@@ -863,6 +868,9 @@ fn allow_video_preview_pair(
             "could not authorize the original video preview: {error}"
         ))
     })?;
+    let Some(enhanced) = enhanced else {
+        return Ok(());
+    };
     scope.allow_file(enhanced).map_err(|error| {
         AppError::Config(format!(
             "could not authorize the enhanced video preview: {error}"
@@ -1457,7 +1465,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
         || !matches!(
             settings.video_codec.as_str(),
-            "av1" | "vp9" | "ffv1" | "h264" | "hevc"
+            "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
         )
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
@@ -1523,6 +1531,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         video_target_resolution: input.video_target_resolution,
         video_low_memory: input.video_low_memory,
         video_crf: input.video_crf,
+        neural_engine: input.neural_engine,
         enable_face_model: input.enable_face_model,
         face_fidelity: input.face_fidelity,
         enable_live_preview: input.enable_live_preview,
@@ -1762,6 +1771,7 @@ fn build_job_message(
                 "jpeg_quality": input.jpeg_quality,
                 "preserve_metadata": input.preserve_metadata,
                 "safe_memory": input.safe_memory,
+                "neural_engine": input.neural_engine,
                 "preview_enabled": input.enable_live_preview,
                 "preview_max_fps": 2.0,
                 "preview_max_dimension": 320,
@@ -1800,6 +1810,7 @@ fn build_job_message(
                 "halo": input.halo,
                 "precision": input.precision,
                 "safe_memory": input.safe_memory,
+                "neural_engine": input.neural_engine,
                 "keyframe_interval": null,
                 "start_frame": null,
                 "end_frame": null,
@@ -1852,6 +1863,7 @@ fn build_job_message(
                     "halo": input.halo,
                     "precision": input.precision,
                     "safe_memory": input.safe_memory,
+                    "neural_engine": input.neural_engine,
                     "keyframe_interval": null,
                     "start_frame": null,
                     "end_frame": null,
@@ -2159,12 +2171,16 @@ mod tests {
         .collect();
         // Open A, start a job using A's output, inspect B, then return to A.
         for (original, enhanced) in [(0, 1), (1, 2), (0, 1), (1, 2)] {
-            allow_video_preview_pair(&scope, &files[original], &files[enhanced]).unwrap();
+            allow_video_preview_pair(&scope, &files[original], Some(&files[enhanced])).unwrap();
             assert!(scope.is_allowed(&files[original]));
             assert!(scope.is_allowed(&files[enhanced]));
             assert!(!scope.is_allowed(&files[3]));
             assert!(!scope.is_allowed(directory.path()));
         }
+        // An unfinished video authorizes only its source.
+        allow_video_preview_pair(&scope, &files[3], None).unwrap();
+        assert!(scope.is_allowed(&files[3]));
+        assert!(!scope.is_allowed(directory.path()));
         assert!(scope.forbidden_patterns().is_empty());
     }
 
@@ -2196,6 +2212,7 @@ mod tests {
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            neural_engine: true,
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,
@@ -2349,6 +2366,7 @@ mod tests {
         assert_eq!(message["data"]["scratch_directory"], "/app-owned/work");
         assert_eq!(message["data"]["stages"].as_array().unwrap().len(), 1);
         assert_eq!(message["data"]["stages"][0]["kind"], "upscale");
+        assert_eq!(message["data"]["neural_engine"], true);
 
         // Probed average FPS is metadata, not a request to retime a VFR clip.
         let mut video = media.clone();
@@ -2365,6 +2383,19 @@ mod tests {
         .unwrap();
         assert_eq!(video_message["type"], "video_job_request");
         assert!(video_message["data"]["fps"].is_null());
+        assert_eq!(video_message["data"]["neural_engine"], true);
+        let mut without_neural_engine = input("video");
+        without_neural_engine.neural_engine = false;
+        let gpu_message = build_job_message(
+            "gpu-job",
+            &video,
+            Path::new("/output/gpu.mp4"),
+            Path::new("/app-owned/work"),
+            &without_neural_engine,
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(gpu_message["data"]["neural_engine"], false);
         assert_eq!(video_message["data"]["hdr_mode"], "tone_map");
         let mut hdr_input = input("video");
         hdr_input.video_hdr_mode = "preserve".into();
@@ -2412,6 +2443,16 @@ mod tests {
         .unwrap();
         assert_eq!(smaller_message["data"]["target_resolution"], 512);
         assert_eq!(smaller_message["data"]["video_low_memory"], false);
+        let mut old_settings = serde_json::to_value(UiSettings::default()).unwrap();
+        old_settings
+            .as_object_mut()
+            .unwrap()
+            .remove("neural_engine");
+        assert!(
+            serde_json::from_value::<UiSettings>(old_settings)
+                .unwrap()
+                .neural_engine
+        );
         let mut old_memory_settings = serde_json::to_value(UiSettings::default()).unwrap();
         old_memory_settings
             .as_object_mut()

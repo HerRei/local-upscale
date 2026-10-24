@@ -1327,6 +1327,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_apple_gpu_reports_whether_the_neural_engine_is_available() {
+        let mut reported = serde_json::json!({
+            "id": "mps",
+            "type": "mps",
+            "name": "Apple GPU (Metal)",
+            "total_memory": 1,
+            "free_memory": 1,
+            "supports_fp16": true,
+            "recommended_tile_sizes": [256],
+            "neural_engine": true
+        });
+        assert!(
+            serde_json::from_value::<DeviceInfo>(reported.clone())
+                .unwrap()
+                .neural_engine
+        );
+        reported.as_object_mut().unwrap().remove("neural_engine");
+        assert!(
+            !serde_json::from_value::<DeviceInfo>(reported)
+                .unwrap()
+                .neural_engine
+        );
+    }
+
+    #[test]
     fn a_new_installation_starts_on_the_gpu_but_not_on_directml() {
         let device = |id: &str| DeviceInfo {
             id: id.into(),

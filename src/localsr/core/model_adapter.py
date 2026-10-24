@@ -174,7 +174,13 @@ class ModelAdapter:
         )
 
     def load(
-        self, path: str, device: torch.device, precision: torch.dtype, *, onnx_device_index=None
+        self,
+        path: str,
+        device: torch.device,
+        precision: torch.dtype,
+        *,
+        onnx_device_index=None,
+        coreml_units: tuple[str, ...] = (),
     ):
         normalized_path = os.path.abspath(path)
         if self.parsed is None or self.parsed_path != normalized_path:
@@ -192,6 +198,17 @@ class ModelAdapter:
             from .onnx_runtime import OnnxImageDescriptor
 
             return OnnxImageDescriptor(descriptor, device_index=onnx_device_index), self.parsed
+        if coreml_units:
+            from .coreml_runtime import CoreMLImageDescriptor, checkpoint_identity
+
+            # The PyTorch descriptor stays on the GPU as the gate's reference
+            # and as the fallback for anything Core ML cannot run.
+            return (
+                CoreMLImageDescriptor(
+                    descriptor, units=coreml_units, identity=checkpoint_identity(normalized_path)
+                ),
+                self.parsed,
+            )
         if device.type == "privateuseone":
             return _DirectMLDescriptor(descriptor), self.parsed
         return descriptor, self.parsed

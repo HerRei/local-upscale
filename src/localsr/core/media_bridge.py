@@ -117,6 +117,23 @@ def implicit_user_ffmpeg(*, refresh: bool = False) -> ExternalFFmpeg | None:
         return found
 
 
+def automatic_video_codec(bridge: MediaBridge | None, container: str, hdr_mode: str) -> str:
+    """The fastest export this computer offers for the "Automatic" video format.
+
+    The system's hardware HEVC encoder (macOS, MP4/MOV, SDR) receives frames as
+    they are restored; everywhere else LocalSR's own AV1 encoder is used.
+    """
+    system = bridge.system if bridge is not None else None
+    if system is not None and hdr_mode != "preserve":
+        try:
+            system.encoder_for("hevc", container=container)
+        except SystemCodecsError:
+            pass
+        else:
+            return "hevc"
+    return "av1"
+
+
 def load_media_bridge(user_path: str | None) -> MediaBridge | None:
     """The available converters: the system codecs, then the user's or a found FFmpeg."""
     user = user_ffmpeg.load_external_ffmpeg(user_path) or implicit_user_ffmpeg()

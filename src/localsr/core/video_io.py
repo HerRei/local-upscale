@@ -417,6 +417,49 @@ def validate_hdr_encoder(video_codec: str = "av1", external_ffmpeg=None) -> None
         raise VideoStageError("HDR encode", str(error)) from error
 
 
+def _system_stream_export(
+    frames,
+    destination: Path,
+    *,
+    system,
+    video_codec: str,
+    container_format: str,
+    crf: int,
+    fps: float,
+    audio_source: str | None,
+    cancel_event: threading.Event | None,
+    temporary_directory: str | None,
+) -> str:
+    """Pipe restored frames to the system encoder while the next ones are restored."""
+    final = _owned_output_temporary(destination, "external", temporary_directory)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="localsr-media-", dir=destination.parent
+        ) as scratch:
+            wav = (
+                system.source_audio(Path(audio_source), Path(scratch) / "audio.wav", cancel_event)
+                if audio_source
+                else None
+            )
+            system.encode_frames(
+                frames,
+                final,
+                video_codec=video_codec,
+                container=container_format,
+                crf=crf,
+                fps=fps,
+                audio=wav,
+                cancel_event=cancel_event,
+            )
+        os.replace(final, destination)
+        return str(destination)
+    finally:
+        try:
+            final.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _external_export(
     frames,
     destination: Path,
@@ -434,7 +477,39 @@ def _external_export(
     temporary_directory: str | None,
     **master_options,
 ) -> str:
-    """Encode an FFV1 master, then let the user's FFmpeg write H.264/HEVC."""
+    """Encode an FFV1 master, then let the user's FFmpeg write H.264/HEVC.
+
+    With the system's own encoders, a whole untrimmed SDR clip skips the master
+    and streams straight into the hardware encoder instead.
+    """
+    system = getattr(external_ffmpeg, "system", None)
+    if (
+        system is not None
+        and not hdr_format
+        and master_options.get("stream_to_system", False)
+        and width % 2 == 0
+        and height % 2 == 0
+    ):
+        from .system_codecs import SystemCodecsError
+
+        try:
+            system.encoder_for(video_codec, container=container_format)
+        except SystemCodecsError:
+            pass
+        else:
+            return _system_stream_export(
+                frames,
+                destination,
+                system=system,
+                video_codec=video_codec,
+                container_format=container_format,
+                crf=crf,
+                fps=fps,
+                audio_source=master_options.get("audio_source"),
+                cancel_event=cancel_event,
+                temporary_directory=temporary_directory,
+            )
+    master_options.pop("stream_to_system", None)
     if external_ffmpeg is None:
         raise VideoStageError(
             "encode",
@@ -511,14 +586,17 @@ def encode_video(
     external_ffmpeg=None,
     fast: bool = False,
     stage_callback: Callable[[str], None] | None = None,
+    stream_to_system: bool = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
     The enhanced picture is encoded to an app-owned temporary container, then
     remuxed with source audio/subtitles. Compatible audio streams are copied;
     audio the container cannot carry is converted to Opus. H.264/HEVC exports
-    are delegated to the user's own FFmpeg from a lossless FFV1 master. The
-    final destination appears only through one atomic replace.
+    are delegated to the user's own FFmpeg from a lossless FFV1 master; with
+    ``stream_to_system`` (a whole, untrimmed clip of timed frames) the system's
+    hardware encoder receives the frames directly. The final destination appears
+    only through one atomic replace.
     """
     container_format = normalize_container(container_format)
     if hdr_format:
@@ -547,6 +625,7 @@ def encode_video(
             warning_callback=warning_callback,
             sdr_bt709=sdr_bt709,
             encoder_threads=encoder_threads,
+            stream_to_system=stream_to_system and preserve_timing,
         )
     spec = encode_spec(
         video_codec, crf=crf, hdr=bool(hdr_format), threads=encoder_threads, fast=fast

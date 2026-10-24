@@ -131,6 +131,22 @@ describe('desktop state', () => {
     expect(snapshot.runtime.result_preview_data_url).toBe('');
   });
 
+  it('shows which engine runs the active job', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'job-1' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'engine_status',
+      data: { job_id: 'job-1', message: 'SPAN runs on the Neural Engine.' },
+    });
+    expect(snapshot.runtime.status_title).toBe('Processing');
+    expect(snapshot.runtime.status_detail).toBe('SPAN runs on the Neural Engine.');
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'engine_status',
+      data: { job_id: 'stale-job', message: 'Preparing HAT for Core ML.' },
+    });
+    expect(snapshot.runtime.status_detail).toBe('SPAN runs on the Neural Engine.');
+  });
+
   it('shows temporal phases without inventing a tile count or first-clip ETA', () => {
     let snapshot = applyWorkerEnvelope(demoSnapshot(), {
       type: 'job_started',

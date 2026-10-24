@@ -156,6 +156,9 @@ pub struct DeviceInfo {
     #[serde(default)]
     pub is_integrated: bool,
     pub recommended_tile_sizes: Vec<u32>,
+    // Apple GPU: supported models can also run through Core ML on the Neural Engine.
+    #[serde(default)]
+    pub neural_engine: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -288,6 +291,9 @@ pub struct UiSettings {
     // Royalty-free AV1/VP9/FFV1 are bundled; H.264/HEVC use the user's FFmpeg.
     #[serde(default = "default_video_codec")]
     pub video_codec: String,
+    // Set once the old AV1 default has moved to "auto"; false in older files.
+    #[serde(default)]
+    pub automatic_video_format: bool,
     // An FFmpeg executable the user installed; LocalSR never bundles one.
     #[serde(default)]
     pub external_ffmpeg_path: String,
@@ -298,6 +304,9 @@ pub struct UiSettings {
     #[serde(default = "default_low_memory")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    // Apple silicon: run supported models through Core ML on the Neural Engine.
+    #[serde(default = "default_neural_engine")]
+    pub neural_engine: bool,
     // Direct builds send version, platform and channel after an update check.
     #[serde(default = "default_anonymous_update_count")]
     pub anonymous_update_count: bool,
@@ -344,12 +353,17 @@ fn default_low_memory() -> bool {
     true
 }
 
+fn default_neural_engine() -> bool {
+    true
+}
+
 fn default_hdr_mode() -> String {
     "tone_map".into()
 }
 
 pub(crate) fn default_video_codec() -> String {
-    "av1".into()
+    // The worker picks the fastest format the computer can write.
+    "auto".into()
 }
 
 impl Default for UiSettings {
@@ -376,11 +390,13 @@ impl Default for UiSettings {
             deflicker_window: 3,
             video_container: "mp4".into(),
             video_codec: default_video_codec(),
+            automatic_video_format: true,
             external_ffmpeg_path: String::new(),
             video_hdr_mode: default_hdr_mode(),
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            neural_engine: true,
             anonymous_update_count: true,
             enable_face_model: false,
             face_fidelity: 70,
@@ -637,6 +653,8 @@ pub struct StartBatchInput {
     #[serde(default = "default_low_memory")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    #[serde(default = "default_neural_engine")]
+    pub neural_engine: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,

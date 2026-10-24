@@ -17,7 +17,8 @@ struct SettingsDocument {
 }
 
 pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
-    if let Some(document) = read_document(&paths.settings) {
+    if let Some(mut document) = read_document(&paths.settings) {
+        adopt_automatic_video_format(&mut document.ui);
         return (document.ui, document.recipes);
     }
 
@@ -31,6 +32,17 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
         }
     }
     (settings, Vec::new())
+}
+
+/// AV1 was the default before "auto" picked the fastest encoder (the Mac's
+/// hardware HEVC). Move that default once; a later explicit AV1 choice stays.
+fn adopt_automatic_video_format(settings: &mut UiSettings) {
+    if !settings.automatic_video_format {
+        if settings.video_codec == "av1" {
+            settings.video_codec = "auto".into();
+        }
+        settings.automatic_video_format = true;
+    }
 }
 
 fn read_document(path: &Path) -> Option<SettingsDocument> {
@@ -182,6 +194,25 @@ mod tests {
         save(&paths, &changed, &recipes).unwrap();
         let (loaded, _) = load(&paths);
         assert_eq!(loaded.output_scale, 2);
+    }
+
+    #[test]
+    fn the_old_av1_default_becomes_automatic_once() {
+        let mut older: UiSettings = serde_json::from_value(serde_json::json!({
+            "video_codec": "av1"
+        }))
+        .unwrap();
+        assert!(!older.automatic_video_format);
+        adopt_automatic_video_format(&mut older);
+        assert_eq!(older.video_codec, "auto");
+        older.video_codec = "av1".into();
+        adopt_automatic_video_format(&mut older);
+        assert_eq!(older.video_codec, "av1");
+        let mut vp9: UiSettings =
+            serde_json::from_value(serde_json::json!({ "video_codec": "vp9" })).unwrap();
+        adopt_automatic_video_format(&mut vp9);
+        assert_eq!(vp9.video_codec, "vp9");
+        assert_eq!(UiSettings::default().video_codec, "auto");
     }
 
     #[test]

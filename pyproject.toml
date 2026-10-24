@@ -28,6 +28,10 @@ dependencies = [
     "tifffile>=2023.0.0",
     "av>=12.0.0",
     "psutil>=7.0.0",
+    # Apple silicon: converts supported checkpoints for Core ML (Neural Engine).
+    "coremltools>=9.0,<10; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Runs those programs without holding the GIL, so decoding and encoding overlap.
+    "pyobjc-framework-CoreML>=12.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 requires-python = ">=3.11"
 

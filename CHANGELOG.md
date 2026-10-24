@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- On Apple Silicon, Quick photo (SPAN), Real-ESRGAN and JPEG cleanup (FBCNN) run on
+  the Neural Engine, and Best photo (RealPLKSR) runs on the GPU through Core ML,
+  for images and videos alike. On a MacBook Pro M1 Pro that is two to three times
+  as fast per tile with a fraction of the energy. The first job with each model
+  and tile size prepares it once; the app then checks the first tile against the
+  usual result and keeps the GPU path whenever Core ML does not match or is
+  slower. Hardware lists the Neural Engine as its own entry, the default on Macs
+  that support it; Apple GPU (Metal) keeps everything on the GPU. Before a job, the
+  status bar names the unit the selected model will use.
+- Videos upscale about twice as fast on the Neural Engine: Quick runs each frame in
+  one call instead of tiles, and decoding, upscaling and encoding overlap.
+- A new *Automatic* video format, now the default, hands frames straight to the
+  Mac's hardware HEVC encoder while the next ones are upscaled, and uses AV1
+  elsewhere. A 15-second iPhone clip at 4× took 2 minutes instead of 5 on an
+  M1 Pro.
+- Videos play in the preview before they are upscaled, with the same controls as a
+  finished comparison.
+
+### Fixed
+
+- The zoom controls beside the video playback bar no longer disappear and leave a
+  gap when the pointer leaves the video.
+
 ## [0.2.2-beta] - 2026-10-23
 
 Videos compared the way photos are.

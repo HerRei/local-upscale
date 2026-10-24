@@ -31,6 +31,7 @@ def main() -> int:
         check=False,
     )
     message_types = []
+    devices = []
     for line in completed.stdout.splitlines():
         try:
             message = json.loads(line)
@@ -38,6 +39,8 @@ def main() -> int:
             continue
         if isinstance(message, dict):
             message_types.append(message.get("type"))
+            if message.get("type") == "capabilities_info":
+                devices = message.get("data", {}).get("devices", [])
 
     required = {"worker_ready", "capabilities_info"}
     if completed.returncode != 0 or not required.issubset(message_types):
@@ -46,6 +49,15 @@ def main() -> int:
         print(
             f"Worker smoke test failed (exit {completed.returncode}, messages {message_types}).",
             file=sys.stderr,
+        )
+        return 1
+    # The frozen worker must keep Core ML's native module on Apple silicon;
+    # coremltools would otherwise import without it and silently disable it.
+    mps = next((device for device in devices if device.get("id") == "mps"), None)
+    if mps is not None and not mps.get("neural_engine"):
+        print(completed.stderr, file=sys.stderr)
+        print(
+            "The packaged worker cannot load Core ML (coremltools native module).", file=sys.stderr
         )
         return 1
     print("Packaged worker startup, capability IPC, and shutdown succeeded.")

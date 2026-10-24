@@ -37,6 +37,7 @@ model_formats
 mps_driver_allocated_memory
 mps_recommended_max_memory
 mps_tensor_allocated_memory
+neural_engine
 oom
 output_temporary_directory
 p05_ms

@@ -60,6 +60,43 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   never sit in unified memory at once. SeedVR2 3B FP16 runs on MPS; FP8 needs
   CUDA or ROCm. H.264, HEVC and AAC decode and encode through the system codecs
   ([media formats](licensing-media.md)).
+- **Neural Engine (Core ML).** On Apple Silicon, SPAN, Real-ESRGAN (RRDBNet) and
+  FBCNN run through Core ML on the Neural Engine, and RealPLKSR runs on the GPU
+  through Core ML, whose program is faster than MPS for it. Every other model keeps
+  MPS: HAT, SwinIR and NAFNet produce broken FP16 output and SCUNet does not convert.
+  The first job with a model and tile size converts the checkpoint into an FP16 Core
+  ML program (1 to 40 seconds and up to about 4 GB of memory for RealPLKSR on an M1
+  Pro), compiles it and caches it in
+  `~/Library/Caches/LocalSR/coreml`; the program never leaves the Mac. Its first tile
+  then runs both ways. Core ML is kept only if it matches the PyTorch result (at
+  least 45 dB PSNR) and is not more than 1.3× slower than MPS, or not slower at all
+  for the GPU program; the verdict is stored per Mac, macOS version and toolchain,
+  and anything that fails, times out or errors keeps MPS. Each model runs at one
+  fixed input size, so edge tiles get a full window of neighbouring pixels instead
+  of padding. Tiles larger than 512 px with a 32 px halo (16 px for Real-ESRGAN,
+  whose conversion needs too much memory beyond that) and the benchmark keep MPS.
+  This is the *Neural Engine* entry under Hardware, the default on Macs where Core
+  ML is available (it is not listed elsewhere); the status bar names the unit the
+  selected model will use, or says the model is unsupported on the Neural Engine.
+  *Apple GPU (Metal)* keeps every model on MPS, and `LOCALSR_DISABLE_COREML=1` does
+  the same for the worker and the command line.
+  Measured on the M1 Pro (2026-10-24, 256 px tiles): per tile, SPAN ran 2.0× as
+  fast as MPS FP32, Real-ESRGAN anime 6B 3.4×, FBCNN 2.4× and RealPLKSR 1.3×.
+  Whole images match the MPS output at 52 to 62 dB for SPAN, Real-ESRGAN and FBCNN
+  (FP16 rounding) and 46 dB for RealPLKSR, where the edge windows differ most. Against
+  an untiled reference the Core ML path is the closer one for RealPLKSR and
+  Real-ESRGAN, because their receptive field exceeds the halo.
+- **Video on the Neural Engine.** Frames of a video share one size, so SPAN runs
+  each frame in one Core ML call (a rectangular program converted once per frame
+  size) instead of overlapping tiles. Programs run through Core ML's Objective-C
+  API (PyObjC), which releases Python's GIL, unlike coremltools; decoding,
+  restoring and encoding then overlap on separate threads. The *Automatic* video
+  format, the default, streams frames straight into the Mac's hardware HEVC
+  encoder (VideoToolbox, MP4, SDR) without the lossless intermediate the H.264/HEVC
+  exports otherwise use; MKV, HDR preservation and trimmed clips keep AV1 or the
+  intermediate. No Apple chip encodes AV1 in hardware. Measured on the M1 Pro with
+  a 15-second 720×1280 iPhone clip upscaled 4× with SPAN (461 frames): 1.58 frames
+  per second with tiles and AV1 before, 3.6 now (2 minutes 8 seconds).
 - **DirectML.** Any DXGI adapter with D3D12 support can be selected; only the
   UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
   DirectML implementation.

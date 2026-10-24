@@ -588,6 +588,82 @@ class SystemCodecs:
                 if count == 0:
                     raise SystemCodecsError("The master video contains no frames.")
 
+    def encode_frames(
+        self,
+        frames,
+        destination: Path,
+        *,
+        video_codec: str,
+        container: str,
+        crf: int,
+        fps: float,
+        audio: Path | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> int:
+        """Stream timed RGB frames straight into the system's hardware encoder.
+
+        Unlike ``transcode_output`` there is no lossless master: each frame is
+        converted to NV12 and piped to the helper as soon as it is restored.
+        """
+        self.encoder_for(video_codec, container=container)
+        arguments = [
+            "encode",
+            "--output",
+            str(destination),
+            "--codec",
+            video_codec,
+            "--quality",
+            f"{_quality(crf):.3f}",
+        ]
+        if audio is not None:
+            arguments += ["--audio", str(audio)]
+        with self._process(arguments, stdin=True) as process:
+            stdin = process.stdin
+            assert stdin is not None
+            count = 0
+            origin = None
+            try:
+                for frame in frames:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError("video job cancelled")
+                    height, width = frame.rgb.shape[:2]
+                    if origin is None:
+                        origin = frame.timestamp
+                        timescale = frame.time_base.denominator
+                        header = {
+                            "stream": STREAM_TAG,
+                            "width": width,
+                            "height": height,
+                            "format": "nv12",
+                            "timescale": timescale,
+                            "full_range": False,
+                            "color": {},
+                            "fps": float(fps) if fps and fps > 0 else 0.0,
+                        }
+                        stdin.write(json.dumps(header).encode("utf-8") + b"\n")
+                    pts = int(round((frame.timestamp - origin) * timescale))
+                    picture = av.VideoFrame.from_ndarray(frame.rgb, format="rgb24")
+                    payload = payload_from_frame(picture, "nv12")
+                    stdin.write(FRAME_HEADER.pack(pts, 0, len(payload)))
+                    stdin.write(payload)
+                    count += 1
+                stdin.close()
+            except BrokenPipeError:
+                self._wait(process, cancel_event, f"{video_codec.upper()} export")
+                raise self._failure(process, f"{video_codec.upper()} export") from None
+            self._wait(process, cancel_event, f"{video_codec.upper()} export")
+            if process.returncode != 0:
+                raise self._failure(process, f"{video_codec.upper()} export")
+            if count == 0:
+                raise SystemCodecsError("The inference pipeline produced no frames.")
+            return count
+
+    def source_audio(
+        self, source: Path, wav: Path, cancel_event: threading.Event | None
+    ) -> Path | None:
+        """Decode a source's audio to PCM WAV aligned to its video, for ``encode_frames``."""
+        return self._master_audio(source, wav, cancel_event)
+
     @staticmethod
     def _master_audio(source: Path, wav: Path, cancel_event: threading.Event | None) -> Path | None:
         """Decode the master's audio to 16-bit PCM WAV, aligned to the video's start."""
@@ -595,8 +671,12 @@ class SystemCodecs:
             audio = next((stream for stream in master.streams if stream.type == "audio"), None)
             if audio is None:
                 return None
-            video = master.streams.video[0]
-            video_start = float((video.start_time or 0) * (video.time_base or Fraction(1, 1000)))
+            video = next((stream for stream in master.streams if stream.type == "video"), None)
+            video_start = (
+                float((video.start_time or 0) * (video.time_base or Fraction(1, 1000)))
+                if video is not None
+                else 0.0
+            )
             channels = 1 if audio.codec_context.layout.nb_channels == 1 else 2
             rate = int(audio.rate or 48000)
             resampler = av.AudioResampler(

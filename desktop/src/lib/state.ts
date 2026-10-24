@@ -647,6 +647,10 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.status_title = 'Could not finish';
       next.runtime.status_detail = String(data.error_message ?? 'Unknown worker error.');
       break;
+    case 'engine_status':
+      if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
+      next.runtime.status_detail = String(data.message ?? '');
+      break;
     case 'warning':
       next.runtime.status_title = 'Warning';
       next.runtime.status_detail = String(data.message ?? 'The engine reported a warning.');

@@ -180,6 +180,8 @@ export interface DeviceInfo {
   supports_fp16: boolean;
   is_integrated: boolean;
   recommended_tile_sizes: number[];
+  /** Apple GPU entries: supported models can also run through Core ML on the Neural Engine. */
+  neural_engine?: boolean;
 }
 
 /** Programs that open and write the formats LocalSR's own runtime omits. */
@@ -249,7 +251,7 @@ export interface Recipe {
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
-export type VideoCodec = 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
+export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
 
 export interface RecipeStage {
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
@@ -275,6 +277,7 @@ export interface UiSettings {
   halo: number;
   precision: string;
   safe_memory: boolean;
+  neural_engine?: boolean;
   deflicker: boolean;
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';
@@ -282,6 +285,8 @@ export interface UiSettings {
   video_low_memory?: boolean;
   video_container: 'mp4' | 'mkv';
   video_codec: VideoCodec;
+  /** Set once the old AV1 default moved to 'auto'; kept so it is not repeated. */
+  automatic_video_format?: boolean;
   external_ffmpeg_path: string;
   video_crf: number;
   /** Direct builds send version, platform and channel after an update check. Defaults to true. */
@@ -441,6 +446,7 @@ export interface VideoComparisonProgress {
 export interface VideoComparisonSources {
   playback_note?: string;
   original_url: string;
+  /** Empty while the video has no finished result; only the source plays. */
   enhanced_url: string;
 }
 
@@ -482,6 +488,7 @@ export interface StartBatchInput {
   halo: number;
   precision: string;
   safe_memory: boolean;
+  neural_engine?: boolean;
   deflicker: boolean;
   deflicker_window: number;
   video_hdr_mode?: 'tone_map' | 'preserve';

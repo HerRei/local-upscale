@@ -2,6 +2,7 @@
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
   import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
+  import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import type {
     CapabilityInfo,
     CatalogModel,
@@ -21,7 +22,13 @@
   let advanced = false;
   let ffmpegNote = '';
 
-  $: codec = settings.video_codec ?? 'av1';
+  $: codec = settings.video_codec ?? 'auto';
+  // Mirrors automatic_video_codec in the worker: the Mac's hardware HEVC
+  // encoder for SDR MP4, LocalSR's AV1 otherwise.
+  $: automaticHardware =
+    Boolean(system) &&
+    (settings.video_container ?? 'mp4') === 'mp4' &&
+    settings.video_hdr_mode !== 'preserve';
   $: editSizeAllowed = editSizeLimit(capabilities, editDevice(capabilities, settings));
   $: externalCodec = codec === 'h264' || codec === 'hevc';
   $: system = systemCodecs(capabilities);
@@ -174,8 +181,10 @@
             id="video-codec"
             value={codec}
             on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
-            ><option value="av1">AV1 · recommended</option><option value="vp9">VP9</option><option
-              value="ffv1">FFV1 · lossless, MKV</option
+            ><option value="auto"
+              >Automatic · {automaticHardware ? 'HEVC, hardware encoder' : 'AV1'}</option
+            ><option value="av1">AV1</option><option value="vp9">VP9</option><option value="ffv1"
+              >FFV1 · lossless, MKV</option
             ><option value="h264">H.264 · {codecSuffix}</option><option value="hevc"
               >HEVC · {codecSuffix}</option
             ></select
@@ -278,9 +287,16 @@
           id="device"
           value={settings.task === 'edit'
             ? (editDevice(capabilities, settings)?.id ?? '')
-            : settings.device_id}
-          on:change={(event) => updateSettings({ device_id: event.currentTarget.value })}
-          >{#each settings.task === 'edit' ? editingDevices(capabilities) : capabilities.devices as device}<option
+            : usingTemporalVideo
+              ? settings.device_id
+              : selectedHardware(settings, capabilities)}
+          on:change={(event) =>
+            updateSettings(
+              settings.task === 'edit' || usingTemporalVideo
+                ? { device_id: event.currentTarget.value }
+                : hardwarePatch(event.currentTarget.value),
+            )}
+          >{#each settings.task === 'edit' ? editingDevices(capabilities) : usingTemporalVideo ? capabilities.devices : hardwareChoices(capabilities) as device}<option
               value={device.id}>{device.name}</option
             >{/each}</select
         >

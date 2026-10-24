@@ -44,6 +44,7 @@
     resultPreviewForSelectedMedia,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
+  import { engineLabel } from './lib/neuralEngine';
   import type {
     AppSnapshot,
     BenchmarkDeviceResult,
@@ -408,7 +409,14 @@
       ? `${selectedMedia.width} × ${selectedMedia.height} → ${outputDimensions} · ${
           settings.task === 'edit'
             ? (editingDevice?.name ?? 'no supported GPU')
-            : (activeDevice?.name ?? 'detecting hardware')
+            : usingTemporalVideo
+              ? (activeDevice?.name ?? 'detecting hardware')
+              : engineLabel(
+                  settings,
+                  snapshot.capabilities,
+                  selectedModel?.architecture,
+                  activeDevice?.name ?? 'detecting hardware',
+                )
         }`
       : '';
   $: taskCaption = !settings.task
@@ -1165,10 +1173,11 @@
       halo: settings.halo,
       precision: settings.precision,
       safe_memory: settings.safe_memory,
+      neural_engine: settings.neural_engine ?? true,
       deflicker: settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
-      video_codec: settings.video_codec ?? 'av1',
+      video_codec: settings.video_codec ?? 'auto',
       external_ffmpeg_path: settings.external_ffmpeg_path ?? '',
       video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
       video_target_resolution: settings.video_target_resolution ?? 0,
@@ -1283,7 +1292,7 @@
       deflicker: settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
-      video_codec: settings.video_codec ?? 'av1',
+      video_codec: settings.video_codec ?? 'auto',
       video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
       video_target_resolution: settings.video_target_resolution ?? 0,
       video_low_memory: settings.video_low_memory ?? true,
@@ -1419,7 +1428,7 @@
       deflicker: recipe.deflicker ?? settings.deflicker,
       deflicker_window: recipe.deflicker_window ?? settings.deflicker_window,
       video_container: recipe.video_container || settings.video_container,
-      video_codec: recipe.video_codec || settings.video_codec || 'av1',
+      video_codec: recipe.video_codec || settings.video_codec || 'auto',
       external_ffmpeg_path: settings.external_ffmpeg_path ?? '',
       video_hdr_mode: recipe.video_hdr_mode ?? 'tone_map',
       video_target_resolution: recipe.video_target_resolution ?? 0,

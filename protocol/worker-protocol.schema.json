@@ -156,7 +156,8 @@
         "allow_unverified_checkpoint": { "type": ["boolean", "null"] },
         "preview_enabled": { "type": "boolean" },
         "preview_max_fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
-        "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 }
+        "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 },
+        "neural_engine": { "type": "boolean" }
       }
     },
     "pipelineStage": {
@@ -233,7 +234,7 @@
                     "hdr_mode": { "enum": ["reject", "tone_map"], "default": "reject" },
                     "output_video_path": { "type": "string", "minLength": 1 },
                     "container": { "enum": ["mp4", "mkv"] },
-                    "video_codec": { "enum": ["av1", "vp9", "ffv1", "h264", "hevc"], "default": "av1" },
+                    "video_codec": { "enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc"], "default": "av1" },
                     "external_ffmpeg": { "type": "string" },
                     "crf": { "type": "integer", "minimum": 0, "maximum": 51 },
                     "fps": { "type": ["number", "null"], "exclusiveMinimum": 0 },
@@ -346,6 +347,7 @@
                 "live_preview_warning",
                 "log",
                 "warning",
+                "engine_status",
                 "job_completed",
                 "job_cancelled",
                 "job_failed",

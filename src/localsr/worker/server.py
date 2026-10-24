@@ -50,6 +50,7 @@ from localsr.protocol.messages import (
     BenchmarkTile,
     CapabilitiesInfo,
     EngineInfo,
+    EngineStatus,
     JobCancelled,
     JobFailed,
     JobStarted,
@@ -465,6 +466,10 @@ class WorkerServer:
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
         """Authenticate and execute the fixed, production-path benchmark."""
+        # Benchmark scores describe the PyTorch device path; a first-use Core
+        # ML conversion inside the warm-up would also distort them.
+        self.engine.neural_engine_enabled = False
+        self.engine.status_callback = None
         workload = str(data.get("workload") or "v1")
         if workload == "v2":
             self._run_benchmark_v2(job_id, data)
@@ -1076,6 +1081,16 @@ class WorkerServer:
         # stack trace, and frame-by-frame stays available.
         from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
 
+        if data.get("video_codec") == "auto":
+            from localsr.core.media_bridge import automatic_video_codec, load_media_bridge
+
+            codec = automatic_video_codec(
+                load_media_bridge(data.get("external_ffmpeg")),
+                str(data.get("container", "mp4")),
+                str(data.get("hdr_mode", "reject")),
+            )
+            data = {**data, "video_codec": codec}
+            send_message(LogMessage(level="info", message=f"Automatic video format: {codec}"))
         model_kind = str(data.get("model_kind", "spandrel_image"))
         if model_kind == "seedvr2" and str(data.get("device", "")).split(":", 1)[0] in {
             "directml",
@@ -1108,6 +1123,10 @@ class WorkerServer:
 
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
+        self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
+        self.engine.status_callback = lambda message: send_message(
+            EngineStatus(job_id=job_id, message=message)
+        )
 
         face_info = None
         face_model_path = data.get("face_model_path")

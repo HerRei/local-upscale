@@ -21,6 +21,12 @@ These apply to v0.2.2-beta. Please read them before starting a long job.
   before it runs; the Microsoft Store edition, when it ships, is signed by the Store.
 - A working launch does not prove GPU compatibility. Some operators fall back to
   the CPU (for example `aten::roll` on DirectML), and drivers vary.
+- On Apple Silicon, the first job with a Neural Engine model (Quick photo, Real-ESRGAN,
+  JPEG cleanup, Best photo) and tile size spends up to about a minute preparing it,
+  using up to about 4 GB of memory while it does.
+  Its results differ from the GPU path by FP16 rounding, and only the M1 Pro has
+  been measured; newer Macs choose between the Neural Engine and the GPU on their
+  first tile.
 
 ## Media formats
 
@@ -34,10 +40,11 @@ These apply to v0.2.2-beta. Please read them before starting a long job.
   them; Windows and Linux would need an HEVC decoder LocalSR does not ship.
   Animated GIFs and HEIC bursts use their first image, and camera RAW files
   other than DNG lose their EXIF date and author.
-- The default video export is AV1. Some older players and editors cannot open it;
-  VP9 and lossless FFV1 are built in. H.264/HEVC export uses macOS's encoders
-  (MP4 only) or your FFmpeg, from a temporary lossless copy that needs extra
-  disk space.
+- The default video format, Automatic, writes HEVC with the Mac's hardware encoder
+  for SDR MP4 exports and AV1 everywhere else. Some older players and editors cannot
+  open AV1; VP9 and lossless FFV1 are built in. Choosing H.264/HEVC explicitly uses
+  macOS's encoders (MP4 only) or your FFmpeg, from a temporary lossless copy that
+  needs extra disk space, except whole clips on macOS, which stream straight in.
 - Interlacing is deinterlaced only when the file is tagged; untagged interlacing
   and inverse telecine are not detected. DVD menus, disc images and encrypted
   media are out of scope.
