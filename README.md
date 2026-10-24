@@ -44,16 +44,23 @@ canvas, a divider that stops at the edges of the frame, zoom with 1:1, and
 playback controls below the picture. Space plays and pauses.
 [Release notes](docs/releases/v0.2.2-beta.md).
 
+0.3.0 runs Quick photo, Real-ESRGAN and JPEG cleanup on the Mac's Neural
+Engine and Best photo through Core ML on the GPU, two to three times as fast
+with a fraction of the energy. Videos upscale about twice as fast and, with the
+new Automatic format, go straight to the Mac's hardware HEVC encoder. Videos
+also play before they are upscaled.
+[Release notes](docs/releases/v0.3.0-beta.md).
+
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 and instructions for each platform:
 
-- **macOS v0.2.2-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
+- **macOS v0.3.0-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
   by Apple, with signed updates in the app.
-- **Windows v0.2.2-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
+- **Windows v0.3.0-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
   CUDA editions; the GPU editions are labelled untested. Installers are unsigned.
-- **Linux v0.2.2-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
+- **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   ROCm was tested on a Radeon RX 9060 XT with earlier builds; CUDA is untested.
 
 Editing with a prompt is available on the Mac only.

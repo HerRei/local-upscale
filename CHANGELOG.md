@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0-beta] - 2026-10-24
+
+The Neural Engine, and videos twice as fast.
 
 ### Added
 
