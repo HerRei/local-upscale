@@ -1918,9 +1918,12 @@ input[type='text'],
   gap: 8px;
   padding: 0 14px 14px;
 }
+/* In the video bar, zoom sits beside the always-visible transport: fading it
+   on pointer-out left the bar cut short with an empty gap. */
 .video-hud .zoom-hud {
   position: static;
   flex: none;
+  opacity: 1;
 }
 .video-transport {
   flex: 1;
