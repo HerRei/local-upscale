@@ -88,7 +88,7 @@
   ];
   let comparisonView: ComparisonView = 'split';
   let holdingOriginal = false;
-  $: canCompare = Boolean(resultPreview || videoComparison);
+  $: canCompare = Boolean(resultPreview || videoComparison?.enhanced_url);
   $: if (!canCompare) holdingOriginal = false;
   $: shownView = holdingOriginal ? 'original' : comparisonView;
   $: resultClip =
@@ -132,10 +132,16 @@
     selectedMedia?.kind === 'video' &&
     progressiveFrame > 0 &&
     videoSourceFrame !== progressiveFrame;
+  // A finished video plays as a comparison; any other video plays alone. While a
+  // job runs, the stage shows its live tiles instead.
   $: desiredVideoComparisonKey =
-    selectedMedia?.kind === 'video' && completedVideoOutput
-      ? `${selectedMedia.id}:${completedVideoOutput}`
-      : '';
+    selectedMedia?.kind !== 'video'
+      ? ''
+      : completedVideoOutput
+        ? `${selectedMedia.id}:${completedVideoOutput}`
+        : processing || selectedMedia.probe_status !== 'ready'
+          ? ''
+          : `${selectedMedia.id}:source`;
   $: if (desiredVideoComparisonKey !== videoComparisonKey) {
     void loadVideoComparison(desiredVideoComparisonKey);
   }
@@ -653,7 +659,9 @@
       videoComparison = sources;
     } catch (error) {
       if (disposed || requestId !== videoRequestId) return;
-      videoComparisonError = `Completed video comparison is unavailable: ${String(error)}`;
+      videoComparisonError = `${
+        key.endsWith(':source') ? 'Video playback' : 'Completed video comparison'
+      } is unavailable: ${String(error)}`;
     } finally {
       if (requestId === videoRequestId) videoPreparation = false;
     }
@@ -669,7 +677,9 @@
     const request = videoRequestId;
     videoRequestId = '';
     videoPreparation = false;
-    videoComparisonError = 'Playback conversion cancelled. Your saved export is still available.';
+    videoComparisonError = videoComparisonKey.endsWith(':source')
+      ? 'Playback conversion cancelled.'
+      : 'Playback conversion cancelled. Your saved export is still available.';
     if (request) void api.cancelVideoComparison(request).catch(() => {});
   }
 

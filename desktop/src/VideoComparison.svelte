@@ -13,6 +13,7 @@
   } from './lib/viewport';
 
   export let originalSrc: string;
+  // Empty before a job has a result: the source plays alone, without a divider.
   export let enhancedSrc: string;
   // Probed source size; the original's own frame size replaces it once loaded.
   export let sourceWidth = 0;
@@ -24,7 +25,9 @@
   const RATES = [0.5, 1, 1.5, 2];
 
   let viewport: HTMLDivElement;
-  let original: HTMLVideoElement;
+  // Without a result, the source plays in the audible `enhanced` element,
+  // which drives time and playback in both modes; `original` stays unset.
+  let original: HTMLVideoElement | undefined;
   let enhanced: HTMLVideoElement;
   let playing = false;
   let currentTime = 0;
@@ -62,7 +65,14 @@
     { x: panX, y: panY },
     compare,
   );
-  $: clip = view === 'original' ? 100 : view === 'enhanced' ? 0 : comparison.imagePercent;
+  $: single = !enhancedSrc;
+  $: clip = single
+    ? 0
+    : view === 'original'
+      ? 100
+      : view === 'enhanced'
+        ? 0
+        : comparison.imagePercent;
   $: fractional = duration > 0 && duration < 1;
   $: played = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
@@ -211,14 +221,15 @@
     originalLoaded = false;
     enhancedLoaded = false;
     for (const video of [original, enhanced]) {
-      video.pause();
-      video.load();
+      video?.pause();
+      video?.load();
     }
   }
 
   function originalMetadata(): void {
-    frameWidth = original.videoWidth || 0;
-    frameHeight = original.videoHeight || 0;
+    const source = original ?? enhanced;
+    frameWidth = source.videoWidth || 0;
+    frameHeight = source.videoHeight || 0;
     updateDuration();
   }
 
@@ -231,17 +242,17 @@
     try {
       if (!enhanced.paused) {
         enhanced.pause();
-        original.pause();
+        original?.pause();
         playing = false;
         return;
       }
       if (duration > 0 && currentTime >= duration - 0.02) seek(0);
-      original.playbackRate = playbackRate;
+      if (original) original.playbackRate = playbackRate;
       enhanced.playbackRate = playbackRate;
-      await Promise.all([original.play(), enhanced.play()]);
+      await Promise.all([original?.play(), enhanced.play()]);
       playing = true;
     } catch (error) {
-      original.pause();
+      original?.pause();
       enhanced.pause();
       playing = false;
       playbackError = `Playback could not start. Retry the comparison or open the saved file: ${String(error)}`;
@@ -261,6 +272,7 @@
 
   function updateTime(): void {
     currentTime = Math.min(enhanced.currentTime || 0, duration || Number.POSITIVE_INFINITY);
+    if (!original) return;
     const decision = synchronizationDecision(
       enhanced.currentTime,
       original.currentTime,
@@ -274,7 +286,7 @@
 
   function nextRate(): void {
     playbackRate = RATES[(RATES.indexOf(playbackRate) + 1) % RATES.length];
-    original.playbackRate = playbackRate;
+    if (original) original.playbackRate = playbackRate;
     enhanced.playbackRate = playbackRate;
   }
 
@@ -292,10 +304,10 @@
     const video = event.currentTarget as HTMLVideoElement;
     const code = video.error?.code ?? 0;
     playing = false;
-    original.pause();
+    original?.pause();
     enhanced.pause();
     if (code === 3 || code === 4) dispatch('compatibilityneeded');
-    playbackError = `${which} video could not be loaded in this player (media error ${code}). Retry the comparison or open the saved file.`;
+    playbackError = `${single ? 'The' : which} video could not be loaded in this player (media error ${code}). Retry the comparison or open the saved file.`;
   }
 
   onMount(() => {
@@ -321,7 +333,7 @@
 <div
   class="video-comparison"
   role="region"
-  aria-label="Video before and after comparison"
+  aria-label={single ? 'Video playback' : 'Video before and after comparison'}
   on:pointerenter={() => (pointerOver = true)}
   on:pointerleave={() => (pointerOver = false)}
   on:pointerdown|stopPropagation
@@ -347,30 +359,32 @@
       class="image-stage video-stage"
       style={`width:${fitted.width}px;height:${fitted.height}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
     >
-      <video
-        bind:this={original}
-        src={originalSrc}
-        muted
-        playsinline
-        preload="auto"
-        on:loadedmetadata={originalMetadata}
-        on:loadeddata={() => (originalLoaded = true)}
-        on:error={(event) => mediaError('Original', event)}
-      ></video>
+      {#if !single}
+        <video
+          bind:this={original}
+          src={originalSrc}
+          muted
+          playsinline
+          preload="auto"
+          on:loadedmetadata={originalMetadata}
+          on:loadeddata={() => (originalLoaded = true)}
+          on:error={(event) => mediaError('Original', event)}
+        ></video>
+      {/if}
       <div class="enhanced-clip" style={`clip-path: inset(0 0 0 ${clip}%)`}>
         <!-- Captions remain embedded in user media; LocalSR does not invent an external track URL. -->
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
           bind:this={enhanced}
-          src={enhancedSrc}
+          src={single ? originalSrc : enhancedSrc}
           playsinline
           preload="auto"
-          on:loadedmetadata={updateDuration}
+          on:loadedmetadata={single ? originalMetadata : updateDuration}
           on:loadeddata={() => (enhancedLoaded = true)}
           on:timeupdate={updateTime}
           on:ended={() => {
             playing = false;
-            original.pause();
+            original?.pause();
           }}
           on:pause={() => (playing = false)}
           on:play={() => (playing = true)}
@@ -378,23 +392,24 @@
         ></video>
       </div>
     </div>
-    <div
-      class="compare-line"
-      class:held={view !== 'split'}
-      role="slider"
-      tabindex={view === 'split' ? 0 : -1}
-      aria-hidden={view !== 'split'}
-      aria-label="Video before and after comparison"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
-      aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
-      style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
-      on:keydown={compareKeyDown}
-    >
-      <span aria-hidden="true">↔</span>
-    </div>
-    {#if view === 'original'}<span class="original-chip" role="status">Original</span>{/if}
+    {#if !single}<div
+        class="compare-line"
+        class:held={view !== 'split'}
+        role="slider"
+        tabindex={view === 'split' ? 0 : -1}
+        aria-hidden={view !== 'split'}
+        aria-label="Video before and after comparison"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
+        aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
+        style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
+        on:keydown={compareKeyDown}
+      >
+        <span aria-hidden="true">↔</span>
+      </div>{/if}
+    {#if view === 'original' && !single}<span class="original-chip" role="status">Original</span
+      >{/if}
   </div>
   <div class="video-hud">
     <div class="video-transport" role="group" aria-label="Video playback controls">
@@ -402,7 +417,7 @@
         type="button"
         class="transport-play"
         title="Play or pause · Space"
-        aria-label={playing ? 'Pause comparison' : 'Play comparison'}
+        aria-label={`${playing ? 'Pause' : 'Play'} ${single ? 'video' : 'comparison'}`}
         on:click={togglePlayback}
       >
         {#if playing}
@@ -468,11 +483,13 @@
   {#if playbackError}
     <div class="video-error" role="alert">
       <p>{playbackError}</p>
-      <button class="button" type="button" on:click={retryPlayback}>Retry comparison</button>
+      <button class="button" type="button" on:click={retryPlayback}
+        >{single ? 'Retry' : 'Retry comparison'}</button
+      >
     </div>
-  {:else if !originalLoaded || !enhancedLoaded}
+  {:else if (!single && !originalLoaded) || !enhancedLoaded}
     <div class="video-loading" role="status">
-      <i aria-hidden="true"></i>Loading video comparison…
+      <i aria-hidden="true"></i>{single ? 'Loading video…' : 'Loading video comparison…'}
     </div>
   {/if}
 </div>

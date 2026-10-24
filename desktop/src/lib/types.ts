@@ -444,6 +444,7 @@ export interface VideoComparisonProgress {
 export interface VideoComparisonSources {
   playback_note?: string;
   original_url: string;
+  /** Empty while the video has no finished result; only the source plays. */
   enhanced_url: string;
 }
 

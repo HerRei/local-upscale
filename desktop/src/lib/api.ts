@@ -228,7 +228,9 @@ export const prepareVideoComparison = async (
   return {
     playback_note: paths.playback_note,
     original_url: paths.original_url ?? convertFileSrc(paths.original_path),
-    enhanced_url: paths.enhanced_url ?? convertFileSrc(paths.enhanced_path),
+    // Empty before a job finishes: the player then shows the source alone.
+    enhanced_url:
+      paths.enhanced_url ?? (paths.enhanced_path ? convertFileSrc(paths.enhanced_path) : ''),
   };
 };
 export const cancelVideoComparison = (requestId: string): Promise<void> =>
