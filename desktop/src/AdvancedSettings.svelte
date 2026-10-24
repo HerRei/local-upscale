@@ -2,6 +2,7 @@
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
   import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
+  import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import type {
     CapabilityInfo,
     CatalogModel,
@@ -278,9 +279,16 @@
           id="device"
           value={settings.task === 'edit'
             ? (editDevice(capabilities, settings)?.id ?? '')
-            : settings.device_id}
-          on:change={(event) => updateSettings({ device_id: event.currentTarget.value })}
-          >{#each settings.task === 'edit' ? editingDevices(capabilities) : capabilities.devices as device}<option
+            : usingTemporalVideo
+              ? settings.device_id
+              : selectedHardware(settings, capabilities)}
+          on:change={(event) =>
+            updateSettings(
+              settings.task === 'edit' || usingTemporalVideo
+                ? { device_id: event.currentTarget.value }
+                : hardwarePatch(event.currentTarget.value),
+            )}
+          >{#each settings.task === 'edit' ? editingDevices(capabilities) : usingTemporalVideo ? capabilities.devices : hardwareChoices(capabilities) as device}<option
               value={device.id}>{device.name}</option
             >{/each}</select
         >
@@ -336,15 +344,6 @@
             checked={settings.safe_memory}
             on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })}
           /> Safe memory mode</label
-        >{/if}
-      {#if !usingTemporalVideo && settings.task !== 'edit' && settings.device_id === 'mps'}<label
-          class="check-row"
-          title="Runs supported models through Core ML on the Neural Engine, or on the GPU through Core ML, when that matches the normal result and is not slower. The first run of a model prepares it once."
-          ><input
-            type="checkbox"
-            checked={settings.neural_engine ?? true}
-            on:change={(event) => updateSettings({ neural_engine: event.currentTarget.checked })}
-          /> Use the Neural Engine for supported models</label
         >{/if}
       {#if settings.task !== 'edit'}<label class="check-row"
           ><input

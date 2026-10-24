@@ -180,6 +180,8 @@ export interface DeviceInfo {
   supports_fp16: boolean;
   is_integrated: boolean;
   recommended_tile_sizes: number[];
+  /** Apple GPU entries: supported models can also run through Core ML on the Neural Engine. */
+  neural_engine?: boolean;
 }
 
 /** Programs that open and write the formats LocalSR's own runtime omits. */

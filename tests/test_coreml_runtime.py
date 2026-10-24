@@ -1,7 +1,9 @@
 """Core ML backend: fixed tile windows, the gate and fallbacks, and a real conversion."""
 
 import json
+import re
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,6 +14,7 @@ import torch.nn.functional as F
 
 from localsr.core import coreml_runtime
 from localsr.core.coreml_runtime import (
+    COMPUTE_UNITS,
     CORE_ML_GPU,
     NEURAL_ENGINE,
     CoreMLImageDescriptor,
@@ -387,6 +390,28 @@ def test_engine_uses_core_ml_only_for_listed_architectures_on_mps(monkeypatch):
     # Turning the setting off between jobs reloads a cached model without Core ML.
     engine.load_model("a.pth", "mps", "fp32", info)
     assert calls[-1] == {}
+
+
+def test_desktop_names_the_same_core_ml_architectures_as_the_worker():
+    from localsr.core.model_catalog import CATALOG_BY_FILENAME
+
+    source = (
+        Path(__file__).resolve().parents[1] / "desktop" / "src" / "lib" / "neuralEngine.ts"
+    ).read_text(encoding="utf-8")
+
+    def listed(name):
+        return set(re.findall(r"'(\w+)'", re.search(rf"{name} = new Set\(\[(.*?)\]\)", source)[1]))
+
+    # The catalog names two Spandrel architectures differently.
+    catalog_name = {"ESRGAN": "RealESRGAN", "PLKSR": "RealPLKSR"}
+
+    def expected(unit):
+        return {catalog_name.get(a, a) for a, units in COMPUTE_UNITS.items() if units[0] == unit}
+
+    assert listed("NEURAL_ENGINE_ARCHITECTURES") == expected(NEURAL_ENGINE)
+    assert listed("CORE_ML_GPU_ARCHITECTURES") == expected(CORE_ML_GPU)
+    catalog = {model.architecture for model in CATALOG_BY_FILENAME.values()}
+    assert expected(NEURAL_ENGINE) | expected(CORE_ML_GPU) <= catalog
 
 
 def test_protocol_carries_the_setting_and_the_status_message():

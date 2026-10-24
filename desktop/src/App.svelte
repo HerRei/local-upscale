@@ -44,6 +44,7 @@
     resultPreviewForSelectedMedia,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
+  import { engineLabel } from './lib/neuralEngine';
   import type {
     AppSnapshot,
     BenchmarkDeviceResult,
@@ -408,7 +409,14 @@
       ? `${selectedMedia.width} × ${selectedMedia.height} → ${outputDimensions} · ${
           settings.task === 'edit'
             ? (editingDevice?.name ?? 'no supported GPU')
-            : (activeDevice?.name ?? 'detecting hardware')
+            : usingTemporalVideo
+              ? (activeDevice?.name ?? 'detecting hardware')
+              : engineLabel(
+                  settings,
+                  snapshot.capabilities,
+                  selectedModel?.architecture,
+                  activeDevice?.name ?? 'detecting hardware',
+                )
         }`
       : '';
   $: taskCaption = !settings.task

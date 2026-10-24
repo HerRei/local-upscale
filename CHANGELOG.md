@@ -10,7 +10,9 @@
   as fast per tile with a fraction of the energy. The first job with each model
   and tile size prepares it once; the app then checks the first tile against the
   usual result and keeps the GPU path whenever Core ML does not match or is
-  slower. Advanced settings has a switch to turn it off.
+  slower. Hardware lists the Neural Engine as its own entry, the default on Macs
+  that support it; Apple GPU (Metal) keeps everything on the GPU. Before a job, the
+  status bar names the unit the selected model will use.
 
 ## [0.2.2-beta] - 2026-10-23
 

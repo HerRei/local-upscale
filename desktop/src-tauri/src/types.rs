@@ -156,6 +156,9 @@ pub struct DeviceInfo {
     #[serde(default)]
     pub is_integrated: bool,
     pub recommended_tile_sizes: Vec<u32>,
+    // Apple GPU: supported models can also run through Core ML on the Neural Engine.
+    #[serde(default)]
+    pub neural_engine: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

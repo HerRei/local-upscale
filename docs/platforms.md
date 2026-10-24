@@ -75,8 +75,11 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   fixed input size, so edge tiles get a full window of neighbouring pixels instead
   of padding. Tiles larger than 512 px with a 32 px halo (16 px for Real-ESRGAN,
   whose conversion needs too much memory beyond that) and the benchmark keep MPS.
-  Advanced settings → *Use the Neural Engine for supported models* turns it off, and
-  `LOCALSR_DISABLE_COREML=1` does the same for the worker and the command line.
+  This is the *Neural Engine* entry under Hardware, the default on Macs where Core
+  ML is available (it is not listed elsewhere); the status bar names the unit the
+  selected model will use, or says the model is unsupported on the Neural Engine.
+  *Apple GPU (Metal)* keeps every model on MPS, and `LOCALSR_DISABLE_COREML=1` does
+  the same for the worker and the command line.
   Measured on the M1 Pro (2026-10-24, 256 px tiles): per tile, SPAN ran 2.0× as
   fast as MPS FP32, Real-ESRGAN anime 6B 3.4×, FBCNN 2.4× and RealPLKSR 1.3×.
   Whole images match the MPS output at 52 to 62 dB for SPAN, Real-ESRGAN and FBCNN
