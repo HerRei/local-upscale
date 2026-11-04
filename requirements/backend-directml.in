@@ -3,9 +3,9 @@
 torch==2.13.0
 torchvision==0.28.0
 onnx==1.22.0
-onnxruntime-directml==1.24.4
+onnxruntime-directml==1.24.4 ; sys_platform == "win32"
 # ml_dtypes 0.6 requires NumPy 2; the retained engine uses NumPy 1.26.
 ml_dtypes==0.5.4
 pyinstaller==6.22.2
-setuptools==83.0.0
+setuptools==84.2.1
 wheel==0.46.2
