@@ -408,22 +408,25 @@ def test_windows_release_overlay_configures_authenticode(monkeypatch, tmp_path: 
     }
 
 
-def test_linux_tauri_environments_use_the_managed_ssd_scratch() -> None:
+def test_linux_tauri_environments_use_isolated_runner_temp() -> None:
     workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text(encoding="utf-8")
 
-    assert workflow.count('ROOT="/ci-scratch/localsr-tauri/') == 2
+    assert workflow.count('ROOT="$RUNNER_TEMP/localsr-tauri/') == 2
     assert workflow.count('VENV="$ROOT/venv"') == 2
-    assert workflow.count("--ssd-path /ci-scratch") == 2
+    assert workflow.count('python -m venv "$VENV"') == 2
     assert workflow.count('export TMPDIR="$ROOT/tmp"') == 2
-    assert workflow.count("PIP_CACHE_DIR=/ci-scratch/cache/pip") == 2
+    assert 'PIP_NO_CACHE_DIR: "1"' in workflow
+    assert "/ci-scratch" not in workflow
 
 
 def test_windows_tauri_environments_bound_paths_and_native_failures() -> None:
     workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text(encoding="utf-8")
 
-    assert "C:\\lsr-ci\\$env:GITHUB_RUN_ID\\$env:GITHUB_RUN_ATTEMPT\\t\\verify" in workflow
-    assert "C:\\lsr-ci\\$env:GITHUB_RUN_ID\\$env:GITHUB_RUN_ATTEMPT\\t\\package" in workflow
+    assert 'Join-Path $env:RUNNER_TEMP "lsr-verify"' in workflow
+    assert 'Join-Path $env:RUNNER_TEMP "lsr-package"' in workflow
+    assert workflow.count("-Name 'LongPathsEnabled' -Value 1") == 2
+    assert workflow.count("python -m venv $venv") == 2
     assert workflow.count('"TEMP=$tmp"') == 2
     assert workflow.count('"TMP=$tmp"') == 2
     assert workflow.count("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") == 5
-    assert workflow.count("Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT") == 2
+    assert "Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT" not in workflow

@@ -35,6 +35,12 @@ Rust formatting/Clippy/tests, and Python wheel/source package verification. Each
 step fails the command immediately on error. Fresh Python package artifacts remain
 under `build/local-ci/` for inspection.
 
+PR CI uses GitHub-hosted `ubuntu-24.04`, `windows-2022` and `macos-latest`
+(Apple Silicon). Lint and all three Python test jobs run independently. Preview
+verification also runs its platform matrix in parallel; optional manual preview
+packages wait for verification. Each job creates a fresh Python 3.11 venv under
+`RUNNER_TEMP`, without global site-packages. See [ADR 0008](adr/0008-hosted-ci.md).
+
 Use `./local-ci.sh --help` for individual checks. `lint` and `test` remain aliases
 for `lint-only` and `test-only`. Help and invalid commands never install packages.
 
