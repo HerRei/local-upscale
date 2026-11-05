@@ -35,7 +35,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/python" -m pip install \
             --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check "ruff==0.16.7" "vulture==2.14"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check "ruff==0.17.3" "vulture==2.16"
           ACTIONLINT_ARCHIVE="$RUNNER_TEMP/actionlint.tar.gz"
           curl --fail --silent --show-error --location \
             --output "$ACTIONLINT_ARCHIVE" \
