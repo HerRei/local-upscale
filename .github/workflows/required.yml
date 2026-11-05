@@ -5,7 +5,7 @@ name: Required checks
 # script, never a PR's, so a PR can't change how its own status is computed.
 on:
   workflow_run:
-    workflows: ["CI", "Tauri Next Preview"]
+    workflows: ["CI", "Tauri Next Preview", "Update verifier"]
     types: [completed]
   workflow_dispatch:
     inputs:

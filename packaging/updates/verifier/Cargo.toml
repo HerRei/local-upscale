@@ -7,3 +7,6 @@ publish = false
 [dependencies]
 base64 = "=0.22.1"
 minisign-verify = "=0.2.5"
+
+[dev-dependencies]
+ring = "=0.17.14"
