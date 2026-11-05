@@ -25,7 +25,7 @@ New here? Start with the [project README](../README.md) and the
 
 ## Releasing and licensing
 
-[Releasing](releasing.md) · [Microsoft Store](microsoft-store.md) ·
+[Releasing](releasing.md) · [Dependency updates](dependency-updates.md) · [Microsoft Store](microsoft-store.md) ·
 [Release notes](releases/) · [Media formats and licensing](licensing-media.md) ·
 [Model licenses](model-licenses.md) · [Third-party notices](../THIRD_PARTY_NOTICES.md) ·
 [Security](../SECURITY.md)

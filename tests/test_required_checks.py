@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location(
+    "required_checks", ROOT / "scripts" / "required_checks.py"
+)
+required = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(required)
+WORKFLOWS = ROOT / ".github" / "workflows"
+
+
+def test_reads_the_real_preview_path_filter_and_ci_has_none():
+    preview = (WORKFLOWS / "tauri-preview.yml").read_text()
+    for event in ("pull_request", "push"):
+        paths = required.trigger_paths(preview, event)
+        assert paths and "desktop/**" in paths and "pyproject.toml" in paths
+    assert required.trigger_paths((WORKFLOWS / "ci.yml").read_text(), "pull_request") is None
+
+
+def test_every_watched_workflow_exists_with_its_display_name():
+    for workflow, name in required.WATCHED.items():
+        text = (WORKFLOWS / workflow).read_text()
+        assert text.startswith(f"name: {name}\n")
+    # required.yml must listen to exactly these names, or reruns won't refresh the status.
+    gate = (WORKFLOWS / "required.yml").read_text()
+    for name in required.WATCHED.values():
+        assert f'"{name}"' in gate
+
+
+def test_globs_follow_github_semantics():
+    assert required.glob_regex("desktop/**").match("desktop/src/lib/a.ts")
+    assert required.glob_regex("src/localsr/core/video_*.py").match("src/localsr/core/video_io.py")
+    assert not required.glob_regex("src/localsr/core/video_*.py").match(
+        "src/localsr/core/x/video_a.py"
+    )
+    assert not required.glob_regex("pyproject.toml").match("pyproject.toml.bak")
+
+
+def test_preview_applies_only_to_its_paths():
+    preview = (WORKFLOWS / "tauri-preview.yml").read_text()
+    assert required.applies(preview, "pull_request", ["desktop/package.json"])
+    assert not required.applies(preview, "pull_request", ["docs/testing.md"])
+    ci = (WORKFLOWS / "ci.yml").read_text()
+    assert required.applies(ci, "pull_request", ["docs/testing.md"])
+
+
+def run(status: str, conclusion: str | None) -> dict:
+    return {"status": status, "conclusion": conclusion}
+
+
+def test_decide():
+    ok = run("completed", "success")
+    assert required.decide({"CI": ok})[0] == "success"
+    assert required.decide({"CI": ok, "Tauri Next Preview": None})[0] == "pending"
+    assert required.decide({"CI": run("in_progress", None)})[0] == "pending"
+    for bad in ("failure", "cancelled", "timed_out", "skipped", "startup_failure"):
+        state, description = required.decide({"CI": run("completed", bad)})
+        assert state == "failure" and bad in description
+    # A failure wins over a still-running workflow: the PR can't merge either way.
+    assert required.decide({"CI": run("completed", "failure"), "P": None})[0] == "failure"

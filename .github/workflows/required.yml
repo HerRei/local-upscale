@@ -1,0 +1,41 @@
+name: Required checks
+
+# Sets the commit status "Required checks" that the main ruleset requires
+# (scripts/required_checks.py). workflow_run always uses main's copy of this file and the
+# script, never a PR's, so a PR can't change how its own status is computed.
+on:
+  workflow_run:
+    workflows: ["CI", "Tauri Next Preview"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit to (re)evaluate
+        required: true
+
+permissions:
+  statuses: write
+  checks: read
+  actions: read
+  pull-requests: read
+  contents: read
+
+concurrency:
+  group: required-checks-${{ github.event.workflow_run.head_sha || inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  status:
+    name: Set Required checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Evaluate and set the status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: python3 scripts/required_checks.py "$SHA"

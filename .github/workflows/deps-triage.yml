@@ -1,0 +1,32 @@
+name: Dependency triage
+
+# Fridays, after Dependabot's Monday-Thursday runs: rerun infrastructure failures once
+# per commit, label real breaks `claude-fix` for the deps-doctor skill, and update the
+# `deps-status` issue (scripts/deps_triage.py). No AI, no secrets.
+on:
+  schedule:
+    - cron: "0 5 * * 5" # Friday 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: write # rerun failed jobs
+  contents: read
+  issues: write # status issue, labels
+  pull-requests: write # labels on PRs
+
+concurrency:
+  group: deps-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Triage open Dependabot PRs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/deps_triage.py

@@ -1,0 +1,56 @@
+name: Dependabot auto-merge
+
+# Arms GitHub's auto-merge on Dependabot "dev-tools" PRs that pass
+# scripts/dependabot_automerge.py, and disarms it on any PR that stops qualifying
+# (for example after someone else pushes a commit). The merge itself still waits for the
+# "Required checks" status. pull_request_target runs main's copy of this file; the PR's
+# code is never checked out or run here.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  decide:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      # Fails on PRs with non-Dependabot commits; the verdict then sees no metadata
+      # and the PR is disarmed rather than left armed.
+      - id: metadata
+        continue-on-error: true
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - id: verdict
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/dependabot_automerge.py "$NUMBER" "$SHA"
+      - name: Arm auto-merge
+        if: steps.verdict.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$URL"
+      - name: Disarm auto-merge
+        if: always() && steps.verdict.outputs.eligible != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --disable-auto "$URL" || true
