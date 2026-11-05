@@ -18,6 +18,16 @@ updates:
       default-days: 7
       semver-major-days: 30
     open-pull-requests-limit: 3
+    # Moved by hand together with requirements/backend-*.in: torch and torchvision only
+    # resolve as a matching pair from the PyTorch index, opencv is the licensing-clean
+    # build from packaging/ffmpeg, and the build tools are pinned per platform. Dependabot
+    # can't update them one by one ("dependency_file_not_resolvable" every week).
+    ignore:
+      - dependency-name: torch
+      - dependency-name: torchvision
+      - dependency-name: opencv-python-headless
+      - dependency-name: pyinstaller
+      - dependency-name: setuptools
     groups:
       dev-tools:
         patterns: ["pytest", "pytest-timeout"]
