@@ -175,6 +175,14 @@ the Microsoft Store package is signed by the Store.
 
 ### Runners
 
-macOS jobs run on GitHub's hosted Apple Silicon runners; the Mac mini's macOS
-guest is Intel and no longer runs jobs. The Windows runner scripts live in
-`infra/windows/`.
+Since September 2026, `linux-appimages.yml`, `windows-installers.yml` and macOS
+tests use GitHub-hosted runners. PR CI and Preview now also use `ubuntu-24.04`,
+`windows-2022` and Apple Silicon `macos-latest`, independently of release work.
+The mini runner and its on-demand Windows VM are retired on the host after this
+migration merges; see [ADR 0008](adr/0008-hosted-ci.md).
+
+`desktop-release.yml` remains manual-only with self-hosted Linux/Windows legs
+and hosted macOS. It is a candidate for removal and will need reprovisioning if
+used after the mini runner is retired. The manual `cleanup-runner.yml` and
+`macos-runner-maintenance.yml` and their scripts remain for legacy maintenance;
+Windows runner provisioning scripts live in `infra/windows/`.

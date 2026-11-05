@@ -17,197 +17,107 @@ concurrency:
 
 env:
   PIP_BREAK_SYSTEM_PACKAGES: "1"
+  PIP_NO_CACHE_DIR: "1"
 
 jobs:
-  coordinate-heavy-work:
-    name: Wait for release priority
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 190
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Wait without occupying a Mac-mini guest
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python3 scripts/workflow_coordination.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "Signed Tauri Release"
-          python3 scripts/workflow_coordination.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "CI" \
-            --only-older-runs
-          python3 scripts/workflow_coordination.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "Tauri Next Preview" \
-            --only-older-runs \
-            --ignore-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-
   lint:
     name: Lint & format (Linux X64)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    needs: [coordinate-heavy-work]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Allocate isolated SSD workspace
-        id: scratch
-        run: |
-          python3 scripts/ci_scratch.py init --root /ci-scratch
-          python3 scripts/ci_scratch.py cleanup --root /ci-scratch --cache-max-gib 2
-          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 3
-          python3 scripts/ci_scratch.py start \
-            --root /ci-scratch \
-            --run-id "${{ github.run_id }}" \
-            --attempt "${{ github.run_attempt }}" \
-            --platform linux \
-            --flavor lint \
-            --github-output "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
       - name: Lint from the isolated environment
-        env:
-          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
         run: |
-          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
-          export TMPDIR="$RUN_ROOT/tmp"
-          export PIP_CACHE_DIR="/ci-scratch/cache/pip"
-          "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
-          "$RUN_ROOT/environment/venv/bin/python" -m pip install \
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install \
             --disable-pip-version-check --upgrade "pip==26.2.1"
-          "$RUN_ROOT/environment/venv/bin/python" -m pip install --disable-pip-version-check "ruff==0.16.7" "vulture==2.14"
-          cd "$RUN_ROOT/source"
-          ACTIONLINT_ARCHIVE="$RUN_ROOT/environment/actionlint.tar.gz"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check "ruff==0.16.7" "vulture==2.14"
+          ACTIONLINT_ARCHIVE="$RUNNER_TEMP/actionlint.tar.gz"
           curl --fail --silent --show-error --location \
             --output "$ACTIONLINT_ARCHIVE" \
             https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $ACTIONLINT_ARCHIVE" | sha256sum --check
-          tar -xzf "$ACTIONLINT_ARCHIVE" -C "$RUN_ROOT/environment" actionlint
-          "$RUN_ROOT/environment/actionlint" -color \
+          tar -xzf "$ACTIONLINT_ARCHIVE" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color \
             -config-file .github/actionlint.yaml \
             .github/workflows/*.yml
-          "$RUN_ROOT/environment/venv/bin/python" scripts/check_beta_readiness.py
-          "$RUN_ROOT/environment/venv/bin/python" -m ruff check src tests scripts
-          "$RUN_ROOT/environment/venv/bin/python" -m ruff format --check src tests scripts
-          "$RUN_ROOT/environment/venv/bin/python" -m vulture src scripts packaging ci/vulture_whitelist.py \
+          "$RUNNER_TEMP/venv/bin/python" scripts/check_beta_readiness.py
+          "$RUNNER_TEMP/venv/bin/python" -m ruff check src tests scripts
+          "$RUNNER_TEMP/venv/bin/python" -m ruff format --check src tests scripts
+          "$RUNNER_TEMP/venv/bin/python" -m vulture src scripts packaging ci/vulture_whitelist.py \
             --exclude src/localsr/video_models/seedvr2/vendor
-      - name: Remove successful scratch
-        if: success()
-        run: |
-          python3 scripts/ci_scratch.py finish \
-            --root /ci-scratch \
-            --run-id "${{ github.run_id }}" \
-            --attempt "${{ github.run_attempt }}" \
-            --platform linux \
-            --flavor lint \
-            --status complete \
-            --cleanup
-      - name: Mark failed scratch for bounded retention
-        if: failure() || cancelled()
-        run: |
-          ROOT="/ci-scratch/runs/${{ github.run_id }}/${{ github.run_attempt }}/linux/lint"
-          if [ -f "$ROOT/.active" ]; then
-            python3 scripts/ci_scratch.py finish \
-              --root /ci-scratch \
-              --run-id "${{ github.run_id }}" \
-              --attempt "${{ github.run_attempt }}" \
-              --platform linux \
-              --flavor lint \
-              --status failed
-          fi
 
   test-linux:
     name: Test Linux X64
-    needs: [lint]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Allocate isolated SSD workspace
-        id: scratch
+      # Match linux-appimages.yml's hosted-image cleanup. Reclaimed space and
+      # Ubuntu package availability need confirmation in the first hosted run.
+      - name: Free hosted Linux disk space
         run: |
-          python3 scripts/storage_preflight.py --ssd-path / --skip-hdd --ssd-min-percent 15 --ssd-peak-gib 5
-          python3 scripts/ci_scratch.py start \
-            --root /ci-scratch \
-            --run-id "${{ github.run_id }}" \
-            --attempt "${{ github.run_attempt }}" \
-            --platform linux \
-            --flavor tests \
-            --github-output "$GITHUB_OUTPUT"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /usr/share/swift /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
+      - name: Install Linux test prerequisites
+        # Keep exercising the external-FFmpeg and legacy-video tests, as on the mini.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
       - name: Install and test in isolation
-        env:
-          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
+        # CPU wheels avoid CUDA's disk cost; resolution is verified by hosted CI.
         run: |
-          rsync -a --exclude '/.git/' "$GITHUB_WORKSPACE/" "$RUN_ROOT/source/"
-          export TMPDIR="$RUN_ROOT/tmp"
-          export PIP_CACHE_DIR="/ci-scratch/cache/pip"
-          "$HOME/.venv-ci/bin/python3.11" -m venv "$RUN_ROOT/environment/venv"
-          PYTHON="$RUN_ROOT/environment/venv/bin/python"
+          python -m venv "$RUNNER_TEMP/venv"
+          PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install --disable-pip-version-check \
             "torch==2.13.0" \
             "torchvision==0.28.0" \
             --index-url https://download.pytorch.org/whl/cpu
-          "$PYTHON" -m pip install --disable-pip-version-check -e "$RUN_ROOT/source[dev,video,face]"
+          "$PYTHON" -m pip install --disable-pip-version-check -e ".[dev,video,face]"
           "$PYTHON" -m pip install --disable-pip-version-check build
-          cd "$RUN_ROOT/source"
           "$PYTHON" -m pyright --pythonpath "$PYTHON"
           "$PYTHON" -m pytest tests/ -v
           "$PYTHON" -m build
           "$PYTHON" scripts/verify_python_package_data.py dist/*.whl dist/*.tar.gz
-      - name: Finalize scratch state
-        if: always()
-        env:
-          JOB_STATUS: ${{ job.status }}
-          RUN_ROOT: ${{ steps.scratch.outputs.run_root }}
-        run: |
-          if [ -n "$RUN_ROOT" ] && [ -f "$RUN_ROOT/.active" ]; then
-            if [ "$JOB_STATUS" = success ]; then
-              STATUS=complete
-              CLEANUP=--cleanup
-            else
-              STATUS=failed
-              CLEANUP=
-            fi
-            python3 scripts/ci_scratch.py finish \
-              --root /ci-scratch \
-              --run-id "${{ github.run_id }}" \
-              --attempt "${{ github.run_attempt }}" \
-              --platform linux \
-              --flavor tests \
-              --status "$STATUS" $CLEANUP
-          fi
 
   test-windows:
     name: Test Windows X64
-    needs: [test-linux]
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: windows-2022
     defaults:
       run:
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: pwsh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # Match windows-installers.yml. Long Torch wheel paths and the hosted
+      # image's VC++ runtime need confirmation in the first hosted run.
+      - name: Enable Win32 long paths
+        run: Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
       - name: Ensure signed Microsoft VC++ runtime
         run: ./scripts/ensure_windows_vc_runtime.ps1
-      - name: Ensure bounded Windows scratch capacity
-        run: ./scripts/ensure_windows_scratch.ps1 -MinimumFreeGiB 20
       - name: Test in an isolated runner-temp environment
         run: |
-          $root = Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests"
-          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $root = Join-Path $env:RUNNER_TEMP "lsr-tests"
           New-Item -ItemType Directory -Force -Path "$root\tmp" | Out-Null
           $env:TEMP = "$root\tmp"
           $env:TMP = "$root\tmp"
-          Copy-Item -LiteralPath $env:GITHUB_WORKSPACE -Destination "$root\source" -Recurse -Force
-          py -3.11 -m venv "$root\venv"
+          python -m venv "$root\venv"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $python = "$root\venv\Scripts\python.exe"
           & $python -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -216,24 +126,16 @@ jobs:
             "torchvision==0.28.0" `
             --index-url https://download.pytorch.org/whl/cpu
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -m pip install --disable-pip-version-check --no-cache-dir -e "$root\source[dev,video,face]"
+          & $python -m pip install --disable-pip-version-check --no-cache-dir -e ".[dev,video,face]"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -c "import torch, torchvision; print(f'torch={torch.__version__} torchvision={torchvision.__version__}')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Set-Location "$root\source"
           & $python -m pytest tests/ -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Remove only this run workspace
-        if: always()
-        run: ./scripts/remove_windows_scratch.ps1 -ManagedRoot (Join-Path $env:RUNNER_TEMP "LocalSR-CI") -Target (Join-Path $env:RUNNER_TEMP "LocalSR-CI\${{ github.run_id }}\${{ github.run_attempt }}\tests")
 
   test-macos:
     name: Test macOS arm64
-    needs: [test-windows]
-    # Hosted Apple Silicon. The Mac mini's macOS guest is Intel, so this job
-    # could only ever exercise x86_64 while the project ships arm64. The hosted
-    # runner is also ephemeral, which removes the need for the guest-SSD
-    # scratch allocation, preflight and cleanup this job used to perform.
+    # Hosted Apple Silicon matches the shipped arm64 target.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

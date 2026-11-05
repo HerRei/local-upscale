@@ -2,8 +2,8 @@
 """Weekly look at every open Dependabot PR; no AI involved.
 
 For each PR it reads the latest CI and Preview runs of the PR's current head:
-- an infrastructure failure (the Mac mini's storage guard, the release-priority wait, a
-  cancelled or timed-out job) gets ONE rerun of the failed jobs per head commit;
+- an infrastructure failure (runner setup, a cancelled or timed-out job, or a legacy
+  Mac-mini storage/priority step) gets ONE rerun of the failed jobs per head commit;
 - a real code failure gets the `claude-fix` label (at most MAX_FLAGS PRs per run), which
   is the cue for the deps-doctor skill;
 - everything else is just reported.
@@ -31,6 +31,7 @@ FIX_LABEL = "claude-fix"
 STATUS_LABEL = "deps-status"
 MAX_FLAGS = 2
 INFRA_STEPS = (
+    # Keep legacy names so failures from runs before hosted CI can still be rerun.
     "isolated SSD workspace",  # storage_preflight refused the job
     "Wait without occupying",  # release-priority coordinator timed out
     "Wait for release priority",

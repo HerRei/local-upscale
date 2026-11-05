@@ -165,15 +165,15 @@ def test_desktop_catalog_fails_closed_for_unresolved_checkpoint_rights() -> None
         assert models[model_id]["support_tier"] == "labs"
 
 
-def test_tauri_preview_keeps_the_linux_cargo_cache_off_the_small_root_ssd() -> None:
+def test_tauri_preview_keeps_cargo_output_in_the_ephemeral_workspace() -> None:
     workflow = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text()
 
-    assert "CARGO_CACHE=/mnt/hdd/ci-cache/localsr-tauri-target/linux-x64" in workflow
-    assert 'mkdir -p "$CARGO_CACHE"' in workflow
-    assert 'echo "CARGO_TARGET_DIR=$CARGO_CACHE" >> "$GITHUB_ENV"' in workflow
+    assert "CARGO_TARGET_DIR: ${{ github.workspace }}/desktop/src-tauri/target" in workflow
+    assert "/mnt/hdd" not in workflow
+    assert "CARGO_CACHE" not in workflow
 
 
-def test_macmini_heavy_workflows_and_preview_guests_are_serialized() -> None:
+def test_hosted_pr_workflows_run_independently_of_the_manual_release() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     preview = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text()
     release = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
@@ -186,27 +186,33 @@ def test_macmini_heavy_workflows_and_preview_guests_are_serialized() -> None:
     assert "cancel-in-progress: false" in release
 
     assert "name: Signed Tauri Release\n" in release
-    for workflow in (ci, preview):
-        assert '--blocked-workflow "Signed Tauri Release"' in workflow
-    assert '--blocked-workflow "Tauri Next Preview"' in ci
-    assert '--ignore-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"' in ci
-    assert ci.count("--only-older-runs") == 2
-    assert '--blocked-workflow "CI"' in preview
-    assert preview.count("--only-older-runs") == 2
-    assert (
-        '--always-block-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"'
-        in preview
-    )
-    assert "runs-on: ubuntu-latest" in ci
-    assert "runs-on: ubuntu-latest" in preview
     assert "runs-on: ubuntu-latest" in release
-    assert preview.count("max-parallel: 1") == 2
+    for workflow in (ci, preview):
+        assert "self-hosted" not in workflow
+        assert "coordinate-heavy-work" not in workflow
+        assert "workflow_coordination.py" not in workflow
+        assert "ci_scratch.py" not in workflow
+        assert "storage_preflight.py" not in workflow
+        assert "ensure_windows_scratch.ps1" not in workflow
+        assert "remove_windows_scratch.ps1" not in workflow
+        assert "/ci-scratch" not in workflow
+        assert "--system-site-packages" not in workflow
+
+    assert "needs:" not in ci
+    assert ci.count("runs-on: ubuntu-24.04") == 2
+    assert "runs-on: windows-2022" in ci
+    assert "runs-on: macos-latest" in ci
+    assert preview.count("needs:") == 1
+    assert "needs: verify" in preview
+    assert "max-parallel:" not in preview
+    assert preview.count("runner: '[\"ubuntu-24.04\"]'") == 2
+    assert preview.count("runner: '[\"windows-2022\"]'") == 2
+    assert "runner: '[\"macos-latest\"]'" in preview
 
 
-def test_isolated_workflow_copies_preserve_github_for_actionlint() -> None:
+def test_hosted_lint_checks_workflows_in_the_checkout() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    assert "--exclude .git " not in ci
-    assert "--exclude '/.git/'" in ci
+    assert "rsync" not in ci
     assert "-config-file .github/actionlint.yaml" in ci
     assert ".github/workflows/*.yml" in ci
 
