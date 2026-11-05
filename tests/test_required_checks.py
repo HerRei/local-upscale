@@ -61,3 +61,15 @@ def test_decide():
         assert state == "failure" and bad in description
     # A failure wins over a still-running workflow: the PR can't merge either way.
     assert required.decide({"CI": run("completed", "failure"), "P": None})[0] == "failure"
+
+
+def test_verifier_applies_only_to_its_paths():
+    verifier = (WORKFLOWS / "verifier.yml").read_text()
+    for event in ("pull_request", "push"):
+        assert required.trigger_paths(verifier, event) == [
+            "packaging/updates/verifier/**",
+            ".github/workflows/verifier.yml",
+        ]
+        assert required.applies(verifier, event, ["packaging/updates/verifier/src/main.rs"])
+        assert required.applies(verifier, event, [".github/workflows/verifier.yml"])
+        assert not required.applies(verifier, event, ["docs/updates.md"])

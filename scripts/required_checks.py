@@ -22,7 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONTEXT = "Required checks"
 # Workflow file -> display name. Every workflow that must pass for a merge.
-WATCHED = {"ci.yml": "CI", "tauri-preview.yml": "Tauri Next Preview"}
+WATCHED = {
+    "ci.yml": "CI",
+    "tauri-preview.yml": "Tauri Next Preview",
+    "verifier.yml": "Update verifier",
+}
 GOOD = {"success"}
 PENDING = {None, "", "neutral"}  # conclusion while queued or running
 
