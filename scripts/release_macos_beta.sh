@@ -43,6 +43,8 @@ echo "commit $COMMIT engine $LOCALSR_ENGINE_ID"
 
 step "verify licensing-clean media runtime"
 python scripts/verify_codec_allowlist.py --python-env "$(command -v python)" > "$OUT/runtime-policy.json"
+# Record the exact environment; the release PR carries its diff against the last release.
+uv pip freeze --python "$(command -v python)" > "$OUT/mac-environment.txt"
 
 step "build worker and app"
 python scripts/build_tauri_preview.py --skip-checks --bundles app > "$OUT/build.log" 2>&1

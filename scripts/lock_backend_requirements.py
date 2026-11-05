@@ -12,7 +12,16 @@ from release_targets import ROOT, targets
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=[target["id"] for target in targets()])
+    parser.add_argument(
+        "--upgrade-package",
+        action="append",
+        default=[],
+        metavar="NAME[==VERSION]",
+        help="move one package (and only it) to a newer pin; repeatable. Without it uv keeps "
+        "every existing pin, so a dependency update never reaches the shipped backend locks.",
+    )
     args = parser.parse_args()
+    upgrades = [flag for name in args.upgrade_package for flag in ("--upgrade-package", name)]
     resolver = subprocess.check_output(["uv", "--version"], text=True).strip()
     for target in targets():
         if args.target and target["id"] != args.target:
@@ -52,6 +61,7 @@ def main() -> None:
                 "--output-file",
                 str(lock),
                 "--quiet",
+                *upgrades,
             ],
             cwd=ROOT,
             check=True,

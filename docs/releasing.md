@@ -16,6 +16,28 @@ the readiness register; `python scripts/check_beta_readiness.py
 --require-beta-ready` reports the gates that are still open. Tags with a hyphen
 are published as prereleases.
 
+## Release train
+
+Every 14 days `release-train.yml` opens a `Version X` PR made by
+`scripts/bump_version.py` ([dependency-updates.md](dependency-updates.md) has the
+rules). `bump_version.py X.Y.Z-beta` (or `--next`) does the same by hand. After the
+packages are live, `bump_version.py --mark-published` clears the candidate markers.
+
+Before building a candidate on the Mac:
+
+1. Check out the merged commit exactly (`git switch --detach <sha>`); the Windows and
+   Linux workflows get a tag or branch at that same commit (`--ref`). Check the built
+   source commit and version before attaching anything.
+2. Bring the release venv up to the merged dependencies:
+   `uv pip install --python .venv/bin/python -e '.[video,face,package,macos-release]'
+   --upgrade-package <each runtime package merged since the last release>`. Never
+   upgrade `av` or `opencv*` this way: they are the licensing-clean builds from
+   `packaging/ffmpeg/install_media_runtime.py`. When their pinned versions change,
+   rerun that script. Either way `verify_codec_allowlist.py` must pass.
+3. `release_macos_beta.sh` writes `mac-environment.txt` (the venv's `uv pip freeze`)
+   next to the build. Diff it against the previous release's copy and put the diff
+   in the release PR.
+
 ## macOS beta
 
 `scripts/release_macos_beta.sh` builds the app from a committed tree (the

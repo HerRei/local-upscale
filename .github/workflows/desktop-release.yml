@@ -1,9 +1,9 @@
 name: Signed Tauri Release
 
+# Manual only. Releases are built and signed on the Mac (docs/releasing.md); a tag push
+# used to start this workflow, which then had to be cancelled by hand every release.
+# Run it on a tag with `gh workflow run desktop-release.yml --ref vX` if ever needed.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:

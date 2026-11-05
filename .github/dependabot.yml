@@ -1,12 +1,119 @@
+# Dependency updates, one grouped PR per ecosystem and week (docs/dependency-updates.md).
+# Ecosystems run on different days so their CI chains don't queue for the one Mac mini
+# slot at once. Only the "dev-tools" groups can merge themselves
+# (.github/workflows/dependabot-automerge.yml); everything else waits for a review.
 version: 2
 updates:
-  - package-ecosystem: pip
+  # pyproject.toml + uv.lock. The shipped Linux/Windows backend locks in
+  # requirements/locks are regenerated from these with
+  # scripts/lock_backend_requirements.py --upgrade-package, never edited by Dependabot.
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    open-pull-requests-limit: 3
+    groups:
+      dev-tools:
+        patterns: ["pytest", "pytest-timeout"]
+        update-types: ["minor", "patch"]
+      lint-tools:
+        # Pinned again in ci.yml; a bump must change both, so it is never automatic.
+        patterns: ["ruff", "pyright", "vulture"]
+        update-types: ["minor", "patch"]
+      runtime:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # Security fixes for the shipped backend locks only. Version updates are off (limit 0):
+  # those locks follow pyproject.toml through the lock script.
+  - package-ecosystem: pip
+    directory: /requirements/locks
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 0
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "05:00"
+      timezone: Europe/Zurich
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    open-pull-requests-limit: 3
+    groups:
+      dev-tools:
+        # Test and lint tools only. Build tools (vite, esbuild, the Svelte plugin,
+        # @tauri-apps/cli) shape the shipped app and stay in "runtime".
+        patterns:
+          - "@testing-library/*"
+          - "@types/node"
+          - "jsdom"
+          - "knip"
+          - "prettier"
+          - "prettier-plugin-svelte"
+          - "svelte-check"
+          - "typescript"
+          - "vitest"
+        update-types: ["minor", "patch"]
+      runtime:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directories:
+      - /desktop/src-tauri
+      - /packaging/updates/verifier
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "05:00"
+      timezone: Europe/Zurich
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    open-pull-requests-limit: 3
+    groups:
+      runtime:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # Workflow files can't be merged with the workflow token, so these are always manual.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: thursday
+      time: "05:00"
+      timezone: Europe/Zurich
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
