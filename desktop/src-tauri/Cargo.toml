@@ -22,7 +22,7 @@ microsoft-store = []
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 directories = "6.0.0"
 futures-util = "0.3.34"
