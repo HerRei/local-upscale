@@ -2348,7 +2348,7 @@ name = "localsr-next"
 version = "0.3.0-beta"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "directories",
  "flate2",
  "fs2",
