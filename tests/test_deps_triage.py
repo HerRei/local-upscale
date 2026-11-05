@@ -47,38 +47,46 @@ class FakeGitHub:
         return {}, {}
 
 
-def finding(number: int, state: str, sha: str, age_days: int = 1) -> object:
-    created = (NOW - dt.timedelta(days=age_days)).isoformat().replace("+00:00", "Z")
-    return triage.Finding(number, f"PR {number}", sha, state, "x", 100 + number, created)
+def finding(number: int, state: str, sha: str, ages: tuple[int, ...] = (1,)) -> object:
+    runs = [
+        (100 * number + i, (NOW - dt.timedelta(days=a)).isoformat().replace("+00:00", "Z"))
+        for i, a in enumerate(ages)
+    ]
+    return triage.Finding(number, f"PR {number}", sha, state, "x", runs if state == "infra" else [])
 
 
-def test_reruns_once_per_head_and_flags_at_most_two():
+def test_reruns_once_per_head_every_workflow_and_flags_at_most_two():
     gh = FakeGitHub()
     worker = triage.Triage(gh, NOW, dry_run=False)
     memory = {"reran": [], "flagged": []}
     findings = [
-        finding(1, "infra", "s1"),
+        finding(1, "infra", "s1", ages=(1, 2)),  # CI and Preview both hit infrastructure
         finding(2, "code", "s2"),
         finding(3, "code", "s3"),
         finding(4, "code", "s4"),
-        finding(5, "infra", "s5", age_days=40),
+        finding(5, "infra", "s5", ages=(40,)),
         finding(6, "stale", "s6"),
     ]
-    reruns, flagged = worker.act(findings, memory)
-    assert reruns == [1] and flagged == [2, 3]
+    reruns, flagged = worker.plan(findings, memory)
+    assert reruns == [(1, [100, 101])] and flagged == [2, 3]
+    assert gh.calls == []  # planning never calls GitHub
     assert "too old" in findings[4].detail
+    worker.execute(reruns, flagged)
+    rerun_calls = [p for p, _ in gh.calls if p.endswith("rerun-failed-jobs")]
+    assert rerun_calls == [
+        "/repos/HerRei/local-upscale/actions/runs/100/rerun-failed-jobs",
+        "/repos/HerRei/local-upscale/actions/runs/101/rerun-failed-jobs",
+    ]
     # Second week, same heads: no repeated rerun, PR 4 gets its turn.
-    reruns, flagged = worker.act(findings, memory)
+    reruns, flagged = worker.plan(findings, memory)
     assert reruns == [] and flagged == [4]
     assert "already reran" in findings[0].detail
-    rerun_calls = [p for p, _ in gh.calls if p.endswith("rerun-failed-jobs")]
-    assert rerun_calls == ["/repos/HerRei/local-upscale/actions/runs/101/rerun-failed-jobs"]
 
 
 def test_memory_forgets_closed_heads():
     worker = triage.Triage(FakeGitHub(), NOW, dry_run=True)
     memory = {"reran": ["gone"], "flagged": ["gone", "s2"]}
-    worker.act([finding(2, "code", "s2")], memory)
+    worker.plan([finding(2, "code", "s2")], memory)
     assert memory == {"reran": [], "flagged": ["s2"]}
 
 

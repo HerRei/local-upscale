@@ -20,7 +20,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -48,8 +48,8 @@ class Finding:
     sha: str
     state: str  # green | pending | infra | code | stale | main-red | stuck
     detail: str
-    run_id: int | None = None
-    run_created: str | None = None
+    # (run id, created_at) of every watched workflow run that failed on infrastructure.
+    infra_runs: list[tuple[int, str]] = field(default_factory=list)
 
 
 def classify(run: dict | None, jobs: list[dict], now: dt.datetime) -> tuple[str, str]:
@@ -135,7 +135,8 @@ class Triage:
             )
             state, detail = classify(run, jobs, self.now)
             states.append((state, detail, run))
-        state, detail, run = worst(states)
+        state, detail, _ = worst(states)
+        infra_runs = [(r["id"], r["created_at"]) for st, _, r in states if st == "infra" and r]
         if state == "code":
             behind = self.gh.request(f"/repos/{self.repo}/compare/main...{sha}")[0]["behind_by"]
             if behind:
@@ -143,38 +144,35 @@ class Triage:
                 # AI run on an old base.
                 state = "stale"
                 detail += f" (behind main by {behind}: comment `@dependabot rebase` first)"
-        return Finding(
-            pull["number"],
-            pull["title"],
-            sha,
-            state,
-            detail,
-            run["id"] if run else None,
-            run["created_at"] if run else None,
-        )
+        return Finding(pull["number"], pull["title"], sha, state, detail, infra_runs)
 
-    def act(self, findings: list[Finding], memory: dict) -> tuple[list[int], list[int]]:
-        reruns, flagged = [], []
+    def plan(self, findings: list[Finding], memory: dict) -> tuple[list, list[int]]:
+        """Decide reruns and labels and record them in memory, without calling GitHub.
+
+        run() saves the memory before carrying the plan out, so a crash halfway can only
+        ever skip a rerun, never repeat one.
+        """
+        reruns: list[tuple[int, list[int]]] = []
+        flagged: list[int] = []
         for f in findings:
-            if f.state == "infra" and f.sha not in memory["reran"] and f.run_id:
-                created = dt.datetime.fromisoformat(f.run_created.replace("Z", "+00:00"))
-                if self.now - created > RERUN_MAX_AGE:
-                    f.detail += " (too old to rerun: comment `@dependabot rebase`)"
-                    continue
-                if not self.dry_run:
-                    self.gh.request(
-                        f"/repos/{self.repo}/actions/runs/{f.run_id}/rerun-failed-jobs", {}
-                    )
-                memory["reran"].append(f.sha)
-                reruns.append(f.number)
-            elif f.state == "infra":
+            if f.state != "infra":
+                continue
+            if f.sha in memory["reran"]:
                 f.detail += " (already reran once for this commit: needs Hermes)"
+                continue
+            fresh = [
+                run_id
+                for run_id, created in f.infra_runs
+                if self.now - dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
+                <= RERUN_MAX_AGE
+            ]
+            if not fresh:
+                f.detail += " (too old to rerun: comment `@dependabot rebase`)"
+                continue
+            memory["reran"].append(f.sha)
+            reruns.append((f.number, fresh))
         for f in findings:
             if f.state == "code" and f.sha not in memory["flagged"] and len(flagged) < MAX_FLAGS:
-                if not self.dry_run:
-                    self.gh.request(
-                        f"/repos/{self.repo}/issues/{f.number}/labels", {"labels": [FIX_LABEL]}
-                    )
                 memory["flagged"].append(f.sha)
                 flagged.append(f.number)
         # Keep the memory small: only heads that are still open matter.
@@ -183,23 +181,35 @@ class Triage:
         memory["flagged"] = [s for s in memory["flagged"] if s in open_heads]
         return reruns, flagged
 
-    def publish(self, issue: dict | None, body: str, comment: str | None) -> None:
+    def execute(self, reruns: list, flagged: list[int]) -> None:
+        if self.dry_run:
+            return
+        for _, run_ids in reruns:
+            for run_id in run_ids:
+                self.gh.request(f"/repos/{self.repo}/actions/runs/{run_id}/rerun-failed-jobs", {})
+        for number in flagged:
+            self.gh.request(f"/repos/{self.repo}/issues/{number}/labels", {"labels": [FIX_LABEL]})
+
+    def save(self, issue: dict | None, body: str) -> dict | None:
         if self.dry_run:
             print(body)
-            if comment:
-                print("\nComment:\n" + comment)
-            return
+            return issue
         if issue is None:
             issue, _ = self.gh.request(
                 f"/repos/{self.repo}/issues",
                 {"title": "Dependency updates: status", "body": body, "labels": [STATUS_LABEL]},
             )
-        else:
-            self.gh.request(f"/repos/{self.repo}/issues/{issue['number']}", {"body": body}, "PATCH")
-        if comment:
-            self.gh.request(
-                f"/repos/{self.repo}/issues/{issue['number']}/comments", {"body": comment}
-            )
+            return issue
+        self.gh.request(f"/repos/{self.repo}/issues/{issue['number']}", {"body": body}, "PATCH")
+        return issue
+
+    def notify(self, issue: dict | None, comment: str | None) -> None:
+        if not comment:
+            return
+        if self.dry_run or issue is None:
+            print("\nComment:\n" + comment)
+            return
+        self.gh.request(f"/repos/{self.repo}/issues/{issue['number']}/comments", {"body": comment})
 
     def run(self) -> int:
         pulls = [
@@ -218,8 +228,8 @@ class Triage:
             for f in findings:
                 if f.state == "code":
                     f.state, f.detail = "main-red", f.detail + " (main itself is red)"
-        reruns, flagged = self.act(findings, memory)
-        table = report(findings, flagged, reruns)
+        reruns, flagged = self.plan(findings, memory)
+        table = report(findings, flagged, [number for number, _ in reruns])
         stamp = self.now.strftime("%Y-%m-%d %H:%M UTC")
         body = (
             f"Updated by `deps-triage.yml` on {stamp}. Green dev-tools PRs merge themselves;"
@@ -242,7 +252,9 @@ class Triage:
                 )
                 + f". Reran {len(reruns)} infrastructure failure(s)."
             )
-        self.publish(issue, body, comment)
+        issue = self.save(issue, body)  # memory first: a crash below can't repeat a rerun
+        self.execute(reruns, flagged)
+        self.notify(issue, comment)
         return 0
 
 
