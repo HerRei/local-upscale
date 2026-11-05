@@ -28,6 +28,10 @@ updates:
       - dependency-name: opencv-python-headless
       - dependency-name: pyinstaller
       - dependency-name: setuptools
+      # pyproject.toml caps numpy below 2: the Intel macOS torch wheels use the NumPy 1.x
+      # C API, and the backend locks pin 1.26.4.
+      - dependency-name: numpy
+        update-types: ["version-update:semver-major"]
     groups:
       dev-tools:
         patterns: ["pytest", "pytest-timeout"]
@@ -69,6 +73,11 @@ updates:
       default-days: 7
       semver-major-days: 30
     open-pull-requests-limit: 3
+    ignore:
+      # svelte-check 4.7 accepts TypeScript 5 and 6 only (peer dependency); revisit when
+      # it supports 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       dev-tools:
         # Test and lint tools only. Build tools (vite, esbuild, the Svelte plugin,
