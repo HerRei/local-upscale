@@ -69,7 +69,8 @@ def replace(root: Path, relative: str, old: str, new: str, count: int = 1) -> No
 def sub(root: Path, relative: str, pattern: str, new: str) -> None:
     path = root / relative
     text = path.read_text(encoding="utf-8")
-    result, found = re.subn(pattern, new, text, count=1, flags=re.MULTILINE | re.DOTALL)
+    # A callable keeps `new` literal: commit subjects may contain backslashes.
+    result, found = re.subn(pattern, lambda _: new, text, count=1, flags=re.MULTILINE | re.DOTALL)
     if found != 1:
         raise ValueError(f"{relative}: pattern {pattern!r} not found")
     path.write_text(result, encoding="utf-8")

@@ -16,10 +16,16 @@ REPO = "HerRei/local-upscale"
 SHA = "a" * 40
 
 
-def commit(sha: str = SHA, login: str = "dependabot[bot]", verified: bool = True) -> dict:
+def commit(
+    sha: str = SHA,
+    login: str = "dependabot[bot]",
+    verified: bool = True,
+    committer: str = "web-flow",
+) -> dict:
     return {
         "sha": sha,
         "author": {"login": login},
+        "committer": {"login": committer},
         "commit": {"verification": {"verified": verified}},
     }
 
@@ -61,6 +67,8 @@ def test_github_as_committer_is_fine_but_a_foreign_author_is_not():
     assert case(commits=[commit(), commit("b" * 40, login="HerRei")]) != []
     assert any("not authored" in r for r in case(commits=[commit(login="HerRei")]))
     assert any("not verified" in r for r in case(commits=[commit(verified=False)]))
+    # Signed by someone else while claiming Dependabot as author.
+    assert any("not committed by" in r for r in case(commits=[commit(committer="mallory")]))
 
 
 def test_fails_closed():

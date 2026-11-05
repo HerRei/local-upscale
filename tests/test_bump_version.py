@@ -125,3 +125,9 @@ def test_a_second_bump_replaces_the_previous_candidate_notice(tree: Path):
     readme = (tree / "README.md").read_text()
     assert readme.count(bump_version.CANDIDATE_START) == 1
     assert f"v{second} is in preparation" in readme
+
+
+def test_notes_with_backslashes_are_inserted_literally(tree: Path):
+    new = bump_version.next_patch(VERSION)
+    bump_version.bump(tree, new, r"- Fix C:\Users\hermes paths and \1 groups", dt.date.today())
+    assert r"C:\Users\hermes paths and \1 groups" in (tree / "CHANGELOG.md").read_text()

@@ -142,8 +142,11 @@ def evaluate(gh: GitHub, sha: str, workflows_dir: Path) -> tuple[str, str]:
     event, files = changed_files(gh, sha)
     runs: dict[str, dict | None] = {}
     for workflow, name in WATCHED.items():
-        if applies((workflows_dir / workflow).read_text(), event, files):
-            runs[name] = latest_run(gh, workflow, sha)
+        run = latest_run(gh, workflow, sha)
+        # A workflow that ran for this commit counts even if the files we can see don't
+        # match its filter (a push of several commits is filtered on all of them).
+        if run is not None or applies((workflows_dir / workflow).read_text(), event, files):
+            runs[name] = run
     return decide(runs)
 
 

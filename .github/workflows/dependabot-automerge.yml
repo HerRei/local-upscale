@@ -47,7 +47,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$URL"
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: gh pr merge --auto --squash --match-head-commit "$SHA" "$URL"
       - name: Disarm auto-merge
         if: always() && steps.verdict.outputs.eligible != 'true'
         env:

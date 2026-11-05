@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from required_checks import GitHub  # noqa: E402
 
 BOT = "dependabot[bot]"
+COMMITTERS = {"web-flow", BOT}
 # Test and lint tools only; build tools and anything shipped stay manual.
 ALLOWLIST = {
     "uv": {"pytest", "pytest-timeout"},
@@ -87,6 +88,11 @@ def verdict(
         # so the author is what identifies Dependabot, plus GitHub's signature.
         if (commit.get("author") or {}).get("login") != BOT:
             reasons.append(f"commit {commit['sha'][:12]} not authored by Dependabot")
+        # GitHub verifies the committer's signature, so the committer must be GitHub
+        # itself (web-flow) or Dependabot; anyone else could sign a commit that only
+        # claims Dependabot as its author.
+        if (commit.get("committer") or {}).get("login") not in COMMITTERS:
+            reasons.append(f"commit {commit['sha'][:12]} not committed by GitHub or Dependabot")
         if not commit["commit"].get("verification", {}).get("verified"):
             reasons.append(f"commit {commit['sha'][:12]} not verified")
     if commits and commits[-1]["sha"] != event_sha:
