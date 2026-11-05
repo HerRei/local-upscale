@@ -132,7 +132,9 @@ def signed_release_violations(desktop_release: str) -> list[str]:
 
     violations: list[str] = []
     required = {
-        "signed release workflow tag trigger": '      - "v*"',
+        # Manual only since 2026-11: releases are built and signed on the Mac, and a tag
+        # trigger here only started a run that had to be cancelled (docs/releasing.md).
+        "manual-only release trigger": "on:\n  workflow_dispatch:",
         "fail-closed Tauri signing": "--require-signing",
         "Developer ID verification": "verify_macos_tauri_signing.py",
         "Authenticode verification": "verify_windows_tauri_signing.ps1",
@@ -148,6 +150,8 @@ def signed_release_violations(desktop_release: str) -> list[str]:
     for label, token in required.items():
         if token not in desktop_release:
             violations.append(f"signed desktop release is missing {label}")
+    if re.search(r"(?m)^  (push|pull_request|schedule):", desktop_release):
+        violations.append("the signed desktop release must not start on pushes, PRs or a schedule")
     if "--clobber" in desktop_release:
         violations.append("signed desktop releases must not overwrite published assets")
     if desktop_release.count("contents: write") != 1:
