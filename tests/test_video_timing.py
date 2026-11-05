@@ -16,16 +16,22 @@ from localsr.core.video_pipeline import VideoJobConfig, _deflicker_frames, run_v
 from localsr.worker.server import WorkerServer
 
 
-def make_vfr(path, times=(0, 40, 80, 120, 480, 840, 1200, 1560, 1920, 2280), transfer=2):
+def make_vfr(
+    path,
+    times=(0, 40, 80, 120, 480, 840, 1200, 1560, 1920, 2280),
+    transfer=2,
+    width=48,
+    height=32,
+):
     with av.open(str(path), "w") as container:
         # Lossless VP9 is royalty-free and bundled; no reordering keeps VFR exact.
         stream = container.add_stream("libvpx-vp9", rate=25)
-        stream.width, stream.height, stream.pix_fmt = 48, 32, "yuv420p"
+        stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
         stream.codec_context.time_base = Fraction(1, 1000)
         stream.codec_context.color_trc = transfer
         stream.options = {"lossless": "1", "lag-in-frames": "0"}
         for index, stamp in enumerate(times):
-            rgb = np.full((32, 48, 3), index % 10 * 20, dtype=np.uint8)
+            rgb = np.full((height, width, 3), index % 10 * 20, dtype=np.uint8)
             rgb[:12, :16] = [240, 40, 20]
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
             frame.pts, frame.time_base = stamp, Fraction(1, 1000)

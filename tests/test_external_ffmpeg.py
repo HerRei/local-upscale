@@ -180,7 +180,8 @@ def test_h264_source_needs_user_ffmpeg_then_converts_losslessly(
 
 @pytest.mark.parametrize("codec,container", [("h264", "mp4"), ("hevc", "mkv")])
 def test_h264_and_hevc_exports_are_written_by_user_ffmpeg(tmp_path, user_ffmpeg, codec, container):
-    source = make_vfr(tmp_path / "source.mp4")
+    # x265 4.1 crashes on frames under 64 px.
+    source = make_vfr(tmp_path / "source.mp4", width=64, height=64)
     frames = list(decode_timed_frames(str(source)))
     output = tmp_path / f"export.{container}"
     with pytest.raises(VideoStageError, match="FFmpeg installed on this computer"):
@@ -188,8 +189,8 @@ def test_h264_and_hevc_exports_are_written_by_user_ffmpeg(tmp_path, user_ffmpeg,
             iter(frames),
             str(output),
             fps=25,
-            width=48,
-            height=32,
+            width=64,
+            height=64,
             video_codec=codec,
             container_format=container,
         )
@@ -198,8 +199,8 @@ def test_h264_and_hevc_exports_are_written_by_user_ffmpeg(tmp_path, user_ffmpeg,
         iter(frames),
         str(output),
         fps=25,
-        width=48,
-        height=32,
+        width=64,
+        height=64,
         video_codec=codec,
         container_format=container,
         external_ffmpeg=user_ffmpeg,
@@ -227,8 +228,8 @@ def test_hevc_hdr_source_and_export_through_user_ffmpeg(tmp_path, user_ffmpeg, c
         iter(frames),
         str(output),
         fps=25,
-        width=48,
-        height=32,
+        width=64,
+        height=64,
         video_codec="hevc",
         hdr_format="HLG",
         external_ffmpeg=user_ffmpeg,

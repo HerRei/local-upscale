@@ -68,8 +68,9 @@ def test_planar_and_rotated_decoder_frames_match_interleaved_color_conversion(tr
 
 def make_hdr(path, transfer, codec="libsvtav1", audio="libopus"):
     # Encode a real ten-bit source with explicit BT.2020 matrix/range tags. AV1 is
-    # bundled; HEVC/AAC sources exercise the user-installed FFmpeg route.
-    untagged = make_vfr(path.with_suffix(".source.mp4"))
+    # bundled; HEVC/AAC sources exercise the user-installed FFmpeg route. 64x64
+    # because distro SVT-AV1 rejects frames under 64 px and x265 4.1 crashes on them.
+    untagged = make_vfr(path.with_suffix(".source.mp4"), width=64, height=64)
     video_options = (
         ["-x265-params", "log-level=error:pools=1:frame-threads=1"]
         if codec == "libx265"
@@ -115,7 +116,7 @@ def test_hdr_preview_and_export_keep_timing_audio_and_explicit_sdr_tags(
     probe, jpeg = probe_video_preview(str(source), 128, stages.append)
     assert probe.hdr_format == ("PQ" if transfer == 16 else "HLG")
     assert stages == ["opening", "decoding_video", "converting_hdr", "preparing_preview"]
-    assert Image.open(io.BytesIO(jpeg)).size == (48, 32)
+    assert Image.open(io.BytesIO(jpeg)).size == (64, 64)
     with pytest.raises(ValueError, match="HDR.*SDR"):
         list(decode_timed_frames(str(source)))
     decoded = list(decode_timed_frames(str(source), hdr_mode="tone_map"))
