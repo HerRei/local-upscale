@@ -51,6 +51,11 @@ new Automatic format, go straight to the Mac's hardware HEVC encoder. Videos
 also play before they are upscaled.
 [Release notes](docs/releases/v0.3.0-beta.md).
 
+<!-- release-candidate -->
+v0.3.1-beta is in preparation; the downloads below are still v0.3.0-beta.
+[Draft release notes](docs/releases/v0.3.1-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
