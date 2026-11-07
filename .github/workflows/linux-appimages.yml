@@ -126,7 +126,10 @@ jobs:
         run: |
           # stable-diffusion.cpp's Vulkan backend is built from source here, because its
           # prebuilt Linux binaries need Ubuntu 24.04's glibc; Ubuntu 22.04's Vulkan headers
-          # and its shaderc are too old for it.
+          # and its shaderc are too old for it. It links against Ubuntu's loader (the SDK
+          # keeps its own outside CMake's search path), older than the SDK's, so sd-cli
+          # loads with any Vulkan loader since Ubuntu 22.04.
+          sudo apt-get install -y libvulkan-dev
           ARCHIVE="/mnt/lsr/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
           curl -fsSL --retry 3 -o "$ARCHIVE" \
             "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
