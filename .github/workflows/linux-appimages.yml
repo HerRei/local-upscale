@@ -40,6 +40,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - id: linux-x86_64-cpu
+            backend: CPU
+            suffix: Linux-CPU-x86_64.AppImage
+            source: Linux-CPU-source-and-notices.tar.gz
+          - id: linux-x86_64-cuda
+            backend: CUDA
+            suffix: Linux-CUDA-x86_64.AppImage
+            source: Linux-CUDA-source-and-notices.tar.gz
           - id: linux-x86_64-rocm
             backend: AMD-ROCm
             suffix: Linux-ROCm-x86_64.AppImage
@@ -146,31 +154,8 @@ jobs:
           mv "$SOURCE" "$ARTIFACT"
           chmod +x "$ARTIFACT"
           python scripts/verify_codec_allowlist.py --tree "$BUNDLE" --output "/mnt/lsr/out/$NAME.codec-policy.json"
-          # Temporary: stack traces of a hung smoke test.
-          sudo apt-get install -y gdb
-          python -m pip install --disable-pip-version-check "py-spy==0.4.1"
-          LOCALSR_SMOKE_TIMEOUT_SECONDS=120 python scripts/smoke_tauri_installer.py \
-            --backend "${{ matrix.backend }}" --timeout 900 \
-            --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json" &
-          SMOKE=$!
-          for _ in $(seq 1 420); do kill -0 "$SMOKE" 2>/dev/null || break; sleep 1; done
-          if kill -0 "$SMOKE" 2>/dev/null; then
-            echo "SMOKE STILL RUNNING after 420 s"
-            ps -eo pid,ppid,pgid,stat,wchan:32,etime,args --forest | cut -c1-220 | tail -40
-            for p in $(pgrep -f 'localsr-worker|localsr-next|AppRun'); do
-              echo "=== $p $(tr '\0' ' ' < "/proc/$p/cmdline" | cut -c1-200)"
-              sudo cat "/proc/$p/stack" | head -20
-              sudo find "/proc/$p/fd" -maxdepth 1 -printf '%f -> %l\n' | tail -30
-              sudo "$(command -v py-spy)" dump --native --pid "$p" 2>&1 | head -80
-              sudo gdb -p "$p" -batch -ex "thread apply all bt 20" 2>&1 \
-                | grep -v '^\[New LWP\|^warning:\|^Reading symbols\|^Downloading' | head -150
-            done
-            sudo pkill -9 -f localsr-worker || true
-            sudo pkill -9 -f localsr-next || true
-            kill "$SMOKE"
-            exit 1
-          fi
-          wait "$SMOKE"
+          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 \
+            --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform linux --architecture x86_64 --report "/mnt/lsr/out/$NAME.architecture.json"
           mkdir -p /mnt/lsr/extract
