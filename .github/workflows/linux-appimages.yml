@@ -1,11 +1,13 @@
 name: Linux AppImages
 
 # Builds the Linux CPU, NVIDIA CUDA and AMD ROCm AppImages on GitHub-hosted runners,
-# which have the disk space the licensing-clean media runtime needs. They run Ubuntu 22.04,
-# the oldest LTS still in standard support: an AppImage uses the host's glibc and runs only
-# where it is at least as new as the build host's, and AppImageHub (the AppImage catalog)
-# tests on that release. Every AppImage must need at most glibc 2.35 and show its window
-# without network within AppImageHub's 30 seconds. The media
+# which have the disk space the licensing-clean media runtime needs. An AppImage uses the
+# host's glibc and runs only where it is at least as new as the build host's, so CPU and
+# CUDA build on Ubuntu 22.04, the oldest LTS still in standard support, which AppImageHub
+# (the AppImage catalog) tests on. ROCm stays on 24.04: its frozen PyTorch worker
+# deadlocks in import torch with 22.04's glibc 2.35 (rocprofiler-sdk waits for a thread
+# that waits for the loader lock). Every AppImage must need at most its runner's glibc and
+# show its window without network within AppImageHub's 30 seconds. The media
 # runtime is built from the pinned LGPL sources, and build_tauri_preview.py refuses any
 # media runtime or AppImage outside packaging/ffmpeg/codec-policy.json; this workflow
 # never passes --private-preview-media. Each AppImage gets its corresponding source
@@ -34,7 +36,7 @@ concurrency:
 jobs:
   appimage:
     name: Build Linux x86_64 ${{ matrix.backend }} AppImage
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 330
     strategy:
       fail-fast: false
@@ -44,14 +46,23 @@ jobs:
             backend: CPU
             suffix: Linux-CPU-x86_64.AppImage
             source: Linux-CPU-source-and-notices.tar.gz
+            runner: ubuntu-22.04
+            glibc: "2.35"
+            elf_packages: libelf1 libdw1
           - id: linux-x86_64-cuda
             backend: CUDA
             suffix: Linux-CUDA-x86_64.AppImage
             source: Linux-CUDA-source-and-notices.tar.gz
+            runner: ubuntu-22.04
+            glibc: "2.35"
+            elf_packages: libelf1 libdw1
           - id: linux-x86_64-rocm
             backend: AMD-ROCm
             suffix: Linux-ROCm-x86_64.AppImage
             source: Linux-ROCm-source-and-notices.tar.gz
+            runner: ubuntu-24.04
+            glibc: "2.39"
+            elf_packages: libelf1t64 libdw1t64
     env:
       PIP_VERSION: "26.2.1"
     steps:
@@ -106,7 +117,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             xdg-utils xvfb dbus-x11 xdotool imagemagick librdmacm1 libibverbs1 squashfs-tools \
             nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch \
-            libnuma1 libelf1 libdw1
+            libnuma1 ${{ matrix.elf_packages }}
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
             --cache-root /mnt/lsr/wheelhouses --report /mnt/lsr/out/dependency-wheelhouse.json
@@ -162,13 +173,17 @@ jobs:
           (cd /mnt/lsr/extract && "$ARTIFACT" --appimage-extract > /dev/null)
           # What AppImageHub tests: the glibc every ELF file needs, and a window without network.
           python scripts/verify_appimage_libc.py /mnt/lsr/extract/squashfs-root --appimage "$ARTIFACT" \
-            --report "/mnt/lsr/out/$NAME.libc.json"
+            --max "${{ matrix.glibc }}" --report "/mnt/lsr/out/$NAME.libc.json"
           python scripts/verify_appimage_window.py --appdir /mnt/lsr/extract/squashfs-root \
             --appimage "$ARTIFACT" --screenshot "/mnt/lsr/out/$NAME.offline-window.png" \
             --report "/mnt/lsr/out/$NAME.offline-window.json"
           # Corresponding source for exactly what the AppImage contains.
-          sed -n 's/^deb /deb-src /p' /etc/apt/sources.list | sudo tee /etc/apt/sources.list.d/deb-src.list
-          test -s /etc/apt/sources.list.d/deb-src.list
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then # 24.04: deb822
+            sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          else
+            sed -n 's/^deb /deb-src /p' /etc/apt/sources.list | sudo tee /etc/apt/sources.list.d/deb-src.list
+            test -s /etc/apt/sources.list.d/deb-src.list
+          fi
           sudo apt-get update
           python scripts/verify_nvidia_redistributables.py /mnt/lsr/extract/squashfs-root \
             | tee "/mnt/lsr/out/$NAME.nvidia.json"

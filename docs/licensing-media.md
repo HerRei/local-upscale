@@ -135,7 +135,7 @@ packages are labelled untested wherever they are offered (see
 - **AMD ROCm** — PyTorch's ROCm wheel carries libnuma (LGPL-2.1) and libelf
   (elfutils, LGPL-3.0-or-later or GPL-2.0-or-later) built on AlmaLinux, some of them
   twice under different file names. The build finds every copy by the soname inside
-  the file, replaces it with the build host's Ubuntu 22.04 build and link-checks every
+  the file, replaces it with the build host's Ubuntu 24.04 build and link-checks every
   library that uses them, and `build_source_bundle.py` refuses a package with any copy
   whose GNU build ID is not Ubuntu's, so the Ubuntu source packages in the bundle
   correspond exactly.
