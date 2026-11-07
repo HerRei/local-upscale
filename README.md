@@ -56,10 +56,12 @@ also play before they are upscaled.
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 and instructions for each platform:
 
-- **macOS v0.3.0-beta:** Apple Silicon, macOS 14 or later. Signed and notarized
-  by Apple, with signed updates in the app.
+- **macOS v0.3.0-beta:** a Mac with Apple Silicon (M1 or newer) and macOS 14 or
+  later. Intel Macs are not supported. Signed and notarized by Apple, with
+  signed updates in the app.
 - **Windows v0.3.0-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
-  CUDA editions; the GPU editions are labelled untested. Installers are unsigned.
+  CUDA editions; the GPU editions are labelled untested. Installers are unsigned,
+  so SmartScreen warns first: choose **More info**, then **Run anyway**.
 - **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   ROCm was tested on a Radeon RX 9060 XT with earlier builds; CUDA is untested.
 
@@ -77,8 +79,19 @@ Editing with a prompt is available on the Mac only.
 The larger GPU editions come in parts. The download page explains how to put
 these together. See [platform support](docs/platforms.md) for the testing details.
 
-Models download when you need them. Quick needs about 4.5 MB; other models can
-be much larger.
+The Mac app takes about 1.2 GB on disk. Models download when you need them.
+Quick needs about 4.5 MB and most other models are under 500 MB. SeedVR2 for
+video takes several gigabytes, and the editing models 5 to 26 GB. Upscaling and
+editing with FLUX.2 klein are tested on a Mac with 16 GB of memory. Qwen Image
+Edit needs 24 GB or more.
+
+LocalSR is only published on
+[GitHub Releases](https://github.com/HerRei/local-upscale/releases) and on
+[herrei.github.io/localsr](https://herrei.github.io/localsr/), which links the
+same files. The Homebrew cask installs the same DMG. GitHub shows a SHA-256 for
+every file, and each installer has a `.sha256` file next to it. The Mac app is
+signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`, and
+`spctl -a -vv /Applications/LocalSR.app` shows it.
 
 ## What you can do
 
@@ -122,31 +135,76 @@ SwinIR, NAFNet, SCUNet and FBCNN. The two HAT face companions require a manual
 import because their checkpoint rights are unresolved.
 [Model guide](docs/models/README.md) · [Model licenses](docs/model-licenses.md).
 
-## What to expect
+## Limits
 
-The Mac build gets the most testing, on an M1 Pro with 16 GB of memory.
-Windows and Linux have automated package checks and some hardware testing;
-they have not had the same manual coverage.
+- AI upscaling reconstructs detail. Faces, text and fine patterns can look
+  sharp and still differ from the real scene, especially at 4×. Keep your
+  originals. LocalSR never overwrites them.
+- The video upscalers work on one frame at a time, so fine detail can flicker.
+  De-flicker and SeedVR2 under Labs still need more testing.
+- Large images and video can take hours. Try a small image or a short clip
+  first to get a feel for the speed.
+- Edit is experimental and makes a new picture from your prompt. One setup is
+  tested: FLUX.2 klein 4B Q4_0 at 512 px on a 16 GB M1 Pro.
+- The Mac build gets the most testing. Windows and Linux have automated package
+  checks and some hardware testing, they don't update themselves, and their
+  CUDA and DirectML editions are untested.
+- On Windows and Linux, H.264, HEVC and AAC (most phone videos) need an FFmpeg
+  you install yourself. On the Mac they open through the system.
 
-Try a small image or a short clip first to get a feel for the speed. Large
-images and video can take hours. More memory helps, but a particular model or
-video job may still be too demanding for your computer.
-[Known limitations](KNOWN_LIMITATIONS.md).
+The full list is in [Known limitations](KNOWN_LIMITATIONS.md).
 
-AI upscaling reconstructs detail. It can make a photo look clearer, but it
-cannot tell you exactly what was in the original scene. Keep your originals.
+## What leaves your computer
 
-## Privacy
+There is no account, and your images and videos are never uploaded. LocalSR
+connects for these things only:
 
-There is no account. Your images and videos are processed locally and never
-uploaded. The app connects to download models you choose and to check for
-updates at launch.
+- **Update check (macOS):** at launch and when you choose *Check for Updates…*,
+  the app reads `herrei.github.io/localsr/updates/beta.json` from GitHub Pages.
+  The launch check can't be turned off in the app. If you block it with a
+  firewall, everything else keeps working.
+- **Anonymous count:** after a successful check, one request goes to my Mac mini
+  at `macmini-ci.tail34a4e0.ts.net` with the app version, platform and channel.
+  It has no install ID and no cookies. It is on by default, so the first launch
+  already sends one. Turn it off with *Send an anonymous update-check count* in
+  the Software Update dialog.
+- **Updates:** when you install one, it downloads from GitHub Releases and its
+  signature is checked before anything is replaced.
+- **Models:** each model downloads from its author's release on Hugging Face or
+  GitHub when you choose it, into `~/Library/Application Support/LocalSR/models`.
 
-The update check includes an anonymous count: app version, platform and channel,
-with no identifier. Turn off *Send an anonymous update-check count* in the
-Software Update dialog if you prefer. *Copy diagnostics* includes versions,
-hardware and memory figures, without file names or media.
+Nothing else is sent: no analytics and no crash reports. *Copy diagnostics* puts
+versions, hardware and memory figures on your clipboard, without file names or
+media, and only when you ask. Windows and Linux builds don't check for updates.
+Once your models are downloaded, LocalSR works offline.
 [Privacy details](https://herrei.github.io/localsr/privacy/).
+
+## FAQ
+
+**Does it run on an Intel Mac?** No. The Mac build needs Apple Silicon and
+macOS 14 or later.
+
+**Is it as good as Topaz?** Topaz uses its own models. LocalSR uses public ones
+such as SPAN, RealPLKSR, HAT and Real-ESRGAN, and it is free. Which result is
+better depends on the photo, so try both on your own pictures.
+
+**Why is it free?** It's my own project, made alongside uni. There is no paid
+version, no account and no advertising, and the code is MIT licensed.
+
+**Why is the download so big?** The app brings its own PyTorch engine, so you
+don't need Python. The DMG is about 420 MB and the installed app about 1.2 GB.
+
+**Can I use my own models?** Yes, compatible `.safetensors` files work as a
+custom checkpoint. `.pth`, `.pt` and `.ckpt` files can run code when they load,
+so the app only uses one after you tick *Allow this pickle-based checkpoint*.
+Do that only for files whose publisher you trust.
+
+**How do I uninstall it?** Quit LocalSR and move it to the Trash. Then delete
+`~/Library/Application Support/LocalSR` (models, settings and the queue) and
+`~/Library/Caches/LocalSR`, and `~/Library/Services/Enhance with LocalSR.workflow`
+if you turned on the Finder action. On Windows, uninstall it under Apps and
+delete `%LOCALAPPDATA%\LocalSR`. On Linux, delete the AppImage and
+`${XDG_DATA_HOME:-~/.local/share}/LocalSR`. Your exported files stay where you saved them.
 
 ## Build from source
 

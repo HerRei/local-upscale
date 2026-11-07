@@ -96,8 +96,9 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 - No weights are bundled. Each model downloads from its author's release when
   you choose it, so the first use of a model needs a network connection.
 - Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
-  `.ckpt` files can run code when loaded and are refused unless you set
-  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` for files whose publisher you trust.
+  `.ckpt` files can run code when loaded and are refused unless you tick
+  *Allow this pickle-based checkpoint* in the app (on the command line, set
+  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`), only for files whose publisher you trust.
 
 ## Installation and updates
 
