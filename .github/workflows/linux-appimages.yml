@@ -1,7 +1,11 @@
 name: Linux AppImages
 
 # Builds the Linux CPU, NVIDIA CUDA and AMD ROCm AppImages on GitHub-hosted runners,
-# which have the disk space and glibc the licensing-clean media runtime needs. The media
+# which have the disk space the licensing-clean media runtime needs. They run Ubuntu 22.04,
+# the oldest LTS still in standard support: an AppImage uses the host's glibc and runs only
+# where it is at least as new as the build host's, and AppImageHub (the AppImage catalog)
+# tests on that release. Every AppImage must need at most glibc 2.35 and show its window
+# without network within AppImageHub's 30 seconds. The media
 # runtime is built from the pinned LGPL sources, and build_tauri_preview.py refuses any
 # media runtime or AppImage outside packaging/ffmpeg/codec-policy.json; this workflow
 # never passes --private-preview-media. Each AppImage gets its corresponding source
@@ -30,7 +34,7 @@ concurrency:
 jobs:
   appimage:
     name: Build Linux x86_64 ${{ matrix.backend }} AppImage
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 330
     strategy:
       fail-fast: false
@@ -100,9 +104,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            xdg-utils xvfb dbus-x11 librdmacm1 libibverbs1 squashfs-tools \
+            xdg-utils xvfb dbus-x11 xdotool imagemagick librdmacm1 libibverbs1 squashfs-tools \
             nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch \
-            libnuma1 libelf1t64 libdw1t64
+            libnuma1 libelf1 libdw1
           python -m pip install --disable-pip-version-check "pip==${PIP_VERSION}"
           python scripts/backend_wheelhouse.py --target "${{ matrix.id }}" \
             --cache-root /mnt/lsr/wheelhouses --report /mnt/lsr/out/dependency-wheelhouse.json
@@ -113,6 +117,27 @@ jobs:
         run: |
           python packaging/ffmpeg/install_media_runtime.py \
             --work-dir /mnt/lsr/lgpl-media/linux-x86_64 --source-cache /mnt/lsr/lgpl-media/sources --jobs 4
+
+      - name: Install the Vulkan SDK for the CUDA and ROCm editing runtime
+        if: matrix.backend != 'CPU'
+        env:
+          VULKAN_SDK_VERSION: "1.4.363.1"
+          VULKAN_SDK_SHA256: b7867d8ca658563813af666f34b93db87f1b1c7d9d69d97e924c210c7ba33eb8
+        run: |
+          # stable-diffusion.cpp's Vulkan backend is built from source here, because its
+          # prebuilt Linux binaries need Ubuntu 24.04's glibc; Ubuntu 22.04's Vulkan headers
+          # and its shaderc are too old for it.
+          ARCHIVE="/mnt/lsr/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
+          curl -fsSL --retry 3 -o "$ARCHIVE" \
+            "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
+          echo "${VULKAN_SDK_SHA256}  ${ARCHIVE}" | sha256sum --check
+          mkdir -p /mnt/lsr/vulkan-sdk
+          tar -C /mnt/lsr/vulkan-sdk -xJf "$ARCHIVE"
+          rm "$ARCHIVE"
+          SDK="/mnt/lsr/vulkan-sdk/${VULKAN_SDK_VERSION}/x86_64"
+          "$SDK/bin/glslc" --version
+          echo "VULKAN_SDK=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/bin" >> "$GITHUB_PATH"
 
       - name: Build, verify and smoke-test the AppImage
         run: |
@@ -130,11 +155,18 @@ jobs:
             --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform linux --architecture x86_64 --report "/mnt/lsr/out/$NAME.architecture.json"
-          # Corresponding source for exactly what the AppImage contains.
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update
           mkdir -p /mnt/lsr/extract
           (cd /mnt/lsr/extract && "$ARTIFACT" --appimage-extract > /dev/null)
+          # What AppImageHub tests: the glibc every ELF file needs, and a window without network.
+          python scripts/verify_appimage_libc.py /mnt/lsr/extract/squashfs-root --appimage "$ARTIFACT" \
+            --report "/mnt/lsr/out/$NAME.libc.json"
+          python scripts/verify_appimage_window.py --appdir /mnt/lsr/extract/squashfs-root \
+            --appimage "$ARTIFACT" --screenshot "/mnt/lsr/out/$NAME.offline-window.png" \
+            --report "/mnt/lsr/out/$NAME.offline-window.json"
+          # Corresponding source for exactly what the AppImage contains.
+          sed -n 's/^deb /deb-src /p' /etc/apt/sources.list | sudo tee /etc/apt/sources.list.d/deb-src.list
+          test -s /etc/apt/sources.list.d/deb-src.list
+          sudo apt-get update
           python scripts/verify_nvidia_redistributables.py /mnt/lsr/extract/squashfs-root \
             | tee "/mnt/lsr/out/$NAME.nvidia.json"
           mapfile -t EXTRA < <(python scripts/fetch_extra_sources.py --platform linux-x86_64 \
