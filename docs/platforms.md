@@ -39,7 +39,7 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   files the license does not list are left out. The Windows engine ships as verified parts next to
   the installer. Nobody has run either package on an NVIDIA GPU yet.
 - **AMD ROCm (Linux).** PyTorch's ROCm wheel bundles libnuma and libelf built on
-  AlmaLinux. The package ships Ubuntu 24.04's own builds instead, found by soname under
+  AlmaLinux. The package ships Ubuntu 22.04's own builds instead, found by soname under
   every file name they appear as (every library that uses them is link-checked with
   `ldd -r`), and its source bundle carries their Ubuntu sources. AMD's aqlprofile is MIT-licensed in
   [ROCm/rocm-systems](https://github.com/ROCm/rocm-systems).
