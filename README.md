@@ -63,6 +63,15 @@ and instructions for each platform:
 - **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   ROCm was tested on a Radeon RX 9060 XT with earlier builds; CUDA is untested.
 
+With [Homebrew](https://brew.sh/), the Mac installer is one command:
+
+```bash
+brew install --cask herrei/tap/localsr
+```
+
+The cask follows each release, and the app keeps updating itself as before
+([HerRei/homebrew-tap](https://github.com/HerRei/homebrew-tap)).
+
 Editing with a prompt is available on the Mac only.
 
 The larger GPU editions come in parts. The download page explains how to put
