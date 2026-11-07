@@ -193,17 +193,17 @@ version, no account and no advertising, and the code is MIT licensed.
 **Why is the download so big?** The app brings its own PyTorch engine, so you
 don't need Python. The DMG is about 420 MB and the installed app about 1.2 GB.
 
-**Can I use my own models?** Yes, compatible `.safetensors` files can be
-imported in the model library. `.pth`, `.pt` and `.ckpt` files can run code
-when they load, so LocalSR refuses them unless you set
-`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`.
+**Can I use my own models?** Yes, compatible `.safetensors` files work as a
+custom checkpoint. `.pth`, `.pt` and `.ckpt` files can run code when they load,
+so the app only uses one after you tick *Allow this pickle-based checkpoint*.
+Do that only for files whose publisher you trust.
 
 **How do I uninstall it?** Quit LocalSR and move it to the Trash. Then delete
 `~/Library/Application Support/LocalSR` (models, settings and the queue) and
 `~/Library/Caches/LocalSR`, and `~/Library/Services/Enhance with LocalSR.workflow`
 if you turned on the Finder action. On Windows, uninstall it under Apps and
 delete `%LOCALAPPDATA%\LocalSR`. On Linux, delete the AppImage and
-`~/.local/share/LocalSR`. Your exported files stay where you saved them.
+`${XDG_DATA_HOME:-~/.local/share}/LocalSR`. Your exported files stay where you saved them.
 
 ## Build from source
 
