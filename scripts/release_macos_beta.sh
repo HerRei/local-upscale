@@ -17,8 +17,8 @@ PROFILE=LocalSR-Z2TU844D84-notary
 OUT="$PWD/build/release-$VERSION"
 mkdir -p "$OUT"
 APP_NAME="LocalSR.app"
-# Public downloads go through the Infomaniak VPS to the Mac mini. GitHub is a mirror.
-HOST_BASE="https://downloads.hermesr.duckdns.org/releases/v$VERSION"
+# Public downloads come from GitHub Releases. The Mac mini keeps a copy.
+HOST_BASE="https://github.com/HerRei/local-upscale/releases/download/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 
 test -z "$(git status --porcelain -- src desktop packaging scripts pyproject.toml)" || { echo "uncommitted source changes"; exit 1; }

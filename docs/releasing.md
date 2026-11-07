@@ -73,12 +73,12 @@ file resumes at the wrong offset.
 After the build:
 
 Public installers, source bundles and updater files use
-`https://downloads.hermesr.duckdns.org/releases/v<version>/`. The Infomaniak
-VPS relays encrypted traffic over WireGuard to the Mac mini. GitHub Releases
-is a mirror and transfer source; it is not the primary download host.
+`https://github.com/HerRei/local-upscale/releases/download/v<version>/`. The
+Mac mini keeps a copy at `https://downloads.hermesr.duckdns.org/releases/v<version>/`,
+reached through the Infomaniak VPS over WireGuard. The site does not link it.
 
 1. Copy the DMG, the update archive and its signature, the engine payload and
-   its parts, the source bundle and `SHA256SUMS` to the download host. A direct
+   its parts, the source bundle and `SHA256SUMS` to the Mac mini. A direct
    `scp` through the Tailscale relay runs at about 750 KB/s; uploading them to a
    **draft** GitHub release and running `gh release download` on the host is far
    faster and creates no tag. A temporary transfer draft can be removed afterward;
