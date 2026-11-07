@@ -88,10 +88,10 @@ Edit needs 24 GB or more.
 LocalSR is only published on
 [GitHub Releases](https://github.com/HerRei/local-upscale/releases) and on
 [herrei.github.io/localsr](https://herrei.github.io/localsr/), which links the
-same files. GitHub shows a SHA-256 for every file, and each installer has a
-`.sha256` file next to it. The Mac app is signed as
-`Developer ID Application: Hermes Reisner (Z2TU844D84)`; run
-`spctl -a -vv /Applications/LocalSR.app` to see it.
+same files. The Homebrew cask installs the same DMG. GitHub shows a SHA-256 for
+every file, and each installer has a `.sha256` file next to it. The Mac app is
+signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`, and
+`spctl -a -vv /Applications/LocalSR.app` shows it.
 
 ## What you can do
 
