@@ -77,12 +77,12 @@ Public installers, source bundles and updater files use
 Mac mini keeps a copy at `https://downloads.hermesr.duckdns.org/releases/v<version>/`,
 reached through the Infomaniak VPS over WireGuard. The site does not link it.
 
-1. Copy the DMG, the update archive and its signature, the engine payload and
-   its parts, the source bundle and `SHA256SUMS` to the Mac mini. A direct
-   `scp` through the Tailscale relay runs at about 750 KB/s; uploading them to a
-   **draft** GitHub release and running `gh release download` on the host is far
-   faster and creates no tag. A temporary transfer draft can be removed afterward;
-   the actual release draft is published once its exact files are verified.
+1. Upload the DMG, the update archive and its signature, the engine payload and
+   its parts, the source bundle, the `.sha256` files and `SHA256SUMS` to the
+   **draft** GitHub release, then copy them to the Mac mini with
+   `gh release download` on the host. A direct `scp` through the Tailscale relay
+   runs at about 750 KB/s. The draft is published once its exact files are
+   verified.
 2. Verify the copies on the host with `shasum -a 256 -c SHA256SUMS`.
 3. Install the previous version on a test Mac and confirm that the update
    downloads, installs and relaunches on the new version.

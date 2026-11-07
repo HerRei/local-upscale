@@ -164,9 +164,10 @@ connects for these things only:
   The launch check can't be turned off in the app. If you block it with a
   firewall, everything else keeps working.
 - **Anonymous count:** after a successful check, one request goes to my Mac mini
-  with the app version, platform and channel. It has no install ID and no
-  cookies. Turn it off with *Send an anonymous update-check count* in the
-  Software Update dialog.
+  at `macmini-ci.tail34a4e0.ts.net` with the app version, platform and channel.
+  It has no install ID and no cookies. It is on by default, so the first launch
+  already sends one. Turn it off with *Send an anonymous update-check count* in
+  the Software Update dialog.
 - **Updates:** when you install one, it downloads from GitHub Releases and its
   signature is checked before anything is replaced.
 - **Models:** each model downloads from its author's release on Hugging Face or
