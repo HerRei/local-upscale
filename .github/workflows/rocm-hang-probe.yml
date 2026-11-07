@@ -1,0 +1,58 @@
+name: ROCm torch start with RDMA libraries and NumPy first
+
+# Temporary: the frozen ROCm worker deadlocks in import torch on Ubuntu 22.04 while
+# libtorch_rocshmem appears to exit. Imports NumPy and then the locked ROCm torch with the
+# build's RDMA libraries installed, prints all output, and traces a hang.
+# Removed again in the next commit.
+
+on:
+  push:
+    branches: [fix/appimage-glibc]
+    paths: [.github/workflows/rocm-hang-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Install the build's RDMA libraries and the locked ROCm torch
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdb librdmacm1 libibverbs1 libnuma1
+          dpkg -l librdmacm1 libibverbs1 | tail -2
+          sudo mkdir -p /mnt/probe && sudo chown "$(id -u)" /mnt/probe
+          python -m venv /mnt/probe/venv
+          /mnt/probe/venv/bin/pip install --disable-pip-version-check --cache-dir /mnt/probe/pip \
+            --extra-index-url https://download.pytorch.org/whl/rocm7.2 \
+            "torch==2.13.0+rocm7.2" "numpy<2.4" "py-spy==0.4.1"
+          LIB=/mnt/probe/venv/lib/python3.11/site-packages/torch/lib
+          readelf -d "$LIB/libtorch_rocshmem.so" | grep NEEDED
+          readelf -d "$LIB/libtorch_hip.so" | grep -c rocshmem || true
+      - name: Import NumPy, then torch, with all output and a trace on a hang
+        run: |
+          /mnt/probe/venv/bin/python -X faulthandler -c 'import numpy, time; t = time.monotonic(); import torch; print("import", round(time.monotonic() - t, 1), "s", torch.cuda.is_available(), flush=True)' &
+          PID=$!
+          for _ in $(seq 1 90); do kill -0 $PID 2>/dev/null || break; sleep 1; done
+          if kill -0 $PID 2>/dev/null; then
+            echo "HANG after 90 s"
+            sudo /mnt/probe/venv/bin/py-spy dump --native --pid $PID || true
+            sudo gdb -p $PID -batch -ex "thread apply all bt 25" 2>&1 \
+              | grep -v '^\[New LWP\|^warning:' | head -150 || true
+            kill -9 $PID
+            exit 1
+          fi
+          wait $PID
+      - name: The same with LD_LIBRARY_PATH on torch/lib, as the AppImage's AppRun does
+        run: |
+          export LD_LIBRARY_PATH=/mnt/probe/venv/lib/python3.11/site-packages/torch/lib
+          timeout -s KILL 90 /mnt/probe/venv/bin/python -c 'import numpy, torch; print("ok", torch.cuda.is_available())'; echo "exit $?"
