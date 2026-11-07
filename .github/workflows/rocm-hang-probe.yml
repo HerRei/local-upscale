@@ -1,0 +1,74 @@
+name: ROCm torch start on Ubuntu 22.04 vs 24.04
+
+# Temporary: the ROCm worker hangs on Ubuntu 22.04 before its handshake. Imports the
+# locked ROCm torch and probes for a GPU, with and without the build's swap of libnuma,
+# libelf and libdw for the host's copies, and takes stack traces of a hang.
+# Removed again in the next commit.
+
+on:
+  push:
+    branches: [fix/appimage-glibc]
+    paths: [.github/workflows/rocm-hang-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        swap: [host-libs, wheel-libs]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Install the locked ROCm torch
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdb libnuma1
+          sudo apt-get install -y libelf1 libdw1 || sudo apt-get install -y libelf1t64 libdw1t64
+          sudo mkdir -p /mnt/probe && sudo chown "$(id -u)" /mnt/probe
+          python -m venv /mnt/probe/venv
+          /mnt/probe/venv/bin/pip install --disable-pip-version-check --cache-dir /mnt/probe/pip \
+            --extra-index-url https://download.pytorch.org/whl/rocm7.2 \
+            "torch==2.13.0+rocm7.2" "py-spy==0.4.1"
+      - name: Swap libnuma, libelf and libdw for the host's copies
+        if: matrix.swap == 'host-libs'
+        run: |
+          LIB=$(/mnt/probe/venv/bin/python -c 'import torch, os; print(os.path.join(os.path.dirname(torch.__file__), "lib"))' 2>/dev/null \
+            || echo /mnt/probe/venv/lib/python3.11/site-packages/torch/lib)
+          for f in "$LIB"/*; do
+            soname=$(readelf -d "$f" 2>/dev/null | sed -n 's/.*Library soname: \[\(.*\)\]/\1/p')
+            case "$soname" in libnuma.so.1|libelf.so.1|libdw.so.1)
+              host=$(ldconfig -p | awk -v s="$soname" '$1 == s && /x86-64/ {print $NF; exit}')
+              echo "replace $(basename "$f") ($soname) with $host"
+              cp "$(readlink -f "$host")" "$(readlink -f "$f")" ;;
+            esac
+          done
+      - name: Import torch and probe for a GPU, with stack traces on a hang
+        run: |
+          cat > /mnt/probe/probe.py <<'EOF'
+          import time
+          t = time.monotonic()
+          import torch
+          print("import", torch.__version__, round(time.monotonic() - t, 1), "s", flush=True)
+          print("hip", torch.version.hip, flush=True)
+          t = time.monotonic()
+          print("is_available", torch.cuda.is_available(), round(time.monotonic() - t, 1), "s", flush=True)
+          print("device_count", torch.cuda.device_count(), flush=True)
+          EOF
+          /mnt/probe/venv/bin/python /mnt/probe/probe.py &
+          PID=$!
+          for _ in $(seq 1 90); do kill -0 $PID 2>/dev/null || break; sleep 1; done
+          if kill -0 $PID 2>/dev/null; then
+            echo "HANG after 90 s"
+            sudo /mnt/probe/venv/bin/py-spy dump --native --pid $PID || true
+            sudo gdb -p $PID -batch -ex "thread apply all bt 25" 2>&1 | grep -v "^\[New LWP\|^warning:" | head -150 || true
+            kill -9 $PID
+            exit 1
+          fi
+          wait $PID
