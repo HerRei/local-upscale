@@ -1,0 +1,88 @@
+name: AppImageHub test of a built AppImage
+
+# Temporary: runs AppImageHub's own test (AppImage/appimage.github.io, code/worker.sh at a
+# pinned commit, as its test.yml runs it for a new entry) on the CPU AppImage of a
+# linux-appimages.yml run. Removed again before this branch is merged.
+
+on:
+  push:
+    branches: [fix/appimage-glibc]
+    paths: [.github/workflows/appimagehub-check.yml]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  appimagehub:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      BUILD_RUN: "42397057457"
+      HUB_COMMIT: 486f32b6c083d36725e629dc5c7ee75bddd6ae8e
+      DISPLAY: ":99"
+      STRICT: "true"
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: linux-x86_64-cpu
+          path: appimage
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: AppImage/appimage.github.io
+          ref: ${{ env.HUB_COMMIT }}
+          path: hub
+          persist-credentials: false
+
+      - name: Install AppImageHub's test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick libasound2-dev pulseaudio-utils alsa-utils alsa-oss \
+            libjack0 desktop-file-utils xmlstarlet xsel xterm xvfb icewm x11-utils x11-apps netpbm \
+            xdotool libgl1-mesa-dri libgl1-mesa-dev mesa-utils libosmesa6 libsdl1.2-dev libsdl2-2.0-0 \
+            fonts-wqy-microhei libfile-mimeinfo-perl tesseract-ocr tesseract-ocr-eng \
+            tesseract-ocr-chi-sim tesseract-ocr-ara tesseract-ocr-rus tesseract-ocr-ell libfuse2 \
+            stalonetray
+          cd hub
+          bash code/fetch-deps.sh
+          cp -a deps/. .
+          sudo bash code/prep-dummy-soundcard.sh
+          sudo gem install dupervisor -v 1.0.5
+          sudo npm install -g asar
+
+      - name: Run AppImageHub's worker on the AppImage
+        run: |
+          shopt -s nullglob
+          files=(appimage/*.AppImage)
+          test "${#files[@]}" = 1
+          NAME=$(basename "${files[0]}")
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory appimage > /dev/null 2>&1 &
+          cd hub
+          # The entry as the pull request names it, pointing at this build instead of the release
+          echo "http://127.0.0.1:8765/$NAME" > data/local-upscale
+          mkdir -p "$HOME/.icewm"
+          printf 'ShowTaskBar = 0\nTaskBarAutoHide = 1\n' > "$HOME/.icewm/preferences"
+          Xvfb :99 -screen 0 800x600x24 > /dev/null 2>&1 &
+          sleep 2
+          set +e
+          timeout --kill-after=30 600 bash -e code/worker.sh "$(readlink -f data/local-upscale)" 2>&1 | tee log.txt
+          code=${PIPESTATUS[0]}
+          bash code/diagnose.sh log.txt > hints.md
+          grep -h '^X-AppImage-' log.txt | sort -u
+          grep -hE '^(ERROR|WARNING|NOTE):' log.txt | sort -u
+          exit "$code"
+
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: appimagehub-result
+          path: |
+            hub/log.txt
+            hub/hints.md
+            hub/database/local-upscale/
+            hub/failure-screens/
+          if-no-files-found: warn
+          retention-days: 14
