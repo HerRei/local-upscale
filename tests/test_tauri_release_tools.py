@@ -25,7 +25,6 @@ verify_package = load_script("verify_tauri_release_package")
 verify_macos_signing = load_script("verify_macos_tauri_signing")
 prepare_release = load_script("prepare_tauri_release_assets")
 smoke_installer = load_script("smoke_tauri_installer")
-publish_release = load_script("publish_tauri_release")
 
 
 def write_pe(path: Path, machine: int) -> None:
@@ -298,7 +297,7 @@ def release_fixture(tmp_path: Path):
 
 
 def test_compacts_every_backend_and_verified_payload(tmp_path: Path) -> None:
-    from verify_prepared_release import verify
+    from verify_prepared_release import expected_assets, verify
 
     staging, manifest, output, readiness = release_fixture(tmp_path)
     index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
@@ -308,7 +307,7 @@ def test_compacts_every_backend_and_verified_payload(tmp_path: Path) -> None:
     assert index["beta_ready"] is False
     assert len((output / "release-files.txt").read_text().splitlines()) == 10
     verify(output, manifest, "c" * 40)
-    assert len(publish_release.expected_assets(output)) == 10
+    assert len(expected_assets(output)) == 10
     second = tmp_path / "rerun"
     prepare_release.prepare(staging, manifest, "v1-alpha", second, readiness)
     assert index_path.read_bytes() == (second / "release-index.json").read_bytes()
@@ -342,120 +341,6 @@ def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> No
         path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match=match):
         prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
-
-
-def test_draft_resume_uploads_only_missing_matching_assets(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
-    expected = {
-        first.name: (first, hashlib.sha256(first.read_bytes()).hexdigest()),
-        second.name: (second, hashlib.sha256(second.read_bytes()).hexdigest()),
-    }
-    release = {
-        "tagName": "v1-alpha",
-        "targetCommitish": "a" * 40,
-        "isDraft": True,
-        "isPrerelease": True,
-        "assets": [
-            {
-                "name": first.name,
-                "digest": "sha256:" + expected[first.name][1],
-            }
-        ],
-    }
-
-    assert publish_release.plan_draft_resume(
-        release, expected, tag="v1-alpha", commit="a" * 40
-    ) == [second]
-
-    first_publication = release | {"assets": []}
-    assert publish_release.plan_draft_resume(
-        first_publication, expected, tag="v1-alpha", commit="a" * 40
-    ) == [first, second]
-
-
-def test_draft_resume_fails_closed_on_digest_commit_or_published_state(
-    tmp_path: Path,
-) -> None:
-    asset = tmp_path / "asset"
-    asset.write_bytes(b"expected")
-    expected = {asset.name: (asset, hashlib.sha256(asset.read_bytes()).hexdigest())}
-    base = {
-        "tagName": "v1-alpha",
-        "targetCommitish": "a" * 40,
-        "isDraft": True,
-        "isPrerelease": True,
-        "assets": [{"name": asset.name, "digest": "sha256:" + "0" * 64}],
-    }
-    with pytest.raises(ValueError, match="digest mismatch"):
-        publish_release.plan_draft_resume(base, expected, tag="v1-alpha", commit="a" * 40)
-    with pytest.raises(ValueError, match="tag does not match"):
-        publish_release.plan_draft_resume(
-            base | {"tagName": "v2"}, expected, tag="v1-alpha", commit="a" * 40
-        )
-    with pytest.raises(ValueError, match="target commit"):
-        publish_release.plan_draft_resume(
-            base | {"targetCommitish": "b" * 40},
-            expected,
-            tag="v1-alpha",
-            commit="a" * 40,
-        )
-    with pytest.raises(ValueError, match="immutable"):
-        publish_release.plan_draft_resume(
-            base | {"isDraft": False}, expected, tag="v1-alpha", commit="a" * 40
-        )
-
-    matching = base | {
-        "targetCommitish": "main",
-        "assets": [{"name": asset.name, "digest": "sha256:" + expected[asset.name][1]}],
-    }
-    assert (
-        publish_release.plan_draft_resume(matching, expected, tag="v1-alpha", commit="a" * 40) == []
-    )
-
-
-def test_published_release_requires_exact_title_state_and_assets(tmp_path: Path) -> None:
-    asset = tmp_path / "asset"
-    asset.write_bytes(b"expected")
-    digest = hashlib.sha256(asset.read_bytes()).hexdigest()
-    expected = {asset.name: (asset, digest)}
-    release = {
-        "tagName": "v1-alpha",
-        "name": "LocalSR v1-alpha",
-        "targetCommitish": "main",
-        "isDraft": False,
-        "isPrerelease": True,
-        "assets": [{"name": asset.name, "digest": f"sha256:{digest}"}],
-    }
-    publish_release.verify_published_release(
-        release,
-        expected,
-        tag="v1-alpha",
-        commit="a" * 40,
-        title="LocalSR v1-alpha",
-    )
-    with pytest.raises(ValueError, match="identity"):
-        publish_release.verify_published_release(
-            release | {"name": "Wrong"},
-            expected,
-            tag="v1-alpha",
-            commit="a" * 40,
-            title="LocalSR v1-alpha",
-        )
-
-
-def test_release_tag_must_resolve_to_the_expected_commit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        publish_release,
-        "run",
-        lambda _command, **_kwargs: type(
-            "Result", (), {"stdout": "b" * 40 + "\n", "stderr": "", "returncode": 0}
-        )(),
-    )
-    with pytest.raises(ValueError, match="expected release commit"):
-        publish_release.verify_local_tag("v1-alpha", "a" * 40)
 
 
 def test_release_matrix_rejects_cross_attempt_commit_mixing(tmp_path: Path) -> None:
