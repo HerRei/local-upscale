@@ -166,13 +166,23 @@ def release_package_violations(name: str, workflow: str, gates: dict[str, str]) 
 
     violations: list[str] = []
     code = _code(workflow)
-    if "on:\n  workflow_dispatch:" not in code:
-        violations.append(f"{name} must start only by hand")
-    if re.search(r"(?m)^  (push|pull_request\w*|schedule|release|workflow_run):", code):
-        violations.append(f"{name} must not start on pushes, PRs, releases or a schedule")
+    trigger_block = re.search(r"(?m)^on:\n((?:[ \t].*\n|\n)*)", code + "\n")
+    triggers = set(
+        re.findall(
+            r"(?m)^  [\"']?([\w-]+)[\"']?\s*:", trigger_block.group(1) if trigger_block else ""
+        )
+    )
+    if triggers != {"workflow_dispatch"}:
+        violations.append(f"{name} must start only by hand, not on {sorted(triggers)}")
     if not re.search(r"(?m)^permissions:\n  contents: read$", code):
         violations.append(f"{name} must default to read-only contents")
-    if code.count("contents: write") != 1:
+    attach_job = code.split("\n  attach:\n", 1)
+    if (
+        "write-all" in code
+        or code.count("contents: write") != 1
+        or len(attach_job) != 2
+        or "contents: write" not in attach_job[1]
+    ):
         violations.append(f"only the attach job of {name} may write release contents")
     for label, token in (RELEASE_PACKAGE_GATES | gates).items():
         if token not in code:
@@ -198,7 +208,7 @@ def hosted_runner_violations(root: Path) -> list[str]:
 
     return [
         f"{path.relative_to(root)} targets a self-hosted runner"
-        for path in sorted((root / ".github" / "workflows").glob("*.yml"))
+        for path in sorted((root / ".github" / "workflows").glob("*.y*ml"))
         if "self-hosted" in _code(path.read_text(encoding="utf-8"))
     ]
 
