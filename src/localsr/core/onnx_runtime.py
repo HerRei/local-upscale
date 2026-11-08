@@ -1,7 +1,7 @@
 """ONNX image execution with the same Spandrel padding and range contract.
 
 Graphs are converted from the checkpoint already verified by ModelAdapter. They
-stay in memory and are bounded to two input shapes per loaded model. Checkpoints
+stay in memory and are bounded to four input shapes per loaded model. Checkpoints
 and user settings are never rewritten by conversion.
 """
 
@@ -87,6 +87,8 @@ class _RawImage(torch.nn.Module):
 MINIMUM_PSNR = 50.0
 GATE_CACHE_ENV = "LOCALSR_ONNX_GATE_CACHE"
 _MAXIMUM_VERDICTS = 400
+# Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).
+_LARGE_GRAPH_BYTES = 256 * 1024**2
 # DXGI device-removed, hung, reset and internal-driver errors, and their usual texts.
 _DEVICE_LOST_FRAGMENTS = (
     "887a0005",
@@ -229,20 +231,10 @@ class _OnnxImage(torch.nn.Module):
         self.status_callback = None
         self.execution_verified = False
         self.verdicts = _Verdicts(gate_cache_directory())
-        requirements = descriptor.size_requirements
-        self.minimum = int(getattr(requirements, "minimum", 0) or 0)
-        self.alignment = max(1, int(getattr(requirements, "multiple_of", 1) or 1))
-        # (height, width) every tile is cut to, so one graph serves the whole image.
-        self.shape: tuple[int, int] | None = None
-
-    def prepare(self, tile_size: int, halo: int) -> None:
-        side = max(tile_size + 2 * halo, self.minimum, 1)
-        side = -(-side // self.alignment) * self.alignment
-        current = self.shape
-        # Keep a larger existing graph for smaller tiles, but not one so much larger
-        # that padding would waste most of the work (the out-of-memory retry halves tiles).
-        if current is None or side > current[0] or current[0] * current[1] > 1.5 * side * side:
-            self.shape = (side, side)
+        # An image's tiles come in up to four shapes (interior, right edge, bottom edge,
+        # corner). Keeping all four lets the next image or video frame of the same size
+        # reuse them; a very large model keeps two to spare shared memory.
+        self.session_limit = 4
 
     def _check_cancelled(self):
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -366,11 +358,15 @@ class _OnnxImage(torch.nn.Module):
             self.sessions[key] = cached
             return cached
         self._check_cancelled()
-        # Release the oldest GPU graph before allocating another one, keeping
-        # the peak at two sessions as well as the retained cache size.
-        if len(self.sessions) >= 2:
+        # Release the oldest GPU graph before allocating another one, keeping the peak
+        # at the retained cache size.
+        if len(self.sessions) >= self.session_limit:
             self.sessions.popitem(last=False)
         graph = self._export(image)
+        if len(graph) > _LARGE_GRAPH_BYTES:
+            self.session_limit = 2
+            while len(self.sessions) >= self.session_limit:
+                self.sessions.popitem(last=False)
         graph_hash = hashlib.sha256(graph).hexdigest()[:24]
         candidates = self._candidates(graph_hash)
         if not candidates:
@@ -639,7 +635,7 @@ class _OnnxImage(torch.nn.Module):
                 raise ValueError("ONNX returned an invalid image shape or non-finite pixels")
             self.execution_verified = True
             self.sessions[key] = state
-            while len(self.sessions) > 2:
+            while len(self.sessions) > self.session_limit:
                 self.sessions.popitem(last=False)
             return torch.from_numpy(np.ascontiguousarray(output))
 
@@ -695,15 +691,6 @@ class OnnxImageDescriptor:
 
     def set_status_callback(self, callback):
         self.model.status_callback = callback
-
-    def prepare_tiles(self, tile_size: int, halo: int, frame=None):
-        # Whole frames vary in size; tiles share one shape cut from real pixels, so an
-        # image's edge tiles do not each need their own export, compile and GPU check.
-        self.model.prepare(tile_size, halo)
-
-    @property
-    def fixed_input_shape(self) -> tuple[int, int] | None:
-        return self.model.shape
 
     @property
     def execution_provider(self):

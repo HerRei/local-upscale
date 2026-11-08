@@ -69,9 +69,10 @@ def test_shape_cache_is_bounded_and_cancellation_does_not_poison_the_next_call()
     import threading
 
     converted = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
-    for side in (8, 16, 24):
+    for side in (8, 16, 24, 32, 40):
         converted(torch.zeros(1, 3, side, side))
-    assert list(converted.model.sessions) == [(1, 3, 16, 16), (1, 3, 24, 24)]
+    # An image's four tile shapes stay; the oldest beyond them goes.
+    assert list(converted.model.sessions) == [(1, 3, side, side) for side in (16, 24, 32, 40)]
     cancel = threading.Event()
     cancel.set()
     converted.set_cancel_event(cancel)
@@ -288,20 +289,20 @@ def test_a_lost_device_is_reported_as_such_and_releases_sessions(monkeypatch):
     assert not converted.model.sessions
 
 
-def test_every_tile_of_an_image_reaches_onnx_in_one_shape(tmp_path):
+def test_onnx_tiles_like_the_cpu_and_reuses_every_shape_for_the_next_image(tmp_path, monkeypatch):
     import threading
 
-    converted = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
-    shapes = set()
-    converted.model.register_forward_hook(
-        lambda model, args, output: shapes.add(tuple(args[0].shape))
+    from localsr.core import onnx_runtime
+
+    original = descriptor()
+    converted = OnnxImageDescriptor(original, provider="CPUExecutionProvider")
+    exports = []
+    export = onnx_runtime._OnnxImage._export
+    monkeypatch.setattr(
+        onnx_runtime._OnnxImage,
+        "_export",
+        lambda self, image: exports.append(tuple(image.shape)) or export(self, image),
     )
-
-    class Adapter:
-        def load(self, path, device, precision, **kwargs):
-            return converted, None
-
-    engine = InferenceEngine(Adapter())
     info = SimpleNamespace(
         half_supported=False,
         safe_memory=True,
@@ -312,20 +313,32 @@ def test_every_tile_of_an_image_reaches_onnx_in_one_shape(tmp_path):
         size_requirements_mult=8,
     )
     image = torch.rand(3, 110, 150)
-    writer = engine.process_image(
-        {"tensor": image},
-        info,
-        "model",
-        "cpu",
-        "fp32",
-        64,
-        8,
-        threading.Event(),
-        lambda *args: None,
-        temporary_directory=str(tmp_path),
-    )
-    assert shapes == {(1, 3, 80, 80)}  # interior, edge and corner tiles alike
-    assert writer is not None
+
+    def render(model):
+        class Adapter:
+            def load(self, path, device, precision, **kwargs):
+                return model, None
+
+        writer = InferenceEngine(Adapter()).process_image(
+            {"tensor": image},
+            info,
+            "model",
+            "cpu",
+            "fp32",
+            64,
+            8,
+            threading.Event(),
+            lambda *args: None,
+            temporary_directory=str(tmp_path),
+        )
+        return writer.get_array().copy()
+
+    onnx = render(converted)
+    first = len(exports)
+    assert 1 < first <= 4  # interior, right edge, bottom edge and corner tiles
+    np.testing.assert_array_equal(render(converted), onnx)
+    assert len(exports) == first  # the second image reuses every shape
+    np.testing.assert_allclose(onnx, render(original), atol=1)  # the same tiling as the CPU
 
 
 def test_a_flat_first_tile_cannot_pass_a_broken_configuration(monkeypatch, tmp_path):
@@ -360,3 +373,13 @@ def test_worker_restarts_only_after_a_lost_device():
         assert _device_lost(wrapped)
     assert not _device_lost(GpuRouteRejected("different results"))
     assert not _device_lost(RuntimeError("Out of memory in the ONNX inference engine."))
+
+
+def test_a_large_model_keeps_two_sessions(monkeypatch):
+    from localsr.core import onnx_runtime
+
+    monkeypatch.setattr(onnx_runtime, "_LARGE_GRAPH_BYTES", 10)
+    converted = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
+    for side in (8, 16, 24):
+        converted(torch.zeros(1, 3, side, side))
+    assert list(converted.model.sessions) == [(1, 3, 16, 16), (1, 3, 24, 24)]
