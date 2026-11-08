@@ -1,6 +1,6 @@
 name: Isolated Windows acceptance
 
-# Deliberately uses a disposable hosted VM, never the shared release runners.
+# Runs on a disposable GitHub-hosted VM.
 on:
   workflow_dispatch:
 
