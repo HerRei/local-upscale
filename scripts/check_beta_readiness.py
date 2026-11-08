@@ -76,9 +76,7 @@ def main() -> int:
     args = parser.parse_args()
     path = args.path
     if path is None:
-        version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-        register = "public-beta-readiness.json" if "-beta" in version else "beta-readiness.json"
-        path = ROOT / "ci" / register
+        path = ROOT / "ci" / "public-beta-readiness.json"
     data = validate(path)
     gates = data["gates"]
     unresolved = [gate for gate in gates if blocks_release(gate)]

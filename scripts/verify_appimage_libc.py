@@ -103,6 +103,11 @@ def main() -> int:
     except InspectionError as error:
         print(f"cannot check the glibc requirement: {error}", file=sys.stderr)
         return 2
+    if not needs:
+        print(
+            f"no ELF file in {args.tree} uses glibc: is it the extracted AppImage?", file=sys.stderr
+        )
+        return 2
     if runtime:
         needs["(AppImage runtime)"] = runtime
     newest = max(needs.values(), key=version_key) if needs else None

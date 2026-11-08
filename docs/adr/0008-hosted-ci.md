@@ -32,10 +32,13 @@ Apple Silicon runners also match the shipped macOS arm64 target.
 
 ## Consequences
 
-`desktop-release.yml` remains manual-only with self-hosted Linux/Windows legs
-and requires provisioned runners. It, `cleanup-runner.yml`,
-`macos-runner-maintenance.yml`, and the shared coordination/scratch scripts and
-their tests are candidates for a separate cleanup.
+`desktop-release.yml` remained manual-only with self-hosted Linux/Windows legs
+and required provisioned runners. Releases did not use it: Linux and Windows
+packages come from `linux-appimages.yml` and `windows-installers.yml`, the Mac
+build from `scripts/release_macos_beta.sh`. It was removed in 0.3.1 together
+with `cleanup-runner.yml`, `macos-runner-maintenance.yml`, the runner
+provisioning in `infra/`, the coordination, scratch, storage and artifact-server
+scripts and their tests. Every workflow now runs on GitHub-hosted runners.
 
 Hosted disks are finite. Linux test and Preview jobs free unused SDKs and
 Docker images using the existing hosted release cleanup. CPU wheels avoid CUDA
