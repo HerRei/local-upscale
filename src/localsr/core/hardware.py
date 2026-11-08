@@ -342,7 +342,7 @@ def _gpu_suggestion(devices: list[dict]) -> dict | None:
         if sys.platform == "win32":
             from .windows_adapters import directml_adapters
 
-            for adapter in directml_adapters():
+            for adapter in directml_adapters(probe=False):
                 download = "CUDA" if adapter["vendor_id"] == 0x10DE else "DirectML"
                 return {"name": adapter["name"], "download": download}
         elif sys.platform == "linux":
@@ -357,9 +357,9 @@ def _gpu_suggestion(devices: list[dict]) -> dict | None:
             # Intel's compute driver helps only an edition that ships OpenVINO, and only
             # when it is missing.
             if "intel-driver" in found:
-                from .openvino_devices import _linux_driver, plugin_registered
+                from .openvino_devices import intel_gpu_runtime_installed, plugin_registered
 
-                if plugin_registered() and _linux_driver() is None:
+                if plugin_registered() and not intel_gpu_runtime_installed():
                     return {
                         "name": _linux_gpu_name(found["intel-driver"]),
                         "download": "intel-driver",
