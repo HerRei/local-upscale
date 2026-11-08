@@ -1122,6 +1122,25 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it.each([
+    [
+      { name: 'Intel(R) UHD Graphics 620', download: 'DirectML' },
+      /This computer has Intel\(R\) UHD Graphics 620\. The DirectML download of LocalSR can use it/,
+    ],
+    [{ name: 'Intel graphics', download: 'intel-driver' }, /once Intel's compute driver/],
+  ] as const)(
+    'names the download or driver for a GPU this edition cannot use',
+    async (suggestion, text) => {
+      const snapshot = readySnapshot();
+      snapshot.settings.device_id = 'cpu';
+      snapshot.capabilities.gpu_suggestion = suggestion;
+      const user = await mountWith(snapshot);
+      await chooseTask(user, /^Upscale$/);
+      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      expect(screen.getByText(text)).toBeTruthy();
+    },
+  );
+
   it('preserves every executable backend id from worker discovery to job settings', async () => {
     const snapshot = readySnapshot();
     snapshot.capabilities.devices = [

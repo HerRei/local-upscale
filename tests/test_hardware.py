@@ -467,3 +467,29 @@ def test_dxgi_queries_work_on_the_windows_software_adapter():
     assert version is None or len(version.split(".")) == 4
     # Without include_software the WARP adapter is never offered.
     assert not any(adapter["software"] for adapter in directml_adapters())
+
+
+def test_a_cpu_only_edition_names_the_download_for_its_gpu(monkeypatch, tmp_path):
+    from localsr.core import windows_adapters
+
+    cpu = [{"type": "cpu"}]
+    monkeypatch.setattr(hardware.sys, "platform", "win32")
+    adapters = [{"name": "Intel(R) UHD Graphics 620", "vendor_id": 0x8086}]
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda: adapters)
+    assert hardware._gpu_suggestion(cpu) == {
+        "name": "Intel(R) UHD Graphics 620",
+        "download": "DirectML",
+    }
+    adapters[0] = {"name": "NVIDIA GeForce RTX 4060", "vendor_id": 0x10DE}
+    assert hardware._gpu_suggestion(cpu)["download"] == "CUDA"
+    # An edition that already uses a GPU suggests nothing.
+    assert hardware._gpu_suggestion([{"type": "directml"}, *cpu]) is None
+
+    monkeypatch.setattr(hardware.sys, "platform", "linux")
+    monkeypatch.setattr(hardware, "_DRM_ROOT", tmp_path)
+    (tmp_path / "card1" / "device").mkdir(parents=True)
+    (tmp_path / "card1" / "device" / "vendor").write_text("0x8086\n")
+    assert hardware._gpu_suggestion(cpu) == {"name": "Intel graphics", "download": "intel-driver"}
+    (tmp_path / "card0" / "device").mkdir(parents=True)
+    (tmp_path / "card0" / "device" / "vendor").write_text("0x1002\n")
+    assert hardware._gpu_suggestion(cpu) == {"name": "an AMD GPU", "download": "ROCm"}
