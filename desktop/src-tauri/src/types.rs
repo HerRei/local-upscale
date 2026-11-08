@@ -175,6 +175,9 @@ pub struct CapabilityInfo {
     /// (system codecs, a found FFmpeg); the worker reports it, the UI reads it.
     #[serde(default)]
     pub media: serde_json::Value,
+    /// A GPU this edition cannot use and the download that would (or the missing driver).
+    #[serde(default)]
+    pub gpu_suggestion: serde_json::Value,
 }
 
 impl CapabilityInfo {
