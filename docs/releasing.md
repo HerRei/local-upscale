@@ -1,6 +1,6 @@
 # Releasing
 
-Current release: **v0.3.0-beta**; release candidate: **v0.3.1-beta** for macOS. Release notes live in
+Current release: **v0.3.0-beta**; release candidate: **v0.3.1-beta** for macOS, Windows and Linux. Release notes live in
 [`releases/`](releases/), one file per tag; the release workflow uses that file
 as the GitHub release body.
 
@@ -73,35 +73,22 @@ file resumes at the wrong offset.
 After the build:
 
 Public installers, source bundles and updater files use
-`https://github.com/HerRei/local-upscale/releases/download/v<version>/`. The
-Mac mini keeps a copy at `https://downloads.hermesr.duckdns.org/releases/v<version>/`,
-reached through the Infomaniak VPS over WireGuard. The site does not link it.
+`https://github.com/HerRei/local-upscale/releases/download/v<version>/`.
 
 1. Upload the DMG, the update archive and its signature, the engine payload and
    its parts, the source bundle, the `.sha256` files and `SHA256SUMS` to the
-   **draft** GitHub release, then copy them to the Mac mini with
-   `gh release download` on the host. A direct `scp` through the Tailscale relay
-   runs at about 750 KB/s. The draft is published once its exact files are
-   verified.
-2. Verify the copies on the host with `shasum -a 256 -c SHA256SUMS`.
+   **draft** GitHub release. Publish only after verifying its exact files.
+2. Download the draft release's files and verify them with
+   `shasum -a 256 -c SHA256SUMS`.
 3. Install the previous version on a test Mac and confirm that the update
    downloads, installs and relaunches on the new version.
 4. Add the entry to the website's `updates/beta.json`, update `release.json` and
    run `localsr/tools/sync_release.py` and `validate_site.py`, then publish.
    GitHub Pages caches the feed for ten minutes.
 
-The signing identity (`Developer ID Application: Hermes Reisner`) and the
-notarization profile `LocalSR-Z2TU844D84-notary` live in the login Keychain of
-the release Mac and never in the repository. To renew the notarization
-credentials, create an app-specific password and run:
-
-```sh
-xcrun notarytool store-credentials LocalSR-Z2TU844D84-notary \
-  --apple-id YOUR_APPLE_ID --team-id Z2TU844D84
-```
-
-The tool prompts for the password. The updater key is handled the same way by
-`scripts/beta_update_signing.py`; see [Updates](updates.md).
+The release requires a Developer ID signing identity and notarization credentials.
+The updater signing key is managed by `scripts/beta_update_signing.py`; see
+[Updates](updates.md).
 
 ## Signed release workflow
 
@@ -122,13 +109,8 @@ Intel XPU is listed under `withheld_targets`; see
 `ci/tauri-release-artifacts.json`, written by `scripts/release_targets.py
 --write-manifests`, must match the registry exactly. `requirements/locks/` holds
 the reviewed Windows and Linux dependency locks with hashes; refresh them with
-`scripts/lock_backend_requirements.py` and uv 0.12.8. Builders reuse verified
-wheelhouses (`backend_wheelhouse.py`) from `/ci-scratch/wheelhouses` or
-`C:\lsr-ci\wheelhouses` and install offline. Cargo output stays under
-`cargo-target/tauri-*`; only bundle output is cleared between variants. The
-registry budgets 15–100 GiB of scratch per backend; ROCm needs the most because
-its wheel, expanded runtime, frozen worker, AppDir and smoke extraction can
-coexist.
+`scripts/lock_backend_requirements.py` and uv 0.12.8. Builders install offline
+from verified wheelhouses prepared by `backend_wheelhouse.py`.
 
 Windows CUDA's installer embeds its engine manifest; the Rust host verifies the
 adjacent 1,900 MiB payload parts before extracting them into a staging directory
@@ -175,14 +157,9 @@ the Microsoft Store package is signed by the Store.
 
 ### Runners
 
-Since September 2026, `linux-appimages.yml`, `windows-installers.yml` and macOS
-tests use GitHub-hosted runners. PR CI and Preview now also use `ubuntu-24.04`,
-`windows-2022` and Apple Silicon `macos-latest`, independently of release work.
-The mini runner and its on-demand Windows VM are retired on the host after this
-migration merges; see [ADR 0008](adr/0008-hosted-ci.md).
+`linux-appimages.yml`, `windows-installers.yml`, PR CI and Preview use
+GitHub-hosted runners; see [ADR 0008](adr/0008-hosted-ci.md).
 
 `desktop-release.yml` remains manual-only with self-hosted Linux/Windows legs
-and hosted macOS. It is a candidate for removal and will need reprovisioning if
-used after the mini runner is retired. The manual `cleanup-runner.yml` and
-`macos-runner-maintenance.yml` and their scripts remain for legacy maintenance;
-Windows runner provisioning scripts live in `infra/windows/`.
+and hosted macOS. It requires provisioned runners and is a candidate for a
+separate cleanup, together with the manual maintenance workflows and scripts.

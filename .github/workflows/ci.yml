@@ -58,8 +58,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Match linux-appimages.yml's hosted-image cleanup. Reclaimed space and
-      # Ubuntu package availability need confirmation in the first hosted run.
+      # Reclaim disk space for the inference dependencies.
       - name: Free hosted Linux disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
@@ -67,7 +66,7 @@ jobs:
           sudo docker image prune --all --force > /dev/null || true
           df -h /
       - name: Install Linux test prerequisites
-        # Keep exercising the external-FFmpeg and legacy-video tests, as on the mini.
+        # Exercise the external-FFmpeg and legacy-video tests.
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
@@ -101,8 +100,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Match windows-installers.yml. Long Torch wheel paths and the hosted
-      # image's VC++ runtime need confirmation in the first hosted run.
+      # Torch wheel paths can exceed the default Win32 path limit.
       - name: Enable Win32 long paths
         run: Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6

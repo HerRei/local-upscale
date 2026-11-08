@@ -54,8 +54,9 @@ projector while the prompt and reference are encoded, the transformer while the
 image is sampled. It may segment GPU execution and never converts a GGUF model to
 FP16/BF16 as a loading fallback.
 
-`scripts/refresh_edit_catalog.py` derives the tiers from that phase model, so the
-catalog, the worker's admission check and this table cannot drift apart:
+`scripts/refresh_edit_catalog.py` derives the tiers from that phase model and
+writes the JSON catalog used by the worker's admission check. Update this table
+when regenerating the catalog:
 
 - **Mac (unified memory):** the smallest Apple memory size where the heaviest
   phase plus the reserve fits in about 70% of memory (what an idle Mac has free),
@@ -175,11 +176,6 @@ keeps components that another installed size of the same family still uses.
 `scripts/refresh_edit_catalog.py` regenerates the catalog from the explicitly
 pinned model revisions using metadata only. Updating a family requires reviewing
 the matching components, runtime support and model license together.
-
-Validation for this implementation uses simulated capacity profiles, tiny fixture
-files and disposable non-model child processes. No Qwen weights were downloaded,
-loaded, or used to probe the development Mac's capacity. Real inference acceptance
-on the Mac/GPU matrix remains a separate validation task.
 
 Upstream references:
 
