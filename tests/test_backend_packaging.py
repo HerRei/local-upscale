@@ -148,6 +148,17 @@ def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
             assert "onnxruntime-directml==1.24.4" in lock
             assert "onnx==1.22.0" in lock
             assert "torch-directml==" not in lock
+            # Both ONNX Runtime wheels install the same package; plain ORT would replace
+            # DirectML's. The OpenVINO plugin registers into the DirectML build.
+            assert "\nonnxruntime==" not in lock
+            assert "onnxruntime-ep-openvino==1.8.1" in lock
+        if target["id"] == "linux-x86_64-cpu":
+            assert "onnxruntime==1.24.4" in lock
+            assert "onnxruntime-ep-openvino==1.8.1" in lock
+            assert "onnxruntime-directml" not in lock
+        elif target["backend"] != "DirectML":
+            # The GPU editions keep their own runtimes and size.
+            assert "onnxruntime-ep-openvino" not in lock
         if target["id"] == "linux-x86_64-cuda":
             assert "nvidia-cublas-cu12==" in lock
         if target["id"] == "linux-x86_64-xpu":
