@@ -323,6 +323,7 @@
       {#if !usingTemporalVideo && settings.task !== 'edit'}
         <div class="field-grid">
           <label
+            title="How large a piece of the image is processed at once, in pixels. Larger tiles are a little faster but need more memory; the result barely changes. Choose a smaller tile if you run out of memory."
             >Tile<select
               value={settings.tile_size}
               on:change={(event) =>
@@ -331,12 +332,14 @@
                 >{/each}</select
             ></label
           ><label
+            title="How many pixels around each tile the model also sees, so the seams between tiles do not show. A larger halo is slower and rarely needed."
             >Halo<select
               value={settings.halo}
               on:change={(event) => updateSettings({ halo: Number(event.currentTarget.value) })}
               >{#each [8, 16, 32, 64] as halo}<option value={halo}>{halo}</option>{/each}</select
             ></label
           ><label
+            title="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML always uses FP32."
             >Precision<select
               disabled={settings.task === 'video' && settings.video_hdr_mode === 'preserve'}
               value={settings.precision}
