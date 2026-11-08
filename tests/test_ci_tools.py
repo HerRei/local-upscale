@@ -77,17 +77,16 @@ def test_release_metadata_is_synchronized():
     assert release_version.check(f"v{VERSION}", ROOT) == VERSION
 
 
-@pytest.mark.parametrize("require_ready, expected_code", [(False, 0), (True, 1)])
-def test_readiness_cli_uses_beta_register_and_keeps_publication_blocked(
-    require_ready, expected_code
-):
+@pytest.mark.parametrize("require_ready", [False, True])
+def test_readiness_cli_passes_the_beta_policy_and_keeps_signing_open(require_ready):
     command = [sys.executable, "-B", str(ROOT / "scripts/check_beta_readiness.py")]
     if require_ready:
         command.append("--require-beta-ready")
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
-    assert result.returncode == expected_code, result.stderr
-    assert f"register valid for v{VERSION}" in result.stdout
-    assert "publication-and-certification" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"register valid for v{VERSION}: 0 blocking" in result.stdout
+    # Signing and the Store stay listed, as an open decision that does not block a beta.
+    assert "Optional windows-signing-and-store: decision-required" in result.stdout
 
 
 def copy_release_metadata(destination: Path) -> None:
@@ -140,11 +139,17 @@ def test_public_beta_rejects_wrong_tag_missing_backend_and_stale_lock(tmp_path):
 def test_beta_readiness_register_is_valid_and_honest():
     data = beta_readiness.validate(ROOT / "ci" / "public-beta-readiness.json", ROOT)
     assert data["release"] == VERSION
-    assert data["beta_ready"] is False
-    statuses = {gate["id"]: gate["status"] for gate in data["gates"]}
+    assert data["beta_ready"] is True
+    gates = {gate["id"]: gate for gate in data["gates"]}
+    statuses = {gate_id: gate["status"] for gate_id, gate in gates.items()}
     assert statuses["batch-rendering-and-comparison"] == "manual-pass"
-    assert statuses["publication-and-certification"] == "decision-required"
+    assert statuses["publication-and-certification"] == "manual-pass"
     assert statuses["hdr-and-temporal-quality"] == "labs"
+    # A beta may ship unsigned and partly untested only while the register says so.
+    assert "not code-signed" in gates["windows-packages"]["summary"]
+    assert "labelled untested" in gates["linux-packages"]["summary"]
+    assert statuses["windows-signing-and-store"] == "decision-required"
+    assert not gates["windows-signing-and-store"]["blocking"]
     assert not next(gate for gate in data["gates"] if gate["id"] == "hdr-and-temporal-quality")[
         "blocking"
     ]
