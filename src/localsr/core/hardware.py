@@ -323,9 +323,41 @@ def get_capability_report() -> dict:
         "system_ram_available": available_ram,
         "devices": devices,
         "media": media_capabilities(),
+        "gpu_suggestion": _gpu_suggestion(devices),
     }
     report.update(_system_pressure_snapshot(total_ram, available_ram))
     return report
+
+
+_GPU_TYPES = {"mps", "cuda", "rocm", "xpu", "directml", "openvino"}
+_LINUX_VENDORS = {"0x10de": "CUDA", "0x1002": "ROCm", "0x8086": "intel-driver"}
+_DRM_ROOT = Path("/sys/class/drm")
+
+
+def _gpu_suggestion(devices: list[dict]) -> dict | None:
+    """A GPU this edition cannot use, and the download (or driver) that would use it."""
+    if any(device["type"] in _GPU_TYPES for device in devices):
+        return None
+    try:
+        if sys.platform == "win32":
+            from .windows_adapters import directml_adapters
+
+            for adapter in directml_adapters():
+                download = "CUDA" if adapter["vendor_id"] == 0x10DE else "DirectML"
+                return {"name": adapter["name"], "download": download}
+        elif sys.platform == "linux":
+            for vendor_file in sorted(_DRM_ROOT.glob("card[0-9]*/device/vendor")):
+                download = _LINUX_VENDORS.get(vendor_file.read_text().strip().lower())
+                if download is not None:
+                    return {"name": _linux_gpu_name(vendor_file.parent), "download": download}
+    except Exception:  # noqa: BLE001 - a hint must never break the capability report
+        logger.debug("GPU suggestion failed", exc_info=True)
+    return None
+
+
+def _linux_gpu_name(device: Path) -> str:
+    vendor = device.joinpath("vendor").read_text().strip().lower()
+    return {"0x10de": "an NVIDIA GPU", "0x1002": "an AMD GPU", "0x8086": "Intel graphics"}[vendor]
 
 
 def _detect_openvino(devices: list[dict], available_ram: int) -> None:

@@ -207,6 +207,7 @@ export interface CapabilityInfo {
   system_swap_used: number;
   devices: DeviceInfo[];
   media?: MediaCapabilities | null;
+  gpu_suggestion?: { name: string; download: 'DirectML' | 'CUDA' | 'ROCm' | 'intel-driver' } | null;
 }
 
 export interface EngineInfo {

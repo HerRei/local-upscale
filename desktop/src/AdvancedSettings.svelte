@@ -23,6 +23,10 @@
   // ONNX Runtime GPU routes always run FP32, whatever the saved precision says.
   $: onnxGpu =
     settings.device_id.startsWith('directml:') || settings.device_id.startsWith('openvino:');
+  $: gpuSuggestion =
+    settings.device_id === 'cpu' && capabilities.gpu_suggestion
+      ? capabilities.gpu_suggestion
+      : null;
   let advanced = false;
   let ffmpegNote = '';
 
@@ -310,6 +314,16 @@
           DirectML uses the selected Windows GPU, including integrated graphics. The first time a
           model runs on it, LocalSR checks once that the GPU gives the same result as the CPU. Start
           with smaller tiles if shared memory is tight.
+        </p>
+      {:else if gpuSuggestion?.download === 'intel-driver'}
+        <p class="model-description">
+          {gpuSuggestion.name} can run models through OpenVINO once Intel's compute driver (the intel-opencl-icd
+          package) is installed.
+        </p>
+      {:else if gpuSuggestion}
+        <p class="model-description">
+          This computer has {gpuSuggestion.name}. The {gpuSuggestion.download} download of LocalSR can
+          use it; this one runs on the CPU.
         </p>
       {:else if !usingTemporalVideo && settings.device_id.startsWith('openvino:')}
         <p class="model-description">
