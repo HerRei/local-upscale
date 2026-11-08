@@ -3,7 +3,10 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{atomic::Ordering, mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -219,6 +222,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
 
     let reader_state = state.clone();
     let reader_app = app.clone();
+    let drained = Arc::new(AtomicBool::new(false));
+    let reader_drained = drained.clone();
     thread::spawn(move || {
         let mut event_gate = WorkerEventGate::default();
         for line in BufReader::new(stdout).lines() {
@@ -243,6 +248,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 }
             }
         }
+        reader_drained.store(true, Ordering::SeqCst);
     });
 
     thread::spawn(move || {
@@ -295,6 +301,15 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             }
             thread::sleep(Duration::from_millis(100));
         };
+        if forced_job.is_empty() && !state.worker.shutting_down.load(Ordering::SeqCst) {
+            // Read what the engine wrote before it exited, such as the failure that asks
+            // for this restart, before its messages stop counting. Bounded: a helper
+            // process that still holds the pipe must not hold up recovery.
+            let deadline = Instant::now() + OUTPUT_DRAIN_LIMIT;
+            while !drained.load(Ordering::SeqCst) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
         state.worker.pid.store(0, Ordering::SeqCst);
         if state.worker.generation.load(Ordering::SeqCst) != generation
             || state.worker.shutting_down.load(Ordering::SeqCst)
@@ -548,6 +563,9 @@ fn handle_worker_envelope(
 
 /// A worker that lost its GPU device exits after its failure message; until its
 /// replacement is ready, no queued job may be sent to it.
+/// How long the app reads an exited engine's remaining output before moving on.
+const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
+
 /// How long an engine that asked for a restart may take to exit before it is stopped.
 const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
 

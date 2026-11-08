@@ -39,10 +39,25 @@ def _newest(path: Path, name: str) -> tuple[int, ...] | None:
     return max(versions) if versions else None
 
 
-def _host_copy(name: str, directories) -> Path | None:
+def _elf_kind(path: Path) -> tuple[int, int] | None:
+    """(class, machine) from the ELF header: 64-bit x86-64 is (2, 62)."""
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(20)
+    except OSError:
+        return None
+    if len(header) < 20 or header[:4] != b"\x7fELF":
+        return None
+    return header[4], int.from_bytes(header[18:20], "little")
+
+
+def _host_copy(name: str, directories, kind: tuple[int, int] | None) -> Path | None:
+    """The first host copy built for the same class and machine as the bundled one."""
+    if kind is None:
+        return None
     for directory in directories:
         candidate = Path(directory) / name
-        if candidate.is_file():
+        if candidate.is_file() and _elf_kind(candidate) == kind:
             return candidate
     return None
 
@@ -68,8 +83,10 @@ def prefer_newer_host_runtime(
     # libstdc++ needs libgcc_s, so that one goes first.
     for name in ("libgcc_s.so.1", "libstdc++.so.6"):
         bundled = bundle / name
-        host = _host_copy(name, directories)
-        if not bundled.is_file() or host is None or _already_loaded(name):
+        if not bundled.is_file() or _already_loaded(name):
+            continue
+        host = _host_copy(name, directories, _elf_kind(bundled))
+        if host is None:
             continue
         host_version, bundled_version = _newest(host, name), _newest(bundled, name)
         if host_version is None or bundled_version is None or host_version <= bundled_version:

@@ -847,3 +847,8 @@ class OnnxImageDescriptor:
     def execution_verified(self):
         """At least one tile ran on the checked GPU route, and none fell back to the CPU."""
         return self.model.execution_verified and not self.model.cpu_tiles
+
+    def reset_execution_evidence(self) -> None:
+        """Start counting afresh; sessions and verdicts stay."""
+        self.model.execution_verified = False
+        self.model.cpu_tiles = 0

@@ -560,6 +560,10 @@ def test_linux_driver_identity_is_intels_gpu_runtime_and_its_compiler(tmp_path, 
     compiler.write_bytes(b"updated compiler")
     assert openvino_devices._linux_driver() != identity  # a compiler update counts
 
+    # With a second compiler version installed, which one the driver loads is unknown.
+    (libraries / "libigc.so.1.0.17").write_bytes(b"older compiler")
+    assert openvino_devices._linux_driver() is None
+
 
 def test_identical_directml_cards_keep_verdicts_only_for_this_process(monkeypatch):
     from localsr.core import inference, onnx_runtime, windows_adapters
@@ -652,3 +656,10 @@ def test_the_benchmark_flag_needs_every_tile_on_the_checked_gpu(monkeypatch, tmp
     assert converted.execution_verified
     converted.model.cpu_tiles = 1  # one tile of the run fell back to the CPU
     assert not converted.execution_verified
+    # A benchmark starts counting afresh and keeps the checked sessions.
+    sessions = dict(converted.model.sessions)
+    converted.reset_execution_evidence()
+    assert not converted.execution_verified and converted.model.cpu_tiles == 0
+    converted(torch.rand(1, 3, 8, 8))
+    assert converted.execution_verified
+    assert dict(converted.model.sessions).keys() == sessions.keys()
