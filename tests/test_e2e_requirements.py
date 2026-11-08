@@ -1,11 +1,4 @@
-"""
-Opaque-box E2E Requirement-Driven Test Suite for LocalSR.
-Covering Requirements R1 through R5 across 4 Tiers:
-- Tier 1: Feature Coverage (R1..R5)
-- Tier 2: Boundary & Corner Cases
-- Tier 3: Cross-Feature Combinations
-- Tier 4: Real-World Scenarios
-"""
+"""End-to-end tests for output saving, worker lifecycle, cancellation and tiled inference."""
 
 import glob
 import json
@@ -78,11 +71,6 @@ class DummyHATModelAdapter:
 
     def release(self):
         pass
-
-
-# ============================================================================
-# Tier 1: Feature Coverage (R1 - R5)
-# ============================================================================
 
 
 def test_r1_output_saving_atomic_rename(tmp_path, monkeypatch):
@@ -339,11 +327,6 @@ def test_r5_hat_model_synthetic_2x(tmp_path):
         ), f"64x64 upscaled 2x must yield 128x128, got {img128.size}"
 
 
-# ============================================================================
-# Tier 2: Boundary & Corner Cases
-# ============================================================================
-
-
 def test_r1_boundary_zero_quality(tmp_path):
     """
     R1 Boundary: Tests JPEG saving with quality=0 or extreme parameters.
@@ -494,11 +477,6 @@ def test_r5_boundary_invalid_model_path(tmp_path):
     assert proc.returncode == 0, "Worker server must remain responsive after model error."
 
 
-# ============================================================================
-# Tier 3: Cross-Feature Combinations
-# ============================================================================
-
-
 def test_r4_cross_cancel_job_then_restart(tmp_path):
     """
     Tier 3: Cancels an in-flight job (assert no output file), then executes subsequent job successfully.
@@ -642,11 +620,6 @@ def test_r3_cross_invalid_model_then_shutdown(tmp_path):
     proc.wait(timeout=3)
 
     assert proc.returncode == 0, "Worker server must exit with code 0 on shutdown after error."
-
-
-# ============================================================================
-# Tier 4: Real-World Scenarios
-# ============================================================================
 
 
 def test_r4_realworld_synthetic_and_tiling(tmp_path):

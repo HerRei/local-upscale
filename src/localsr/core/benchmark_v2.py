@@ -32,6 +32,7 @@ from typing import Callable, Iterable, Literal
 import numpy as np
 import torch
 
+from .benchmark import percentile
 from .inference import InferenceEngine
 
 WORKLOAD_VERSION = "localsr-benchmark-v2.1"
@@ -245,20 +246,6 @@ def coefficient_of_variation(seconds: list[float]) -> float:
     if mean <= 0:
         return float("inf")
     return statistics.pstdev(seconds) / mean
-
-
-def percentile(values: list[float], percentile_value: float) -> float:
-    """Linearly interpolated percentile, matching the v1 definition."""
-    if not values:
-        raise ValueError("at least one measurement is required")
-    ordered = sorted(float(value) for value in values)
-    position = (len(ordered) - 1) * min(100.0, max(0.0, percentile_value)) / 100.0
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
 
 def _synchronize(device: torch.device) -> None:

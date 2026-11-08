@@ -1,7 +1,6 @@
 name: Signed Tauri Release
 
-# Manual only. Releases are built and signed on the Mac (docs/releasing.md); a tag push
-# used to start this workflow, which then had to be cancelled by hand every release.
+# Manual only. See docs/releasing.md for the public release procedure.
 # Run it on a tag with `gh workflow run desktop-release.yml --ref vX` if ever needed.
 on:
   workflow_dispatch:
@@ -49,10 +48,7 @@ jobs:
           - platform: windows
             runner: '["self-hosted","Windows","X64","localsr-windows-builder"]'
           - platform: macos
-            # Hosted Apple Silicon is genuinely arm64, so the architecture gate
-            # in the build job now passes instead of failing closed. This also
-            # frees the Mac mini's Intel macOS guest, which could never have
-            # satisfied that gate.
+            # The architecture gate requires an arm64 runner.
             runner: '["macos-latest"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
@@ -342,9 +338,7 @@ jobs:
   build-macos-arm64:
     name: Build signed and notarized macOS ARM64 DMG
     needs: [build-windows]
-    # Hosted Apple Silicon. The architecture gate below now passes on a genuine
-    # arm64 host instead of failing closed on the Intel Mac-mini guest, which
-    # could never satisfy it.
+    # The architecture gate requires an arm64 runner.
     runs-on: macos-latest
     timeout-minutes: 300
     env:

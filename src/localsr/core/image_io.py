@@ -148,7 +148,6 @@ class ImageManager:
             img = ImageOps.exif_transpose(metadata_img)
             converted_icc = None
 
-        # ICC Profile handling
         icc_profile_bytes = None if is_raw else img.info.get("icc_profile")
         has_invalid_icc = False
 
@@ -159,8 +158,7 @@ class ImageManager:
                 srgb_profile = ImageCms.createProfile("sRGB")
                 img = ImageCms.profileToProfile(img, src_profile, srgb_profile)
 
-                # After conversion, the image is sRGB. We'll embed standard sRGB profile on save.
-                # Pillow's srgb profile bytes:
+                # Embed the output sRGB profile when saving.
                 converted_icc = ImageCms.ImageCmsProfile(srgb_profile).tobytes()
             except (ImageCms.PyCMSError, OSError, ValueError) as e:
                 has_invalid_icc = True
@@ -257,7 +255,6 @@ class ImageManager:
             )
             out_img = out_img.resize(target_size, Image.Resampling.LANCZOS)
 
-        # Handle Alpha scaling
         if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp"]:
             new_size = (
                 self.alpha_channel.width * final_scale,
@@ -297,14 +294,12 @@ class ImageManager:
         tmp_path = Path(temporary_name)
         try:
             if fmt in ["jpg", "jpeg"]:
-                # Strip alpha if we were going to save as JPEG
                 if out_img.mode == "RGBA":
                     out_img = out_img.convert("RGB")
                 out_img.save(tmp_path, format="JPEG", quality=quality, subsampling=0, **kwargs)
             elif fmt == "png":
                 out_img.save(tmp_path, format="PNG", **kwargs)
             elif fmt in ["tif", "tiff"]:
-                # BigTIFF might be needed if extremely large, but PIL handles it if installed correctly with libtiff
                 out_img.save(tmp_path, format="TIFF", compression="tiff_deflate", **kwargs)
             elif fmt == "webp":
                 out_img.save(tmp_path, format="WEBP", quality=quality, method=6, **kwargs)
