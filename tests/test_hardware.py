@@ -355,7 +355,7 @@ def test_directml_uses_uma_and_counts_shared_memory_for_integrated_gpus(monkeypa
             "shared_usage": 0,
         },
     ]
-    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda: adapters)
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda **_: adapters)
     devices = []
     hardware._detect_directml(devices, 16 * gib, 12 * gib)
     amd, intel = devices
@@ -467,6 +467,14 @@ def test_dxgi_queries_work_on_the_windows_software_adapter():
     assert version is None or len(version.split(".")) == 4
     # Without include_software the WARP adapter is never offered.
     assert not any(adapter["software"] for adapter in directml_adapters())
+    # A lookup without a Direct3D device still reads names, ids, memory and the driver.
+    looked_up = next(
+        adapter
+        for adapter in directml_adapters(include_software=True, probe=False)
+        if adapter["software"]
+    )
+    assert looked_up["luid"] == warp["luid"] and looked_up["uma"] is None
+    assert looked_up["driver_version"] == warp["driver_version"]
 
 
 def test_a_cpu_only_edition_names_the_download_for_its_gpu(monkeypatch, tmp_path):
@@ -475,7 +483,7 @@ def test_a_cpu_only_edition_names_the_download_for_its_gpu(monkeypatch, tmp_path
     cpu = [{"type": "cpu"}]
     monkeypatch.setattr(hardware.sys, "platform", "win32")
     adapters = [{"name": "Intel(R) UHD Graphics 620", "vendor_id": 0x8086}]
-    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda: adapters)
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda **_: adapters)
     assert hardware._gpu_suggestion(cpu) == {
         "name": "Intel(R) UHD Graphics 620",
         "download": "DirectML",
@@ -490,15 +498,15 @@ def test_a_cpu_only_edition_names_the_download_for_its_gpu(monkeypatch, tmp_path
     monkeypatch.setattr(hardware.sys, "platform", "linux")
     monkeypatch.setattr(hardware, "_DRM_ROOT", tmp_path)
     monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: True)
-    monkeypatch.setattr(openvino_devices, "_linux_driver", lambda: None)
+    monkeypatch.setattr(openvino_devices, "intel_gpu_runtime_installed", lambda: False)
     (tmp_path / "card0" / "device").mkdir(parents=True)
     (tmp_path / "card0" / "device" / "vendor").write_text("0x8086\n")
     assert hardware._gpu_suggestion(cpu) == {"name": "Intel graphics", "download": "intel-driver"}
     # Intel's driver is already there: installing it again would not help.
-    monkeypatch.setattr(openvino_devices, "_linux_driver", lambda: "libigdrcl.so:1:1")
+    monkeypatch.setattr(openvino_devices, "intel_gpu_runtime_installed", lambda: True)
     assert hardware._gpu_suggestion(cpu) is None
     # An edition without OpenVINO cannot use Intel graphics at all.
-    monkeypatch.setattr(openvino_devices, "_linux_driver", lambda: None)
+    monkeypatch.setattr(openvino_devices, "intel_gpu_runtime_installed", lambda: False)
     monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: False)
     assert hardware._gpu_suggestion(cpu) is None
     # A second, NVIDIA or AMD card wins over the integrated Intel graphics on card0.
