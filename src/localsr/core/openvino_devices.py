@@ -99,12 +99,11 @@ def _linux_driver() -> str | None:
     directories = (str(runtime.parent), *_LINUX_LIBRARY_DIRECTORIES)
     parts = [_fingerprint(runtime)]
     for prefix in ("libigc.so", "libigdfcl.so"):
-        found = next(
-            (match for d in directories for match in sorted(Path(d).glob(f"{prefix}*"))), None
-        )
-        if found is None:
+        # With two versions installed, which one the driver loads is not known here.
+        found = {match.resolve() for d in directories for match in Path(d).glob(f"{prefix}*")}
+        if len(found) != 1:
             return None
-        parts.append(_fingerprint(found))
+        parts.append(_fingerprint(found.pop()))
     return "|".join(parts)
 
 

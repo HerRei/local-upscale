@@ -474,8 +474,16 @@ def test_render_tiles_are_only_requested_for_unmeasured_warmup():
 def test_onnx_gpu_routes_are_benchmarked_although_torch_stages_on_the_cpu(device_id, provider):
     engine = _FakeEngine()
     engine.active_backend_id = device_id
+    resets = []
     engine.active_model = type(
-        "Model", (), {"execution_provider": provider, "execution_verified": True}
+        "Model",
+        (),
+        {
+            "execution_provider": provider,
+            "execution_verified": True,
+            # The real descriptor forgets earlier jobs' CPU tiles here.
+            "reset_execution_evidence": lambda self: resets.append(True),
+        },
     )()
     ticks = {"value": 0.0}
 
@@ -495,3 +503,4 @@ def test_onnx_gpu_routes_are_benchmarked_although_torch_stages_on_the_cpu(device
         clock=clock,
     )
     assert result.device == device_id
+    assert resets == [True]  # counted afresh before the warm-up
