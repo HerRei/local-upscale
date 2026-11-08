@@ -42,7 +42,12 @@ def _windows_driver(luid: str) -> str | None:
 
         wanted = f"{high:08x}{low:08x}"
         return next(
-            (a.get("driver_version") for a in directml_adapters() if a.get("luid") == wanted), None
+            (
+                a.get("driver_version")
+                for a in directml_adapters(probe=False)
+                if a.get("luid") == wanted
+            ),
+            None,
         )
     except (ValueError, OSError, RuntimeError, AttributeError):
         return None
@@ -73,10 +78,8 @@ def _linux_library(name: str, directories) -> Path | None:
     return None
 
 
-def _linux_driver() -> str | None:
-    """Intel's GPU compute runtime and its graphics compiler, each by its file name, size
-    and date, which change with every update. Without exactly one such runtime there is no
-    driver identity, and verdicts are not stored."""
+def _intel_gpu_runtimes() -> set[Path]:
+    """Intel's GPU compute runtimes (libigdrcl) the OpenCL loader would find."""
     runtimes = set()
     for icd in sorted(_OPENCL_VENDORS.glob("*.icd")):
         try:
@@ -93,6 +96,21 @@ def _linux_driver() -> str | None:
         )
         if path is not None and path.exists():
             runtimes.add(path.resolve())
+    return runtimes
+
+
+def intel_gpu_runtime_installed() -> bool:
+    try:
+        return bool(_intel_gpu_runtimes())
+    except OSError:
+        return False
+
+
+def _linux_driver() -> str | None:
+    """Intel's GPU compute runtime and its graphics compiler, each by its file name, size
+    and date, which change with every update. Without exactly one such runtime there is no
+    driver identity, and verdicts are not stored."""
+    runtimes = _intel_gpu_runtimes()
     if len(runtimes) != 1:
         return None
     runtime = runtimes.pop()

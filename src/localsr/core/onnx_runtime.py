@@ -678,7 +678,23 @@ class _OnnxImage(torch.nn.Module):
         providers = self._close_profile(state) if first_run else set()
         if output.shape != expected:
             raise ValueError("ONNX returned an invalid image shape")
-        if first_run and providers is not None and self.provider not in providers:
+        if first_run and providers is None:
+            placement = state.get("placement")
+            if placement and placement["nodes"] > placement["cpu_nodes"]:
+                providers = {self.provider}
+            elif self._gated:
+                # Where the tile ran is unknown: no verdict, the CPU's result, and the
+                # configuration opens again with a fresh profile for the next tile.
+                state["candidates"].insert(0, (state["config"], state["pending"]))
+                self._open_next(state)
+                self._status(
+                    f"LocalSR could not tell where {self.architecture} ran on {self._label()}; "
+                    "this tile ran on the CPU, and the next one checks again."
+                )
+                return self._on_cpu(state, image)
+            else:
+                providers = set()
+        if first_run and self.provider not in providers:
             if not self._gated:
                 raise RuntimeError(
                     f"The model did not execute on {self.provider}; select CPU explicitly."
@@ -686,9 +702,7 @@ class _OnnxImage(torch.nn.Module):
             self._reject(state, state["config"][0], "no node ran on the GPU")
             return "rejected", None
         if first_run:
-            logger.info(
-                "ONNX %s executed with providers: %s", self.architecture, sorted(providers or ())
-            )
+            logger.info("ONNX %s executed with providers: %s", self.architecture, sorted(providers))
         if state["pending"]:
             return self._judge(state, image, output)
         if not np.isfinite(output).all():
