@@ -692,6 +692,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn catalog_models_without_the_preset_flag_stay_preset_eligible() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        for entry in catalog["models"].as_array().unwrap() {
+            let model: CatalogModel = serde_json::from_value(entry.clone()).unwrap();
+            let slow = model.model_id.contains("dat2");
+            assert_eq!(model.preset_eligible, !slow, "{}", model.model_id);
+            let mut older = entry.clone();
+            older.as_object_mut().unwrap().remove("preset_eligible");
+            let older: CatalogModel = serde_json::from_value(older).unwrap();
+            assert!(older.preset_eligible, "{}", model.model_id);
+        }
+    }
+
+    #[test]
     fn v1_benchmark_results_keep_deserializing_after_v2_fields_were_added() {
         let legacy = serde_json::json!({
             "workload_version": "localsr-benchmark-v1",
