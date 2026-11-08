@@ -5,8 +5,10 @@ AppImageHub runs the app with ``firejail --net=none`` on a plain X server, waits
 for a visible window, and fails the app when it quit or showed none (code/worker.sh). Here the app runs as
 the calling user in network, PID and mount namespaces of its own: only a loopback interface exists, as with
 firejail, so the update check and every other connection fail as they do for an offline user, and ending
-the namespace ends every process the app started. Saves a screenshot. Needs Xvfb, xdotool, ImageMagick's
-import, util-linux, iproute2 and password-less sudo (GitHub-hosted runners).
+the namespace ends every process the app started. Only the app's own window counts (its exact title), it
+must still be there at the second look, and a screenshot of it must show more than one colour, which a web
+view that never drew would. Needs Xvfb, xdotool, ImageMagick, util-linux, iproute2 and password-less sudo
+(GitHub-hosted runners).
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from pathlib import Path
 
 DISPLAY = ":97"
 NETWORK_REACHABLE = 97
+WINDOW_TITLE = "^LocalSR$"  # the main window's title in desktop/src-tauri/tauri.conf.json
 # Run as root inside the namespaces: bring up loopback, prove nothing outside answers, then become the user.
 ROOT_SCRIPT = (
     "ip link set lo up || exit 96; "
@@ -32,26 +35,42 @@ ROOT_SCRIPT = (
 )
 
 
-def visible_windows(env: dict[str, str]) -> list[str]:
-    found = subprocess.run(
-        ["xdotool", "search", "--onlyvisible", "--name", "."],
+def app_windows(env: dict[str, str]) -> list[str]:
+    """The ids of the visible windows with the app's title."""
+    return subprocess.run(
+        ["xdotool", "search", "--onlyvisible", "--name", WINDOW_TITLE],
         capture_output=True,
         text=True,
         env=env,
         timeout=10,
         check=False,
     ).stdout.split()
-    return [
-        subprocess.run(
-            ["xdotool", "getwindowname", window],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=10,
-            check=False,
-        ).stdout.strip()
-        for window in found
-    ]
+
+
+def screenshot_problem(window: str, path: Path, env: dict[str, str]) -> str | None:
+    """Capture the window to ``path``; what is wrong with the capture, or None."""
+    capture = subprocess.run(
+        ["import", "-window", window, str(path)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+    if capture.returncode != 0 or not path.is_file() or path.stat().st_size == 0:
+        return f"the screenshot failed ({capture.returncode}): {capture.stderr.strip()}"
+    colours = subprocess.run(
+        ["identify", "-format", "%k", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if colours.returncode != 0 or not colours.stdout.strip().isdigit():
+        return f"could not read the screenshot ({colours.returncode}): {colours.stderr.strip()}"
+    if int(colours.stdout) < 2:
+        return "the window shows a single colour: the web view drew nothing"
+    return None
 
 
 def end_namespace(pidfile: Path) -> None:
@@ -80,7 +99,7 @@ def main() -> int:
     parser.add_argument("--screenshot", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    for tool in ("Xvfb", "xdotool", "import", "unshare", "setpriv", "pgrep", "sudo"):
+    for tool in ("Xvfb", "xdotool", "import", "identify", "unshare", "setpriv", "pgrep", "sudo"):
         if not shutil.which(tool):
             parser.error(f"{tool} is missing")
     root = args.appdir.resolve()
@@ -115,8 +134,10 @@ def main() -> int:
         raise SystemExit("Xvfb did not start")
 
     windows: list[str] = []
+    still: list[str] = []
     seconds = None
     alive = False
+    problem = None
     with tempfile.TemporaryDirectory(prefix="localsr-window-") as temporary:
         pidfile = Path(temporary) / "unshare.pid"
         command = [
@@ -130,7 +151,7 @@ def main() -> int:
         app = subprocess.Popen(command)
         try:
             while time.monotonic() - started < args.timeout and app.poll() is None:
-                windows = visible_windows(env)
+                windows = app_windows(env)
                 if windows:
                     seconds = round(time.monotonic() - started, 1)
                     # AppImageHub looks again 10 s after the start at the earliest: still running?
@@ -139,12 +160,9 @@ def main() -> int:
                 time.sleep(1)
             alive = app.poll() is None
             if windows and alive:
-                subprocess.run(
-                    ["import", "-window", "root", str(args.screenshot)],
-                    env=env,
-                    timeout=30,
-                    check=False,
-                )
+                still = app_windows(env)
+                if still:
+                    problem = screenshot_problem(still[0], args.screenshot, env)
         finally:
             end_namespace(pidfile)
             try:
@@ -155,23 +173,28 @@ def main() -> int:
             xvfb.terminate()
             xvfb.wait(timeout=10)
 
-    passed_check = bool(windows) and alive and app.returncode != NETWORK_REACHABLE
+    passed_check = bool(still) and alive and problem is None and app.returncode != NETWORK_REACHABLE
     report = {
         "passed": passed_check,
-        "window_titles": windows,
         "seconds_to_window": seconds,
         "running_after_window": alive if windows else None,
+        "window_at_second_look": bool(still) if windows and alive else None,
+        "screenshot_problem": problem,
         "exit_code": None if alive else app.returncode,
-        "screenshot": str(args.screenshot) if windows and alive else None,
+        "screenshot": str(args.screenshot) if still and problem is None else None,
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     if app.returncode == NETWORK_REACHABLE:
         print("The namespace could reach the network, so the check proves nothing", file=sys.stderr)
     elif not windows:
-        print(f"No visible window within {args.timeout:g} s without network", file=sys.stderr)
+        print(f"No LocalSR window within {args.timeout:g} s without network", file=sys.stderr)
     elif not alive:
         print("The app quit right after showing its window", file=sys.stderr)
+    elif not still:
+        print("The LocalSR window was gone at the second look", file=sys.stderr)
+    elif problem:
+        print(problem, file=sys.stderr)
     return 0 if passed_check else 1
 
 
