@@ -325,7 +325,11 @@ class _OnnxImage(torch.nn.Module):
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
         # Which provider got which node (ONNX Runtime 1.24); read after creation.
         options.add_session_config_entry("session.record_ep_graph_assignment_info", "1")
-        trace = tempfile.TemporaryDirectory(prefix="localsr-onnx-profile-")
+        # Windows keeps a profile open while its session lives; a leftover file must not
+        # turn into an error.
+        trace = tempfile.TemporaryDirectory(
+            prefix="localsr-onnx-profile-", ignore_cleanup_errors=True
+        )
         options.enable_profiling = True
         options.profile_file_prefix = str(Path(trace.name) / "execution")
         try:
@@ -397,10 +401,7 @@ class _OnnxImage(torch.nn.Module):
     def _open_next(self, state: dict) -> None:
         """Open the next untried configuration of the route for this graph."""
         # Free the configuration that failed before allocating its replacement.
-        state.pop("session", None)
-        trace = state.pop("trace", None)
-        if trace is not None:
-            trace.cleanup()
+        self._release_session(state)
         gc.collect()
         while state["candidates"]:
             config, pending = state["candidates"].pop(0)
@@ -431,6 +432,21 @@ class _OnnxImage(torch.nn.Module):
             )
             return
         raise self._rejected()
+
+    @staticmethod
+    def _release_session(state: dict) -> None:
+        """Drop the open configuration's session. Its profile is ended first: Windows keeps
+        the file open, and its folder could not be removed."""
+        session = state.pop("session", None)
+        trace = state.pop("trace", None)
+        if trace is None:
+            return
+        if session is not None:
+            try:
+                session.end_profiling()
+            except Exception:  # noqa: BLE001 - this only closes the profile file
+                logger.debug("Could not end the ONNX profile", exc_info=True)
+        trace.cleanup()
 
     def _reject(self, state: dict, config: str, reason: str) -> None:
         self.verdicts.put(
@@ -592,12 +608,9 @@ class _OnnxImage(torch.nn.Module):
         if pattern is None:
             state["cpu_only"] = True
             # These tiles never use the GPU again; release what only it needed.
-            state.pop("session", None)
+            self._release_session(state)
             state.pop("graph", None)
             state["candidates"] = []
-            trace = state.pop("trace", None)
-            if trace is not None:
-                trace.cleanup()
             return self._on_cpu(state, image)
         tile = None
         results = [pattern]
