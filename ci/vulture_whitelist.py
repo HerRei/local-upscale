@@ -88,6 +88,7 @@ _.MAX_IMAGE_PIXELS  # Pillow reads this only in the isolated export-preview chil
 _.forward  # torch.nn.Module
 _.do_GET  # http.server handler
 _.do_POST  # http.server handler
+_.log_message  # http.server handler
 exc_type  # __exit__ protocol
 exc_val  # __exit__ protocol
 exc_tb  # __exit__ protocol
@@ -102,6 +103,7 @@ _.intra_op_num_threads  # onnxruntime.SessionOptions
 _.graph_optimization_level  # onnxruntime.SessionOptions
 _.enable_profiling  # onnxruntime.SessionOptions
 _.profile_file_prefix  # onnxruntime.SessionOptions
+_.uid  # tarfile.TarInfo
 _.gid  # tarfile.TarInfo
 _.gname  # tarfile.TarInfo
 _.mtime  # tarfile.TarInfo

@@ -2,7 +2,9 @@
 """Enforce the LocalSR desktop architecture and CI boundary.
 
 The webview delegates native authority to Rust and inference to the Python
-worker. Public Tauri releases use their own fail-closed signed pipeline.
+worker. Release packages are built by hand on GitHub-hosted runners or the Mac:
+the Linux and Windows workflows verify every package before attaching it, and
+the Mac release is signed and notarized.
 """
 
 from __future__ import annotations
@@ -14,7 +16,33 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_UPLOAD_PLATFORMS = {"linux", "macos", "windows"}
+
+RELEASE_PACKAGE_GATES = {
+    "installed package smoke": "smoke_tauri_installer.py",
+    "package architecture check": "verify_tauri_release_package.py",
+    "codec allowlist": "verify_codec_allowlist.py",
+    "NVIDIA redistribution policy": "verify_nvidia_redistributables.py",
+    "release environment consistency check": "python -m pip check",
+    "corresponding source bundle": "build_source_bundle.py",
+}
+RELEASE_PACKAGE_WORKFLOWS = {
+    "linux-appimages.yml": {
+        "glibc ceiling": "verify_appimage_libc.py",
+        "offline window check": "verify_appimage_window.py",
+    },
+    "windows-installers.yml": {},
+}
+MACOS_RELEASE_GATES = {
+    "Developer ID signing": "sign_macos_keychain.py",
+    "notarization": "xcrun notarytool submit",
+    "stapled tickets": "xcrun stapler staple",
+    "Gatekeeper assessment": "spctl --assess",
+    "codec allowlist": "verify_codec_allowlist.py",
+    "worker smoke": "packaging/smoke_worker.py",
+    "host smoke": "--headless-smoke-test",
+    "signed update archive": "beta_update_signing.py sign",
+    "corresponding source bundle": "build_source_bundle.py",
+}
 
 FORBIDDEN_WEBVIEW_PACKAGES = {
     "@tauri-apps/plugin-fs",
@@ -127,61 +155,62 @@ def workflow_isolation_violations(preview: str) -> list[str]:
     return violations
 
 
-def signed_release_violations(desktop_release: str) -> list[str]:
-    """Return violations that could publish the wrong host or unsigned installers."""
+def _code(text: str) -> str:
+    """The text without comment lines, so a comment can neither satisfy nor trip a check."""
+
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def release_package_violations(name: str, workflow: str, gates: dict[str, str]) -> list[str]:
+    """Return violations that could attach an unverified Linux or Windows package."""
 
     violations: list[str] = []
-    required = {
-        # Releases use the manual procedure in docs/releasing.md.
-        "manual-only release trigger": "on:\n  workflow_dispatch:",
-        "fail-closed Tauri signing": "--require-signing",
-        "Developer ID verification": "verify_macos_tauri_signing.py",
-        "Authenticode verification": "verify_windows_tauri_signing.ps1",
-        "installed package smoke": "smoke_tauri_installer.py",
-        "real empty-cache Quick/Best inference": "validate_live_models.py",
-        "embedded live-model release evidence": "--live-model-report",
-        "patched release dependency assertion": "diffusers.__version__",
-        "release environment consistency check": "python -m pip check",
-        "compact three-installer manifest": "ci/tauri-release-artifacts.json",
-        "explicit prerelease publication": "publish_tauri_release.py",
-        "tag-derived release title": 'TITLE="LocalSR $TAG"',
-    }
-    for label, token in required.items():
-        if token not in desktop_release:
-            violations.append(f"signed desktop release is missing {label}")
-    if re.search(r"(?m)^  (push|pull_request|schedule):", desktop_release):
-        violations.append("the signed desktop release must not start on pushes, PRs or a schedule")
-    if "--clobber" in desktop_release:
-        violations.append("signed desktop releases must not overwrite published assets")
-    if desktop_release.count("contents: write") != 1:
-        violations.append("only the signed desktop publishing job may write release contents")
+    code = _code(workflow)
+    trigger_block = re.search(r"(?m)^on:\n((?:[ \t].*\n|\n)*)", code + "\n")
+    triggers = set(
+        re.findall(
+            r"(?m)^  [\"']?([\w-]+)[\"']?\s*:", trigger_block.group(1) if trigger_block else ""
+        )
+    )
+    if triggers != {"workflow_dispatch"}:
+        violations.append(f"{name} must start only by hand, not on {sorted(triggers)}")
+    if not re.search(r"(?m)^permissions:\n  contents: read$", code):
+        violations.append(f"{name} must default to read-only contents")
+    attach_job = re.search(r"(?ms)^  attach:\n(.*?)(?=^ {0,2}\S|\Z)", code)
+    if (
+        "write-all" in code
+        or code.count("contents: write") != 1
+        or attach_job is None
+        or "contents: write" not in attach_job.group(1)
+    ):
+        violations.append(f"only the attach job of {name} may write release contents")
+    for label, token in (RELEASE_PACKAGE_GATES | gates).items():
+        if token not in code:
+            violations.append(f"{name} is missing the {label}")
+    if "--private-preview-media" in code:
+        violations.append(f"{name} must not package the private preview media runtime")
     return violations
 
 
-def workflow_upload_platform_violations(root: Path) -> list[str]:
-    """Inspect every upload_artifacts.py call site for the wire-level enum."""
+def macos_release_violations(script: str) -> list[str]:
+    """Return violations that could publish an unsigned or unnotarized Mac release."""
 
-    violations: list[str] = []
-    workflows = root / ".github" / "workflows"
-    for path in sorted(workflows.glob("*.yml")):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for index, line in enumerate(lines):
-            if "upload_artifacts.py" not in line:
-                continue
-            invocation = " ".join(lines[index : index + 12])
-            match = re.search(r"--platform\s+['\"]?([A-Za-z0-9_.-]+)", invocation)
-            relative = path.relative_to(root)
-            if match is None:
-                violations.append(
-                    f"{relative}:{index + 1} upload call has no literal --platform value"
-                )
-                continue
-            platform = match.group(1)
-            if platform not in CANONICAL_UPLOAD_PLATFORMS:
-                violations.append(
-                    f"{relative}:{index + 1} upload platform {platform!r} is not canonical"
-                )
-    return violations
+    code = _code(script)
+    return [
+        f"the macOS release script is missing the {label}"
+        for label, token in MACOS_RELEASE_GATES.items()
+        if token not in code
+    ]
+
+
+def hosted_runner_violations(root: Path) -> list[str]:
+    """Every workflow runs on GitHub-hosted runners; the self-hosted ones are retired."""
+
+    return [
+        f"{path.relative_to(root)} targets a self-hosted runner"
+        for path in sorted((root / ".github" / "workflows").glob("*.y*ml"))
+        if "self-hosted" in _code(path.read_text(encoding="utf-8"))
+    ]
 
 
 def collect_violations(root: Path = ROOT) -> list[str]:
@@ -234,10 +263,12 @@ def collect_violations(root: Path = ROOT) -> list[str]:
     violations.extend(webview_authority_violations(package, capability, frontend_sources))
 
     preview = _read(root, ".github/workflows/tauri-preview.yml")
-    desktop_release = _read(root, ".github/workflows/desktop-release.yml")
     violations.extend(workflow_isolation_violations(preview))
-    violations.extend(signed_release_violations(desktop_release))
-    violations.extend(workflow_upload_platform_violations(root))
+    for name, gates in RELEASE_PACKAGE_WORKFLOWS.items():
+        workflow = _read(root, f".github/workflows/{name}")
+        violations.extend(release_package_violations(name, workflow, gates))
+    violations.extend(macos_release_violations(_read(root, "scripts/release_macos_beta.sh")))
+    violations.extend(hosted_runner_violations(root))
 
     build_script = _read(root, "scripts/build_tauri_preview.py")
     if 'BUILD_ROOT = ROOT / "build" / "tauri-preview"' not in build_script:
@@ -275,7 +306,7 @@ def main() -> int:
         return 1
     print(
         "Desktop architecture boundary valid: isolated webview, Rust authority, "
-        "Python worker, and fail-closed signed Tauri release."
+        "Python worker, and verified release builds."
     )
     return 0
 
