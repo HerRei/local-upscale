@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.2-beta] - Unreleased
+
+### Added
+
+- Integrated graphics. On Windows, the DirectML download can use built-in graphics too
+  (Intel UHD, Iris Xe and Arc, AMD Radeon). That has not run on real hardware yet, which
+  is why every GPU first has to pass the check below. Intel graphics also appear as
+  "(OpenVINO)" devices in the Windows DirectML and the Linux CPU downloads, through
+  Intel's own runtime; on an Intel Arrow Lake GPU under Linux, six models gave the same
+  result as the CPU.
+- A check before LocalSR trusts a GPU. The first time a model runs on a DirectML or
+  OpenVINO device, LocalSR compares the GPU's result with the CPU's on a detailed test
+  image and on the real picture, and uses the GPU only when they match. If they do not,
+  it tries safer settings, and when none matches it says so and asks you to use the
+  CPU. The result is remembered per model, device and driver, so the check runs again
+  only after an update.
+- When a download cannot use this computer's GPU, the hardware settings name the one
+  that can (or, on Linux, the Intel driver that is missing).
+
+### Changed
+
+- DirectML and OpenVINO always run in full precision (FP32); the precision setting shows
+  that and cannot be changed there.
+- LocalSR reads how much memory Windows grants to each graphics adapter and treats
+  built-in graphics as such, including AMD chips with a large reserved memory.
+- If the graphics driver resets the GPU during a job, that job stops with an
+  explanation, and the engine restarts with a fresh device before the next one.
+- On Linux the engine uses the computer's C++ runtime when it is newer than the one it
+  brings along, so drivers built for newer systems, such as Intel's, load inside the
+  AppImage.
+- The status line shows long messages on two lines, with the full text on hover.
+
+### Fixed
+
+- Built-in AMD graphics under ROCm on Linux were limited to their small reserved memory.
+- The Interface text menu in the advanced settings showed no value.
+- Symbols that minimal Linux systems drew as empty boxes (the plus to add media, zoom in,
+  the Advanced arrow).
+
 ## [0.3.1-beta] - Unreleased
 
 ### Changed
