@@ -163,6 +163,7 @@ def main() -> int:
                 still = app_windows(env)
                 if still:
                     problem = screenshot_problem(still[0], args.screenshot, env)
+                alive = app.poll() is None
         finally:
             end_namespace(pidfile)
             try:
