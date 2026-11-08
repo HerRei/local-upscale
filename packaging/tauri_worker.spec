@@ -75,6 +75,7 @@ if find_spec("onnxruntime") is not None:
         except PackageNotFoundError:
             continue
     onnx_hidden += ["onnxruntime", "torch.onnx"]
+openvino_package_libraries: set[str] = set()
 if find_spec("onnxruntime_ep_openvino") is not None:
     # Intel GPUs: the OpenVINO plugin and its own OpenVINO runtime, loaded by path
     # from this package directory. The NPU plugin is left out: LocalSR does not use
@@ -87,6 +88,7 @@ if find_spec("onnxruntime_ep_openvino") is not None:
     if not any("providers_openvino_plugin" in Path(entry[0]).name for entry in openvino_binaries):
         raise RuntimeError("The OpenVINO plugin library was not found for bundling")
     spandrel_binaries += openvino_binaries
+    openvino_package_libraries = {Path(entry[0]).name for entry in openvino_binaries}
     openvino_notices = collect_data_files(
         "onnxruntime_ep_openvino", includes=["third-party-programs.txt", "cache.json"]
     )
@@ -204,6 +206,16 @@ if sys.platform == "darwin" and target_arch in ("arm64", "x86_64"):
             analysis.binaries, target_arch, report_path
         )
     )
+
+# The dependency analysis also copies OpenVINO's own libraries to the top level. The frozen
+# worker puts the top level first on the library path, so the plugin would load that copy,
+# and OpenVINO, which finds its device plugins next to itself, would list no device at all.
+# The plugin finds its libraries in its own directory.
+analysis.binaries = TOC(
+    entry
+    for entry in analysis.binaries
+    if not (len(Path(entry[0]).parts) == 1 and Path(entry[0]).name in openvino_package_libraries)
+)
 
 # OpenCV's Windows wheel loads FFmpeg as a separate videoio plugin. LocalSR uses
 # OpenCV only for face detection and drawing, so that plugin is never shipped.
