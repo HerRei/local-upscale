@@ -511,34 +511,20 @@
     stateRefresh = setTimeout(() => void refresh(), 80);
   }
 
-  // One refresh at a time: a request during a refresh runs once more after it, so each
-  // snapshot is taken after the one before and an older one never replaces a newer one
-  // (an update switch, for one). Callers that wait get the state after the rerun.
-  let refreshRunning: Promise<void> | null = null;
-  let refreshAgain = false;
+  // Refreshes can overlap; an answer to an older request than the one already shown is
+  // dropped, so it cannot undo a change (an update switch, for one) that a newer answer
+  // showed. Refreshes are not queued behind each other: an auto-start inside a refresh
+  // waits for a refresh of its own.
+  let refreshesStarted = 0;
+  let refreshShown = 0;
 
-  function refresh(): Promise<void> {
-    if (!api.isTauri()) return Promise.resolve();
-    if (refreshRunning) {
-      refreshAgain = true;
-      return refreshRunning;
-    }
-    refreshRunning = (async () => {
-      try {
-        do {
-          refreshAgain = false;
-          await refreshOnce();
-        } while (refreshAgain);
-      } finally {
-        refreshRunning = null;
-      }
-    })();
-    return refreshRunning;
-  }
-
-  async function refreshOnce(): Promise<void> {
+  async function refresh(): Promise<void> {
+    if (!api.isTauri()) return;
+    const order = ++refreshesStarted;
     try {
       const latest = await api.refreshSnapshot();
+      if (order < refreshShown) return;
+      refreshShown = order;
       for (const media of latest.media) {
         const previous = snapshot.media.find((item) => item.id === media.id);
         if (media.probe_status === 'pending' && previous?.probe_status === 'pending') {
