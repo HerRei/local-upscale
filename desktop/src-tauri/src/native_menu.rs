@@ -1,23 +1,46 @@
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     App, AppHandle, Emitter, Manager, Runtime,
 };
 
-use crate::types::Recipe;
+use crate::types::{Recipe, UiSettings};
+
+/// The two update switches the menu shows with a check mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Switches {
+    pub check_at_launch: bool,
+    pub update_count: bool,
+}
+
+pub fn switches(settings: &UiSettings) -> Switches {
+    Switches {
+        check_at_launch: settings.check_updates_at_launch,
+        update_count: settings.anonymous_update_count,
+    }
+}
 
 pub const EVENT_NAME: &str = "native-menu-action";
 
-pub fn install<R: Runtime>(app: &App<R>, recipes: &[Recipe]) -> tauri::Result<()> {
-    install_for_manager(app, recipes)
+pub fn install<R: Runtime>(
+    app: &App<R>,
+    recipes: &[Recipe],
+    switches: Switches,
+) -> tauri::Result<()> {
+    install_for_manager(app, recipes, switches)
 }
 
-pub fn rebuild<R: Runtime>(app: &AppHandle<R>, recipes: &[Recipe]) -> tauri::Result<()> {
-    install_for_manager(app, recipes)
+pub fn rebuild<R: Runtime>(
+    app: &AppHandle<R>,
+    recipes: &[Recipe],
+    switches: Switches,
+) -> tauri::Result<()> {
+    install_for_manager(app, recipes, switches)
 }
 
 fn install_for_manager<R: Runtime, M: Manager<R>>(
     manager: &M,
     recipes: &[Recipe],
+    switches: Switches,
 ) -> tauri::Result<()> {
     let add_media = MenuItemBuilder::with_id("file.add-media", "Add Media…")
         .accelerator("CmdOrCtrl+O")
@@ -112,18 +135,35 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
     // macOS keeps update checks in the app menu; elsewhere they sit under Help.
     let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
+    // Builds without their own update feed (the Store and, for now, Windows and Linux)
+    // neither check at launch nor send the count, so they have no switches.
+    let switchable = crate::updates::checks_for_updates();
+    let check_at_launch =
+        CheckMenuItemBuilder::with_id("app.check-updates-at-launch", "Check for Updates at Launch")
+            .checked(switches.check_at_launch)
+            .build(manager)?;
+    let update_count =
+        CheckMenuItemBuilder::with_id("app.update-count", "Send Anonymous Update Count")
+            .checked(switches.update_count)
+            .build(manager)?;
     #[cfg(target_os = "macos")]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
         .item(&github)
         .build()?;
     #[cfg(not(target_os = "macos"))]
-    let help_menu = SubmenuBuilder::new(manager, "Help")
-        .item(&guide)
-        .item(&github)
-        .separator()
-        .item(&updates)
-        .build()?;
+    let help_menu = {
+        let builder = SubmenuBuilder::new(manager, "Help")
+            .item(&guide)
+            .item(&github)
+            .separator()
+            .item(&updates);
+        if switchable {
+            builder.item(&check_at_launch).item(&update_count).build()?
+        } else {
+            builder.build()?
+        }
+    };
 
     #[cfg(target_os = "macos")]
     let menu_builder = {
@@ -137,7 +177,13 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
                 ),
                 ..Default::default()
             }))
-            .item(&updates)
+            .item(&updates);
+        let app_menu = if switchable {
+            app_menu.item(&check_at_launch).item(&update_count)
+        } else {
+            app_menu
+        };
+        let app_menu = app_menu
             .separator()
             .services()
             .separator()

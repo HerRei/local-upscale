@@ -204,6 +204,32 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
   return snapshot;
 }
 
+describe('Update switches in the native menu', () => {
+  it('turn the launch check and the anonymous count off, even during a job', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'job-running';
+    await mountWith(snapshot);
+    await chooseMenuItem('app.update-count');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ anonymous_update_count: false }),
+      ),
+    );
+    await chooseMenuItem('app.check-updates-at-launch');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ anonymous_update_count: false, check_updates_at_launch: false }),
+      ),
+    );
+    await chooseMenuItem('app.check-updates-at-launch');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ check_updates_at_launch: true }),
+      ),
+    );
+  });
+});
+
 describe('Edit task', () => {
   it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
     // 36 GB: the Qwen editor fits within the share of memory a default may use.

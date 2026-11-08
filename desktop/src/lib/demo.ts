@@ -50,6 +50,7 @@ export function demoSnapshot(): AppSnapshot {
       video_hdr_mode: 'tone_map',
       video_crf: 18,
       anonymous_update_count: true,
+      check_updates_at_launch: true,
       enable_face_model: false,
       face_fidelity: 70,
       enable_live_preview: true,

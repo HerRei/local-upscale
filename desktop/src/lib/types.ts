@@ -292,6 +292,7 @@ export interface UiSettings {
   video_crf: number;
   /** Direct builds send version, platform and channel after an update check. Defaults to true. */
   anonymous_update_count?: boolean;
+  check_updates_at_launch?: boolean;
   enable_face_model: boolean;
   face_fidelity: number;
   enable_live_preview: boolean;

@@ -85,19 +85,26 @@ it('uses Store updates and waits for the active queue to finish', async () => {
   expect(api.installUpdate).not.toHaveBeenCalled();
 });
 
-it('lets direct builds turn off the anonymous update-check count, but not while processing', async () => {
+it('lets direct builds turn off the launch check and the count, even while processing', async () => {
   const user = userEvent.setup();
-  const changes: boolean[] = [];
-  const view = render(UpdatePanel, {
-    props: { processing: true, anonymousUpdateCount: true },
-    events: { anonymouscount: (event: CustomEvent<boolean>) => changes.push(event.detail) },
+  const counts: boolean[] = [];
+  const launches: boolean[] = [];
+  render(UpdatePanel, {
+    // Neither switch touches a running job, so neither waits for one.
+    props: { processing: true, anonymousUpdateCount: true, checkAtLaunch: true },
+    events: {
+      anonymouscount: (event: CustomEvent<boolean>) => counts.push(event.detail),
+      checkatlaunch: (event: CustomEvent<boolean>) => launches.push(event.detail),
+    },
   });
-  const box = await screen.findByLabelText(
+  const count = await screen.findByLabelText(
     'Send an anonymous update-check count (version, platform, channel)',
   );
-  expect((box as HTMLInputElement).checked).toBe(true);
-  expect(box.matches(':disabled')).toBe(true);
-  await view.rerender({ processing: false, anonymousUpdateCount: true });
-  await user.click(box);
-  expect(changes).toEqual([false]);
+  const launch = screen.getByLabelText('Check for updates when LocalSR starts');
+  expect((count as HTMLInputElement).checked).toBe(true);
+  expect((launch as HTMLInputElement).checked).toBe(true);
+  await user.click(count);
+  await user.click(launch);
+  expect(counts).toEqual([false]);
+  expect(launches).toEqual([false]);
 });
