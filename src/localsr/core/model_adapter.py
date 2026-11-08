@@ -175,7 +175,7 @@ class ModelAdapter:
         device: torch.device,
         precision: torch.dtype,
         *,
-        onnx_device_index=None,
+        onnx_route=None,
         coreml_units: tuple[str, ...] = (),
     ):
         normalized_path = os.path.abspath(path)
@@ -190,10 +190,10 @@ class ModelAdapter:
         # the single-image tensor contract used by LocalSR.
         descriptor = self.parsed.to(device).to(precision)
         descriptor.eval()
-        if onnx_device_index is not None:
+        if onnx_route is not None:
             from .onnx_runtime import OnnxImageDescriptor
 
-            return OnnxImageDescriptor(descriptor, device_index=onnx_device_index), self.parsed
+            return OnnxImageDescriptor(descriptor, route=onnx_route), self.parsed
         if coreml_units:
             from .coreml_runtime import CoreMLImageDescriptor, checkpoint_identity
 

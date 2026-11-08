@@ -1,5 +1,6 @@
 """Exercise actual graph conversion and the descriptor boundary on CPU in CI."""
 
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,7 +9,7 @@ import spandrel
 import torch
 
 from localsr.core.inference import InferenceEngine
-from localsr.core.onnx_runtime import OnnxImageDescriptor
+from localsr.core.onnx_runtime import OnnxImageDescriptor, OnnxRoute
 
 pytest.importorskip("onnx")
 pytest.importorskip("onnxruntime")
@@ -88,7 +89,8 @@ def test_cpu_and_onnx_gpu_never_share_a_cached_model(monkeypatch):
 
     class Adapter:
         def load(self, path, device, precision, **kwargs):
-            model = SimpleNamespace(execution_provider=kwargs.get("onnx_device_index", "cpu"))
+            route = kwargs.get("onnx_route")
+            model = SimpleNamespace(execution_provider=route.provider if route else "cpu")
             calls.append((str(device), precision, kwargs))
             return model, None
 
@@ -106,7 +108,15 @@ def test_cpu_and_onnx_gpu_never_share_a_cached_model(monkeypatch):
     assert engine.active_model is not gpu
     assert calls == [
         ("cpu", torch.float32, {}),
-        ("cpu", torch.float32, {"onnx_device_index": 0}),
+        (
+            "cpu",
+            torch.float32,
+            {
+                "onnx_route": OnnxRoute(
+                    "DmlExecutionProvider", 0, identity="directml:0", label="directml:0"
+                )
+            },
+        ),
         ("cpu", torch.float32, {}),
     ]
     engine.release_all()
@@ -149,3 +159,199 @@ def test_native_onnx_allocation_failure_releases_sessions_and_allows_retry(monke
     monkeypatch.setattr(converted.model, "_session", session)
     assert converted(image).shape == image.shape
     assert converted.execution_verified
+
+
+def gated(monkeypatch, tmp_path, configs, broken=frozenset(), failing=frozenset()):
+    """A CPU route that behaves like a GPU route under test.
+
+    Configurations named in ``broken`` return a visibly different image and those in
+    ``failing`` raise on their first run, so the gate's decisions can be checked
+    without a GPU. Returns the descriptor and a list of reference (CPU) calls.
+    """
+    from localsr.core import onnx_runtime
+
+    monkeypatch.setenv("LOCALSR_ONNX_GATE_CACHE", str(tmp_path))
+    monkeypatch.setitem(
+        onnx_runtime.ROUTE_CONFIGS,
+        "CPUExecutionProvider",
+        tuple((name, {}, False) for name in configs),
+    )
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_gated", property(lambda self: True))
+    run = onnx_runtime._OnnxImage._run
+
+    def run_configured(self, session, image):
+        name = self._current["config"][0]  # recorded by track() below
+        if name in failing:
+            raise RuntimeError(f"configuration {name} crashed")
+        output = run(self, session, image)
+        return output + 0.25 if name in broken else output
+
+    open_next = onnx_runtime._OnnxImage._open_next
+
+    def track(self, state):
+        open_next(self, state)
+        self._current = state
+
+    reference = onnx_runtime._OnnxImage._reference
+    calls = []
+
+    def counted(self, image):
+        calls.append(tuple(image.shape))
+        return reference(self, image)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", run_configured)
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_open_next", track)
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_reference", counted)
+    return OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider"), calls
+
+
+def test_gate_rejects_a_configuration_that_differs_and_uses_the_next(monkeypatch, tmp_path):
+    original = descriptor()
+    converted, calls = gated(monkeypatch, tmp_path, ("fast", "safe"), broken={"fast"})
+    image = torch.linspace(0, 1, 3 * 8 * 8).reshape(1, 3, 8, 8)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert converted.model.active_config == "safe"
+    assert len(calls) == 4  # pattern and tile, for each configuration tried
+    verdicts = json.loads((tmp_path / "verdicts.json").read_text())
+    assert sorted(v["accepted"] for v in verdicts.values()) == [False, True]
+    # A new engine reuses both verdicts: no checks, straight to the accepted configuration.
+    again, calls = gated(monkeypatch, tmp_path, ("fast", "safe"), broken={"fast"})
+    np.testing.assert_allclose(again(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert again.model.active_config == "safe" and calls == []
+
+
+def test_gate_refuses_the_route_when_no_configuration_matches(monkeypatch, tmp_path):
+    from localsr.core.onnx_runtime import GpuRouteRejected
+
+    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a", "b"})
+    image = torch.rand(1, 3, 8, 8)
+    with pytest.raises(GpuRouteRejected, match="Select the CPU"):
+        converted(image)
+    assert len(calls) == 4
+    again, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a", "b"})
+    with pytest.raises(GpuRouteRejected):
+        again(image)
+    assert calls == []  # refused from the stored verdicts, without running anything
+
+
+def test_gate_moves_on_when_a_configuration_crashes_on_its_first_tile(monkeypatch, tmp_path):
+    original = descriptor()
+    converted, _ = gated(monkeypatch, tmp_path, ("crashes", "works"), failing={"crashes"})
+    image = torch.rand(1, 3, 8, 8)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert converted.model.active_config == "works"
+
+
+def test_gate_keeps_checking_while_the_reference_is_unstable(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+    unstable = {"left": 2}  # both inputs of the first check: the pattern and the tile
+    reference = onnx_runtime._OnnxImage._reference
+
+    def sometimes_unstable(self, image):
+        output = reference(self, image)
+        if unstable["left"]:
+            unstable["left"] -= 1
+            output = output.copy()
+            output.flat[0] = np.nan
+        return output
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_reference", sometimes_unstable)
+    image = torch.rand(1, 3, 8, 8)
+    converted(image)
+    assert not (tmp_path / "verdicts.json").exists()  # nothing decided on an unstable tile
+    converted(image)
+    assert json.loads((tmp_path / "verdicts.json").read_text())
+
+
+def test_a_lost_device_is_reported_as_such_and_releases_sessions(monkeypatch):
+    from onnxruntime.capi.onnxruntime_pybind11_state import RuntimeException
+
+    from localsr.core.onnx_runtime import GpuDeviceLost
+
+    converted = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
+    image = torch.zeros(1, 3, 8, 8)
+    converted(image)
+
+    def removed(_image):
+        raise RuntimeException("DML failed: DXGI_ERROR_DEVICE_REMOVED (0x887A0005)")
+
+    monkeypatch.setattr(converted.model, "_session", removed)
+    with pytest.raises(GpuDeviceLost, match="restarts with a fresh device"):
+        converted(image)
+    assert not converted.model.sessions
+
+
+def test_every_tile_of_an_image_reaches_onnx_in_one_shape(tmp_path):
+    import threading
+
+    converted = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
+    shapes = set()
+    converted.model.register_forward_hook(
+        lambda model, args, output: shapes.add(tuple(args[0].shape))
+    )
+
+    class Adapter:
+        def load(self, path, device, precision, **kwargs):
+            return converted, None
+
+    engine = InferenceEngine(Adapter())
+    info = SimpleNamespace(
+        half_supported=False,
+        safe_memory=True,
+        architecture="test",
+        scale=1,
+        out_channels=3,
+        size_requirements_min=8,
+        size_requirements_mult=8,
+    )
+    image = torch.rand(3, 110, 150)
+    writer = engine.process_image(
+        {"tensor": image},
+        info,
+        "model",
+        "cpu",
+        "fp32",
+        64,
+        8,
+        threading.Event(),
+        lambda *args: None,
+        temporary_directory=str(tmp_path),
+    )
+    assert shapes == {(1, 3, 80, 80)}  # interior, edge and corner tiles alike
+    assert writer is not None
+
+
+def test_a_flat_first_tile_cannot_pass_a_broken_configuration(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    converted, _ = gated(monkeypatch, tmp_path, ("detail-broken", "sound"))
+    run = onnx_runtime._OnnxImage._run
+
+    def wrong_on_detail(self, session, image):
+        # Correct on flat input, wrong wherever the image has detail.
+        output = run(self, session, image)
+        if self._current["config"][0] == "detail-broken" and float(image.std()) > 0.01:
+            output = output + 0.3
+        return output
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", wrong_on_detail)
+    flat = torch.full((1, 3, 8, 8), 0.5)
+    converted(flat)
+    assert converted.model.active_config == "sound"
+
+
+def test_worker_restarts_only_after_a_lost_device():
+    from localsr.core.onnx_runtime import GpuDeviceLost, GpuRouteRejected
+    from localsr.worker.server import _device_lost
+
+    try:
+        try:
+            raise GpuDeviceLost("device removed")
+        except GpuDeviceLost as lost:
+            raise RuntimeError("tile failed") from lost
+    except RuntimeError as wrapped:
+        assert _device_lost(wrapped)
+    assert not _device_lost(GpuRouteRejected("different results"))
+    assert not _device_lost(RuntimeError("Out of memory in the ONNX inference engine."))
