@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { updateDialogOpen } from './lib/updates';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +24,7 @@ const api = vi.hoisted(() => ({
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
+  setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
   startBenchmark: vi.fn(async () => undefined),
@@ -204,29 +206,29 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
   return snapshot;
 }
 
-describe('Update switches in the native menu', () => {
-  it('turn the launch check and the anonymous count off, even during a job', async () => {
+describe('Update switches', () => {
+  it('go to the host on their own, even during a job, and never through a full save', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.runtime.active_job_id = 'job-running';
-    await mountWith(snapshot);
+    const user = await mountWith(snapshot);
+    await chooseMenuItem('app.updates');
+    await user.click(
+      await screen.findByLabelText(
+        'Send an anonymous update-check count (version, platform, channel)',
+      ),
+    );
+    await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
+    expect(api.setUpdateSwitch.mock.calls).toEqual([
+      ['anonymous_update_count', false],
+      ['check_updates_at_launch', false],
+    ]);
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ anonymous_update_count: false }),
+    );
+    // The menu's own items are the host's: the window does not act on them.
     await chooseMenuItem('app.update-count');
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ anonymous_update_count: false }),
-      ),
-    );
-    await chooseMenuItem('app.check-updates-at-launch');
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ anonymous_update_count: false, check_updates_at_launch: false }),
-      ),
-    );
-    await chooseMenuItem('app.check-updates-at-launch');
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ check_updates_at_launch: true }),
-      ),
-    );
+    expect(api.setUpdateSwitch).toHaveBeenCalledTimes(2);
+    updateDialogOpen.set(false); // the dialog's store outlives this test's window
   });
 });
 

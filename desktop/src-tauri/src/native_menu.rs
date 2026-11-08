@@ -216,6 +216,19 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
 }
 
 pub fn dispatch(app: &AppHandle, id: &str) {
+    // The update switches are the host's own settings: it flips the saved value, so a
+    // window that has not caught up cannot send the opposite.
+    let switch = match id {
+        "app.check-updates-at-launch" => Some("check_updates_at_launch"),
+        "app.update-count" => Some("anonymous_update_count"),
+        _ => None,
+    };
+    if let Some(name) = switch {
+        if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
+            crate::commands::toggle_update_switch(&state, app, name);
+        }
+        return;
+    }
     if id == "help.guide" {
         let _ = open::that_detached(crate::commands::USER_GUIDE_URL);
         return;
