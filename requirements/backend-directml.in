@@ -9,3 +9,5 @@ ml_dtypes==0.5.4
 pyinstaller==6.22.2
 setuptools==84.2.1
 wheel==0.46.2
+# Intel GPUs through the OpenVINO plugin, beside DirectML (it registers into this ONNX Runtime).
+onnxruntime-ep-openvino==1.8.1 ; sys_platform == "win32"

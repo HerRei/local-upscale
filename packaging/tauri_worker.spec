@@ -14,7 +14,13 @@ from pathlib import Path
 
 from PyInstaller.building.datastruct import TOC
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 ROOT = Path(SPECPATH).parent
@@ -69,6 +75,25 @@ if find_spec("onnxruntime") is not None:
         except PackageNotFoundError:
             continue
     onnx_hidden += ["onnxruntime", "torch.onnx"]
+if find_spec("onnxruntime_ep_openvino") is not None:
+    # Intel GPUs: the OpenVINO plugin and its own OpenVINO runtime, loaded by path
+    # from this package directory. The NPU plugin is left out: LocalSR does not use
+    # the NPU, and it would load Level Zero at device discovery.
+    openvino_binaries = [
+        entry
+        for entry in collect_dynamic_libs("onnxruntime_ep_openvino")
+        if "openvino_intel_npu_plugin" not in Path(entry[0]).name
+    ]
+    if not any("providers_openvino_plugin" in Path(entry[0]).name for entry in openvino_binaries):
+        raise RuntimeError("The OpenVINO plugin library was not found for bundling")
+    spandrel_binaries += openvino_binaries
+    openvino_notices = collect_data_files(
+        "onnxruntime_ep_openvino", includes=["third-party-programs.txt", "cache.json"]
+    )
+    if not any(Path(entry[0]).name == "third-party-programs.txt" for entry in openvino_notices):
+        raise RuntimeError("The OpenVINO third-party notices must be bundled")
+    datas += openvino_notices + copy_metadata("onnxruntime-ep-openvino")
+    onnx_hidden += ["onnxruntime_ep_openvino"]
 coreml_hidden = []
 if sys.platform == "darwin" and find_spec("coremltools") is not None:
     # Core ML conversion and execution on Apple silicon. coremltools swallows a
