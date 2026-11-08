@@ -12,6 +12,14 @@
 - On a Mac, Homebrew installs LocalSR: `brew install --cask herrei/tap/localsr`.
 - Dependency updates, among them Tauri 2.12.
 
+### Fixed
+
+- Building the app from source works again: after a dependency update the Rust
+  half of the file dialog plugin was one version behind its JavaScript half, and
+  Tauri refuses to build with mismatched halves.
+- The Windows installers build again: MSYS2 renamed its zlib DLL to
+  `libz-1.dll`, which the check of the media runtime's DLLs did not accept yet.
+
 ## [0.3.0-beta] - 2026-10-24
 
 The Neural Engine, and videos twice as fast.
