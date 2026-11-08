@@ -88,7 +88,14 @@ if find_spec("onnxruntime_ep_openvino") is not None:
     if not any("providers_openvino_plugin" in Path(entry[0]).name for entry in openvino_binaries):
         raise RuntimeError("The OpenVINO plugin library was not found for bundling")
     spandrel_binaries += openvino_binaries
-    openvino_package_libraries = {Path(entry[0]).name for entry in openvino_binaries}
+    # Every library file in the plugin's directory, versioned names included (libopenvino.so.2641,
+    # libtbb.so.12): collect_dynamic_libs only lists the plain .so files, while the dependency
+    # analysis copies exactly the versioned ones to the top level.
+    openvino_package_libraries = {
+        path.name
+        for path in Path(find_spec("onnxruntime_ep_openvino").submodule_search_locations[0]).iterdir()
+        if path.is_file() and (".so" in path.name or path.suffix.lower() == ".dll")
+    }
     openvino_notices = collect_data_files(
         "onnxruntime_ep_openvino", includes=["third-party-programs.txt", "cache.json"]
     )
