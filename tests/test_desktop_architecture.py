@@ -51,27 +51,86 @@ def test_rejects_preview_release_coupling() -> None:
     assert any("explicit manual build" in violation for violation in violations)
 
 
-def test_rejects_unsigned_or_overwriting_desktop_release() -> None:
-    violations = architecture.signed_release_violations(
-        "permissions:\n  contents: write\n  contents: write\nrun: gh release upload --clobber\n",
+RELEASE_WORKFLOW = """name: Release packages
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - run: |
+          python -m pip check
+          python scripts/verify_codec_allowlist.py
+          python scripts/smoke_tauri_installer.py
+          python scripts/verify_tauri_release_package.py
+          python scripts/verify_nvidia_redistributables.py
+          python scripts/build_source_bundle.py
+  attach:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+"""
+
+
+def test_accepts_a_verified_manual_release_workflow() -> None:
+    assert architecture.release_package_violations("w.yml", RELEASE_WORKFLOW, {}) == []
+
+
+def test_rejects_unverified_or_automatic_release_workflows() -> None:
+    weakened = (
+        RELEASE_WORKFLOW.replace("  workflow_dispatch:", "  workflow_dispatch:\n  push:")
+        .replace("permissions:\n  contents: read", "permissions:\n  contents: write")
+        .replace("          python scripts/smoke_tauri_installer.py\n", "")
+        .replace("python -m pip check", "python build.py --private-preview-media")
+    )
+    violations = architecture.release_package_violations(
+        "w.yml", weakened, {"glibc ceiling": "verify_appimage_libc.py"}
     )
 
-    assert any("fail-closed Tauri signing" in violation for violation in violations)
-    assert any("must not overwrite" in violation for violation in violations)
-    assert any("only the signed desktop publishing job" in violation for violation in violations)
+    assert any("must not start on pushes" in violation for violation in violations)
+    assert any("read-only contents" in violation for violation in violations)
+    assert any("only the attach job" in violation for violation in violations)
+    assert any("installed package smoke" in violation for violation in violations)
+    assert any("consistency check" in violation for violation in violations)
+    assert any("glibc ceiling" in violation for violation in violations)
+    assert any("private preview media" in violation for violation in violations)
 
 
-def test_every_workflow_upload_uses_the_canonical_platform_contract() -> None:
-    assert architecture.workflow_upload_platform_violations(ROOT) == []
+def test_comments_neither_satisfy_nor_trip_a_release_gate() -> None:
+    commented = RELEASE_WORKFLOW.replace(
+        "          python scripts/smoke_tauri_installer.py\n",
+        "          # python scripts/smoke_tauri_installer.py --private-preview-media\n",
+    )
+    violations = architecture.release_package_violations("w.yml", commented, {})
+
+    assert violations == ["w.yml is missing the installed package smoke"]
 
 
-def test_publish_jobs_combine_attempts_and_use_the_provisioned_python() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
+def test_rejects_an_unsigned_or_unnotarized_macos_release() -> None:
+    script = (ROOT / "scripts" / "release_macos_beta.sh").read_text(encoding="utf-8")
+    assert architecture.macos_release_violations(script) == []
 
-    assert 'RUN_ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID"' in workflow
-    assert '"$HOME/.venv-ci/bin/python3.11" scripts/prepare_tauri_release_assets.py' in workflow
-    assert 'ROOT="/mnt/hdd/ci-artifacts/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"' not in workflow
-    assert "\n          python scripts/prepare_tauri_release_assets.py" not in workflow
+    unsigned = script.replace("xcrun notarytool submit", "true").replace(
+        "python scripts/sign_macos_keychain.py", "# python scripts/sign_macos_keychain.py"
+    )
+    violations = architecture.macos_release_violations(unsigned)
+    assert any("Developer ID signing" in violation for violation in violations)
+    assert any("notarization" in violation for violation in violations)
+
+
+def test_rejects_workflows_on_self_hosted_runners(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "hosted.yml").write_text(
+        "# was self-hosted\njobs:\n  a:\n    runs-on: macos-latest\n"
+    )
+    (workflows / "local.yml").write_text("jobs:\n  a:\n    runs-on: [self-hosted, Linux]\n")
+
+    assert architecture.hosted_runner_violations(tmp_path) == [
+        ".github/workflows/local.yml targets a self-hosted runner"
+    ]
 
 
 def test_release_workflows_install_the_pinned_face_extra() -> None:
@@ -79,63 +138,9 @@ def test_release_workflows_install_the_pinned_face_extra() -> None:
         extras = tomllib.load(stream)["project"]["optional-dependencies"]
     assert extras["face"] == ["opencv-python-headless==4.10.0.84"]
 
-    for workflow_name in ("desktop-release.yml", "tauri-preview.yml"):
+    for workflow_name in ("linux-appimages.yml", "windows-installers.yml", "tauri-preview.yml"):
         workflow = (ROOT / ".github/workflows" / workflow_name).read_text()
         assert ".[package,video,face]" in workflow or "backend_wheelhouse.py" in workflow
-
-
-def test_signed_release_uses_bounded_release_retention_on_every_platform() -> None:
-    workflow = (ROOT / ".github/workflows/desktop-release.yml").read_text()
-
-    assert "ci_scratch.py" not in workflow
-    # Linux and Windows build on persistent self-hosted runners, so their
-    # release scratch needs explicit, bounded retention.
-    assert workflow.count("release_scratch.py start") == 2
-    assert workflow.count("release_scratch.py finish") == 2
-    assert workflow.count("--retain-hours 48") == 2
-    assert "--platform linux" in workflow
-    assert "--platform windows" in workflow
-    assert "--platform macos" in workflow
-    # macOS builds on an ephemeral GitHub-hosted runner that is discarded with
-    # the job, so its scratch is bounded by construction and must stay under
-    # RUNNER_TEMP rather than persistent storage.
-    macos_job = workflow.split("  build-macos-arm64:", 1)[1].split("  verify-release-matrix:", 1)[0]
-    assert "runs-on: macos-latest" in macos_job
-    assert "release_scratch.py" not in macos_job
-    assert "$RUNNER_TEMP" in macos_job
-    assert "/Volumes/CISCRATCH" not in macos_job
-
-
-def test_release_builds_revalidate_runner_health_immediately_before_work() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
-
-    assert workflow.count("Revalidate release runner immediately before build") == 3
-    assert workflow.count("scripts/release_runner_preflight.py") >= 6
-
-
-def test_signed_windows_cleanup_survives_thumbprint_validation_failure() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
-    persisted = workflow.index('"LOCALSR_IMPORTED_CERTIFICATE=$($certificate.Thumbprint)"')
-    thumbprint_check = workflow.index("Imported certificate thumbprint mismatch")
-    cleanup = workflow.index("Cert:\\CurrentUser\\My\\$env:LOCALSR_IMPORTED_CERTIFICATE")
-
-    assert persisted < thumbprint_check < cleanup
-    assert "--secret release-certificate.pfx" in workflow
-
-
-def test_signed_macos_gate_fails_closed_without_an_unregistered_runner_label() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
-
-    assert "[self-hosted, macOS, ARM64]" not in workflow
-    assert '["self-hosted","macOS","ARM64"]' not in workflow
-    assert workflow.count("A registered native macOS ARM64 runner is required") >= 3
-    # The signed macOS preflight and build must route to a label that always
-    # has capacity, or a release would queue forever. GitHub-hosted
-    # macos-latest is genuinely arm64 and never lacks a runner, so no
-    # self-hosted macOS label may remain in the release workflow.
-    assert workflow.count("macos-latest") >= 2
-    assert "self-hosted, macOS" not in workflow
-    assert '"self-hosted","macOS"' not in workflow
 
 
 def test_desktop_catalog_fails_closed_for_unresolved_checkpoint_rights() -> None:
@@ -173,29 +178,15 @@ def test_tauri_preview_keeps_cargo_output_in_the_ephemeral_workspace() -> None:
     assert "CARGO_CACHE" not in workflow
 
 
-def test_hosted_pr_workflows_run_independently_of_the_manual_release() -> None:
+def test_hosted_pr_workflows_run_in_parallel_on_fresh_runners() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     preview = (ROOT / ".github" / "workflows" / "tauri-preview.yml").read_text()
-    release = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text()
 
-    # CI and Preview may cancel only older runs of themselves. They must not
-    # share GitHub's one-pending-run concurrency queue with a release.
+    # CI and Preview may cancel only older runs of themselves.
     assert "group: localsr-ci-${{ github.ref }}" in ci
     assert "group: localsr-tauri-${{ github.ref }}" in preview
-    assert "group: localsr-macmini-heavy" in release
-    assert "cancel-in-progress: false" in release
-
-    assert "name: Signed Tauri Release\n" in release
-    assert "runs-on: ubuntu-latest" in release
     for workflow in (ci, preview):
         assert "self-hosted" not in workflow
-        assert "coordinate-heavy-work" not in workflow
-        assert "workflow_coordination.py" not in workflow
-        assert "ci_scratch.py" not in workflow
-        assert "storage_preflight.py" not in workflow
-        assert "ensure_windows_scratch.ps1" not in workflow
-        assert "remove_windows_scratch.ps1" not in workflow
-        assert "/ci-scratch" not in workflow
         assert "--system-site-packages" not in workflow
 
     assert "needs:" not in ci
