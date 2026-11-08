@@ -19,6 +19,13 @@ from pathlib import Path
 
 ELF_MAGIC = b"\x7fELF"
 VERSION = re.compile(r"GLIBC_(\d+(?:\.\d+)+)")
+# What runs on the host's CPU (EM_386, EM_X86_64). Other ELF files, such as the AMD GPU code
+# objects in the ROCm edition, never load the host's glibc and objdump cannot read them.
+HOST_MACHINES = {3, 62}
+
+
+class InspectionError(RuntimeError):
+    """objdump could not read a file, so its glibc requirement is unknown."""
 
 
 def version_key(text: str) -> tuple[int, ...]:
@@ -33,11 +40,29 @@ def is_elf(path: Path) -> bool:
         return False
 
 
+def elf_machine(path: Path) -> int | None:
+    """The ELF header's e_machine, or None for a file too short to have one."""
+    with path.open("rb") as stream:
+        header = stream.read(20)
+    if len(header) < 20:
+        return None
+    return int.from_bytes(header[18:20], "little" if header[5] == 1 else "big")
+
+
 def required_glibc(path: Path) -> str | None:
-    """The newest GLIBC_ version among the file's undefined (required) dynamic symbols, or None."""
-    output = subprocess.run(
+    """The newest GLIBC_ version among the file's undefined (required) dynamic symbols, or None.
+
+    Raises InspectionError when objdump fails: an unreadable file must not pass as one that needs
+    nothing.
+    """
+    result = subprocess.run(
         ["objdump", "-T", str(path)], capture_output=True, text=True, check=False
-    ).stdout
+    )
+    if result.returncode != 0:
+        raise InspectionError(
+            f"objdump -T {path} failed ({result.returncode}): {result.stderr.strip()}"
+        )
+    output = result.stdout
     versions = [
         m.group(1)
         for line in output.splitlines()
@@ -49,7 +74,11 @@ def required_glibc(path: Path) -> str | None:
 
 
 def scan(tree: Path) -> dict[str, str]:
-    files = [p for p in tree.rglob("*") if p.is_file() and not p.is_symlink() and is_elf(p)]
+    files = [
+        p
+        for p in tree.rglob("*")
+        if p.is_file() and not p.is_symlink() and is_elf(p) and elf_machine(p) in HOST_MACHINES
+    ]
     with ThreadPoolExecutor(max_workers=4) as pool:
         found = dict(zip(files, pool.map(required_glibc, files), strict=True))
     return {str(path.relative_to(tree)): version for path, version in found.items() if version}
@@ -68,8 +97,12 @@ def main() -> int:
     args = parser.parse_args()
     if not args.tree.is_dir():
         parser.error(f"not a directory: {args.tree}")
-    needs = scan(args.tree)
-    runtime = required_glibc(args.appimage)
+    try:
+        needs = scan(args.tree)
+        runtime = required_glibc(args.appimage)
+    except InspectionError as error:
+        print(f"cannot check the glibc requirement: {error}", file=sys.stderr)
+        return 2
     if runtime:
         needs["(AppImage runtime)"] = runtime
     newest = max(needs.values(), key=version_key) if needs else None
