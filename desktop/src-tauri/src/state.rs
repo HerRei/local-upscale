@@ -28,6 +28,9 @@ pub struct WorkerControl {
     pub pid: AtomicU32,
     pub restart_count: AtomicU32,
     pub shutting_down: AtomicBool,
+    /// The process ID of an engine that ended on its own with a failure, for its
+    /// replacement: the engine then knows which GPU step crashed it.
+    pub crashed_engine: AtomicU32,
 }
 
 impl Default for WorkerControl {
@@ -39,6 +42,7 @@ impl Default for WorkerControl {
             pid: AtomicU32::new(0),
             restart_count: AtomicU32::new(0),
             shutting_down: AtomicBool::new(false),
+            crashed_engine: AtomicU32::new(0),
         }
     }
 }
