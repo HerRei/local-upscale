@@ -1,5 +1,4 @@
+# Every workflow runs on GitHub-hosted runners (docs/adr/0008-hosted-ci.md), so no
+# self-hosted labels are declared and actionlint rejects any that appear.
 self-hosted-runner:
-  labels:
-    - localsr-linux-builder
-    - localsr-windows-builder
-    - localsr-macos-cross-builder
+  labels: []
