@@ -42,20 +42,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: linux-x86_64-cpu
-            backend: CPU
-            suffix: Linux-CPU-x86_64.AppImage
-            source: Linux-CPU-source-and-notices.tar.gz
-            runner: ubuntu-22.04
-            glibc: "2.35"
-            elf_packages: libelf1 libdw1
-          - id: linux-x86_64-cuda
-            backend: CUDA
-            suffix: Linux-CUDA-x86_64.AppImage
-            source: Linux-CUDA-source-and-notices.tar.gz
-            runner: ubuntu-22.04
-            glibc: "2.35"
-            elf_packages: libelf1 libdw1
           - id: linux-x86_64-rocm
             backend: AMD-ROCm
             suffix: Linux-ROCm-x86_64.AppImage
@@ -165,8 +151,10 @@ jobs:
           mv "$SOURCE" "$ARTIFACT"
           chmod +x "$ARTIFACT"
           python scripts/verify_codec_allowlist.py --tree "$BUNDLE" --output "/mnt/lsr/out/$NAME.codec-policy.json"
-          python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 \
-            --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json"
+          # Temporary: where and why the ROCm worker hangs (reverted in the next commit).
+          sudo apt-get install -y gdb
+          python -m pip install --disable-pip-version-check "py-spy==0.4.1"
+          bash .github/debug-rocm-hang.sh "$ARTIFACT"  # ends the job (exit 1) after its experiments
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform linux --architecture x86_64 --report "/mnt/lsr/out/$NAME.architecture.json"
           mkdir -p /mnt/lsr/extract
