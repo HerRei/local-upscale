@@ -89,9 +89,11 @@ def test_shape_cache_is_bounded_and_cancellation_does_not_poison_the_next_call()
 
 
 def test_cpu_and_onnx_gpu_never_share_a_cached_model(monkeypatch):
-    from localsr.core import onnx_runtime
+    from localsr.core import onnx_runtime, windows_adapters
 
     monkeypatch.setattr(onnx_runtime, "directml_available", lambda: True)
+    # No adapter details, wherever the test runs (a Windows runner has a software one).
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda **_: [])
     calls = []
 
     class Adapter:
@@ -753,6 +755,7 @@ def test_without_any_placement_evidence_nothing_is_decided(monkeypatch, tmp_path
     def first_profile_unreadable(self, state):
         if unreadable["left"]:
             unreadable["left"] -= 1
+            state["session"].end_profiling()
             state.pop("trace").cleanup()
             return None
         return close(self, state)

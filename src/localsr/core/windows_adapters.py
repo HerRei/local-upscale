@@ -199,7 +199,10 @@ def directml_adapters(*, include_software: bool = False, probe: bool = True) -> 
                 )
                 if get_description(adapter, ctypes.byref(description)) < 0:
                     raise RuntimeError(f"Could not read graphics adapter {index}")
-                if description.flags & 2 and not include_software:
+                # Microsoft's Basic Render Driver (WARP) does not always carry the software
+                # flag, for example on a machine without a GPU driver.
+                software = bool(description.flags & 2) or description.vendor_id == 0x1414
+                if software and not include_software:
                     continue  # Software rendering is not GPU acceptance.
                 if probe and create_device(adapter, _FEATURE_LEVEL_11_0, device_iid, None) < 0:
                     continue
@@ -222,7 +225,7 @@ def directml_adapters(*, include_software: bool = False, probe: bool = True) -> 
                         "subsystem_id": int(description.subsystem_id),
                         "revision": int(description.revision),
                         "luid": f"{description.luid.high & 0xFFFFFFFF:08x}{description.luid.low:08x}",
-                        "software": bool(description.flags & 2),
+                        "software": software,
                         "uma": uma,
                         "budget": None if budget is None else budget[0],
                         "usage": None if budget is None else budget[1],
