@@ -176,12 +176,12 @@ def release_package_violations(name: str, workflow: str, gates: dict[str, str]) 
         violations.append(f"{name} must start only by hand, not on {sorted(triggers)}")
     if not re.search(r"(?m)^permissions:\n  contents: read$", code):
         violations.append(f"{name} must default to read-only contents")
-    attach_job = code.split("\n  attach:\n", 1)
+    attach_job = re.search(r"(?ms)^  attach:\n(.*?)(?=^ {0,2}\S|\Z)", code)
     if (
         "write-all" in code
         or code.count("contents: write") != 1
-        or len(attach_job) != 2
-        or "contents: write" not in attach_job[1]
+        or attach_job is None
+        or "contents: write" not in attach_job.group(1)
     ):
         violations.append(f"only the attach job of {name} may write release contents")
     for label, token in (RELEASE_PACKAGE_GATES | gates).items():
