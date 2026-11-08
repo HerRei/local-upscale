@@ -87,6 +87,9 @@ def _check_openvino_plugin(result: dict[str, object]) -> None:
     from localsr.core.openvino_devices import EP_NAME, plugin_registered
 
     if not plugin_registered():
+        from localsr.core import openvino_devices
+
+        result["openvino_error"] = openvino_devices.registration_error
         raise RuntimeError(f"The bundled OpenVINO plugin could not be registered: {result}")
     devices = sorted(
         str(device.device.type).rsplit(".", 1)[-1]
