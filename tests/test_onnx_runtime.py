@@ -161,6 +161,11 @@ def test_native_onnx_allocation_failure_releases_sessions_and_allows_retry(monke
     assert converted.execution_verified
 
 
+def active_config(converted):
+    (state,) = converted.model.sessions.values()
+    return state["config"][0]
+
+
 def gated(monkeypatch, tmp_path, configs, broken=frozenset(), failing=frozenset()):
     """A CPU route that behaves like a GPU route under test.
 
@@ -210,14 +215,14 @@ def test_gate_rejects_a_configuration_that_differs_and_uses_the_next(monkeypatch
     converted, calls = gated(monkeypatch, tmp_path, ("fast", "safe"), broken={"fast"})
     image = torch.linspace(0, 1, 3 * 8 * 8).reshape(1, 3, 8, 8)
     np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
-    assert converted.model.active_config == "safe"
+    assert active_config(converted) == "safe"
     assert len(calls) == 4  # pattern and tile, for each configuration tried
     verdicts = json.loads((tmp_path / "verdicts.json").read_text())
     assert sorted(v["accepted"] for v in verdicts.values()) == [False, True]
     # A new engine reuses both verdicts: no checks, straight to the accepted configuration.
     again, calls = gated(monkeypatch, tmp_path, ("fast", "safe"), broken={"fast"})
     np.testing.assert_allclose(again(image).numpy(), original(image).numpy(), atol=1e-6)
-    assert again.model.active_config == "safe" and calls == []
+    assert active_config(again) == "safe" and calls == []
 
 
 def test_gate_refuses_the_route_when_no_configuration_matches(monkeypatch, tmp_path):
@@ -239,7 +244,7 @@ def test_gate_moves_on_when_a_configuration_crashes_on_its_first_tile(monkeypatc
     converted, _ = gated(monkeypatch, tmp_path, ("crashes", "works"), failing={"crashes"})
     image = torch.rand(1, 3, 8, 8)
     np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
-    assert converted.model.active_config == "works"
+    assert active_config(converted) == "works"
 
 
 def test_gate_keeps_checking_while_the_reference_is_unstable(monkeypatch, tmp_path):
@@ -339,7 +344,7 @@ def test_a_flat_first_tile_cannot_pass_a_broken_configuration(monkeypatch, tmp_p
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", wrong_on_detail)
     flat = torch.full((1, 3, 8, 8), 0.5)
     converted(flat)
-    assert converted.model.active_config == "sound"
+    assert active_config(converted) == "sound"
 
 
 def test_worker_restarts_only_after_a_lost_device():

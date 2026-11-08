@@ -130,14 +130,22 @@ def _fixed_window(
     return window, core_top, core_left
 
 
+def _integrated_gpu(backend, device: torch.device) -> bool:
+    """Whether the device shares system memory; unknown counts as discrete, as before."""
+    try:
+        properties = backend.get_device_properties(device)
+    except (AttributeError, AssertionError, RuntimeError):
+        return False
+    return bool(getattr(properties, "is_integrated", False)) or bool(
+        getattr(properties, "is_integrated_gpu", False)
+    )
+
+
 def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | None:
     """Apply a hard allocator ceiling and return its fraction of device capacity."""
     if device.type in {"cuda", "xpu"}:
         backend = torch.cuda if device.type == "cuda" else torch.xpu
-        properties = backend.get_device_properties(device)
-        if bool(getattr(properties, "is_integrated", False)) or bool(
-            getattr(properties, "is_integrated_gpu", False)
-        ):
+        if _integrated_gpu(backend, device):
             # An integrated GPU (an AMD APU under ROCm, say) reports only its BIOS
             # carve-out here, often 512 MiB, while it really allocates from shared
             # system memory. A cap against the carve-out would fail every job.
