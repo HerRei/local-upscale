@@ -68,6 +68,11 @@ models and the queue. Uninstalling the package can delete its data folder
 (`%LOCALAPPDATA%\Packages\HerRei.LocalSR_tvsg0jvwy7150\LocalCache\Local\LocalSR`),
 so back it up first; models in the shared `LocalSR/models` folder are unaffected.
 
+References: [manual packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion),
+[MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool),
+[Store package requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements),
+[Tauri and the Microsoft Store](https://v2.tauri.app/distribute/microsoft-store/).
+
 ## Before submission
 
 - Rebuild the worker on the royalty-free media runtime (see
@@ -78,9 +83,3 @@ so back it up first; models in the shared `LocalSR/models` folder are unaffected
 - Check installation on another drive and Windows accessibility.
 - Review `runFullTrust` in the certification notes: the app launches its local
   inference worker and reads media the user selected.
-- Publish the privacy and support pages the listing links to.
-
-References: [manual packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion),
-[MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool),
-[Store package requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements),
-[Tauri and the Microsoft Store](https://v2.tauri.app/distribute/microsoft-store/).

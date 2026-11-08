@@ -168,9 +168,7 @@ def run(
     return result.stdout if capture else ""
 
 
-# ---------------------------------------------------------------------------
 # Policy derivation
-# ---------------------------------------------------------------------------
 
 
 def load_policy(path: Path = POLICY_PATH) -> dict:
@@ -302,9 +300,7 @@ def configure_warnings(output: str) -> list[str]:
     return problems
 
 
-# ---------------------------------------------------------------------------
 # Sources
-# ---------------------------------------------------------------------------
 
 
 def fetch_source(entry: dict, cache: Path) -> Path:
@@ -355,9 +351,7 @@ def extract_fresh(archive: Path, destination: Path) -> Path:
     return children[0]
 
 
-# ---------------------------------------------------------------------------
 # Builder
-# ---------------------------------------------------------------------------
 
 
 class Builder:

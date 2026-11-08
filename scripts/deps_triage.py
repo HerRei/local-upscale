@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Weekly look at every open Dependabot PR; no AI involved.
+"""Weekly look at every open Dependabot PR.
 
 For each PR it reads the latest CI and Preview runs of the PR's current head:
-- an infrastructure failure (runner setup, a cancelled or timed-out job, or a legacy
-  Mac-mini storage/priority step) gets ONE rerun of the failed jobs per head commit;
+- an infrastructure failure (runner setup, a cancelled or timed-out job, or a
+  storage/priority step) gets one rerun of the failed jobs per head commit;
 - a real code failure gets the `claude-fix` label (at most MAX_FLAGS PRs per run), which
-  is the cue for the deps-doctor skill;
+  marks it for contributor review;
 - everything else is just reported.
-The result goes into one issue labelled `deps-status`; a comment there notifies Hermes
-when something needs him. State (which head already had its rerun) lives in a hidden
+The result goes into one issue labelled `deps-status`; a comment there flags items
+that need review. State (which head already had its rerun) lives in a hidden
 marker in that issue, so a rerun is never repeated for the same commit.
 """
 
@@ -31,7 +31,7 @@ FIX_LABEL = "claude-fix"
 STATUS_LABEL = "deps-status"
 MAX_FLAGS = 2
 INFRA_STEPS = (
-    # Keep legacy names so failures from runs before hosted CI can still be rerun.
+    # Step names from the retired self-hosted runners, so their old failures can still be rerun.
     "isolated SSD workspace",  # storage_preflight refused the job
     "Wait without occupying",  # release-priority coordinator timed out
     "Wait for release priority",
@@ -141,8 +141,7 @@ class Triage:
         if state == "code":
             behind = self.gh.request(f"/repos/{self.repo}/compare/main...{sha}")[0]["behind_by"]
             if behind:
-                # Main may already fix this (it did for the Windows tests); don't spend an
-                # AI run on an old base.
+                # Rebase first: main may already contain the fix.
                 state = "stale"
                 detail += f" (behind main by {behind}: comment `@dependabot rebase` first)"
         return Finding(pull["number"], pull["title"], sha, state, detail, infra_runs)
@@ -225,7 +224,7 @@ class Triage:
         main_states = [classify(r, [], self.now)[0] for r in self.latest_runs(main_sha)]
         main_red = any(state not in {"green", "pending"} for state in main_states)
         if main_red:
-            # Every PR inherits main's failures; an AI run per PR would only rediscover them.
+            # Suppress per-PR flags while main is failing.
             for f in findings:
                 if f.state == "code":
                     f.state, f.detail = "main-red", f.detail + " (main itself is red)"
@@ -234,7 +233,7 @@ class Triage:
         stamp = self.now.strftime("%Y-%m-%d %H:%M UTC")
         body = (
             f"Updated by `deps-triage.yml` on {stamp}. Green dev-tools PRs merge themselves;"
-            f" `{FIX_LABEL}` PRs are for the deps-doctor skill; everything else needs a"
+            f" `{FIX_LABEL}` PRs need a fix; everything else needs a"
             " review (docs/dependency-updates.md).\n\n"
             f"{table if findings else 'No open Dependabot PRs.'}\n\n"
             f"<!-- deps-triage {json.dumps(memory)} -->\n"

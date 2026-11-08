@@ -11,7 +11,7 @@ loading. Restoration weights are not included in installers.
 | SPAN NomosUni | 4× | Quick photo upscaling | 4.5 MB | CC BY 4.0 |
 | HAT-S | 4× | General photo upscaling | 81.1 MB | Apache-2.0 |
 | HAT-L ImageNet | 4× | Larger general photo model | 165.8 MB | Apache-2.0 |
-| RealPLKSR NomosWebPhoto | 4× | Degraded web photos · Labs | 29.7 MB | CC BY 4.0 |
+| RealPLKSR NomosWebPhoto | 4× | Degraded web photos | 29.7 MB | CC BY 4.0 |
 | RealPLKSR HFA2k | 4× | Anime and line art · Labs | 29.7 MB | CC BY 4.0 |
 | Real-ESRGAN x2plus | 2× | Native 2× upscaling | 67.1 MB | BSD-3-Clause |
 | RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC BY 4.0 |
@@ -67,6 +67,7 @@ boundaries, read [video support](../video-support.md).
 ## Your own models
 
 Supported `.safetensors` checkpoints can be imported. Unverified pickle or
-TorchScript files are blocked by default; set
-`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` only for files whose publisher you trust. Check your model's license, architecture,
+TorchScript files are blocked by default. For files whose publisher you trust,
+tick **Allow this pickle-based checkpoint** in the app; on the command line, set
+`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`. Check your model's license, architecture,
 scale and colour assumptions before using it.

@@ -25,12 +25,3 @@ LocalSR v0.2.0-beta on macOS 26, taken on 22 October 2026 on an M1 Pro with
 (SPAN NomosUni), original on the left and result on the right; the library
 shows the photo upscalers and the Best model's license, source and memory
 estimate.
-
-## Earlier screenshot
-
-`localsr-desktop.png` is the earlier, unedited capture of v0.1.1-beta, taken on
-15 September 2026. Its Apollo 17 photograph is image **AS17-148-22727**, courtesy
-of the Earth Science and Remote Sensing Unit, NASA Johnson Space Center
-([source](https://svs.gsfc.nasa.gov/30613) ·
-[media usage guidelines](https://www.nasa.gov/nasa-brand-center/images-and-media/)).
-NASA does not endorse LocalSR. The README now uses the images above.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open a release-candidate PR when one is due; no AI involved.
+"""Open a release-candidate PR when one is due.
 
 A candidate is due when ALL of these hold:
 - the last published release (draft releases don't count) is at least 14 days old;

@@ -1,55 +1,66 @@
 # LocalSR
 
-**Enlarge photos and restore images on your own computer.**
-
 LocalSR is a free desktop app for upscaling photos, cleaning up noise and blur,
 and enhancing video. Choose an image, pick Quick or Best, and compare the result
-with your original. The models run on your computer; your photos stay there too.
+with your original. The models run on your computer, and your photos stay there too.
 
-[**Download LocalSR**](https://herrei.github.io/localsr/download/) ·
+[Download](https://herrei.github.io/localsr/download/) ·
 [Try it in your browser](https://herrei.github.io/localsr/demo/) ·
-[Website](https://herrei.github.io/localsr/) · [User guide](https://herrei.github.io/localsr/guide/) ·
+[Website](https://herrei.github.io/localsr/) ·
+[User guide](https://herrei.github.io/localsr/guide/) ·
 [Changelog](CHANGELOG.md)
 
 | Original detail | LocalSR, 4× with Quick |
 | --- | --- |
 | <img src="docs/assets/marseille-detail-input.png" alt="Original crop of apartment balconies in Marseille" width="480"> | <img src="docs/assets/marseille-detail-output.webp" alt="The same balconies after a 4× upscale in LocalSR" width="480"> |
 
-*An actual result from SPAN NomosUni, with no added sharpening. Photo by
+*A real result from SPAN NomosUni, with no added sharpening. Photo by
 [Tim Ziegelbaum](https://unsplash.com/photos/modern-apartment-building-with-colorful-balconies-against-blue-sky-n4bofMDUS_Y).
 [Image credits and processing details](docs/assets/README.md).*
 
-## New in 0.2: a calmer window
-
 ![The LocalSR window: a photo of Marseille balconies compared before and after a 4× upscale, with the media list on the left and the task, quality and model settings on the right](docs/assets/localsr-window.webp)
 
-Version 0.2 redesigns the window for people who open LocalSR for the first
-time. There is one way to start: add a photo, choose Quick or Best and press
-the button at the bottom right. If a model is missing, that button says so
-("Download 4 MB, then upscale") and does both. Quick and Best are described by
-what you get rather than by model name, Upscale handles videos too, and the
-top bar is gone: the model library, performance and updates live in the menu
-bar. The app ships IBM Plex Sans, uses square corners and neutral greys, and
-keeps colour for the button that starts work. New installations start on the
-GPU. [Release notes](docs/releases/v0.2.0-beta.md).
+## Why I built it
 
-0.2.1 keeps the comparison divider in place while you zoom, so a close look
-still shows before and after side by side. Original · Split · Enhanced above the
-preview switches between the whole original, the divider and the whole result,
-and holding M shows the original from any view.
-[Release notes](docs/releases/v0.2.1-beta.md).
+LocalSR started out of necessity. For a long time I upscaled pictures with the
+HAT-L models, but only through the terminal. At some point I wanted a proper app
+for it, and most of what I found was subscription-based, really complicated or
+outdated. So the decision was clear. With the help of Claude and a clear idea of
+what I wanted, I built a super-resolution app that puts research-level models in
+one place and runs them on your own computer. The results are impressive, but
+they are not my work. My work is making these niche but incredible models a lot
+more accessible. They are meant to be used anyway: every model the app downloads
+is published under an open licence (Apache-2.0, BSD-3-Clause, MIT or CC BY 4.0
+at the moment), and the app shows you each licence before it downloads anything.
 
-0.2.2 compares a finished video the way it compares a photo: the same
-canvas, a divider that stops at the edges of the frame, zoom with 1:1, and
-playback controls below the picture. Space plays and pauses.
-[Release notes](docs/releases/v0.2.2-beta.md).
+## What it does
 
-0.3.0 runs Quick photo, Real-ESRGAN and JPEG cleanup on the Mac's Neural
-Engine and Best photo through Core ML on the GPU, two to three times as fast
-with a fraction of the energy. Videos upscale about twice as fast and, with the
-new Automatic format, go straight to the Mac's hardware HEVC encoder. Videos
-also play before they are upscaled.
-[Release notes](docs/releases/v0.3.0-beta.md).
+- Enlarge photos and artwork by 2×, 3× or 4×. Quick uses a small, fast model,
+  and Best a larger one made for real photos.
+- Clean up noise, blur and JPEG artifacts first, then enlarge.
+- Compare the original and the result with a slider, or hold M to see the
+  original. Results are saved as new files, so your originals stay untouched.
+- Enhance video frame by frame, with the source timing, rotation and audio kept.
+- Process a whole folder or a queue, and save a setup as a recipe.
+- Edit with a prompt, with FLUX.2 klein or Qwen Image Edit. This is
+  experimental, and so far only FLUX.2 klein has been tested, on a 16 GB Mac.
+  [About editing](docs/image-editing.md).
+
+LocalSR also has a built-in benchmark. It times a real upscaling model on fixed
+test images, through the same inference engine the app uses for your own files,
+and reports how many megapixels per second your CPU or GPU can upscale. Local AI
+benchmarks can be hard to grasp, so it's good to have one built around a real
+use case.
+
+It opens JPEG, PNG, WebP, TIFF, AVIF, GIF, JPEG 2000 and camera RAW files, and
+on the Mac also HEIC and JPEG XL. It saves PNG, JPEG, TIFF or WebP. Videos can
+be MP4, MOV, MKV, WebM and other common formats, and are saved as AV1, VP9 or
+FFV1, or on the Mac also as HEVC. [Video support](docs/video-support.md).
+
+Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by Philip
+Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
+FBCNN, and each model shows its size, licence and source before you download it.
+[Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
 <!-- release-candidate -->
 v0.3.1-beta is in preparation; the downloads below are still v0.3.0-beta.
@@ -59,157 +70,77 @@ v0.3.1-beta is in preparation; the downloads below are still v0.3.0-beta.
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
-and instructions for each platform:
+for each platform:
 
-- **macOS v0.3.0-beta:** a Mac with Apple Silicon (M1 or newer) and macOS 14 or
-  later. Intel Macs are not supported. Signed and notarized by Apple, with
-  signed updates in the app.
-- **Windows v0.3.0-beta:** Windows 10 or 11, x86-64. CPU, DirectML and NVIDIA
-  CUDA editions; the GPU editions are labelled untested. Installers are unsigned,
-  so SmartScreen warns first: choose **More info**, then **Run anyway**.
+- **macOS v0.3.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
+  Macs are not supported. Signed and notarized, and it updates itself.
+- **Windows v0.3.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
+  NVIDIA CUDA editions. DirectML and CUDA are untested. The installers are
+  unsigned, so SmartScreen warns first: choose **More info**, then **Run anyway**.
 - **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
-  ROCm was tested on a Radeon RX 9060 XT with earlier builds; CUDA is untested.
+  CUDA is untested.
 
-With [Homebrew](https://brew.sh/), the Mac installer is one command:
+On a Mac you can also install it with [Homebrew](https://brew.sh/):
 
 ```bash
 brew install --cask herrei/tap/localsr
 ```
 
-The cask follows each release, and the app keeps updating itself as before
-([HerRei/homebrew-tap](https://github.com/HerRei/homebrew-tap)).
-
-Editing with a prompt is available on the Mac only.
-
-The larger GPU editions come in parts. The download page explains how to put
-these together. See [platform support](docs/platforms.md) for the testing details.
-
-The Mac app takes about 1.2 GB on disk. Models download when you need them.
-Quick needs about 4.5 MB and most other models are under 500 MB. SeedVR2 for
-video takes several gigabytes, and the editing models 5 to 26 GB. Upscaling and
-editing with FLUX.2 klein are tested on a Mac with 16 GB of memory. Qwen Image
-Edit needs 24 GB or more.
+The Mac app takes about 1.2 GB, because it brings its own Python and PyTorch.
+Models download when you choose them: Quick is 4.5 MB, most others are under
+500 MB, and the editing models are 5 to 26 GB. I test upscaling on a Mac with
+16 GB of memory.
 
 LocalSR is only published on
-[GitHub Releases](https://github.com/HerRei/local-upscale/releases) and on
-[herrei.github.io/localsr](https://herrei.github.io/localsr/), which links the
-same files. The Homebrew cask installs the same DMG. GitHub shows a SHA-256 for
-every file, and each installer has a `.sha256` file next to it. The Mac app is
-signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`, and
+[GitHub Releases](https://github.com/HerRei/local-upscale/releases), on
+[herrei.github.io/localsr](https://herrei.github.io/localsr/) and through the
+Homebrew cask, which all use the same files. Each file has a SHA-256 next to it.
+The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`;
 `spctl -a -vv /Applications/LocalSR.app` shows it.
-
-## What you can do
-
-- **Enlarge photos and artwork** by 2×, 3× or 4×. Quick is a good starting point;
-  Best spends more time on photo detail.
-- **Clean up noise, blur and JPEG artifacts** before enlarging. Face restoration
-  is available with compatible models.
-- **Watch the result take shape.** Finished tiles appear as the job runs. When
-  it finishes, drag the comparison slider to see what changed, or switch
-  between Original, Split and Enhanced above the preview. The slider stays in
-  place while you zoom in, and holding M shows the original. Large exports
-  get a smaller preview while the saved file keeps every pixel.
-- **Process a folder** or build a queue of images and videos. Save a setup as a
-  recipe if you want to use it again.
-- **Edit with a prompt.** Describe a change and a local Qwen Image Edit or
-  FLUX.2 klein model creates a new image. This is experimental; FLUX.2 klein
-  Q4_0 at 512 px has been tested on a 16 GB M1 Pro. The editing models are
-  separate downloads of 5–26 GB. [About editing](docs/image-editing.md).
-- **Enhance video** frame by frame, keeping the source timing, rotation and
-  audio. SeedVR2, HDR preservation and other Labs options still need more
-  testing. [Video support](docs/video-support.md).
-- **Automate jobs** with the `localsr` command, including watch folders and
-  CPU/GPU benchmarks. [Command line guide](docs/automation.md).
-
-JPEG, PNG, WebP, TIFF, AVIF, GIF, JPEG 2000 and camera RAW files are supported.
-On macOS, HEIC/HEIF and JPEG XL open through the system decoders. You can save
-images as PNG, JPEG, TIFF or WebP. [Metadata and colour](docs/metadata.md).
-
-## Choose a model
-
-You can start with the presets and explore the library later. Each model shows
-its download size, license, source and estimated memory use. LocalSR checks
-curated downloads against their expected size and SHA-256 checksum before use.
-You can also import your own compatible `.safetensors` files.
-
-![LocalSR's model library, showing the photo upscalers with their quality, speed and size, and the Best model's license, source, memory estimate and download button](docs/assets/localsr-model-library.webp)
-
-Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by
-Philip Hofmann under CC BY 4.0. The library also includes HAT, Real-ESRGAN,
-SwinIR, NAFNet, SCUNet and FBCNN. The two HAT face companions require a manual
-import because their checkpoint rights are unresolved.
-[Model guide](docs/models/README.md) · [Model licenses](docs/model-licenses.md).
 
 ## Limits
 
-- AI upscaling reconstructs detail. Faces, text and fine patterns can look
-  sharp and still differ from the real scene, especially at 4×. Keep your
-  originals. LocalSR never overwrites them.
-- The video upscalers work on one frame at a time, so fine detail can flicker.
-  De-flicker and SeedVR2 under Labs still need more testing.
-- Large images and video can take hours. Try a small image or a short clip
-  first to get a feel for the speed.
-- Edit is experimental and makes a new picture from your prompt. One setup is
-  tested: FLUX.2 klein 4B Q4_0 at 512 px on a 16 GB M1 Pro.
-- The Mac build gets the most testing. Windows and Linux have automated package
-  checks and some hardware testing, they don't update themselves, and their
-  CUDA and DirectML editions are untested.
-- On Windows and Linux, H.264, HEVC and AAC (most phone videos) need an FFmpeg
-  you install yourself. On the Mac they open through the system.
+- Upscaling reconstructs detail. Faces, text and fine patterns can look sharp
+  and still differ from the real scene, especially at 4×.
+- Video is upscaled one frame at a time, so fine detail can flicker.
+- Large images and long videos can take hours. Try a small one first.
+- I test the Mac build the most, and only the Mac build updates itself.
+- On Windows and Linux, phone videos (H.264, HEVC, AAC) need an FFmpeg you
+  install yourself. On the Mac they open through the system.
 
-The full list is in [Known limitations](KNOWN_LIMITATIONS.md).
+The full list is in [Known limitations](KNOWN_LIMITATIONS.md), and the testing
+details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-There is no account, and your images and videos are never uploaded. LocalSR
-connects for these things only:
+There is no account, and your images and videos are never uploaded. On the Mac,
+the app reads its update feed on GitHub Pages at launch (for the beta,
+`herrei.github.io/localsr/updates/beta.json`), and this check can't be turned off
+in the app. After the check it
+sends one anonymous count with the app version, platform and channel to my Mac
+mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. The
+count is on by default, and you can turn it off in the Software Update dialog.
 
-- **Update check (macOS):** at launch and when you choose *Check for Updates…*,
-  the app reads `herrei.github.io/localsr/updates/beta.json` from GitHub Pages.
-  The launch check can't be turned off in the app. If you block it with a
-  firewall, everything else keeps working.
-- **Anonymous count:** after a successful check, one request goes to my Mac mini
-  at `macmini-ci.tail34a4e0.ts.net` with the app version, platform and channel.
-  It has no install ID and no cookies. It is on by default, so the first launch
-  already sends one. Turn it off with *Send an anonymous update-check count* in
-  the Software Update dialog.
-- **Updates:** when you install one, it downloads from GitHub Releases and its
-  signature is checked before anything is replaced.
-- **Models:** each model downloads from its author's release on Hugging Face or
-  GitHub when you choose it, into `~/Library/Application Support/LocalSR/models`.
-
-Nothing else is sent: no analytics and no crash reports. *Copy diagnostics* puts
-versions, hardware and memory figures on your clipboard, without file names or
-media, and only when you ask. Windows and Linux builds don't check for updates.
-Once your models are downloaded, LocalSR works offline.
-[Privacy details](https://herrei.github.io/localsr/privacy/).
+Updates come from GitHub Releases, and the app checks their signature before it
+replaces anything. Models download from their authors on GitHub or Hugging Face
+when you choose them. That is all, and once your models are downloaded, LocalSR
+works offline. [Privacy details](https://herrei.github.io/localsr/privacy/).
 
 ## FAQ
-
-**Does it run on an Intel Mac?** No. The Mac build needs Apple Silicon and
-macOS 14 or later.
-
-**Is it as good as Topaz?** Topaz uses its own models. LocalSR uses public ones
-such as SPAN, RealPLKSR, HAT and Real-ESRGAN, and it is free. Which result is
-better depends on the photo, so try both on your own pictures.
 
 **Why is it free?** It's my own project, made alongside uni. There is no paid
 version, no account and no advertising, and the code is MIT licensed.
 
-**Why is the download so big?** The app brings its own PyTorch engine, so you
-don't need Python. The DMG is about 420 MB and the installed app about 1.2 GB.
-
 **Can I use my own models?** Yes, compatible `.safetensors` files work as a
 custom checkpoint. `.pth`, `.pt` and `.ckpt` files can run code when they load,
 so the app only uses one after you tick *Allow this pickle-based checkpoint*.
-Do that only for files whose publisher you trust.
+Do that only for files from a publisher you trust.
 
-**How do I uninstall it?** Quit LocalSR and move it to the Trash. Then delete
-`~/Library/Application Support/LocalSR` (models, settings and the queue) and
-`~/Library/Caches/LocalSR`, and `~/Library/Services/Enhance with LocalSR.workflow`
-if you turned on the Finder action. On Windows, uninstall it under Apps and
-delete `%LOCALAPPDATA%\LocalSR`. On Linux, delete the AppImage and
-`${XDG_DATA_HOME:-~/.local/share}/LocalSR`. Your exported files stay where you saved them.
+**How do I uninstall it?** On a Mac, move LocalSR to the Trash and delete
+`~/Library/Application Support/LocalSR` and `~/Library/Caches/LocalSR`. On
+Windows, uninstall it under Apps and delete `%LOCALAPPDATA%\LocalSR`. On Linux,
+delete the AppImage and `${XDG_DATA_HOME:-~/.local/share}/LocalSR`. The
+[guide](https://herrei.github.io/localsr/guide/) has the details.
 
 ## Build from source
 
@@ -221,26 +152,23 @@ You need Python 3.11, Node.js, a stable Rust toolchain and
 cd desktop && npm run tauri -- dev
 ```
 
-The interface uses Svelte and Tauri, with a Rust host for the queue, settings,
-file access and updates. A separate Python worker runs PyTorch and Spandrel.
-If inference fails, the host can restart the worker.
-[Desktop guide](desktop/README.md) · [Worker protocol](protocol/README.md).
-
-Run `./local-ci.sh` for the local checks. Packaging and signing are covered in
-[Releasing](docs/releasing.md). The [command line](docs/automation.md) also works
-without the desktop interface.
+The interface is Svelte in Tauri, with a Rust host for the queue, settings and
+updates, and a separate Python worker that runs PyTorch and spandrel. Run
+`./local-ci.sh` for the local checks. [Desktop guide](desktop/README.md) ·
+[Worker protocol](protocol/README.md) · [Command line](docs/automation.md) ·
+[Releasing](docs/releasing.md).
 
 ## Feedback
 
 Please report bugs on [GitHub Issues](https://github.com/HerRei/local-upscale/issues)
 with your app version, model, device and the steps that led to the problem.
-*Copy diagnostics* supplies the hardware details. For security reports, see
-[SECURITY.md](SECURITY.md). For anything else:
+*Copy diagnostics* in the app adds the hardware details. For security reports,
+see [SECURITY.md](SECURITY.md). For anything else:
 [hermes.reisner@gmail.com](mailto:hermes.reisner@gmail.com).
 
-## License
+## Licence
 
-LocalSR is [MIT licensed](LICENSE). Models keep their authors' licenses, shown
+LocalSR is [MIT licensed](LICENSE). Models keep their authors' licences, shown
 in the app before download. Bundled libraries are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and each release includes the
-corresponding source for its LGPL components.
+source of its LGPL components.

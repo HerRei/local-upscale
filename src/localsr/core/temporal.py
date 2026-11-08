@@ -2,8 +2,7 @@
 
 Pure array/index arithmetic, deliberately model-agnostic: the engine sees
 clips of `window` frames whose neighbors share `overlap` frames, and the
-stitcher crossfades those shared frames so clip boundaries never pop. All
-functions are exercised by unit tests with fake models.
+stitcher crossfades those shared frames to smooth clip boundaries.
 """
 
 from __future__ import annotations
