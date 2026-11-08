@@ -270,7 +270,7 @@ def test_linuxdeploy_removes_plugin_copied_host_libraries_before_packaging(
 def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: Path) -> None:
     appimage_dir = tmp_path / "bundle" / "appimage"
     appdir = appimage_dir / "LocalSR.AppDir"
-    appdir.mkdir(parents=True)
+    (appdir / "usr" / "lib" / "LocalSR" / "engine").mkdir(parents=True)
     (appdir / "AppRun").write_text("#!/bin/sh\n", encoding="utf-8")
     image = appimage_dir / "LocalSR.AppImage"
     runtime = b"ELF-runtime-prefix"
@@ -430,3 +430,60 @@ def test_windows_tauri_environments_bound_paths_and_native_failures() -> None:
     assert workflow.count('"TMP=$tmp"') == 2
     assert workflow.count("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") == 5
     assert "Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT" not in workflow
+
+
+def test_removes_engine_library_copies_the_app_does_not_need(tmp_path, monkeypatch) -> None:
+    appdir = tmp_path / "LocalSR.AppDir"
+    lib = appdir / "usr" / "lib"
+    engine = lib / "LocalSR" / "engine" / "_internal"
+    # path relative to the AppDir: (SONAME, NEEDED)
+    elves = {
+        "usr/lib/LocalSR/engine/_internal/torch/lib/libtorch_rocshmem.so": (
+            "libtorch_rocshmem.so",
+            {"libnuma.so.1"},
+        ),
+        "usr/lib/LocalSR/engine/_internal/torch/lib/libnuma.so.1": ("libnuma.so.1", set()),
+        "usr/lib/LocalSR/engine/_internal/torch/lib/libhsa-runtime64.so": (
+            "libhsa-runtime64.so.1",
+            set(),
+        ),
+        "usr/lib/LocalSR/engine/_internal/libz.so.1": ("libz.so.1", set()),
+        "usr/lib/LocalSR/engine/_internal/libpng16.so.16": ("libpng16.so.16", {"libz.so.1"}),
+        "usr/bin/localsr": (None, {"libwebkit.so.0", "libz.so.1"}),
+        "usr/lib/libwebkit.so.0": ("libwebkit.so.0", {"libpng16.so.16"}),
+        # linuxdeploy's copies of engine libraries, one under the versioned alias name
+        "usr/lib/libtorch_rocshmem.so": ("libtorch_rocshmem.so", {"libnuma.so.1"}),
+        "usr/lib/libnuma.so.1": ("libnuma.so.1", set()),
+        "usr/lib/libhsa-runtime64.so.1": ("libhsa-runtime64.so.1", set()),
+        "usr/lib/libz.so.1": ("libz.so.1", set()),
+        "usr/lib/libpng16.so.16": ("libpng16.so.16", {"libz.so.1"}),
+    }
+    for relative in elves:
+        path = appdir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x7fELF" + bytes(12))
+    (lib / "gdk-pixbuf-2.0").mkdir()
+    (lib / "gdk-pixbuf-2.0" / "loaders.cache").write_text("not an ELF file\n")
+    assert engine.is_dir()
+
+    def dynamic(path: Path) -> tuple[str | None, set[str]]:
+        return elves[path.relative_to(appdir).as_posix()]
+
+    monkeypatch.setattr(build, "_elf_dynamic", dynamic)
+    removed = build.remove_engine_library_copies(appdir)
+
+    assert sorted(path.name for path in removed) == [
+        "libhsa-runtime64.so.1",
+        "libnuma.so.1",
+        "libtorch_rocshmem.so",
+    ]
+    # the app needs libz directly and libpng through libwebkit
+    assert (lib / "libz.so.1").exists() and (lib / "libpng16.so.16").exists()
+    assert (lib / "libwebkit.so.0").exists()
+    assert (engine / "torch" / "lib" / "libtorch_rocshmem.so").exists()
+
+
+def test_engine_library_copies_need_exactly_one_engine(tmp_path) -> None:
+    (tmp_path / "usr" / "lib").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="expected one engine directory"):
+        build.remove_engine_library_copies(tmp_path)
