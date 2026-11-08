@@ -143,6 +143,12 @@ export const removeMedia = (id: string): Promise<void> => invoke('remove_media',
 export const clearMedia = (): Promise<void> => invoke('clear_media');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
+
+/** One update switch, saved by the host on its own: a full settings save never changes it. */
+export const setUpdateSwitch = (
+  name: 'check_updates_at_launch' | 'anonymous_update_count',
+  value: boolean,
+): Promise<void> => invoke('set_update_switch', { name, value });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>

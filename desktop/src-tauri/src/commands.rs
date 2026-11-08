@@ -247,45 +247,95 @@ pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
 }
 
 #[tauri::command]
-pub fn save_settings(
-    state: State<'_, Arc<AppState>>,
-    app: AppHandle,
-    settings: UiSettings,
-) -> AppResult<()> {
-    let before = native_menu::switches(&*lock(&state.settings)?);
-    let requested = native_menu::switches(&settings);
-    let result = store_settings(&state, settings);
-    if requested != before {
-        // The menu sets its own check mark when clicked; show what was actually saved.
-        let saved = native_menu::switches(&*lock(&state.settings)?);
-        native_menu::rebuild(&app, &lock(&state.recipes)?, saved).map_err(|error| {
-            AppError::Config(format!("could not refresh the update switches: {error}"))
-        })?;
-    }
-    result
-}
-
-fn store_settings(state: &AppState, settings: UiSettings) -> AppResult<()> {
-    crate::updates::ensure_not_installing(state)?;
+pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> AppResult<()> {
+    crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(state)?;
-    let only_switches = only_update_switches_differ(&*lock(&state.settings)?, &settings);
-    if !only_switches && !lock(&state.runtime)?.active_job_id.is_empty() {
+    crate::updates::ensure_not_installing(&state)?;
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(AppError::Validation(
             "Finish or cancel the current queue before changing settings.".into(),
         ));
     }
     validate_settings(&settings)?;
+    let mut settings = settings;
+    keep_update_switches(&*lock(&state.settings)?, &mut settings);
     *lock(&state.settings)? = settings;
     state.persist_settings()
 }
 
-/// The update switches change nothing about a running job, so they may change during one.
-fn only_update_switches_differ(current: &UiSettings, next: &UiSettings) -> bool {
-    let mut same = next.clone();
-    same.check_updates_at_launch = current.check_updates_at_launch;
-    same.anonymous_update_count = current.anonymous_update_count;
-    serde_json::to_value(&same).ok() == serde_json::to_value(current).ok()
+/// The update switches change only through set_update_switch. A full settings save
+/// carries the window's copy, which an older refresh may have left behind; it must
+/// never turn an opt-out back on.
+fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
+    incoming.check_updates_at_launch = current.check_updates_at_launch;
+    incoming.anonymous_update_count = current.anonymous_update_count;
+}
+
+/// Set one update switch. It may change while jobs run: it does not touch them.
+#[tauri::command]
+pub fn set_update_switch(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    name: String,
+    value: bool,
+) -> AppResult<()> {
+    let result = apply_update_switch(&state, &name, value);
+    refresh_update_switches(&state, &app);
+    result
+}
+
+/// The menu's own click: flip the saved value, whatever the window shows.
+pub fn toggle_update_switch(state: &AppState, app: &AppHandle, name: &str) {
+    let current = lock(&state.settings).ok().and_then(|settings| match name {
+        "check_updates_at_launch" => Some(settings.check_updates_at_launch),
+        "anonymous_update_count" => Some(settings.anonymous_update_count),
+        _ => None,
+    });
+    if let Some(current) = current {
+        if let Err(error) = apply_update_switch(state, name, !current) {
+            eprintln!("LocalSR: could not save {name}: {error}");
+        }
+    }
+    refresh_update_switches(state, app);
+}
+
+fn apply_update_switch(state: &AppState, name: &str, value: bool) -> AppResult<()> {
+    let previous = {
+        let mut settings = lock(&state.settings)?;
+        let field = match name {
+            "check_updates_at_launch" => &mut settings.check_updates_at_launch,
+            "anonymous_update_count" => &mut settings.anonymous_update_count,
+            _ => {
+                return Err(AppError::Validation(format!(
+                    "unknown update switch: {name}"
+                )))
+            }
+        };
+        std::mem::replace(field, value)
+    };
+    if let Err(error) = state.persist_settings() {
+        // Shown and used must match what is on disk.
+        if let Ok(mut settings) = lock(&state.settings) {
+            match name {
+                "check_updates_at_launch" => settings.check_updates_at_launch = previous,
+                _ => settings.anonymous_update_count = previous,
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// The menu sets its own check mark when clicked; it and the window show what is saved.
+fn refresh_update_switches(state: &AppState, app: &AppHandle) {
+    // One lock at a time: the settings guard is gone before the recipes are taken.
+    let switches = lock(&state.settings).map(|settings| native_menu::switches(&settings));
+    if let Ok(switches) = switches {
+        if let Ok(recipes) = lock(&state.recipes) {
+            let _ = native_menu::rebuild(app, &recipes, switches);
+        }
+    }
+    emit_state_changed(app);
 }
 
 #[tauri::command]
@@ -2140,14 +2190,20 @@ mod tests {
     use crate::types::RecipeStage;
 
     #[test]
-    fn the_update_switches_may_change_during_a_job_and_nothing_else() {
-        let current = UiSettings::default();
-        let mut next = current.clone();
-        next.check_updates_at_launch = false;
-        next.anonymous_update_count = false;
-        assert!(only_update_switches_differ(&current, &next));
-        next.tile_size += 64;
-        assert!(!only_update_switches_differ(&current, &next));
+    fn a_full_settings_save_never_changes_the_update_switches() {
+        let current = UiSettings {
+            anonymous_update_count: false,
+            ..UiSettings::default()
+        };
+        // A window copy from an older refresh still has the count on.
+        let mut incoming = UiSettings {
+            tile_size: UiSettings::default().tile_size + 64,
+            ..UiSettings::default()
+        };
+        keep_update_switches(&current, &mut incoming);
+        assert!(!incoming.anonymous_update_count);
+        assert!(incoming.check_updates_at_launch);
+        assert_eq!(incoming.tile_size, UiSettings::default().tile_size + 64);
         // Settings saved before 0.3.3 check at launch, as before.
         let mut saved = serde_json::to_value(UiSettings::default()).unwrap();
         saved
