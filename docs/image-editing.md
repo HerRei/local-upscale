@@ -182,3 +182,8 @@ Upstream references:
 - https://huggingface.co/Qwen/Qwen-Image-Edit-2511
 - https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF
 - https://github.com/leejet/stable-diffusion.cpp/blob/3f8527a46c54ecf4cb4ed6003da8e8982283c73c/docs/qwen_image_edit.md
+
+Automated tests use simulated memory profiles and small fixtures, not real
+weights. On real hardware only FLUX.2 klein 4B Q4_0 at 512 px has run so far
+(16 GB M1 Pro); the Qwen bundles and larger sizes are estimates. See
+[Known limitations](../KNOWN_LIMITATIONS.md#image-editing).

@@ -588,6 +588,7 @@ class WorkerServer:
             ) -> None:
                 stage_index = current_device_index * stages_per_device + update.stage_index
                 percentage = (stage_index + update.fraction) / max(1, total_phases) * 100.0
+                # Older hosts read this aggregate event; current hosts read the v2 envelope below.
                 send_message(
                     BenchmarkProgress(
                         job_id=job_id,

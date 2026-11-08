@@ -16,9 +16,19 @@ the catalog (`pair_with`) so the UI can present them as alternatives.
 ## Training and evaluation
 
 The official HAT-L ×4 ImageNet-pretrained checkpoint (XPixel Group, Apache-2.0
-code terms) was fine-tuned with L1 loss on a research-only corpus of FFHQ, EFHQ
-and general high-resolution images. The selected checkpoint combines 75% stock
-HAT-L weights with 25% face-tuned weights (α = 0.25).
+code terms) was fine-tuned on a research-only face corpus: 60% FFHQ, 20%
+identity- and clip-balanced EFHQ, and 20% general high-resolution replay. The loss
+was L1 only, without GAN or perceptual loss, at a learning rate of 1e-5 and a
+2.5e-6 refinement pass, with EMA 0.999, gradient clipping 1.0, 15% clean-replay
+batches and a high-order degradation pipeline with Poisson noise and double JPEG.
+L1 does not guarantee accurate detail or preserved identity.
+
+The fully face-tuned weights gained about 1.0 dB on mildly degraded faces but lost
+about 1.9 dB on clean images. Interpolations with the stock weights were therefore
+compared, accepting a mild-bucket gain with a clean-bucket drop of at most 0.62 dB.
+The selected checkpoint combines 75% stock HAT-L weights with 25% face-tuned
+weights (α = 0.25). α = 0.1 is the conservative alternative (clean −0.03 dB,
+mild +0.19 dB); α of 0.5 and more cost too much on clean images.
 
 Evaluation on 512-image clean/mild/hard recovery buckets reported these PSNR
 values against the stock HAT-L base:

@@ -35,15 +35,16 @@ at the moment), and the app shows you each licence before it downloads anything.
 
 ## What it does
 
-- Enlarge photos and artwork by 2×, 3× or 4×. Quick is a good start, and Best
-  spends more time on photo detail.
+- Enlarge photos and artwork by 2×, 3× or 4×. Quick uses a small, fast model,
+  and Best a larger one made for real photos.
 - Clean up noise, blur and JPEG artifacts first, then enlarge.
 - Compare the original and the result with a slider, or hold M to see the
-  original.
+  original. Results are saved as new files, so your originals stay untouched.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
 - Process a whole folder or a queue, and save a setup as a recipe.
-- Edit with a prompt, with Qwen Image Edit or FLUX.2 klein. This is
-  experimental and only tested on the Mac. [About editing](docs/image-editing.md).
+- Edit with a prompt, with FLUX.2 klein or Qwen Image Edit. This is
+  experimental, and so far only FLUX.2 klein has been tested, on a 16 GB Mac.
+  [About editing](docs/image-editing.md).
 
 LocalSR also has a built-in benchmark. It times a real upscaling model on fixed
 test images, through the same inference engine the app uses for your own files,
@@ -52,7 +53,9 @@ benchmarks can be hard to grasp, so it's good to have one built around a real
 use case.
 
 It opens JPEG, PNG, WebP, TIFF, AVIF, GIF, JPEG 2000 and camera RAW files, and
-on the Mac also HEIC and JPEG XL. It saves PNG, JPEG, TIFF or WebP.
+on the Mac also HEIC and JPEG XL. It saves PNG, JPEG, TIFF or WebP. Videos can
+be MP4, MOV, MKV, WebM and other common formats, and are saved as AV1, VP9 or
+FFV1, or on the Mac also as HEVC. [Video support](docs/video-support.md).
 
 Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by Philip
 Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
@@ -72,9 +75,10 @@ for each platform:
 - **macOS v0.3.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
 - **Windows v0.3.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
-  NVIDIA CUDA editions. The installers are unsigned, so SmartScreen warns first:
-  choose **More info**, then **Run anyway**.
+  NVIDIA CUDA editions. DirectML and CUDA are untested. The installers are
+  unsigned, so SmartScreen warns first: choose **More info**, then **Run anyway**.
 - **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
+  CUDA is untested.
 
 On a Mac you can also install it with [Homebrew](https://brew.sh/):
 
@@ -97,12 +101,10 @@ The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`
 ## Limits
 
 - Upscaling reconstructs detail. Faces, text and fine patterns can look sharp
-  and still differ from the real scene, especially at 4×. LocalSR never
-  overwrites your originals.
+  and still differ from the real scene, especially at 4×.
 - Video is upscaled one frame at a time, so fine detail can flicker.
 - Large images and long videos can take hours. Try a small one first.
-- I test the Mac build the most. The Windows and Linux GPU editions are partly
-  untested, and those builds don't update themselves.
+- I test the Mac build the most, and only the Mac build updates itself.
 - On Windows and Linux, phone videos (H.264, HEVC, AAC) need an FFmpeg you
   install yourself. On the Mac they open through the system.
 
@@ -112,8 +114,9 @@ details are in [platform support](docs/platforms.md).
 ## What leaves your computer
 
 There is no account, and your images and videos are never uploaded. On the Mac,
-the app reads `herrei.github.io/localsr/updates/beta.json` at launch to check
-for updates, and this check can't be turned off in the app. After the check it
+the app reads its update feed on GitHub Pages at launch (for the beta,
+`herrei.github.io/localsr/updates/beta.json`), and this check can't be turned off
+in the app. After the check it
 sends one anonymous count with the app version, platform and channel to my Mac
 mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. The
 count is on by default, and you can turn it off in the Software Update dialog.
