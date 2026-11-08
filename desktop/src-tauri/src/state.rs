@@ -61,6 +61,9 @@ pub struct AppState {
     pub edit_runtime: Mutex<String>,
     pub worker: WorkerControl,
     pub scheduler: Mutex<()>,
+    // One writer of the settings file at a time, from taking the copy to writing it, so an
+    // older copy can never land after a newer one.
+    pub settings_io: Mutex<()>,
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub launch_intents: Mutex<Vec<LaunchIntent>>,
     /// Set when no settings file existed at launch: the first device report
@@ -97,6 +100,7 @@ impl AppState {
             edit_runtime: Mutex::new(String::new()),
             worker: WorkerControl::default(),
             scheduler: Mutex::new(()),
+            settings_io: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
             launch_intents: Mutex::new(Vec::new()),
             choose_device: AtomicBool::new(first_run),
@@ -141,6 +145,12 @@ impl AppState {
     }
 
     pub fn persist_settings(&self) -> AppResult<()> {
+        let _io = lock(&self.settings_io)?;
+        self.write_settings()
+    }
+
+    /// Write the settings as they are now. The caller holds `settings_io`.
+    pub fn write_settings(&self) -> AppResult<()> {
         let ui = lock(&self.settings)?.clone();
         let recipes = lock(&self.recipes)?.clone();
         settings::save(&self.paths, &ui, &recipes)

@@ -258,8 +258,12 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
     }
     validate_settings(&settings)?;
     let mut settings = settings;
-    keep_update_switches(&*lock(&state.settings)?, &mut settings);
-    *lock(&state.settings)? = settings;
+    {
+        // Read and replace under one guard, so a switch saved in between is kept.
+        let mut current = lock(&state.settings)?;
+        keep_update_switches(&current, &mut settings);
+        *current = settings;
+    }
     state.persist_settings()
 }
 
@@ -279,27 +283,27 @@ pub fn set_update_switch(
     name: String,
     value: bool,
 ) -> AppResult<()> {
-    let result = apply_update_switch(&state, &name, value);
+    let result = apply_update_switch(&state, &name, |_| value);
     refresh_update_switches(&state, &app);
     result
 }
 
 /// The menu's own click: flip the saved value, whatever the window shows.
 pub fn toggle_update_switch(state: &AppState, app: &AppHandle, name: &str) {
-    let current = lock(&state.settings).ok().and_then(|settings| match name {
-        "check_updates_at_launch" => Some(settings.check_updates_at_launch),
-        "anonymous_update_count" => Some(settings.anonymous_update_count),
-        _ => None,
-    });
-    if let Some(current) = current {
-        if let Err(error) = apply_update_switch(state, name, !current) {
-            eprintln!("LocalSR: could not save {name}: {error}");
-        }
+    if let Err(error) = apply_update_switch(state, name, |current| !current) {
+        eprintln!("LocalSR: could not save {name}: {error}");
     }
     refresh_update_switches(state, app);
 }
 
-fn apply_update_switch(state: &AppState, name: &str, value: bool) -> AppResult<()> {
+/// Change one switch and write it, as one step: other writers wait, so two quick clicks
+/// are two flips and no older copy of the settings lands after this one.
+fn apply_update_switch(
+    state: &AppState,
+    name: &str,
+    change: impl FnOnce(bool) -> bool,
+) -> AppResult<()> {
+    let _io = lock(&state.settings_io)?;
     let previous = {
         let mut settings = lock(&state.settings)?;
         let field = match name {
@@ -311,9 +315,11 @@ fn apply_update_switch(state: &AppState, name: &str, value: bool) -> AppResult<(
                 )))
             }
         };
-        std::mem::replace(field, value)
+        let previous = *field;
+        *field = change(previous);
+        previous
     };
-    if let Err(error) = state.persist_settings() {
+    if let Err(error) = state.write_settings() {
         // Shown and used must match what is on disk.
         if let Ok(mut settings) = lock(&state.settings) {
             match name {
@@ -328,11 +334,12 @@ fn apply_update_switch(state: &AppState, name: &str, value: bool) -> AppResult<(
 
 /// The menu sets its own check mark when clicked; it and the window show what is saved.
 fn refresh_update_switches(state: &AppState, app: &AppHandle) {
-    // One lock at a time: the settings guard is gone before the recipes are taken.
+    // Copies, so no lock is held while the menu is rebuilt.
     let switches = lock(&state.settings).map(|settings| native_menu::switches(&settings));
-    if let Ok(switches) = switches {
-        if let Ok(recipes) = lock(&state.recipes) {
-            let _ = native_menu::rebuild(app, &recipes, switches);
+    let recipes = lock(&state.recipes).map(|recipes| recipes.clone());
+    if let (Ok(switches), Ok(recipes)) = (switches, recipes) {
+        if let Err(error) = native_menu::rebuild(app, &recipes, switches) {
+            eprintln!("LocalSR: could not refresh the update switches in the menu: {error}");
         }
     }
     emit_state_changed(app);
@@ -2188,6 +2195,31 @@ pub fn open_model_license(
 mod tests {
     use super::*;
     use crate::types::RecipeStage;
+
+    #[test]
+    fn an_update_switch_is_written_at_once_and_rolled_back_when_writing_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::create_dir_all(&paths.model_root).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        apply_update_switch(&state, "anonymous_update_count", |_| false).unwrap();
+        let (saved, _) = crate::settings::load(&state.paths);
+        assert!(!saved.anonymous_update_count);
+        // Two flips are two flips.
+        apply_update_switch(&state, "check_updates_at_launch", |current| !current).unwrap();
+        apply_update_switch(&state, "check_updates_at_launch", |current| !current).unwrap();
+        assert!(
+            crate::settings::load(&state.paths)
+                .0
+                .check_updates_at_launch
+        );
+        assert!(apply_update_switch(&state, "device_id", |_| true).is_err());
+        // An unreadable settings file refuses the write; memory goes back to match the disk.
+        fs::write(&state.paths.settings, b"{ not json").unwrap();
+        assert!(apply_update_switch(&state, "anonymous_update_count", |_| true).is_err());
+        assert!(!lock(&state.settings).unwrap().anonymous_update_count);
+    }
 
     #[test]
     fn a_full_settings_save_never_changes_the_update_switches() {
