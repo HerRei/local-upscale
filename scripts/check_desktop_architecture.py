@@ -132,8 +132,7 @@ def signed_release_violations(desktop_release: str) -> list[str]:
 
     violations: list[str] = []
     required = {
-        # Manual only since 2026-11: releases are built and signed on the Mac, and a tag
-        # trigger here only started a run that had to be cancelled (docs/releasing.md).
+        # Releases use the manual procedure in docs/releasing.md.
         "manual-only release trigger": "on:\n  workflow_dispatch:",
         "fail-closed Tauri signing": "--require-signing",
         "Developer ID verification": "verify_macos_tauri_signing.py",
