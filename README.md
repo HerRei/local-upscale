@@ -78,11 +78,11 @@ for each platform:
 - **Windows v0.3.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
   NVIDIA CUDA editions. DirectML and CUDA are untested. The installers are
   unsigned, so SmartScreen warns first: choose **More info**, then **Run anyway**.
-  With AMD or Intel graphics, built-in ones included, take DirectML; it also runs
-  Intel graphics through OpenVINO.
+  With AMD or Intel graphics, built-in ones included, take DirectML; the upcoming
+  release also uses built-in graphics and runs Intel graphics through OpenVINO.
 - **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
-  CUDA is untested. The CPU AppImage also runs Intel graphics through OpenVINO once
-  Intel's compute driver (`intel-opencl-icd`) is installed.
+  CUDA is untested. In the upcoming release the CPU AppImage also runs Intel graphics
+  through OpenVINO once Intel's compute driver (`intel-opencl-icd`) is installed.
 
 On a Mac you can also install it with [Homebrew](https://brew.sh/):
 

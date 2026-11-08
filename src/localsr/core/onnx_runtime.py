@@ -332,6 +332,7 @@ class _OnnxImage(torch.nn.Module):
         )
         options.enable_profiling = True
         options.profile_file_prefix = str(Path(trace.name) / "execution")
+        session = None
         try:
             if self.provider == "OpenVINOExecutionProvider":
                 options.add_provider_for_devices([self.route.ep_device], dict(provider_options))
@@ -353,7 +354,7 @@ class _OnnxImage(torch.nn.Module):
             if self.provider not in session.get_providers():
                 raise RuntimeError(f"{self.provider} failed to initialize; select CPU explicitly.")
         except BaseException:
-            trace.cleanup()
+            self._release_session({"session": session, "trace": trace})
             raise
         return session, trace
 
@@ -695,14 +696,26 @@ class _OnnxImage(torch.nn.Module):
             placement = state.get("placement")
             if placement and placement["nodes"] > placement["cpu_nodes"]:
                 providers = {self.provider}
-            elif self._gated:
+            elif self._gated and not state.get("reprofiled"):
                 # Where the tile ran is unknown: no verdict, the CPU's result, and the
-                # configuration opens again with a fresh profile for the next tile.
+                # configuration opens again once with a fresh profile for the next tile.
+                state["reprofiled"] = True
                 state["candidates"].insert(0, (state["config"], state["pending"]))
                 self._open_next(state)
                 self._status(
                     f"LocalSR could not tell where {self.architecture} ran on {self._label()}; "
                     "this tile ran on the CPU, and the next one checks again."
+                )
+                return self._on_cpu(state, image)
+            elif self._gated:
+                # Still unknown: this shape stays on the CPU until the model loads again.
+                state["cpu_only"] = state["told_cpu_only"] = True
+                self._release_session(state)
+                state.pop("graph", None)
+                state["candidates"] = []
+                self._status(
+                    f"LocalSR still could not tell where {self.architecture} ran on "
+                    f"{self._label()}; these tiles run on the CPU."
                 )
                 return self._on_cpu(state, image)
             else:
