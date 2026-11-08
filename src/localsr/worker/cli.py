@@ -17,6 +17,10 @@ def main():
         from localsr.worker.edit_guard import main as edit_guard_main
 
         raise SystemExit(edit_guard_main(sys.argv[2:]))
+    if sys.argv[1:2] == ["--gpu-preflight"]:
+        from localsr.core.gpu_preflight import child_main
+
+        raise SystemExit(child_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--video-playback-preview"]:
         from localsr.core.video_playback import main as playback_main
 

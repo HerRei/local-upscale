@@ -27,6 +27,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from . import gpu_preflight
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,6 +91,8 @@ MINIMUM_PSNR = 50.0
 GATE_CACHE_ENV = "LOCALSR_ONNX_GATE_CACHE"
 # Set by the app on the engine it starts after one that crashed: that engine's process ID.
 CRASHED_ENGINE_ENV = "LOCALSR_CRASHED_ENGINE"
+# GPUs whose preflight already ran in this process, whatever its outcome.
+_PREFLIGHT_TRIED: set[str] = set()
 _MAXIMUM_VERDICTS = 400
 # Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).
 _LARGE_GRAPH_BYTES = 256 * 1024**2
@@ -163,6 +167,8 @@ class OnnxRoute:
     # Without a known device and driver identity a verdict lasts only for this process:
     # a later driver must be checked again.
     persist: bool = True
+    # The app's device id ("directml:0", "openvino:<uuid>"), for the preflight process.
+    device: str = ""
 
     def __post_init__(self):
         if self.provider not in ROUTE_CONFIGS or self.device_index < 0:
@@ -273,6 +279,14 @@ class _Crashes:
         entry = self._read().get(key)
         return isinstance(entry, dict) and entry.get("state") == "crashed"
 
+    def mark(self, key: str) -> None:
+        entries = self._read()
+        entries[key] = {
+            "state": "crashed",
+            "started": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        self._write(entries)
+
     @contextmanager
     def watch(self, key: str):
         # Re-entrant: opening the next configuration happens inside a first tile's watch.
@@ -333,6 +347,7 @@ class _OnnxImage(torch.nn.Module):
         self.cpu_tiles = 0
         self.verdicts = _Verdicts(gate_cache_directory(), persist=route.persist)
         self.crashes = _Crashes(gate_cache_directory())
+        self.preflight_passed = gpu_preflight.Passed(gate_cache_directory())
         self.crashed_route = False
         # An image's tiles come in up to four shapes (interior, right edge, bottom edge,
         # corner). Keeping all four lets the next image or video frame of the same size
@@ -457,6 +472,9 @@ class _OnnxImage(torch.nn.Module):
         if self._gated and self.crashes.crashed(self._crash_key()):
             self.crashed_route = True
             return []
+        if self._gated and not self._preflight():
+            self.crashed_route = True
+            return []
         for config in ROUTE_CONFIGS[self.provider]:
             verdict = (
                 self.verdicts.get(self._verdict_key(graph_hash, config[0])) if self._gated else None
@@ -466,12 +484,36 @@ class _OnnxImage(torch.nn.Module):
             configs.append((config, verdict is None and self._gated))
         return configs
 
+    def _preflight(self) -> bool:
+        """Run the GPU once in a separate process before this engine opens a session on
+        it; False when that process crashed."""
+        key = self._crash_key()
+        if (
+            not self.route.device
+            or os.environ.get(gpu_preflight.CHILD_ENV)
+            or key in _PREFLIGHT_TRIED
+            or key in self.preflight_passed
+        ):
+            return True
+        self._status(
+            f"Testing {self._label()} in a separate process before its first use. This "
+            "happens once per graphics driver."
+        )
+        outcome = gpu_preflight.run(self.route.device, self.cancel_event)
+        _PREFLIGHT_TRIED.add(key)
+        if outcome == "crashed":
+            self.crashes.mark(key)
+            return False
+        if outcome == "passed":
+            self.preflight_passed.add(key)
+        return True
+
     def _rejected(self) -> GpuRouteRejected:
         if self.crashed_route:
             return GpuRouteRejected(
-                f"The engine stopped while preparing {self._label()} before, so LocalSR does "
-                "not use that GPU. Select the CPU. LocalSR tries the GPU again after the next "
-                "update of LocalSR or of the graphics driver."
+                f"The engine crashed while preparing {self._label()}, so LocalSR does not use "
+                "that GPU. Select the CPU. LocalSR tries the GPU again after the next update of "
+                "LocalSR or of the graphics driver."
             )
         return GpuRouteRejected(
             f"{self.architecture} gives different results on {self._label()} than on the CPU, "

@@ -28,9 +28,11 @@
   built-in graphics as such, including AMD chips with a large reserved memory.
 - If the graphics driver resets the GPU during a job, that job stops with an
   explanation, and the engine restarts with a fresh device before the next one.
-- If the engine crashes while it prepares a GPU, as Intel's OpenVINO did with a 2020
-  driver on a UHD 620, LocalSR does not use that GPU again and says so, until LocalSR or
-  the graphics driver is updated.
+- Before a GPU's first use, LocalSR runs a tiny model on it in a separate process, so a
+  graphics driver that crashes cannot take the engine down with it. If that process
+  crashes, as Intel's OpenVINO did with a 2020 driver on a UHD 620, or the engine crashes
+  on the GPU later, LocalSR does not use that GPU and says so, until LocalSR or the
+  graphics driver is updated.
 - On Linux the engine uses the computer's C++ runtime when it is newer than the one it
   brings along, so drivers built for newer systems, such as Intel's, load inside the
   AppImage.
