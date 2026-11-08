@@ -510,6 +510,9 @@ def run_device_phase(
                 )
             )
 
+    if onnx_gpu:
+        # A cached model keeps what earlier jobs did; the benchmark judges only its own tiles.
+        engine.active_model.reset_execution_evidence()
     emit("started", "warmup", 0)
     warmup_iterations = 0
     warm_started = clock()
