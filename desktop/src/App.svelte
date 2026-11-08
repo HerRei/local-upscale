@@ -480,7 +480,9 @@
           api.listenForNativeMenu((action) => void handleNativeMenuAction(action)),
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
-        await subscribe(() => startUpdateWatcher());
+        await subscribe(() =>
+          startUpdateWatcher(snapshot.settings.check_updates_at_launch ?? true),
+        );
         await subscribe(() =>
           api.listenForFileDrops({
             hover: (active) => (filesDragging = active),
@@ -935,6 +937,18 @@
       }
     }
     snapshot = { ...snapshot, settings: next };
+    if (api.isTauri()) {
+      void api
+        .saveSettings(snapshot.settings)
+        .catch((error) => showModal('Could not save settings', String(error)));
+    }
+  }
+
+  /** The update switches may change during a job; they do not touch it. */
+  function updateUpdateSwitches(
+    patch: Pick<Partial<UiSettings>, 'check_updates_at_launch' | 'anonymous_update_count'>,
+  ): void {
+    snapshot = { ...snapshot, settings: { ...snapshot.settings, ...patch } };
     if (api.isTauri()) {
       void api
         .saveSettings(snapshot.settings)
@@ -1655,6 +1669,16 @@
         case 'app.updates':
           updateDialogOpen.set(true);
           break;
+        case 'app.check-updates-at-launch':
+          updateUpdateSwitches({
+            check_updates_at_launch: !(snapshot.settings.check_updates_at_launch ?? true),
+          });
+          break;
+        case 'app.update-count':
+          updateUpdateSwitches({
+            anonymous_update_count: !(snapshot.settings.anonymous_update_count ?? true),
+          });
+          break;
       }
     } catch (error) {
       showModal('Native action failed', String(error));
@@ -1876,9 +1900,14 @@
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     anonymousUpdateCount={settings.anonymous_update_count ?? true}
-    on:anonymouscount={(event) => updateSettings({ anonymous_update_count: event.detail })}
+    checkAtLaunch={settings.check_updates_at_launch ?? true}
+    on:anonymouscount={(event) => updateUpdateSwitches({ anonymous_update_count: event.detail })}
+    on:checkatlaunch={(event) => updateUpdateSwitches({ check_updates_at_launch: event.detail })}
   />
-  <WelcomeNotice anonymousUpdateCount={settings.anonymous_update_count ?? true} />
+  <WelcomeNotice
+    anonymousUpdateCount={settings.anonymous_update_count ?? true}
+    checkAtLaunch={settings.check_updates_at_launch ?? true}
+  />
 
   <main class="workspace">
     <MediaQueue

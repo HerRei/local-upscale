@@ -95,7 +95,8 @@ pub fn run() {
             }
             app.manage(state.clone());
             *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
-            native_menu::install(app, &lock(&state.recipes)?)?;
+            let switches = native_menu::switches(&*lock(&state.settings)?);
+            native_menu::install(app, &lock(&state.recipes)?, switches)?;
             fit_main_window(app.handle());
             if let Err(error) = worker::start_worker(state.clone(), app.handle().clone()) {
                 if let Ok(mut runtime) = state.runtime.lock() {

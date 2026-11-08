@@ -74,6 +74,12 @@ impl UpdateConfig {
         !self.public_key.is_empty() && !self.backend.is_empty() && !self.engine_id.is_empty()
     }
 }
+
+/// Whether this build checks a signed update feed itself: a direct build with an updater
+/// key, not a Store build. Only then do the launch check and the count exist.
+pub fn checks_for_updates() -> bool {
+    UpdateConfig::load().enabled() && !crate::distribution::managed_by_store()
+}
 #[derive(Clone, Deserialize, Serialize)]
 pub struct DownloadFile {
     pub name: String,
