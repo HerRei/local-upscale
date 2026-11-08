@@ -1589,6 +1589,7 @@ mod tests {
             ("cuda:0", "rocm", false),
             ("xpu:0", "xpu", true),
             ("directml:0", "directml", true),
+            ("openvino:8680677d06", "openvino", true),
         ];
 
         for (id, backend, integrated) in device_specs {

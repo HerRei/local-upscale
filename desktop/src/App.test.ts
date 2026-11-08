@@ -1166,6 +1166,16 @@ describe('LocalSR desktop interface', () => {
         is_integrated: true,
         recommended_tile_sizes: [64, 128],
       },
+      {
+        id: 'openvino:8680677d060000000002000000000000',
+        type: 'openvino',
+        name: 'Intel(R) Graphics (iGPU) (OpenVINO)',
+        total_memory: 8,
+        free_memory: 6,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [64, 128],
+      },
     ];
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
@@ -1179,6 +1189,7 @@ describe('LocalSR desktop interface', () => {
       'AMD GPU (ROCm)',
       'Intel GPU (XPU)',
       'Intel(R) Iris(R) Xe Graphics (DirectML)',
+      'Intel(R) Graphics (iGPU) (OpenVINO)',
     ]) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
@@ -1190,6 +1201,16 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
+    // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
+    const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
+    expect(precision.disabled).toBe(true);
+    expect(precision.value).toBe('fp32');
+
+    await user.selectOptions(hardware, 'openvino:8680677d060000000002000000000000');
+    expect(
+      await screen.findByText(/OpenVINO runs the model on the selected Intel GPU/),
+    ).toBeTruthy();
+    expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
   });
 
   it.each(['mps', 'directml:1', 'xpu:0'])(
