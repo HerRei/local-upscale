@@ -119,11 +119,12 @@ details are in [platform support](docs/platforms.md).
 
 There is no account, and your images and videos are never uploaded. On the Mac,
 the app reads its update feed on GitHub Pages at launch (for the beta,
-`herrei.github.io/localsr/updates/beta.json`), and this check can't be turned off
-in the app. After the check it
+`herrei.github.io/localsr/updates/beta.json`). After a check it
 sends one anonymous count with the app version, platform and channel to my Mac
-mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. The
-count is on by default, and you can turn it off in the Software Update dialog.
+mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both are
+on by default, and you can turn off either one in the LocalSR menu (**Check for
+Updates at Launch**, **Send Anonymous Update Count**) or in the Software Update
+dialog; **Check for Updates…** still works when you ask.
 
 Updates come from GitHub Releases, and the app checks their signature before it
 replaces anything. Models download from their authors on GitHub or Hugging Face

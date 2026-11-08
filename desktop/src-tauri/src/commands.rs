@@ -247,11 +247,30 @@ pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
 }
 
 #[tauri::command]
-pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> AppResult<()> {
-    crate::updates::ensure_not_installing(&state)?;
+pub fn save_settings(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    settings: UiSettings,
+) -> AppResult<()> {
+    let before = native_menu::switches(&*lock(&state.settings)?);
+    let requested = native_menu::switches(&settings);
+    let result = store_settings(&state, settings);
+    if requested != before {
+        // The menu sets its own check mark when clicked; show what was actually saved.
+        let saved = native_menu::switches(&*lock(&state.settings)?);
+        native_menu::rebuild(&app, &lock(&state.recipes)?, saved).map_err(|error| {
+            AppError::Config(format!("could not refresh the update switches: {error}"))
+        })?;
+    }
+    result
+}
+
+fn store_settings(state: &AppState, settings: UiSettings) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
-    if !lock(&state.runtime)?.active_job_id.is_empty() {
+    crate::updates::ensure_not_installing(state)?;
+    let only_switches = only_update_switches_differ(&*lock(&state.settings)?, &settings);
+    if !only_switches && !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(AppError::Validation(
             "Finish or cancel the current queue before changing settings.".into(),
         ));
@@ -259,6 +278,14 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
     validate_settings(&settings)?;
     *lock(&state.settings)? = settings;
     state.persist_settings()
+}
+
+/// The update switches change nothing about a running job, so they may change during one.
+fn only_update_switches_differ(current: &UiSettings, next: &UiSettings) -> bool {
+    let mut same = next.clone();
+    same.check_updates_at_launch = current.check_updates_at_launch;
+    same.anonymous_update_count = current.anonymous_update_count;
+    serde_json::to_value(&same).ok() == serde_json::to_value(current).ok()
 }
 
 #[tauri::command]
@@ -312,7 +339,8 @@ pub fn save_recipe(
     }
     drop(recipes);
     state.persist_settings()?;
-    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
+    let switches = native_menu::switches(&*lock(&state.settings)?);
+    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -382,7 +410,8 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     lock(&state.recipes)?.retain(|recipe| recipe.id != id);
     state.persist_settings()?;
-    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
+    let switches = native_menu::switches(&*lock(&state.settings)?);
+    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -2109,6 +2138,28 @@ pub fn open_model_license(
 mod tests {
     use super::*;
     use crate::types::RecipeStage;
+
+    #[test]
+    fn the_update_switches_may_change_during_a_job_and_nothing_else() {
+        let current = UiSettings::default();
+        let mut next = current.clone();
+        next.check_updates_at_launch = false;
+        next.anonymous_update_count = false;
+        assert!(only_update_switches_differ(&current, &next));
+        next.tile_size += 64;
+        assert!(!only_update_switches_differ(&current, &next));
+        // Settings saved before 0.3.3 check at launch, as before.
+        let mut saved = serde_json::to_value(UiSettings::default()).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("check_updates_at_launch");
+        assert!(
+            serde_json::from_value::<UiSettings>(saved)
+                .unwrap()
+                .check_updates_at_launch
+        );
+    }
 
     #[test]
     fn face_companions_require_the_matching_installed_model_and_explicit_selection() {

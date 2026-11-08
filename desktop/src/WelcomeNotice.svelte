@@ -5,6 +5,7 @@
 
   /** Whether the anonymous update-check count is on, so the notice describes it truthfully. */
   export let anonymousUpdateCount = true;
+  export let checkAtLaunch = true;
 
   const SEEN_KEY = 'localsr.welcome.seen';
   // Check for Updates lives in the app menu on macOS and under Help elsewhere.
@@ -44,9 +45,11 @@
       >
       {#if counts}
         <span class="count"
-          >{anonymousUpdateCount
-            ? `At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn it off under Check for Updates in the ${updatesMenu} menu.`
-            : 'The anonymous update-check count is off.'}</span
+          >{!checkAtLaunch
+            ? `LocalSR does not check for updates at launch; Check for Updates in the ${updatesMenu} menu still does.`
+            : anonymousUpdateCount
+              ? `At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn either off in the ${updatesMenu} menu.`
+              : 'At launch LocalSR checks for updates; the anonymous update-check count is off.'}</span
         >
       {/if}
     </div>

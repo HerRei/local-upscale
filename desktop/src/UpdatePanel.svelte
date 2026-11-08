@@ -4,7 +4,8 @@
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
   export let anonymousUpdateCount = true;
-  const dispatch = createEventDispatcher<{ anonymouscount: boolean }>();
+  export let checkAtLaunch = true;
+  const dispatch = createEventDispatcher<{ anonymouscount: boolean; checkatlaunch: boolean }>();
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
@@ -91,8 +92,14 @@
         <label class="count"
           ><input
             type="checkbox"
+            checked={checkAtLaunch}
+            on:change={(event) => dispatch('checkatlaunch', event.currentTarget.checked)}
+          /> Check for updates when LocalSR starts</label
+        >
+        <label class="count"
+          ><input
+            type="checkbox"
             checked={anonymousUpdateCount}
-            disabled={processing}
             on:change={(event) => dispatch('anonymouscount', event.currentTarget.checked)}
           /> Send an anonymous update-check count (version, platform, channel)</label
         >

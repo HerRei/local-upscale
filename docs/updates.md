@@ -10,7 +10,10 @@ but update checks are disabled.
 On macOS, **Check for Updates…** in the LocalSR menu opens Software Update: choose the Stable or Beta channel, check for a compatible release, read
 its notes and total download size, download it, and install and restart. The
 beta also checks its feed once at launch and shows a notice when a newer build
-exists. Downloads can run while jobs are processing;
+exists. **Check for Updates at Launch** in the LocalSR menu, or the matching box in
+the update dialog, turns that launch check off (setting `check_updates_at_launch`);
+asking with **Check for Updates…** still works. Both switches can change while
+jobs run, and the menu shows them only in builds that check a signed feed. Downloads can run while jobs are processing;
 installation waits until the queue, any cancellation and any model download have
 finished, and the native host enforces that as well as the interface.
 
@@ -24,8 +27,10 @@ After a successful check, direct builds send one request to
 for example `v=0.1.6-beta&t=darwin-aarch64-mps-native&c=beta`. It carries no
 install or user ID and no cookies, times out after five seconds and never affects
 the check. The Mac mini counts active installs per day without storing the IP
-address (see `packaging/hosting/stats/`). Turn it off with **Send an anonymous
-update-check count** in the update dialog (setting `anonymous_update_count`).
+address (see `packaging/hosting/stats/`). Turn it off with **Send Anonymous Update
+Count** in the LocalSR menu or **Send an anonymous update-check count** in the update
+dialog (setting `anonymous_update_count`). With the launch check off, the count is
+sent only after a check you ask for.
 Store editions and loopback test feeds never send it; `LOCALSR_USAGE_PING` points
 a build at another HTTPS endpoint.
 
