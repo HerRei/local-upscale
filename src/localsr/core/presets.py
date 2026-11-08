@@ -122,6 +122,7 @@ def rank_models_for_preset(
         if model.native_scale >= target_scale
         and _purpose_match(model, purpose) > 0
         and _rights_allow_preset(model, purpose)
+        and model.preset_eligible
     ]
 
     category = _mode_category(mode)

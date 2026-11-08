@@ -24,6 +24,7 @@
       "name": "HAT-S \u00d74 \u2014 Slim",
       "native_scale": 4,
       "pair_with": "hat_s_x4_face",
+      "preset_eligible": true,
       "purposes": [
         "general",
         "photo"
@@ -68,6 +69,7 @@
       "name": "HAT-S \u00d74 Face \u2014 Restoration",
       "native_scale": 4,
       "pair_with": "hat_s_x4",
+      "preset_eligible": true,
       "purposes": [
         "face",
         "photo"
@@ -111,6 +113,7 @@
       "name": "HAT-L \u00d74 ImageNet \u2014 Large",
       "native_scale": 4,
       "pair_with": "hat_l_x4_face",
+      "preset_eligible": true,
       "purposes": [
         "general",
         "photo"
@@ -155,6 +158,7 @@
       "name": "HAT-L \u00d74 Face \u2014 Restoration",
       "native_scale": 4,
       "pair_with": "hat_l_x4_imagenet",
+      "preset_eligible": true,
       "purposes": [
         "face",
         "photo"
@@ -200,6 +204,7 @@
       "name": "RealPLKSR Denoise \u2014 Slim",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "denoise",
         "photo"
@@ -245,6 +250,7 @@
       "name": "NAFNet SIDD Width64 \u2014 Large",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "denoise",
         "photo"
@@ -289,6 +295,7 @@
       "name": "RealPLKSR 4x HFA2k \u2014 Anime",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "illustration",
         "anime",
@@ -333,6 +340,7 @@
       "name": "SPAN 4x NomosUni \u2014 Quick",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -376,6 +384,7 @@
       "name": "RealPLKSR 4x NomosWebPhoto \u2014 Best",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -419,6 +428,7 @@
       "name": "Real-ESRGAN \u00d72 \u2014 Compact",
       "native_scale": 2,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -464,6 +474,7 @@
       "name": "FBCNN Color \u2014 JPEG Restoration",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "restoration",
         "photo"
@@ -509,6 +520,7 @@
       "name": "NAFNet GoPro Deblur",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "deblur",
         "restoration",
@@ -553,6 +565,7 @@
       "name": "Real-ESRGAN \u00d74 \u2014 Classic",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -596,6 +609,7 @@
       "name": "Real-ESRGAN \u00d74 Anime \u2014 Fast",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "illustration",
         "anime"
@@ -639,6 +653,7 @@
       "name": "SwinIR \u00d74 Real \u2014 Transformer",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -684,6 +699,7 @@
       "name": "SCUNet Color \u2014 Blind Denoise",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "denoise",
         "photo"
@@ -703,6 +719,92 @@
       "terms_acceptance_required": false,
       "time_factor": 0.8,
       "vram_estimate_mb": 1500
+    },
+    {
+      "architecture": "DAT",
+      "attribution_required": true,
+      "author": "Philip Hofmann",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "commercial_use_status": "allowed",
+      "content": [
+        "photo"
+      ],
+      "description": "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on lettering, masonry and clean photos; foliage and fur can come out soft. About ten times slower than Best, so it is never picked by a preset.",
+      "display_name": "DAT2 \u00d74 BHI Real",
+      "download_url": "https://github.com/Phhofm/models/releases/download/4xBHI_dat2_real/4xBHI_dat2_real.pth",
+      "engine_id": "localsr.pytorch-spandrel",
+      "filename": "4xBHI_dat2_real.pth",
+      "fixes": [],
+      "license_name": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "memory_factor": 1.8,
+      "model_id": "bhi_dat2_real_x4",
+      "name": "DAT2 \u00d74 BHI Real \u2014 Lettering and buildings",
+      "native_scale": 4,
+      "pair_with": "",
+      "preset_eligible": false,
+      "purposes": [
+        "photo"
+      ],
+      "quality_tier": 3,
+      "recommended_halo": 32,
+      "redistribution_allowed": false,
+      "rights_status": "attribution",
+      "role": "Lettering, buildings and clean photos; very slow",
+      "sha256": "14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0",
+      "size_bytes": 140196334,
+      "source_url": "https://huggingface.co/Phips/4xBHI_dat2_real",
+      "speed_factor": 0.1,
+      "speed_tier": 1,
+      "stage": "upscale",
+      "support_tier": "supported",
+      "terms_acceptance_required": false,
+      "time_factor": 1.9,
+      "vram_estimate_mb": 4000
+    },
+    {
+      "architecture": "DAT",
+      "attribution_required": true,
+      "author": "Philip Hofmann",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "commercial_use_status": "allowed",
+      "content": [
+        "photo"
+      ],
+      "description": "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed and noisy before upscaling. About ten times slower than Best, so it is never picked by a preset.",
+      "display_name": "DAT2 \u00d74 RealWebPhoto v4",
+      "download_url": "https://github.com/Phhofm/models/releases/download/4xRealWebPhoto_v4_dat2/4xRealWebPhoto_v4_dat2.pth",
+      "engine_id": "localsr.pytorch-spandrel",
+      "filename": "4xRealWebPhoto_v4_dat2.pth",
+      "fixes": [],
+      "license_name": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "memory_factor": 1.8,
+      "model_id": "realwebphoto_v4_dat2_x4",
+      "name": "DAT2 \u00d74 RealWebPhoto v4 \u2014 Noisy photos",
+      "native_scale": 4,
+      "pair_with": "",
+      "preset_eligible": false,
+      "purposes": [
+        "photo"
+      ],
+      "quality_tier": 3,
+      "recommended_halo": 32,
+      "redistribution_allowed": false,
+      "rights_status": "attribution",
+      "role": "Noisy, compressed web and phone photos; very slow",
+      "sha256": "9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9",
+      "size_bytes": 140299118,
+      "source_url": "https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2",
+      "speed_factor": 0.1,
+      "speed_tier": 1,
+      "stage": "upscale",
+      "support_tier": "supported",
+      "terms_acceptance_required": false,
+      "time_factor": 1.9,
+      "vram_estimate_mb": 4000
     }
   ],
   "schema_version": 2,
