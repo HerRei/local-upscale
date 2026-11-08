@@ -448,3 +448,22 @@ def test_openvino_discovery_failure_hides_nothing_else(monkeypatch):
     devices = [{"id": "cpu"}]
     hardware._detect_openvino(devices, 1024**3)
     assert devices == [{"id": "cpu"}]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="real DXGI and D3D12 calls")
+def test_dxgi_queries_work_on_the_windows_software_adapter():
+    """Every Windows machine has WARP, Microsoft's software D3D12 adapter, so the raw COM
+    calls (function-table slots, structure layouts) run against a real adapter here."""
+    from localsr.core.windows_adapters import directml_adapters
+
+    adapters = directml_adapters(include_software=True)
+    warp = next(adapter for adapter in adapters if adapter["software"])
+    assert warp["vendor_id"] == 0x1414
+    assert len(warp["luid"]) == 16 and int(warp["luid"], 16) >= 0
+    assert warp["uma"] is True  # WARP renders in system memory
+    assert warp["budget"] > 0 and warp["usage"] >= 0
+    assert warp["shared_budget"] >= 0 and warp["shared_usage"] >= 0
+    version = warp["driver_version"]
+    assert version is None or len(version.split(".")) == 4
+    # Without include_software the WARP adapter is never offered.
+    assert not any(adapter["software"] for adapter in directml_adapters())
