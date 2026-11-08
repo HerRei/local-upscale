@@ -652,11 +652,17 @@ pub fn recover_update_settings(state: State<'_, Arc<AppState>>, app: AppHandle) 
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(invalid("Finish or cancel processing before recovery"));
     }
-    crate::settings::recover_defaults(&state.paths)?;
-    let (settings, recipes) = crate::settings::load(&state.paths);
-    *lock(&state.settings)? = settings;
-    *lock(&state.recipes)? = recipes;
-    state.persist_settings()?;
+    {
+        // One settings writer at a time, from moving the broken file aside to writing the
+        // recovered one: a switch saved meanwhile waits and then applies on top.
+        let _io = lock(&state.settings_io)?;
+        crate::settings::recover_defaults(&state.paths)?;
+        let (settings, recipes) = crate::settings::load(&state.paths);
+        *lock(&state.settings)? = settings;
+        *lock(&state.recipes)? = recipes;
+        state.write_settings()?;
+    }
+    crate::native_menu::reconcile(&app);
     crate::state::emit_state_changed(&app);
     Ok(())
 }

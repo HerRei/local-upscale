@@ -215,6 +215,27 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     Ok(())
 }
 
+/// Show the saved update switches. The rebuild runs on the UI thread and reads the settings
+/// there, so when several overlap, the last one shows the newest state.
+pub fn reconcile(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(state) = handle.try_state::<std::sync::Arc<crate::state::AppState>>() else {
+            return;
+        };
+        let Ok(switches) = crate::state::lock(&state.settings).map(|settings| switches(&settings))
+        else {
+            return;
+        };
+        let Ok(recipes) = crate::state::lock(&state.recipes).map(|recipes| recipes.clone()) else {
+            return;
+        };
+        if let Err(error) = rebuild(&handle, &recipes, switches) {
+            eprintln!("LocalSR: could not refresh the update switches in the menu: {error}");
+        }
+    });
+}
+
 pub fn dispatch(app: &AppHandle, id: &str) {
     // The update switches are the host's own settings: it flips the saved value, so a
     // window that has not caught up cannot send the opposite.
