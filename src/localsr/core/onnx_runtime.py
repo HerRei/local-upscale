@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,8 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+from . import gpu_preflight
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,10 @@ class _RawImage(torch.nn.Module):
 # this (OpenVINO FP32 on an Intel iGPU: 128 dB); FP16 arithmetic lands near 50 dB.
 MINIMUM_PSNR = 50.0
 GATE_CACHE_ENV = "LOCALSR_ONNX_GATE_CACHE"
+# Set by the app on the engine it starts after one that crashed: that engine's process ID.
+CRASHED_ENGINE_ENV = "LOCALSR_CRASHED_ENGINE"
+# GPUs whose preflight already ran in this process, whatever its outcome.
+_PREFLIGHT_TRIED: set[str] = set()
 _MAXIMUM_VERDICTS = 400
 # Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).
 _LARGE_GRAPH_BYTES = 256 * 1024**2
@@ -160,6 +167,8 @@ class OnnxRoute:
     # Without a known device and driver identity a verdict lasts only for this process:
     # a later driver must be checked again.
     persist: bool = True
+    # The app's device id ("directml:0", "openvino:<uuid>"), for the preflight process.
+    device: str = ""
 
     def __post_init__(self):
         if self.provider not in ROUTE_CONFIGS or self.device_index < 0:
@@ -217,6 +226,95 @@ class _Verdicts:
             logger.warning("Could not store the GPU check result", exc_info=True)
 
 
+class _Crashes:
+    """GPUs the engine died on. A native crash in a graphics driver ends the process before
+    any handler runs, so the riskiest steps (opening a session, a configuration's first
+    tile and its check) leave a note on disk while they run and remove it when they end.
+    The app starts the next engine with the crashed engine's process ID; a note left by
+    that process marks the GPU as crashed. A note left by an engine the app stopped itself
+    (quit, cancel) is not a crash and is overwritten later. Stored apart from the verdicts,
+    so it holds even when the driver cannot be identified, and keyed by the LocalSR
+    version, so an update tries the GPU again."""
+
+    def __init__(self, directory: Path):
+        self.path = directory / "crashes.json"
+        self.depth: dict[str, int] = {}
+        try:
+            crashed_pid = int(os.environ.get(CRASHED_ENGINE_ENV, "0"))
+        except ValueError:
+            crashed_pid = 0
+        if crashed_pid:
+            self._confirm(crashed_pid)
+
+    def _read(self) -> dict:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def _write(self, entries: dict) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(f".{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+            os.replace(temporary, self.path)
+        except OSError:
+            logger.warning("Could not record a GPU step", exc_info=True)
+
+    def _confirm(self, pid: int) -> None:
+        entries = self._read()
+        crashed = {
+            key: {**entry, "state": "crashed"}
+            for key, entry in entries.items()
+            if isinstance(entry, dict)
+            and entry.get("state") == "opening"
+            and entry.get("pid") == pid
+        }
+        if crashed:
+            logger.warning("The engine stopped during a GPU step before: %s", ", ".join(crashed))
+            self._write({**entries, **crashed})
+
+    def crashed(self, key: str) -> bool:
+        entry = self._read().get(key)
+        return isinstance(entry, dict) and entry.get("state") == "crashed"
+
+    def mark(self, key: str) -> None:
+        entries = self._read()
+        entries[key] = {
+            "state": "crashed",
+            "started": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        self._write(entries)
+
+    @contextmanager
+    def watch(self, key: str):
+        # Re-entrant: opening the next configuration happens inside a first tile's watch.
+        if self.depth.get(key):
+            self.depth[key] += 1
+            try:
+                yield
+            finally:
+                self.depth[key] -= 1
+            return
+        self.depth[key] = 1
+        entries = self._read()
+        entries[key] = {
+            "state": "opening",
+            "pid": os.getpid(),
+            "started": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        self._write(entries)
+        try:
+            yield
+        finally:
+            self.depth[key] = 0
+            entries = self._read()
+            if entries.get(key, {}).get("pid") == os.getpid():
+                entries.pop(key, None)
+                self._write(entries)
+
+
 def _psnr(first: np.ndarray, second: np.ndarray) -> float:
     error = float(np.mean((np.clip(first, 0, 1) - np.clip(second, 0, 1)) ** 2))
     return math.inf if error == 0 else 10 * math.log10(1 / error)
@@ -248,6 +346,9 @@ class _OnnxImage(torch.nn.Module):
         # Tiles that ran through PyTorch on the CPU because the route could not be checked.
         self.cpu_tiles = 0
         self.verdicts = _Verdicts(gate_cache_directory(), persist=route.persist)
+        self.crashes = _Crashes(gate_cache_directory())
+        self.preflight_passed = gpu_preflight.Passed(gate_cache_directory())
+        self.crashed_route = False
         # An image's tiles come in up to four shapes (interior, right edge, bottom edge,
         # corner). Keeping all four lets the next image or video frame of the same size
         # reuse them; a very large model keeps two to spare shared memory.
@@ -271,6 +372,14 @@ class _OnnxImage(torch.nn.Module):
 
     def _label(self) -> str:
         return self.route.label or self.provider
+
+    def _crash_key(self) -> str:
+        # The whole GPU, not one configuration: a driver that crashes the process on one
+        # setting is not trusted with the others.
+        return "|".join((self.route.identity, self.provider, _localsr_version()))
+
+    def _watch(self):
+        return self.crashes.watch(self._crash_key()) if self._gated else nullcontext()
 
     def _verdict_key(self, graph_hash: str, config: str) -> str:
         import onnxruntime as ort
@@ -360,6 +469,12 @@ class _OnnxImage(torch.nn.Module):
 
     def _candidates(self, graph_hash: str) -> list[tuple]:
         configs = []
+        if self._gated and self.crashes.crashed(self._crash_key()):
+            self.crashed_route = True
+            return []
+        if self._gated and not self._preflight():
+            self.crashed_route = True
+            return []
         for config in ROUTE_CONFIGS[self.provider]:
             verdict = (
                 self.verdicts.get(self._verdict_key(graph_hash, config[0])) if self._gated else None
@@ -369,7 +484,37 @@ class _OnnxImage(torch.nn.Module):
             configs.append((config, verdict is None and self._gated))
         return configs
 
+    def _preflight(self) -> bool:
+        """Run the GPU once in a separate process before this engine opens a session on
+        it; False when that process crashed."""
+        key = self._crash_key()
+        if (
+            not self.route.device
+            or os.environ.get(gpu_preflight.CHILD_ENV)
+            or key in _PREFLIGHT_TRIED
+            or key in self.preflight_passed
+        ):
+            return True
+        self._status(
+            f"Testing {self._label()} in a separate process before its first use. This "
+            "happens once per graphics driver."
+        )
+        outcome = gpu_preflight.run(self.route.device, self.cancel_event)
+        _PREFLIGHT_TRIED.add(key)
+        if outcome == "crashed":
+            self.crashes.mark(key)
+            return False
+        if outcome == "passed":
+            self.preflight_passed.add(key)
+        return True
+
     def _rejected(self) -> GpuRouteRejected:
+        if self.crashed_route:
+            return GpuRouteRejected(
+                f"The engine crashed while preparing {self._label()}, so LocalSR does not use "
+                "that GPU. Select the CPU. LocalSR tries the GPU again after the next update of "
+                "LocalSR or of the graphics driver."
+            )
         return GpuRouteRejected(
             f"{self.architecture} gives different results on {self._label()} than on the CPU, "
             "so LocalSR does not use that GPU for this model. Select the CPU for it."
@@ -412,7 +557,8 @@ class _OnnxImage(torch.nn.Module):
                     f"{self.architecture}. This happens once per model and tile shape."
                 )
             try:
-                session, trace = self._create(state["graph"], config)
+                with self._watch():
+                    session, trace = self._create(state["graph"], config)
             except InterruptedError:
                 raise
             except Exception as error:
@@ -681,7 +827,16 @@ class _OnnxImage(torch.nn.Module):
 
     def _attempt(self, state: dict, image, expected) -> tuple[str, np.ndarray | None]:
         """Run one tile on the open configuration: ("accepted" | "rejected" | "undecided",
-        output). Errors that are not about the configuration propagate."""
+        output). Errors that are not about the configuration propagate. A configuration's
+        first tile and its check are watched for a crash of the whole engine."""
+        flat = state["pending"] and float(image.std()) < _DETAILED_TILE_STD
+        risky = not state.get("cpu_only") and not flat and ("trace" in state or state["pending"])
+        if not risky:
+            return self._attempt_tile(state, image, expected)
+        with self._watch():
+            return self._attempt_tile(state, image, expected)
+
+    def _attempt_tile(self, state: dict, image, expected) -> tuple[str, np.ndarray | None]:
         if state.get("cpu_only"):
             return self._on_cpu(state, image)
         if state["pending"] and float(image.std()) < _DETAILED_TILE_STD:
