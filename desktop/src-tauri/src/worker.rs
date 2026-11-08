@@ -183,6 +183,13 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     }
 
     let mut child = command.spawn().map_err(|error| {
+        // The next attempt still has to tell its engine which one crashed.
+        if crashed_engine != 0 {
+            state
+                .worker
+                .crashed_engine
+                .store(crashed_engine, Ordering::SeqCst);
+        }
         AppError::Worker(format!(
             "could not start the LocalSR inference engine: {error}"
         ))

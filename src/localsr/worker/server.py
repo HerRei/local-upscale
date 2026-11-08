@@ -1406,9 +1406,6 @@ def main():
         result = probe(args.backend_probe)
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         return
-    from localsr.core import gpu_guard
-
-    gpu_guard.settle()
     server = WorkerServer()
     server.run()
 

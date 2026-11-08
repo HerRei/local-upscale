@@ -25,6 +25,11 @@ def main():
         from localsr.core.video_playback import main as playback_main
 
         raise SystemExit(playback_main(sys.argv[2:]))
+    # Before the server's imports, which may fail: the crashed engine's notes are then
+    # already settled.
+    from localsr.core import gpu_guard
+
+    gpu_guard.settle()
     from localsr.worker.server import main as server_main
 
     server_main()

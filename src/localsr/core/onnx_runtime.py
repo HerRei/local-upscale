@@ -271,7 +271,8 @@ class _OnnxImage(torch.nn.Module):
     def _crash_key(self) -> str:
         # The whole GPU, not one configuration: a driver that crashes on one setting is
         # not trusted with the others.
-        return "|".join((self.route.identity, self.provider, _localsr_version()))
+        # The device as well: two identical cards share an identity.
+        return "|".join((self.route.identity, self.route.device, self.provider, _localsr_version()))
 
     def _watch(self):
         return self.crashes.watch(self._crash_key()) if self._gated else nullcontext()
@@ -418,11 +419,6 @@ class _OnnxImage(torch.nn.Module):
                 f"{happened}, so LocalSR does not use that GPU. Select the CPU. LocalSR "
                 f"tries the GPU again {retry}."
             )
-        return GpuRouteRejected(
-            f"The engine crashed while preparing {self._label()}, so LocalSR does not use "
-            "that GPU. Select the CPU. LocalSR tries the GPU again after the next update of "
-            "LocalSR or of the graphics driver."
-        )
         return GpuRouteRejected(
             f"{self.architecture} gives different results on {self._label()} than on the CPU, "
             "so LocalSR does not use that GPU for this model. Select the CPU for it."
