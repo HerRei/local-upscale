@@ -196,15 +196,14 @@ def directml_adapters(*, include_software: bool = False) -> list[dict]:
                     raise RuntimeError(f"Could not read graphics adapter {index}")
                 if description.flags & 2 and not include_software:
                     continue  # Software rendering is not GPU acceptance.
-                if create_device(adapter, _FEATURE_LEVEL_11_0, device_iid, None) < 0:
+                # NVIDIA makes no x86 integrated GPUs, and creating a device, even only to
+                # test DirectX 12 support, would wake a sleeping laptop dGPU just to ask; its
+                # cards with a current driver all support DirectX 12.
+                nvidia = description.vendor_id == 0x10DE
+                if not nvidia and create_device(adapter, _FEATURE_LEVEL_11_0, device_iid, None) < 0:
                     continue
                 budget = _optional("memory budget", _memory_budget, adapter)
-                # NVIDIA makes no x86 integrated GPUs, and creating a device would wake a
-                # sleeping laptop dGPU just to ask.
-                if description.vendor_id == 0x10DE:
-                    uma = False
-                else:
-                    uma = _optional("architecture", _uma, create_device, adapter)
+                uma = False if nvidia else _optional("architecture", _uma, create_device, adapter)
                 adapters.append(
                     {
                         "index": index,

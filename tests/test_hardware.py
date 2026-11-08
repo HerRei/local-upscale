@@ -485,11 +485,23 @@ def test_a_cpu_only_edition_names_the_download_for_its_gpu(monkeypatch, tmp_path
     # An edition that already uses a GPU suggests nothing.
     assert hardware._gpu_suggestion([{"type": "directml"}, *cpu]) is None
 
+    from localsr.core import openvino_devices
+
     monkeypatch.setattr(hardware.sys, "platform", "linux")
     monkeypatch.setattr(hardware, "_DRM_ROOT", tmp_path)
-    (tmp_path / "card1" / "device").mkdir(parents=True)
-    (tmp_path / "card1" / "device" / "vendor").write_text("0x8086\n")
-    assert hardware._gpu_suggestion(cpu) == {"name": "Intel graphics", "download": "intel-driver"}
+    monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: True)
+    monkeypatch.setattr(openvino_devices, "_linux_driver", lambda: None)
     (tmp_path / "card0" / "device").mkdir(parents=True)
-    (tmp_path / "card0" / "device" / "vendor").write_text("0x1002\n")
+    (tmp_path / "card0" / "device" / "vendor").write_text("0x8086\n")
+    assert hardware._gpu_suggestion(cpu) == {"name": "Intel graphics", "download": "intel-driver"}
+    # Intel's driver is already there: installing it again would not help.
+    monkeypatch.setattr(openvino_devices, "_linux_driver", lambda: "libigdrcl.so:1:1")
+    assert hardware._gpu_suggestion(cpu) is None
+    # An edition without OpenVINO cannot use Intel graphics at all.
+    monkeypatch.setattr(openvino_devices, "_linux_driver", lambda: None)
+    monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: False)
+    assert hardware._gpu_suggestion(cpu) is None
+    # A second, NVIDIA or AMD card wins over the integrated Intel graphics on card0.
+    (tmp_path / "card1" / "device").mkdir(parents=True)
+    (tmp_path / "card1" / "device" / "vendor").write_text("0x1002\n")
     assert hardware._gpu_suggestion(cpu) == {"name": "an AMD GPU", "download": "ROCm"}

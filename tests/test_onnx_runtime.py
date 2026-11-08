@@ -283,7 +283,7 @@ def test_gate_keeps_checking_while_the_reference_is_unstable(monkeypatch, tmp_pa
     assert json.loads((tmp_path / "verdicts.json").read_text())
 
 
-def test_a_lost_device_is_reported_as_such_and_releases_sessions(monkeypatch):
+def test_a_lost_device_is_reported_without_touching_its_sessions(monkeypatch):
     from onnxruntime.capi.onnxruntime_pybind11_state import RuntimeException
 
     from localsr.core.onnx_runtime import GpuDeviceLost
@@ -296,9 +296,12 @@ def test_a_lost_device_is_reported_as_such_and_releases_sessions(monkeypatch):
         raise RuntimeException("DML failed: DXGI_ERROR_DEVICE_REMOVED (0x887A0005)")
 
     monkeypatch.setattr(converted.model, "_session", removed)
+    sessions = dict(converted.model.sessions)
     with pytest.raises(GpuDeviceLost, match="restarts with a fresh device.*0x887A0005"):
         converted(image)
-    assert not converted.model.sessions
+    # Freeing a lost device's sessions can hang; the worker exits instead.
+    assert dict(converted.model.sessions) == sessions
+    assert not converted.execution_verified
 
 
 def test_onnx_tiles_like_the_cpu_and_reuses_every_shape_for_the_next_image(tmp_path, monkeypatch):
@@ -461,7 +464,7 @@ def test_a_lost_device_wins_over_a_cancellation_at_the_same_moment(monkeypatch):
     monkeypatch.setattr(converted.model, "_session", removed)
     with pytest.raises(GpuDeviceLost):
         converted(image)
-    assert not converted.model.sessions
+    assert not converted.execution_verified
 
 
 def test_an_accepted_configuration_that_crashes_falls_back(monkeypatch, tmp_path):
@@ -627,6 +630,9 @@ def test_a_model_unstable_on_both_test_patterns_runs_on_the_cpu(monkeypatch, tmp
     assert not (tmp_path / "verdicts.json").exists()
     assert sum("cannot check" in status for status in statuses) == 1
     assert not converted.execution_verified
+    # The shape no longer holds a GPU session or its graph.
+    (state,) = converted.model.sessions.values()
+    assert "session" not in state and "graph" not in state
 
 
 def test_a_cancelled_switch_to_the_next_configuration_is_tried_again(monkeypatch, tmp_path):
@@ -669,3 +675,60 @@ def test_the_benchmark_flag_needs_every_tile_on_the_checked_gpu(monkeypatch, tmp
     converted(torch.rand(1, 3, 8, 8))
     assert converted.execution_verified
     assert dict(converted.model.sessions).keys() == sessions.keys()
+
+
+def test_cancelling_during_the_check_stores_no_verdict(monkeypatch, tmp_path):
+    import threading
+
+    from onnxruntime.capi.onnxruntime_pybind11_state import Fail
+
+    from localsr.core import onnx_runtime
+
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+    cancel = threading.Event()
+    converted.set_cancel_event(cancel)
+
+    def terminated(self, session, image):
+        cancel.set()  # the user cancels; ONNX Runtime stops the run with an ordinary error
+        raise Fail(
+            "[ONNXRuntimeError] : 1 : FAIL : Exiting due to terminate flag being set to true."
+        )
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", terminated)
+    with pytest.raises(InterruptedError):
+        converted(torch.rand(1, 3, 8, 8))
+    assert not (tmp_path / "verdicts.json").exists()
+
+
+def test_python_and_numpy_memory_errors_count_as_out_of_memory():
+    from localsr.core.onnx_runtime import _is_memory_error
+
+    class ArrayMemoryError(MemoryError):
+        """Like NumPy's own subclass, which says "Unable to allocate ..."."""
+
+    assert _is_memory_error(MemoryError())
+    assert _is_memory_error(ArrayMemoryError("Unable to allocate 1.00 TiB for an array"))
+    assert not _is_memory_error(ValueError("array is too big"))
+
+
+def test_an_unreadable_profile_is_no_verdict(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    original = descriptor()
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_close_profile", lambda self, state: None)
+    image = torch.rand(1, 3, 8, 8)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    verdicts = json.loads((tmp_path / "verdicts.json").read_text())
+    assert [verdict["accepted"] for verdict in verdicts.values()] == [True]
+
+
+def test_an_unreadable_driver_identity_keeps_the_gpu(monkeypatch):
+    from localsr.core import openvino_devices
+
+    def unreadable():
+        raise PermissionError("/usr/lib64/libigc.so.2")
+
+    monkeypatch.setattr(openvino_devices.sys, "platform", "linux")
+    monkeypatch.setattr(openvino_devices, "_linux_driver", unreadable)
+    assert openvino_devices._driver("") is None
