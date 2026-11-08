@@ -48,7 +48,17 @@
 
   {#if items.length === 0}
     <div class="empty-card">
-      <div class="empty-plus" aria-hidden="true">＋</div>
+      <div class="empty-plus" aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          width="18"
+          height="18"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg
+        >
+      </div>
       <strong>Add media to begin</strong>
       <p>Images, camera RAW, or video clips. A folder becomes a batch.</p>
       <div class="empty-actions">

@@ -1299,6 +1299,15 @@ input[type='text'],
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
+/* A failure or a GPU note can run long; two lines keep its instruction readable, and the
+   tooltip holds the rest. */
+.status-copy span.status-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+}
 .status-actions {
   display: flex;
   gap: 6px;

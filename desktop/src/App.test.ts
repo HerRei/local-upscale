@@ -1220,6 +1220,8 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
+    // The saved scale is a number; the menu must still show the matching option.
+    expect((screen.getByLabelText('Interface text') as HTMLSelectElement).selectedIndex).toBe(0);
     // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.disabled).toBe(true);

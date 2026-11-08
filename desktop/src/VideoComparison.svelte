@@ -468,7 +468,7 @@
         type="button"
         aria-label="Zoom in"
         disabled={zoom >= limits.max}
-        on:click={() => setZoom(zoom * 1.25)}>＋</button
+        on:click={() => setZoom(zoom * 1.25)}>+</button
       >
       <button type="button" class:active={Math.abs(zoom - 1) < 0.001} on:click={fitView}>Fit</button
       >
