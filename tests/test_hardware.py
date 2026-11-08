@@ -323,3 +323,128 @@ def test_discovers_nvidia_cuda_and_intel_discrete_xpu(monkeypatch):
     assert xpu["is_integrated"] is False
     # The CPU fallback is always enumerated last.
     assert report["devices"][-1]["id"] == "cpu"
+
+
+def test_directml_uses_uma_and_counts_shared_memory_for_integrated_gpus(monkeypatch):
+    from localsr.core import onnx_runtime, windows_adapters
+
+    gib = 1024**3
+    monkeypatch.delenv("LOCALSR_SKIP_DIRECTML_PROBE", raising=False)
+    monkeypatch.setattr(onnx_runtime, "directml_available", lambda: True)
+    adapters = [
+        # An AMD APU with a 2 GiB BIOS carve-out: the old "< 512 MiB" guess called it discrete.
+        {
+            "index": 0,
+            "name": "AMD Radeon 780M",
+            "dedicated_memory": 2 * gib,
+            "uma": True,
+            "budget": 2 * gib,
+            "usage": 0,
+            "shared_budget": 7 * gib,
+            "shared_usage": 0,
+        },
+        # Windows grants this process little right now: the budget follows it.
+        {
+            "index": 1,
+            "name": "Intel UHD",
+            "dedicated_memory": 128 * 1024**2,
+            "uma": None,
+            "budget": 3 * gib,
+            "usage": 1 * gib,
+            "shared_budget": 0,
+            "shared_usage": 0,
+        },
+    ]
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda: adapters)
+    devices = []
+    hardware._detect_directml(devices, 16 * gib, 12 * gib)
+    amd, intel = devices
+    assert amd["is_integrated"] is True and amd["total_memory"] == 16 * gib
+    assert amd["free_memory"] == 6 * gib  # half the available RAM, not the 2 GiB carve-out
+    assert intel["is_integrated"] is True  # no UMA answer: the old guess decides
+    assert intel["free_memory"] == int(2 * gib * 0.85)
+
+
+def test_integrated_rocm_gpu_is_budgeted_from_shared_memory(monkeypatch):
+    from contextlib import nullcontext
+
+    gib = 1024**3
+    monkeypatch.setattr(hardware, "_system_memory", lambda: (32 * gib, 20 * gib))
+    monkeypatch.setattr(hardware.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(hardware.torch.version, "hip", "7.2")
+    monkeypatch.setattr(
+        hardware.torch,
+        "cuda",
+        SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            device=lambda _index: nullcontext(),
+            mem_get_info=lambda _index: (400 * 1024**2, 512 * 1024**2),
+            get_device_properties=lambda _index: SimpleNamespace(
+                name="AMD Radeon 780M", major=11, minor=0, is_integrated=1
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        hardware.torch, "xpu", SimpleNamespace(is_available=lambda: False), raising=False
+    )
+    report = hardware.get_capability_report()
+    apu = next(device for device in report["devices"] if device["id"] == "cuda:0")
+    assert apu["is_integrated"] is True
+    assert apu["free_memory"] == 10 * gib  # not the 400 MiB the carve-out reports
+
+
+def test_integrated_gpu_gets_no_allocator_cap_against_its_carve_out(monkeypatch):
+    from localsr.core import inference
+
+    calls = []
+    fake = SimpleNamespace(
+        get_device_properties=lambda _device: SimpleNamespace(is_integrated=1),
+        mem_get_info=lambda _device: (400 * 1024**2, 512 * 1024**2),
+        set_per_process_memory_fraction=lambda *args: calls.append(args),
+    )
+    monkeypatch.setattr(inference.torch, "cuda", fake)
+    assert inference._apply_gpu_memory_limit(inference.torch.device("cuda", 0), True) is None
+    assert calls == []
+
+
+def test_openvino_gpus_are_offered_with_stable_ids(monkeypatch):
+    from localsr.core import openvino_devices
+
+    gib = 1024**3
+    monkeypatch.setattr(
+        openvino_devices,
+        "gpu_devices",
+        lambda: [
+            {
+                "key": "8680677d060000000002000000000000",
+                "name": "Intel(R) Graphics (iGPU)",
+                "integrated": True,
+                "total_memory": 30 * gib,
+                "max_allocation": 4 * gib,
+                "luid": "20cc4f2663550000",
+                "device_id": "0x7d67",
+                "architecture": "GPU: vendor=0x8086 arch=v12.70.4",
+                "plugin_version": "1.8.1",
+                "ep_device": object(),
+            }
+        ],
+    )
+    devices = []
+    hardware._detect_openvino(devices, 12 * gib)
+    (device,) = devices
+    assert device["id"] == "openvino:8680677d060000000002000000000000"
+    assert device["type"] == "openvino" and device["is_integrated"]
+    assert device["free_memory"] == 6 * gib and not device["supports_fp16"]
+
+
+def test_openvino_discovery_failure_hides_nothing_else(monkeypatch):
+    from localsr.core import openvino_devices
+
+    def broken():
+        raise OSError("plugin library missing")
+
+    monkeypatch.setattr(openvino_devices, "gpu_devices", broken)
+    devices = [{"id": "cpu"}]
+    hardware._detect_openvino(devices, 1024**3)
+    assert devices == [{"id": "cpu"}]

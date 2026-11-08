@@ -256,6 +256,10 @@ def get_capability_report() -> dict:
                 free, total = torch.cuda.mem_get_info(index)
                 properties = torch.cuda.get_device_properties(index)
             major, minor = properties.major, properties.minor
+            integrated = bool(getattr(properties, "is_integrated", False))
+            if integrated:
+                # The device reports its BIOS carve-out; it really uses shared memory.
+                total, free = total_ram, max(int(free), available_ram // 2)
             devices.append(
                 {
                     "id": f"cuda:{index}",
@@ -265,7 +269,7 @@ def get_capability_report() -> dict:
                     "free_memory": int(free),
                     "supports_fp16": (major, minor) >= (5, 3),
                     "recommended_tile_sizes": _recommended_tiles(int(free)),
-                    "is_integrated": False,
+                    "is_integrated": integrated,
                 }
             )
 
@@ -290,6 +294,8 @@ def get_capability_report() -> dict:
 
     if sys.platform == "win32":
         _detect_directml(devices, total_ram, available_ram)
+    if sys.platform in {"win32", "linux"}:
+        _detect_openvino(devices, available_ram)
         # QNN provider discovery is intentionally not exposed yet. The current
         # inference engine consumes PyTorch/Spandrel checkpoints and cannot
         # execute them through ONNX Runtime QNN without a separate conversion
@@ -322,6 +328,35 @@ def get_capability_report() -> dict:
     return report
 
 
+def _detect_openvino(devices: list[dict], available_ram: int) -> None:
+    """Intel GPUs through ONNX Runtime's OpenVINO plugin, where the build ships it."""
+    try:
+        from .openvino_devices import gpu_devices
+
+        found = gpu_devices()
+    except Exception:  # noqa: BLE001 - discovery must never hide the other devices
+        logger.debug("OpenVINO discovery failed", exc_info=True)
+        return
+    for device in found:
+        integrated = device["integrated"]
+        budget = available_ram // 2
+        if not integrated and device["total_memory"]:
+            budget = min(budget, device["total_memory"])
+        devices.append(
+            {
+                "id": f"openvino:{device['key']}",
+                "type": "openvino",
+                "name": f"{device['name']} (OpenVINO)",
+                "total_memory": device["total_memory"] or budget,
+                "free_memory": budget,
+                # The route runs FP32 so its results match the CPU's.
+                "supports_fp16": False,
+                "recommended_tile_sizes": _recommended_tiles(budget),
+                "is_integrated": integrated,
+            }
+        )
+
+
 def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) -> None:
     # Packaging smoke tests can run in a Windows VM with no passed-through D3D12
     # adapter. Some torch-directml builds block indefinitely while probing that
@@ -338,10 +373,20 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
 
             for adapter in directml_adapters():
                 dedicated = adapter["dedicated_memory"]
-                integrated = dedicated < 512 * 1024**2
+                # D3D12 says whether the adapter shares memory with the CPU; the old
+                # guess (little dedicated memory) is the fallback when it cannot tell.
+                uma = adapter.get("uma")
+                integrated = uma if uma is not None else dedicated < 512 * 1024**2
                 budget = (
                     min(available_ram // 2, dedicated) if not integrated else available_ram // 2
                 )
+                # What Windows grants this process on the adapter right now, with headroom.
+                # An integrated GPU may also use the non-local (shared) segment.
+                if adapter.get("budget") is not None:
+                    granted = adapter["budget"] - (adapter.get("usage") or 0)
+                    if integrated and adapter.get("shared_budget") is not None:
+                        granted += adapter["shared_budget"] - (adapter.get("shared_usage") or 0)
+                    budget = max(256 * 1024**2, min(budget, int(granted * 0.85)))
                 devices.append(
                     {
                         "id": f"directml:{adapter['index']}",
