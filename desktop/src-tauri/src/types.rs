@@ -39,6 +39,9 @@ pub struct CatalogModel {
     pub pair_with: String,
     pub commercial_use_status: String,
     pub commercial_use_allowed: Option<bool>,
+    // False: the library offers it, but no preset picks it on its own.
+    #[serde(default = "preset_eligible_default")]
+    pub preset_eligible: bool,
     pub automated_download_allowed: bool,
     pub redistribution_allowed: bool,
     pub attribution_required: bool,
@@ -678,6 +681,10 @@ pub struct WorkerEnvelope {
     pub message_type: String,
     #[serde(default)]
     pub data: serde_json::Value,
+}
+
+fn preset_eligible_default() -> bool {
+    true
 }
 
 #[cfg(test)]

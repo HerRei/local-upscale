@@ -49,6 +49,11 @@ export function rightsAllowPreset(model: CatalogModel): boolean {
   return model.commercial_use_allowed === true;
 }
 
+/** Mirrors `presets.py`: a slow specialist the library offers is never picked by a preset. */
+function presetMayPick(model: CatalogModel): boolean {
+  return rightsAllowPreset(model) && model.preset_eligible !== false;
+}
+
 function contentMatch(model: CatalogModel, content: ContentKind): number {
   if (content === 'illustration') {
     if (model.purposes.includes('illustration') || model.purposes.includes('anime')) return 2;
@@ -93,7 +98,7 @@ export function chooseFixModel(
       model.native_scale === 1 &&
       !model.purposes.includes('face') &&
       fixesOf(model).includes(fix) &&
-      rightsAllowPreset(model),
+      presetMayPick(model),
   );
   return rankForQuality(candidates, quality)[0];
 }
@@ -279,7 +284,7 @@ export function choosePresetModel(
   );
   if (pinned) return pinned;
   const eligible = candidates.filter(
-    (model) => rightsAllowPreset(model) && (task === 'denoise' || contentMatch(model, content) > 0),
+    (model) => presetMayPick(model) && (task === 'denoise' || contentMatch(model, content) > 0),
   );
   if (task === 'denoise') return rankForQuality(eligible, quality)[0];
   const ranked = rankForQuality(eligible, quality);

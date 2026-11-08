@@ -77,6 +77,9 @@ class CatalogModel:
     # Pipeline stage the checkpoint serves: upscale, deblock, restore, or
     # face_restore. Derived from purposes and scale when left empty.
     stage: str = ""
+    # False keeps a checkpoint out of the Quick and Best presets: the library offers it,
+    # and a user can pin it, but no preset picks it on its own (a slow specialist).
+    preset_eligible: bool = True
 
     @property
     def stage_kind(self) -> str:
@@ -631,6 +634,73 @@ MODEL_CATALOG = (
         time_factor=0.8,
         speed_factor=0.7,
         vram_estimate_mb=1500,
+    ),
+    CatalogModel(
+        model_id="bhi_dat2_real_x4",
+        role="Lettering, buildings and clean photos; very slow",
+        stage="upscale",
+        name="DAT2 ×4 BHI Real — Lettering and buildings",
+        filename="4xBHI_dat2_real.pth",
+        description=(
+            "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on "
+            "lettering, masonry and clean photos; foliage and fur can come out soft. About ten "
+            "times slower than Best, so it is never picked by a preset."
+        ),
+        size_bytes=140_196_334,
+        sha256="14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/4xBHI_dat2_real/4xBHI_dat2_real.pth"
+        ),
+        architecture="DAT",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=32,
+        source_url="https://huggingface.co/Phips/4xBHI_dat2_real",
+        license_name="CC BY 4.0",
+        author="Philip Hofmann",
+        memory_factor=1.8,
+        # Measured 73 s per input megapixel on an M1 Pro (MPS baseline 38 s/MP).
+        time_factor=1.9,
+        speed_factor=0.10,
+        vram_estimate_mb=4000,
+        commercial_use_status="allowed",
+        preset_eligible=False,
+    ),
+    CatalogModel(
+        model_id="realwebphoto_v4_dat2_x4",
+        role="Noisy, compressed web and phone photos; very slow",
+        stage="upscale",
+        name="DAT2 ×4 RealWebPhoto v4 — Noisy photos",
+        filename="4xRealWebPhoto_v4_dat2.pth",
+        description=(
+            "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed "
+            "and noisy before upscaling. About ten times slower than Best, so it is never picked "
+            "by a preset."
+        ),
+        size_bytes=140_299_118,
+        sha256="9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/"
+            "4xRealWebPhoto_v4_dat2/4xRealWebPhoto_v4_dat2.pth"
+        ),
+        architecture="DAT",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=32,
+        source_url="https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2",
+        license_name="CC BY 4.0",
+        author="Philip Hofmann",
+        memory_factor=1.8,
+        # Measured 73 s per input megapixel on an M1 Pro (MPS baseline 38 s/MP).
+        time_factor=1.9,
+        speed_factor=0.10,
+        vram_estimate_mb=4000,
+        commercial_use_status="allowed",
+        preset_eligible=False,
     ),
 )
 
