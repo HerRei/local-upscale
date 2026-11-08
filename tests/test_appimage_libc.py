@@ -24,12 +24,27 @@ DYNAMIC SYMBOL TABLE:
 NEEDS_2_17 = "0000000000000000      DF *UND*\t0000000000000000  GLIBC_2.17  clock_gettime\n"
 
 
-def fake_objdump(monkeypatch, outputs: dict[str, str]) -> None:
+def fake_objdump(monkeypatch, outputs: dict[str, str], unreadable: frozenset[str] = frozenset()):
     def run(command, **_kwargs):
-        stdout = outputs.get(Path(command[-1]).name, "")
-        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        name = Path(command[-1]).name
+        if name in unreadable:
+            return subprocess.CompletedProcess(
+                command, 1, stdout="", stderr=f"objdump: {name}: file format not recognized"
+            )
+        return subprocess.CompletedProcess(command, 0, stdout=outputs.get(name, ""), stderr="")
 
     monkeypatch.setattr(libc.subprocess, "run", run)
+
+
+def elf(machine: int = 62) -> bytes:
+    """An ELF header up to e_machine: 64-bit, little-endian, shared object."""
+    return (
+        b"\x7fELF"
+        + bytes([2, 1, 1])
+        + bytes(9)
+        + (3).to_bytes(2, "little")
+        + machine.to_bytes(2, "little")
+    )
 
 
 def test_only_required_symbols_count_and_versions_compare_by_number(monkeypatch, tmp_path):
@@ -41,12 +56,12 @@ def test_only_required_symbols_count_and_versions_compare_by_number(monkeypatch,
 def tree_with(tmp_path: Path) -> tuple[Path, Path]:
     tree = tmp_path / "squashfs-root"
     (tree / "usr/lib").mkdir(parents=True)
-    (tree / "usr/lib/libnew.so").write_bytes(b"\x7fELF new")
-    (tree / "usr/lib/libold.so").write_bytes(b"\x7fELF old")
+    (tree / "usr/lib/libnew.so").write_bytes(elf())
+    (tree / "usr/lib/libold.so").write_bytes(elf())
     (tree / "usr/lib/script.sh").write_bytes(b"#!/bin/sh\n")
     (tree / "usr/lib/link.so").symlink_to("libnew.so")
     appimage = tmp_path / "App.AppImage"
-    appimage.write_bytes(b"\x7fELF runtime")
+    appimage.write_bytes(elf())
     return tree, appimage
 
 
@@ -79,3 +94,22 @@ def test_a_payload_within_the_ceiling_passes(monkeypatch, tmp_path):
     tree, appimage = tree_with(tmp_path)
     fake_objdump(monkeypatch, {"libnew.so": NEEDS_2_38, "libold.so": NEEDS_2_17})
     assert run_main(monkeypatch, str(tree), "--appimage", str(appimage), "--max", "2.38") == 0
+
+
+def test_a_file_objdump_cannot_read_fails_the_check(monkeypatch, tmp_path, capsys):
+    tree, appimage = tree_with(tmp_path)
+    fake_objdump(monkeypatch, {"libold.so": NEEDS_2_17}, unreadable=frozenset({"libnew.so"}))
+    assert run_main(monkeypatch, str(tree), "--appimage", str(appimage)) == 2
+    assert "libnew.so" in capsys.readouterr().err
+
+
+def test_gpu_code_objects_are_not_host_code(monkeypatch, tmp_path):
+    tree, appimage = tree_with(tmp_path)
+    (tree / "usr/lib/kernels.co").write_bytes(elf(machine=224))  # EM_AMDGPU
+    (tree / "usr/lib/short.so").write_bytes(b"\x7fELF")
+    fake_objdump(
+        monkeypatch,
+        {"libnew.so": NEEDS_2_17, "libold.so": NEEDS_2_17},
+        unreadable=frozenset({"kernels.co", "short.so"}),
+    )
+    assert run_main(monkeypatch, str(tree), "--appimage", str(appimage)) == 0
