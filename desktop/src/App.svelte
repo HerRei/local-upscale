@@ -121,7 +121,7 @@
     );
 
   $: settings = snapshot.settings;
-  // Editing: the Qwen bundle, the GPU it runs on and whether this computer can start it.
+  // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
   $: editModel = editModels.find((model) => model.model_id === settings.edit_model_id);
@@ -394,7 +394,6 @@
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id,
   );
-  // While idle, the status bar says what Start will produce, next to the button that does it.
   // A finished job keeps its own message while its result is selected.
   $: idleSummary =
     selectedMedia &&
@@ -718,7 +717,6 @@
     resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
   }
 
-  // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(quality: 'quick' | 'best'): string {
     if (settings.task === 'denoise')
       return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
@@ -863,7 +861,6 @@
     }
   }
 
-  /** Download several catalog models one after another, then refresh. */
   async function downloadModels(
     models: (CatalogModel | CatalogVideoModel | EditModel | undefined)[],
   ): Promise<boolean> {
@@ -905,7 +902,6 @@
     }
   }
 
-  /** Fetch every missing stage the catalog allows, then start without another click. */
   async function prepareAndStart(): Promise<void> {
     if (!canPrepare) return;
     const targets = downloads.stages.map(
@@ -1199,7 +1195,7 @@
     }
   }
 
-  /** One image, one native Qwen pass; the worker checks memory again before loading. */
+  /** The worker rechecks memory before loading the editing bundle. */
   async function startEdit(): Promise<void> {
     if (!selectedMedia || !editModel || !editingDevice) return;
     startingJob = true;
@@ -1973,7 +1969,6 @@
         >
           <section class="control-section">
             <span class="eyebrow">Task</span>
-            <!-- Video follows the selection: a selected video is upscaled as video. -->
             <div class="seg-inline task-switch" role="group" aria-label="Task">
               <button
                 aria-pressed={settings.task === 'upscale' || settings.task === 'video'}
