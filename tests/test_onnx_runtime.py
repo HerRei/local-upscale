@@ -771,3 +771,34 @@ def test_without_any_placement_evidence_nothing_is_decided(monkeypatch, tmp_path
     np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
     verdicts = json.loads((tmp_path / "verdicts.json").read_text())
     assert [verdict["accepted"] for verdict in verdicts.values()] == [True]
+
+
+def test_a_profile_that_stays_unreadable_is_tried_once_more_then_the_cpu_runs(
+    monkeypatch, tmp_path
+):
+    from localsr.core import onnx_runtime
+
+    original = descriptor()
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+
+    def unreadable(self, state):
+        state["session"].end_profiling()
+        state.pop("trace").cleanup()
+        return None
+
+    create = onnx_runtime._OnnxImage._create
+    created = []
+
+    def counted(self, graph, config):
+        created.append(config[0])
+        return create(self, graph, config)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_close_profile", unreadable)
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_create", counted)
+    monkeypatch.setattr(onnx_runtime, "_placement", lambda session, provider: None)
+    image = torch.rand(1, 3, 8, 8)
+    for _ in range(5):
+        np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert len(created) == 2  # the first session and one fresh profile, not one per tile
+    assert not (tmp_path / "verdicts.json").exists()
+    assert not converted.execution_verified
