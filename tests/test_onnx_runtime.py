@@ -496,3 +496,18 @@ def test_openvino_luid_finds_the_dxgi_adapter_and_its_driver(monkeypatch):
     )
     assert openvino_devices._windows_driver("20cc4f2663550000") == "32.0.101.6987"
     assert openvino_devices._windows_driver("not hex") is None
+
+
+def test_backend_probe_requires_a_bundled_openvino_plugin_to_load(monkeypatch):
+    import importlib.util
+
+    from localsr.core import backend_validation, openvino_devices
+
+    result = {}
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    backend_validation._check_openvino_plugin(result)
+    assert result == {}  # editions without the plugin are not affected
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: False)
+    with pytest.raises(RuntimeError, match="could not be registered"):
+        backend_validation._check_openvino_plugin(result)
