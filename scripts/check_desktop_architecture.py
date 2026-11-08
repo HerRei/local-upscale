@@ -207,7 +207,7 @@ def hosted_runner_violations(root: Path) -> list[str]:
     """Every workflow runs on GitHub-hosted runners; the self-hosted ones are retired."""
 
     return [
-        f"{path.relative_to(root)} targets a self-hosted runner"
+        f"{path.relative_to(root).as_posix()} targets a self-hosted runner"
         for path in sorted((root / ".github" / "workflows").glob("*.y*ml"))
         if "self-hosted" in _code(path.read_text(encoding="utf-8"))
     ]
