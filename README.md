@@ -43,7 +43,7 @@ at the moment), and the app shows you each licence before it downloads anything.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
 - Process a whole folder or a queue, and save a setup as a recipe.
 - Edit with a prompt, with Qwen Image Edit or FLUX.2 klein. This is
-  experimental and only on the Mac. [About editing](docs/image-editing.md).
+  experimental and only tested on the Mac. [About editing](docs/image-editing.md).
 
 LocalSR also has a built-in benchmark. It times a real upscaling model on fixed
 test images, through the same inference engine the app uses for your own files,
