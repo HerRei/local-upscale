@@ -2161,12 +2161,14 @@
                       role="radio"
                       aria-checked={settings.content !== 'illustration'}
                       class:active={settings.content !== 'illustration'}
+                      title="Uses a model made for photographs"
                       on:click={() => setContent('photo')}>Photo</button
                     >
                     <button
                       role="radio"
                       aria-checked={settings.content === 'illustration'}
                       class:active={settings.content === 'illustration'}
+                      title="Uses a model made for drawings and anime"
                       on:click={() => setContent('illustration')}>Illustration</button
                     >
                   </div>
