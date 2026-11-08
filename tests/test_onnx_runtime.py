@@ -801,3 +801,51 @@ def test_a_profile_that_stays_unreadable_is_tried_once_more_then_the_cpu_runs(
     assert len(created) == 2  # the first session and one fresh profile, not one per tile
     assert not (tmp_path / "verdicts.json").exists()
     assert not converted.execution_verified
+
+
+def test_a_gpu_that_crashed_the_engine_is_not_used_again(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+    from localsr.core.onnx_runtime import CRASHED_ENGINE_ENV, GpuRouteRejected
+
+    original = descriptor()
+    image = torch.rand(1, 3, 8, 8)
+    # "a" fails its check, so "b" opens inside the first tile's watch: the note must stay.
+    converted, _ = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
+    run = onnx_runtime._OnnxImage._run
+    notes = []
+
+    def noting(self, session, image):
+        notes.append(json.loads((tmp_path / "crashes.json").read_text()))
+        return run(self, session, image)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", noting)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert notes and all(
+        [entry["state"] for entry in note.values()] == ["opening"] for note in notes
+    )
+    assert json.loads((tmp_path / "crashes.json").read_text()) == {}  # removed after the check
+
+    # The process died during that step: its note stays behind with its process ID.
+    ((key, entry),) = notes[-1].items()
+    (tmp_path / "crashes.json").write_text(json.dumps({key: {**entry, "pid": 4242}}))
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", run)
+
+    # An engine the app stopped itself (quit, cancel) is no crash: the GPU is used.
+    monkeypatch.setenv(CRASHED_ENGINE_ENV, "999")
+    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert active_config(converted) == "b"  # still runs on the GPU
+
+    (tmp_path / "crashes.json").write_text(json.dumps({key: {**entry, "pid": 4242}}))
+    (tmp_path / "verdicts.json").unlink()
+    monkeypatch.setenv(CRASHED_ENGINE_ENV, "4242")
+    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
+    with pytest.raises(GpuRouteRejected, match="stopped while preparing"):
+        converted(image)
+    assert calls == []  # nothing ran on that GPU
+    # Later engines, started without the variable, keep refusing it.
+    monkeypatch.delenv(CRASHED_ENGINE_ENV)
+    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"))
+    with pytest.raises(GpuRouteRejected, match="Select the CPU"):
+        converted(image)
+    assert json.loads((tmp_path / "crashes.json").read_text())[key]["state"] == "crashed"

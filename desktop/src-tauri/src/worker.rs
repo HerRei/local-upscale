@@ -177,6 +177,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         command.env("PYTHONPATH", path);
     }
     command.env("PYTHONUNBUFFERED", "1");
+    let crashed_engine = state.worker.crashed_engine.swap(0, Ordering::SeqCst);
+    if crashed_engine != 0 {
+        command.env("LOCALSR_CRASHED_ENGINE", crashed_engine.to_string());
+    }
 
     let mut child = command.spawn().map_err(|error| {
         AppError::Worker(format!(
@@ -262,6 +266,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     thread::spawn(move || {
         let mut forced_job = String::new();
         let mut restart_requested: Option<Instant> = None;
+        let engine_pid = child.id();
+        let mut stopped_by_app = false;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -269,6 +275,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 Ok(None) => {}
             }
             if state.worker.shutting_down.load(Ordering::SeqCst) {
+                stopped_by_app = true;
                 let _ = child.kill();
                 break child.wait();
             }
@@ -280,6 +287,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             if restart_overdue(restarting, &mut restart_requested, Instant::now()) {
                 // The engine asked for a restart but has not exited, for example because
                 // freeing a lost GPU hangs; the queue waits for its replacement.
+                stopped_by_app = true;
                 let _ = child.kill();
                 break child.wait();
             }
@@ -295,12 +303,19 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                             "Stopping the inference engine and releasing memory…".into();
                     }
                     emit_state_changed(&app);
+                    stopped_by_app = true;
                     let _ = child.kill();
                     break child.wait();
                 }
             }
             thread::sleep(Duration::from_millis(100));
         };
+        if !stopped_by_app && engine_crashed(&status) {
+            state
+                .worker
+                .crashed_engine
+                .store(engine_pid, Ordering::SeqCst);
+        }
         if state.worker.generation.load(Ordering::SeqCst) == generation {
             if let Ok(mut runtime) = state.runtime.lock() {
                 mark_exited(&mut runtime);
@@ -582,6 +597,15 @@ const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 
 /// How long an engine that asked for a restart may take to exit before it is stopped.
 const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
+
+/// The exit code with which the engine asks for a fresh process after a lost GPU.
+const RESTART_EXIT_CODE: i32 = 75;
+
+/// Whether an engine that ended on its own crashed: a failure other than the requested
+/// restart, such as an access violation in a graphics driver or a fatal signal.
+fn engine_crashed(status: &std::io::Result<std::process::ExitStatus>) -> bool {
+    matches!(status, Ok(exit) if !exit.success() && exit.code() != Some(RESTART_EXIT_CODE))
+}
 
 fn restart_overdue(restarting: bool, since: &mut Option<Instant>, now: Instant) -> bool {
     if !restarting {
@@ -1681,6 +1705,35 @@ mod tests {
         runtime.worker = "restarting".into();
         mark_exited(&mut runtime);
         assert_eq!(runtime.worker, "restarting");
+    }
+
+    #[test]
+    fn only_an_unrequested_failing_exit_counts_as_a_crash() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::ExitStatus;
+
+        #[cfg(unix)]
+        let (clean, restart, failure, access_violation) = (
+            ExitStatus::from_raw(0),
+            ExitStatus::from_raw(75 << 8),
+            ExitStatus::from_raw(1 << 8),
+            ExitStatus::from_raw(11), // SIGSEGV
+        );
+        #[cfg(windows)]
+        let (clean, restart, failure, access_violation) = (
+            ExitStatus::from_raw(0),
+            ExitStatus::from_raw(75),
+            ExitStatus::from_raw(1),
+            ExitStatus::from_raw(0xC000_0005),
+        );
+        assert!(!engine_crashed(&Ok(clean)));
+        assert!(!engine_crashed(&Ok(restart)));
+        assert!(engine_crashed(&Ok(failure)));
+        assert!(engine_crashed(&Ok(access_violation)));
+        assert!(!engine_crashed(&Err(std::io::Error::other("no status"))));
     }
 
     #[test]
