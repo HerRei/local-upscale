@@ -284,7 +284,7 @@ pub fn set_update_switch(
     value: bool,
 ) -> AppResult<()> {
     let result = apply_update_switch(&state, &name, |_| value);
-    refresh_update_switches(&state, &app);
+    refresh_update_switches(&app);
     result
 }
 
@@ -293,7 +293,7 @@ pub fn toggle_update_switch(state: &AppState, app: &AppHandle, name: &str) {
     if let Err(error) = apply_update_switch(state, name, |current| !current) {
         eprintln!("LocalSR: could not save {name}: {error}");
     }
-    refresh_update_switches(state, app);
+    refresh_update_switches(app);
 }
 
 /// Change one switch and write it, as one step: other writers wait, so two quick clicks
@@ -333,15 +333,8 @@ fn apply_update_switch(
 }
 
 /// The menu sets its own check mark when clicked; it and the window show what is saved.
-fn refresh_update_switches(state: &AppState, app: &AppHandle) {
-    // Copies, so no lock is held while the menu is rebuilt.
-    let switches = lock(&state.settings).map(|settings| native_menu::switches(&settings));
-    let recipes = lock(&state.recipes).map(|recipes| recipes.clone());
-    if let (Ok(switches), Ok(recipes)) = (switches, recipes) {
-        if let Err(error) = native_menu::rebuild(app, &recipes, switches) {
-            eprintln!("LocalSR: could not refresh the update switches in the menu: {error}");
-        }
-    }
+fn refresh_update_switches(app: &AppHandle) {
+    native_menu::reconcile(app);
     emit_state_changed(app);
 }
 
