@@ -31,6 +31,7 @@ FIX_LABEL = "claude-fix"
 STATUS_LABEL = "deps-status"
 MAX_FLAGS = 2
 INFRA_STEPS = (
+    # Step names from the retired self-hosted runners, so their old failures can still be rerun.
     "isolated SSD workspace",  # storage_preflight refused the job
     "Wait without occupying",  # release-priority coordinator timed out
     "Wait for release priority",
