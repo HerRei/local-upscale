@@ -72,7 +72,7 @@ from localsr.protocol.messages import (
 )
 from localsr.worker.result_preview import ResultPreviewService
 
-# Thread-safe writing to stdout
+# Prevent interleaved JSON Lines from concurrent worker threads.
 print_lock = threading.Lock()
 
 
@@ -209,7 +209,6 @@ class WorkerServer:
 
         while self.running:
             try:
-                # Wait for messages
                 msg = self.message_queue.get(timeout=1.0)
                 req_type = msg.get("type")
                 data = msg.get("data", {})
@@ -346,7 +345,6 @@ class WorkerServer:
                     # The process boundary must turn any inference/I/O failure
                     # into a job_failed message instead of killing the worker.
                     except Exception as e:  # noqa: BLE001
-                        # Ensure we always clear up
                         traceback.print_exc(file=sys.stderr)
                         send_message(JobFailed(job_id=job_id, error_message=str(e)))
                     finally:
@@ -590,8 +588,7 @@ class WorkerServer:
             ) -> None:
                 stage_index = current_device_index * stages_per_device + update.stage_index
                 percentage = (stage_index + update.fraction) / max(1, total_phases) * 100.0
-                # Keep the original aggregate event for older hosts, then send
-                # the richer v2 envelope understood by current hosts.
+                # Older hosts read this aggregate event; current hosts read the v2 envelope below.
                 send_message(
                     BenchmarkProgress(
                         job_id=job_id,

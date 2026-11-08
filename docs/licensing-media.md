@@ -83,9 +83,10 @@ shows the command for the actual distribution and can run it in a terminal.
 
 - H.264/HEVC videos need a user-installed FFmpeg on Windows and Linux; macOS
   uses its own codecs.
-- The default export is AV1 in MP4. AV1 encodes more slowly than x264 and some
-  older players and editors cannot open it; VP9 and lossless FFV1 (MKV) are
-  alternatives.
+- The desktop defaults to Automatic: HEVC through the Mac hardware encoder for
+  SDR MP4 exports, AV1 otherwise. The Python API defaults to AV1 in MP4. AV1
+  encodes more slowly than x264 and some older players and editors cannot open
+  it; VP9 and lossless FFV1 (MKV) are alternatives.
 - Comparison playback copies are VP9/Opus WebM.
 - HDR preservation exports 10-bit AV1, VP9 or FFV1, or HEVC Main 10 through the
   user's FFmpeg (libx265).

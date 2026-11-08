@@ -166,10 +166,6 @@ class InferenceEngine:
         self._loaded_models: dict[str, tuple[object, torch.device, torch.dtype]] = {}
         self._loaded_backend_ids: dict[str, str] = {}
         self._active_path: str | None = None
-        # Legacy single-model fields kept for backward compat with
-        # process_image and any external callers.
-        self._loaded_model = None
-        self._loaded_model_path: str | None = None
         self._loaded_device: torch.device | None = None
         self._loaded_precision: torch.dtype | None = None
         # On Apple silicon, supported architectures run through Core ML on the
@@ -229,7 +225,6 @@ class InferenceEngine:
             coreml_units = coreml_units_for(str(getattr(model_info, "architecture", "")))
         backend_id = f"{device_str}+coreml" if coreml_units else device_str
 
-        # Already cached? Just switch active.
         if model_path in self._loaded_models:
             cached_model, cached_device, cached_precision = self._loaded_models[model_path]
             if (
@@ -241,12 +236,10 @@ class InferenceEngine:
                 self._sync_legacy_fields()
                 self._attach_status(cached_model)
                 return device, precision
-            # Precision/device changed — drop the stale cache entry and reload.
             del self._loaded_models[model_path]
             gc.collect()
 
-        # Load the new model. The GPU memory limit is applied once per
-        # device; subsequent loads on the same device keep the existing cap.
+        # Apply the memory cap once per device, shared by its cached models.
         if not any(d == device for _, d, _ in self._loaded_models.values()):
             _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
 
@@ -290,20 +283,13 @@ class InferenceEngine:
         return self._loaded_backend_ids.get(self._active_path)
 
     def _sync_legacy_fields(self) -> None:
-        """Keep _loaded_model / _loaded_model_path etc. in sync with the
-        multi-model cache so process_image and external code that reads
-        those fields continues to work.
-        """
+        """Synchronize active-model fields with the cache."""
         if self._active_path is not None:
             entry = self._loaded_models.get(self._active_path)
             if entry is not None:
-                self._loaded_model = entry[0]
-                self._loaded_model_path = self._active_path
                 self._loaded_device = entry[1]
                 self._loaded_precision = entry[2]
         else:
-            self._loaded_model = None
-            self._loaded_model_path = None
             self._loaded_device = None
             self._loaded_precision = None
 
@@ -312,9 +298,6 @@ class InferenceEngine:
         if path is not None:
             entry = self._loaded_models.pop(path, None)
             self._loaded_backend_ids.pop(path, None)
-            # entry is a (model, device, precision) tuple. The model
-            # reference is dropped by letting it go out of scope; we
-            # don't need to del entry[0] (tuples are immutable).
             del entry
             if self._active_path == path:
                 self._active_path = next(iter(self._loaded_models), None)
@@ -783,7 +766,6 @@ class InferenceEngine:
                             h * scale,
                             current_tile_size,
                         )
-                    # Re-initialize output array cleanly
                     out_array = new_output()
                     continue
                 raise
@@ -806,7 +788,6 @@ class InferenceEngine:
         temporary_directory: str | None = None,
     ) -> OutputWriter:
 
-        # load_model applies GPU memory limits and loads the model onto device.
         device, precision = self.load_model(model_path, device_str, precision_str, model_info)
         model = self.active_model
 
@@ -886,7 +867,6 @@ class InferenceEngine:
                     return writer
 
                 except RuntimeError as e:
-                    # Check for OOM
                     err_str = str(e).lower()
                     if (
                         "out of memory" in err_str
@@ -920,7 +900,6 @@ class InferenceEngine:
                                 current_tile_size,
                             )
 
-                        # Re-initialize output writer cleanly
                         writer.cleanup()
                         writer = OutputWriter(
                             (model_info.out_channels, h * scale, w * scale),

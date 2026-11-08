@@ -323,8 +323,7 @@ pub fn save_recipe(
 
 fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
     if recipe.stages.is_empty() {
-        // Recipes saved by pre-v0.0.11 previews are deliberately accepted and
-        // reconstructed from their legacy top-level fields by the frontend.
+        // The frontend reconstructs recipes without stages from their top-level fields.
         return Ok(());
     }
     if recipe.stages.len() > 3
@@ -899,8 +898,7 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String)
         ));
     }
     // A queued source must update its own persisted thumbnail. `preview_ready`
-    // is reserved for the completed output comparison; using it for sources
-    // previously left the center canvas empty while populating result state.
+    // is reserved for the completed output comparison.
     if queued_media.is_some() {
         lock(&state.database)?.start_media_probe(&encoded)?;
         emit_state_changed(&app);
@@ -1154,7 +1152,6 @@ pub fn detect_external_ffmpeg() -> Vec<String> {
     found
 }
 
-/// Open the FFmpeg project's download page in the user's browser. Installing
 pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";
 
 #[tauri::command]
@@ -2082,6 +2079,32 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     Ok(requested)
 }
 
+#[tauri::command]
+pub fn open_model_license(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+    source: Option<bool>,
+) -> AppResult<()> {
+    let catalog = lock(&state.catalog)?;
+    let model = catalog
+        .models
+        .iter()
+        .find(|model| model.model_id == model_id)
+        .ok_or_else(|| AppError::Validation("Unknown model".into()))?;
+    let url = if source.unwrap_or(false) || model.license_url.is_empty() {
+        &model.source_url
+    } else {
+        &model.license_url
+    };
+    if !url.starts_with("https://") {
+        return Err(AppError::Validation(
+            "No HTTPS license link is available".into(),
+        ));
+    }
+    open::that(url)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2686,30 +2709,4 @@ mod tests {
         assert!(import_verified_catalog_file(&source, &destination, 18, &digest).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"conflicting bytes");
     }
-}
-
-#[tauri::command]
-pub fn open_model_license(
-    state: State<'_, Arc<AppState>>,
-    model_id: String,
-    source: Option<bool>,
-) -> AppResult<()> {
-    let catalog = lock(&state.catalog)?;
-    let model = catalog
-        .models
-        .iter()
-        .find(|model| model.model_id == model_id)
-        .ok_or_else(|| AppError::Validation("Unknown model".into()))?;
-    let url = if source.unwrap_or(false) || model.license_url.is_empty() {
-        &model.source_url
-    } else {
-        &model.license_url
-    };
-    if !url.starts_with("https://") {
-        return Err(AppError::Validation(
-            "No HTTPS license link is available".into(),
-        ));
-    }
-    open::that(url)?;
-    Ok(())
 }

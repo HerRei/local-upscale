@@ -109,10 +109,6 @@ _.uname  # tarfile.TarInfo
 _._model  # spandrel descriptor internals
 cached_model  # tuple unpacking
 
-# Legacy InferenceEngine compatibility fields, written but never read; removal candidates.
-_._loaded_model
-_._loaded_model_path
-
 # PyInstaller hooks and spec-file imports.
 hiddenimports
 datas
