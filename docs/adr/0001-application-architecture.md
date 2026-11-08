@@ -1,6 +1,6 @@
 # Architecture Decision Record: 0001 - Application Architecture
 
-Status: Superseded for the UI host by ADR 0002 and then ADR 0005. The isolated Python
+Status: Superseded for the UI host by ADR 0005. The isolated Python
 inference-worker decision still stands.
 
 ## Context
