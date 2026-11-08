@@ -153,8 +153,13 @@ def _optional(name: str, query, *arguments):
         return None
 
 
-def directml_adapters(*, include_software: bool = False) -> list[dict]:
-    """DirectX 12 adapters in DXGI order. ``include_software`` lets tests use WARP."""
+def directml_adapters(*, include_software: bool = False, probe: bool = True) -> list[dict]:
+    """DirectX 12 adapters in DXGI order. ``include_software`` lets tests use WARP.
+
+    ``probe=False`` only reads names, ids, memory and drivers: it creates no Direct3D
+    device, so a sleeping laptop GPU stays asleep, and it does not test DirectX 12
+    support or integrated memory ("uma" is None). Use it for lookups, not for picking
+    a DirectML device."""
     if sys.platform != "win32":
         return []
     # Load system DLLs with an explicit system-directory search flag.
@@ -196,14 +201,16 @@ def directml_adapters(*, include_software: bool = False) -> list[dict]:
                     raise RuntimeError(f"Could not read graphics adapter {index}")
                 if description.flags & 2 and not include_software:
                     continue  # Software rendering is not GPU acceptance.
-                # NVIDIA makes no x86 integrated GPUs, and creating a device, even only to
-                # test DirectX 12 support, would wake a sleeping laptop dGPU just to ask; its
-                # cards with a current driver all support DirectX 12.
-                nvidia = description.vendor_id == 0x10DE
-                if not nvidia and create_device(adapter, _FEATURE_LEVEL_11_0, device_iid, None) < 0:
+                if probe and create_device(adapter, _FEATURE_LEVEL_11_0, device_iid, None) < 0:
                     continue
                 budget = _optional("memory budget", _memory_budget, adapter)
-                uma = False if nvidia else _optional("architecture", _uma, create_device, adapter)
+                # NVIDIA makes no x86 integrated GPUs; a second device just to ask is spared.
+                if not probe:
+                    uma = None
+                elif description.vendor_id == 0x10DE:
+                    uma = False
+                else:
+                    uma = _optional("architecture", _uma, create_device, adapter)
                 adapters.append(
                     {
                         "index": index,

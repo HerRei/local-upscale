@@ -496,16 +496,22 @@ def test_verdicts_without_a_known_driver_last_only_for_this_process(tmp_path):
 def test_openvino_luid_finds_the_dxgi_adapter_and_its_driver(monkeypatch):
     from localsr.core import openvino_devices, windows_adapters
 
+    calls = []
     # OpenVINO writes the LUID's eight bytes in memory order: LowPart, then HighPart.
     monkeypatch.setattr(
         windows_adapters,
         "directml_adapters",
-        lambda: [
-            {"luid": "00000000000000aa", "driver_version": "1.0.0.0"},
-            {"luid": "00005563264fcc20", "driver_version": "32.0.101.6987"},
-        ],
+        lambda **options: (
+            calls.append(options)
+            or [
+                {"luid": "00000000000000aa", "driver_version": "1.0.0.0"},
+                {"luid": "00005563264fcc20", "driver_version": "32.0.101.6987"},
+            ]
+        ),
     )
     assert openvino_devices._windows_driver("20cc4f2663550000") == "32.0.101.6987"
+    # A lookup creates no Direct3D device, which would wake a sleeping laptop GPU.
+    assert calls == [{"probe": False}]
     assert openvino_devices._windows_driver("not hex") is None
 
 
@@ -586,10 +592,12 @@ def test_identical_directml_cards_keep_verdicts_only_for_this_process(monkeypatc
         "driver_version": "31.0.24027.1012",
     }
     monkeypatch.setattr(
-        windows_adapters, "directml_adapters", lambda: [{**card, "index": 0}, {**card, "index": 1}]
+        windows_adapters,
+        "directml_adapters",
+        lambda **_: [{**card, "index": 0}, {**card, "index": 1}],
     )
     assert inference._onnx_route("directml:1").persist is False
-    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda: [{**card, "index": 0}])
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda **_: [{**card, "index": 0}])
     assert inference._onnx_route("directml:0").persist is True
 
 
@@ -711,7 +719,7 @@ def test_python_and_numpy_memory_errors_count_as_out_of_memory():
     assert not _is_memory_error(ValueError("array is too big"))
 
 
-def test_an_unreadable_profile_is_no_verdict(monkeypatch, tmp_path):
+def test_an_unreadable_profile_falls_back_to_the_graph_assignment(monkeypatch, tmp_path):
     from localsr.core import onnx_runtime
 
     original = descriptor()
@@ -732,3 +740,31 @@ def test_an_unreadable_driver_identity_keeps_the_gpu(monkeypatch):
     monkeypatch.setattr(openvino_devices.sys, "platform", "linux")
     monkeypatch.setattr(openvino_devices, "_linux_driver", unreadable)
     assert openvino_devices._driver("") is None
+
+
+def test_without_any_placement_evidence_nothing_is_decided(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    original = descriptor()
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+    close = onnx_runtime._OnnxImage._close_profile
+    unreadable = {"left": 1}
+
+    def first_profile_unreadable(self, state):
+        if unreadable["left"]:
+            unreadable["left"] -= 1
+            state.pop("trace").cleanup()
+            return None
+        return close(self, state)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_close_profile", first_profile_unreadable)
+    monkeypatch.setattr(onnx_runtime, "_placement", lambda session, provider: None)
+    image = torch.rand(1, 3, 8, 8)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    # Nothing stored and nothing verified: the tile was the CPU's.
+    assert not (tmp_path / "verdicts.json").exists()
+    assert not converted.execution_verified
+    # The configuration opened again with a fresh profile, which decides.
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    verdicts = json.loads((tmp_path / "verdicts.json").read_text())
+    assert [verdict["accepted"] for verdict in verdicts.values()] == [True]
