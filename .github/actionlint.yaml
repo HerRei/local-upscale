@@ -1,4 +1,5 @@
-# Every workflow runs on GitHub-hosted runners (docs/adr/0008-hosted-ci.md), so no
-# self-hosted labels are declared and actionlint rejects any that appear.
+# Every workflow runs on GitHub-hosted runners (docs/adr/0008-hosted-ci.md): no custom
+# runner labels are declared, so actionlint rejects them, and
+# scripts/check_desktop_architecture.py rejects the self-hosted label.
 self-hosted-runner:
   labels: []

@@ -5,6 +5,8 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "check_desktop_architecture", ROOT / "scripts" / "check_desktop_architecture.py"
@@ -89,13 +91,39 @@ def test_rejects_unverified_or_automatic_release_workflows() -> None:
         "w.yml", weakened, {"glibc ceiling": "verify_appimage_libc.py"}
     )
 
-    assert any("must not start on pushes" in violation for violation in violations)
+    assert any("must start only by hand" in violation for violation in violations)
     assert any("read-only contents" in violation for violation in violations)
     assert any("only the attach job" in violation for violation in violations)
     assert any("installed package smoke" in violation for violation in violations)
     assert any("consistency check" in violation for violation in violations)
     assert any("glibc ceiling" in violation for violation in violations)
     assert any("private preview media" in violation for violation in violations)
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    ["  push:\n", '  "push":\n', "  repository_dispatch:\n", "  pull_request_target:\n"],
+)
+def test_release_workflows_start_only_by_hand(trigger: str) -> None:
+    automatic = RELEASE_WORKFLOW.replace(
+        "  workflow_dispatch:\n", "  workflow_dispatch:\n" + trigger
+    )
+    violations = architecture.release_package_violations("w.yml", automatic, {})
+
+    assert any("must start only by hand" in violation for violation in violations)
+
+
+def test_only_the_attach_job_may_write_release_contents() -> None:
+    moved = RELEASE_WORKFLOW.replace("    permissions:\n      contents: write\n", "").replace(
+        "    runs-on: ubuntu-22.04\n",
+        "    runs-on: ubuntu-22.04\n    permissions:\n      contents: write\n",
+    )
+    broad = RELEASE_WORKFLOW.replace(
+        "    runs-on: ubuntu-22.04\n", "    runs-on: ubuntu-22.04\n    permissions: write-all\n"
+    )
+    for workflow in (moved, broad):
+        violations = architecture.release_package_violations("w.yml", workflow, {})
+        assert any("only the attach job" in violation for violation in violations)
 
 
 def test_comments_neither_satisfy_nor_trip_a_release_gate() -> None:
@@ -127,9 +155,11 @@ def test_rejects_workflows_on_self_hosted_runners(tmp_path: Path) -> None:
         "# was self-hosted\njobs:\n  a:\n    runs-on: macos-latest\n"
     )
     (workflows / "local.yml").write_text("jobs:\n  a:\n    runs-on: [self-hosted, Linux]\n")
+    (workflows / "other.yaml").write_text("jobs:\n  a:\n    runs-on: [self-hosted, linux]\n")
 
     assert architecture.hosted_runner_violations(tmp_path) == [
-        ".github/workflows/local.yml targets a self-hosted runner"
+        ".github/workflows/local.yml targets a self-hosted runner",
+        ".github/workflows/other.yaml targets a self-hosted runner",
     ]
 
 
