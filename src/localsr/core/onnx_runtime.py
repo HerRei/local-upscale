@@ -105,12 +105,19 @@ _DEVICE_LOST_FRAGMENTS = (
 _MEMORY_FRAGMENTS = (
     "out of memory",
     "not enough memory",
+    "insufficient memory",
+    "failed to allocate",
     "e_outofmemory",
     "0x8007000e",
     "bad allocation",
     "bad_alloc",
     "allocation failed",
+    "out of gpu resources",
+    "cl_out_of_resources",
+    "cl_mem_object_allocation_failure",
 )
+# A real tile below this spread of values is too flat to tell a GPU result apart.
+_DETAILED_TILE_STD = 0.03
 _OPENVINO_FP32 = json.dumps({"GPU": {"INFERENCE_PRECISION_HINT": "f32"}})
 _OPENVINO_ACCURACY = json.dumps(
     {"GPU": {"INFERENCE_PRECISION_HINT": "f32", "EXECUTION_MODE_HINT": "ACCURACY"}}
@@ -150,6 +157,9 @@ class OnnxRoute:
     # What identifies the hardware and driver in stored verdicts.
     identity: str = ""
     label: str = ""
+    # Without a known device and driver identity a verdict lasts only for this process:
+    # a later driver must be checked again.
+    persist: bool = True
 
     def __post_init__(self):
         if self.provider not in ROUTE_CONFIGS or self.device_index < 0:
@@ -173,10 +183,13 @@ def gate_cache_directory() -> Path:
 class _Verdicts:
     """Stored first-tile checks, keyed by graph, route, configuration, device and versions."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, persist: bool = True):
         self.path = directory / "verdicts.json"
+        self.memory: dict | None = None if persist else {}
 
     def _read(self) -> dict:
+        if self.memory is not None:
+            return self.memory
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -190,6 +203,8 @@ class _Verdicts:
     def put(self, key: str, verdict: dict) -> None:
         verdicts = self._read()
         verdicts[key] = {**verdict, "recorded": datetime.now(UTC).isoformat(timespec="seconds")}
+        if self.memory is not None:
+            return
         if len(verdicts) > _MAXIMUM_VERDICTS:
             newest = sorted(verdicts.items(), key=lambda item: str(item[1].get("recorded", "")))
             verdicts = dict(newest[-_MAXIMUM_VERDICTS:])
@@ -230,7 +245,7 @@ class _OnnxImage(torch.nn.Module):
         self.cancel_event: threading.Event | None = None
         self.status_callback = None
         self.execution_verified = False
-        self.verdicts = _Verdicts(gate_cache_directory())
+        self.verdicts = _Verdicts(gate_cache_directory(), persist=route.persist)
         # An image's tiles come in up to four shapes (interior, right edge, bottom edge,
         # corner). Keeping all four lets the next image or video frame of the same size
         # reuse them; a very large model keeps two to spare shared memory.
@@ -379,27 +394,30 @@ class _OnnxImage(torch.nn.Module):
 
     def _open_next(self, state: dict) -> None:
         """Open the next untried configuration of the route for this graph."""
+        # Free the configuration that failed before allocating its replacement.
+        state.pop("session", None)
+        trace = state.pop("trace", None)
+        if trace is not None:
+            trace.cleanup()
+        gc.collect()
         while state["candidates"]:
             config, pending = state["candidates"].pop(0)
             if pending:
                 self._status(
                     f"Checking that {self._label()} gives the same result as the CPU for "
-                    f"{self.architecture}. This happens once per model and tile size."
+                    f"{self.architecture}. This happens once per model and tile shape."
                 )
             try:
                 session, trace = self._create(state["graph"], config)
             except InterruptedError:
                 raise
             except Exception as error:
-                if _is_device_lost(error):
-                    raise
-                if not pending:
+                if _is_device_lost(error) or _is_memory_error(error):
+                    # Not a verdict on the configuration: the tile retry or a fresh
+                    # worker deals with these.
                     raise
                 logger.warning("ONNX %s %s failed to open: %s", self.provider, config[0], error)
-                self.verdicts.put(
-                    self._verdict_key(state["hash"], config[0]),
-                    {"accepted": False, "reason": f"session: {error}"[:500]},
-                )
+                self._reject(state, config[0], f"session: {error}")
                 continue
             state.update(
                 session=session,
@@ -411,14 +429,19 @@ class _OnnxImage(torch.nn.Module):
             return
         raise self._rejected()
 
+    def _reject(self, state: dict, config: str, reason: str) -> None:
+        self.verdicts.put(
+            self._verdict_key(state["hash"], config), {"accepted": False, "reason": reason[:500]}
+        )
+
     def forward(self, image):
         try:
             return self._execute(image)
         except Exception as error:
-            if self.cancel_event is not None and self.cancel_event.is_set():
-                raise InterruptedError("Cancelled") from error
-            if isinstance(error, (GpuRouteRejected, GpuDeviceLost, InterruptedError)):
+            if isinstance(error, (GpuRouteRejected, GpuDeviceLost)):
                 raise
+            # A lost device outranks a cancellation that arrives at the same time: only
+            # a fresh worker recovers it.
             if _is_device_lost(error):
                 self.sessions.clear()
                 self.execution_verified = False
@@ -430,11 +453,14 @@ class _OnnxImage(torch.nn.Module):
                     "(device removed or reset). The engine restarts with a fresh device; if this "
                     "repeats, choose a smaller tile or the CPU."
                 ) from error
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                raise InterruptedError("Cancelled") from error
+            if isinstance(error, InterruptedError):
+                raise
             # ORT's native exceptions inherit Exception, not RuntimeError.
             # Translate allocation failures so the existing tile-size retry
             # can release GPU sessions and reduce the next allocation.
-            message = str(error).lower()
-            if any(fragment in message for fragment in _MEMORY_FRAGMENTS):
+            if _is_memory_error(error):
                 self.sessions.clear()
                 self.execution_verified = False
                 error = error.with_traceback(None)
@@ -511,24 +537,29 @@ class _OnnxImage(torch.nn.Module):
         difference = np.abs(np.clip(candidate, 0, 1) - np.clip(reference, 0, 1))
         return (_psnr(candidate, reference), float(difference.max()), cpu_ms), reference
 
-    def _judge(self, state: dict, image, output: np.ndarray) -> np.ndarray | None:
-        """Compare a pending configuration with PyTorch on the CPU.
+    def _judge(self, state: dict, image, output: np.ndarray):
+        """Compare a configuration under test with PyTorch on the CPU.
 
-        Two inputs: a fixed, detailed test pattern (a flat first tile such as sky or a
-        black border would let almost anything pass) and the real tile. Returns the
-        output to use, or None when the configuration is rejected. When the CPU's own
-        result is unstable on both, the CPU output is used and the check repeats on the
-        next tile.
+        Two inputs must both match: a fixed, detailed test pattern and the real tile. A
+        tile too flat to tell results apart, or one where the CPU's own result is
+        unstable, cannot decide; neither can the pattern for a model whose CPU result on
+        it is unstable, and then the real tile decides alone, provided it has detail.
+        Returns ("accepted", output), ("rejected", None) or ("undecided", CPU output).
         """
         config = state["config"][0]
         pattern, _ = self._compare(state, _test_pattern(tuple(image.shape)), None)
         tile, reference = self._compare(state, image, output)
-        results = [result for result in (pattern, tile) if result is not None]
-        if not results:
-            return reference
+        if tile is None or float(image.std()) < _DETAILED_TILE_STD:
+            self._status(
+                f"This tile cannot show whether {self._label()} matches the CPU for "
+                f"{self.architecture}; it ran on the CPU, and the check continues on the "
+                "next tile."
+            )
+            return "undecided", reference
+        results = [tile] if pattern is None else [pattern, tile]
         psnr = min(result[0] for result in results)
         accepted = psnr >= MINIMUM_PSNR
-        cpu_ms = results[-1][2]
+        cpu_ms = tile[2]
         gpu_ms = None
         if accepted:
             started = time.perf_counter()
@@ -543,7 +574,7 @@ class _OnnxImage(torch.nn.Module):
                 "max_error": round(max(result[1] for result in results), 6)
                 if all(math.isfinite(result[1]) for result in results)
                 else None,
-                "checked": ["pattern"] * (pattern is not None) + ["tile"] * (tile is not None),
+                "checked": ["tile"] if pattern is None else ["pattern", "tile"],
                 "gpu_ms": None if gpu_ms is None else round(gpu_ms, 1),
                 "cpu_ms": round(cpu_ms, 1),
                 "shape": list(image.shape),
@@ -563,9 +594,12 @@ class _OnnxImage(torch.nn.Module):
             cpu_ms,
         )
         if not accepted:
-            return None
+            return "rejected", None
         state["pending"] = False
-        state.pop("graph", None)
+        self._announce(state, config, gpu_ms, cpu_ms)
+        return "accepted", output
+
+    def _announce(self, state: dict, config: str, gpu_ms: float | None, cpu_ms: float | None):
         placement = state.get("placement") or {}
         if placement.get("cpu_heavy") or placement.get("cpu_subgraphs", 0) > 2:
             self._status(
@@ -573,7 +607,7 @@ class _OnnxImage(torch.nn.Module):
                 f"({placement['cpu_nodes']} of {placement['nodes']} operations), "
                 "which costs speed but not accuracy."
             )
-        if gpu_ms is not None and gpu_ms > cpu_ms:
+        if gpu_ms is not None and cpu_ms is not None and gpu_ms > cpu_ms:
             self._status(
                 f"{self.architecture} runs on {self._label()}, but slower than on the CPU here "
                 f"({gpu_ms:.0f} ms against {cpu_ms:.0f} ms per tile)."
@@ -581,7 +615,31 @@ class _OnnxImage(torch.nn.Module):
         else:
             fallback = "" if config == ROUTE_CONFIGS[self.provider][0][0] else f" ({config})"
             self._status(f"{self.architecture} runs on {self._label()}{fallback}.")
-        return output if tile is not None else reference
+
+    def _attempt(self, state: dict, image, expected) -> tuple[str, np.ndarray | None]:
+        """Run one tile on the open configuration: ("accepted" | "rejected" | "undecided",
+        output). Errors that are not about the configuration propagate."""
+        first_run = "trace" in state
+        output = self._run(state["session"], image)
+        providers = self._close_profile(state) if first_run else set()
+        if output.shape != expected:
+            raise ValueError("ONNX returned an invalid image shape")
+        if first_run and self.provider not in providers:
+            if not self._gated:
+                raise RuntimeError(
+                    f"The model did not execute on {self.provider}; select CPU explicitly."
+                )
+            self._reject(state, state["config"][0], "no node ran on the GPU")
+            return "rejected", None
+        if first_run:
+            logger.info("ONNX %s executed with providers: %s", self.architecture, sorted(providers))
+        if state["pending"]:
+            return self._judge(state, image, output)
+        if not np.isfinite(output).all():
+            raise ValueError("ONNX returned an invalid image shape or non-finite pixels")
+        if first_run:
+            self._announce(state, state["config"][0], None, None)
+        return "accepted", output
 
     def _execute(self, image):
         self._check_cancelled()
@@ -596,63 +654,41 @@ class _OnnxImage(torch.nn.Module):
             image.shape[3] * self.scale,
         )
         while True:
+            failure = None
+            # A configuration that fails on its first tile (or during its check) is
+            # rejected like one whose result differs, accepted before or not; memory
+            # errors, a lost device and cancellation are not about the configuration.
+            fallible = self._gated and ("trace" in state or state.get("pending"))
             try:
-                output = self._run(state["session"], image)
+                outcome, output = self._attempt(state, image, expected)
             except InterruptedError:
                 raise
             except Exception as error:
-                message = str(error).lower()
-                untried = state.get("pending") and not _is_device_lost(error)
-                if not untried or any(fragment in message for fragment in _MEMORY_FRAGMENTS):
+                if not fallible or _is_device_lost(error) or _is_memory_error(error):
                     raise
-                # A configuration still under test that fails to run is rejected like
-                # one whose result differs; the next configuration gets the tile.
+                failure = f"run: {error}"
                 logger.warning(
                     "ONNX %s %s failed on its first tile: %s",
                     self.provider,
                     state["config"][0],
                     error,
                 )
-                trace = state.pop("trace", None)
-                if trace is not None:
-                    trace.cleanup()
-                self.verdicts.put(
-                    self._verdict_key(state["hash"], state["config"][0]),
-                    {"accepted": False, "reason": f"run: {error}"[:500]},
-                )
+            if failure is not None:
+                self._reject(state, state["config"][0], failure)
                 self._open_next(state)
                 continue
-            first_run = "trace" in state
-            providers = self._close_profile(state) if first_run else set()
-            if output.shape != expected:
-                raise ValueError("ONNX returned an invalid image shape")
-            if first_run and self.provider not in providers:
-                if not state["pending"]:
-                    raise RuntimeError(
-                        f"The model did not execute on {self.provider}; select CPU explicitly."
-                    )
-                self.verdicts.put(
-                    self._verdict_key(state["hash"], state["config"][0]),
-                    {"accepted": False, "reason": "no node ran on the GPU"},
-                )
+            if outcome == "rejected":
                 self._open_next(state)
                 continue
-            if first_run:
-                logger.info(
-                    "ONNX %s executed with providers: %s", self.architecture, sorted(providers)
-                )
-            if state["pending"]:
-                judged = self._judge(state, image, output)
-                if judged is None:
-                    self._open_next(state)
-                    continue
-                output = judged
-            elif not np.isfinite(output).all():
-                raise ValueError("ONNX returned an invalid image shape or non-finite pixels")
-            self.execution_verified = True
+            # The session stays cached either way; an undecided tile keeps checking.
             self.sessions[key] = state
             while len(self.sessions) > self.session_limit:
                 self.sessions.popitem(last=False)
+            if outcome == "accepted":
+                self.execution_verified = True
+                # The serialized graph is needed only to open another configuration.
+                state.pop("graph", None)
+                state["candidates"] = []
             return torch.from_numpy(np.ascontiguousarray(output))
 
 
@@ -701,6 +737,11 @@ def _test_pattern(shape: tuple[int, ...]) -> torch.Tensor:
         for channel in range(channels)
     ]
     return torch.stack(planes).unsqueeze(0).expand(shape[0], -1, -1, -1).contiguous()
+
+
+def _is_memory_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return any(fragment in message for fragment in _MEMORY_FRAGMENTS)
 
 
 def _is_device_lost(error: BaseException) -> bool:

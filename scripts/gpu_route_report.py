@@ -114,14 +114,17 @@ def chain(descriptor, route, tensor: torch.Tensor, side: int) -> list[dict]:
 
 
 def whole_image(model_path: str, device: str, tensor: torch.Tensor, tile: int, halo: int) -> dict:
+    """The photo through the engine: on the device twice with the same engine (the second
+    run reuses its sessions, so it is the warm time), then on the CPU."""
     from localsr.core.inference import InferenceEngine
     from localsr.core.model_adapter import ModelAdapter
 
     adapter = ModelAdapter(allow_unverified_checkpoints=True)
     info = adapter.inspect(model_path)
-    runs = {}
-    for label, target in (("route_first", device), ("route_warm", device), ("cpu", "cpu")):
-        engine = InferenceEngine(adapter)
+    runs: dict = {}
+    arrays: dict = {}
+
+    def render(engine, label: str, target: str) -> None:
         messages: list[str] = []
         engine.status_callback = messages.append
         started = time.perf_counter()
@@ -137,22 +140,27 @@ def whole_image(model_path: str, device: str, tensor: torch.Tensor, tile: int, h
                 threading.Event(),
                 lambda *arguments: None,
             )
-            array = writer.get_array().astype(np.float64) / 255
+            arrays[label] = writer.get_array().astype(np.float64) / 255
             writer.cleanup()
             runs[label] = {"seconds": round(time.perf_counter() - started, 2), "messages": messages}
-            runs[label]["_array"] = array
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001 - a failing run is a result
             runs[label] = {
                 "seconds": round(time.perf_counter() - started, 2),
                 "messages": messages,
                 "error": f"{type(error).__name__}: {error}"[:300],
             }
-        engine.release_all()
-        adapter.release()
-    route, cpu = runs["route_warm"].pop("_array", None), runs["cpu"].pop("_array", None)
-    runs["route_first"].pop("_array", None)
-    if route is not None and cpu is not None:
-        runs["route_vs_cpu"] = metrics(route, cpu)
+
+    engine = InferenceEngine(adapter)
+    render(engine, "route_first", device)
+    render(engine, "route_warm", device)
+    engine.release_all()
+    adapter.release()
+    engine = InferenceEngine(adapter)
+    render(engine, "cpu", "cpu")
+    engine.release_all()
+    adapter.release()
+    if "route_warm" in arrays and "cpu" in arrays:
+        runs["route_vs_cpu"] = metrics(arrays["route_warm"], arrays["cpu"])
     return runs
 
 

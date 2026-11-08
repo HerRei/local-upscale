@@ -387,6 +387,13 @@ def build(arguments: argparse.Namespace) -> dict:
 
     licenses = collect_licenses(tree, output / "licenses")
     report["components"]["python-distribution-licenses"] = len(licenses)
+    # Native notices that live inside a package rather than its .dist-info (the OpenVINO
+    # plugin lists the libraries it bundles there).
+    for notice in sorted(tree.rglob("onnxruntime_ep_openvino/third-party-programs.txt")):
+        target = output / "licenses" / "onnxruntime-ep-openvino" / notice.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(notice, target)
+        report["components"]["openvino-plugin-notices"] = str(target.relative_to(output))
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         shutil.copy2(ROOT / name, output / name)
     shutil.copy2(ROOT / "packaging" / "ffmpeg" / "codec-policy.json", output / "codec-policy.json")

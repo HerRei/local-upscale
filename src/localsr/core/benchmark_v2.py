@@ -476,10 +476,13 @@ def run_device_phase(
     expected_type = (
         "privateuseone" if device_id.startswith("directml:") else device_id.split(":", 1)[0]
     )
+    # ONNX Runtime GPU routes stage tiles on the CPU, so torch reports a CPU device.
+    onnx_provider = {"directml": "DmlExecutionProvider", "openvino": "OpenVINOExecutionProvider"}
     onnx_gpu = (
-        device_id.startswith("directml:")
+        device_id.split(":", 1)[0] in onnx_provider
         and getattr(engine, "active_backend_id", None) == device_id
-        and getattr(engine.active_model, "execution_provider", None) == "DmlExecutionProvider"
+        and getattr(engine.active_model, "execution_provider", None)
+        == onnx_provider[device_id.split(":", 1)[0]]
     )
     if torch_device.type != expected_type and not onnx_gpu:
         raise RuntimeError(f"Requested {device_id}, but the engine loaded on {torch_device}.")

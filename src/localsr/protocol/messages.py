@@ -444,6 +444,9 @@ class JobCancelled:
 class JobFailed:
     job_id: str
     error_message: str
+    # The GPU device was lost: the worker exits after this message and the app must
+    # not hand it another job.
+    restart_required: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_failed", "data": asdict(self)})
@@ -539,6 +542,9 @@ class BenchmarkCompleted:
 class BenchmarkFailed:
     job_id: str
     error_message: str
+    # The GPU device was lost: the worker exits after this message and the app must
+    # not hand it another job.
+    restart_required: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "benchmark_failed", "data": asdict(self)})

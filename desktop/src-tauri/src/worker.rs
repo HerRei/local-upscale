@@ -17,7 +17,8 @@ use crate::{
     settings,
     state::{emit_state_changed, lock, AppState},
     types::{
-        BenchmarkResult, CapabilityInfo, DeviceInfo, EngineInfo, WorkerEnvelope, PROTOCOL_VERSION,
+        BenchmarkResult, CapabilityInfo, DeviceInfo, EngineInfo, RuntimeStatus, WorkerEnvelope,
+        PROTOCOL_VERSION,
     },
 };
 
@@ -524,6 +525,14 @@ fn handle_worker_envelope(
     }
 }
 
+/// A worker that lost its GPU device exits after its failure message; until its
+/// replacement is ready, no queued job may be sent to it.
+fn hold_until_restart(runtime: &mut RuntimeStatus, data: &Value) {
+    if data.get("restart_required").and_then(Value::as_bool) == Some(true) {
+        runtime.worker = "restarting".into();
+    }
+}
+
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
     let data = &envelope.data;
     match envelope.message_type.as_str() {
@@ -993,6 +1002,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         "benchmark_failed" => {
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id.clear();
+            hold_until_restart(&mut runtime, data);
             runtime.progress = 0.0;
             runtime.status_title = "Benchmark failed".into();
             runtime.status_detail = string(data, "error_message");
@@ -1034,6 +1044,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.status_title = "Could not finish".into();
             runtime.status_detail = error;
             runtime.estimated_remaining_seconds = 0.0;
+            hold_until_restart(&mut runtime, data);
         }
         "protocol_error" => {
             let mut runtime = lock(&state.runtime)?;
@@ -1578,6 +1589,21 @@ mod tests {
         .unwrap();
 
         assert!(!capability.devices[0].is_integrated);
+    }
+
+    #[test]
+    fn a_lost_gpu_holds_dispatch_until_the_engine_restarts() {
+        let mut runtime = RuntimeStatus {
+            worker: "ready".into(),
+            ..RuntimeStatus::default()
+        };
+        hold_until_restart(&mut runtime, &json!({"job_id": "a", "error_message": "x"}));
+        assert_eq!(runtime.worker, "ready");
+        hold_until_restart(
+            &mut runtime,
+            &json!({"job_id": "a", "error_message": "x", "restart_required": true}),
+        );
+        assert_eq!(runtime.worker, "restarting");
     }
 
     #[test]
