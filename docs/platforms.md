@@ -115,7 +115,11 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   DirectML and the Linux CPU downloads, through ONNX Runtime's OpenVINO plugin. They
   need Intel's graphics compute driver (Linux: the `intel-opencl-icd` package); without
   it the device does not appear. On the Arrow Lake GPU (Linux), whole photos matched the
-  CPU: SPAN at 91 dB and RealPLKSR at 95 dB, at most 1/255 apart.
+  CPU for every model tried, at most 1/255 apart: SPAN 91 dB, RealPLKSR 95 dB, HAT-S
+  93 dB, FBCNN 94 dB, Real-ESRGAN 89 dB, SwinIR 88 dB. NAFNet SIDD stopped on the same
+  test photo on the CPU too (its instability guard). Next to that desktop's 24-core CPU
+  the integrated GPU was faster for SPAN, RealPLKSR and HAT-S and slower for Real-ESRGAN,
+  FBCNN and SwinIR; the app says so when the GPU is slower than the CPU.
 - **Integrated GPUs and memory.** Windows says how much memory it grants LocalSR on
   each adapter; an integrated GPU counts its shared memory, and an AMD APU with a
   large BIOS carve-out is no longer mistaken for a discrete card. Under ROCm, an
