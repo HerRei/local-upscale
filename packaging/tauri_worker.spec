@@ -214,16 +214,6 @@ if sys.platform == "darwin" and target_arch in ("arm64", "x86_64"):
         )
     )
 
-# The dependency analysis also copies OpenVINO's own libraries to the top level. The frozen
-# worker puts the top level first on the library path, so the plugin would load that copy,
-# and OpenVINO, which finds its device plugins next to itself, would list no device at all.
-# The plugin finds its libraries in its own directory.
-analysis.binaries = TOC(
-    entry
-    for entry in analysis.binaries
-    if not (len(Path(entry[0]).parts) == 1 and Path(entry[0]).name in openvino_package_libraries)
-)
-
 # OpenCV's Windows wheel loads FFmpeg as a separate videoio plugin. LocalSR uses
 # OpenCV only for face detection and drawing, so that plugin is never shipped.
 analysis.binaries = TOC(
@@ -281,6 +271,22 @@ collection = COLLECT(
     upx=False,
     name="engine",
 )
+
+# PyInstaller also copies OpenVINO's own libraries (libopenvino, its ONNX frontend, oneTBB)
+# to the top level when it assembles the folder. The frozen worker puts the top level first
+# on the library path, so the plugin would load that copy, and OpenVINO, which finds its
+# device plugins next to itself, would list no device at all. Nothing else needs them, and
+# the plugin finds them in its own directory, so the copies go.
+if openvino_package_libraries:
+    internal = Path(DISTPATH) / "engine" / "_internal"
+    plugin_directory = internal / "onnxruntime_ep_openvino"
+    if not plugin_directory.is_dir():
+        raise RuntimeError(f"The OpenVINO plugin directory is missing: {plugin_directory}")
+    for name in sorted(openvino_package_libraries):
+        duplicate = internal / name
+        if (duplicate.is_file() or duplicate.is_symlink()) and (plugin_directory / name).exists():
+            duplicate.unlink()
+            print(f"Removed the top-level copy of {name}")
 
 # Fail the build if any bundled media component falls outside the codec policy
 # (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC). Private,
