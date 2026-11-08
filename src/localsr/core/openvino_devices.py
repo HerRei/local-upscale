@@ -48,34 +48,64 @@ def _windows_driver(luid: str) -> str | None:
         return None
 
 
+_LINUX_LIBRARY_DIRECTORIES = (
+    "/usr/lib64",
+    "/usr/lib64/intel-opencl",
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib/x86_64-linux-gnu/intel-opencl",
+    "/usr/lib",
+    "/usr/local/lib",
+)
+_OPENCL_VENDORS = Path("/etc/OpenCL/vendors")
+
+
+def _fingerprint(path: Path) -> str:
+    resolved = path.resolve()
+    info = resolved.stat()
+    return f"{resolved.name}:{info.st_size}:{int(info.st_mtime)}"
+
+
+def _linux_library(name: str, directories) -> Path | None:
+    for directory in directories:
+        candidate = Path(directory) / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _linux_driver() -> str | None:
-    """Intel's OpenCL driver as named by the ICD loader, with its size and date, which
-    change with every driver update."""
-    for icd in sorted(Path("/etc/OpenCL/vendors").glob("*intel*.icd")):
+    """Intel's GPU compute runtime and its graphics compiler, each by its file name, size
+    and date, which change with every update. Without exactly one such runtime there is no
+    driver identity, and verdicts are not stored."""
+    runtimes = set()
+    for icd in sorted(_OPENCL_VENDORS.glob("*.icd")):
         try:
             library = icd.read_text().strip().splitlines()[0].strip()
         except (OSError, IndexError):
             continue
-        candidates = (
-            [Path(library)]
+        # libigdrcl is the GPU runtime; Intel's CPU OpenCL driver has its own ICD.
+        if not Path(library).name.startswith("libigdrcl"):
+            continue
+        path = (
+            Path(library)
             if library.startswith("/")
-            else [
-                Path(directory) / library
-                for directory in (
-                    "/usr/lib64",
-                    "/usr/lib/x86_64-linux-gnu",
-                    "/usr/lib",
-                    "/usr/local/lib",
-                )
-            ]
+            else _linux_library(library, _LINUX_LIBRARY_DIRECTORIES)
         )
-        for candidate in candidates:
-            try:
-                info = candidate.stat()
-            except OSError:
-                continue
-            return f"{candidate.name}:{info.st_size}:{int(info.st_mtime)}"
-    return None
+        if path is not None and path.exists():
+            runtimes.add(path.resolve())
+    if len(runtimes) != 1:
+        return None
+    runtime = runtimes.pop()
+    directories = (str(runtime.parent), *_LINUX_LIBRARY_DIRECTORIES)
+    parts = [_fingerprint(runtime)]
+    for prefix in ("libigc.so", "libigdfcl.so"):
+        found = next(
+            (match for d in directories for match in sorted(Path(d).glob(f"{prefix}*"))), None
+        )
+        if found is None:
+            return None
+        parts.append(_fingerprint(found))
+    return "|".join(parts)
 
 
 def _driver(luid: str) -> str | None:

@@ -221,7 +221,8 @@ def test_gate_rejects_a_configuration_that_differs_and_uses_the_next(monkeypatch
     image = torch.linspace(0, 1, 3 * 8 * 8).reshape(1, 3, 8, 8)
     np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
     assert active_config(converted) == "safe"
-    assert len(calls) == 4  # pattern and tile, for each configuration tried
+    # "fast" fails on the test pattern and is rejected without its tile; "safe" needs both.
+    assert len(calls) == 3
     verdicts = json.loads((tmp_path / "verdicts.json").read_text())
     assert sorted(v["accepted"] for v in verdicts.values()) == [False, True]
     # A new engine reuses both verdicts: no checks, straight to the accepted configuration.
@@ -237,7 +238,7 @@ def test_gate_refuses_the_route_when_no_configuration_matches(monkeypatch, tmp_p
     image = torch.rand(1, 3, 8, 8)
     with pytest.raises(GpuRouteRejected, match="Select the CPU"):
         converted(image)
-    assert len(calls) == 4
+    assert len(calls) == 2  # each configuration fails on the test pattern
     again, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a", "b"})
     with pytest.raises(GpuRouteRejected):
         again(image)
@@ -256,13 +257,14 @@ def test_gate_keeps_checking_while_the_reference_is_unstable(monkeypatch, tmp_pa
     from localsr.core import onnx_runtime
 
     converted, _ = gated(monkeypatch, tmp_path, ("only",))
-    unstable = {"left": 2}  # both inputs of the first check: the pattern and the tile
+    seen = {"calls": 0}
     reference = onnx_runtime._OnnxImage._reference
 
     def sometimes_unstable(self, image):
+        # The first check's second CPU run, the real tile, is unstable; the pattern is not.
+        seen["calls"] += 1
         output = reference(self, image)
-        if unstable["left"]:
-            unstable["left"] -= 1
+        if seen["calls"] == 2:
             output = output.copy()
             output.flat[0] = np.nan
         return output
@@ -365,7 +367,7 @@ def test_a_flat_first_tile_cannot_pass_a_broken_configuration(monkeypatch, tmp_p
     np.testing.assert_allclose(converted(flat).numpy(), descriptor()(flat).numpy(), atol=1e-6)
     # A flat tile decides nothing: it ran on the CPU, the user is told, the check goes on.
     assert not (tmp_path / "verdicts.json").exists()
-    assert any("cannot show whether" in status for status in statuses)
+    assert any("too little detail" in status for status in statuses)
     assert not converted.execution_verified
     converted(torch.rand(1, 3, 8, 8))
     assert active_config(converted) == "sound"
@@ -511,3 +513,142 @@ def test_backend_probe_requires_a_bundled_openvino_plugin_to_load(monkeypatch):
     monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: False)
     with pytest.raises(RuntimeError, match="could not be registered"):
         backend_validation._check_openvino_plugin(result)
+
+    import onnxruntime as ort
+
+    def device(kind):
+        return SimpleNamespace(
+            ep_name="OpenVINOExecutionProvider",
+            device=SimpleNamespace(type=f"OrtHardwareDeviceType.{kind}"),
+        )
+
+    monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: True)
+    monkeypatch.setattr(backend_validation.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(ort, "get_ep_devices", lambda: [device("CPU")], raising=False)
+    backend_validation._check_openvino_plugin(result)  # no GPU on a build runner is fine
+    assert result["openvino_devices"] == ["CPU"]
+    monkeypatch.setattr(ort, "get_ep_devices", lambda: [], raising=False)
+    with pytest.raises(RuntimeError, match="no CPU device"):
+        backend_validation._check_openvino_plugin(result)
+
+
+def test_linux_driver_identity_is_intels_gpu_runtime_and_its_compiler(tmp_path, monkeypatch):
+    from localsr.core import openvino_devices
+
+    vendors = tmp_path / "vendors"
+    libraries = tmp_path / "lib64"
+    vendors.mkdir()
+    (libraries / "intel-opencl").mkdir(parents=True)
+    # Intel's CPU OpenCL driver sorts first and must not stand in for the GPU driver.
+    (libraries / "libintelocl.so").write_bytes(b"cpu")
+    (vendors / "intel-cpu.icd").write_text(f"{libraries / 'libintelocl.so'}\n")
+    runtime = libraries / "intel-opencl" / "libigdrcl.so"
+    runtime.write_bytes(b"gpu runtime")
+    (vendors / "intel.icd").write_text(f"{runtime}\n")
+    monkeypatch.setattr(openvino_devices, "_OPENCL_VENDORS", vendors)
+    monkeypatch.setattr(openvino_devices, "_LINUX_LIBRARY_DIRECTORIES", (str(libraries),))
+    assert openvino_devices._linux_driver() is None  # no compiler found: no identity
+
+    compiler = libraries / "libigc.so.2.41.15+0"
+    compiler.write_bytes(b"compiler")
+    (libraries / "libigc.so.2").symlink_to(compiler.name)
+    (libraries / "libigdfcl.so.2.41.15+0").write_bytes(b"frontend")
+    identity = openvino_devices._linux_driver()
+    assert identity.startswith("libigdrcl.so:11:")
+    assert "libigc.so.2.41.15+0:8:" in identity and "libintelocl" not in identity
+
+    compiler.write_bytes(b"updated compiler")
+    assert openvino_devices._linux_driver() != identity  # a compiler update counts
+
+
+def test_identical_directml_cards_keep_verdicts_only_for_this_process(monkeypatch):
+    from localsr.core import inference, onnx_runtime, windows_adapters
+
+    monkeypatch.setattr(onnx_runtime, "directml_available", lambda: True)
+    card = {
+        "name": "Radeon RX 7600",
+        "vendor_id": 0x1002,
+        "device_id": 0x7480,
+        "subsystem_id": 0x12341002,
+        "driver_version": "31.0.24027.1012",
+    }
+    monkeypatch.setattr(
+        windows_adapters, "directml_adapters", lambda: [{**card, "index": 0}, {**card, "index": 1}]
+    )
+    assert inference._onnx_route("directml:1").persist is False
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda: [{**card, "index": 0}])
+    assert inference._onnx_route("directml:0").persist is True
+
+
+def test_a_model_unstable_on_both_test_patterns_runs_on_the_cpu(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    original = descriptor()
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+    reference = onnx_runtime._OnnxImage._reference
+    patterns = {
+        tuple(onnx_runtime._test_pattern((1, 3, 8, 8), smooth=smooth).flatten()[:5].tolist())
+        for smooth in (False, True)
+    }
+
+    def unstable_on_patterns(self, image):
+        output = reference(self, image)
+        if tuple(image.flatten()[:5].tolist()) in patterns:
+            output = output.copy()
+            output.flat[0] = np.nan
+        return output
+
+    gpu_runs = []
+    run = onnx_runtime._OnnxImage._run
+
+    def counted_run(self, session, image):
+        gpu_runs.append(1)
+        return run(self, session, image)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_reference", unstable_on_patterns)
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", counted_run)
+    statuses = []
+    converted.set_status_callback(statuses.append)
+    image = torch.rand(1, 3, 8, 8)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    first = len(gpu_runs)
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert len(gpu_runs) == first  # later tiles of the shape do not touch the GPU
+    assert not (tmp_path / "verdicts.json").exists()
+    assert sum("cannot check" in status for status in statuses) == 1
+    assert not converted.execution_verified
+
+
+def test_a_cancelled_switch_to_the_next_configuration_is_tried_again(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    original = descriptor()
+    converted, _ = gated(monkeypatch, tmp_path, ("broken", "sound"), broken={"broken"})
+    create = onnx_runtime._OnnxImage._create
+    interrupted = []
+
+    def cancelled_once(self, graph, config):
+        if config[0] == "sound" and not interrupted:
+            interrupted.append(config[0])
+            raise InterruptedError("Cancelled")
+        return create(self, graph, config)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_create", cancelled_once)
+    # A flat tile caches the state while "broken" is still being checked; the next,
+    # detailed tile rejects it, and the switch to "sound" is cancelled.
+    converted(torch.full((1, 3, 8, 8), 0.5))
+    assert converted.model.sessions
+    image = torch.rand(1, 3, 8, 8)
+    with pytest.raises(InterruptedError):
+        converted(image)
+    assert not converted.model.sessions  # the half-switched state is not kept
+    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert active_config(converted) == "sound"
+
+
+def test_the_benchmark_flag_needs_every_tile_on_the_checked_gpu(monkeypatch, tmp_path):
+    converted, _ = gated(monkeypatch, tmp_path, ("only",))
+    converted(torch.rand(1, 3, 8, 8))
+    assert converted.execution_verified
+    converted.model.cpu_tiles = 1  # one tile of the run fell back to the CPU
+    assert not converted.execution_verified
