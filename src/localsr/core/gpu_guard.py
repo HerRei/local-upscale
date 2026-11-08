@@ -42,6 +42,8 @@ PREFLIGHT_ARGUMENT = "--gpu-preflight"
 # Set in the preflight child: it must not start a preflight of its own.
 CHILD_ENV = "LOCALSR_GPU_PREFLIGHT_CHILD"
 TIMEOUT_SECONDS = 300.0
+# A note older than this cannot belong to a GPU call that is still running.
+STALE_NOTE_SECONDS = 3600.0
 # The child could not run its test (a Python error before or around the GPU call).
 UNTESTED = 2
 # Crash records in this process, in case the cache cannot be written.
@@ -97,7 +99,8 @@ class CrashNotes:
         self.depth: dict[str, int] = {}
 
     def _note(self, key: str) -> Path:
-        return self.directory / f"running-{hashlib.sha256(key.encode()).hexdigest()[:16]}.json"
+        digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+        return self.directory / f"running-{digest}-{os.getpid()}.json"
 
     def crashed(self, key: str) -> str | None:
         """How this GPU crashed before ("engine" or "preflight"), or None."""
@@ -122,13 +125,22 @@ class CrashNotes:
         return notes
 
     def settle(self, crashed_pid: int) -> None:
-        """At engine startup: the dead engine's notes become crash records; every other
-        note is left by an engine the app stopped itself and is removed."""
+        """At engine startup: the dead engine's notes become crash records. Notes from an
+        earlier process with this engine's process ID, or too old to be running, were
+        left by engines the app stopped itself and are removed; younger notes of other
+        processes may belong to a GPU call still running elsewhere and stay."""
         for note in self.running():
+            path = note["path"]
             if note.get("pid") == crashed_pid and isinstance(note.get("key"), str):
                 logger.warning("The engine crashed during a GPU call before: %s", note["key"])
                 self.mark(note["key"], "engine")
-            note["path"].unlink(missing_ok=True)
+            elif note.get("pid") != os.getpid():
+                try:
+                    if time.time() - path.stat().st_mtime < STALE_NOTE_SECONDS:
+                        continue
+                except OSError:
+                    continue
+            path.unlink(missing_ok=True)
 
     @contextmanager
     def watch(self, key: str):
@@ -150,11 +162,23 @@ class CrashNotes:
             yield
         finally:
             self.depth[key] = 0
+            self._remove(note)
+
+    def _remove(self, note: Path) -> None:
+        """Remove a finished call's note. Cleaning up never fails the GPU call: a note
+        that cannot be removed is defused, so it can blame nothing later."""
+        try:
             note.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove a GPU call note", exc_info=True)
+            try:
+                _write_json(note, {"pid": 0})
+            except OSError:
+                pass
 
 
 def settle() -> None:
-    """Run once at engine startup, before any GPU is used."""
+    """Run once at engine startup, before anything heavy is imported."""
     try:
         crashed_pid = int(os.environ.pop(CRASHED_ENGINE_ENV, "0"))
     except ValueError:
