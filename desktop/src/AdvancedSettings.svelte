@@ -19,6 +19,10 @@
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseOutput: () => Promise<void>;
   export let refreshCapabilities: () => Promise<void>;
+
+  // ONNX Runtime GPU routes always run FP32, whatever the saved precision says.
+  $: onnxGpu =
+    settings.device_id.startsWith('directml:') || settings.device_id.startsWith('openvino:');
   let advanced = false;
   let ffmpegNote = '';
 
@@ -303,8 +307,14 @@
       </div>
       {#if !usingTemporalVideo && settings.device_id.startsWith('directml:')}
         <p class="model-description">
-          DirectML uses the selected Windows GPU, including compatible Intel integrated graphics.
-          Start with smaller tiles if shared memory is tight.
+          DirectML uses the selected Windows GPU, including integrated graphics. The first time a
+          model runs on it, LocalSR checks once that the GPU gives the same result as the CPU. Start
+          with smaller tiles if shared memory is tight.
+        </p>
+      {:else if !usingTemporalVideo && settings.device_id.startsWith('openvino:')}
+        <p class="model-description">
+          OpenVINO runs the model on the selected Intel GPU. The first time a model runs on it,
+          LocalSR checks once that the GPU gives the same result as the CPU.
         </p>
       {/if}
       <div class="field-row">
@@ -339,10 +349,11 @@
               >{#each [8, 16, 32, 64] as halo}<option value={halo}>{halo}</option>{/each}</select
             ></label
           ><label
-            title="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML always uses FP32."
+            title="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32."
             >Precision<select
-              disabled={settings.task === 'video' && settings.video_hdr_mode === 'preserve'}
-              value={settings.precision}
+              disabled={onnxGpu ||
+                (settings.task === 'video' && settings.video_hdr_mode === 'preserve')}
+              value={onnxGpu ? 'fp32' : settings.precision}
               on:change={(event) => updateSettings({ precision: event.currentTarget.value })}
               ><option value="fp32">FP32</option><option value="fp16">FP16</option></select
             ></label
