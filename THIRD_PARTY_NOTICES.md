@@ -47,7 +47,9 @@ own terms; this file is a distribution notice, not a replacement for their licen
   `third-party-programs.txt`, listing ONNX Runtime and nlohmann/json (MIT) and OpenVINO, ONNX,
   flatbuffers, opencv_contrib and a TensorFlow allocator (Apache-2.0), is included in the frozen
   worker. The Linux CPU edition also ships ONNX 1.22.0 (Apache-2.0) and ONNX Runtime 1.24.4 (MIT)
-  for the model conversion. The GPU driver comes from the system and is not distributed.
+  for the model conversion. The Linux CPU edition bundles Ubuntu 22.04's OpenCL ICD loader
+  `libOpenCL.so.1` (ocl-icd 2.2.14, BSD-2-Clause, reproduced below), which finds the system's
+  GPU driver; the driver itself comes from the system and is not distributed.
 - **macOS system codecs** — `localsr-media` links Apple's AVFoundation, CoreMedia, CoreVideo and
   VideoToolbox frameworks, which are part of macOS and not distributed by LocalSR. It adds no
   third-party code to the package.
@@ -182,3 +184,26 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## ocl-icd BSD notice
+
+Copyright 2012 Brice Videau <brice.videau@imag.fr>
+Copyright 2012 Vincent Danjean <Vincent.Danjean@ens-lyon.org>
+
+Redistribution and use in source and binary forms, with or without modification, are permitted
+provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of
+   conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of
+   conditions and the following disclaimer in the documentation and/or other materials provided
+   with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

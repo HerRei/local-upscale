@@ -346,10 +346,24 @@ def _gpu_suggestion(devices: list[dict]) -> dict | None:
                 download = "CUDA" if adapter["vendor_id"] == 0x10DE else "DirectML"
                 return {"name": adapter["name"], "download": download}
         elif sys.platform == "linux":
+            found: dict[str, Path] = {}
             for vendor_file in sorted(_DRM_ROOT.glob("card[0-9]*/device/vendor")):
                 download = _LINUX_VENDORS.get(vendor_file.read_text().strip().lower())
                 if download is not None:
-                    return {"name": _linux_gpu_name(vendor_file.parent), "download": download}
+                    found.setdefault(download, vendor_file.parent)
+            for download in ("CUDA", "ROCm"):
+                if download in found:
+                    return {"name": _linux_gpu_name(found[download]), "download": download}
+            # Intel's compute driver helps only an edition that ships OpenVINO, and only
+            # when it is missing.
+            if "intel-driver" in found:
+                from .openvino_devices import _linux_driver, plugin_registered
+
+                if plugin_registered() and _linux_driver() is None:
+                    return {
+                        "name": _linux_gpu_name(found["intel-driver"]),
+                        "download": "intel-driver",
+                    }
     except Exception:  # noqa: BLE001 - a hint must never break the capability report
         logger.debug("GPU suggestion failed", exc_info=True)
     return None

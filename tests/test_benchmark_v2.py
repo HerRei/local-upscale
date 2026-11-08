@@ -503,4 +503,4 @@ def test_onnx_gpu_routes_are_benchmarked_although_torch_stages_on_the_cpu(device
         clock=clock,
     )
     assert result.device == device_id
-    assert resets == [True]  # counted afresh before the warm-up
+    assert resets == [True, True]  # counted afresh before the warm-up and after it

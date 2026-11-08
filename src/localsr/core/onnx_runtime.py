@@ -418,6 +418,7 @@ class _OnnxImage(torch.nn.Module):
                     # Not a verdict on the configuration: the tile retry or a fresh
                     # worker deals with these.
                     raise
+                self._check_cancelled()
                 logger.warning("ONNX %s %s failed to open: %s", self.provider, config[0], error)
                 self._reject(state, config[0], f"session: {error}")
                 continue
@@ -445,11 +446,9 @@ class _OnnxImage(torch.nn.Module):
             # A lost device outranks a cancellation that arrives at the same time: only
             # a fresh worker recovers it.
             if _is_device_lost(error):
-                self.sessions.clear()
+                # The sessions stay: freeing them on a lost device can hang before the
+                # failure is reported, and the worker exits right after reporting it.
                 self.execution_verified = False
-                # The traceback would keep the failed tile's session, and its memory, alive.
-                error = error.with_traceback(None)
-                gc.collect()
                 # The driver's own words (an HRESULT or OpenCL code) help a bug report.
                 detail = (str(error).strip().splitlines() or [""])[0][:200]
                 raise GpuDeviceLost(
@@ -468,6 +467,7 @@ class _OnnxImage(torch.nn.Module):
             if _is_memory_error(error):
                 self.sessions.clear()
                 self.execution_verified = False
+                self.cpu_tiles = 0
                 error = error.with_traceback(None)
                 gc.collect()
                 raise RuntimeError("Out of memory in the ONNX inference engine.") from error
@@ -502,8 +502,9 @@ class _OnnxImage(torch.nn.Module):
             if watcher is not None:
                 watcher.join()
 
-    def _close_profile(self, state: dict) -> set:
-        """The providers the first run used, from the session's profile."""
+    def _close_profile(self, state: dict) -> set | None:
+        """The providers the first run used, from the session's profile; None when the
+        profile could not be read."""
         trace = state.pop("trace", None)
         if trace is None:
             return set()
@@ -517,7 +518,7 @@ class _OnnxImage(torch.nn.Module):
             }
         except Exception:  # noqa: BLE001
             logger.debug("Could not read the ONNX profile", exc_info=True)
-            return set()
+            return None
         finally:
             trace.cleanup()
 
@@ -590,6 +591,13 @@ class _OnnxImage(torch.nn.Module):
         pattern = self._pattern_check(state, tuple(image.shape))
         if pattern is None:
             state["cpu_only"] = True
+            # These tiles never use the GPU again; release what only it needed.
+            state.pop("session", None)
+            state.pop("graph", None)
+            state["candidates"] = []
+            trace = state.pop("trace", None)
+            if trace is not None:
+                trace.cleanup()
             return self._on_cpu(state, image)
         tile = None
         results = [pattern]
@@ -670,7 +678,7 @@ class _OnnxImage(torch.nn.Module):
         providers = self._close_profile(state) if first_run else set()
         if output.shape != expected:
             raise ValueError("ONNX returned an invalid image shape")
-        if first_run and self.provider not in providers:
+        if first_run and providers is not None and self.provider not in providers:
             if not self._gated:
                 raise RuntimeError(
                     f"The model did not execute on {self.provider}; select CPU explicitly."
@@ -678,7 +686,9 @@ class _OnnxImage(torch.nn.Module):
             self._reject(state, state["config"][0], "no node ran on the GPU")
             return "rejected", None
         if first_run:
-            logger.info("ONNX %s executed with providers: %s", self.architecture, sorted(providers))
+            logger.info(
+                "ONNX %s executed with providers: %s", self.architecture, sorted(providers or ())
+            )
         if state["pending"]:
             return self._judge(state, image, output)
         if not np.isfinite(output).all():
@@ -705,7 +715,11 @@ class _OnnxImage(torch.nn.Module):
             # A switch to the next configuration that was interrupted (cancelled, out of
             # memory) leaves no session; drop it so the next tile starts over from the
             # stored verdicts, where an untried configuration is still untried.
-            if "session" not in state and self.sessions.get(key) is state:
+            if (
+                "session" not in state
+                and not state.get("cpu_only")
+                and self.sessions.get(key) is state
+            ):
                 del self.sessions[key]
             raise
 
@@ -723,6 +737,9 @@ class _OnnxImage(torch.nn.Module):
             except Exception as error:
                 if not fallible or _is_device_lost(error) or _is_memory_error(error):
                     raise
+                # Cancelling stops ONNX Runtime with an ordinary error; that says nothing
+                # about the configuration.
+                self._check_cancelled()
                 failure = f"run: {error}"
                 logger.warning(
                     "ONNX %s %s failed on its first tile: %s",
@@ -806,6 +823,9 @@ def _test_pattern(shape: tuple[int, ...], smooth: bool = False) -> torch.Tensor:
 
 
 def _is_memory_error(error: BaseException) -> bool:
+    # NumPy's "Unable to allocate ..." is a MemoryError too.
+    if isinstance(error, MemoryError):
+        return True
     message = str(error).lower()
     return any(fragment in message for fragment in _MEMORY_FRAGMENTS)
 

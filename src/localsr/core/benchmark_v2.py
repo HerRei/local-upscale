@@ -559,6 +559,10 @@ def run_device_phase(
         completed_units=warmup_iterations,
         fraction=1.0,
     )
+    if onnx_gpu:
+        # The warm-up may have run its first tiles on the CPU while the GPU was checked;
+        # the score must come from the measured scenes alone.
+        engine.active_model.reset_execution_evidence()
 
     scene_results: list[dict] = []
     all_cvs: list[float] = []
