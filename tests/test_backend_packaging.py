@@ -163,3 +163,37 @@ def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
             assert "nvidia-cublas-cu12==" in lock
         if target["id"] == "linux-x86_64-xpu":
             assert "intel-sycl-rt==" in lock
+
+
+def test_the_engine_prefers_a_newer_host_cpp_runtime(tmp_path, monkeypatch):
+    from localsr.worker import host_runtime
+    from localsr.worker.host_runtime import prefer_newer_host_runtime
+
+    # The test process may already hold its own copies; the frozen engine does not.
+    monkeypatch.setattr(host_runtime, "_already_loaded", lambda name: False)
+
+    bundle, host = tmp_path / "bundle", tmp_path / "host"
+    bundle.mkdir()
+    host.mkdir()
+    (bundle / "libstdc++.so.6").write_bytes(b"\x00GLIBCXX_3.4.29\x00GLIBCXX_3.4.30\x00")
+    (bundle / "libgcc_s.so.1").write_bytes(b"\x00GCC_3.0\x00GCC_12.0.0\x00")
+    (host / "libgcc_s.so.1").write_bytes(b"\x00GCC_3.0\x00GCC_14.0.0\x00")
+    (host / "libstdc++.so.6").write_bytes(b"\x00GLIBCXX_3.4.30\x00GLIBCXX_3.4.34\x00")
+    loaded = []
+    assert prefer_newer_host_runtime(bundle, (str(host),), loaded.append) == [
+        str(host / "libgcc_s.so.1"),
+        str(host / "libstdc++.so.6"),
+    ]
+    assert loaded == [str(host / "libgcc_s.so.1"), str(host / "libstdc++.so.6")]
+
+    # An older or equal host runtime leaves the bundled one in place.
+    (host / "libstdc++.so.6").write_bytes(b"\x00GLIBCXX_3.4.28\x00")
+    (host / "libgcc_s.so.1").write_bytes(b"\x00GCC_12.0.0\x00")
+    loaded.clear()
+    assert prefer_newer_host_runtime(bundle, (str(host),), loaded.append) == []
+    assert loaded == []
+
+
+def test_the_entrypoint_settles_the_cpp_runtime_before_importing_the_engine():
+    source = (ROOT / "packaging" / "worker_entrypoint.py").read_text()
+    assert source.index("prefer_newer_host_runtime()") < source.index("localsr.worker.cli")

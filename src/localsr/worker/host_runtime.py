@@ -1,0 +1,82 @@
+"""Use the computer's C++ runtime when it is newer than the one the Linux engine bundles.
+
+The engine is built on an older Linux and bundles that system's libstdc++. Drivers the
+engine loads from the computer, such as Intel's OpenCL driver for OpenVINO, are built
+against the computer's newer libstdc++ and fail to load against the bundled one, so the
+GPU simply does not appear. A newer libstdc++ runs everything built for an older one, so
+the newer of the two is loaded first, before any C++ library: every later library that
+needs libstdc++ then uses it. Standard library only; this runs before anything else.
+"""
+
+import ctypes
+import os
+import re
+import sys
+from pathlib import Path
+
+HOST_LIBRARY_DIRECTORIES = (
+    "/usr/lib64",
+    "/usr/lib/x86_64-linux-gnu",
+    "/lib64",
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib",
+)
+_VERSION = {
+    "libstdc++.so.6": re.compile(rb"GLIBCXX_3\.4\.(\d+)\x00"),
+    "libgcc_s.so.1": re.compile(rb"GCC_(\d+)\.(\d+)(?:\.(\d+))?\x00"),
+}
+
+
+def _newest(path: Path, name: str) -> tuple[int, ...] | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    versions = [
+        tuple(int(part) for part in match.groups() if part is not None)
+        for match in _VERSION[name].finditer(data)
+    ]
+    return max(versions) if versions else None
+
+
+def _host_copy(name: str, directories) -> Path | None:
+    for directory in directories:
+        candidate = Path(directory) / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _already_loaded(name: str) -> bool:
+    try:
+        return name in Path("/proc/self/maps").read_text(errors="replace")
+    except OSError:
+        return False
+
+
+def prefer_newer_host_runtime(
+    bundle: Path | None = None, directories=HOST_LIBRARY_DIRECTORIES, load=None
+) -> list[str]:
+    """Load the host's libgcc_s and libstdc++ where they are newer than the bundled ones.
+    Returns the paths it loaded."""
+    if bundle is None:
+        if not (sys.platform == "linux" and getattr(sys, "frozen", False)):
+            return []
+        bundle = Path(getattr(sys, "_MEIPASS", ""))
+    load = load or (lambda path: ctypes.CDLL(path, mode=os.RTLD_NOW | os.RTLD_GLOBAL))
+    loaded = []
+    # libstdc++ needs libgcc_s, so that one goes first.
+    for name in ("libgcc_s.so.1", "libstdc++.so.6"):
+        bundled = bundle / name
+        host = _host_copy(name, directories)
+        if not bundled.is_file() or host is None or _already_loaded(name):
+            continue
+        host_version, bundled_version = _newest(host, name), _newest(bundled, name)
+        if host_version is None or bundled_version is None or host_version <= bundled_version:
+            continue
+        try:
+            load(str(host))
+        except OSError:
+            continue
+        loaded.append(str(host))
+    return loaded
