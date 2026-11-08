@@ -452,6 +452,13 @@ describe('model library resolution', () => {
     expect(chooseFixModel(snapshot, 'noise', 'best')?.model_id).toBe('nafnet_sidd_width64');
   });
 
+  it('never picks a fix model that is kept out of the presets', () => {
+    const snapshot = demoSnapshot();
+    snapshot.catalog.models.find((model) => model.model_id === 'fbcnn_color')!.preset_eligible =
+      false;
+    expect(chooseFixModel(snapshot, 'jpeg', 'best')?.model_id).not.toBe('fbcnn_color');
+  });
+
   it('lists the stages a job will run and what still needs downloading', () => {
     const snapshot = demoSnapshot();
     snapshot.settings.task = 'upscale';

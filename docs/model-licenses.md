@@ -207,8 +207,8 @@ retained notices; it does not imply the author's endorsement of LocalSR.
   include models trained on DF2K and ImageNet, LocalSR follows the license the author grants for
   the weights and lists the training data here.
 
-Both are library models only: no preset picks them (`preset_eligible=False`), because they take
-about ten times as long as Best.
+Both are library models: no preset picks them on its own (`preset_eligible=False`), because
+they take about ten times as long as Best. A model pinned to Best by the user is still used.
 
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
