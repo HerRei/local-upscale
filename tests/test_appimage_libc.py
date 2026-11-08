@@ -96,6 +96,19 @@ def test_a_payload_within_the_ceiling_passes(monkeypatch, tmp_path):
     assert run_main(monkeypatch, str(tree), "--appimage", str(appimage), "--max", "2.38") == 0
 
 
+def test_a_tree_without_host_code_using_glibc_fails(monkeypatch, tmp_path, capsys):
+    _tree, appimage = tree_with(tmp_path)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    gpu_only = tmp_path / "gpu-only"
+    gpu_only.mkdir()
+    (gpu_only / "kernels.co").write_bytes(elf(machine=224))  # EM_AMDGPU
+    fake_objdump(monkeypatch, {"App.AppImage": NEEDS_2_17, "kernels.co": NEEDS_2_17})
+    for tree in (empty, gpu_only):
+        assert run_main(monkeypatch, str(tree), "--appimage", str(appimage)) == 2
+        assert "no ELF file" in capsys.readouterr().err
+
+
 def test_a_file_objdump_cannot_read_fails_the_check(monkeypatch, tmp_path, capsys):
     tree, appimage = tree_with(tmp_path)
     fake_objdump(monkeypatch, {"libold.so": NEEDS_2_17}, unreadable=frozenset({"libnew.so"}))

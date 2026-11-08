@@ -62,7 +62,7 @@
       "status": "automated-pass",
       "blocking": true,
       "scope": "windows",
-      "summary": "The Windows CPU, DirectML and NVIDIA CUDA installers are built on GitHub-hosted runners (windows-installers.yml) with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC) and are attached to a release only after verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check pass; each ships its corresponding source, and the CUDA engine ships as verified parts beside its installer. All three passed for v0.3.1-beta on the release branch (run 42411586091). As the beta policy in docs/platforms.md says, they are not code-signed, and DirectML and CUDA are published labelled untested.",
+      "summary": "The Windows CPU, DirectML and NVIDIA CUDA installers are built on GitHub-hosted runners (windows-installers.yml) with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC) and are attached to a release only after verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check pass; each ships its corresponding source, and the CUDA engine ships as verified parts beside its installer. All three passed on the release branch in run 42411586091, on an earlier commit than the final candidate. As the beta policy in docs/platforms.md says, they are not code-signed, and DirectML and CUDA are published labelled untested.",
       "next_action": "Run the workflow on the final candidate commit and attach only what it verified.",
       "evidence": "docs/platforms.md"
     },
@@ -71,7 +71,7 @@
       "status": "automated-pass",
       "blocking": true,
       "scope": "linux",
-      "summary": "The Linux CPU, AMD ROCm and NVIDIA CUDA AppImages are built on Ubuntu 22.04 GitHub-hosted runners (linux-appimages.yml) and are attached to a release only after verify_codec_allowlist, the NVIDIA redistribution policy, the worker smoke test, the architecture check, AppImageHub's glibc ceiling of 2.35 and an offline window test pass; each ships corresponding source including Ubuntu sources for every bundled host library. The ROCm AppImage carries Ubuntu's own libnuma and libelf in place of the AlmaLinux copies in PyTorch's wheel. All three passed for v0.3.1-beta on the release branch (run 42499281378). CUDA is published labelled untested; ROCm ran on a Radeon RX 9060 XT in earlier builds.",
+      "summary": "The Linux CPU, AMD ROCm and NVIDIA CUDA AppImages are built on Ubuntu 22.04 GitHub-hosted runners (linux-appimages.yml) and are attached to a release only after verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test, the architecture check, AppImageHub's glibc ceiling of 2.35 and an offline window test pass; each ships corresponding source including Ubuntu sources for every bundled host library. The ROCm AppImage carries Ubuntu's own libnuma and libelf in place of the AlmaLinux copies in PyTorch's wheel. All three passed on the release branch in run 42499281378, before the stricter glibc and window checks (3965075, 310d64b). CUDA is published labelled untested; ROCm ran on a Radeon RX 9060 XT in earlier builds.",
       "next_action": "Run the workflow on the final candidate commit and attach only what it verified; run the ROCm AppImage on the RX 9060 XT.",
       "evidence": "docs/platforms.md"
     },

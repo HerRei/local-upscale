@@ -121,7 +121,14 @@ def test_only_the_attach_job_may_write_release_contents() -> None:
     broad = RELEASE_WORKFLOW.replace(
         "    runs-on: ubuntu-22.04\n", "    runs-on: ubuntu-22.04\n    permissions: write-all\n"
     )
-    for workflow in (moved, broad):
+    attach, build = RELEASE_WORKFLOW.split("  attach:\n")
+    attach_first = attach.replace(
+        "  build:\n", "  attach:\n    runs-on: ubuntu-24.04\n  build:\n"
+    ).replace(
+        "    runs-on: ubuntu-22.04\n",
+        "    runs-on: ubuntu-22.04\n    permissions:\n      contents: write\n",
+    )
+    for workflow in (moved, broad, attach_first):
         violations = architecture.release_package_violations("w.yml", workflow, {})
         assert any("only the attach job" in violation for violation in violations)
 
