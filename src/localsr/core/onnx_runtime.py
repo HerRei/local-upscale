@@ -228,7 +228,6 @@ class _OnnxImage(torch.nn.Module):
         self.cancel_event: threading.Event | None = None
         self.status_callback = None
         self.execution_verified = False
-        self.active_config: str | None = None
         self.verdicts = _Verdicts(gate_cache_directory())
         requirements = descriptor.size_requirements
         self.minimum = int(getattr(requirements, "minimum", 0) or 0)
@@ -568,7 +567,8 @@ class _OnnxImage(torch.nn.Module):
                 f"({gpu_ms:.0f} ms against {cpu_ms:.0f} ms per tile)."
             )
         else:
-            self._status(f"{self.architecture} runs on {self._label()}.")
+            fallback = "" if config == ROUTE_CONFIGS[self.provider][0][0] else f" ({config})"
+            self._status(f"{self.architecture} runs on {self._label()}{fallback}.")
         return output if tile is not None else reference
 
     def _execute(self, image):
@@ -638,7 +638,6 @@ class _OnnxImage(torch.nn.Module):
             elif not np.isfinite(output).all():
                 raise ValueError("ONNX returned an invalid image shape or non-finite pixels")
             self.execution_verified = True
-            self.active_config = state["config"][0]
             self.sessions[key] = state
             while len(self.sessions) > 2:
                 self.sessions.popitem(last=False)

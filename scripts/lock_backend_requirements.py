@@ -29,7 +29,9 @@ def main() -> None:
         if target["platform"] == "macos":
             continue  # macOS builds natively and has no cross-resolved lock.
         lock = ROOT / "requirements/locks" / f"{target['id']}.txt"
-        sources = ["backend-directml.in" if target["backend"] == "DirectML" else "backend-modern.in"]
+        sources = [
+            "backend-directml.in" if target["backend"] == "DirectML" else "backend-modern.in"
+        ]
         if target["id"] == "linux-x86_64-cpu":
             # Intel GPUs through OpenVINO; the GPU editions bring their own runtime.
             sources.append("backend-openvino.in")
