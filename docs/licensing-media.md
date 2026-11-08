@@ -83,9 +83,10 @@ shows the command for the actual distribution and can run it in a terminal.
 
 - H.264/HEVC videos need a user-installed FFmpeg on Windows and Linux; macOS
   uses its own codecs.
-- The default export is AV1 in MP4. AV1 encodes more slowly than x264 and some
-  older players and editors cannot open it; VP9 and lossless FFV1 (MKV) are
-  alternatives.
+- The desktop defaults to Automatic: HEVC through the Mac hardware encoder for
+  SDR MP4 exports, AV1 otherwise. The Python API defaults to AV1 in MP4. AV1
+  encodes more slowly than x264 and some older players and editors cannot open
+  it; VP9 and lossless FFV1 (MKV) are alternatives.
 - Comparison playback copies are VP9/Opus WebM.
 - HDR preservation exports 10-bit AV1, VP9 or FFV1, or HEVC Main 10 through the
   user's FFmpeg (libx265).
@@ -135,7 +136,7 @@ packages are labelled untested wherever they are offered (see
 - **AMD ROCm** — PyTorch's ROCm wheel carries libnuma (LGPL-2.1) and libelf
   (elfutils, LGPL-3.0-or-later or GPL-2.0-or-later) built on AlmaLinux, some of them
   twice under different file names. The build finds every copy by the soname inside
-  the file, replaces it with the build host's Ubuntu 24.04 build and link-checks every
+  the file, replaces it with the build host's Ubuntu 22.04 build and link-checks every
   library that uses them, and `build_source_bundle.py` refuses a package with any copy
   whose GNU build ID is not Ubuntu's, so the Ubuntu source packages in the bundle
   correspond exactly.

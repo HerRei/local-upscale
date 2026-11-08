@@ -121,7 +121,7 @@
     );
 
   $: settings = snapshot.settings;
-  // Editing: the Qwen bundle, the GPU it runs on and whether this computer can start it.
+  // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
   $: editModel = editModels.find((model) => model.model_id === settings.edit_model_id);
@@ -394,7 +394,6 @@
   $: activeDevice = snapshot.capabilities.devices.find(
     (device) => device.id === settings.device_id,
   );
-  // While idle, the status bar says what Start will produce, next to the button that does it.
   // A finished job keeps its own message while its result is selected.
   $: idleSummary =
     selectedMedia &&
@@ -863,7 +862,6 @@
     }
   }
 
-  /** Download several catalog models one after another, then refresh. */
   async function downloadModels(
     models: (CatalogModel | CatalogVideoModel | EditModel | undefined)[],
   ): Promise<boolean> {
@@ -905,7 +903,6 @@
     }
   }
 
-  /** Fetch every missing stage the catalog allows, then start without another click. */
   async function prepareAndStart(): Promise<void> {
     if (!canPrepare) return;
     const targets = downloads.stages.map(
@@ -1199,7 +1196,7 @@
     }
   }
 
-  /** One image, one native Qwen pass; the worker checks memory again before loading. */
+  /** The worker rechecks memory before loading the editing bundle. */
   async function startEdit(): Promise<void> {
     if (!selectedMedia || !editModel || !editingDevice) return;
     startingJob = true;
@@ -1973,7 +1970,7 @@
         >
           <section class="control-section">
             <span class="eyebrow">Task</span>
-            <!-- Video follows the selection: a selected video is upscaled as video. -->
+            <!-- A selected video is upscaled as video, so Upscale stays pressed for it. -->
             <div class="seg-inline task-switch" role="group" aria-label="Task">
               <button
                 aria-pressed={settings.task === 'upscale' || settings.task === 'video'}
@@ -2164,12 +2161,14 @@
                       role="radio"
                       aria-checked={settings.content !== 'illustration'}
                       class:active={settings.content !== 'illustration'}
+                      title="Uses a model made for photographs"
                       on:click={() => setContent('photo')}>Photo</button
                     >
                     <button
                       role="radio"
                       aria-checked={settings.content === 'illustration'}
                       class:active={settings.content === 'illustration'}
+                      title="Uses a model made for drawings and anime"
                       on:click={() => setContent('illustration')}>Illustration</button
                     >
                   </div>

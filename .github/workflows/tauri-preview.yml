@@ -40,7 +40,6 @@ on:
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
       - "pyproject.toml"
-      - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   pull_request:
     branches: [main]
@@ -81,7 +80,6 @@ on:
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
       - "pyproject.toml"
-      - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   workflow_dispatch:
     inputs:
@@ -129,9 +127,7 @@ jobs:
             runner: '["windows-2022"]'
             shell: pwsh
             cargo_jobs: 2
-          # Hosted Apple Silicon. The Mac mini's macOS guest is Intel, so it
-          # could only ever verify x86_64 while we ship arm64. A hosted runner
-          # matches the shipped target and frees the guest entirely.
+          # Validate the shipped arm64 target on an arm64 runner.
           - platform: macOS arm64
             runner: '["macos-latest"]'
             shell: bash
@@ -144,8 +140,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Match linux-appimages.yml's hosted-image cleanup. The first hosted
-      # run must confirm reclaimed space and native package availability.
+      # Reclaim disk space for the inference dependencies.
       - name: Free hosted Linux disk space
         if: runner.os == 'Linux'
         shell: bash
@@ -205,7 +200,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 squashfs-tools
       # Use the same hosted Windows/Rust setup as windows-installers.yml.
-      # Toolchain downloads and cold-build duration cannot be verified offline.
       - name: Install the stable Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
@@ -277,8 +271,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      # Match linux-appimages.yml's hosted-image cleanup. The first hosted
-      # run must confirm reclaimed space and native package availability.
+      # Reclaim disk space for the inference dependencies.
       - name: Free hosted Linux disk space
         if: runner.os == 'Linux'
         shell: bash
@@ -338,7 +331,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 squashfs-tools
       # Use the same hosted Windows/Rust setup as windows-installers.yml.
-      # Toolchain downloads and cold-build duration cannot be verified offline.
       - name: Install the stable Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
@@ -353,7 +345,6 @@ jobs:
         working-directory: desktop
         run: npm ci
       - name: Install the Linux inference packager
-        # CPU-index downloads and dependency resolution await a hosted package run.
         if: runner.os == 'Linux'
         run: |
           python -m pip install --disable-pip-version-check "pip==${{ env.PIP_VERSION }}"
@@ -363,7 +354,6 @@ jobs:
           python -m pip install --disable-pip-version-check \
             -e ".[package,video,face]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
       - name: Install the Windows inference packager
-        # CPU-index downloads and dependency resolution await a hosted package run.
         if: runner.os == 'Windows'
         run: |
           python -m pip install --disable-pip-version-check "pip==${{ env.PIP_VERSION }}"
@@ -373,7 +363,6 @@ jobs:
           python -m pip install --disable-pip-version-check -e ".[package,video,face]" "pyinstaller==${{ env.PYINSTALLER_VERSION }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Replace PyPI media wheels with the licensing-clean runtime
-        # Cold compilation, disk use and installer smoke need a hosted package run.
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch
@@ -383,8 +372,8 @@ jobs:
         # The required verify matrix has already run Svelte checks and tests on
         # this exact commit. Avoid starting a second Vitest worker pool after
         # the memory-intensive PyInstaller build on the hosted runner.
-        # Windows has no licensing-clean media runtime yet; its package is a
-        # private acceptance preview only and is never published.
+        # This Windows preview uses PyPI media wheels rather than the licensing-clean
+        # runtime built by windows-installers.yml; it remains private and unpublished.
         run: python scripts/build_tauri_preview.py --skip-checks --bundles ${{ matrix.bundles }} ${{ runner.os == 'Windows' && '--private-preview-media' || '' }}
       - name: Install or mount the package and boot its bundled worker
         run: python scripts/smoke_tauri_installer.py --artifact-glob "${{ matrix.package_path }}" --report build/tauri-preview/installer-smoke-${{ runner.os }}.json

@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.1-beta] - Unreleased
+
+### Changed
+
+- The Linux AppImages are now built on Ubuntu 22.04, so they run on Ubuntu 22.04
+  and on other distributions with glibc 2.35 or newer; v0.3.0-beta needed glibc
+  2.39 (Ubuntu 24.04). Before release, every AppImage is checked the way the
+  AppImage catalog checks it: no file in it may need a newer glibc than 2.35, and
+  it must open its window without a network connection.
+- The ROCm and CUDA AppImages are about a third smaller: they no longer carry a
+  second copy of the engine's libraries. On a Radeon RX 9060 XT, the engine
+  inside the ROCm AppImage passed the checks for images, video with audio, and
+  cancelling and recovering.
+- On a Mac, Homebrew installs LocalSR: `brew install --cask herrei/tap/localsr`.
+- The advanced settings explain Tile, Halo and Precision, and the Photo and
+  Illustration buttons say which kind of model they pick, right where you set them.
+- Dependency updates, among them Tauri 2.12.
+
+### Fixed
+
+- Building the app from source works again: after a dependency update the Rust
+  half of the file dialog plugin was one version behind its JavaScript half, and
+  Tauri refuses to build with mismatched halves.
+- The Windows installers build again: MSYS2 renamed its zlib DLL to
+  `libz-1.dll`, which the check of the media runtime's DLLs did not accept yet.
+
 ## [0.3.0-beta] - 2026-10-24
 
 The Neural Engine, and videos twice as fast.

@@ -9,7 +9,7 @@ a release without a person.
 | Mon-Thu 05:00 (Zurich) | Dependabot (`.github/dependabot.yml`) | One grouped PR per ecosystem: Python (Mon), npm (Tue), Cargo (Wed), GitHub Actions (Thu). New versions wait 7 days (majors 30) before they are offered. Security fixes come any day, also grouped. |
 | every CI or Preview run | `required.yml` | Sets the commit status **Required checks** from the latest CI and Preview runs of that exact commit. Preview counts only when its own path filter matches. This is the one check the `main` ruleset requires. |
 | every Dependabot PR | `dependabot-automerge.yml` | Arms auto-merge only for the `dev-tools` groups (pytest, prettier, vitest, …; the list is in `scripts/dependabot_automerge.py`), and only when every commit is a verified Dependabot commit and only the expected manifest and lock files changed. It disarms auto-merge when a PR stops qualifying. |
-| Fri 05:00 UTC | `deps-triage.yml` | Reruns infrastructure failures (runner setup, cancelled or timed-out jobs, and legacy storage/priority failures) once per commit. It labels at most two real breaks `claude-fix` and updates the `deps-status` issue. While `main` itself is red it labels nothing. |
+| Fri 05:00 UTC | `deps-triage.yml` | Reruns infrastructure failures (runner setup, cancelled or timed-out jobs, and legacy storage/priority failures) once per commit. It labels at most two PRs `claude-fix` that are up to date with `main` and fail on their own code, and updates the `deps-status` issue. While `main` itself is red it labels nothing. |
 | daily 05:00 UTC | `release-train.yml` | Opens a `Version X` PR when a release is due (see below). |
 
 ## What needs a person
@@ -27,8 +27,9 @@ a release without a person.
   `requirements/backend-*.in` only where it blocks the update.
 - **Lint tools** (ruff, pyright, vulture) are pinned in `ci.yml` too, so a bump changes
   both places.
-- **`claude-fix` PRs**: run the deps-doctor skill. It fixes the break on a `doctor/<dep>`
-  branch, runs the checks and shows the diff. Nothing is pushed before you OK it.
+- **`claude-fix` PRs**: reproduce the failure on the PR branch and push a fix with
+  the relevant checks passing. A PR behind `main` gets an `@dependabot rebase`
+  comment instead of the label.
   Pushes and PRs run CI and applicable Preview checks on GitHub-hosted runners,
   independently of releases; see [ADR 0008](adr/0008-hosted-ci.md).
 

@@ -1,0 +1,62 @@
+name: First-run feedback
+description: Try one restore without instructions and tell us where you got stuck.
+title: "[Feedback]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you read any instructions, open LocalSR and restore one old scan or photo.
+        Then answer the questions below. If you also try the Edit tab, keep that for the
+        last question, so the two don't mix.
+  - type: textarea
+    attributes:
+      label: The first control you couldn't understand
+      description: What it was, where it was, and what you expected it to do.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Did the before/after comparison make the change clear?
+      options:
+        - "Yes"
+        - Partly
+        - "No"
+        - I didn't find the comparison
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: The model you chose
+      description: As the app names it, for example Quick photo or Best photo.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Hardware
+      description: CPU, GPU and RAM.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: LocalSR version
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Anything else about the restore
+  - type: textarea
+    attributes:
+      label: The Edit tab (optional)
+      description: If you tried it, the same questions for Edit only.
+  - type: checkboxes
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed private paths and images from the report.
+          required: true

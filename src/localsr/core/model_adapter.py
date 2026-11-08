@@ -111,11 +111,9 @@ class ModelAdapter:
         else:
             checkpoint_trust = "cached"
 
-        # Determine attributes using official spandrel 0.4 API
         arch = self.parsed.architecture.name
         scale = self.parsed.scale
 
-        # Channels
         in_c = getattr(self.parsed, "input_channels", getattr(self.parsed, "in_channels", 3))
         out_c = getattr(self.parsed, "output_channels", getattr(self.parsed, "out_channels", 3))
 
@@ -124,10 +122,8 @@ class ModelAdapter:
         # requirements to every tile.
         tiling_supported = True
 
-        # Half support
         half_supported = getattr(self.parsed, "supports_half", False)
 
-        # Size requirements
         req_min = 0
         req_mult = 1
         req_square = False
