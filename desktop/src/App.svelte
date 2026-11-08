@@ -717,6 +717,7 @@
     resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
   }
 
+  // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(quality: 'quick' | 'best'): string {
     if (settings.task === 'denoise')
       return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
@@ -1969,6 +1970,7 @@
         >
           <section class="control-section">
             <span class="eyebrow">Task</span>
+            <!-- A selected video is upscaled as video, so Upscale stays pressed for it. -->
             <div class="seg-inline task-switch" role="group" aria-label="Task">
               <button
                 aria-pressed={settings.task === 'upscale' || settings.task === 'video'}

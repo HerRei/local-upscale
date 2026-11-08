@@ -72,3 +72,14 @@ References: [manual packaging](https://learn.microsoft.com/en-us/windows/msix/de
 [MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool),
 [Store package requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements),
 [Tauri and the Microsoft Store](https://v2.tauri.app/distribute/microsoft-store/).
+
+## Before submission
+
+- Rebuild the worker on the royalty-free media runtime (see
+  [Platforms](platforms.md)); the test builds so far used a different runtime.
+- Resolve the remaining WACK warning and run the acceptance cases on the final
+  package.
+- Verify the Microsoft-signed installation and update after certification.
+- Check installation on another drive and Windows accessibility.
+- Review `runFullTrust` in the certification notes: the app launches its local
+  inference worker and reads media the user selected.
