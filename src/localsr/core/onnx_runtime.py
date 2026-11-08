@@ -306,6 +306,8 @@ class _OnnxImage(torch.nn.Module):
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         elif optimization == "basic":
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        # Which provider got which node (ONNX Runtime 1.24); read after creation.
+        options.add_session_config_entry("session.record_ep_graph_assignment_info", "1")
         trace = tempfile.TemporaryDirectory(prefix="localsr-onnx-profile-")
         options.enable_profiling = True
         options.profile_file_prefix = str(Path(trace.name) / "execution")
@@ -399,7 +401,13 @@ class _OnnxImage(torch.nn.Module):
                     {"accepted": False, "reason": f"session: {error}"[:500]},
                 )
                 continue
-            state.update(session=session, trace=trace, config=config, pending=pending)
+            state.update(
+                session=session,
+                trace=trace,
+                config=config,
+                pending=pending,
+                placement=_placement(session, self.provider),
+            )
             return
         raise self._rejected()
 
@@ -541,6 +549,7 @@ class _OnnxImage(torch.nn.Module):
                 "shape": list(image.shape),
                 "architecture": self.architecture,
                 "device": self._label(),
+                "placement": state.get("placement"),
             },
         )
         logger.info(
@@ -557,6 +566,13 @@ class _OnnxImage(torch.nn.Module):
             return None
         state["pending"] = False
         state.pop("graph", None)
+        placement = state.get("placement") or {}
+        if placement.get("cpu_heavy") or placement.get("cpu_subgraphs", 0) > 2:
+            self._status(
+                f"Part of {self.architecture} runs on the CPU on {self._label()} "
+                f"({placement['cpu_nodes']} of {placement['nodes']} operations), "
+                "which costs speed but not accuracy."
+            )
         if gpu_ms is not None and gpu_ms > cpu_ms:
             self._status(
                 f"{self.architecture} runs on {self._label()}, but slower than on the CPU here "
@@ -638,6 +654,33 @@ class _OnnxImage(torch.nn.Module):
             while len(self.sessions) > self.session_limit:
                 self.sessions.popitem(last=False)
             return torch.from_numpy(np.ascontiguousarray(output))
+
+
+# Operations that carry a model's work; one of these on the CPU makes a GPU route slow.
+_HEAVY_OPERATIONS = {"Conv", "ConvTranspose", "MatMul", "Gemm", "Attention", "FusedConv"}
+
+
+def _placement(session, provider: str) -> dict | None:
+    """How many nodes, and which heavy ones, ONNX Runtime gave to the CPU instead."""
+    try:
+        subgraphs = session.get_provider_graph_assignment_info()
+    except (AttributeError, RuntimeError):
+        return None
+    nodes = cpu_nodes = cpu_subgraphs = 0
+    heavy: set[str] = set()
+    for subgraph in subgraphs:
+        assigned = subgraph.get_nodes()
+        nodes += len(assigned)
+        if subgraph.ep_name == "CPUExecutionProvider" and provider != "CPUExecutionProvider":
+            cpu_nodes += len(assigned)
+            cpu_subgraphs += 1
+            heavy.update(node.op_type for node in assigned if node.op_type in _HEAVY_OPERATIONS)
+    return {
+        "nodes": nodes,
+        "cpu_nodes": cpu_nodes,
+        "cpu_subgraphs": cpu_subgraphs,
+        "cpu_heavy": sorted(heavy),
+    }
 
 
 def _test_pattern(shape: tuple[int, ...]) -> torch.Tensor:

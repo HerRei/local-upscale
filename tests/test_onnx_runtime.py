@@ -383,3 +383,26 @@ def test_a_large_model_keeps_two_sessions(monkeypatch):
     for side in (8, 16, 24):
         converted(torch.zeros(1, 3, side, side))
     assert list(converted.model.sessions) == [(1, 3, 16, 16), (1, 3, 24, 24)]
+
+
+def test_placement_counts_what_a_gpu_route_leaves_on_the_cpu():
+    from localsr.core.onnx_runtime import _placement
+
+    def subgraph(provider, *operations):
+        nodes = [SimpleNamespace(op_type=operation) for operation in operations]
+        return SimpleNamespace(ep_name=provider, get_nodes=lambda: nodes)
+
+    session = SimpleNamespace(
+        get_provider_graph_assignment_info=lambda: [
+            subgraph("DmlExecutionProvider", "Conv", "LeakyRelu", "Conv"),
+            subgraph("CPUExecutionProvider", "Shape", "Gather"),
+            subgraph("CPUExecutionProvider", "MatMul"),
+        ]
+    )
+    assert _placement(session, "DmlExecutionProvider") == {
+        "nodes": 6,
+        "cpu_nodes": 3,
+        "cpu_subgraphs": 2,
+        "cpu_heavy": ["MatMul"],
+    }
+    assert _placement(SimpleNamespace(), "DmlExecutionProvider") is None  # older ONNX Runtime
