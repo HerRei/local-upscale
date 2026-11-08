@@ -40,7 +40,6 @@ on:
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
       - "pyproject.toml"
-      - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   pull_request:
     branches: [main]
@@ -81,7 +80,6 @@ on:
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
       - "pyproject.toml"
-      - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   workflow_dispatch:
     inputs:

@@ -30,11 +30,9 @@ FILES = [
     "desktop/src/lib/demo.ts",
     "ci/tauri-targets.json",
     "ci/tauri-release-artifacts.json",
-    "ci/beta-readiness.json",
     "ci/public-beta-release.json",
     "ci/public-beta-readiness.json",
     "packaging/updates/production.pub",
-    ".github/workflows/desktop-release.yml",
 ]
 
 
