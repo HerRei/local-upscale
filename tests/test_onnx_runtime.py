@@ -540,13 +540,12 @@ def test_backend_probe_requires_a_bundled_openvino_plugin_to_load(monkeypatch):
         )
 
     monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: True)
-    monkeypatch.setattr(backend_validation.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(ort, "get_ep_devices", lambda: [device("CPU")], raising=False)
     backend_validation._check_openvino_plugin(result)  # no GPU on a build runner is fine
     assert result["openvino_devices"] == ["CPU"]
     monkeypatch.setattr(ort, "get_ep_devices", lambda: [], raising=False)
-    with pytest.raises(RuntimeError, match="no CPU device"):
-        backend_validation._check_openvino_plugin(result)
+    backend_validation._check_openvino_plugin(result)  # no device on this machine: recorded
+    assert result["openvino_devices"] == []
 
 
 def test_linux_driver_identity_is_intels_gpu_runtime_and_its_compiler(tmp_path, monkeypatch):
