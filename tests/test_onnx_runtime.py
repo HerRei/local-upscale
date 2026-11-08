@@ -1,6 +1,7 @@
 """Exercise actual graph conversion and the descriptor boundary on CPU in CI."""
 
 import json
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,8 +12,13 @@ import torch
 from localsr.core.inference import InferenceEngine
 from localsr.core.onnx_runtime import OnnxImageDescriptor, OnnxRoute
 
-pytest.importorskip("onnx")
-pytest.importorskip("onnxruntime")
+if os.environ.get("CI"):
+    # CI installs both on purpose; a missing one must fail, not skip the GPU check's tests.
+    import onnx  # noqa: F401
+    import onnxruntime  # noqa: F401
+else:
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
 
 
 def descriptor():
@@ -290,7 +296,7 @@ def test_a_lost_device_is_reported_as_such_and_releases_sessions(monkeypatch):
         raise RuntimeException("DML failed: DXGI_ERROR_DEVICE_REMOVED (0x887A0005)")
 
     monkeypatch.setattr(converted.model, "_session", removed)
-    with pytest.raises(GpuDeviceLost, match="restarts with a fresh device"):
+    with pytest.raises(GpuDeviceLost, match="restarts with a fresh device.*0x887A0005"):
         converted(image)
     assert not converted.model.sessions
 

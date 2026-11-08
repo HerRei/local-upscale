@@ -301,6 +301,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             }
             thread::sleep(Duration::from_millis(100));
         };
+        if state.worker.generation.load(Ordering::SeqCst) == generation {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                mark_exited(&mut runtime);
+            }
+        }
         if forced_job.is_empty() && !state.worker.shutting_down.load(Ordering::SeqCst) {
             // Read what the engine wrote before it exited, such as the failure that asks
             // for this restart, before its messages stop counting. Bounded: a helper
@@ -563,6 +568,15 @@ fn handle_worker_envelope(
 
 /// A worker that lost its GPU device exits after its failure message; until its
 /// replacement is ready, no queued job may be sent to it.
+/// An engine that has exited takes no more work, even while its last messages are read:
+/// a completion read then must not send the next job to it. A requested restart keeps
+/// its state, which tells the exit handler that the stop was expected.
+fn mark_exited(runtime: &mut RuntimeStatus) {
+    if runtime.worker != "restarting" {
+        runtime.worker = "unavailable".into();
+    }
+}
+
 /// How long the app reads an exited engine's remaining output before moving on.
 const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 
@@ -1653,6 +1667,19 @@ mod tests {
             &mut runtime,
             &json!({"job_id": "a", "error_message": "x", "restart_required": true}),
         );
+        assert_eq!(runtime.worker, "restarting");
+    }
+
+    #[test]
+    fn an_exited_engine_takes_no_more_work() {
+        let mut runtime = RuntimeStatus {
+            worker: "ready".into(),
+            ..RuntimeStatus::default()
+        };
+        mark_exited(&mut runtime);
+        assert_eq!(runtime.worker, "unavailable");
+        runtime.worker = "restarting".into();
+        mark_exited(&mut runtime);
         assert_eq!(runtime.worker, "restarting");
     }
 
