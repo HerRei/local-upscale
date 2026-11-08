@@ -11,9 +11,12 @@ On macOS, **Check for Updates…** in the LocalSR menu opens Software Update: ch
 its notes and total download size, download it, and install and restart. The
 beta also checks its feed once at launch and shows a notice when a newer build
 exists. **Check for Updates at Launch** in the LocalSR menu, or the matching box in
-the update dialog, turns that launch check off (setting `check_updates_at_launch`);
-asking with **Check for Updates…** still works. Both switches can change while
-jobs run, and the menu shows them only in builds that check a signed feed. Downloads can run while jobs are processing;
+the update dialog, turns that launch check off from the next launch (setting
+`check_updates_at_launch`); asking with **Check for Updates…** still works. Both
+switches can change while jobs run, and the menu shows them only in builds that
+check a signed feed. The host saves them on their own (`set_update_switch`); a full
+settings save never changes them, so a window that has not caught up cannot turn
+an opt-out back on. Downloads can run while jobs are processing;
 installation waits until the queue, any cancellation and any model download have
 finished, and the native host enforces that as well as the interface.
 

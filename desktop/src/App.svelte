@@ -944,16 +944,19 @@
     }
   }
 
-  /** The update switches may change during a job; they do not touch it. */
-  function updateUpdateSwitches(
-    patch: Pick<Partial<UiSettings>, 'check_updates_at_launch' | 'anonymous_update_count'>,
+  /**
+   * The update switches are saved by the host on its own and may change during a job.
+   * The window shows the host's value afterwards, also when saving failed.
+   */
+  function setUpdateSwitch(
+    name: 'check_updates_at_launch' | 'anonymous_update_count',
+    value: boolean,
   ): void {
-    snapshot = { ...snapshot, settings: { ...snapshot.settings, ...patch } };
-    if (api.isTauri()) {
-      void api
-        .saveSettings(snapshot.settings)
-        .catch((error) => showModal('Could not save settings', String(error)));
-    }
+    if (!api.isTauri()) return;
+    void api
+      .setUpdateSwitch(name, value)
+      .catch((error) => showModal('Could not save settings', String(error)))
+      .finally(() => scheduleRefresh());
   }
 
   function setTask(task: TaskKind): void {
@@ -1669,16 +1672,6 @@
         case 'app.updates':
           updateDialogOpen.set(true);
           break;
-        case 'app.check-updates-at-launch':
-          updateUpdateSwitches({
-            check_updates_at_launch: !(snapshot.settings.check_updates_at_launch ?? true),
-          });
-          break;
-        case 'app.update-count':
-          updateUpdateSwitches({
-            anonymous_update_count: !(snapshot.settings.anonymous_update_count ?? true),
-          });
-          break;
       }
     } catch (error) {
       showModal('Native action failed', String(error));
@@ -1901,8 +1894,8 @@
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     anonymousUpdateCount={settings.anonymous_update_count ?? true}
     checkAtLaunch={settings.check_updates_at_launch ?? true}
-    on:anonymouscount={(event) => updateUpdateSwitches({ anonymous_update_count: event.detail })}
-    on:checkatlaunch={(event) => updateUpdateSwitches({ check_updates_at_launch: event.detail })}
+    on:anonymouscount={(event) => setUpdateSwitch('anonymous_update_count', event.detail)}
+    on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
   />
   <WelcomeNotice
     anonymousUpdateCount={settings.anonymous_update_count ?? true}

@@ -129,6 +129,7 @@ pub fn run() {
             commands::remove_media,
             commands::clear_media,
             commands::save_settings,
+            commands::set_update_switch,
             commands::save_recipe,
             commands::delete_recipe,
             commands::start_jobs,
