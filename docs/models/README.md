@@ -22,6 +22,8 @@ loading. Restoration weights are not included in installers.
 | Real-ESRGAN x4plus Anime 6B | 4× | Fast anime and illustration | 17.9 MB | BSD-3-Clause |
 | SwinIR-M Real x4 GAN | 4× | Transformer real-world upscaling | 67.1 MB | Apache-2.0 |
 | SCUNet Color (PSNR) | 1× | Blind real-photo denoising | 72.0 MB | Apache-2.0 |
+| DAT2 BHI Real | 4× | Lettering, buildings and clean photos · very slow | 140.2 MB | CC BY 4.0 |
+| DAT2 RealWebPhoto v4 | 4× | Noisy, compressed web and phone photos · very slow | 140.3 MB | CC BY 4.0 |
 | HAT-S Face | 4× | Face companion · verified import | 40.5 MB | Rights unresolved |
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |
 
@@ -30,7 +32,9 @@ can be resampled after inference. A 1× restoration model cleans an image withou
 enlarging it and can run before an upscaler.
 
 **Quick** selects SPAN NomosUni; **Best** selects RealPLKSR NomosWebPhoto. HAT-S is
-the smaller stock HAT option. Model choice changes speed, memory use and visual
+the smaller stock HAT option. The two DAT2 models are never picked by a preset: they
+take about ten times as long as Best (around 73 seconds per input megapixel on an M1
+Pro), so choose them in the library for the photos they suit. Model choice changes speed, memory use and visual
 results; compare a representative crop before processing a large folder.
 
 ## Author credit and checkpoint terms

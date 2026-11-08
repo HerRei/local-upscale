@@ -187,6 +187,29 @@ app. HFA2k's `.pth` hash matches the catalog, and all 340 NomosWebPhoto tensors 
 author's licensed conversion. CC BY 4.0 permits sharing and commercial use with attribution and
 retained notices; it does not imply the author's endorsement of LocalSR.
 
+### DAT2 BHI Real and RealWebPhoto v4 (`bhi_dat2_real_x4`, `realwebphoto_v4_dat2_x4`)
+
+- Exact assets: `4xBHI_dat2_real.pth` and `4xRealWebPhoto_v4_dat2.pth` from Philip Hofmann's own
+  [models releases](https://github.com/Phhofm/models/releases) on GitHub, both re-downloaded and
+  hashed on 2026-11-08.
+- Sizes: `140,196,334` and `140,299,118` bytes.
+- SHA-256: `14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0` and
+  `9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9`.
+- Terms: CC BY 4.0, declared on both GitHub releases and on the author's Hugging Face cards
+  ([BHI Real](https://huggingface.co/Phips/4xBHI_dat2_real),
+  [RealWebPhoto v4](https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2)). The DAT architecture
+  is Apache-2.0 ([zhengchen1999/DAT](https://github.com/zhengchen1999/DAT)).
+- Training data, recorded because it differs between the two: RealWebPhoto v4 was trained on
+  Nomos8k (stock photos). BHI Real was trained on the author's
+  [BHI set](https://huggingface.co/datasets/Phips/BHI), filtered tiles from thirteen sources
+  including FFHQ (whose dataset terms are CC BY-NC-SA 4.0, with images under mixed licences),
+  ImageNet, DF2K, COCO and iNaturalist 2019. As for the other checkpoints in this catalogue, which
+  include models trained on DF2K and ImageNet, LocalSR follows the license the author grants for
+  the weights and lists the training data here.
+
+Both are library models only: no preset picks them (`preset_eligible=False`), because they take
+about ten times as long as Best.
+
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
 

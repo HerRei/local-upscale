@@ -277,6 +277,25 @@ class TestStandardCatalogRankings:
         )
         assert selected.model_id == "nafnet_sidd_width64"
 
+    def test_slow_specialists_never_become_a_preset(self):
+        from dataclasses import replace
+
+        # The shipped choices stay as they were with the DAT2 entries in the catalogue.
+        for mode in Preset:
+            for purpose in (ModelPurpose.PHOTO, ModelPurpose.GENERAL):
+                ranked = rank_models_for_preset(MODEL_CATALOG, mode, purpose=purpose)
+                assert all(model.preset_eligible for model in ranked)
+        assert get_preset_model(Preset.FAST, ModelPurpose.PHOTO).model_id == "span_photo_x4"
+        assert (
+            select_model_for_preset(MODEL_CATALOG, Preset.QUALITY, purpose=ModelPurpose.PHOTO)
+            is not None
+        )
+        # Even a higher tier and a larger file do not make one the Best preset.
+        dat2 = next(model for model in MODEL_CATALOG if model.model_id == "bhi_dat2_real_x4")
+        louder = replace(dat2, quality_tier=QualityTier.ULTRA, size_bytes=10**10)
+        ranked = rank_models_for_preset([*MODEL_CATALOG, louder], Preset.QUALITY)
+        assert louder not in ranked
+
     def test_deblur_selects_nafnet_gopro_deblur(self):
         selected = get_preset_model(Preset.FAST, ModelPurpose.DEBLUR)
         assert selected.model_id == "nafnet_gopro_deblur"

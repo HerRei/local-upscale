@@ -35,6 +35,8 @@ export interface CatalogModel {
   pair_with: string;
   commercial_use_status: string;
   commercial_use_allowed: boolean | null;
+  /** False: the library offers it, but no preset picks it on its own. */
+  preset_eligible?: boolean;
   automated_download_allowed: boolean;
   redistribution_allowed: boolean;
   attribution_required: boolean;

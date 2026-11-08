@@ -75,6 +75,30 @@ describe('desktop state', () => {
     );
   });
 
+  it('never lets a slow specialist become a preset, however it ranks', () => {
+    const snapshot = demoSnapshot();
+    const best = snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!;
+    // Stronger and larger than Best: it would win the Best ranking if presets could pick it.
+    snapshot.catalog.models.push({
+      ...best,
+      model_id: 'slow_specialist_x4',
+      quality_tier: best.quality_tier + 1,
+      size_bytes: best.size_bytes * 10,
+      preset_eligible: false,
+    });
+    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
+      'realplksr_nomoswebphoto_x4',
+    );
+    // A pin is the user's own choice and still works.
+    expect(
+      choosePresetModel(snapshot, 'upscale', 'best', 'photo', {
+        'upscale/photo/best': 'slow_specialist_x4',
+      })?.model_id,
+    ).toBe('slow_specialist_x4');
+  });
+
   it('tracks image and video progress without losing worker state', () => {
     let snapshot = demoSnapshot();
     snapshot = applyWorkerEnvelope(snapshot, { type: 'worker_ready', data: {} });

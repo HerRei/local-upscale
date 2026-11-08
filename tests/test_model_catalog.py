@@ -70,14 +70,16 @@ def test_catalog_has_all_curated_models():
         "realesrgan_x4plus_anime_6b",
         "swinir_m_real_x4_gan",
         "scunet_color_real_psnr",
+        "bhi_dat2_real_x4",
+        "realwebphoto_v4_dat2_x4",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 16
+    assert len(MODEL_CATALOG) == 18
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 16
-    assert len({model.filename for model in MODEL_CATALOG}) == 16
+    assert len({model.model_id for model in MODEL_CATALOG}) == 18
+    assert len({model.filename for model in MODEL_CATALOG}) == 18
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
