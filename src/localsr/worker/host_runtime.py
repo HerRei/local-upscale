@@ -79,8 +79,7 @@ def prefer_newer_host_runtime(
             return []
         bundle = Path(getattr(sys, "_MEIPASS", ""))
     load = load or (lambda path: ctypes.CDLL(path, mode=os.RTLD_NOW | os.RTLD_GLOBAL))
-    loaded = []
-    # libstdc++ needs libgcc_s, so that one goes first.
+    candidates = {}
     for name in ("libgcc_s.so.1", "libstdc++.so.6"):
         bundled = bundle / name
         if not bundled.is_file() or _already_loaded(name):
@@ -89,7 +88,21 @@ def prefer_newer_host_runtime(
         if host is None:
             continue
         host_version, bundled_version = _newest(host, name), _newest(bundled, name)
-        if host_version is None or bundled_version is None or host_version <= bundled_version:
+        if host_version is not None and bundled_version is not None:
+            candidates[name] = (host, host_version, bundled_version)
+    cxx = candidates.get("libstdc++.so.6")
+    newer_cxx = cxx is not None and cxx[1] > cxx[2]
+    loaded = []
+    # libstdc++ needs libgcc_s, so that one goes first. A newer host libstdc++ comes with
+    # the host's libgcc_s even when both libgcc_s name the same newest version.
+    for name in ("libgcc_s.so.1", "libstdc++.so.6"):
+        if name not in candidates:
+            continue
+        host, host_version, bundled_version = candidates[name]
+        if not (
+            host_version > bundled_version
+            or (name == "libgcc_s.so.1" and newer_cxx and host_version >= bundled_version)
+        ):
             continue
         try:
             load(str(host))

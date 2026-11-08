@@ -198,6 +198,15 @@ def test_the_engine_prefers_a_newer_host_cpp_runtime(tmp_path, monkeypatch):
     ]
     assert loaded == [str(host / "libgcc_s.so.1"), str(host / "libstdc++.so.6")]
 
+    # A newer host libstdc++ brings the host's libgcc_s along even at the same version.
+    (host / "libstdc++.so.6").write_bytes(_elf() + b"\x00GLIBCXX_3.4.34\x00")
+    (host / "libgcc_s.so.1").write_bytes(_elf() + b"\x00GCC_3.0\x00GCC_12.0.0\x00")
+    loaded.clear()
+    assert prefer_newer_host_runtime(bundle, directories, loaded.append) == [
+        str(host / "libgcc_s.so.1"),
+        str(host / "libstdc++.so.6"),
+    ]
+
     # An older or equal host runtime leaves the bundled one in place.
     (host / "libstdc++.so.6").write_bytes(_elf() + b"\x00GLIBCXX_3.4.28\x00")
     (host / "libgcc_s.so.1").write_bytes(_elf() + b"\x00GCC_12.0.0\x00")

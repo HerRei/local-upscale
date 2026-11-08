@@ -108,10 +108,14 @@ def _linux_driver() -> str | None:
 
 
 def _driver(luid: str) -> str | None:
-    if sys.platform == "win32":
-        return _windows_driver(luid)
-    if sys.platform == "linux":
-        return _linux_driver()
+    # Without a readable identity the GPU still works; its verdicts are just not stored.
+    try:
+        if sys.platform == "win32":
+            return _windows_driver(luid)
+        if sys.platform == "linux":
+            return _linux_driver()
+    except OSError:
+        return None
     return None
 
 
