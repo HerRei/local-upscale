@@ -6,7 +6,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
 - **Desktop host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
   components retain their upstream permissive or file-level terms (including Apache, BSD, ISC,
   MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. macOS uses WKWebView and Windows uses WebView2. The Linux AppImages bundle
-  WebKitGTK/GTK/GStreamer libraries from Ubuntu 22.04 (the ROCm edition: 24.04); these include LGPL and other
+  WebKitGTK/GTK/GStreamer libraries from Ubuntu 22.04; these include LGPL and other
   licenses and require the matching notices and applicable source/relinking materials.
 - **IBM Plex Sans** — Copyright © 2017 IBM Corp., with Reserved Font Name "Plex", under the
   SIL Open Font License 1.1. The interface bundles the unmodified variable font from IBM's
@@ -35,7 +35,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
   AMD under MIT, BSD, University of Illinois/NCSA and Apache-2.0-with-LLVM-exception terms in
   [ROCm's repositories](https://github.com/ROCm/rocm-systems); the MIT notice they share is
   reproduced below. Its libnuma (LGPL-2.1) and libelf (elfutils, LGPL-3.0-or-later or
-  GPL-2.0-or-later) are Ubuntu 24.04's own builds, and the ROCm source bundle carries their
+  GPL-2.0-or-later) are Ubuntu 22.04's own builds, and the ROCm source bundle carries their
   Ubuntu source packages. libdrm is MIT.
 - **Windows DirectML engine** — ONNX is Apache-2.0; ONNX Runtime is MIT and ships its own
   third-party notices. The DirectML build uses ONNX 1.22.0, ONNX Runtime DirectML 1.24.4 and
