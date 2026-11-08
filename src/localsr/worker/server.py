@@ -136,12 +136,12 @@ DEVICE_LOST_EXIT_CODE = 75
 
 def _device_lost(error: BaseException) -> bool:
     """Whether a job failed because the graphics driver removed or reset the GPU."""
-    from localsr.core.onnx_runtime import GpuDeviceLost
+    from localsr.core.onnx_runtime import GpuDeviceLost, _is_device_lost
 
     seen: set[int] = set()
     current: BaseException | None = error
     while current is not None and id(current) not in seen:
-        if isinstance(current, GpuDeviceLost):
+        if isinstance(current, GpuDeviceLost) or _is_device_lost(current):
             return True
         seen.add(id(current))
         current = current.__cause__ or current.__context__
@@ -376,8 +376,14 @@ class WorkerServer:
                     # into a job_failed message instead of killing the worker.
                     except Exception as e:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
-                        send_message(JobFailed(job_id=job_id, error_message=str(e)))
                         self.restart_after_job = _device_lost(e)
+                        send_message(
+                            JobFailed(
+                                job_id=job_id,
+                                error_message=str(e),
+                                restart_required=self.restart_after_job,
+                            )
+                        )
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
@@ -441,8 +447,14 @@ class WorkerServer:
                         self._run_video_job(job_id, data)
                     except Exception as e:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
-                        send_message(JobFailed(job_id=job_id, error_message=str(e)))
                         self.restart_after_job = _device_lost(e)
+                        send_message(
+                            JobFailed(
+                                job_id=job_id,
+                                error_message=str(e),
+                                restart_required=self.restart_after_job,
+                            )
+                        )
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
@@ -478,8 +490,14 @@ class WorkerServer:
                         send_message(BenchmarkCancelled(job_id=job_id))
                     except Exception as error:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
-                        send_message(BenchmarkFailed(job_id=job_id, error_message=str(error)))
                         self.restart_after_job = _device_lost(error)
+                        send_message(
+                            BenchmarkFailed(
+                                job_id=job_id,
+                                error_message=str(error),
+                                restart_required=self.restart_after_job,
+                            )
+                        )
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
