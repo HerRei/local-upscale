@@ -76,7 +76,19 @@
 
 <section class="control-section">
   <button class="disclosure" on:click={() => (advanced = !advanced)}
-    ><span>Advanced</span><b>{advanced ? '⌃' : '⌄'}</b><small
+    ><span>Advanced</span><b aria-hidden="true"
+      ><svg
+        viewBox="0 0 12 12"
+        width="10"
+        height="10"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        ><path d={advanced ? 'M3 7.5 6 4.5 9 7.5' : 'M3 4.5 6 7.5 9 4.5'} /></svg
+      ></b
+    ><small
       >{settings.task === 'edit' ? 'Size, steps, seed, hardware' : 'Scale, format, hardware'}</small
     ></button
   >
@@ -334,7 +346,7 @@
       <div class="field-row">
         <label for="interface-scale">Interface text</label><select
           id="interface-scale"
-          value={settings.interface_scale}
+          value={String(settings.interface_scale)}
           on:change={(event) =>
             updateSettings({
               interface_scale: Number(event.currentTarget.value) as UiSettings['interface_scale'],
