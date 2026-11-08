@@ -101,7 +101,8 @@ def chain(descriptor, route, tensor: torch.Tensor, side: int) -> list[dict]:
                 started = time.perf_counter()
                 output = session.run(None, {"image": tile.numpy()})[0]
                 warm = time.perf_counter() - started
-                trace.cleanup()
+                # Ends the profile first: Windows keeps it open while the session lives.
+                probe._release_session({"session": session, "trace": trace})
                 entry[f"route_{config[0]}"] = {
                     **metrics(output, reference),
                     "session_seconds": round(created, 3),
