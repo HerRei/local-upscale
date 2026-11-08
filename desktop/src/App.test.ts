@@ -1942,6 +1942,26 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it('uses the tile overlap a library model needs', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /DAT2 ×4 BHI Real/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'bhi_dat2_real_x4', halo: 32 }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Back to Best' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'realplksr_nomoswebphoto_x4', halo: 16 }),
+      ),
+    );
+  });
+
   it('pins a library model to Best and removes an installed model', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     api.removeModel.mockResolvedValue(undefined);

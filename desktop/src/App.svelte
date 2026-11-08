@@ -1121,6 +1121,8 @@
       output_scale: model
         ? Math.min(model.native_scale, Math.max(2, settings.output_scale))
         : settings.output_scale,
+      // As the presets do: some models need a wider overlap between tiles.
+      halo: model ? model.recommended_halo : settings.halo,
       allow_unsafe_pickle_model: false,
       enable_face_model: false,
       quality: 'custom',

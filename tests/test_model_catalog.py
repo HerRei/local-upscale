@@ -431,3 +431,10 @@ def test_default_model_directory():
     dir_path = default_model_directory()
     assert isinstance(dir_path, Path)
     assert dir_path.name == "models"
+
+
+def test_only_the_slow_dat2_models_stay_out_of_the_presets():
+    assert {model.model_id for model in MODEL_CATALOG if not model.preset_eligible} == {
+        "bhi_dat2_real_x4",
+        "realwebphoto_v4_dat2_x4",
+    }
