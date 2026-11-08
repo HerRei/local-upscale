@@ -89,20 +89,32 @@
           disabled={inProgress || status.stage === 'downloaded'}
           ><option value="stable">Stable</option><option value="beta">Beta</option></select
         >
-        <label class="count"
-          ><input
-            type="checkbox"
-            checked={checkAtLaunch}
-            on:change={(event) => dispatch('checkatlaunch', event.currentTarget.checked)}
-          /> Check for updates when LocalSR starts</label
-        >
-        <label class="count"
-          ><input
-            type="checkbox"
-            checked={anonymousUpdateCount}
-            on:change={(event) => dispatch('anonymouscount', event.currentTarget.checked)}
-          /> Send an anonymous update-check count (version, platform, channel)</label
-        >
+        {#if status.configured}
+          <!-- Each box shows what LocalSR has saved: a click asks for the change, and the
+               box follows once it is saved, so a failed save never leaves it showing one. -->
+          <label class="count"
+            ><input
+              type="checkbox"
+              checked={checkAtLaunch}
+              on:change={(event) => {
+                const wanted = event.currentTarget.checked;
+                event.currentTarget.checked = checkAtLaunch;
+                dispatch('checkatlaunch', wanted);
+              }}
+            /> Check for updates when LocalSR starts</label
+          >
+          <label class="count"
+            ><input
+              type="checkbox"
+              checked={anonymousUpdateCount}
+              on:change={(event) => {
+                const wanted = event.currentTarget.checked;
+                event.currentTarget.checked = anonymousUpdateCount;
+                dispatch('anonymouscount', wanted);
+              }}
+            /> Send an anonymous update-check count (version, platform, channel)</label
+          >
+        {/if}
       {/if}
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
       <p class="detail">

@@ -224,9 +224,13 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         _ => None,
     };
     if let Some(name) = switch {
-        if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
-            crate::commands::toggle_update_switch(&state, app, name);
-        }
+        // Off the menu's thread: saving writes a file.
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
+                crate::commands::toggle_update_switch(&state, &app, name);
+            }
+        });
         return;
     }
     if id == "help.guide" {
