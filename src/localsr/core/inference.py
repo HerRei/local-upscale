@@ -195,11 +195,14 @@ def _onnx_route(device_str: str):
         except (OSError, RuntimeError):
             adapter = None
         if adapter is None:
-            return OnnxRoute("DmlExecutionProvider", index, identity=device_str, label=device_str)
+            return OnnxRoute(
+                "DmlExecutionProvider", index, identity=device_str, label=device_str, persist=False
+            )
         identity = "|".join(
             (
                 adapter["name"],
-                f"{adapter['vendor_id']:04x}:{adapter.get('device_id', 0):04x}",
+                f"{adapter['vendor_id']:04x}:{adapter.get('device_id', 0):04x}"
+                f":{adapter.get('subsystem_id', 0):08x}",
                 str(adapter.get("driver_version")),
             )
         )
@@ -208,6 +211,7 @@ def _onnx_route(device_str: str):
             index,
             identity=identity,
             label=f"{adapter['name']} (DirectML)",
+            persist=adapter.get("driver_version") is not None,
         )
     if kind == "openvino":
         from .onnx_runtime import OnnxRoute
@@ -220,13 +224,21 @@ def _onnx_route(device_str: str):
                 "Choose another device in the Hardware settings."
             )
         identity = "|".join(
-            (device["name"], device["device_id"], device["architecture"], device["plugin_version"])
+            (
+                device["key"],
+                device["name"],
+                device["device_id"],
+                device["architecture"],
+                device["plugin_version"],
+                str(device.get("driver")),
+            )
         )
         return OnnxRoute(
             "OpenVINOExecutionProvider",
             ep_device=device["ep_device"],
             identity=identity,
             label=f"{device['name']} (OpenVINO)",
+            persist=device.get("driver") is not None,
         )
     return None
 

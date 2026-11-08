@@ -5,6 +5,7 @@
 
 # Serialized dataclass fields: protocol messages, benchmark/estimate reports and
 # catalog entries are emitted through dataclasses.asdict() or the catalog export.
+VIDEO  # ModelPurpose enum member used by catalog data and the desktop
 allow_unverified_checkpoint
 author
 client_name
@@ -53,6 +54,7 @@ processing_stage
 protocol_version
 rationale
 requires_download
+restart_required
 scratch_directory
 shared_memory
 source_url
@@ -76,7 +78,6 @@ vram_estimate_mb
 warmup_count
 working_disk_bytes
 workload_version
-VIDEO  # ModelPurpose enum member used by catalog data and the desktop
 
 # Worker protocol request contracts exercised by tests and external hosts.
 HandshakeRequest

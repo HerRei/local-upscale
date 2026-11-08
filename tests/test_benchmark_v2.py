@@ -465,3 +465,33 @@ def test_render_tiles_are_only_requested_for_unmeasured_warmup():
     run_scene(**arguments, warm=False)
     assert "tile_callback" in calls[0] and "tile_callback" not in calls[1]
     assert len(pixels) == 1 and np.all(pixels[0] == 127)
+
+
+@pytest.mark.parametrize(
+    ("device_id", "provider"),
+    [("directml:0", "DmlExecutionProvider"), ("openvino:86806d7", "OpenVINOExecutionProvider")],
+)
+def test_onnx_gpu_routes_are_benchmarked_although_torch_stages_on_the_cpu(device_id, provider):
+    engine = _FakeEngine()
+    engine.active_backend_id = device_id
+    engine.active_model = type(
+        "Model", (), {"execution_provider": provider, "execution_verified": True}
+    )()
+    ticks = {"value": 0.0}
+
+    def clock():
+        ticks["value"] += 0.5
+        return ticks["value"]
+
+    result = run_device_phase(
+        engine=engine,
+        model_info=_FakeModelInfo(),
+        model_path="/models/quick.pth",
+        device_id=device_id,
+        device_name="Integrated GPU",
+        device_type=device_id.split(":")[0],
+        scenes=(SceneSpec("test-compute", 16, 16, 16, "compute"),),
+        cancel_event=threading.Event(),
+        clock=clock,
+    )
+    assert result.device == device_id

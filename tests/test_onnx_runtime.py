@@ -114,7 +114,11 @@ def test_cpu_and_onnx_gpu_never_share_a_cached_model(monkeypatch):
             torch.float32,
             {
                 "onnx_route": OnnxRoute(
-                    "DmlExecutionProvider", 0, identity="directml:0", label="directml:0"
+                    "DmlExecutionProvider",
+                    0,
+                    identity="directml:0",
+                    label="directml:0",
+                    persist=False,  # no adapter details: verdicts only for this process
                 )
             },
         ),
@@ -355,8 +359,15 @@ def test_a_flat_first_tile_cannot_pass_a_broken_configuration(monkeypatch, tmp_p
         return output
 
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", wrong_on_detail)
+    statuses = []
+    converted.set_status_callback(statuses.append)
     flat = torch.full((1, 3, 8, 8), 0.5)
-    converted(flat)
+    np.testing.assert_allclose(converted(flat).numpy(), descriptor()(flat).numpy(), atol=1e-6)
+    # A flat tile decides nothing: it ran on the CPU, the user is told, the check goes on.
+    assert not (tmp_path / "verdicts.json").exists()
+    assert any("cannot show whether" in status for status in statuses)
+    assert not converted.execution_verified
+    converted(torch.rand(1, 3, 8, 8))
     assert active_config(converted) == "sound"
 
 
@@ -406,3 +417,82 @@ def test_placement_counts_what_a_gpu_route_leaves_on_the_cpu():
         "cpu_heavy": ["MatMul"],
     }
     assert _placement(SimpleNamespace(), "DmlExecutionProvider") is None  # older ONNX Runtime
+
+
+def test_out_of_memory_while_opening_is_not_a_verdict(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+
+    converted, _ = gated(monkeypatch, tmp_path, ("a", "b"))
+
+    def no_memory(self, graph, config):
+        raise RuntimeError("Failed to allocate memory for the graph")
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_create", no_memory)
+    with pytest.raises(RuntimeError, match="Out of memory in the ONNX"):
+        converted(torch.rand(1, 3, 8, 8))
+    assert not (tmp_path / "verdicts.json").exists()  # smaller tiles may still work
+
+
+def test_a_lost_device_wins_over_a_cancellation_at_the_same_moment(monkeypatch):
+    import threading
+
+    from onnxruntime.capi.onnxruntime_pybind11_state import RuntimeException
+
+    from localsr.core.onnx_runtime import GpuDeviceLost
+
+    converted = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
+    image = torch.zeros(1, 3, 8, 8)
+    converted(image)
+    cancel = threading.Event()
+    converted.set_cancel_event(cancel)
+
+    def removed(_image):
+        cancel.set()
+        raise RuntimeException("DXGI_ERROR_DEVICE_REMOVED (0x887A0005)")
+
+    monkeypatch.setattr(converted.model, "_session", removed)
+    with pytest.raises(GpuDeviceLost):
+        converted(image)
+    assert not converted.model.sessions
+
+
+def test_an_accepted_configuration_that_crashes_falls_back(monkeypatch, tmp_path):
+
+    original = descriptor()
+    image = torch.rand(1, 3, 8, 8)
+    first, _ = gated(monkeypatch, tmp_path, ("default", "basic"))
+    first(image)
+    assert active_config(first) == "default"
+    # The next day the accepted configuration crashes on its first tile.
+    again, _ = gated(monkeypatch, tmp_path, ("default", "basic"), failing={"default"})
+    np.testing.assert_allclose(again(image).numpy(), original(image).numpy(), atol=1e-6)
+    assert active_config(again) == "basic"
+    state = next(iter(again.model.sessions.values()))
+    assert "graph" not in state  # the serialized graph goes once a configuration works
+
+
+def test_verdicts_without_a_known_driver_last_only_for_this_process(tmp_path):
+    from localsr.core.onnx_runtime import _Verdicts
+
+    stored, temporary = _Verdicts(tmp_path), _Verdicts(tmp_path, persist=False)
+    temporary.put("key", {"accepted": True})
+    assert temporary.get("key")["accepted"]
+    assert not (tmp_path / "verdicts.json").exists()
+    stored.put("key", {"accepted": True})
+    assert _Verdicts(tmp_path).get("key")["accepted"]
+
+
+def test_openvino_luid_finds_the_dxgi_adapter_and_its_driver(monkeypatch):
+    from localsr.core import openvino_devices, windows_adapters
+
+    # OpenVINO writes the LUID's eight bytes in memory order: LowPart, then HighPart.
+    monkeypatch.setattr(
+        windows_adapters,
+        "directml_adapters",
+        lambda: [
+            {"luid": "00000000000000aa", "driver_version": "1.0.0.0"},
+            {"luid": "00005563264fcc20", "driver_version": "32.0.101.6987"},
+        ],
+    )
+    assert openvino_devices._windows_driver("20cc4f2663550000") == "32.0.101.6987"
+    assert openvino_devices._windows_driver("not hex") is None

@@ -418,7 +418,8 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
                     granted = adapter["budget"] - (adapter.get("usage") or 0)
                     if integrated and adapter.get("shared_budget") is not None:
                         granted += adapter["shared_budget"] - (adapter.get("shared_usage") or 0)
-                    budget = max(256 * 1024**2, min(budget, int(granted * 0.85)))
+                    # No floor: a near-exhausted grant must not be reported as more.
+                    budget = min(budget, max(0, int(granted * 0.85)))
                 devices.append(
                     {
                         "id": f"directml:{adapter['index']}",
