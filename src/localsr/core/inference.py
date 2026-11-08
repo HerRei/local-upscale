@@ -191,27 +191,35 @@ def _onnx_route(device_str: str):
         from .windows_adapters import directml_adapters
 
         try:
-            adapter = next((a for a in directml_adapters() if a["index"] == index), None)
+            adapters = directml_adapters()
         except (OSError, RuntimeError):
-            adapter = None
+            adapters = []
+        adapter = next((a for a in adapters if a["index"] == index), None)
         if adapter is None:
             return OnnxRoute(
                 "DmlExecutionProvider", index, identity=device_str, label=device_str, persist=False
             )
-        identity = "|".join(
-            (
-                adapter["name"],
-                f"{adapter['vendor_id']:04x}:{adapter.get('device_id', 0):04x}"
-                f":{adapter.get('subsystem_id', 0):08x}",
-                str(adapter.get("driver_version")),
+
+        def describe(entry: dict) -> str:
+            return "|".join(
+                (
+                    entry["name"],
+                    f"{entry['vendor_id']:04x}:{entry.get('device_id', 0):04x}"
+                    f":{entry.get('subsystem_id', 0):08x}",
+                    str(entry.get("driver_version")),
+                )
             )
-        )
+
+        identity = describe(adapter)
+        # Two identical cards cannot be told apart across restarts, so their verdicts
+        # last only for this process.
+        twins = sum(1 for entry in adapters if describe(entry) == identity)
         return OnnxRoute(
             "DmlExecutionProvider",
             index,
             identity=identity,
             label=f"{adapter['name']} (DirectML)",
-            persist=adapter.get("driver_version") is not None,
+            persist=adapter.get("driver_version") is not None and twins == 1,
         )
     if kind == "openvino":
         from .onnx_runtime import OnnxRoute
