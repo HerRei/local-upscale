@@ -9,6 +9,10 @@
   2.39 (Ubuntu 24.04). Before release, every AppImage is checked the way the
   AppImage catalog checks it: no file in it may need a newer glibc than 2.35, and
   it must open its window without a network connection.
+- The ROCm and CUDA AppImages are about a third smaller: they no longer carry a
+  second copy of the engine's libraries. On a Radeon RX 9060 XT, the engine
+  inside the ROCm AppImage passed the checks for images, video with audio, and
+  cancelling and recovering.
 - On a Mac, Homebrew installs LocalSR: `brew install --cask herrei/tap/localsr`.
 - The advanced settings explain Tile, Halo and Precision, and the Photo and
   Illustration buttons say which kind of model they pick, right where you set them.
