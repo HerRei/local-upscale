@@ -323,9 +323,10 @@
       </div>
       {#if !usingTemporalVideo && settings.device_id.startsWith('directml:')}
         <p class="model-description">
-          DirectML uses the selected Windows GPU, including integrated graphics. The first time a
-          model runs on it, LocalSR checks once that the GPU gives the same result as the CPU. Start
-          with smaller tiles if shared memory is tight.
+          DirectML uses the selected Windows GPU, including integrated graphics. It has not been
+          tested on real hardware yet, so the first time a model runs on it, LocalSR checks once
+          that the GPU gives the same result as the CPU. Start with smaller tiles if shared memory
+          is tight.
         </p>
       {:else if gpuSuggestion?.download === 'intel-driver'}
         <p class="model-description">

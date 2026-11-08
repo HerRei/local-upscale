@@ -450,10 +450,13 @@ class _OnnxImage(torch.nn.Module):
                 # The traceback would keep the failed tile's session, and its memory, alive.
                 error = error.with_traceback(None)
                 gc.collect()
+                # The driver's own words (an HRESULT or OpenCL code) help a bug report.
+                detail = (str(error).strip().splitlines() or [""])[0][:200]
                 raise GpuDeviceLost(
                     f"The graphics driver stopped {self._label()} while it ran {self.architecture} "
                     "(device removed or reset). The engine restarts with a fresh device; if this "
                     "repeats, choose a smaller tile or the CPU."
+                    + (f" Driver message: {detail}" if detail else "")
                 ) from error
             if self.cancel_event is not None and self.cancel_event.is_set():
                 raise InterruptedError("Cancelled") from error

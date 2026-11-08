@@ -84,6 +84,9 @@ jobs:
             "torchvision==0.28.0" \
             --index-url https://download.pytorch.org/whl/cpu
           "$PYTHON" -m pip install --disable-pip-version-check -e ".[dev,video,face]"
+          # The GPU check's tests run the exported graphs on ONNX Runtime's CPU provider;
+          # without these they skip. Same pins as requirements/backend-openvino.in.
+          "$PYTHON" -m pip install --disable-pip-version-check "onnx==1.22.0" "onnxruntime==1.24.4"
           "$PYTHON" -m pip install --disable-pip-version-check build
           "$PYTHON" -m pyright --pythonpath "$PYTHON"
           "$PYTHON" -m pytest tests/ -v
@@ -126,6 +129,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -m pip install --disable-pip-version-check --no-cache-dir -e ".[dev,video,face]"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m pip install --disable-pip-version-check --no-cache-dir "onnx==1.22.0" "onnxruntime==1.24.4"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -c "import torch, torchvision; print(f'torch={torch.__version__} torchvision={torchvision.__version__}')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $python -m pytest tests/ -v
@@ -148,4 +153,5 @@ jobs:
           PYTHON="$RUNNER_TEMP/venv/bin/python"
           "$PYTHON" -m pip install --disable-pip-version-check --upgrade "pip==26.2.1"
           "$PYTHON" -m pip install --disable-pip-version-check -e ".[dev,video,face]"
+          "$PYTHON" -m pip install --disable-pip-version-check "onnx==1.22.0" "onnxruntime==1.24.4"
           "$PYTHON" -m pytest tests/ -v
