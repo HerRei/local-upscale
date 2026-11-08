@@ -93,16 +93,16 @@ def chain(descriptor, route, tensor: torch.Tensor, side: int) -> list[dict]:
             session = ort.InferenceSession(graph, options, providers=["CPUExecutionProvider"])
             entry[name] = metrics(session.run(None, {"image": tile.numpy()})[0], reference)
         for config in ROUTE_CONFIGS[route.provider]:
+            opened: dict = {}
             try:
                 started = time.perf_counter()
-                session, trace = probe._create(graph, config)
+                opened["session"], opened["trace"] = probe._create(graph, config)
                 created = time.perf_counter() - started
+                session = opened["session"]
                 session.run(None, {"image": tile.numpy()})
                 started = time.perf_counter()
                 output = session.run(None, {"image": tile.numpy()})[0]
                 warm = time.perf_counter() - started
-                # Ends the profile first: Windows keeps it open while the session lives.
-                probe._release_session({"session": session, "trace": trace})
                 entry[f"route_{config[0]}"] = {
                     **metrics(output, reference),
                     "session_seconds": round(created, 3),
@@ -110,6 +110,9 @@ def chain(descriptor, route, tensor: torch.Tensor, side: int) -> list[dict]:
                 }
             except Exception as error:  # noqa: BLE001 - a failing configuration is a result
                 entry[f"route_{config[0]}"] = {"error": f"{type(error).__name__}: {error}"[:300]}
+            finally:
+                # Ends the profile first: Windows keeps it open while the session lives.
+                probe._release_session(opened)
         results.append(entry)
     return results
 
