@@ -2517,6 +2517,8 @@
             ? ` · ${Math.round(snapshot.runtime.progress)}%`
             : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
+          class="status-detail"
+          title={booting ? undefined : idleSummary || snapshot.runtime.status_detail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
             : idleSummary || snapshot.runtime.status_detail}</span
