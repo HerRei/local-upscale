@@ -81,7 +81,9 @@ def scan(tree: Path) -> dict[str, str]:
     ]
     with ThreadPoolExecutor(max_workers=4) as pool:
         found = dict(zip(files, pool.map(required_glibc, files), strict=True))
-    return {str(path.relative_to(tree)): version for path, version in found.items() if version}
+    return {
+        path.relative_to(tree).as_posix(): version for path, version in found.items() if version
+    }
 
 
 def main() -> int:
