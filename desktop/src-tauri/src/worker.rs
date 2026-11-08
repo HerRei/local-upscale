@@ -598,13 +598,29 @@ const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 /// How long an engine that asked for a restart may take to exit before it is stopped.
 const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
 
-/// The exit code with which the engine asks for a fresh process after a lost GPU.
-const RESTART_EXIT_CODE: i32 = 75;
-
-/// Whether an engine that ended on its own crashed: a failure other than the requested
-/// restart, such as an access violation in a graphics driver or a fatal signal.
+/// Whether an engine that ended on its own died of a fault in native code, such as an
+/// access violation in a graphics driver. A kill (the OOM killer, Task Manager) or an
+/// ordinary failing exit is not one: the engine then cannot blame the GPU it was using.
 fn engine_crashed(status: &std::io::Result<std::process::ExitStatus>) -> bool {
-    matches!(status, Ok(exit) if !exit.success() && exit.code() != Some(RESTART_EXIT_CODE))
+    let Ok(exit) = status else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        // SIGILL, SIGABRT, SIGFPE, SIGSEGV and SIGBUS (7 on Linux, 10 on macOS).
+        let bus = if cfg!(target_os = "linux") { 7 } else { 10 };
+        exit.signal()
+            .is_some_and(|signal| [4, 6, 8, 11, bus].contains(&signal))
+    }
+    #[cfg(windows)]
+    {
+        // NTSTATUS error codes (0xC0000005 access violation, 0xC0000409 fast fail, ...)
+        // and 3, the exit code of abort().
+        exit.code()
+            .is_some_and(|code| code == 3 || code as u32 >= 0xC000_0000)
+    }
 }
 
 fn restart_overdue(restarting: bool, since: &mut Option<Instant>, now: Instant) -> bool {
@@ -1708,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_unrequested_failing_exit_counts_as_a_crash() {
+    fn only_a_native_fault_counts_as_a_crash() {
         #[cfg(unix)]
         use std::os::unix::process::ExitStatusExt;
         #[cfg(windows)]
@@ -1716,23 +1732,27 @@ mod tests {
         use std::process::ExitStatus;
 
         #[cfg(unix)]
-        let (clean, restart, failure, access_violation) = (
+        let (clean, restart, failure, killed, faults) = (
             ExitStatus::from_raw(0),
             ExitStatus::from_raw(75 << 8),
             ExitStatus::from_raw(1 << 8),
-            ExitStatus::from_raw(11), // SIGSEGV
+            ExitStatus::from_raw(9), // SIGKILL, as from the OOM killer
+            vec![ExitStatus::from_raw(11), ExitStatus::from_raw(6)], // SIGSEGV, SIGABRT
         );
         #[cfg(windows)]
-        let (clean, restart, failure, access_violation) = (
+        let (clean, restart, failure, killed, faults) = (
             ExitStatus::from_raw(0),
             ExitStatus::from_raw(75),
-            ExitStatus::from_raw(1),
-            ExitStatus::from_raw(0xC000_0005),
+            ExitStatus::from_raw(2),
+            ExitStatus::from_raw(1), // TerminateProcess from Task Manager
+            vec![ExitStatus::from_raw(0xC000_0005), ExitStatus::from_raw(3)],
         );
-        assert!(!engine_crashed(&Ok(clean)));
-        assert!(!engine_crashed(&Ok(restart)));
-        assert!(engine_crashed(&Ok(failure)));
-        assert!(engine_crashed(&Ok(access_violation)));
+        for status in [clean, restart, failure, killed] {
+            assert!(!engine_crashed(&Ok(status)), "{status:?}");
+        }
+        for status in faults {
+            assert!(engine_crashed(&Ok(status)), "{status:?}");
+        }
         assert!(!engine_crashed(&Err(std::io::Error::other("no status"))));
     }
 
