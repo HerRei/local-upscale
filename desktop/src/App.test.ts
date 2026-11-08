@@ -3,7 +3,7 @@
 import { updateDialogOpen } from './lib/updates';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
@@ -210,6 +210,24 @@ describe('Update switches', () => {
   it('go to the host on their own, even during a job, and never through a full save', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.runtime.active_job_id = 'job-running';
+    // A direct build with its own update feed shows the switches; no launch check runs.
+    snapshot.settings.check_updates_at_launch = false;
+    const unconfigured = api.updateStatus.getMockImplementation();
+    onTestFinished(() => {
+      if (unconfigured) api.updateStatus.mockImplementation(unconfigured);
+    });
+    api.updateStatus.mockResolvedValue({
+      configured: true,
+      channel: 'beta',
+      target: 'darwin-aarch64-mps-native',
+      stage: 'idle',
+      version: '',
+      notes: '',
+      size: 0,
+      downloaded: 0,
+      message: '',
+      settings_recovery: false,
+    });
     const user = await mountWith(snapshot);
     await chooseMenuItem('app.updates');
     await user.click(
@@ -220,7 +238,7 @@ describe('Update switches', () => {
     await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
     expect(api.setUpdateSwitch.mock.calls).toEqual([
       ['anonymous_update_count', false],
-      ['check_updates_at_launch', false],
+      ['check_updates_at_launch', true], // it started off in this test
     ]);
     expect(api.saveSettings).not.toHaveBeenCalledWith(
       expect.objectContaining({ anonymous_update_count: false }),
@@ -228,7 +246,6 @@ describe('Update switches', () => {
     // The menu's own items are the host's: the window does not act on them.
     await chooseMenuItem('app.update-count');
     expect(api.setUpdateSwitch).toHaveBeenCalledTimes(2);
-    updateDialogOpen.set(false); // the dialog's store outlives this test's window
   });
 });
 
@@ -413,6 +430,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  updateDialogOpen.set(false); // the dialog's store outlives each test's window
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

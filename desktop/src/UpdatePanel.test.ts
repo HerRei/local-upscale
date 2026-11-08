@@ -89,7 +89,7 @@ it('lets direct builds turn off the launch check and the count, even while proce
   const user = userEvent.setup();
   const counts: boolean[] = [];
   const launches: boolean[] = [];
-  render(UpdatePanel, {
+  const view = render(UpdatePanel, {
     // Neither switch touches a running job, so neither waits for one.
     props: { processing: true, anonymousUpdateCount: true, checkAtLaunch: true },
     events: {
@@ -107,4 +107,28 @@ it('lets direct builds turn off the launch check and the count, even while proce
   await user.click(launch);
   expect(counts).toEqual([false]);
   expect(launches).toEqual([false]);
+  // The boxes show what is saved until the host has saved the change (or refused it).
+  expect((count as HTMLInputElement).checked).toBe(true);
+  expect((launch as HTMLInputElement).checked).toBe(true);
+  await view.rerender({ processing: true, anonymousUpdateCount: false, checkAtLaunch: false });
+  expect((count as HTMLInputElement).checked).toBe(false);
+  expect((launch as HTMLInputElement).checked).toBe(false);
+});
+
+it('shows no update switches in a build without its own update feed', async () => {
+  api.updateStatus.mockResolvedValue({
+    configured: false,
+    channel: 'beta',
+    target: '',
+    stage: 'idle',
+    version: '',
+    notes: '',
+    size: 0,
+    downloaded: 0,
+    message: '',
+    settings_recovery: false,
+  });
+  render(UpdatePanel, { anonymousUpdateCount: true, checkAtLaunch: true });
+  await screen.findByText('Software Update');
+  expect(screen.queryByLabelText('Check for updates when LocalSR starts')).toBeNull();
 });

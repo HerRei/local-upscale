@@ -511,10 +511,18 @@
     stateRefresh = setTimeout(() => void refresh(), 80);
   }
 
+  // Refreshes can overlap; an answer older than the one already shown is dropped, so it
+  // cannot undo a change (an update switch, for one) that a newer answer showed.
+  let refreshesStarted = 0;
+  let refreshShown = 0;
+
   async function refresh(): Promise<void> {
     if (!api.isTauri()) return;
+    const order = ++refreshesStarted;
     try {
       const latest = await api.refreshSnapshot();
+      if (order < refreshShown) return;
+      refreshShown = order;
       for (const media of latest.media) {
         const previous = snapshot.media.find((item) => item.id === media.id);
         if (media.probe_status === 'pending' && previous?.probe_status === 'pending') {
