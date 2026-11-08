@@ -134,6 +134,14 @@ def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | 
     """Apply a hard allocator ceiling and return its fraction of device capacity."""
     if device.type in {"cuda", "xpu"}:
         backend = torch.cuda if device.type == "cuda" else torch.xpu
+        properties = backend.get_device_properties(device)
+        if bool(getattr(properties, "is_integrated", False)) or bool(
+            getattr(properties, "is_integrated_gpu", False)
+        ):
+            # An integrated GPU (an AMD APU under ROCm, say) reports only its BIOS
+            # carve-out here, often 512 MiB, while it really allocates from shared
+            # system memory. A cap against the carve-out would fail every job.
+            return None
         free_memory, total_memory = backend.mem_get_info(device)
         if total_memory <= 0:
             return None
@@ -154,6 +162,64 @@ def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | 
             setter(fraction)
         return fraction
 
+    return None
+
+
+def _onnx_route(device_str: str):
+    """The ONNX Runtime route for a DirectML or OpenVINO device id, or None for PyTorch."""
+    kind, _, key = device_str.partition(":")
+    if kind == "directml":
+        from .onnx_runtime import OnnxRoute, directml_available
+
+        if not directml_available():
+            # Without ONNX Runtime DirectML the legacy torch-directml path decides.
+            return None
+        try:
+            index = int(key)
+        except ValueError as error:
+            raise RuntimeError(f"Invalid DirectML device identifier: {device_str}") from error
+        if index < 0:
+            raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
+        from .windows_adapters import directml_adapters
+
+        try:
+            adapter = next((a for a in directml_adapters() if a["index"] == index), None)
+        except (OSError, RuntimeError):
+            adapter = None
+        if adapter is None:
+            return OnnxRoute("DmlExecutionProvider", index, identity=device_str, label=device_str)
+        identity = "|".join(
+            (
+                adapter["name"],
+                f"{adapter['vendor_id']:04x}:{adapter.get('device_id', 0):04x}",
+                str(adapter.get("driver_version")),
+            )
+        )
+        return OnnxRoute(
+            "DmlExecutionProvider",
+            index,
+            identity=identity,
+            label=f"{adapter['name']} (DirectML)",
+        )
+    if kind == "openvino":
+        from .onnx_runtime import OnnxRoute
+        from .openvino_devices import device_for
+
+        device = device_for(key)
+        if device is None:
+            raise RuntimeError(
+                "The selected Intel GPU is no longer available through OpenVINO. "
+                "Choose another device in the Hardware settings."
+            )
+        identity = "|".join(
+            (device["name"], device["device_id"], device["architecture"], device["plugin_version"])
+        )
+        return OnnxRoute(
+            "OpenVINOExecutionProvider",
+            ep_device=device["ep_device"],
+            identity=identity,
+            label=f"{device['name']} (OpenVINO)",
+        )
     return None
 
 
@@ -193,33 +259,19 @@ class InferenceEngine:
         desired path. Image pipelines still use process_image(), which
         calls this internally.
         """
-        onnx_device_index = None
-        if device_str.startswith("directml:"):
-            from .onnx_runtime import directml_available
-
-            if directml_available():
-                try:
-                    onnx_device_index = int(device_str.partition(":")[2])
-                except ValueError as error:
-                    raise RuntimeError(
-                        f"Invalid DirectML device identifier: {device_str}"
-                    ) from error
-                if onnx_device_index < 0:
-                    raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
+        onnx_route = _onnx_route(device_str)
         # ONNX owns the GPU tensors. PyTorch stages tiles and validates returned
         # pixels on CPU; the selected execution backend is tracked separately.
         device = (
-            torch.device("cpu")
-            if onnx_device_index is not None
-            else _resolve_torch_device(device_str)
+            torch.device("cpu") if onnx_route is not None else _resolve_torch_device(device_str)
         )
         precision = (
             torch.float16
-            if precision_str == "fp16" and model_info.half_supported and onnx_device_index is None
+            if precision_str == "fp16" and model_info.half_supported and onnx_route is None
             else torch.float32
         )
         coreml_units: tuple[str, ...] = ()
-        if onnx_device_index is None and device.type == "mps" and self.neural_engine_enabled:
+        if onnx_route is None and device.type == "mps" and self.neural_engine_enabled:
             from .coreml_runtime import coreml_units_for
 
             coreml_units = coreml_units_for(str(getattr(model_info, "architecture", "")))
@@ -243,10 +295,8 @@ class InferenceEngine:
         if not any(d == device for _, d, _ in self._loaded_models.values()):
             _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
 
-        if onnx_device_index is not None:
-            model, _ = self.model_adapter.load(
-                model_path, device, precision, onnx_device_index=onnx_device_index
-            )
+        if onnx_route is not None:
+            model, _ = self.model_adapter.load(model_path, device, precision, onnx_route=onnx_route)
         elif coreml_units:
             model, _ = self.model_adapter.load(
                 model_path, device, precision, coreml_units=coreml_units
