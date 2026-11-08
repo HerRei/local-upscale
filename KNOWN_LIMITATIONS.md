@@ -6,7 +6,7 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 
 - Published packages: macOS on Apple Silicon (v0.3.0-beta); Windows CPU, DirectML
   and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
-  (v0.3.0-beta; image editing is Mac only). The CUDA and
+  (v0.3.0-beta; image editing is tested only on the Mac). The CUDA and
   DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU (the app
   labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
@@ -79,9 +79,10 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 
 ## Image editing
 
-- Edit is experimental and published for macOS only. One configuration is
-  validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro, about two
-  minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
+- Edit is experimental and tested only on the Mac. CUDA/ROCm packages also
+  include editing support, but it has not been validated on those GPUs. One
+  configuration is validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro,
+  about two minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
   the Qwen bundles and larger edit sizes have not run on real hardware yet; their
   memory profiles are estimates. Up to v0.1.5-beta the memory guard misread free
   memory on Macs and refused edits that fit.
