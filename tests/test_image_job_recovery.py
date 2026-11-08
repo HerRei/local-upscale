@@ -184,3 +184,64 @@ def test_progress_accounts_for_fused_stages_and_excludes_initial_model_loading(m
         ("upscale", 100),
         ("face_restore", 100),
     ]
+
+
+def test_a_lost_device_exits_before_the_native_cleanup(tmp_path, monkeypatch):
+    import localsr.worker.server as server_module
+    from localsr.core.onnx_runtime import GpuDeviceLost
+
+    class Exited(BaseException):
+        pass
+
+    image = tmp_path / "input.png"
+    Image.new("RGB", (8, 8), (32, 64, 96)).save(image)
+    events = []
+    server = WorkerServer()
+    server.model_adapter = SimpleNamespace(
+        inspect=lambda path: NormalizedModelInfo("Test", 2, 3, 3, True, False, 1, 1, path, []),
+        release=lambda: events.append("release"),
+    )
+
+    def process_image(**kwargs):
+        raise GpuDeviceLost("The graphics driver stopped the GPU.")
+
+    server.engine = SimpleNamespace(process_image=process_image, release_model=lambda *a: None)
+    monkeypatch.setattr(server, "reader_thread_func", lambda: None)
+
+    def emit(message):
+        envelope = json.loads(message.to_json())
+        if envelope["type"] == "job_failed":
+            events.append(("job_failed", envelope["data"]["restart_required"]))
+
+    def exit_now(code):
+        events.append(("exit", code))
+        raise Exited
+
+    monkeypatch.setattr(server_module, "send_message", emit)
+    monkeypatch.setattr(server_module.os, "_exit", exit_now)
+    server.message_queue.put(
+        {
+            "type": "job_request",
+            "data": {
+                "job_id": "job-0",
+                "image_path": str(image),
+                "model_path": str(tmp_path / "model.pth"),
+                "output_path": str(tmp_path / "output.png"),
+                "scratch_directory": str(tmp_path / "scratch"),
+                "output_format": "png",
+                "device": "directml:0",
+                "precision": "fp32",
+                "tile_size": 64,
+                "halo": 8,
+                "jpeg_quality": 98,
+                "preserve_metadata": True,
+                "safe_memory": True,
+                "preview_enabled": False,
+            },
+        }
+    )
+    with pytest.raises(Exited):
+        server.run()
+    # The fake _exit returns control, so Python still unwinds through the cleanup
+    # afterwards; the real os._exit never gets there.
+    assert events[:2] == [("job_failed", True), ("exit", server_module.DEVICE_LOST_EXIT_CODE)]

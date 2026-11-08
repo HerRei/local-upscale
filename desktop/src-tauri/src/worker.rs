@@ -255,6 +255,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
 
     thread::spawn(move || {
         let mut forced_job = String::new();
+        let mut restart_requested: Option<Instant> = None;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -262,6 +263,17 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 Ok(None) => {}
             }
             if state.worker.shutting_down.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                break child.wait();
+            }
+            let restarting = state
+                .runtime
+                .lock()
+                .map(|runtime| runtime.worker == "restarting")
+                .unwrap_or(false);
+            if restart_overdue(restarting, &mut restart_requested, Instant::now()) {
+                // The engine asked for a restart but has not exited, for example because
+                // freeing a lost GPU hangs; the queue waits for its replacement.
                 let _ = child.kill();
                 break child.wait();
             }
@@ -296,8 +308,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         let cleanup_error = lock(&state.worker.cancellation)
             .and_then(|mut cancellation| cancellation.finish())
             .err();
+        let mut requested_restart = false;
         if let Ok(mut runtime) = state.runtime.lock() {
             let active = std::mem::take(&mut runtime.active_job_id);
+            requested_restart = runtime.worker == "restarting" && forced_job.is_empty();
             let last_confirmed_stage = runtime.status_title.clone();
             let exit_summary = match &status {
                 Ok(exit) => format!("The inference engine exited with {exit}"),
@@ -307,13 +321,20 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             };
             let interruption = worker_interruption_detail(&exit_summary, &last_confirmed_stage);
             runtime.worker = "unavailable".into();
-            runtime.status_title = if forced_job.is_empty() {
-                "Engine stopped"
+            if requested_restart {
+                // Keep the failure that asked for the restart on screen; it already says
+                // that the engine restarts.
             } else {
-                "Cancelled"
+                runtime.status_title = if forced_job.is_empty() {
+                    "Engine stopped"
+                } else {
+                    "Cancelled"
+                }
+                .into();
             }
-            .into();
-            runtime.status_detail = if forced_job.is_empty() {
+            runtime.status_detail = if requested_restart {
+                std::mem::take(&mut runtime.status_detail)
+            } else if forced_job.is_empty() {
                 format!("{interruption} Restarting…")
             } else if let Some(error) = cleanup_error {
                 format!("Work stopped. Could not remove its temporary directory: {error}. Restarting engine…")
@@ -338,7 +359,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         }
         emit_state_changed(&app);
 
-        let attempt = if forced_job.is_empty() {
+        let attempt = if forced_job.is_empty() && !requested_restart {
             state.worker.restart_count.fetch_add(1, Ordering::SeqCst) + 1
         } else {
             1
@@ -527,6 +548,17 @@ fn handle_worker_envelope(
 
 /// A worker that lost its GPU device exits after its failure message; until its
 /// replacement is ready, no queued job may be sent to it.
+/// How long an engine that asked for a restart may take to exit before it is stopped.
+const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
+
+fn restart_overdue(restarting: bool, since: &mut Option<Instant>, now: Instant) -> bool {
+    if !restarting {
+        *since = None;
+        return false;
+    }
+    now.duration_since(*since.get_or_insert(now)) >= RESTART_EXIT_GRACE
+}
+
 fn hold_until_restart(runtime: &mut RuntimeStatus, data: &Value) {
     if data.get("restart_required").and_then(Value::as_bool) == Some(true) {
         runtime.worker = "restarting".into();
@@ -1604,6 +1636,35 @@ mod tests {
             &json!({"job_id": "a", "error_message": "x", "restart_required": true}),
         );
         assert_eq!(runtime.worker, "restarting");
+    }
+
+    #[test]
+    fn an_engine_that_does_not_exit_after_asking_for_a_restart_is_stopped() {
+        let start = Instant::now();
+        let mut since = None;
+        assert!(!restart_overdue(false, &mut since, start));
+        assert!(!restart_overdue(true, &mut since, start));
+        assert!(!restart_overdue(
+            true,
+            &mut since,
+            start + RESTART_EXIT_GRACE / 2
+        ));
+        assert!(restart_overdue(
+            true,
+            &mut since,
+            start + RESTART_EXIT_GRACE
+        ));
+        // A fresh request starts its own grace period.
+        assert!(!restart_overdue(
+            false,
+            &mut since,
+            start + RESTART_EXIT_GRACE * 2
+        ));
+        assert!(!restart_overdue(
+            true,
+            &mut since,
+            start + RESTART_EXIT_GRACE * 2
+        ));
     }
 
     #[test]

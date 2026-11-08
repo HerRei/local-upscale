@@ -245,6 +245,8 @@ class _OnnxImage(torch.nn.Module):
         self.cancel_event: threading.Event | None = None
         self.status_callback = None
         self.execution_verified = False
+        # Tiles that ran through PyTorch on the CPU because the route could not be checked.
+        self.cpu_tiles = 0
         self.verdicts = _Verdicts(gate_cache_directory(), persist=route.persist)
         # An image's tiles come in up to four shapes (interior, right edge, bottom edge,
         # corner). Keeping all four lets the next image or video frame of the same size
@@ -537,29 +539,65 @@ class _OnnxImage(torch.nn.Module):
         difference = np.abs(np.clip(candidate, 0, 1) - np.clip(reference, 0, 1))
         return (_psnr(candidate, reference), float(difference.max()), cpu_ms), reference
 
+    def _pattern_check(self, state: dict, shape: tuple[int, ...]):
+        """The configuration against the CPU on the fixed test pattern, once per
+        configuration and shape. A second, smoother pattern stands in when the model's CPU
+        result on the first is unstable; None when neither can be used."""
+        config = state["config"][0]
+        cached = state.get("pattern")
+        if cached is not None and cached[0] == config:
+            return cached[1]
+        result = None
+        for smooth in (False, True):
+            result, _ = self._compare(state, _test_pattern(shape, smooth=smooth), None)
+            if result is not None:
+                break
+        state["pattern"] = (config, result)
+        return result
+
+    def _on_cpu(self, state: dict, image, reference: np.ndarray | None = None):
+        """This tile through PyTorch on the CPU, while the configuration cannot be checked."""
+        if reference is None:
+            reference = self._reference(image)
+            self._check_cancelled()
+        self.cpu_tiles += 1
+        if state.get("cpu_only") and not state.get("told_cpu_only"):
+            state["told_cpu_only"] = True
+            self._status(
+                f"LocalSR cannot check {self._label()} for {self.architecture}: the model's "
+                "result on the CPU is unstable on its test images. These tiles run on the CPU."
+            )
+        elif not state.get("told_undecided"):
+            state["told_undecided"] = True
+            self._status(
+                f"Tiles with too little detail to check {self._label()} run on the CPU until "
+                f"a detailed tile shows that it matches the CPU for {self.architecture}."
+            )
+        return "undecided", reference
+
     def _judge(self, state: dict, image, output: np.ndarray):
         """Compare a configuration under test with PyTorch on the CPU.
 
-        Two inputs must both match: a fixed, detailed test pattern and the real tile. A
-        tile too flat to tell results apart, or one where the CPU's own result is
-        unstable, cannot decide; neither can the pattern for a model whose CPU result on
-        it is unstable, and then the real tile decides alone, provided it has detail.
-        Returns ("accepted", output), ("rejected", None) or ("undecided", CPU output).
+        Two inputs must both match: a fixed, detailed test pattern and the real tile. When
+        the CPU's own result on either cannot be used, nothing is decided and the tile's
+        CPU result is used instead. Returns ("accepted", output), ("rejected", None) or
+        ("undecided", CPU output).
         """
         config = state["config"][0]
-        pattern, _ = self._compare(state, _test_pattern(tuple(image.shape)), None)
-        tile, reference = self._compare(state, image, output)
-        if tile is None or float(image.std()) < _DETAILED_TILE_STD:
-            self._status(
-                f"This tile cannot show whether {self._label()} matches the CPU for "
-                f"{self.architecture}; it ran on the CPU, and the check continues on the "
-                "next tile."
-            )
-            return "undecided", reference
-        results = [tile] if pattern is None else [pattern, tile]
+        pattern = self._pattern_check(state, tuple(image.shape))
+        if pattern is None:
+            state["cpu_only"] = True
+            return self._on_cpu(state, image)
+        tile = None
+        results = [pattern]
+        if pattern[0] >= MINIMUM_PSNR:
+            tile, reference = self._compare(state, image, output)
+            if tile is None:
+                return self._on_cpu(state, image, reference)
+            results.append(tile)
         psnr = min(result[0] for result in results)
         accepted = psnr >= MINIMUM_PSNR
-        cpu_ms = tile[2]
+        cpu_ms = (tile or pattern)[2]
         gpu_ms = None
         if accepted:
             started = time.perf_counter()
@@ -574,7 +612,7 @@ class _OnnxImage(torch.nn.Module):
                 "max_error": round(max(result[1] for result in results), 6)
                 if all(math.isfinite(result[1]) for result in results)
                 else None,
-                "checked": ["tile"] if pattern is None else ["pattern", "tile"],
+                "checked": ["pattern", "tile"][: len(results)],
                 "gpu_ms": None if gpu_ms is None else round(gpu_ms, 1),
                 "cpu_ms": round(cpu_ms, 1),
                 "shape": list(image.shape),
@@ -619,6 +657,11 @@ class _OnnxImage(torch.nn.Module):
     def _attempt(self, state: dict, image, expected) -> tuple[str, np.ndarray | None]:
         """Run one tile on the open configuration: ("accepted" | "rejected" | "undecided",
         output). Errors that are not about the configuration propagate."""
+        if state.get("cpu_only"):
+            return self._on_cpu(state, image)
+        if state["pending"] and float(image.std()) < _DETAILED_TILE_STD:
+            # Too flat to tell results apart: no GPU run, the CPU's result is used.
+            return self._on_cpu(state, image)
         first_run = "trace" in state
         output = self._run(state["session"], image)
         providers = self._close_profile(state) if first_run else set()
@@ -653,6 +696,17 @@ class _OnnxImage(torch.nn.Module):
             image.shape[2] * self.scale,
             image.shape[3] * self.scale,
         )
+        try:
+            return self._advance(state, key, image, expected)
+        except BaseException:
+            # A switch to the next configuration that was interrupted (cancelled, out of
+            # memory) leaves no session; drop it so the next tile starts over from the
+            # stored verdicts, where an untried configuration is still untried.
+            if "session" not in state and self.sessions.get(key) is state:
+                del self.sessions[key]
+            raise
+
+    def _advance(self, state: dict, key: tuple, image, expected):
         while True:
             failure = None
             # A configuration that fails on its first tile (or during its check) is
@@ -719,12 +773,21 @@ def _placement(session, provider: str) -> dict | None:
     }
 
 
-def _test_pattern(shape: tuple[int, ...]) -> torch.Tensor:
+def _test_pattern(shape: tuple[int, ...], smooth: bool = False) -> torch.Tensor:
     """A fixed, detailed image of the given (N, C, H, W) shape: gradients, fine and
-    coarse waves, hard edges and light noise, all within [0, 1]."""
+    coarse waves, hard edges and light noise, all within [0, 1]. The smooth variant has
+    soft waves and faint noise only, for models whose CPU result on hard edges is unstable."""
     _, channels, height, width = shape
     y = torch.linspace(0, 1, height).view(height, 1)
     x = torch.linspace(0, 1, width).view(1, width)
+    if smooth:
+        soft = torch.sin(2 * math.pi * (x + y)) * torch.cos(2 * math.pi * 2 * x)
+        grain = torch.randn(height, width, generator=torch.Generator().manual_seed(20261109))
+        planes = [
+            (0.5 + (0.22 + 0.03 * channel) * soft + 0.015 * grain).clamp(0, 1)
+            for channel in range(channels)
+        ]
+        return torch.stack(planes).unsqueeze(0).expand(shape[0], -1, -1, -1).contiguous()
     waves = 0.5 + 0.3 * torch.sin(2 * math.pi * (3 * x + 2 * y)) * torch.cos(
         2 * math.pi * 7 * x * y
     )
@@ -782,4 +845,5 @@ class OnnxImageDescriptor:
 
     @property
     def execution_verified(self):
-        return self.model.execution_verified
+        """At least one tile ran on the checked GPU route, and none fell back to the CPU."""
+        return self.model.execution_verified and not self.model.cpu_tiles

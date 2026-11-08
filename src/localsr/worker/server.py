@@ -219,6 +219,21 @@ class WorkerServer:
         self.cancel_event.set()
         self.message_queue.put({"type": "shutdown_request"})
 
+    def _restart_if_required(self) -> None:
+        """After a lost device, exit as soon as the failure is reported. Freeing the sessions
+        of a lost device can hang, and the desktop app restarts a worker that exits."""
+        if not self.restart_after_job:
+            return
+        send_message(
+            LogMessage(
+                level="error",
+                message="The GPU device was lost; restarting the engine to recover it.",
+            )
+        )
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(DEVICE_LOST_EXIT_CODE)
+
     def run(self):
         reader_thread = threading.Thread(target=self.reader_thread_func, daemon=True)
         reader_thread.start()
@@ -227,17 +242,6 @@ class WorkerServer:
         send_message(LogMessage(level="info", message="Worker started and ready."))
 
         while self.running:
-            if self.restart_after_job:
-                send_message(
-                    LogMessage(
-                        level="error",
-                        message="The GPU device was lost; restarting the engine to recover it.",
-                    )
-                )
-                sys.stdout.flush()
-                sys.stderr.flush()
-                # The desktop app restarts a worker that exits.
-                os._exit(DEVICE_LOST_EXIT_CODE)
             try:
                 msg = self.message_queue.get(timeout=1.0)
                 req_type = msg.get("type")
@@ -384,6 +388,7 @@ class WorkerServer:
                                 restart_required=self.restart_after_job,
                             )
                         )
+                        self._restart_if_required()
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
@@ -455,6 +460,7 @@ class WorkerServer:
                                 restart_required=self.restart_after_job,
                             )
                         )
+                        self._restart_if_required()
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
@@ -498,6 +504,7 @@ class WorkerServer:
                                 restart_required=self.restart_after_job,
                             )
                         )
+                        self._restart_if_required()
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
