@@ -146,6 +146,9 @@
       width: slot?.width || media?.width || 1,
       height: slot?.height || media?.height || 1,
       preview_data_url: slot?.preview_data_url ?? '',
+      preview_width: slot?.preview_width ?? 0,
+      preview_height: slot?.preview_height ?? 0,
+      region: slot?.region,
       status: slot?.status ?? 'loading',
       error: slot?.error ?? '',
     };
@@ -2438,6 +2441,10 @@
           </div>{/if}
         <ComparePane
           items={compareItems}
+          generation={snapshot.runtime.compare?.generation ?? 0}
+          requestRegions={(generation, regions) =>
+            api.isTauri() ? api.requestCompareRegions(generation, regions) : Promise.resolve()}
+          clearRegions={() => (api.isTauri() ? api.clearCompareRegions() : Promise.resolve())}
           layout={compareLayout}
           setLayout={(layout) => (compareLayout = layout)}
           swapItems={(first, second) => setComparePicks(swapSlots(comparePicks, first, second))}

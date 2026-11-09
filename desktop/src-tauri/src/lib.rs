@@ -144,6 +144,8 @@ pub fn run() {
             commands::cancel_video_comparison,
             commands::request_image_comparison,
             commands::request_compare,
+            commands::request_compare_regions,
+            commands::clear_compare_regions,
             commands::cancel_jobs,
             commands::cancel_jobs_for_media,
             commands::start_model_trials,

@@ -664,3 +664,47 @@ class VideoJobCompleted:
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
+
+
+@dataclass
+class RegionRequest:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    x: int
+    y: int
+    width: int
+    height: int
+    target_width: int
+    target_height: int
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_request", "data": asdict(self)})
+
+
+@dataclass
+class RegionReady:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    png_base64: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_ready", "data": asdict(self)})
+
+
+@dataclass
+class RegionFailed:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_failed", "data": asdict(self)})

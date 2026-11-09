@@ -226,3 +226,17 @@ def test_the_engine_answers_a_capabilities_request_with_its_hardware():
     assert answer["type"] == "capabilities_info", answer
     assert any(device["id"] == "cpu" for device in answer["data"]["devices"])
     assert "gpu_suggestion" in answer["data"]
+
+
+def test_compare_region_protocol_has_identity_and_bounds():
+    from localsr.protocol.messages import RegionFailed, RegionReady, RegionRequest
+
+    request = RegionRequest("image.png", "slot1", 2, "job", 3, 1, 2, 30, 40, 60, 80)
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    fields = schema["$defs"]["regionRequest"]["allOf"][1]["properties"]["data"]["required"]
+    assert set(_message(request)["data"]) == set(fields)
+    for result in (
+        RegionReady("image.png", "slot1", 2, "job", 3, "pixels"),
+        RegionFailed("image.png", "slot1", 2, "job", 3, "error"),
+    ):
+        assert _message(result)["data"]["request_id"] == 3

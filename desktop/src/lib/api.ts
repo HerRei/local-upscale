@@ -371,3 +371,9 @@ export const discardUpdate = (): Promise<void> => invoke('discard_update');
 export const recoverUpdateSettings = (): Promise<void> => invoke('recover_update_settings');
 export const listenForUpdates = (callback: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
   listen<UpdateStatus>('update-status', (event) => callback(event.payload));
+
+export const requestCompareRegions = (
+  generation: number,
+  regions: (import('./compareRegions').Region | null)[],
+): Promise<void> => invoke('request_compare_regions', { generation, regions });
+export const clearCompareRegions = (): Promise<void> => invoke('clear_compare_regions');

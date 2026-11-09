@@ -755,6 +755,16 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?
                 .fail_media_probe(&string(data, "media_path"), &string(data, "error_message"))?;
         }
+        "region_ready" | "region_failed" => {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply_region(
+                &database,
+                &mut runtime.compare,
+                data,
+                envelope.message_type == "region_failed",
+            )?;
+        }
         "preview_ready" => {
             {
                 let database = lock(&state.database)?;
