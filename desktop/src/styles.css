@@ -1123,6 +1123,8 @@ input[type='text'],
   position: absolute;
   left: 0;
   bottom: 0;
+  /* A thin meter along the bottom edge; the shared rule above makes it full height. */
+  height: 3px;
   margin: 0;
   max-width: 100%;
 }
