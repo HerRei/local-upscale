@@ -53,8 +53,11 @@ How the verified package is installed depends on the edition:
   until the restart. A journal (`swap-journal.json` in the profile) names the backup
   and the copy until the new image is accepted. The profile journal is locked before
   reading or writing; different app folders sharing that profile cannot overwrite it.
-  It is published with an atomic rename and directory sync only after a complete,
-  synchronized backup exists. Under the same lock, `--headless-update-version`
+  It is written first, marked `preparing`, so a crash while staging or copying only
+  removes the partial files at the next start; it is rewritten with an atomic rename
+  and directory sync to a restoring record only after a complete, synchronized
+  backup exists. An accepted update removes the backup before the journal, so a crash
+  in between keeps the new image and leaves no stray file. Under the same lock, `--headless-update-version`
   reads the version at the destination before staging, so a surviving older process
   cannot overwrite a newer installation with an intermediate signed release.
   A failure after replacement restores the backup.
@@ -346,3 +349,11 @@ names, insufficient disk space, settings preservation, the AppImage swap with it
 lock, startup rollback after a crash, and the Windows confirmation at the next start. The production candidate test downloads a real signed archive through
 the app's own downloader and checks that truncation and substituted content are
 rejected.
+
+## Crash safety tests
+
+Test-only fault points (`update_storage::fault`, compiled under `cfg(test)`) let the
+tests fail, or "crash" without any cleanup, at every step of the AppImage swap and its
+recovery, of the engine package install (`engine_payload::recover_install` finishes or
+undoes a killed install at the next one) and of the Windows pending-install marker.
+Each run asserts one working executable or engine, no journal and no stray files.

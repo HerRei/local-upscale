@@ -8,6 +8,7 @@ use std::{
     path::{Component, Path},
 };
 
+use crate::update_storage;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -110,6 +111,33 @@ thread_local! {
     static AFTER_PART_VERIFICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Undo what a killed installation left in the engine's folder: a half-unpacked
+/// `engine.installing-*` goes, and an engine that was moved aside but not replaced
+/// (`engine.previous-*` with no `engine`) takes its place again.
+pub fn recover_install(destination: &Path) -> io::Result<()> {
+    let Some(parent) = destination.parent() else {
+        return Ok(());
+    };
+    let mut previous = Vec::new();
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("engine.installing-") {
+            fs::remove_dir_all(entry.path())?;
+        } else if name.starts_with("engine.previous-") {
+            previous.push(entry.path());
+        }
+    }
+    for path in previous {
+        if destination.exists() {
+            fs::remove_dir_all(path)?;
+        } else {
+            fs::rename(path, destination)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::Result<()> {
     install_manifest(&fs::read(manifest_path)?, source, destination)
 }
@@ -185,11 +213,10 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             hook();
         }
     });
+    recover_install(destination)?;
     let staging = parent.join(format!("engine.installing-{}", std::process::id()));
     let backup = parent.join(format!("engine.previous-{}", std::process::id()));
-    if backup.exists() {
-        return Err(invalid("a previous engine installation requires recovery"));
-    }
+    update_storage::fault("staging-create")?;
     fs::create_dir(&staging)?;
     let result = (|| {
         let reader = PartsReader {
@@ -218,6 +245,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             if bytes > manifest.unpacked_bytes || count > manifest.file_count {
                 return Err(invalid("engine archive exceeds its manifest"));
             }
+            update_storage::fault("extract-entry")?;
             if !entry.unpack_in(&staging)? {
                 return Err(invalid("engine archive escaped its destination"));
             }
@@ -239,14 +267,18 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             return Err(invalid("engine archive is incomplete"));
         }
         if destination.exists() {
+            update_storage::fault("backup-rename")?;
             fs::rename(destination, &backup)?;
         }
-        if let Err(error) = fs::rename(&staging, destination) {
+        let installed = update_storage::fault("install-rename")
+            .and_then(|()| fs::rename(&staging, destination));
+        if let Err(error) = installed {
             if backup.exists() {
                 fs::rename(&backup, destination)?;
             }
             return Err(error);
         }
+        update_storage::fault("backup-remove")?;
         if backup.exists() {
             fs::remove_dir_all(&backup)?;
         }
@@ -403,6 +435,88 @@ mod tests {
             b"exe"
         );
         assert!(!destination.join("old.exe").exists());
+    }
+
+    /// The engine folder after a failure or a crash: missing, or a whole engine; never
+    /// the unpacked half of one. Returns the worker's content.
+    fn engine_content(folder: &Path) -> Option<Vec<u8>> {
+        if !folder.exists() {
+            return None;
+        }
+        Some(fs::read(folder.join("localsr-worker.exe")).expect("engine without its worker"))
+    }
+
+    fn engine_leftovers(root: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("engine."))
+            .collect();
+        names.sort();
+        names
+    }
+
+    // A failure or a crash at any step of the engine install never leaves a partial
+    // engine, and the next install attempt restores or replaces the engine and clears
+    // every staging and backup folder.
+    #[test]
+    fn the_engine_install_survives_a_failure_or_a_crash_at_every_step() {
+        use update_storage::fault::{self, Mode};
+        for had_engine in [true, false] {
+            let fresh = |root: &Path| {
+                let manifest = payload(root, false, false);
+                let destination = root.join("engine");
+                if had_engine {
+                    fs::create_dir(&destination).unwrap();
+                    fs::write(destination.join("localsr-worker.exe"), b"old").unwrap();
+                }
+                (manifest, destination)
+            };
+            let root = tempfile::tempdir().unwrap();
+            let (manifest, destination) = fresh(root.path());
+            fault::arm(None);
+            install(&manifest, root.path(), &destination).unwrap();
+            let steps = fault::seen();
+            for expected in [
+                "staging-create",
+                "extract-entry",
+                "install-rename",
+                "backup-remove",
+            ] {
+                assert!(steps.contains(&expected), "{steps:?} lacks {expected}");
+            }
+            let installed_at = steps.iter().position(|s| *s == "install-rename").unwrap();
+            for (index, step) in steps.iter().enumerate() {
+                for mode in [Mode::Fail, Mode::Crash] {
+                    let why = format!("{step} #{index} {mode:?} had_engine={had_engine}");
+                    let root = tempfile::tempdir().unwrap();
+                    let (manifest, destination) = fresh(root.path());
+                    fault::arm(Some((step, mode)));
+                    let _ = fault::crashed(|| install(&manifest, root.path(), &destination));
+                    fault::arm(None);
+                    let new_in_place = index > installed_at;
+                    // Before any recovery: the engine is missing only while the old one
+                    // is moved aside, and is never partial.
+                    match engine_content(&destination) {
+                        Some(content) if new_in_place => assert_eq!(content, b"exe", "{why}"),
+                        Some(content) => assert_eq!(content, b"old", "{why}"),
+                        None => assert!(!new_in_place, "{why}"),
+                    }
+                    recover_install(&destination).unwrap();
+                    let expected = if new_in_place {
+                        Some(b"exe".to_vec())
+                    } else {
+                        had_engine.then(|| b"old".to_vec())
+                    };
+                    assert_eq!(engine_content(&destination), expected, "{why}");
+                    assert_eq!(engine_leftovers(root.path()), Vec::<String>::new(), "{why}");
+                    // And an install after the crash completes.
+                    install(&manifest, root.path(), &destination).unwrap();
+                    assert_eq!(engine_content(&destination), Some(b"exe".to_vec()), "{why}");
+                    assert_eq!(engine_leftovers(root.path()), Vec::<String>::new(), "{why}");
+                }
+            }
+        }
     }
 
     #[test]
