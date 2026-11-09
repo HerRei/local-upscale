@@ -181,6 +181,9 @@ pub struct CapabilityInfo {
     /// A GPU this edition cannot use and the download that would (or the missing driver).
     #[serde(default)]
     pub gpu_suggestion: serde_json::Value,
+    /// An Intel NPU the machine has but cannot use yet (its compiler is missing).
+    #[serde(default)]
+    pub npu_hint: serde_json::Value,
 }
 
 impl CapabilityInfo {

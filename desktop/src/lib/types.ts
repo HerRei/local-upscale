@@ -210,6 +210,8 @@ export interface CapabilityInfo {
   devices: DeviceInfo[];
   media?: MediaCapabilities | null;
   gpu_suggestion?: { name: string; download: 'DirectML' | 'CUDA' | 'ROCm' | 'intel-driver' } | null;
+  /** An Intel NPU the machine has but cannot use yet (its compiler is missing). */
+  npu_hint?: { name: string; missing: 'compiler' } | null;
 }
 
 export interface EngineInfo {

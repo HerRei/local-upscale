@@ -10,6 +10,34 @@ export const NEURAL_ENGINE_ID = 'neural-engine';
 // src/localsr/core/coreml_runtime.py (tests/test_coreml_runtime.py checks it).
 const NEURAL_ENGINE_ARCHITECTURES = new Set(['SPAN', 'RealESRGAN', 'FBCNN']);
 const CORE_ML_GPU_ARCHITECTURES = new Set(['RealPLKSR']);
+// Catalog architectures an Intel NPU runs, mirroring NPU_ARCHITECTURES in
+// src/localsr/core/onnx_runtime.py (tests/test_onnx_runtime.py checks it).
+const NPU_ARCHITECTURES = new Set(['SPAN', 'RealESRGAN', 'FBCNN']);
+
+/** Whether a model runs on an Intel NPU; a custom model (no architecture) may. */
+function npuRuns(architecture?: string): boolean {
+  return architecture === undefined || NPU_ARCHITECTURES.has(architecture);
+}
+
+function isNpu(capabilities: CapabilityInfo, deviceId: string): boolean {
+  return capabilities.devices.some((device) => device.id === deviceId && device.type === 'npu');
+}
+
+/** The accelerator a model can use on this computer, for the model library. */
+export function acceleratorFor(
+  capabilities: CapabilityInfo,
+  architecture?: string,
+): 'Neural Engine' | 'NPU' | undefined {
+  if (!architecture) return undefined;
+  if (neuralEngineAvailable(capabilities) && NEURAL_ENGINE_ARCHITECTURES.has(architecture))
+    return 'Neural Engine';
+  if (
+    capabilities.devices.some((device) => device.type === 'npu') &&
+    NPU_ARCHITECTURES.has(architecture)
+  )
+    return 'NPU';
+  return undefined;
+}
 
 /** Whether a model runs on the Neural Engine; a custom model (no architecture) may. */
 export function neuralEngineRuns(architecture?: string): boolean {
@@ -23,9 +51,13 @@ export function neuralEngineAvailable(capabilities: CapabilityInfo): boolean {
 /** Hardware entries for image and frame-by-frame video jobs. The Neural Engine is listed
  *  only for a model it runs; for the others the Apple GPU is the Apple entry. */
 export function hardwareChoices(capabilities: CapabilityInfo, architecture?: string): DeviceInfo[] {
-  const mps = capabilities.devices.find((device) => device.id === 'mps');
-  if (!mps?.neural_engine || !neuralEngineRuns(architecture)) return capabilities.devices;
-  return capabilities.devices.flatMap((device) =>
+  // An NPU is listed only for a model it runs; the engine runs the others on the CPU.
+  const devices = npuRuns(architecture)
+    ? capabilities.devices
+    : capabilities.devices.filter((device) => device.type !== 'npu');
+  const mps = devices.find((device) => device.id === 'mps');
+  if (!mps?.neural_engine || !neuralEngineRuns(architecture)) return devices;
+  return devices.flatMap((device) =>
     device === mps ? [{ ...mps, id: NEURAL_ENGINE_ID, name: 'Neural Engine' }, mps] : [device],
   );
 }
@@ -35,6 +67,7 @@ export function selectedHardware(
   capabilities: CapabilityInfo,
   architecture?: string,
 ): string {
+  if (isNpu(capabilities, settings.device_id) && !npuRuns(architecture)) return 'cpu';
   return settings.device_id === 'mps' &&
     settings.neural_engine !== false &&
     neuralEngineAvailable(capabilities) &&
@@ -62,6 +95,8 @@ export function engineLabel(
   architecture: string | undefined,
   fallback: string,
 ): string {
+  if (isNpu(capabilities, settings.device_id) && !npuRuns(architecture))
+    return 'CPU · this model does not run on the NPU';
   if (selectedHardware(settings, capabilities) !== NEURAL_ENGINE_ID) return fallback;
   if (!architecture) return 'Neural Engine where supported';
   if (NEURAL_ENGINE_ARCHITECTURES.has(architecture)) return 'Neural Engine';

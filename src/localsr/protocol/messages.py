@@ -197,6 +197,7 @@ class CapabilitiesInfo:
     media: dict = field(default_factory=dict)
     # A GPU this edition cannot use and the download (or driver) that would use it.
     gpu_suggestion: dict | None = None
+    npu_hint: dict | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "capabilities_info", "data": asdict(self)})

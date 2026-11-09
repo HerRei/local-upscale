@@ -513,3 +513,49 @@ def test_a_cpu_only_edition_names_the_download_for_its_gpu(monkeypatch, tmp_path
     (tmp_path / "card1" / "device").mkdir(parents=True)
     (tmp_path / "card1" / "device" / "vendor").write_text("0x1002\n")
     assert hardware._gpu_suggestion(cpu) == {"name": "an AMD GPU", "download": "ROCm"}
+
+
+def _npu(compiler="458781"):
+    return {
+        "key": "80d1d11eb73811eab3de0242ac130004",
+        "name": "Intel(R) AI Boost",
+        "kind": "NPU",
+        "integrated": True,
+        "total_memory": 0,
+        "max_allocation": 0,
+        "luid": "",
+        "device_id": "",
+        "architecture": "3720",
+        "plugin_version": "1.8.1",
+        "driver": "npu-driver:1779321600|npu-compiler:458781",
+        "compiler": compiler,
+        "ep_device": object(),
+    }
+
+
+def test_an_intel_npu_is_offered_as_its_own_device(monkeypatch):
+    from localsr.core import openvino_devices
+
+    gib = 1024**3
+    monkeypatch.setattr(openvino_devices, "gpu_devices", lambda: [])
+    monkeypatch.setattr(openvino_devices, "npu_devices", lambda: [_npu()])
+    devices = []
+    hardware._detect_openvino(devices, 12 * gib)
+    (device,) = devices
+    assert device["id"] == "openvino:80d1d11eb73811eab3de0242ac130004"
+    assert device["type"] == "npu" and device["name"] == "Intel(R) AI Boost (NPU)"
+    assert device["is_integrated"] and not device["supports_fp16"]
+    assert device["free_memory"] == 6 * gib
+
+
+def test_an_npu_without_its_compiler_is_not_offered_but_named_in_a_hint(monkeypatch):
+    from localsr.core import openvino_devices
+
+    monkeypatch.setattr(openvino_devices, "gpu_devices", lambda: [])
+    monkeypatch.setattr(openvino_devices, "npu_devices", lambda: [_npu(compiler="0")])
+    devices = []
+    hardware._detect_openvino(devices, 8 * 1024**3)
+    assert devices == []
+    assert hardware._npu_hint() == {"name": "Intel(R) AI Boost", "missing": "compiler"}
+    monkeypatch.setattr(openvino_devices, "npu_devices", lambda: [_npu()])
+    assert hardware._npu_hint() is None
