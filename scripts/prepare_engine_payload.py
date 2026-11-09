@@ -96,7 +96,11 @@ def prepare(
     writer = PartWriter(output, prefix, part_bytes)
     try:
         with gzip.GzipFile(fileobj=writer, mode="wb", compresslevel=1, mtime=0) as compressed:
-            with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT) as archive:
+            # Links were refused above; dereferencing keeps tarfile from writing a
+            # zero-length hard-link entry for a second name of the same file.
+            with tarfile.open(
+                fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT, dereference=True
+            ) as archive:
                 for path in files:
                     info = archive.gettarinfo(
                         str(path), arcname=path.relative_to(engine).as_posix()
@@ -116,7 +120,9 @@ def prepare(
         "parts": writer.parts,
     }
     path = output / "engine-payload.json"
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Never replace a manifest that is already there (the caller renames this one).
+    with path.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return path
 
 
@@ -173,12 +179,11 @@ def validate_payload(
         or not 1 <= len(parts) <= 64
     ):
         raise ValueError(f"invalid {backend} engine payload manifest")
-    name_re = re.compile(re.escape(prefix) + r"\.part-\d{4}")
     paths = []
-    for part in parts:
+    for index, part in enumerate(parts, start=1):
         name = part.get("filename") if isinstance(part, dict) else None
-        if not isinstance(name, str) or not name_re.fullmatch(name):
-            raise ValueError(f"engine payload part {name!r} is not a part of {prefix}")
+        if not isinstance(name, str) or name != f"{prefix}.part-{index:04d}":
+            raise ValueError(f"engine payload part {name!r} is not part {index} of {prefix}")
         path = directory / name
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"engine payload part {name} is missing or a link")
@@ -205,6 +210,7 @@ def validate_payload(
                     or ".." in relative.parts
                     or "\\" in member.name
                     or ":" in member.name
+                    or member.name != relative.as_posix()
                     or str(relative).lower() in names
                 ):
                     raise ValueError(f"engine payload holds an unsafe entry: {member.name!r}")

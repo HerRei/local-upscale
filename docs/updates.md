@@ -97,8 +97,9 @@ Each release target in `ci/tauri-targets.json` names its update `backend` and
 `scripts/release_targets.py --update-env <target> --commit <sha>`, which takes the
 key from `packaging/updates/production.pub`. The engine id is
 `<target>-<SHA-256 of the engine recipe>`; `release_macos_beta.sh` uses the same
-calculator for macOS. The commit argument still validates release provenance, but
-is not part of that identity. The installed host's `--headless-smoke-test` report states
+calculator for macOS. The commit argument is not part of that identity: the
+smoke step stamps it into each build's `.smoke.json` (`commit`) and `platforms`
+refuses a report stamped for another commit. The installed host's `--headless-smoke-test` report states
 its compiled identity (`update`), and the workflows fail when it is not the
 expected one (`smoke_tauri_installer.py --update-target`).
 
@@ -167,7 +168,7 @@ The Windows and Linux updater files are signed on the Mac as well:
 build/release-<version>/beta.json --commit <sha>` reads the build artifacts as
 `gh run download` leaves them (one folder per release target). It first checks every
 edition: the package against its checksum file and its installed smoke report
-(version and update identity), and the engine package as the app's installer would
+(version, update identity and release commit), and the engine package as the app's installer would
 (part names inside the folder, no links, sizes, digests, a gzip tar of exactly
 `file_count` safe regular files with the worker); for Windows CUDA the engine
 manifest must be the one the smoke test installed. If anything fails it signs nothing.
@@ -181,7 +182,11 @@ build/release-<version>/beta.json --commit <sha> --files build/release-<version>
 --files <downloads>` then checks that the feed has exactly one entry per release
 target with the right backend, kind, protocol and engine id, an engine package and
 files below the size limit, and verifies every statement and every signature against
-the updater public key over the local copies of the files. Serve immutable files over HTTPS
+the updater public key over the local copies of the files. The engine manifest must
+list the engine parts the feed names, and `unpacked_size` must cover the engine. All
+files must be at the release's own GitHub download URL, or at the prefix named with
+`--host`. The channel of the Windows and Linux entries is `beta` for a version with
+a prerelease suffix and `stable` otherwise. Serve immutable files over HTTPS
 and publish an entry only after installing it from the feed on a test machine.
 
 A portable Linux update is a signed `.tar.gz` containing only `localsr-next`,
@@ -202,9 +207,9 @@ who do need that engine:
 ```json
 {
   "id": "new-engine-id",
-  "manifest": { "name": "engine-payload.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
+  "manifest": { "name": "worker.engine-payload.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
   "parts": [
-    { "name": "worker.engine.tar.gz.part001", "url": "…", "size": 123456, "sha256": "…", "signature": "…" }
+    { "name": "worker.engine.tar.gz.part-0001", "url": "…", "size": 123456, "sha256": "…", "signature": "…" }
   ]
 }
 ```
