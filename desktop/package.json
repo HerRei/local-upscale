@@ -13,7 +13,9 @@
     "test": "vitest run --testTimeout=20000",
     "tauri": "tauri",
     "format": "prettier --write \"src/**/*.{svelte,ts,css}\"",
-    "format:check": "prettier --check \"src/**/*.{svelte,ts,css}\""
+    "format:check": "prettier --check \"src/**/*.{svelte,ts,css}\"",
+    "e2e": "playwright test",
+    "e2e:update": "playwright test --grep @visual --update-snapshots"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
@@ -21,6 +23,7 @@
     "svelte": "5.57.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tauri-apps/cli": "2.12.4",
     "@testing-library/svelte": "^5.4.2",
