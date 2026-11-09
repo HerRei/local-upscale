@@ -826,7 +826,15 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
             let editing = string(data, "unit") == "steps";
-            runtime.status_title = if editing { "Editing" } else { "Enhancing" }.into();
+            // In a job of several stages the title keeps which one runs (two fixes can
+            // both be "Restoring"); a one-stage job reads "Enhancing" as before.
+            let staged = runtime.status_title.contains(" · stage ")
+                && !runtime.status_title.ends_with(" 1/1");
+            if editing {
+                runtime.status_title = "Editing".into();
+            } else if !staged {
+                runtime.status_title = "Enhancing".into();
+            }
             let remaining = number(data, "estimated_remaining_seconds");
             // Editing spends most of its time outside the sampling steps; the
             // worker then names the phase it is in.
@@ -1649,6 +1657,40 @@ mod tests {
                 assert!(gate.should_forward(&position, started + Duration::from_millis(index)));
             }
         }
+    }
+
+    #[test]
+    fn ordinary_progress_preserves_the_active_image_stage() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        let title_after_progress = |index: u32, count: u32| {
+            for (kind, data) in [
+                (
+                    "stage_started",
+                    json!({"job_id":"j", "stage_index":index, "stage_count":count, "stage_kind":"restore", "model_id":"noise"}),
+                ),
+                (
+                    "progress",
+                    json!({"job_id":"j", "percentage":45, "completed_tiles":1, "total_tiles":4}),
+                ),
+            ] {
+                apply_worker_envelope(
+                    &state,
+                    &WorkerEnvelope {
+                        message_type: kind.into(),
+                        data,
+                    },
+                )
+                .unwrap();
+            }
+            lock(&state.runtime).unwrap().status_title.clone()
+        };
+        // Several fixes can share a kind; the title keeps which stage is running.
+        assert_eq!(title_after_progress(2, 5), "Restoring · stage 3/5");
+        // A one-stage job reads as before.
+        assert_eq!(title_after_progress(0, 1), "Enhancing");
     }
 
     #[test]
