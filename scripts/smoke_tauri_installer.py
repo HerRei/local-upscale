@@ -406,6 +406,17 @@ def check_update_identity(payload: dict[str, object], target_id: str, commit: st
         )
 
 
+def record_commit(report: Path, commit: str) -> None:
+    """Stamp the release commit the build came from into its smoke report.
+
+    The signing tool reads the stamp back: reports and downloads from another run's
+    commit are refused before anything is signed.
+    """
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["commit"] = commit
+    report.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def resolve_artifact(pattern: str) -> Path:
     matches = [Path(value).resolve() for value in glob.glob(pattern)]
     if len(matches) != 1:
@@ -478,6 +489,7 @@ def main() -> int:
     payload = smoke(resolve_artifact(args.artifact_glob), args.report, args.timeout)
     if args.update_target:
         check_update_identity(payload, args.update_target, args.commit)
+        record_commit(args.report, args.commit)
     return 0
 
 

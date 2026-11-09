@@ -195,8 +195,7 @@ def verify(output: Path, manifest_path: Path, commit: str) -> None:
     assets = expected_assets(output)
     # Preparation also keeps private build manifests, so validate the checksum
     # set directly rather than treating those private files as public downloads.
-    lines = (output / "SHA256SUMS").read_text().splitlines()
-    checksums = {line.split("  ", 1)[1]: line.split("  ", 1)[0] for line in lines}
+    checksums = parse_checksums((output / "SHA256SUMS").read_text().splitlines())
     if checksums != {
         name: digest
         for name, (_path, digest) in assets.items()
@@ -204,6 +203,17 @@ def verify(output: Path, manifest_path: Path, commit: str) -> None:
     }:
         raise ValueError("prepared checksums do not cover exactly the public payloads")
     print(f"Verified {len(wanted)} backend distributions and {len(assets)} public files")
+
+
+def parse_checksums(lines: list[str]) -> dict[str, str]:
+    """`<sha256>  <name>` lines; a repeated or malformed line is an error, never a winner."""
+    checksums: dict[str, str] = {}
+    for line in lines:
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^\s/]+)", line)
+        if not match or match[2] in checksums:
+            raise ValueError(f"bad or repeated line in the checksum file: {line!r}")
+        checksums[match[2]] = match[1]
+    return checksums
 
 
 def _signature(value: object, label: str) -> None:
@@ -293,6 +303,23 @@ def _statement(
         raise ValueError(f"{key}: the signed release statement does not match the entry")
 
 
+def _engine_manifest(key: str, contract: dict, engine_parts: list, path: Path) -> None:
+    """The engine manifest the client will read lists the parts the feed names, and the
+    entry reserves room for the engine it unpacks."""
+    payload = json.loads(path.read_bytes())
+    listed = [
+        (part.get("filename"), part.get("size"), part.get("sha256"))
+        for part in payload.get("parts", [])
+    ]
+    named = [(part["name"], part["size"], part["sha256"]) for part in engine_parts]
+    if listed != named:
+        raise ValueError(
+            f"{key}: the engine manifest does not list the engine parts the feed names"
+        )
+    if contract["unpacked_size"] < payload.get("unpacked_bytes", 0):
+        raise ValueError(f"{key}: unpacked_size is below the engine's unpacked size")
+
+
 def verify_feed(
     feed_path: Path,
     commit: str,
@@ -300,8 +327,13 @@ def verify_feed(
     files: list[Path],
     release_version: str | None = None,
     public_key: str | None = None,
+    host: str | None = None,
 ) -> None:
-    """Check that the feed serves every edition its own complete, signed update."""
+    """Check that the feed serves every edition its own complete, signed update.
+
+    Every file is expected under the release's own download URL, or under `host` when
+    that is named; never under whatever prefix the feed happens to use.
+    """
     release_version = release_version or version()
     public_key = public_key or PUBLIC_KEY.read_text(encoding="utf-8").strip()
     local = _LocalFiles(files)
@@ -319,10 +351,7 @@ def verify_feed(
             f"{sorted(set(expected) - set(platforms or {}))}, unknown "
             f"{sorted(set(platforms or {}) - set(expected))}"
         )
-    base = f"https://github.com/HerRei/local-upscale/releases/download/v{release_version}"
-    bases = {str(entry.get("url", "")).rsplit("/", 1)[0] for entry in platforms.values()}
-    if len(bases) == 1:
-        base = bases.pop()
+    base = host or f"https://github.com/HerRei/local-upscale/releases/download/v{release_version}"
     for key, target in expected.items():
         entry = platforms[key]
         files = update_files(target, release_version)
@@ -382,6 +411,7 @@ def verify_feed(
             )
         # The shape is right; now the signatures, over the bytes that will be published.
         _statement(key, contract, release_version, channel, public_key)
+        _engine_manifest(key, contract, engine_parts, local(files["engine_manifest"]))
         package = [local(part["name"]) for part in parts] if parts else [local(name)]
         _signed_file(
             {"size": size, "sha256": contract["sha256"], "signature": entry.get("signature")},
@@ -407,6 +437,9 @@ def main() -> int:
         help="Folder holding local copies of the feed's files (repeatable)",
     )
     parser.add_argument("--version", help="Release version of the feed (default: pyproject)")
+    parser.add_argument(
+        "--host", help="Download URL prefix of the feed (default: the GitHub release)"
+    )
     parser.add_argument("--public-key", type=Path, help="Updater public key (default: production)")
     args = parser.parse_args()
     if args.feed:
@@ -418,6 +451,7 @@ def main() -> int:
             files=args.files,
             release_version=args.version,
             public_key=args.public_key.read_text().strip() if args.public_key else None,
+            host=args.host,
         )
         print(f"Verified {len(targets())} update targets and their signatures in {args.feed}")
     if args.output or args.manifest:
