@@ -1323,7 +1323,9 @@ fn resume_after_failed_install(
 
 /// Keep profile backups; discard only downloaded/staged update material.
 fn finish_install(backup: &Path, version: &str, downloads: &Path) -> AppResult<()> {
+    update_storage::fault("confirm-version")?;
     fs::write(backup.join("installed-version.txt"), version)?;
+    update_storage::fault("confirm-downloads")?;
     match fs::remove_dir_all(downloads) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1441,6 +1443,8 @@ fn record_pending_install(
 /// downloads stay for another try. Returns whether an installation was confirmed.
 pub fn confirm_pending_install(next_root: &Path, running_version: &str) -> bool {
     let marker = next_root.join(PENDING_INSTALL);
+    // A crash while the marker was written leaves a temporary file.
+    update_storage::remove_stale_temporaries(&marker);
     let Ok(bytes) = fs::read(&marker) else {
         return false;
     };
@@ -1457,7 +1461,7 @@ pub fn confirm_pending_install(next_root: &Path, running_version: &str) -> bool 
     if finish_install(&pending.backup, &pending.version, &pending.downloads).is_err() {
         return false;
     }
-    fs::remove_file(marker).is_ok()
+    update_storage::fault("confirm-marker").is_ok() && fs::remove_file(marker).is_ok()
 }
 
 /// Before anything else at start: roll back an executable swap that a crash interrupted,
@@ -2423,6 +2427,60 @@ mod tests {
         assert_eq!(fs::read(&stale).unwrap(), b"stale");
     }
 
+    // A failure or a crash at any step of the AppImage install (verified staging, backup,
+    // journal, swap, startup check, clean-up) leaves exactly one working image at its path
+    // after the next start's recovery: the old one until the new one was accepted.
+    #[cfg(unix)]
+    #[test]
+    fn the_appimage_install_survives_a_failure_or_a_crash_at_every_step() {
+        use fault::Mode;
+        use std::os::unix::fs::PermissionsExt;
+        use update_storage::fault;
+        for accept in [true, false] {
+            fault::arm(None);
+            let steps = {
+                let swap = SwapFixture::new();
+                let ran = swap.replace(|_| {
+                    if accept {
+                        Ok(())
+                    } else {
+                        Err(AppError::Worker("startup failed".into()))
+                    }
+                });
+                assert_eq!(ran.is_ok(), accept);
+                fault::seen()
+            };
+            let accepted_at = steps.iter().position(|step| *step == "backup-remove");
+            assert_eq!(accepted_at.is_some(), accept, "{steps:?}");
+            for (index, step) in steps.iter().enumerate() {
+                for mode in [Mode::Fail, Mode::Crash] {
+                    let why = format!("{step} #{index} {mode:?} accept={accept}");
+                    let swap = SwapFixture::new();
+                    fault::arm(Some((step, mode)));
+                    let _ = fault::crashed(|| {
+                        swap.replace(|_| {
+                            if accept {
+                                Ok(())
+                            } else {
+                                Err(AppError::Worker("startup failed".into()))
+                            }
+                        })
+                    });
+                    fault::arm(None);
+                    fault::recover_swap(&swap.journal)
+                        .unwrap_or_else(|error| panic!("{why}: recovery failed: {error}"));
+                    let kept = accepted_at.is_some_and(|at| index > at);
+                    let expected = if kept { &swap.data[..] } else { OLD_IMAGE };
+                    assert_eq!(fs::read(&swap.appimage).unwrap(), expected, "{why}");
+                    let mode_bits = fs::metadata(&swap.appimage).unwrap().permissions().mode();
+                    assert_eq!(mode_bits & 0o111, 0o111, "{why}: not executable");
+                    assert!(!swap.journal.exists(), "{why}: journal left");
+                    assert!(swap.leftovers().is_empty(), "{why}: {:?}", swap.leftovers());
+                }
+            }
+        }
+    }
+
     // Review finding 4: the working image keeps its name, and an interrupted swap is rolled
     // back at the next start.
     #[cfg(unix)]
@@ -2459,7 +2517,7 @@ mod tests {
         fs::write(&staged, &swap.data).unwrap();
         fs::rename(&staged, &swap.appimage).unwrap();
         assert_eq!(
-            update_storage::recover_swap(&swap.journal).unwrap(),
+            update_storage::fault::recover_swap(&swap.journal).unwrap(),
             Some(swap.appimage.clone())
         );
         assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
@@ -2469,7 +2527,10 @@ mod tests {
         // Killed while staging: only the staged copy is removed.
         fs::write(&swap.journal, journal.to_string()).unwrap();
         fs::write(&staged, b"half").unwrap();
-        assert_eq!(update_storage::recover_swap(&swap.journal).unwrap(), None);
+        assert_eq!(
+            update_storage::fault::recover_swap(&swap.journal).unwrap(),
+            None
+        );
         assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
         assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
 
@@ -2480,7 +2541,7 @@ mod tests {
             "current": swap.appimage, "backup": outside, "staged": staged,
         });
         fs::write(&swap.journal, foreign.to_string()).unwrap();
-        assert!(update_storage::recover_swap(&swap.journal).is_err());
+        assert!(update_storage::fault::recover_swap(&swap.journal).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"other");
         assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
     }
@@ -2571,6 +2632,113 @@ mod tests {
         );
         assert!(!downloads.exists());
         assert!(!confirm_pending_install(&next, "0.3.7-beta"));
+    }
+
+    // A crash or a failure at any step of recording or confirming a Windows install
+    // leaves either a retry (marker and downloads kept) or the confirmed state; the next
+    // starts always reach the confirmed state once the new version runs.
+    #[test]
+    fn every_crash_point_of_the_windows_install_marker_retries_or_confirms() {
+        use update_storage::fault::{self, Mode};
+        struct Folders {
+            _root: tempfile::TempDir,
+            next: PathBuf,
+            backup: PathBuf,
+            downloads: PathBuf,
+        }
+        let folders = || {
+            let root = tempfile::tempdir().unwrap();
+            let next = root.path().join("next");
+            let backup = next.join("backups/before-install");
+            let downloads = next.join("updates");
+            fs::create_dir_all(&backup).unwrap();
+            fs::create_dir_all(&downloads).unwrap();
+            fs::write(downloads.join(APPLICATION_FILE), b"installer").unwrap();
+            Folders {
+                _root: root,
+                next,
+                backup,
+                downloads,
+            }
+        };
+        let record =
+            |f: &Folders| record_pending_install(&f.next, "0.3.8-beta", &f.downloads, &f.backup);
+        let confirmed = |f: &Folders| {
+            fs::read_to_string(f.backup.join("installed-version.txt")).ok()
+                == Some("0.3.8-beta".into())
+                && !f.downloads.exists()
+                && !f.next.join(PENDING_INSTALL).exists()
+        };
+        let retry = |f: &Folders| {
+            f.downloads.join(APPLICATION_FILE).is_file()
+                && !f.backup.join("installed-version.txt").exists()
+        };
+        let stray = |f: &Folders| {
+            fs::read_dir(&f.next)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name != "backups" && name != "updates" && name != PENDING_INSTALL)
+                .collect::<Vec<_>>()
+        };
+
+        // Record, then confirm: the steps of a whole successful install.
+        let whole = folders();
+        fault::arm(None);
+        record(&whole).unwrap();
+        assert!(confirm_pending_install(&whole.next, "0.3.8-beta"));
+        let steps = fault::seen();
+        for expected in [
+            "atomic-rename",
+            "confirm-version",
+            "confirm-downloads",
+            "confirm-marker",
+        ] {
+            assert!(steps.contains(&expected), "{steps:?} lacks {expected}");
+        }
+        assert!(confirmed(&whole));
+        for (index, step) in steps.iter().enumerate() {
+            for mode in [Mode::Fail, Mode::Crash] {
+                let why = format!("{step} #{index} {mode:?}");
+                let f = folders();
+                fault::arm(Some((step, mode)));
+                let _ = fault::crashed(|| {
+                    let recorded = record(&f);
+                    if recorded.is_ok() {
+                        // The old version is still running: the installer did not finish.
+                        assert!(!confirm_pending_install(&f.next, "0.3.7-beta"));
+                        confirm_pending_install(&f.next, "0.3.8-beta");
+                    }
+                });
+                fault::arm(None);
+                let marker = f.next.join(PENDING_INSTALL);
+                if confirmed(&f) {
+                    // Nothing left to do.
+                } else if marker.exists() {
+                    // A marker is always a whole, valid one.
+                    assert!(
+                        serde_json::from_slice::<PendingInstall>(&fs::read(&marker).unwrap())
+                            .is_ok(),
+                        "{why}"
+                    );
+                    // The downloads may already be gone: confirming again is harmless.
+                } else {
+                    // Recording never finished: the downloads wait for another try.
+                    assert!(retry(&f), "{why}: neither a retry nor confirmed");
+                }
+                // The old version starts again, then the new one: a retry stays a
+                // retry, and the confirmation completes.
+                let old_start = confirm_pending_install(&f.next, "0.3.7-beta");
+                assert!(!old_start || confirmed(&f), "{why}");
+                if marker.exists() {
+                    assert!(
+                        confirm_pending_install(&f.next, "0.3.8-beta") || confirmed(&f),
+                        "{why}"
+                    );
+                    assert!(confirmed(&f), "{why}");
+                }
+                assert_eq!(stray(&f), Vec::<String>::new(), "{why}");
+            }
+        }
     }
 
     #[test]
