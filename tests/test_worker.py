@@ -468,3 +468,141 @@ def test_worker_memmap_cleanup_on_error(monkeypatch):
 
     # Check F1.4 cleanup executed in finally despite exception
     assert writer_instance.cleaned_up is True
+
+
+def _sent(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
+
+
+def _batch_jobs(count):
+    return [{"job_id": f"photo-{index}", "image_path": f"{index}.png"} for index in range(count)]
+
+
+def test_cancelling_any_batch_member_cancels_the_whole_batch():
+    server = WorkerServer()
+    server._request_cancel("photo-1")
+    server._activate_batch(["photo-0", "photo-1", "photo-2"])
+    assert server.cancel_event.is_set()
+    # A photo the lanes hand back runs as its own job and is cancelled too.
+    server._activate_job("photo-2")
+    assert server.cancel_event.is_set()
+    server._deactivate_job("photo-2")
+    server._deactivate_batch(["photo-0", "photo-1", "photo-2"])
+    assert not server.cancel_event.is_set() and not server.pending_cancel_job_ids
+    server._activate_job("next")
+    assert not server.cancel_event.is_set()
+
+    server._activate_batch(["a", "b"])
+    server._request_cancel("unrelated")
+    assert not server.cancel_event.is_set()
+    server._request_cancel("b")
+    assert server.cancel_event.is_set()
+    assert {"a", "b"} <= server.pending_cancel_job_ids
+
+
+def test_photos_the_lanes_hand_back_run_as_normal_jobs_in_order(monkeypatch, capsys):
+    import localsr.worker.image_batch as batch_module
+    from localsr.protocol.messages import JobCompleted
+
+    server = WorkerServer()
+    jobs = _batch_jobs(3)
+    ran = []
+
+    def lanes(runner, items):
+        runner.emit(JobCompleted(job_id=items[0]["job_id"], elapsed_seconds=1.0))
+        return items[1:]
+
+    def run_job(job_id, data):
+        assert server.active_job_id == job_id and server.active_batch_job_ids
+        ran.append(job_id)
+        server_module.send_message(JobCompleted(job_id=job_id, elapsed_seconds=1.0))
+
+    import localsr.worker.server as server_module
+
+    monkeypatch.setattr(batch_module.ImageBatchRunner, "run", lanes)
+    monkeypatch.setattr(server, "_run_job", run_job)
+    server._run_image_batch(jobs)
+    assert ran == ["photo-1", "photo-2"]
+    sent = [(m["type"], m["data"]["job_id"]) for m in _sent(capsys)]
+    assert sent == [
+        ("job_completed", "photo-0"),
+        ("job_started", "photo-1"),
+        ("job_completed", "photo-1"),
+        ("job_started", "photo-2"),
+        ("job_completed", "photo-2"),
+    ]
+    assert server.active_job_id is None and not server.active_batch_job_ids
+    assert not server.cancel_event.is_set()
+
+
+def test_cancelling_a_batch_also_cancels_the_photos_left_for_the_normal_path(monkeypatch, capsys):
+    import localsr.worker.image_batch as batch_module
+    import localsr.worker.server as server_module
+    from localsr.protocol.messages import JobCancelled, JobCompleted
+
+    server = WorkerServer()
+    monkeypatch.setattr(batch_module.ImageBatchRunner, "run", lambda runner, items: items)
+
+    def run_job(job_id, data):
+        if job_id == "photo-0":
+            server._request_cancel("photo-0")  # The reader thread, mid-photo.
+        message = JobCancelled if server.cancel_event.is_set() else JobCompleted
+        server_module.send_message(
+            message(job_id=job_id)
+            if message is JobCancelled
+            else message(job_id=job_id, elapsed_seconds=1.0)
+        )
+
+    monkeypatch.setattr(server, "_run_job", run_job)
+    server._run_image_batch(_batch_jobs(3))
+    terminal = [
+        (m["type"], m["data"]["job_id"]) for m in _sent(capsys) if m["type"] != "job_started"
+    ]
+    assert terminal == [("job_cancelled", f"photo-{index}") for index in range(3)]
+    assert not server.cancel_event.is_set() and not server.pending_cancel_job_ids
+
+
+def test_an_unexpected_batch_error_fails_every_photo_without_a_result(monkeypatch, capsys):
+    import localsr.worker.image_batch as batch_module
+    from localsr.protocol.messages import JobCompleted
+
+    server = WorkerServer()
+
+    def broken(runner, items):
+        runner.emit(JobCompleted(job_id=items[0]["job_id"], elapsed_seconds=1.0))
+        raise RuntimeError("scheduler bug")
+
+    monkeypatch.setattr(batch_module.ImageBatchRunner, "run", broken)
+    server._run_image_batch(_batch_jobs(3))
+    sent = [(m["type"], m["data"]["job_id"]) for m in _sent(capsys) if "job_id" in m["data"]]
+    assert sent == [
+        ("job_completed", "photo-0"),
+        ("job_failed", "photo-1"),
+        ("job_failed", "photo-2"),
+    ]
+    assert server.active_job_id is None and not server.active_batch_job_ids
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        [{"job_id": "only"}],
+        [{"job_id": "same"}, {"job_id": "same"}],
+        [{"job_id": "named"}, {"image_path": "unnamed.png"}],
+        [{"job_id": f"many-{index}"} for index in range(65)],
+    ],
+    ids=["one", "duplicate", "unnamed", "too-many"],
+)
+def test_a_malformed_batch_fails_each_photo_it_names(capsys, jobs):
+    server = WorkerServer()
+    server._run_image_batch(jobs)
+    named = {job["job_id"] for job in jobs if "job_id" in job}
+    failed = {m["data"]["job_id"] for m in _sent(capsys) if m["type"] == "job_failed"}
+    assert failed == named
+    assert server.active_job_id is None and not server.active_batch_job_ids
+
+
+def test_the_engine_offers_photo_batches():
+    from localsr.worker.server import _engine_features
+
+    assert "image_batch_v1" in _engine_features()
