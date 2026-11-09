@@ -9,6 +9,7 @@
     fixQuality,
     fixesOf,
     formatBytes,
+    libraryModelsForTask,
     modelsForTask,
     rememberedFixModel,
     rightsAllowPreset,
@@ -132,38 +133,9 @@
     if (context.slot === 'face') return models.filter((model) => model.purposes.includes('face'));
     if (context.slot === 'fix') {
       const fix = context.fix;
-      return models.filter(
-        (model) =>
-          model.native_scale === 1 &&
-          !model.purposes.includes('face') &&
-          (!fix || fixesOf(model).includes(fix)),
-      );
+      return libraryModelsForTask(models, 'denoise', context.content, fix);
     }
-    const candidates = modelsForTask(snapshot, context.task);
-    if (context.task === 'denoise') {
-      const fix = context.fix;
-      return fix ? candidates.filter((model) => fixesOf(model).includes(fix)) : candidates;
-    }
-    const matches = (model: CatalogModel): number =>
-      context.content === 'illustration'
-        ? model.purposes.includes('illustration') || model.purposes.includes('anime')
-          ? 2
-          : model.purposes.includes('general')
-            ? 1
-            : 0
-        : model.purposes.includes('photo')
-          ? 2
-          : model.purposes.includes('general')
-            ? 1
-            : 0;
-    return candidates
-      .filter((model) => matches(model) > 0)
-      .sort(
-        (left, right) =>
-          matches(right) - matches(left) ||
-          right.quality_tier - left.quality_tier ||
-          right.speed_tier - left.speed_tier,
-      );
+    return libraryModelsForTask(models, context.task, context.content, context.fix);
   })();
   // Installed models for this job first; the rest say why they cannot join.
   $: trialModels =
@@ -947,13 +919,11 @@
                 <button
                   class="link-button"
                   type="button"
-                  on:click={() => void openSource(selected.model_id)}>Model source ↗</button
+                  title={selected.source_url}
+                  on:click={() => void openSource(selected.model_id)}
+                  >{selected.author} · model source ↗</button
                 >
               </dd>
-            </div>
-            <div>
-              <dt>Author</dt>
-              <dd>{selected.author}</dd>
             </div>
             <div>
               <dt>Architecture</dt>

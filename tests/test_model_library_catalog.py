@@ -62,6 +62,19 @@ def test_rights_status_is_separate_from_support_tier() -> None:
         assert entry["rights_status"] in {"verified", "attribution", "unresolved", "non_commercial"}
 
 
+def test_every_desktop_catalog_entry_has_a_source_and_license_name() -> None:
+    manifest = exporter.build_manifest()
+    entries = [
+        *manifest["models"],
+        *manifest["video_models"],
+        *manifest["interpolation_models"],
+    ]
+    for entry in entries:
+        assert entry["source_url"].startswith("https://"), entry["model_id"]
+        assert entry["author"].strip(), entry["model_id"]
+        assert entry["license_name"].strip(), entry["model_id"]
+
+
 def test_display_names_read_like_the_library_rows() -> None:
     assert get_model_by_id("realplksr_nomoswebphoto_x4").display_name == (
         "RealPLKSR ×4 NomosWebPhoto"

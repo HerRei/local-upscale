@@ -458,6 +458,50 @@ export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): Catal
   return [];
 }
 
+/** Models shown in the library's initial "For this job" group. */
+export function libraryModelsForTask(
+  models: CatalogModel[],
+  task: TaskKind | '',
+  content: ContentKind,
+  fix?: Exclude<FixKind, 'faces'>,
+): CatalogModel[] {
+  if (task === 'denoise')
+    return models.filter(
+      (model) =>
+        model.native_scale === 1 &&
+        !model.purposes.includes('face') &&
+        (!fix || fixesOf(model).includes(fix)),
+    );
+  if (task !== 'upscale' && task !== 'video') return [];
+  return models
+    .filter((model) => {
+      if (model.native_scale <= 1 || model.purposes.includes('face')) return false;
+      return content === 'illustration'
+        ? model.purposes.some((purpose) => ['illustration', 'anime', 'general'].includes(purpose))
+        : model.purposes.some((purpose) => ['photo', 'general'].includes(purpose));
+    })
+    .sort((left, right) => {
+      const matches = (model: CatalogModel) =>
+        content === 'illustration'
+          ? model.purposes.some((purpose) => ['illustration', 'anime'].includes(purpose))
+            ? 2
+            : 1
+          : model.purposes.includes('photo')
+            ? 2
+            : 1;
+      return (
+        matches(right) - matches(left) ||
+        right.quality_tier - left.quality_tier ||
+        right.speed_tier - left.speed_tier
+      );
+    });
+}
+
+/** Count compatible choices beyond the installed current selection. */
+export function modelsAvailableBeyondSelection(models: CatalogModel[], selectedId: string): number {
+  return models.filter((model) => !model.installed || model.model_id !== selectedId).length;
+}
+
 /**
  * The checkpoint Quick or Best resolves to for a task and content type.
  *
