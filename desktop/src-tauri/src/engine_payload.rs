@@ -1,5 +1,6 @@
-//! Install the existing frozen worker from verified, adjacent NSIS payloads.
-//! This does not download packages or manage a Python environment.
+//! Install a frozen worker from verified payload parts: the parts beside the Windows CUDA
+//! installer, or an updater's engine package on any edition. This does not download
+//! packages or manage a Python environment.
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -73,7 +74,11 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
         .map_err(|error| invalid(error.to_string()))?;
     if manifest.schema_version != 1
         || manifest.format != "tar.gz.parts"
-        || !matches!(manifest.backend.as_str(), "CUDA" | "ROCM" | "CPU" | "MPS")
+        // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
+        || !matches!(
+            manifest.backend.as_str(),
+            "CUDA" | "ROCM" | "CPU" | "MPS" | "DIRECTML"
+        )
         || manifest.parts.is_empty()
         || manifest.parts.len() > 64
         || manifest.file_count == 0
@@ -303,6 +308,31 @@ mod tests {
             b"exe"
         );
         assert!(!destination.join("old.exe").exists());
+    }
+
+    #[test]
+    fn installs_the_engine_package_of_every_edition() {
+        for (backend, accepted) in [
+            ("CUDA", true),
+            ("ROCM", true),
+            ("CPU", true),
+            ("MPS", true),
+            ("DIRECTML", true),
+            ("XPU", false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let manifest = payload(root.path(), false, false);
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+            value["backend"] = backend.into();
+            fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+            let destination = root.path().join("engine");
+            assert_eq!(
+                install(&manifest, root.path(), &destination).is_ok(),
+                accepted,
+                "{backend}"
+            );
+        }
     }
 
     #[test]
