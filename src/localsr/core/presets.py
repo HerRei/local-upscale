@@ -197,7 +197,7 @@ def get_preset_model(
 def _device_priority(device: Mapping) -> tuple[int, int]:
     backend = str(device.get("type", "cpu"))
     order = {"cuda": 5, "rocm": 5, "mps": 4, "xpu": 3, "directml": 2, "cpu": 1}
-    return order.get(backend, 0), int(device.get("free_memory", 0))
+    return order.get(backend, 0), int(device.get("free_memory") or 0)
 
 
 def resolve_settings_for_model(
@@ -232,7 +232,7 @@ def resolve_settings_for_model(
             {max(4, int(size)) for size in device.get("recommended_tile_sizes", [64])},
             reverse=True,
         )
-        low_memory = 0 < int(device.get("free_memory", 0)) < 3 * 1024**3
+        low_memory = 0 < int(device.get("free_memory") or 0) < 3 * 1024**3
         safe_memory = low_memory
         if safe_memory and len(recommended) > 1:
             recommended = recommended[1:] + recommended[:1]
@@ -258,7 +258,7 @@ def resolve_settings_for_model(
                     halo=halo,
                     precision=precision,
                     device_type=device_type,
-                    available_device_memory=int(device.get("free_memory", 0)) or None,
+                    available_device_memory=int(device.get("free_memory") or 0) or None,
                     available_system_memory=available_system_memory,
                     available_disk=available_disk,
                     model_file_size=model_file_size or model.size_bytes,

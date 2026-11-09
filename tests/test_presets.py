@@ -577,3 +577,9 @@ class TestDevicePriorityAndSettingsResolution:
             model_half_supported=True,
         )
         assert settings.precision == "fp32"
+
+
+def test_device_priority_accepts_unknown_free_memory():
+    from localsr.core.presets import _device_priority
+
+    assert _device_priority({"type": "cuda", "free_memory": None}) == (5, 0)
