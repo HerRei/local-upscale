@@ -7,7 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings, WorkerEnvelope } from './lib/types';
+import type {
+  AppSnapshot,
+  LaunchIntent,
+  MediaItem,
+  Recipe,
+  UiSettings,
+  WorkerEnvelope,
+} from './lib/types';
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -43,14 +50,14 @@ const api = vi.hoisted(() => ({
   openFfmpegDownloadPage: vi.fn(async () => undefined),
   ffmpegInstallHint: vi.fn(async () => null),
   openTerminalWithInstallCommand: vi.fn(async () => undefined),
-  downloadModel: vi.fn(async () => undefined),
+  downloadModel: vi.fn(async (_id: string, _accepted: boolean) => undefined),
   cancelDownload: vi.fn(async () => undefined),
   removeModel: vi.fn(async () => undefined),
   importCatalogModel: vi.fn(async () => undefined),
   startEdit: vi.fn(async () => undefined),
   openEditLink: vi.fn(async () => undefined),
   chooseEditRuntime: vi.fn(async (): Promise<string | null> => null),
-  saveRecipe: vi.fn(async () => undefined),
+  saveRecipe: vi.fn(async (_recipe: Recipe) => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
     configured: false,
@@ -129,7 +136,7 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     minimum_protocol_version: 1,
     engine_id: 'localsr.test',
     engine_version: '0.0.11-alpha',
-    features: ['image', 'video_frame', 'video_seedvr2'],
+    features: ['image', 'image_multi_fix', 'video_frame', 'video_seedvr2'],
     model_formats: ['.safetensors'],
     video_engines: ['spandrel_image', 'seedvr2'],
   };
@@ -1811,7 +1818,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.quality = 'best';
     snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
     snapshot.settings.fixes = ['jpeg'];
-    snapshot.settings.preprocess_model_id = 'fbcnn_color';
+    snapshot.settings.fix_stages = [{ fix: 'jpeg' as const, model_id: 'fbcnn_color' }];
     snapshot.catalog.models.find((model) => model.model_id === 'fbcnn_color')!.installed = false;
     const user = await mountWith(snapshot);
 
@@ -1895,7 +1902,10 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['jpeg'], preprocess_model_id: 'fbcnn_color' }),
+        expect.objectContaining({
+          fixes: ['jpeg'],
+          fix_stages: [{ fix: 'jpeg' as const, model_id: 'fbcnn_color' }],
+        }),
       ),
     );
     expect(
@@ -1904,13 +1914,22 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['blur'], preprocess_model_id: 'nafnet_gopro_deblur' }),
+        expect.objectContaining({
+          fixes: ['blur', 'jpeg'],
+          fix_stages: [
+            { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' },
+            { fix: 'jpeg', model_id: 'fbcnn_color' },
+          ],
+        }),
       ),
     );
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: [], preprocess_model_id: '' }),
+        expect.objectContaining({
+          fixes: ['jpeg'],
+          fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+        }),
       ),
     );
   });
@@ -1922,12 +1941,15 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['noise'], preprocess_model_id: 'nafnet_sidd_width64' }),
+        expect.objectContaining({
+          fixes: ['noise'],
+          fix_stages: [{ fix: 'noise' as const, model_id: 'nafnet_sidd_width64' }],
+        }),
       ),
     );
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Fix noise')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Change the fix model' }));
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
     // Only models that fix noise; the JPEG model is not offered for this job.
@@ -1942,7 +1964,7 @@ describe('LocalSR desktop interface', () => {
           quality: 'best',
           selected_model_id: 'realplksr_nomoswebphoto_x4',
           halo: 16,
-          preprocess_model_id: 'scunet_color_real_psnr',
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
           preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
         }),
       ),
@@ -1956,13 +1978,17 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ preprocess_model_id: 'scunet_color_real_psnr' }),
+        expect.objectContaining({
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
+        }),
       ),
     );
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ preprocess_model_id: 'denoise_realplksr_1x' }),
+        expect.objectContaining({
+          fix_stages: [{ fix: 'noise' as const, model_id: 'denoise_realplksr_1x' }],
+        }),
       ),
     );
     await user.click(screen.getByRole('button', { name: /^Best/ }));
@@ -1971,17 +1997,20 @@ describe('LocalSR desktop interface', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           content: 'illustration',
-          preprocess_model_id: 'scunet_color_real_psnr',
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
         }),
       ),
     );
 
-    await user.click(screen.getByRole('button', { name: 'Change the fix model' }));
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     const again = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(again).getByRole('button', { name: 'Back to the default' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ preprocess_model_id: 'nafnet_sidd_width64', preset_pins: {} }),
+        expect.objectContaining({
+          fix_stages: [{ fix: 'noise' as const, model_id: 'nafnet_sidd_width64' }],
+          preset_pins: {},
+        }),
       ),
     );
   });
@@ -1994,7 +2023,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'Change the fix model' }));
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
@@ -2005,13 +2034,13 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'custom',
           selected_model_id: 'hat_l_x4_imagenet',
-          preprocess_model_id: 'scunet_color_real_psnr',
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
         }),
       ),
     );
   });
 
-  it('lets Restore choose its model per problem and replaces a pick that cannot fix it', async () => {
+  it('lets Restore choose its model per problem and retains the last fix as primary', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Restore/);
@@ -2033,16 +2062,23 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    // The blur chip cannot keep a denoiser: it brings a model that fixes blur.
+    // Blur enters before noise; the chosen denoiser remains primary.
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['blur'], selected_model_id: 'nafnet_gopro_deblur' }),
+        expect.objectContaining({
+          fixes: ['blur', 'noise'],
+          selected_model_id: 'scunet_color_real_psnr',
+          fix_stages: [
+            { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
+            { fix: 'noise', model_id: 'scunet_color_real_psnr' },
+          ],
+        }),
       ),
     );
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText(
-        'Can add artifacts to sharp pictures and line art.',
+        'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
       ),
     ).toBeTruthy();
   });
@@ -2109,7 +2145,10 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: /^Old scans/ }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['jpeg'], preprocess_model_id: 'fbcnn_color' }),
+        expect.objectContaining({
+          fixes: ['jpeg'],
+          fix_stages: [{ fix: 'jpeg' as const, model_id: 'fbcnn_color' }],
+        }),
       ),
     );
     expect(screen.getByRole('button', { name: 'JPEG artifacts', pressed: true })).toBeTruthy();
@@ -2313,4 +2352,540 @@ it('asks for FFmpeg before starting an H.264 export instead of failing later', a
   expect(api.startJobs).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: 'Not now' }));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+describe('Several fixes in one pass', () => {
+  const blur = { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' };
+  const jpeg = { fix: 'jpeg' as const, model_id: 'fbcnn_color' };
+  const rows = () => within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem');
+  const labels = () => rows().map((row) => row.querySelector('.stage')?.textContent);
+  const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
+
+  it('toggles each fix on its own, adds it at its place, moves it and changes its model', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    // One fix has nowhere to move.
+    expect(screen.queryByRole('button', { name: /^Move the/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(screen.getByRole('button', { name: 'Noise', pressed: true })).toBeTruthy();
+    expect(labels()).toEqual(['Fix blur', 'Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    const move = (name: string) => screen.getByRole('button', { name });
+    // Each fix offers only the moves it can make.
+    expect(screen.queryByRole('button', { name: 'Move the blur fix earlier' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Move the noise fix later' })).toBeNull();
+    expect(move('Move the JPEG fix earlier')).toBeTruthy();
+    expect(move('Move the JPEG fix later')).toBeTruthy();
+
+    await user.click(move('Move the noise fix earlier'));
+    expect(labels()).toEqual(['Fix blur', 'Fix noise', 'Fix JPEG', 'Upscale ×4']);
+    // The keyboard stays on the fix that moved.
+    expect(document.activeElement).toBe(move('Move the noise fix earlier'));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'realplksr_nomoswebphoto_x4',
+        fixes: ['blur', 'noise', 'jpeg'],
+        fix_stages: [blur, { fix: 'noise', model_id: 'nafnet_sidd_width64' }, jpeg],
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
+    // The library opens on the model this fix uses now.
+    expect(within(library).getByRole('heading', { name: 'NAFNet SIDD Width64' })).toBeTruthy();
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'realplksr_nomoswebphoto_x4',
+        fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }, jpeg],
+        preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+      }),
+    );
+    expect(within(rows()[1]).getByText(/Your pick/)).toBeTruthy();
+    expect(within(rows()[2]).queryByText(/Your pick/)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · JPEG artifacts')).toBeTruthy();
+    expect(within(library).getByRole('heading', { name: 'FBCNN Color' })).toBeTruthy();
+    expect(within(library).queryByRole('button', { name: /SCUNet/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Close model library' }));
+
+    // Turning one fix off keeps the others, their order and their models.
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        fixes: ['noise', 'jpeg'],
+        fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }, jpeg],
+      }),
+    );
+    // A fix moved to the top keeps the keyboard on its way back down.
+    await user.click(move('Move the JPEG fix earlier'));
+    expect(labels()).toEqual(['Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    expect(document.activeElement).toBe(move('Move the JPEG fix later'));
+  });
+
+  it('runs the fixes before the last one first in Restore, whose last fix is its model', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    // JPEG goes before noise; the noise fix stays the model.
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        halo: 8,
+        fixes: ['jpeg', 'noise'],
+        fix_stages: [jpeg, { fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+      }),
+    );
+    expect(labels()).toEqual(['Fix JPEG', 'Restore']);
+    // A fix before the model is chosen like one before an upscale; the model stays.
+    await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
+    const fixLibrary = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(fixLibrary).getByText('Choosing for Restore · JPEG artifacts')).toBeTruthy();
+    await user.click(
+      within(fixLibrary).getByRole('button', { name: 'Use for JPEG artifacts · Quick' }),
+    );
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'denoise_realplksr_1x',
+        halo: 8,
+        preset_pins: { 'fix/jpeg/quick': 'fbcnn_color' },
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    expect(
+      within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
+        'Choosing for Restore · Noise',
+      ),
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Close model library' }));
+
+    // Now JPEG is last: FBCNN becomes the model, with the overlap it needs.
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'fbcnn_color',
+        halo: 32,
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
+      }),
+    );
+    expect(labels()).toEqual(['Fix noise', 'Restore']);
+
+    // The host answers the save with the settings it holds.
+    snapshot.settings = structuredClone(lastSaved());
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Scan clean-up');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe.mock.calls[0][0].stages).toEqual([
+      { kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' },
+      { kind: 'restore', model_id: 'fbcnn_color', fix: 'jpeg' },
+    ]);
+
+    await user.click(screen.getByRole('button', { name: 'Restore selected' }));
+    await waitFor(() =>
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: 'denoise',
+          model_id: 'fbcnn_color',
+          fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
+        }),
+      ),
+    );
+  });
+
+  it('keeps a model picked by hand when it fixes the first problem chosen in Restore', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        quality: 'custom',
+        selected_model_id: 'scunet_color_real_psnr',
+        fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      }),
+    );
+    // A problem it cannot fix brings a model that can, as one fix did before.
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'nafnet_gopro_deblur',
+        fix_stages: [blur],
+      }),
+    );
+  });
+
+  it('lets your own checkpoint be the Restore model without a fix in front of it', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: '__custom__',
+        fix_stages: [],
+        fixes: [],
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Blur', pressed: false })).toBeTruthy();
+  });
+
+  it('saves the fixes in order in a recipe and applies them again', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
+    api.saveRecipe.mockImplementationOnce(async (recipe: Recipe) => {
+      snapshot.recipes = [recipe];
+      snapshot.settings = structuredClone(lastSaved());
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Two fixes');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const recipe = api.saveRecipe.mock.calls[0][0];
+    expect(recipe.fixes).toEqual(['noise', 'blur']);
+    expect(recipe.stages).toEqual([
+      { kind: 'restore', model_id: 'nafnet_sidd_width64', fix: 'noise' },
+      { kind: 'restore', model_id: 'nafnet_gopro_deblur', fix: 'blur' },
+      { kind: 'upscale', model_id: 'realplksr_nomoswebphoto_x4' },
+    ]);
+    const saved = await screen.findByRole('button', { name: /^Two fixes/ });
+    expect(saved.getAttribute('aria-pressed')).toBe('true');
+
+    await user.click(screen.getByRole('button', { name: 'Move the blur fix earlier' }));
+    await waitFor(() => expect(saved.getAttribute('aria-pressed')).toBe('false'));
+    await user.click(saved);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        fixes: ['noise', 'blur'],
+        fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }, blur],
+      }),
+    );
+    expect(saved.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it.each([
+    {
+      name: 'Restore with a chip',
+      recipe: {
+        task: 'denoise' as const,
+        model_id: 'fbcnn_color',
+        output_scale: 1,
+        fixes: ['jpeg' as const],
+        stages: [{ kind: 'restore' as const, model_id: 'fbcnn_color' }],
+      },
+      fix_stages: [jpeg],
+      fixes: ['jpeg'],
+    },
+    {
+      name: 'Restore without a chip',
+      recipe: {
+        task: 'denoise' as const,
+        model_id: 'scunet_color_real_psnr',
+        output_scale: 1,
+        fixes: [],
+        stages: [{ kind: 'restore' as const, model_id: 'scunet_color_real_psnr' }],
+      },
+      fix_stages: [],
+      fixes: [],
+    },
+    {
+      name: 'Upscale with a fix and Faces',
+      recipe: {
+        task: 'upscale' as const,
+        model_id: 'hat_l_x4_imagenet',
+        output_scale: 4,
+        fixes: ['noise' as const, 'faces' as const],
+        stages: [
+          { kind: 'restore' as const, model_id: 'scunet_color_real_psnr' },
+          { kind: 'upscale' as const, model_id: 'hat_l_x4_imagenet' },
+        ],
+      },
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      fixes: ['noise', 'faces'],
+    },
+  ])('applies a 0.3.5 recipe: $name', async ({ recipe, fix_stages, fixes }) => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'old',
+        name: 'Old recipe',
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp32',
+        safe_memory: true,
+        ...recipe,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Old recipe/ }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: recipe.task,
+        selected_model_id: recipe.model_id,
+        fix_stages,
+        fixes,
+      }),
+    );
+    expect(screen.getByRole('button', { name: /^Old recipe/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+  });
+
+  it('keeps a frame-by-frame video recipe and shows no fixes for video', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      quality: 'best',
+      selected_model_id: 'span_photo_x4',
+      selected_video_model_id: 'frame_by_frame',
+    });
+    const user = await mountWith(snapshot);
+    // Video runs no fixes, so it offers none; Faces stays.
+    expect(screen.queryByRole('button', { name: 'Noise' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Blur' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Faces' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe.mock.calls[0][0].stages).toEqual([
+      { kind: 'video', model_id: 'span_photo_x4' },
+    ]);
+  });
+
+  it('drops the fixes when the task becomes video', async () => {
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'custom',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'noise'],
+      fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+    });
+    const user = await mountWith(snapshot);
+    const switched = structuredClone(snapshot);
+    switched.media = [image('photo'), video('clip', true)];
+    api.refreshSnapshot.mockResolvedValue(switched);
+    await user.click(screen.getByRole('button', { name: /^▶ clip\.mp4/ }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ task: 'video', fix_stages: [], fixes: [] }),
+    );
+  });
+
+  it('keeps a fix without a model in the plan and neither downloads nor starts', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur'],
+      fix_stages: [{ fix: 'blur', model_id: 'retired_model' }],
+    });
+    snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
+    const user = await mountWith(snapshot);
+    expect(within(rows()[0]).getByText('No model for this fix')).toBeTruthy();
+    expect(rows()[0].textContent).not.toContain('Needs your file');
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Change the blur fix model' }));
+    expect(
+      within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
+        'Choosing for Upscale · Blur',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('does not blame an engine that has not answered yet', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine = null;
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'jpeg'],
+      fix_stages: [blur, jpeg],
+    });
+    await mountWith(snapshot);
+    expect(screen.queryByText(/runs one fix at a time/)).toBeNull();
+  });
+
+  it('refuses several fixes on an engine that runs one', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features = snapshot.engine!.features.filter(
+      (feature) => feature !== 'image_multi_fix',
+    );
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    expect(screen.queryByText(/runs one fix at a time/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(
+      screen.getByText('This engine runs one fix at a time. Update LocalSR to run several.'),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('keeps the terms acceptance of each fix model apart', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    // The catalog is shared between tests; change a copy.
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'jpeg'],
+      fix_stages: [blur, jpeg],
+    });
+    for (const id of ['nafnet_gopro_deblur', 'fbcnn_color']) {
+      const model = snapshot.catalog.models.find((entry) => entry.model_id === id)!;
+      model.installed = false;
+      model.terms_acceptance_required = true;
+    }
+    const user = await mountWith(snapshot);
+    const blurTerms = within(rows()[0]).getByRole('checkbox') as HTMLInputElement;
+    const jpegTerms = within(rows()[1]).getByRole('checkbox') as HTMLInputElement;
+    // Start cannot fetch a model whose terms nobody accepted.
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    await user.click(blurTerms);
+    expect(blurTerms.checked).toBe(true);
+    expect(jpegTerms.checked).toBe(false);
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    await user.click(within(rows()[0]).getByRole('button', { name: /^Download model/ }));
+    await waitFor(() =>
+      expect(api.downloadModel).toHaveBeenCalledWith('nafnet_gopro_deblur', true),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('checkbox', { name: /reviewed.*license/i }));
+    await user.click(within(library).getByRole('button', { name: /^Download/ }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('fbcnn_color', true));
+    await user.click(screen.getByRole('button', { name: 'Close model library' }));
+    expect((within(rows()[0]).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    expect((within(rows()[1]).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('clears a remembered fix on a custom upscaler without keeping the old checkpoint', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'custom',
+      selected_model_id: 'hat_s_x4',
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    await user.click(screen.getByRole('button', { name: 'Back to the default' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'hat_s_x4',
+        quality: 'custom',
+        fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }],
+        preset_pins: {},
+      }),
+    );
+  });
+
+  it('keeps Faces for the way back from Restore', async () => {
+    const snapshot = readySnapshot([image('portrait', true)]);
+    snapshot.engine!.features.push('face_aware');
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'hat_l_x4_imagenet',
+      // Best brings HAT-L back, whose face companion Faces needs.
+      preset_pins: { 'upscale/photo/best': 'hat_l_x4_imagenet' },
+      fixes: ['faces'],
+      enable_face_model: true,
+    });
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise', 'faces'] }),
+    );
+    await chooseTask(user, /^Upscale/);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        enable_face_model: true,
+        fixes: ['noise', 'faces'],
+      }),
+    );
+  });
+
+  it.each([false, true])(
+    'downloads every fix once and only starts if preparation completes (cancel: %s)',
+    async (cancel) => {
+      const snapshot = readySnapshot([image('photo', true)]);
+      Object.assign(snapshot.settings, {
+        task: 'upscale',
+        quality: 'best',
+        selected_model_id: 'span_photo_x4',
+        fixes: ['blur', 'jpeg', 'noise'],
+        fix_stages: [blur, jpeg, { fix: 'noise', model_id: 'nafnet_sidd_width64' }],
+      });
+      const ids = snapshot.settings.fix_stages.map((stage) => stage.model_id);
+      for (const model of snapshot.catalog.models)
+        if (ids.includes(model.model_id)) model.installed = false;
+      let rejectDownload!: (error: Error) => void;
+      api.downloadModel.mockImplementation(async (id: string) => {
+        if (cancel)
+          return new Promise((_, reject) => {
+            rejectDownload = reject;
+          });
+        snapshot.catalog.models.find((model) => model.model_id === id)!.installed = true;
+        api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      });
+      api.cancelDownload.mockImplementationOnce(async () => {
+        rejectDownload(new Error('cancelled'));
+        return undefined;
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
+      if (cancel) {
+        await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
+        await waitFor(() => expect(api.cancelDownload).toHaveBeenCalledWith(ids[0]));
+        await screen.findByRole('button', { name: /^Download .*then upscale$/ });
+        expect(api.startJobs).not.toHaveBeenCalled();
+        expect(api.downloadModel).toHaveBeenCalledTimes(1);
+      } else {
+        await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
+        expect(api.downloadModel.mock.calls.map((call) => call[0])).toEqual(ids);
+        expect(api.startJobs).toHaveBeenCalledWith(
+          expect.objectContaining({ fix_stages: snapshot.settings.fix_stages }),
+        );
+      }
+    },
+  );
 });

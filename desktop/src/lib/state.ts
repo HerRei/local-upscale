@@ -6,6 +6,7 @@ import type {
   DeviceInfo,
   EditModel,
   FixKind,
+  FixStageSelection,
   Quality,
   TaskKind,
   UiSettings,
@@ -113,10 +114,53 @@ export function fixQuality(quality: Quality | ''): 'quick' | 'best' {
   return quality === 'quick' ? 'quick' : 'best';
 }
 
-function fitsFix(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): boolean {
+/** A 1× model that fixes this problem; the host accepts nothing else as a fix. */
+export function fitsFix(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): boolean {
   return (
     model.native_scale === 1 && !model.purposes.includes('face') && fixesOf(model).includes(fix)
   );
+}
+
+/** The order a fix takes when it is turned on: deblur first, noise last. */
+export const DEFAULT_FIX_ORDER: Exclude<FixKind, 'faces'>[] = ['blur', 'jpeg', 'noise'];
+
+/**
+ * Turn a fix off, or on at its place in the default order: before the first fix that
+ * comes after it there, so an order the user changed stays as it is. A new fix has no
+ * model yet; resolving the recipe gives it one.
+ */
+export function toggleFixStage(
+  stages: FixStageSelection[],
+  fix: Exclude<FixKind, 'faces'>,
+): FixStageSelection[] {
+  if (stages.some((stage) => stage.fix === fix)) return stages.filter((stage) => stage.fix !== fix);
+  const rank = DEFAULT_FIX_ORDER.indexOf(fix);
+  const at = stages.findIndex((stage) => DEFAULT_FIX_ORDER.indexOf(stage.fix) > rank);
+  const next = [...stages];
+  next.splice(at < 0 ? next.length : at, 0, { fix, model_id: '' });
+  return next;
+}
+
+/** Swap a fix with its neighbour; the same list comes back when it cannot move. */
+export function moveFixStage(
+  stages: FixStageSelection[],
+  fix: Exclude<FixKind, 'faces'>,
+  offset: -1 | 1,
+): FixStageSelection[] {
+  const index = stages.findIndex((stage) => stage.fix === fix);
+  const other = index + offset;
+  if (index < 0 || other < 0 || other >= stages.length) return stages;
+  const next = [...stages];
+  [next[index], next[other]] = [next[other], next[index]];
+  return next;
+}
+
+/** How a fix stage is named in the plan, the recipe and the job (the host agrees). */
+export function fixStageKind(
+  model: CatalogModel | undefined,
+  fix: Exclude<FixKind, 'faces'>,
+): 'deblock' | 'restore' {
+  return model?.stage === 'deblock' || fix === 'jpeg' ? 'deblock' : 'restore';
 }
 
 /**
@@ -180,6 +224,8 @@ export interface PlanStage {
   fix?: Exclude<FixKind, 'faces'>;
   /** The model is the user's remembered choice for that problem and quality. */
   remembered?: boolean;
+  /** A fix no catalog model resolves to: the row stays and Start waits for a choice. */
+  missing?: boolean;
   label: string;
   model?: CatalogModel;
   videoModel?: CatalogVideoModel;
@@ -229,7 +275,6 @@ export function resolvePlan(
   }
   const byId = (id: string): CatalogModel | undefined =>
     snapshot.catalog.models.find((model) => model.model_id === id);
-  const chip = settings.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
   const remembered = (model: CatalogModel, fix?: Exclude<FixKind, 'faces'>): boolean =>
     Boolean(fix) &&
     rememberedFixModel(snapshot, fix!, fixQuality(settings.quality), settings.preset_pins)
@@ -254,17 +299,35 @@ export function resolvePlan(
       sizeBytes: model.installed ? 0 : model.size_bytes,
     };
 
-  if (settings.task === 'upscale' && settings.preprocess_model_id) {
-    const model = byId(settings.preprocess_model_id);
-    const fixes = (model ? fixesOf(model) : []).filter(
-      (item): item is Exclude<FixKind, 'faces'> => item !== 'faces',
+  const restoring = settings.task === 'denoise';
+  const fixStages = settings.task === 'upscale' || restoring ? settings.fix_stages : [];
+  // Restore's model is its last fix; the ones before it run first, as before an upscale.
+  const chip = restoring ? fixStages.at(-1)?.fix : undefined;
+  const missingStage = (
+    kind: PlanStage['kind'],
+    role: PlanStage['role'],
+    label: string,
+    fix: Exclude<FixKind, 'faces'>,
+  ): PlanStage => ({
+    kind,
+    role,
+    fix,
+    label,
+    missing: true,
+    installed: false,
+    canDownload: false,
+    needsFile: false,
+    sizeBytes: 0,
+  });
+  for (const selection of restoring ? fixStages.slice(0, -1) : fixStages) {
+    const found = byId(selection.model_id);
+    const model = found && fitsFix(found, selection.fix) ? found : undefined;
+    const kind = fixStageKind(model, selection.fix);
+    const label = FIX_ROW_LABELS[selection.fix];
+    stages.push(
+      stageFor(kind, 'fix', label, model, selection.fix) ??
+        missingStage(kind, 'fix', label, selection.fix),
     );
-    const kind = model?.stage === 'deblock' || fixes.includes('jpeg') ? 'deblock' : 'restore';
-    // The chip names the problem; a recipe saved before chips existed falls back to
-    // the model, when it fixes only one thing.
-    const fix = chip && fixes.includes(chip) ? chip : fixes.length === 1 ? fixes[0] : undefined;
-    const stage = stageFor(kind, 'fix', fix ? FIX_ROW_LABELS[fix] : 'Fix first', model, fix);
-    if (stage) stages.push(stage);
   }
 
   if (options.usingTemporalVideo && options.selectedVideoModel) {
@@ -292,7 +355,6 @@ export function resolvePlan(
     });
   } else {
     const primary = byId(settings.selected_model_id);
-    const restoring = settings.task === 'denoise';
     const stage = stageFor(
       restoring ? 'restore' : 'upscale',
       'primary',
@@ -301,6 +363,7 @@ export function resolvePlan(
       restoring && primary && chip && fixesOf(primary).includes(chip) ? chip : undefined,
     );
     if (stage) stages.push(stage);
+    else if (chip) stages.push(missingStage('restore', 'primary', 'Restore', chip));
   }
 
   if (options.faceEnabled && options.faceModel && settings.task !== 'denoise') {
@@ -312,7 +375,13 @@ export function resolvePlan(
 
 /** Stages LocalSR can fetch itself before the job, and their total size. */
 export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; bytes: number } {
-  const pending = stages.filter((stage) => stage.canDownload);
+  const seen = new Set<string>();
+  const pending = stages.filter((stage) => {
+    const id = (stage.model ?? stage.videoModel ?? stage.editModel)?.model_id;
+    if (!stage.canDownload || !id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   return { stages: pending, bytes: pending.reduce((total, stage) => total + stage.sizeBytes, 0) };
 }
 
@@ -504,7 +573,14 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       break;
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
-      next.runtime.status_title = data.unit === 'steps' ? 'Editing' : 'Enhancing';
+      // In a job of several stages the title keeps which one runs (two fixes can both be
+      // "Restoring"); a one-stage job reads "Enhancing" as before.
+      if (data.unit === 'steps') next.runtime.status_title = 'Editing';
+      else if (
+        !next.runtime.status_title.includes(' · stage ') ||
+        next.runtime.status_title.endsWith(' 1/1')
+      )
+        next.runtime.status_title = 'Enhancing';
       // Editing names its phase; most of an edit happens outside the steps.
       next.runtime.status_detail = data.detail
         ? String(data.detail)
