@@ -171,6 +171,38 @@ describe('desktop state', () => {
     expect(snapshot.runtime.status_detail).toBe('SPAN runs on the Neural Engine.');
   });
 
+  it('keeps the route note after a progress tick replaces the detail line', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'job-1' } });
+    const note =
+      'Checking that Intel UHD Graphics 620 (DirectML) gives the same result as the CPU.';
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'engine_status',
+      data: { job_id: 'job-1', message: note },
+    });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: { percentage: 12, completed_tiles: 3, total_tiles: 25 },
+    });
+    expect(snapshot.runtime.status_detail).toBe('3 of 25 tiles');
+    expect(snapshot.runtime.hardware_note).toBe(note);
+    // A note for another job leaves it alone.
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'engine_status',
+      data: { job_id: 'stale-job', message: 'HAT runs on the GPU.' },
+    });
+    expect(snapshot.runtime.hardware_note).toBe(note);
+    for (const end of ['job_completed', 'job_cancelled', 'job_failed'] as const) {
+      const ended = applyWorkerEnvelope(snapshot, { type: end, data: { output_path: 'x' } });
+      expect(ended.runtime.hardware_note).toBe('');
+    }
+    // A new job starts without the last one's note.
+    expect(
+      applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'job-2' } }).runtime
+        .hardware_note,
+    ).toBe('');
+  });
+
   it('shows temporal phases without inventing a tile count or first-clip ETA', () => {
     let snapshot = applyWorkerEnvelope(demoSnapshot(), {
       type: 'job_started',

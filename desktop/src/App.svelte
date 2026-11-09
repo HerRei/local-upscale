@@ -423,6 +423,14 @@
                 )
         }`
       : '';
+  // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
+  // ticks replace the detail line, so the note keeps its own line until the job ends.
+  $: hardwareNote =
+    snapshot.runtime.active_job_id &&
+    snapshot.runtime.hardware_note &&
+    snapshot.runtime.hardware_note !== snapshot.runtime.status_detail
+      ? snapshot.runtime.hardware_note
+      : '';
   $: taskCaption = !settings.task
     ? ''
     : settings.task === 'denoise'
@@ -1961,6 +1969,7 @@
   class:booting
   class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
+  class:status-extra={Boolean(hardwareNote)}
   style={`--ui-scale:${settings.interface_scale / 100}`}
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
@@ -2672,6 +2681,7 @@
             ? 'Opening the trusted desktop control plane.'
             : idleSummary || snapshot.runtime.status_detail}</span
         >
+        {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if queueEta}<span
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."

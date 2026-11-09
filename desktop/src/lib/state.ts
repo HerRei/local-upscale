@@ -485,6 +485,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.throughput_unit = 'tiles/s';
       next.runtime.active_tile_size = 0;
       next.runtime.result_preview_data_url = '';
+      next.runtime.hardware_note = '';
       break;
     case 'stage_started': {
       const labels: Record<string, string> = {
@@ -702,6 +703,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
     case 'job_completed':
     case 'video_job_completed':
       next.runtime.active_job_id = '';
+      next.runtime.hardware_note = '';
       // Drop a live video-frame thumbnail while the host decodes the final
       // output. This prevents a transient comparison slider over one frame.
       next.runtime.result_preview_data_url = '';
@@ -717,17 +719,22 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       break;
     case 'job_cancelled':
       next.runtime.active_job_id = '';
+      next.runtime.hardware_note = '';
       next.runtime.status_title = 'Cancelled';
       next.runtime.status_detail = 'Temporary output was cleaned up.';
       break;
     case 'job_failed':
       next.runtime.active_job_id = '';
+      next.runtime.hardware_note = '';
       next.runtime.status_title = 'Could not finish';
       next.runtime.status_detail = String(data.error_message ?? 'Unknown worker error.');
       break;
     case 'engine_status':
       if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
       next.runtime.status_detail = String(data.message ?? '');
+      // The next progress tick replaces the detail line; the route note (a check, a GPU
+      // slower than the CPU, part of a model on the CPU) stays until the job ends.
+      next.runtime.hardware_note = next.runtime.status_detail;
       break;
     case 'warning':
       next.runtime.status_title = 'Warning';
