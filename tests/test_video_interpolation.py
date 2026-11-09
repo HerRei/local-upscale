@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from fractions import Fraction
+from pathlib import Path
 from types import SimpleNamespace
 
 import av
@@ -210,3 +211,200 @@ def test_interpolation_off_leaves_the_frame_by_frame_job_unchanged(tmp_path):
     )
     assert engine.frames == len(selected)
     assert synthesizer.calls == []
+
+
+# The worker: request fields, the verified RIFE bundle, and engine routing.
+
+
+class BundleStore:
+    def __init__(self, bundle, installed=True):
+        self.bundle, self.installed, self.hashed = bundle, installed, False
+
+    def bundle_dir_for(self, model):
+        assert model.model_id == "rife_4_25"
+        return self.bundle
+
+    def bundle_file_path(self, model, file):
+        return self.bundle / file.filename
+
+    def is_bundle_installed(self, model):
+        self.hashed = True
+        return self.installed
+
+
+def worker_request(tmp_path, **fields):
+    return {
+        "video_path": "input.mp4",
+        "model_path": "model.pth",
+        "output_video_path": str(tmp_path / "output.mp4"),
+        "device": "mps",
+        "precision": "fp32",
+        "tile_size": 64,
+        "halo": 8,
+        **fields,
+    }
+
+
+def patched_worker(monkeypatch, tmp_path, *, installed=True):
+    from test_worker import DummyModelAdapter
+
+    import localsr.video_models.rife.engine as rife_engine
+    import localsr.worker.server as server_module
+
+    loaded = []
+
+    class FakeRife:
+        def __init__(self, checkpoint, device_str, **_options):
+            loaded.append((Path(checkpoint), device_str))
+
+    captured = {}
+
+    def fake_video_job(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output_path="output.mp4", frames_processed=1, elapsed_seconds=1.0, inference_seconds=1.0
+        )
+
+    monkeypatch.setattr(rife_engine, "RifeSynthesizer", FakeRife)
+    monkeypatch.setattr(server_module, "run_video_job", fake_video_job)
+    monkeypatch.setattr(server_module, "send_message", lambda _message: None)
+    server = server_module.WorkerServer()
+    server.model_adapter = DummyModelAdapter()
+    bundle = tmp_path / "rife_4_25"
+    bundle.mkdir()
+    server.model_store = BundleStore(bundle, installed)
+    return server, bundle, loaded, captured
+
+
+def test_worker_runs_interpolation_with_the_verified_rife_bundle(monkeypatch, tmp_path):
+    server, bundle, loaded, captured = patched_worker(monkeypatch, tmp_path)
+    server._run_video_job(
+        "interpolate",
+        worker_request(
+            tmp_path,
+            interpolation="fps60",
+            interpolation_order="before_upscale",
+            interpolation_model_id="rife_4_25",
+            interpolation_bundle_dir=str(bundle),
+        ),
+    )
+    assert server.model_store.hashed
+    assert loaded == [(bundle / "flownet_v4.25.pkl", "mps")]
+    config = captured["config"]
+    assert (config.interpolation, config.interpolation_order) == ("fps60", "before_upscale")
+    assert captured["synthesizer"] is not None
+
+
+def test_worker_without_interpolation_never_loads_rife(monkeypatch, tmp_path):
+    server, _bundle, loaded, captured = patched_worker(monkeypatch, tmp_path)
+    server._run_video_job("plain", worker_request(tmp_path))
+    assert loaded == []
+    assert captured["synthesizer"] is None
+    assert captured["config"].interpolation == "off"
+
+
+def test_worker_refuses_an_interpolation_bundle_outside_the_catalog_path(monkeypatch, tmp_path):
+    server, _bundle, loaded, _ = patched_worker(monkeypatch, tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with pytest.raises(ValueError, match="does not match"):
+        server._run_video_job(
+            "untrusted",
+            worker_request(
+                tmp_path,
+                interpolation="x2",
+                interpolation_model_id="rife_4_25",
+                interpolation_bundle_dir=str(elsewhere),
+            ),
+        )
+    assert not server.model_store.hashed
+    assert loaded == []
+
+
+def test_worker_refuses_an_interpolation_model_that_fails_its_checksum(monkeypatch, tmp_path):
+    server, bundle, loaded, _ = patched_worker(monkeypatch, tmp_path, installed=False)
+    with pytest.raises(ValueError, match="SHA-256"):
+        server._run_video_job(
+            "corrupt",
+            worker_request(
+                tmp_path,
+                interpolation="x2",
+                interpolation_model_id="rife_4_25",
+                interpolation_bundle_dir=str(bundle),
+            ),
+        )
+    assert loaded == []
+
+
+def test_worker_refuses_unknown_interpolation_models(monkeypatch, tmp_path):
+    server, bundle, _, _ = patched_worker(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match="trusted catalog"):
+        server._run_video_job(
+            "unknown",
+            worker_request(
+                tmp_path,
+                interpolation="x2",
+                interpolation_model_id="gmfss",
+                interpolation_bundle_dir=str(bundle),
+            ),
+        )
+
+
+def test_seedvr2_jobs_refuse_interpolation_in_this_release(monkeypatch, tmp_path):
+    server, bundle, _, _ = patched_worker(monkeypatch, tmp_path)
+    monkeypatch.setattr("localsr.core.video_engines.seedvr2_runtime_issue", lambda: None)
+    with pytest.raises(ValueError, match="frame-by-frame"):
+        server._run_video_job(
+            "seedvr2",
+            worker_request(
+                tmp_path,
+                model_kind="seedvr2",
+                device="cuda:0",
+                interpolation="x2",
+                interpolation_bundle_dir=str(bundle),
+            ),
+        )
+
+
+def test_the_engine_advertises_frame_interpolation():
+    from localsr.worker.server import _engine_features
+
+    assert "video_interpolation" in _engine_features()
+
+
+def test_the_protocol_carries_interpolation_with_off_by_default():
+    import json
+
+    from localsr.protocol.messages import VideoJobRequest
+
+    fields = dict(
+        job_id="j",
+        video_path="in.mp4",
+        model_path="m.pth",
+        output_video_path="out.mp4",
+        container="mp4",
+        crf=18,
+        fps=None,
+        device="cpu",
+        tile_size=128,
+        halo=16,
+        precision="fp32",
+        safe_memory=False,
+    )
+    data = json.loads(VideoJobRequest(**fields).to_json())["data"]
+    assert data["interpolation"] == "off"
+    assert data["interpolation_order"] == "after_upscale"
+    assert data["interpolation_model_id"] is None
+    assert data["interpolation_bundle_dir"] is None
+
+    schema = json.loads(
+        (Path(__file__).parents[1] / "protocol" / "worker-protocol.schema.json").read_text()
+    )
+    properties = schema["$defs"]["videoJobRequest"]["allOf"][1]["properties"]["data"]["allOf"][1][
+        "properties"
+    ]
+    assert properties["interpolation"]["enum"] == ["off", "x2", "x4", "fps60", "fps120"]
+    assert properties["interpolation"]["default"] == "off"
+    assert properties["interpolation_order"]["enum"] == ["after_upscale", "before_upscale"]
+    assert properties["interpolation_model_id"]["type"] == ["string", "null"]
+    assert properties["interpolation_bundle_dir"]["type"] == ["string", "null"]

@@ -113,6 +113,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "localsr.core" = ["benchmark_references.json", "edit_catalog.json"]
+"localsr.video_models.rife" = ["*.md"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",
     "*.md",

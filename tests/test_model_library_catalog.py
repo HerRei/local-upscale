@@ -40,7 +40,7 @@ def test_fix_chips_map_to_the_expected_checkpoints() -> None:
 def test_rights_status_is_separate_from_support_tier() -> None:
     manifest = exporter.build_manifest()
     by_id = {entry["model_id"]: entry for entry in manifest["models"]}
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
 
     # Labs models with verified rights stay preset-eligible; Labs is validation only.
     best = by_id["realplksr_nomoswebphoto_x4"]
