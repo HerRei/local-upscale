@@ -4,7 +4,22 @@
 
 ### Added
 
-## [Unreleased]
+- The model plan shows how many compatible models remain in the library and opens
+  the library filtered to the current task. Model details identify each author
+  beside its source link and link the catalog license name.
+- Add fixed-seed property tests for video timing, image colour handling, tiling,
+  Compare geometry and signed update validation.
+- End-to-end tests of the desktop interface with Playwright in Chromium and WebKit:
+  the Inputs, Outputs and Compare tabs, the plan card, Advanced settings, keyboard
+  navigation at 1024×700 and 1440×900, and screenshot baselines of nine key screens. A
+  new CI job runs the behaviour tests on Linux.
+- On the Mac, HEIC image output and MOV video output
+  ([#94](https://github.com/HerRei/local-upscale/issues/94)). HEIC joins PNG,
+  JPEG, TIFF and WebP under Advanced > Format with the same quality slider as JPEG;
+  it keeps the sRGB profile, the safe metadata and transparency. MOV joins MP4 and
+  MKV as a container and holds HEVC or Apple ProRes 422, and the video format menu
+  lists only the codecs the chosen container holds. macOS writes both with its own
+  encoders, so Windows and Linux do not offer them.
 
 ### Changed
 
@@ -21,7 +36,6 @@
   longer leaves a staged or backup file (or a stale journal temporary), a killed
   engine package install restores the previous engine and removes its half-unpacked
   folder, and the Windows install marker leaves no temporary file.
-
 
 ## [0.3.7-beta] - Unreleased
 
