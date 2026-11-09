@@ -194,5 +194,7 @@ json.dump({"version": version, "commit": commit, "engine_id": engine_id,
           open(f"{out}/release.json", "w"), indent=2)
 print("feed entry written")
 PY
+# The app trusts the entry's version, channel and identity only as this signed statement says.
+python scripts/beta_update_signing.py statement "$OUT/beta.json"
 step "done"
 cat "$OUT/SHA256SUMS"
