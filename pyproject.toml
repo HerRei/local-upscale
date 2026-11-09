@@ -43,6 +43,7 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
+    "hypothesis>=6.125.0",
     "ruff==0.17.3",
     "pyright==1.1.414",
     "vulture==2.16",
