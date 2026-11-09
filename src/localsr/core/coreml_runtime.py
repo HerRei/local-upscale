@@ -608,6 +608,10 @@ class _CoreMLImage(torch.nn.Module):
         )
         return lanes
 
+    def forget_batch_unit(self, unit: str) -> None:
+        """Drop a unit's batch runners after one failed; the next batch loads new ones."""
+        self.batch_runners.pop(unit, None)
+
     def _announce(self, unit: str) -> None:
         if self.active_unit != unit:
             self.active_unit = unit
@@ -737,6 +741,9 @@ class CoreMLImageDescriptor:
 
     def batch_lanes(self, sample: torch.Tensor, shape: tuple[int, int], *, gpu: bool) -> list:
         return self.model.batch_lanes(sample, shape, gpu=gpu)
+
+    def forget_batch_unit(self, unit: str) -> None:
+        self.model.forget_batch_unit(unit)
 
     def set_cancel_event(self, cancel_event):
         self.model.cancel_event = cancel_event

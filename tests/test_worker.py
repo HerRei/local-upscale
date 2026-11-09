@@ -562,25 +562,61 @@ def test_cancelling_a_batch_also_cancels_the_photos_left_for_the_normal_path(mon
     assert not server.cancel_event.is_set() and not server.pending_cancel_job_ids
 
 
-def test_an_unexpected_batch_error_fails_every_photo_without_a_result(monkeypatch, capsys):
+def test_an_unexpected_batch_error_fails_the_started_photos_and_runs_the_others_alone(
+    monkeypatch, capsys
+):
     import localsr.worker.image_batch as batch_module
-    from localsr.protocol.messages import JobCompleted
+    import localsr.worker.server as server_module
+    from localsr.protocol.messages import JobCompleted, JobStarted
 
     server = WorkerServer()
 
     def broken(runner, items):
+        runner.emit(JobStarted(job_id=items[0]["job_id"]))
         runner.emit(JobCompleted(job_id=items[0]["job_id"], elapsed_seconds=1.0))
+        runner.emit(JobStarted(job_id=items[1]["job_id"]))
         raise RuntimeError("scheduler bug")
 
+    def run_job(job_id, data):
+        server_module.send_message(JobCompleted(job_id=job_id, elapsed_seconds=1.0))
+
     monkeypatch.setattr(batch_module.ImageBatchRunner, "run", broken)
+    monkeypatch.setattr(server, "_run_job", run_job)
     server._run_image_batch(_batch_jobs(3))
     sent = [(m["type"], m["data"]["job_id"]) for m in _sent(capsys) if "job_id" in m["data"]]
     assert sent == [
+        ("job_started", "photo-0"),
         ("job_completed", "photo-0"),
+        ("job_started", "photo-1"),
         ("job_failed", "photo-1"),
-        ("job_failed", "photo-2"),
+        # A photo that never started runs as an ordinary job, as in the queue before.
+        ("job_started", "photo-2"),
+        ("job_completed", "photo-2"),
     ]
     assert server.active_job_id is None and not server.active_batch_job_ids
+
+
+def test_a_lost_device_in_a_batch_leaves_the_unstarted_photos_queued(monkeypatch, capsys):
+    import localsr.worker.image_batch as batch_module
+    import localsr.worker.server as server_module
+    from localsr.protocol.messages import JobStarted
+
+    server = WorkerServer()
+    exits = []
+
+    def lost(runner, items):
+        runner.emit(JobStarted(job_id=items[0]["job_id"]))
+        raise RuntimeError("device lost")
+
+    monkeypatch.setattr(batch_module.ImageBatchRunner, "run", lost)
+    monkeypatch.setattr(server_module, "_device_lost", lambda error: True)
+    monkeypatch.setattr(server_module.os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(server, "_run_job", lambda *_: pytest.fail("ran on a lost device"))
+    server._run_image_batch(_batch_jobs(3))
+    sent = [(m["type"], m["data"].get("job_id")) for m in _sent(capsys) if m["type"] != "log"]
+    # Only the started photo fails; the engine restarts and the desktop sends the rest again.
+    assert sent == [("job_started", "photo-0"), ("job_failed", "photo-0")]
+    assert exits
 
 
 @pytest.mark.parametrize(

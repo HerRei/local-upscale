@@ -658,3 +658,33 @@ def test_batch_lanes_keep_the_normal_path_when_the_gate_is_inconclusive(fake_cor
     descriptor.model.fallback_call = lambda _model, value: torch.full_like(value, 9.0)
     assert descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True) == []
     assert NEURAL_ENGINE not in FakeProgram.stores[("unstable", (32, 32))]
+
+
+def test_a_unit_with_a_stored_rejection_is_never_loaded_as_a_lane(fake_coreml, monkeypatch):
+    monkeypatch.setattr(coreml_runtime, "_NativeRunner", FakeRunner)
+    FakeProgram.stores[("stored", (32, 32))] = {CORE_ML_GPU: {"accepted": False}}
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="stored"
+    )
+    lanes = descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True)
+    assert [runner.unit for runner in lanes] == [NEURAL_ENGINE] * 2
+    assert CORE_ML_GPU not in {runner.unit for runner in fake_coreml.runners}
+    # A gate that rejects a unit leaves no runner of it in the lanes either.
+    fake_coreml.behaviours[NEURAL_ENGINE] = "wrong"
+    fresh = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="fresh-reject"
+    )
+    assert fresh.batch_lanes(image(32, 32)[None], (32, 32), gpu=True) == []
+
+
+def test_a_forgotten_batch_unit_gets_fresh_runners(fake_coreml, monkeypatch):
+    monkeypatch.setattr(coreml_runtime, "_NativeRunner", FakeRunner)
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="forget"
+    )
+    first = descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True)
+    descriptor.forget_batch_unit(CORE_ML_GPU)
+    second = descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True)
+    assert second[:2] == first[:2]
+    assert not {id(runner) for runner in second[2:]} & {id(runner) for runner in first[2:]}
+    assert [runner.unit for runner in second[2:]] == [CORE_ML_GPU] * 2
