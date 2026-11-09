@@ -106,7 +106,7 @@
       "status": "labs",
       "blocking": false,
       "scope": "cuda-xpu-other-directml",
-      "summary": "NVIDIA CUDA (published, labelled untested), Linux Intel XPU (withheld) and DirectML adapters other than the UHD 620 have not run on physical hardware, and DirectML is still outside the GPU tolerance on the UHD 620.",
+      "summary": "NVIDIA CUDA (published, labelled untested), Linux Intel XPU (withheld) and DirectML adapters other than the UHD 620 have not run on physical hardware. On the UHD 620 with its 2020 driver, DirectML matched the CPU (93.7 dB, source build, 9 November 2026), while OpenVINO crashes inside the driver and the GPU preflight refuses it.",
       "next_action": "Collect volunteer hardware reports before describing these engines as tested."
     },
     {

@@ -13,11 +13,11 @@ import json
 import logging
 import math
 import os
-import sys
 import tempfile
 import threading
 import time
 from collections import OrderedDict
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +25,9 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+from . import gpu_guard
+from .gpu_guard import GATE_CACHE_ENV, gate_cache_directory  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +88,6 @@ class _RawImage(torch.nn.Module):
 # Every LocalSR GPU route through ONNX runs FP32, so a correct route lands far above
 # this (OpenVINO FP32 on an Intel iGPU: 128 dB); FP16 arithmetic lands near 50 dB.
 MINIMUM_PSNR = 50.0
-GATE_CACHE_ENV = "LOCALSR_ONNX_GATE_CACHE"
 _MAXIMUM_VERDICTS = 400
 # Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).
 _LARGE_GRAPH_BYTES = 256 * 1024**2
@@ -160,24 +162,14 @@ class OnnxRoute:
     # Without a known device and driver identity a verdict lasts only for this process:
     # a later driver must be checked again.
     persist: bool = True
+    # The app's device id ("directml:0", "openvino:<uuid>"), for the preflight process.
+    device: str = ""
 
     def __post_init__(self):
         if self.provider not in ROUTE_CONFIGS or self.device_index < 0:
             raise ValueError("Invalid ONNX execution provider or device index")
         if self.provider == "OpenVINOExecutionProvider" and self.ep_device is None:
             raise ValueError("The OpenVINO route needs an OpenVINO device")
-
-
-def gate_cache_directory() -> Path:
-    override = os.environ.get(GATE_CACHE_ENV)
-    if override:
-        return Path(override)
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "LocalSR" / "gpu-checks"
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return base / "LocalSR" / "gpu-checks"
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "LocalSR" / "gpu-checks"
 
 
 class _Verdicts:
@@ -248,6 +240,10 @@ class _OnnxImage(torch.nn.Module):
         # Tiles that ran through PyTorch on the CPU because the route could not be checked.
         self.cpu_tiles = 0
         self.verdicts = _Verdicts(gate_cache_directory(), persist=route.persist)
+        self.crashes = gpu_guard.CrashNotes(gate_cache_directory())
+        self.preflight_passed = gpu_guard.Passed(gate_cache_directory())
+        # How this GPU crashed before ("engine" or "preflight"), when it did.
+        self.crash_cause: str | None = None
         # An image's tiles come in up to four shapes (interior, right edge, bottom edge,
         # corner). Keeping all four lets the next image or video frame of the same size
         # reuse them; a very large model keeps two to spare shared memory.
@@ -271,6 +267,15 @@ class _OnnxImage(torch.nn.Module):
 
     def _label(self) -> str:
         return self.route.label or self.provider
+
+    def _crash_key(self) -> str:
+        # The whole GPU, not one configuration: a driver that crashes on one setting is
+        # not trusted with the others.
+        # The device as well: two identical cards share an identity.
+        return "|".join((self.route.identity, self.route.device, self.provider, _localsr_version()))
+
+    def _watch(self):
+        return self.crashes.watch(self._crash_key()) if self._gated else nullcontext()
 
     def _verdict_key(self, graph_hash: str, config: str) -> str:
         import onnxruntime as ort
@@ -360,6 +365,10 @@ class _OnnxImage(torch.nn.Module):
 
     def _candidates(self, graph_hash: str) -> list[tuple]:
         configs = []
+        if self._gated:
+            self.crash_cause = self.crashes.crashed(self._crash_key()) or self._preflight()
+            if self.crash_cause:
+                return []
         for config in ROUTE_CONFIGS[self.provider]:
             verdict = (
                 self.verdicts.get(self._verdict_key(graph_hash, config[0])) if self._gated else None
@@ -369,7 +378,47 @@ class _OnnxImage(torch.nn.Module):
             configs.append((config, verdict is None and self._gated))
         return configs
 
+    def _preflight(self) -> str | None:
+        """Run the GPU once in a separate process before this engine opens a session on
+        it; "preflight" when that process crashed on it."""
+        key = self._crash_key()
+        if (
+            not self.route.device
+            or os.environ.get(gpu_guard.CHILD_ENV)
+            or key in gpu_guard._PREFLIGHT_TRIED
+            or key in self.preflight_passed
+        ):
+            return None
+        self._status(
+            f"Testing {self._label()} in a separate process before its first use. This "
+            "happens once per graphics driver."
+        )
+        outcome = gpu_guard.run(self.route.device, self.cancel_event)
+        gpu_guard._PREFLIGHT_TRIED.add(key)
+        if outcome == "crashed":
+            self.crashes.mark(key, "preflight")
+            return "preflight"
+        if outcome == "passed" and self.route.persist:
+            # Without a known driver identity a later driver could not be told apart.
+            self.preflight_passed.add(key)
+        return None
+
     def _rejected(self) -> GpuRouteRejected:
+        if self.crash_cause:
+            happened = (
+                f"A test run on {self._label()} crashed"
+                if self.crash_cause == "preflight"
+                else f"The engine crashed on {self._label()} earlier"
+            )
+            retry = (
+                "after the next update of LocalSR or of the graphics driver"
+                if self.route.persist
+                else "after the next update of LocalSR"
+            )
+            return GpuRouteRejected(
+                f"{happened}, so LocalSR does not use that GPU. Select the CPU. LocalSR "
+                f"tries the GPU again {retry}."
+            )
         return GpuRouteRejected(
             f"{self.architecture} gives different results on {self._label()} than on the CPU, "
             "so LocalSR does not use that GPU for this model. Select the CPU for it."
@@ -412,7 +461,8 @@ class _OnnxImage(torch.nn.Module):
                     f"{self.architecture}. This happens once per model and tile shape."
                 )
             try:
-                session, trace = self._create(state["graph"], config)
+                with self._watch():
+                    session, trace = self._create(state["graph"], config)
             except InterruptedError:
                 raise
             except Exception as error:
@@ -509,9 +559,10 @@ class _OnnxImage(torch.nn.Module):
             watcher.start()
         try:
             self._check_cancelled()
-            output = session.run(
-                ["restored"], {"image": image.detach().contiguous().numpy()}, options
-            )[0]
+            with self._watch():
+                output = session.run(
+                    ["restored"], {"image": image.detach().contiguous().numpy()}, options
+                )[0]
             self._check_cancelled()
             return output
         finally:
