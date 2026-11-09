@@ -1339,6 +1339,15 @@ def test_add_statements_signs_both_formats_and_fills_in_what_an_older_feed_lacks
     again = json.loads(path.read_text())["platforms"]["darwin-aarch64-mps-native"]["localsr"]
     assert (again["statement"], again["statement_signature"]) == version_1
     assert _statement_v2({"localsr": again})["schema_version"] == 2
+    verify_prepared._statement(
+        "darwin-aarch64-mps-native", again, "1.2.3-beta", "beta", TEST_KEY.public_key
+    )
+    # An entry with a statement but no signature for it is signed again, not skipped.
+    for field in ("statement_signature", "statement_v2_signature"):
+        entry = json.loads(path.read_text())
+        entry["platforms"]["darwin-aarch64-mps-native"]["localsr"][field] = ""
+        path.write_text(json.dumps(entry))
+        assert update_signing.add_statements(path, sign=fake_sign) == ["darwin-aarch64-mps-native"]
 
 
 # The updater's own tests (desktop/src-tauri/src/updates.rs) verify statements signed here,
@@ -1384,6 +1393,18 @@ def rust_fixture_statements(fixture: dict) -> dict:
             base64.b64encode(data).decode(),
             TEST_KEY.signature(data, "linux-x86_64-rocm-native.statement-v2.json"),
         )
+    # Signed by the right key but not format 2: the client must refuse them on their content.
+    key = "linux-x86_64-rocm-native"
+    version_2 = json.loads(update_signing.release_statement_v2("0.3.7-beta", key, contract))
+    for name, data in (
+        ("format_1", update_signing.release_statement("0.3.7-beta", key, contract)),
+        ("extra_field", update_signing._statement_bytes({**version_2, "extra": 1})),
+        (
+            "missing_parts",
+            update_signing._statement_bytes({k: v for k, v in version_2.items() if k != "parts"}),
+        ),
+    ):
+        out[name] = (base64.b64encode(data).decode(), TEST_KEY.signature(data, f"{name}.json"))
     return out
 
 
@@ -1395,6 +1416,11 @@ def test_the_updater_fixture_holds_the_statements_this_signer_writes() -> None:
     assert (fixture["split"]["statement_v2"], fixture["split"]["statement_v2_signature"]) == signed[
         "split"
     ]
+    for name in ("format_1", "extra_field", "missing_parts"):
+        assert (
+            fixture["rejected"][name]["statement"],
+            fixture["rejected"][name]["signature"],
+        ) == signed[name]
     assert verify_prepared.minisign_verify(
         fixture["public_key"],
         fixture["statement_v2_signature"],

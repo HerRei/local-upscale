@@ -539,7 +539,15 @@ def add_statements(feed: Path, sign: Callable[[Path], None] = sign_artifact) -> 
     with tempfile.TemporaryDirectory(prefix="localsr-signing-") as temporary:
         for key, entry in data["platforms"].items():
             contract = entry["localsr"]
-            if not (contract.get("statement") and contract.get("statement_v2")):
+            if not all(
+                contract.get(field)
+                for field in (
+                    "statement",
+                    "statement_signature",
+                    "statement_v2",
+                    "statement_v2_signature",
+                )
+            ):
                 digest = ((contract.get("engine") or {}).get("manifest") or {}).get("sha256")
                 if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
                     raise ValueError(f"{key} has no engine package to sign a statement for")
