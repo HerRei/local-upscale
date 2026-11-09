@@ -109,6 +109,9 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
   Settings, recipes and the queue are backed up before an update is installed.
 - An AppImage replaces itself only when it runs as an AppImage from a folder you
   can write to; an AppImage under `/opt` owned by root has to be updated by hand.
+- The Windows installer cannot roll back an update that fails halfway, for example
+  on a full disk. Run the full installer from the website; settings, recipes, the
+  queue and models are kept.
 - Uninstalling the Store edition can delete its data folder, including settings
   and recipes. Back it up first; downloaded models live in the shared
   `LocalSR/models` folder and survive.

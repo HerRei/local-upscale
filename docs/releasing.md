@@ -105,12 +105,15 @@ macOS build, from the workflow runs at the same commit:
 2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
    --feed build/release-<version>/beta.json --commit <sha>` checks every package
    against its checksum file, its installed smoke report (version and update
-   identity) and its engine package, signs the updater files with the Keychain key
-   and adds their entries next to the macOS entry. It prints the `.sig` files it
-   wrote.
+   identity) and its engine package, and signs nothing unless all of them pass. It
+   then signs private copies of exactly those files with the Keychain key, adds the
+   entries with their signed release statements next to the macOS entry, and prints
+   the `.sig` files it wrote. The copies need room for the largest package once more.
 3. `python scripts/verify_prepared_release.py --feed
-   build/release-<version>/beta.json --commit <sha>` must pass: one entry per
-   release target, with its backend, kind, protocol, engine id and engine package.
+   build/release-<version>/beta.json --commit <sha> --files build/release-<version>
+   --files build/release-<version>/platforms` must pass: one entry per release
+   target, with its backend, kind, protocol, engine id and engine package, and every
+   statement and signature verified against the public key over the local files.
 4. Attach the packages, their parts and engine packages from the same runs
    (`release_tag`, or `attach-release-assets.yml`), and upload the printed `.sig`
    files from the Mac to the release. The signatures cover the exact files of those
