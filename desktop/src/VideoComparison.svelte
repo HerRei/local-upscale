@@ -391,7 +391,6 @@
             playing = false;
             original?.pause();
           }}
-          on:waiting={() => original?.pause()}
           on:playing={() => {
             if (original?.paused) void original.play().catch(() => undefined);
           }}
