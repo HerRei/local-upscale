@@ -660,7 +660,7 @@ MODEL_CATALOG = (
         source_url="https://huggingface.co/Phips/4xBHI_dat2_real",
         license_name="CC BY 4.0",
         author="Philip Hofmann",
-        memory_factor=1.8,
+        memory_factor=2.0,
         # Measured 73 s per input megapixel on an M1 Pro (MPS baseline 38 s/MP).
         time_factor=1.9,
         speed_factor=0.10,
@@ -694,7 +694,7 @@ MODEL_CATALOG = (
         source_url="https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2",
         license_name="CC BY 4.0",
         author="Philip Hofmann",
-        memory_factor=1.8,
+        memory_factor=2.0,
         # Measured 73 s per input megapixel on an M1 Pro (MPS baseline 38 s/MP).
         time_factor=1.9,
         speed_factor=0.10,
