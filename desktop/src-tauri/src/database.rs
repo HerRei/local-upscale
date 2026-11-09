@@ -377,6 +377,27 @@ impl Database {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Queue a started batch photo again, marked to run on its own (`run_alone`);
+    /// a photo that never started or already ended is left as it is.
+    pub fn requeue_alone(&self, id: &str) -> AppResult<()> {
+        let Some(request) = self
+            .connection
+            .query_row("SELECT request_json FROM jobs WHERE id=?1", [id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+        else {
+            return Ok(());
+        };
+        let mut request: serde_json::Value = serde_json::from_str(&request)?;
+        request["data"]["run_alone"] = true.into();
+        self.connection.execute(
+            "UPDATE jobs SET status='queued', progress=0, error='', request_json=?2, updated_at=?3 WHERE id=?1 AND status IN ('starting','running')",
+            params![id, request.to_string(), now_millis()],
+        )?;
+        Ok(())
+    }
+
     /// A job that started is now stopping; one that never started stays as it is.
     pub fn mark_cancelling(&self, id: &str) -> AppResult<()> {
         self.connection.execute(

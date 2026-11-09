@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::AppResult;
@@ -29,16 +29,28 @@ impl Cancellation {
         self.requested_at = None;
         self.resetting = false;
         if message["type"] == "image_batch_request" {
-            if let Some(jobs) = message["data"]["jobs"].as_array_mut() {
-                for data in jobs {
-                    let member = data["job_id"].as_str().unwrap_or_default().to_owned();
-                    self.job_ids.push(member.clone());
-                    if let Err(error) = self.prepare_scratch(&member, data, false) {
+            let mut jobs = message["data"]["jobs"].take();
+            let members = jobs.as_array_mut().map(std::mem::take).unwrap_or_default();
+            let mut kept = Vec::with_capacity(members.len());
+            for mut data in members {
+                let member = data["job_id"].as_str().unwrap_or_default().to_owned();
+                if let Err(error) = self.prepare_scratch(&member, &mut data, false) {
+                    if kept.is_empty() {
                         self.finish()?;
                         return Err(error);
                     }
+                    // A folder that cannot be used (an ejected drive) ends the batch
+                    // before that photo; it fails on its own when its turn comes.
+                    break;
                 }
+                self.job_ids.push(member);
+                kept.push(data);
             }
+            *message = if kept.len() == 1 {
+                json!({"type": "job_request", "data": kept.pop()})
+            } else {
+                json!({"type": "image_batch_request", "data": {"jobs": kept}})
+            };
         } else {
             self.job_ids = vec![id.into()];
             let video = message["type"] == "video_job_request";
@@ -225,5 +237,44 @@ mod tests {
         assert!(control.expired(now + CANCEL_GRACE));
         control.finish().unwrap();
         assert!(!paths[1].exists());
+    }
+
+    #[test]
+    fn a_member_without_a_scratch_folder_ends_the_batch_before_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let at = |name: &str| directory.path().join(name);
+        let mut message = json!({"type":"image_batch_request", "data":{"jobs":[
+            {"job_id":"a", "output_path":at("a.png")},
+            {"job_id":"b", "output_path":at("b.png")},
+            {"job_id":"c", "output_path":at("gone/c.png")},
+            {"job_id":"d", "output_path":at("d.png")}
+        ]}});
+        let mut control = Cancellation::default();
+        control.prepare("a", &mut message).unwrap();
+        // The photos before it still run together; c and later wait in the queue.
+        assert_eq!(control.job_ids, ["a", "b"]);
+        let jobs = message["data"]["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert!(PathBuf::from(jobs[1]["scratch_directory"].as_str().unwrap()).is_dir());
+        control.finish().unwrap();
+
+        let mut message = json!({"type":"image_batch_request", "data":{"jobs":[
+            {"job_id":"a", "output_path":at("a.png")},
+            {"job_id":"b", "output_path":at("gone/b.png")}
+        ]}});
+        control.prepare("a", &mut message).unwrap();
+        // One photo left is an ordinary job request.
+        assert_eq!(message["type"], "job_request");
+        assert_eq!(message["data"]["job_id"], "a");
+        assert!(message["data"]["scratch_directory"].is_string());
+        assert_eq!(control.job_ids, ["a"]);
+        control.finish().unwrap();
+
+        let mut message = json!({"type":"image_batch_request", "data":{"jobs":[
+            {"job_id":"a", "output_path":at("gone/a.png")},
+            {"job_id":"b", "output_path":at("b.png")}
+        ]}});
+        assert!(control.prepare("a", &mut message).is_err());
+        assert!(control.job_ids.is_empty());
     }
 }
