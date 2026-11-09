@@ -54,6 +54,10 @@ COMPUTE_UNITS = {
 # PyTorch path is clearly faster on this Mac (newer GPUs can be).
 NEURAL_ENGINE_SPEED_MARGIN = 1.3
 MINIMUM_PSNR = 45.0
+# A gate tile needs this much detail (standard deviation of its input). On a blank tile
+# even an FP16 program that overflows on real content matches PyTorch: RealPLKSR HFA2k
+# in FP16 matched FP32 at 64-76 dB on flat tiles and failed on manga pages (#97).
+MINIMUM_GATE_DETAIL = 4 / 255
 # Converting large shapes exhausted 16 GB of memory for RRDBNet (768 px failed,
 # 512 px was measured), so larger user tiles keep PyTorch. SPAN is small enough
 # to convert whole video frames.
@@ -554,10 +558,13 @@ class _CoreMLImage(torch.nn.Module):
         """Compare Core ML with PyTorch on a real tile and decide.
 
         Returns the PyTorch output when the tile is inconclusive (the reference
-        itself is unstable), so the next tile repeats the gate.
+        itself is unstable, or the tile has no detail to compare), so the next tile
+        repeats the gate.
         """
         unit, runner, program = state["unit"], state["runner"], state["program"]
         reference = self._run_fallback(padded)
+        if float(padded.detach().float().std()) < MINIMUM_GATE_DETAIL:
+            return reference
         reference_cpu = reference.detach().to("cpu", torch.float32)
         if not torch.isfinite(reference_cpu).all() or (
             reference_cpu.amin() < -4 or reference_cpu.amax() > 5
