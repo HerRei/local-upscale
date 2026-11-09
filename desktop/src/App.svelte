@@ -440,6 +440,7 @@
   $: if (snapshot.runtime.active_job_id) lastFailure = '';
   else if (snapshot.runtime.status_title === 'Could not finish')
     lastFailure = snapshot.runtime.status_detail;
+  let failureNote: HTMLElement | undefined;
   // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
   // needs a GPU, so it gets no such button.
   $: acceleratorFailure =
@@ -1037,6 +1038,14 @@
           (model) => model.model_id === candidate.selected_model_id && model.architecture === 'HAT',
         ))
     );
+  }
+
+  /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
+   *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
+  async function useTheCpu(): Promise<void> {
+    updateSettings(hardwarePatch('cpu'));
+    await tick();
+    (document.getElementById('device') ?? failureNote)?.focus();
   }
 
   function updateSettings(patch: Partial<UiSettings>): void {
@@ -2689,13 +2698,17 @@
             </section>
 
             {#if lastFailure}
-              <section class="control-section failure-note" role="alert" aria-label="Last error">
+              <section
+                class="control-section failure-note"
+                role="alert"
+                aria-label="Last error"
+                tabindex="-1"
+                bind:this={failureNote}
+              >
                 <p>{lastFailure}</p>
                 {#if acceleratorFailure}
-                  <button
-                    class="button"
-                    type="button"
-                    on:click={() => updateSettings(hardwarePatch('cpu'))}>Use the CPU</button
+                  <button class="button" type="button" on:click={() => void useTheCpu()}
+                    >Use the CPU</button
                   >
                 {/if}
               </section>
