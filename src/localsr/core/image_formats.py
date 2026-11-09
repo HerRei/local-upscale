@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -75,6 +76,13 @@ SUPPORTED_INPUT_EXTENSIONS = (
     | SYSTEM_IMAGE_EXTENSIONS
     | VIDEO_INPUT_EXTENSIONS
 )
+
+
+def system_image_output_formats() -> list[str]:
+    """Still-image formats this computer writes with its own codecs (HEIC on macOS, via sips)."""
+    if sys.platform == "darwin" and os.access("/usr/bin/sips", os.X_OK):
+        return ["heic"]
+    return []
 
 
 def is_raw_input(path: str | Path) -> bool:

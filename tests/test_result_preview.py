@@ -3,8 +3,10 @@ import io
 import json
 import os
 import queue
+import sys
 import threading
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -421,3 +423,16 @@ def test_preview_cache_is_bounded_by_bytes(tmp_path, monkeypatch):
         assert sum(len(item.jpeg_base64) for item in service.cache.values()) <= 100
     finally:
         service.close()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is decoded by macOS")
+def test_a_heic_export_previews(tmp_path):
+    from localsr.core.image_io import ImageManager
+
+    path = tmp_path / "finished.heic"
+    ImageManager().save_from_writer(
+        np.full((3, 80, 120), 128, dtype=np.uint8), str(path), "heic", 90, True, None, {}, 1
+    )
+    result = render_result_preview({"image_path": str(path), "max_dimension": 64})
+    assert isinstance(result, PreviewReady)
+    assert (result.width, result.height) == (120, 80)

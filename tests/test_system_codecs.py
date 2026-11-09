@@ -16,7 +16,9 @@ from test_hdr import make_hdr
 from test_video_timing import make_vfr, run_standard, timestamps
 
 from localsr.core import media_bridge, system_codecs
+from localsr.core.external_ffmpeg import ExternalFFmpegError
 from localsr.core.media_bridge import MediaBridge, decodable_source, load_media_bridge
+from localsr.core.media_codecs import audio_copy_allowed, muxer_format, validate_output
 from localsr.core.system_codecs import (
     FRAME_HEADER,
     STREAM_TAG,
@@ -511,3 +513,104 @@ def test_encode_frames_sends_scheduled_durations(monkeypatch, tmp_path):
     assert (pts, duration) == (0, 1)
     pts, duration, _ = FRAME_HEADER.unpack_from(data, FRAME_HEADER.size + length)
     assert (pts, duration) == (1, 4)
+
+
+def test_mov_codec_validation():
+    from localsr.core.media_codecs import validate_output
+
+    for codec in ("hevc", "prores"):
+        validate_output(codec, "mov")
+    for codec, container in (("h264", "mov"), ("av1", "mov"), ("prores", "mp4")):
+        with pytest.raises(ValueError):
+            validate_output(codec, container)
+    # A source whose audio only the system decodes is planned against the output container.
+    assert muxer_format("mov") == "mov" and audio_copy_allowed("aac", "mov")
+    helper = SystemCodecs("/nonexistent", 1)
+    assert helper.encoder_for("prores", container="mov")
+    with pytest.raises(SystemCodecsError):
+        helper.encoder_for("prores", container="mp4")
+
+
+@pytest.mark.parametrize("codec,fourcc", [("hevc", "hvc1"), ("prores", "apcn")])
+def test_mov_system_export_with_audio(tmp_path, bridge, codec, fourcc):
+    source = make_vfr(tmp_path / "source.mp4")
+    frames = source_frames(source)
+    tone = tmp_path / "tone.mkv"
+    make_tone(tone)
+    output = tmp_path / f"{codec}.mov"
+    encode_video(
+        iter(frames),
+        str(output),
+        fps=25,
+        width=48,
+        height=32,
+        video_codec=codec,
+        container_format="mov",
+        audio_source=str(tone),
+        external_ffmpeg=bridge,
+        stream_to_system=True,
+    )
+    info = bridge.system.probe(str(output))
+    assert info["video"]["codec"] == fourcc
+    assert info["audio"]["codec"] == "aac"
+    expected_duration = float(frames[-1].timestamp + frames[-1].duration - frames[0].timestamp)
+    assert info["video"]["duration"] == pytest.approx(expected_duration, abs=0.05)
+    with decodable_source(str(output), ffmpeg=bridge, temporary_directory=str(tmp_path)) as (
+        frame_path,
+        _,
+    ):
+        assert len(source_frames(Path(frame_path))) == len(frames)
+
+
+def test_mov_and_prores_exports_need_the_system_codecs(monkeypatch):
+    class FakeFFmpeg:
+        path = "/usr/bin/ffmpeg"
+        version = "7"
+
+        def encoder_for(self, codec, *, hdr=False):
+            return "libx265"
+
+    user_only = MediaBridge(user=FakeFFmpeg())
+    for codec in ("hevc", "prores"):
+        with pytest.raises(ValueError, match="codecs of macOS"):
+            media_bridge.validate_export(user_only, codec, "mov")
+        with pytest.raises(ValueError, match="codecs of macOS"):
+            media_bridge.validate_export(None, codec, "mov")
+    with pytest.raises(ValueError, match="codecs of macOS"):
+        media_bridge.validate_export(user_only, "prores", "mp4")
+    with pytest.raises(ExternalFFmpegError, match="codecs of macOS"):
+        user_only.export_provider("hevc", container="mov")
+    both = MediaBridge(system=SystemCodecs("/nonexistent", 1), user=FakeFFmpeg())
+    media_bridge.validate_export(both, "prores", "mov")
+    media_bridge.validate_export(both, "hevc", "mov")
+    assert isinstance(both.export_provider("hevc", container="mov"), SystemCodecs)
+    # An FFmpeg the user installed still writes HEVC into MKV, never ProRes or MOV.
+    assert both.export_provider("hevc", container="mkv") is both.user
+    with pytest.raises(ValueError, match="SDR"):
+        validate_output("prores", "mov", hdr=True)
+    fake = SystemCodecs("/fake", 1)
+    monkeypatch.setattr(media_bridge, "detect_system_codecs", lambda: fake)
+    monkeypatch.setattr(media_bridge, "implicit_user_ffmpeg", lambda: None)
+    report = media_bridge.media_capabilities()["system_codecs"]
+    assert "prores" in report["encode"] and "mov" in report["containers"]
+
+
+def test_mov_export_through_the_lossless_master(tmp_path, bridge):
+    """Odd sizes cannot stream to the encoder: the FFV1 master route writes MOV as well."""
+    source = make_vfr(tmp_path / "source.mp4")
+    frames = source_frames(source)
+    output = tmp_path / "master.mov"
+    encode_video(
+        iter(frames),
+        str(output),
+        fps=25,
+        width=48,
+        height=32,
+        video_codec="prores",
+        container_format="mov",
+        external_ffmpeg=bridge,
+        stream_to_system=False,
+    )
+    info = bridge.system.probe(str(output))
+    assert info["video"]["codec"] == "apcn"
+    assert output.read_bytes()[4:12] == b"ftypqt  "

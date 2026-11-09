@@ -119,6 +119,9 @@ def test_automation_parser_exposes_process_benchmark_and_watch_commands():
     [
         (["--video-codec", "ffv1"], "MKV"),
         (["--video-codec", "h264"], "--external-ffmpeg"),
+        (["--video-codec", "av1", "--video-container", "mov"], "HEVC or Apple ProRes"),
+        (["--video-codec", "prores", "--video-container", "mov"], "codecs of macOS"),
+        (["--video-codec", "hevc", "--video-container", "mov"], "codecs of macOS"),
     ],
 )
 def test_automation_rejects_codec_choices_that_cannot_run(arguments, message, monkeypatch):
@@ -363,3 +366,16 @@ def test_watch_tries_a_failing_file_again_only_after_it_changes(tmp_path):
 
     _watch(args, runner, "cpu", clock=lambda: now[0], sleeper=sleeper)
     assert runner.attempts == 2  # once as found, once after the change
+
+
+def test_automation_writes_mov_and_heic_only_where_macos_provides_them(monkeypatch):
+    from localsr.automation import AutomationError, _validate_automation_args
+
+    arguments = ["process", "a.mp4", "--output", "out", "--format", "heic"]
+    mov = ["--video-codec", "prores", "--video-container", "mov"]
+    monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: True)
+    monkeypatch.setattr("localsr.automation.sys.platform", "darwin")
+    _validate_automation_args(build_automation_parser().parse_args([*arguments, *mov]))
+    monkeypatch.setattr("localsr.automation.sys.platform", "linux")
+    with pytest.raises(AutomationError, match="HEIC output needs macOS"):
+        _validate_automation_args(build_automation_parser().parse_args(arguments))

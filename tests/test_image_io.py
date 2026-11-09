@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image, ImageCms
 
-from localsr.core.image_io import ImageManager
+from localsr.core.image_io import ImageManager, open_image
 
 
 def create_srgb_profile():
@@ -445,3 +445,75 @@ def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
     assert not data["has_invalid_icc"]
     pixels = data["tensor"][0, 0].mul(255).round().tolist()
     assert pixels[0] == 0 and pixels[1] >= 2 and pixels[2] > pixels[1]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is encoded by macOS")
+def test_heic_export_preserves_colour_metadata_and_quality(tmp_path):
+    rng = np.random.default_rng(94)
+    pixels = rng.integers(0, 256, (96, 128, 3), dtype=np.uint8)
+    manager = ImageManager()
+    sizes = []
+    for quality in (20, 95):
+        path = tmp_path / f"quality-{quality}.heic"
+        manager.save_from_writer(
+            pixels.transpose(2, 0, 1),
+            str(path),
+            "heic",
+            quality,
+            True,
+            None,
+            {315: "LocalSR test"},
+            1,
+        )
+        sizes.append(path.stat().st_size)
+        decoded = open_image(path)
+        assert decoded.size == (128, 96)
+        assert decoded.info.get("icc_profile")
+        assert decoded.getexif().get(315) == "LocalSR test"
+        if quality == 95:
+            error = np.abs(np.asarray(decoded.convert("RGB"), dtype=int) - pixels.astype(int))
+            assert error.mean() < 55
+    assert sizes[1] > sizes[0]
+
+
+def test_heic_export_needs_macos(tmp_path, monkeypatch):
+    monkeypatch.setattr("localsr.core.image_io.sys.platform", "linux")
+    path = tmp_path / "out.heic"
+    with pytest.raises(ValueError, match="needs macOS"):
+        ImageManager().save_from_writer(
+            np.zeros((3, 8, 8), dtype=np.uint8), str(path), "heic", 90, True, None, {}, 1
+        )
+    assert not path.exists() and not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is encoded by macOS")
+def test_heic_export_keeps_transparency(tmp_path):
+    rng = np.random.default_rng(95)
+    pixels = rng.integers(0, 256, (3, 64, 64), dtype=np.uint8)
+    manager = ImageManager()
+    manager.alpha_channel = Image.fromarray(
+        np.repeat(np.array([0, 255], dtype=np.uint8), 32)[:, None].repeat(64, axis=1)
+    )
+    path = tmp_path / "alpha.heic"
+    manager.save_from_writer(pixels, str(path), "heic", 90, True, None, {}, 1)
+    alpha = np.asarray(open_image(path).convert("RGBA"))[..., 3]
+    assert alpha[:24].max() <= 8 and alpha[40:].min() >= 247
+
+
+def test_an_image_job_refuses_heic_before_any_inference_without_macos(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from localsr.worker.image_job import ImageJobRunner
+
+    monkeypatch.setattr("localsr.core.image_io.sys.platform", "win32")
+    engine = MagicMock()
+    runner = ImageJobRunner(
+        engine=engine,
+        model_adapter=MagicMock(),
+        cancel_event=MagicMock(),
+        emit=MagicMock(),
+        emit_preview=MagicMock(),
+    )
+    with pytest.raises(ValueError, match="needs macOS"):
+        runner.run("job", {"output_format": "heic"})
+    engine.release_models_except.assert_not_called()

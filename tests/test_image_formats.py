@@ -26,3 +26,23 @@ def test_hevc_based_formats_are_only_offered_where_the_os_decodes_them():
     # Royalty-free formats Pillow already decodes are offered everywhere.
     for extension in (".avif", ".jp2", ".gif", ".bmp"):
         assert extension in image_formats.RASTER_INPUT_EXTENSIONS
+
+
+def test_heic_output_is_announced_only_where_macos_encodes_it(monkeypatch):
+    import sys
+
+    from localsr.core import media_bridge
+
+    monkeypatch.setattr(media_bridge, "detect_system_codecs", lambda: None)
+    monkeypatch.setattr(media_bridge, "implicit_user_ffmpeg", lambda: None)
+    assert image_formats.system_image_output_formats() == (
+        ["heic"] if sys.platform == "darwin" else []
+    )
+    monkeypatch.setattr(image_formats.sys, "platform", "linux")
+    assert image_formats.system_image_output_formats() == []
+    assert media_bridge.media_capabilities()["image_output"] == []
+    monkeypatch.setattr(image_formats.sys, "platform", "darwin")
+    monkeypatch.setattr(image_formats.os, "access", lambda *_: False)
+    assert image_formats.system_image_output_formats() == []
+    monkeypatch.setattr(image_formats.os, "access", lambda *_: True)
+    assert media_bridge.media_capabilities()["image_output"] == ["heic"]

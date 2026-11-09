@@ -18,6 +18,10 @@ the verified formats are listed in [Testing](testing.md).
 
 Packet durations are restored from the source presentation intervals after encoding, so variable frame rate and the last held frame survive AV1, VP9 and FFV1 export. H.264/HEVC exports written by a user-installed FFmpeg use its passthrough timing mode.
 
+## MOV, HEVC and Apple ProRes (macOS)
+
+On macOS the container menu also offers **MOV**. The video format menu then lists only the codecs the chosen container holds: MOV takes HEVC or Apple ProRes 422, while MP4 and MKV keep their usual choices (ProRes needs MOV, FFV1 needs MKV). Choosing MOV switches an incompatible format to HEVC, and choosing ProRes switches the container to MOV. Both are written by the Mac's own AVFoundation encoders through `localsr-media`; Windows and Linux do not offer them, the worker announces them in its media capabilities (`system_codecs.encode` lists `prores`) and rejects a request for them elsewhere. ProRes 422 is an editing format: files are several times larger than HEVC, the quality setting does not apply, and HDR preservation is not available for it (choose HEVC). Audio is handled as for MP4: decodable audio is converted to AAC. A user-installed FFmpeg never writes MOV or ProRes. The command line takes `--video-container mov` with `--video-codec hevc|prores`.
+
 ## Legacy recordings
 
 LocalSR accepts AVI/DivX, MPEG/VOB, camcorder transport streams,

@@ -200,6 +200,8 @@ export interface MediaCapabilities {
     encode: string[];
     containers: string[];
   } | null;
+  /** Still-image formats the system writes beyond PNG, JPEG, TIFF and WebP (HEIC on macOS). */
+  image_output?: string[];
   /** An FFmpeg found on this computer, used without being selected. */
   external_ffmpeg?: { detected: string[]; candidates: string[] };
 }
@@ -241,7 +243,7 @@ export interface Recipe {
   safe_memory: boolean;
   video_model_id?: string;
   custom_model_path?: string;
-  output_format?: 'png' | 'jpg' | 'tif' | 'webp';
+  output_format?: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
   preserve_metadata?: boolean;
   jpeg_quality?: number;
   deflicker?: boolean;
@@ -249,7 +251,7 @@ export interface Recipe {
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
   video_low_memory?: boolean;
-  video_container?: 'mp4' | 'mkv';
+  video_container?: 'mp4' | 'mkv' | 'mov';
   video_codec?: VideoCodec | '';
   video_crf?: number;
   enable_face_model?: boolean;
@@ -263,7 +265,7 @@ export interface Recipe {
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
-export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
+export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc' | 'prores';
 
 /** One fix in run order; in Restore the last one is the model itself. */
 export interface FixStageSelection {
@@ -294,7 +296,7 @@ export interface UiSettings {
   custom_model_path: string;
   output_scale: number;
   output_directory: string;
-  output_format: 'png' | 'jpg' | 'tif' | 'webp';
+  output_format: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
   preserve_metadata: boolean;
   jpeg_quality: number;
   device_id: string;
@@ -308,7 +310,7 @@ export interface UiSettings {
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
   video_low_memory?: boolean;
-  video_container: 'mp4' | 'mkv';
+  video_container: 'mp4' | 'mkv' | 'mov';
   video_codec: VideoCodec;
   /** Set once the old AV1 default moved to 'auto'; kept so it is not repeated. */
   automatic_video_format?: boolean;
