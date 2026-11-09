@@ -6,6 +6,7 @@ import type {
   DeviceInfo,
   EditModel,
   FixKind,
+  InterpolationTarget,
   Quality,
   TaskKind,
   UiSettings,
@@ -173,9 +174,12 @@ export const FIT_LABELS: Record<Fit, string> = {
 };
 
 export interface PlanStage {
-  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video' | 'edit';
-  /** What the row's Change opens: the fix before the upscaler, the main model, or Faces. */
-  role: 'fix' | 'primary' | 'face';
+  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video' | 'edit' | 'interpolate';
+  /**
+   * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
+   * Frame interpolation is set under Advanced and has no Change.
+   */
+  role: 'fix' | 'primary' | 'face' | 'interpolate';
   /** The problem this row's model fixes, when it fixes one. */
   fix?: Exclude<FixKind, 'faces'>;
   /** The model is the user's remembered choice for that problem and quality. */
@@ -183,6 +187,7 @@ export interface PlanStage {
   label: string;
   model?: CatalogModel;
   videoModel?: CatalogVideoModel;
+  interpolationModel?: CatalogVideoModel;
   editModel?: EditModel;
   custom?: string;
   installed: boolean;
@@ -307,7 +312,55 @@ export function resolvePlan(
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
+
+  // Frame interpolation is a frame-by-frame video stage; the plan lists it where it runs.
+  const target = settings.video_interpolation ?? 'off';
+  const interpolation = snapshot.catalog.interpolation_models?.[0];
+  if (
+    settings.task === 'video' &&
+    !options.usingTemporalVideo &&
+    target !== 'off' &&
+    interpolation
+  ) {
+    const stage: PlanStage = {
+      kind: 'interpolate',
+      role: 'interpolate',
+      label: interpolationLabel(target),
+      interpolationModel: interpolation,
+      installed: interpolation.installed,
+      canDownload: !interpolation.installed && interpolation.automated_download_allowed,
+      needsFile: !interpolation.installed && !interpolation.automated_download_allowed,
+      sizeBytes: interpolation.installed ? 0 : interpolation.total_size_bytes,
+    };
+    if (settings.video_interpolation_order === 'before_upscale') stages.unshift(stage);
+    else stages.push(stage);
+  }
   return stages;
+}
+
+const INTERPOLATION_RATES: Record<Exclude<InterpolationTarget, 'off'>, [number, number]> = {
+  x2: [2, 0],
+  x4: [4, 0],
+  fps60: [0, 60],
+  fps120: [0, 120],
+};
+
+/** The plan row's name for an interpolation target. */
+export function interpolationLabel(target: Exclude<InterpolationTarget, 'off'>): string {
+  const [multiplier, rate] = INTERPOLATION_RATES[target];
+  return multiplier ? `Interpolate ${multiplier}×` : `Interpolate to ${rate} fps`;
+}
+
+/**
+ * The frame rate a target gives a source, as the worker computes it. A fixed rate
+ * at or below the source rate leaves the video unchanged.
+ */
+export function frameRateChange(target: Exclude<InterpolationTarget, 'off'>, fps: number): string {
+  if (!(fps > 0)) return '';
+  const [multiplier, rate] = INTERPOLATION_RATES[target];
+  const format = (value: number) => String(Number(value.toFixed(3)));
+  if (!multiplier && fps >= rate * 0.99) return `Already ${format(fps)} fps · kept as it is`;
+  return `${format(fps)} → ${format(multiplier ? fps * multiplier : rate)} fps`;
 }
 
 /** Stages LocalSR can fetch itself before the job, and their total size. */
