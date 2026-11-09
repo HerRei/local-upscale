@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image, ImageCms
 
-from localsr.core.image_io import ImageManager
+from localsr.core.image_io import ImageManager, open_image
 
 
 def create_srgb_profile():
@@ -445,3 +445,32 @@ def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
     assert not data["has_invalid_icc"]
     pixels = data["tensor"][0, 0].mul(255).round().tolist()
     assert pixels[0] == 0 and pixels[1] >= 2 and pixels[2] > pixels[1]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is encoded by macOS")
+def test_heic_export_preserves_colour_metadata_and_quality(tmp_path):
+    rng = np.random.default_rng(94)
+    pixels = rng.integers(0, 256, (96, 128, 3), dtype=np.uint8)
+    manager = ImageManager()
+    sizes = []
+    for quality in (20, 95):
+        path = tmp_path / f"quality-{quality}.heic"
+        manager.save_from_writer(
+            pixels.transpose(2, 0, 1),
+            str(path),
+            "heic",
+            quality,
+            True,
+            None,
+            {315: "LocalSR test"},
+            1,
+        )
+        sizes.append(path.stat().st_size)
+        decoded = open_image(path)
+        assert decoded.size == (128, 96)
+        assert decoded.info.get("icc_profile")
+        assert decoded.getexif().get(315) == "LocalSR test"
+        if quality == 95:
+            error = np.abs(np.asarray(decoded.convert("RGB"), dtype=int) - pixels.astype(int))
+            assert error.mean() < 55
+    assert sizes[1] > sizes[0]
