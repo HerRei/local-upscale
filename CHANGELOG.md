@@ -44,6 +44,12 @@
   creates. A new engine's files are synced before the old engine is deleted, a
   half-removed old engine is never restored, and an engine moved aside by a killed
   installation is put back at the next start.
+- Video export no longer leaves the system encoder's hidden `.sb-` copy beside the
+  output; frame interpolation by x2 or x4 keeps every source frame's slot, so the
+  last frame is held and the output is exactly as long as the source; HDR with ProRes
+  names the real rule (ProRes is SDR) instead of a container error; a whole-frame
+  Core ML program for a large video is only compiled with enough free disk space,
+  otherwise the frame runs in tiles.
 
 ## [0.3.7-beta] - Unreleased
 

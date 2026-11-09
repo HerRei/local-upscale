@@ -497,6 +497,35 @@ def test_spans_whole_frames_get_their_own_rectangular_program(fake_coreml):
     assert esrgan.whole_frame_shape(20, 30, 4) is None
 
 
+def test_whole_frame_compile_needs_free_disk_and_otherwise_falls_back_to_tiles(
+    fake_coreml, monkeypatch
+):
+    """A 1080p SPAN compile took ~6.6 GB of temporary space (QA 0.3.8 F5)."""
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="wf")
+    messages = []
+    converted.model.status_callback = messages.append
+    state = converted.model._state((1088, 1920))
+    state["program"].compiled = type(
+        "Missing", (), {"__truediv__": lambda self, name: SimpleNamespace(exists=lambda: False)}
+    )()
+    free = {"bytes": 4 * 1024**3}
+    monkeypatch.setattr(
+        coreml_runtime.shutil,
+        "disk_usage",
+        lambda path: SimpleNamespace(total=0, used=0, free=free["bytes"]),
+    )
+    assert converted.whole_frame_shape(1080, 1920, 0) is None
+    assert any("free disk space" in message for message in messages)
+    free["bytes"] = 40 * 1024**3
+    assert converted.whole_frame_shape(1080, 1920, 0) == (1088, 1920)
+    # A program that is already compiled needs no space.
+    free["bytes"] = 1
+    state["program"].compiled = type(
+        "Done", (), {"__truediv__": lambda self, name: SimpleNamespace(exists=lambda: True)}
+    )()
+    assert converted.whole_frame_shape(1080, 1920, 0) == (1088, 1920)
+
+
 def test_cancellation_stops_before_core_ml_runs(fake_coreml):
     converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="rs")
     cancelled = threading.Event()

@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+import glob
 import heapq
 import os
 import tempfile
@@ -403,10 +404,14 @@ def decode_timed_frames(
             yield pending
 
 
-def validate_hdr_encoder(video_codec: str = "av1", external_ffmpeg=None) -> None:
+def validate_hdr_encoder(
+    video_codec: str = "av1", external_ffmpeg=None, container: str | None = None
+) -> None:
     """Fail before inference if this export cannot carry 10-bit HDR."""
     try:
-        validate_output(video_codec, "mkv" if video_codec == "ffv1" else "mp4", hdr=True)
+        validate_output(
+            video_codec, container or ("mkv" if video_codec == "ffv1" else "mp4"), hdr=True
+        )
         if video_codec in EXTERNAL_OUTPUT_CODECS:
             if external_ffmpeg is None:
                 raise ValueError("HEVC HDR export requires a selected external FFmpeg.")
@@ -459,6 +464,13 @@ def _system_stream_export(
             final.unlink()
         except FileNotFoundError:
             pass
+        # macOS keeps a `<name>.sb-...` sibling of a file the system encoder wrote
+        # (a full extra copy for ProRes). Only the ones of this job's own file go.
+        for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
+            try:
+                sidecar.unlink()
+            except OSError:
+                pass
 
 
 def _external_export(
@@ -603,7 +615,7 @@ def encode_video(
     if hdr_format:
         if hdr_format not in {"HLG", "PQ"} or sdr_bt709:
             raise ValueError("HDR output must be HLG or PQ, without SDR conversion.")
-        validate_hdr_encoder(video_codec, external_ffmpeg)
+        validate_hdr_encoder(video_codec, external_ffmpeg, container_format)
     validate_output(video_codec, container_format, hdr=bool(hdr_format))
     if video_codec in EXTERNAL_OUTPUT_CODECS + SYSTEM_OUTPUT_CODECS:
         return _external_export(

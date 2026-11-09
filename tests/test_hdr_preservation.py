@@ -157,3 +157,10 @@ def test_uint8_is_refused_by_hdr_encoder_without_publishing_output(tmp_path):
             hdr_format="HLG",
         )
     assert not output.exists()
+
+
+def test_prores_hdr_names_the_sdr_rule_not_the_container():
+    from localsr.core.video_io import VideoStageError, validate_hdr_encoder
+
+    with pytest.raises(VideoStageError, match="ProRes export is SDR"):
+        validate_hdr_encoder("prores", None, "mov")

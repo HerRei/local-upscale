@@ -73,7 +73,7 @@ def test_interpolation_property_keeps_a_monotone_grid_and_source_duration(interv
         assert 0 < output[-1].duration <= Fraction(1, rate)
     else:
         multiplier = 2 if target == "x2" else 4
-        assert len(output) == (len(frames) - 1) * multiplier + 1
+        assert len(output) == len(frames) * multiplier
 
 
 @settings(max_examples=24, derandomize=True, deadline=None)
@@ -120,7 +120,7 @@ def test_duplicate_runs_and_scene_cuts_preserve_the_interpolation_grid(before, a
             threading.Event(),
         )
     )
-    assert len(output) == (len(frames) - 1) * 2 + 1
+    assert len(output) == len(frames) * 2
     assert all(
         first.timestamp < second.timestamp
         for first, second in zip(output, output[1:], strict=False)

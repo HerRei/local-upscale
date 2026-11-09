@@ -118,8 +118,8 @@ def test_output_rate_and_expected_frame_counts():
     sixty = InterpolationTarget.parse("fps60")
     assert double.output_fps(29.97) == pytest.approx(59.94)
     assert sixty.output_fps(23.976) == 60
-    assert double.expected_frames(10, 30.0) == 19
-    assert InterpolationTarget.parse("x4").expected_frames(10, 30.0) == 37
+    assert double.expected_frames(10, 30.0) == 20
+    assert InterpolationTarget.parse("x4").expected_frames(10, 30.0) == 40
     assert sixty.expected_frames(24, 24.0) == 60
     assert double.expected_frames(0, 30.0) == 0
 
@@ -138,23 +138,23 @@ def test_doubling_keeps_every_source_frame_and_halves_each_interval():
     frames = timed(flat([100, 140, 180, 220]), [0, 100, 200, 300])
     output, synthesizer = run(frames, "x2")
     times = [frame.timestamp for frame in output]
-    assert times == [Fraction(stamp, 1000) for stamp in (0, 50, 100, 150, 200, 250, 300)]
-    assert [frame.duration for frame in output] == [Fraction(1, 20)] * 6 + [Fraction(1, 10)]
+    assert times == [Fraction(stamp, 1000) for stamp in (0, 50, 100, 150, 200, 250, 300, 350)]
+    assert [frame.duration for frame in output] == [Fraction(1, 20)] * 8
     assert {frame.time_base for frame in output} == {Fraction(1, 2000)}
-    assert [int(frame.rgb[0, 0, 0]) for frame in output] == [100, 120, 140, 160, 180, 200, 220]
+    assert [int(frame.rgb[0, 0, 0]) for frame in output] == [100, 120, 140, 160, 180, 200, 220, 220]
     for source in frames:
         match = next(frame for frame in output if frame.timestamp == source.timestamp)
         np.testing.assert_array_equal(match.rgb, source.rgb)
     assert synthesizer.calls == [(100, 140, (0.5,)), (140, 180, (0.5,)), (180, 220, (0.5,))]
-    assert [frame.index for frame in output] == list(range(7))
+    assert [frame.index for frame in output] == list(range(8))
 
 
 def test_variable_frame_rate_intervals_are_subdivided_where_they_are():
     frames = timed(flat([100, 140, 180, 220]), [0, 40, 400, 440])
     output, _ = run(frames, "x4")
     times = [int(frame.timestamp * 1000) for frame in output]
-    assert times == [0, 10, 20, 30, 40, 130, 220, 310, 400, 410, 420, 430, 440]
-    assert output[-1].duration == Fraction(40, 1000)
+    assert times == [0, 10, 20, 30, 40, 130, 220, 310, 400, 410, 420, 430, 440, 450, 460, 470]
+    assert output[-1].duration == Fraction(10, 1000)
     end = output[-1].timestamp + output[-1].duration
     assert end == frames[-1].timestamp + frames[-1].duration
 
@@ -196,14 +196,14 @@ def test_no_frame_is_blended_across_a_scene_cut():
     np.testing.assert_array_equal(at_cut.rgb, frames[1].rgb)
     blended_pairs = [(call[0], call[1]) for call in synthesizer.calls]
     assert (int(frames[1].rgb[0, 0, 0]), int(frames[2].rgb[0, 0, 0])) not in blended_pairs
-    assert len(output) == 7
+    assert len(output) == 8
 
 
 def test_animation_on_twos_interpolates_across_the_repeated_drawing():
     a, b, c = moving(3, step=3)
     frames = timed([a, a.copy(), b, b.copy(), c], [0, 100, 200, 300, 400])
     output, synthesizer = run(frames, "x2")
-    assert [int(frame.timestamp * 1000) for frame in output] == list(range(0, 401, 50))
+    assert [int(frame.timestamp * 1000) for frame in output] == list(range(0, 451, 50))
     # The repeat at 100 ms is replaced by the in-between drawing, so motion is even.
     assert [call[2] for call in synthesizer.calls] == [(0.25, 0.5, 0.75)] * 2
     np.testing.assert_array_equal(output[0].rgb, a)
@@ -215,7 +215,7 @@ def test_long_static_runs_hold_and_interpolate_only_the_last_interval():
     still, moved = pattern(5), pattern(5, shift=2)
     frames = timed([still] * 6 + [moved], [0, 100, 200, 300, 400, 500, 600])
     output, synthesizer = run(frames, "x2", max_duplicate_run=2)
-    assert len(output) == 13
+    assert len(output) == 14
     assert [call[2] for call in synthesizer.calls] == [(0.5,)]
     for frame in output[:11]:
         np.testing.assert_array_equal(frame.rgb, still)
@@ -261,7 +261,7 @@ def test_single_frame_and_empty_streams():
     assert run([], "x2")[0] == []
     output, synthesizer = run(timed(flat([7]), [0], last_duration=40), "x4")
     assert [(frame.timestamp, frame.duration) for frame in output] == [
-        (Fraction(0), Fraction(40, 1000))
+        (Fraction(step * 10, 1000), Fraction(10, 1000)) for step in range(4)
     ]
     assert synthesizer.calls == []
 
@@ -317,3 +317,18 @@ def test_large_duplicate_run_has_contiguous_batch_durations():
     frames = timed([a] * 6 + [b], list(range(0, 700, 100)))
     output, _ = run(frames, "x4", max_duplicate_run=6)
     assert all(a.timestamp + a.duration == b.timestamp for a, b in itertools.pairwise(output))
+
+
+@pytest.mark.parametrize("target, multiplier", [("x2", 2), ("x4", 4)])
+def test_multiplier_keeps_every_frame_slot_and_the_source_duration(target, multiplier):
+    """N source frames become N * multiplier frames that end exactly where the source ends."""
+    count = 6
+    frames = timed(flat([100 + 20 * index for index in range(count)]), range(0, 600, 100))
+    output, _ = run(frames, target)
+    assert len(output) == count * multiplier
+    assert InterpolationTarget.parse(target).expected_frames(count, 10.0) == len(output)
+    assert output[0].timestamp == 0
+    assert output[-1].timestamp + output[-1].duration == Fraction(600, 1000)
+    assert all(a.timestamp + a.duration == b.timestamp for a, b in itertools.pairwise(output))
+    # The last source frame is held, not invented.
+    np.testing.assert_array_equal(output[-1].rgb, frames[-1].rgb)
