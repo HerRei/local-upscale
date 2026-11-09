@@ -6,7 +6,7 @@ const catalog = structuredClone(rawCatalog) as unknown as CatalogManifest;
 for (const model of catalog.models) {
   model.installed = false;
 }
-for (const model of catalog.video_models) {
+for (const model of [...catalog.video_models, ...catalog.interpolation_models]) {
   model.total_size_bytes = model.files.reduce((total, file) => total + file.size_bytes, 0);
   model.installed = false;
 }
@@ -49,6 +49,8 @@ export function demoSnapshot(): AppSnapshot {
       external_ffmpeg_path: '',
       video_hdr_mode: 'tone_map',
       video_crf: 18,
+      video_interpolation: 'off',
+      video_interpolation_order: 'after_upscale',
       anonymous_update_count: true,
       check_updates_at_launch: true,
       enable_face_model: false,
