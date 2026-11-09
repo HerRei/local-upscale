@@ -89,7 +89,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
 - **SeedVR2 video integration** — vendored adapter code is covered by the included
   `src/localsr/video_models/seedvr2/NOTICE.md` and `vendor/LICENSE`; model bundles remain external.
 - **RIFE frame interpolation** — the IFNet network code from Practical-RIFE (MIT, copyright
-  2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.25
+  2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.26
   checkpoint (MIT, per the Practical-RIFE README) is an optional, checksum-pinned download and is
   not included in installers.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
