@@ -1,4 +1,6 @@
+import io
 import os
+import struct
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -281,3 +283,72 @@ def test_open_photo_develops_camera_raw_for_editing(tmp_path, monkeypatch):
     )
     with open_photo(path) as image:
         assert image.size == (6, 4) and image.mode == "RGB"
+
+
+def _grey_profile(gamma: float) -> bytes:
+    """A minimal ICC v2 grey display profile with a gamma tone curve."""
+
+    def s15(value):
+        return struct.pack(">i", round(value * 65536))
+
+    white = s15(0.9642) + s15(1.0) + s15(0.8249)
+    name = b"Test grey\0"
+    tags = [
+        (b"desc", b"desc\0\0\0\0" + struct.pack(">I", len(name)) + name + b"\0" * 78),
+        (b"wtpt", b"XYZ \0\0\0\0" + white),
+        (b"kTRC", b"curv\0\0\0\0" + struct.pack(">IH", 1, round(gamma * 256)) + b"\0\0"),
+        (b"cprt", b"text\0\0\0\0none\0\0\0\0"),
+    ]
+    offset = 128 + 4 + 12 * len(tags)
+    table, body = struct.pack(">I", len(tags)), b""
+    for signature, data in tags:
+        data += b"\0" * (-len(data) % 4)
+        table += signature + struct.pack(">II", offset + len(body), len(data))
+        body += data
+    header = struct.pack(">I", offset + len(body)) + b"lcms" + bytes([2, 0x10, 0, 0])
+    header += b"mntrGRAYXYZ " + struct.pack(">6H", 2026, 11, 9, 0, 0, 0) + b"acspAPPL"
+    header += b"\0" * 24 + white + b"lcms" + b"\0" * 44
+    return header + table + body
+
+
+def test_sixteen_bit_grey_scans_keep_their_grey_levels(tmp_path):
+    # Scanners write 16-bit grey PNG and TIFF. Pillow clips those to 8 bits instead of
+    # scaling them, which turned every grey above 0.4 % into white (issue #97).
+    levels = np.tile(np.arange(256, dtype=np.uint16), (4, 1))
+    for name, array in (
+        ("scan.png", levels * 257),
+        ("scan.tif", levels * 257),
+        ("scan-int32.tif", (levels * 257).astype(np.int32)),
+    ):
+        path = tmp_path / name
+        Image.fromarray(array).save(path)
+        data = ImageManager().load(str(path))
+        pixels = data["tensor"].mul(255).round().numpy()
+        assert np.abs(pixels - levels).max() <= 1, name
+        assert (pixels[0] == pixels[1]).all() and (pixels[1] == pixels[2]).all(), name
+
+
+def test_a_grey_colour_profile_is_applied_and_the_output_tagged(tmp_path):
+    # A grey ICC profile (Photoshop's Gray Gamma and Dot Gain profiles are common on manga
+    # scans) used to fail the conversion, so its tone curve was ignored and the output
+    # carried no profile: mid-tones shifted against the source in colour-managed apps.
+    path = tmp_path / "linear-grey.png"
+    Image.new("L", (8, 8), 128).save(path, icc_profile=_grey_profile(1.0))
+    data = ImageManager().load(str(path))
+
+    assert data["has_invalid_icc"] is False
+    output_profile = ImageCms.ImageCmsProfile(io.BytesIO(data["icc_profile"]))
+    assert "sRGB" in ImageCms.getProfileDescription(output_profile)
+    # Linear 50 % grey is about 188 in sRGB.
+    assert abs(float(data["tensor"].mean()) * 255 - 188) < 3
+
+
+def test_a_grey_profile_keeps_transparency(tmp_path):
+    path = tmp_path / "grey-alpha.png"
+    image = Image.merge("LA", (Image.new("L", (8, 8), 128), Image.new("L", (8, 8), 77)))
+    image.save(path, icc_profile=_grey_profile(1.0))
+    data = ImageManager().load(str(path))
+
+    assert data["has_invalid_icc"] is False
+    assert data["alpha_image"].getextrema() == (77, 77)
+    assert abs(float(data["tensor"].mean()) * 255 - 188) < 3
