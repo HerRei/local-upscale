@@ -311,6 +311,9 @@ async fn download_one(
         .parent()
         .ok_or_else(|| AppError::Validation("model destination has no parent".into()))?;
     fs::create_dir_all(parent).await?;
+    if reuse_complete_partial(&partial, destination, expected_size, expected_sha256).await? {
+        return Ok(());
+    }
     let partial_size = fs::metadata(&partial)
         .await
         .map(|metadata| metadata.len())
@@ -513,6 +516,32 @@ fn validate_artifact_metadata(url: &str, size: u64, sha256: &str) -> AppResult<(
     Ok(())
 }
 
+/// A partial that already has the full length was cut off before its check. A sound one is
+/// installed; a corrupt one is removed so this download starts over instead of failing.
+async fn reuse_complete_partial(
+    partial: &Path,
+    destination: &Path,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> AppResult<bool> {
+    let complete = fs::metadata(partial)
+        .await
+        .is_ok_and(|metadata| metadata.len() == expected_size);
+    if !complete {
+        return Ok(false);
+    }
+    let partial_for_hash = partial.to_path_buf();
+    let actual_sha256 = tokio::task::spawn_blocking(move || sha256_file(&partial_for_hash))
+        .await
+        .map_err(|error| AppError::Download(format!("checksum task failed: {error}")))??;
+    if actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        install_atomically(partial, destination).await?;
+        return Ok(true);
+    }
+    fs::remove_file(partial).await?;
+    Ok(false)
+}
+
 async fn install_atomically(partial: &Path, destination: &Path) -> AppResult<()> {
     let backup = appended_path(destination, ".replaced");
     let had_destination = fs::metadata(destination).await.is_ok();
@@ -612,6 +641,42 @@ fn check_cancel(cancellation: &AtomicBool) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_complete_partial_is_installed_when_sound_and_downloaded_again_when_corrupt() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("model.pth");
+        let partial = directory.path().join("model.pth.part");
+        let content = b"twelve bytes";
+        let sound = sha256_file(&{
+            std::fs::write(&partial, content).unwrap();
+            partial.clone()
+        })
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let reuse = |sha: &str| {
+            runtime.block_on(reuse_complete_partial(
+                &partial,
+                &destination,
+                content.len() as u64,
+                sha,
+            ))
+        };
+        // Corrupt (another hash): removed, so the download starts over.
+        assert!(!reuse(&"0".repeat(64)).unwrap());
+        assert!(!partial.exists() && !destination.exists());
+        // Sound: installed without a request.
+        std::fs::write(&partial, content).unwrap();
+        assert!(reuse(&sound).unwrap());
+        assert_eq!(std::fs::read(&destination).unwrap(), content);
+        // A shorter partial is left to resume.
+        std::fs::write(&partial, b"short").unwrap();
+        assert!(!reuse(&sound).unwrap());
+        assert!(partial.exists());
+    }
 
     #[test]
     fn declared_cc_by_downloads_do_not_unlock_unresolved_face_weights() {
