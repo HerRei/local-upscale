@@ -192,9 +192,10 @@ def validate_payload(
     has_worker = False
     names: set[str] = set()
     try:
-        with gzip.GzipFile(fileobj=joined, mode="rb") as decoded, tarfile.open(
-            fileobj=decoded, mode="r|"
-        ) as archive:
+        with (
+            gzip.GzipFile(fileobj=joined, mode="rb") as decoded,
+            tarfile.open(fileobj=decoded, mode="r|") as archive,
+        ):
             for member in archive:
                 relative = PurePosixPath(member.name)
                 if (

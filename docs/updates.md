@@ -226,7 +226,9 @@ media/NVIDIA packaging recipes, macOS media helper and worker entitlements, and
 worker build helpers. macOS uses `uv.lock`, with the local package version removed.
 The informational `localsr.__version__` and its comments are excluded; other code
 in that module is hashed. Text line endings are normalized. App versions, commit
-IDs, Rust/frontend changes and release asset names do not affect the result.
+IDs, Rust/frontend changes, release asset names and edits to the release tooling
+(`release_targets.py`, signing and feed scripts) do not affect the result; a change
+to the hashing recipe itself bumps `ENGINE_ID_SCHEME`.
 The input list is deliberately conservative: a build-helper change can invalidate
 an engine even if its final bytes happen to be identical. When adding an engine
 input or changing a toolchain outside these files, update the recipe list/build

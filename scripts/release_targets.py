@@ -19,6 +19,8 @@ UPDATE_OS = {"macos": "darwin", "windows": "windows", "linux": "linux"}
 UPDATE_ARCH = {"arm64": "aarch64", "x86_64": "x86_64"}
 UPDATE_KINDS = {"native", "portable"}
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+# Bump when this hashing recipe itself changes; release tooling edits are not engine inputs.
+ENGINE_ID_SCHEME = 1
 
 
 def _valid_update(target: dict) -> bool:
@@ -91,7 +93,6 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
         root / "scripts/build_tauri_preview.py",
         root / "scripts/collect_xpu_runtime.py",
         root / "scripts/filter_macho_architecture.py",
-        root / "scripts/release_targets.py",
     ]
     lock = root / "requirements/locks" / f"{entry['id']}.txt"
     inputs.append(lock if entry["platform"] != "macos" else root / "uv.lock")
@@ -123,7 +124,9 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
                     package["version"] = "<app-version>"
             data = json.dumps(document, sort_keys=True, default=str).encode()
         records.append([name, hashlib.sha256(data).hexdigest()])
-    digest = hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps([ENGINE_ID_SCHEME, records], separators=(",", ":")).encode()
+    ).hexdigest()
     return f"{entry['id']}-{digest}"
 
 
