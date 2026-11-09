@@ -559,3 +559,19 @@ def test_an_npu_without_its_compiler_is_not_offered_but_named_in_a_hint(monkeypa
     assert hardware._npu_hint() == {"name": "Intel(R) AI Boost", "missing": "compiler"}
     monkeypatch.setattr(openvino_devices, "npu_devices", lambda: [_npu()])
     assert hardware._npu_hint() is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        ("Intel(R) UHD Graphics 620", "Intel UHD Graphics 620"),
+        ("Intel(R) UHD Graphics 620 (iGPU)", "Intel UHD Graphics 620"),
+        ("Intel(R) Arc(TM) A770 Graphics (dGPU)", "Intel Arc A770 Graphics"),
+        ("Intel® Arc™ 140V GPU (16GB)", "Intel Arc 140V GPU (16GB)"),
+        ("Intel(R) AI Boost", "Intel AI Boost"),
+        ("NVIDIA GeForce RTX 3060", "NVIDIA GeForce RTX 3060"),
+    ],
+)
+def test_display_name_matches_the_hardware_menu(raw, shown):
+    # desktop/src/lib/hardwareRoutes.test.ts checks cleanDeviceName with the same names.
+    assert hardware.display_name(raw) == shown
