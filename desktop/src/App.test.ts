@@ -1204,7 +1204,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Download 23 MB, then start video' }));
-    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('rife_4_25', false));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('rife_4_26', false));
   });
 
   it('keeps interpolation out of SeedVR2 jobs and HDR preservation', async () => {

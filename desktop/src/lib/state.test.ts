@@ -624,7 +624,7 @@ describe('model library resolution', () => {
     expect(plan.map((stage) => stage.kind)).toEqual(['upscale', 'interpolate']);
     const interpolate = plan[1];
     expect(interpolate.label).toBe('Interpolate to 60 fps');
-    expect(interpolate.interpolationModel?.model_id).toBe('rife_4_25');
+    expect(interpolate.interpolationModel?.model_id).toBe('rife_4_26');
     expect(interpolate.canDownload).toBe(true);
     expect(interpolate.sizeBytes).toBe(24_636_301);
     expect(pendingDownloads(plan).stages).toContain(interpolate);

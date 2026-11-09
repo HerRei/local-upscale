@@ -688,7 +688,7 @@ mod tests {
     fn interpolation_models_download_as_verified_bundles() {
         let manifest: crate::types::CatalogManifest =
             serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
-        let rife = bundle_model(&manifest, "rife_4_25").unwrap();
+        let rife = bundle_model(&manifest, "rife_4_26").unwrap();
         assert_eq!(rife.engine_kind, "rife");
         assert!(rife.automated_download_allowed);
         assert!(!rife.terms_acceptance_required);

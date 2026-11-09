@@ -846,30 +846,30 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}
 
 # Frame interpolation models: optional stages of a video job, never video engines.
-# RIFE 4.25 is Practical-RIFE's "recommended by default for most scenes" checkpoint; the
-# README places its links under the project's MIT license. The official copy sits in a
+# LocalSR selected RIFE 4.26 after synthetic held-out-frame comparisons; the
+# Practical-RIFE README places its model links under the project's MIT license. The official copy sits in a
 # Google Drive archive that cannot serve pinned downloads; HolyWu/vs-rife (MIT) publishes
 # the same bytes as a release asset, and the size and SHA-256 below are those of
 # train_log/flownet.pkl in the official archive (checked 2026-11-09).
 INTERPOLATION_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     CatalogVideoModel(
-        model_id="rife_4_25",
-        name="RIFE 4.25 — Labs",
+        model_id="rife_4_26",
+        name="RIFE 4.26 — Labs",
         description=(
             "Makes in-between frames for smoother motion: 2× or 4× the frame rate, or 60 or "
             "120 fps. Small and fast; runs on Apple, NVIDIA and AMD GPUs and on the CPU. "
             "Very fast motion can smear, and scene cuts are kept as cuts."
         ),
-        family="rife_4_25",
+        family="rife_4_26",
         engine_kind="rife",
         files=(
             ModelFile(
                 role="flownet",
-                filename="flownet_v4.25.pkl",
+                filename="flownet_v4.26.pkl",
                 size_bytes=24_636_301,
-                sha256="6615790efd627772917205db291f51cd392528a157ecbb2ecaeec3bff8eb6de2",
+                sha256="45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f",
                 download_url=(
-                    "https://github.com/HolyWu/vs-rife/releases/download/model/flownet_v4.25.pkl"
+                    "https://github.com/HolyWu/vs-rife/releases/download/model/flownet_v4.26.pkl"
                 ),
             ),
         ),
@@ -883,7 +883,7 @@ INTERPOLATION_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     ),
 )
 INTERPOLATION_CATALOG_BY_ID = {model.model_id: model for model in INTERPOLATION_MODEL_CATALOG}
-DEFAULT_INTERPOLATION_MODEL_ID = "rife_4_25"
+DEFAULT_INTERPOLATION_MODEL_ID = "rife_4_26"
 
 
 class ModelStore:

@@ -67,7 +67,7 @@ FP8** are separate, optional Labs downloads for supported engines. They export
 SDR and can require substantial RAM, GPU memory and time. A smaller FP8 file does
 not guarantee that a high-resolution clip fits in memory.
 
-Optional frame interpolation uses **RIFE 4.25**, a separate approximately 25 MB
+Optional frame interpolation uses **RIFE 4.26**, a separate approximately 25 MB
 download, with the frame-by-frame engine. Its code and weights are MIT licensed;
 see [model licenses](../model-licenses.md) for the source and checkpoint details.
 It does not work with SeedVR2 or HDR preservation in this version.
