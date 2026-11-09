@@ -66,6 +66,11 @@ MAXIMUM_PIXELS_BY_ARCHITECTURE = {"ESRGAN": 544 * 544, "SPAN": 2_400_000}
 # Every frame of a video has the same size, so these run one call per frame
 # instead of overlapping tiles: fewer pixels and calls (SPAN on an M1 Pro: 1.4-2.2x).
 WHOLE_FRAME_ARCHITECTURES = {"SPAN"}
+# Compiling a 1920x1080 SPAN program used ~6.6 GB of temporary space for a while
+# (measured on macOS), so a whole-frame program is only compiled when this much
+# is free: bytes per input pixel, plus room the Mac needs to stay usable.
+COMPILE_BYTES_PER_PIXEL = 1600
+COMPILE_FREE_HEADROOM = 3 * 1024**3
 SIDE_ALIGNMENT = 16
 LOAD_TIMEOUT_SECONDS = 180.0
 # Bump when the conversion recipe changes so stale programs are not reused.
@@ -109,6 +114,12 @@ def cache_directory() -> Path:
     if override:
         return Path(override)
     return Path.home() / "Library" / "Caches" / "LocalSR" / "coreml"
+
+
+def _existing_parent(path: Path) -> Path:
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path
 
 
 def checkpoint_identity(path: str) -> str:
@@ -436,7 +447,33 @@ class _CoreMLImage(torch.nn.Module):
         if self.architecture not in WHOLE_FRAME_ARCHITECTURES:
             return None
         shape = self._shape_for(height + 2 * halo, width + 2 * halo)
-        return shape if self._usable(shape) else None
+        return shape if self._usable(shape) and self._room_to_compile(shape) else None
+
+    def _room_to_compile(self, shape: tuple[int, int]) -> bool:
+        """False, with a message, when compiling this program could fill the disk.
+
+        The frame then runs in tiles, whose programs are small. Nothing is stored
+        as a verdict, so a later run with free space still uses the whole frame.
+        """
+        state = self._state(shape)
+        program: _Program = state["program"]
+        if (program.compiled / "coremldata.bin").exists():
+            return True
+        needed = COMPILE_BYTES_PER_PIXEL * shape[0] * shape[1] + COMPILE_FREE_HEADROOM
+        free = min(
+            shutil.disk_usage(path).free
+            for path in (_existing_parent(cache_directory()), Path(tempfile.gettempdir()))
+        )
+        if free >= needed:
+            return True
+        if not state.get("low_space"):
+            state["low_space"] = True
+            self._status(
+                f"Not enough free disk space to prepare {self.architecture} for "
+                f"{shape[1]}x{shape[0]} px frames ({needed / 1024**3:.1f} GB needed, "
+                f"{free / 1024**3:.1f} GB free). Using smaller tiles instead."
+            )
+        return False
 
     def _usable(self, shape: tuple[int, int]) -> bool:
         if shape[0] * shape[1] > self.maximum_pixels:
