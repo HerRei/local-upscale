@@ -614,3 +614,45 @@ def test_mov_export_through_the_lossless_master(tmp_path, bridge):
     info = bridge.system.probe(str(output))
     assert info["video"]["codec"] == "apcn"
     assert output.read_bytes()[4:12] == b"ftypqt  "
+
+
+class _SidecarSystem:
+    """A stand-in helper that, like macOS, leaves a `.sb-` sibling of its output."""
+
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    def source_audio(self, *_args):
+        return None
+
+    def encode_frames(self, frames, final, **_options):
+        final.write_bytes(b"video")
+        final.with_name(final.name + ".sb-df5fe11b-AbCdEf").write_bytes(b"x" * 64)
+        if self.fail:
+            raise InterruptedError("video job cancelled")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_system_export_leaves_nothing_but_the_output(tmp_path, fail):
+    from localsr.core.video_io import _system_stream_export
+
+    keep = tmp_path / ".unrelated.sb-keep"
+    keep.write_bytes(b"mine")
+    destination = tmp_path / "out.mp4"
+    call = {
+        "system": _SidecarSystem(fail),
+        "video_codec": "hevc",
+        "container_format": "mp4",
+        "crf": 18,
+        "fps": 24.0,
+        "audio_source": None,
+        "cancel_event": None,
+        "temporary_directory": None,
+    }
+    if fail:
+        with pytest.raises(InterruptedError):
+            _system_stream_export(iter(()), destination, **call)
+    else:
+        _system_stream_export(iter(()), destination, **call)
+    expected = {keep.name} | (set() if fail else {destination.name})
+    assert {path.name for path in tmp_path.iterdir()} == expected
