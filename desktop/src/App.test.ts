@@ -1535,6 +1535,26 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
   });
 
+  it('keeps keyboard focus on a control after Use the CPU', async () => {
+    const user = await mountWith(onTheGpu());
+    await failOnTheGpu();
+    let failure = screen.getByRole('alert', { name: 'Last error' });
+    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    // Advanced is closed: the error stays and takes the focus.
+    await waitFor(() => expect(document.activeElement).toBe(failure));
+    cleanup();
+
+    const open = await mountWith(onTheGpu());
+    await chooseTask(open, /^Upscale$/);
+    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await failOnTheGpu();
+    failure = screen.getByRole('alert', { name: 'Last error' });
+    await open.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    // Advanced is open: the Hardware menu that now says CPU takes it.
+    await waitFor(() => expect(document.activeElement?.id).toBe('device'));
+    expect((document.activeElement as HTMLSelectElement).value).toBe('cpu');
+  });
+
   it('shows the CPU hint only for a task the CPU runs, with the engine ready', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.device_id = 'cpu';
