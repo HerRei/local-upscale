@@ -1,6 +1,6 @@
 # Releasing
 
-Current release: **v0.3.0-beta**; release candidate: **v0.3.5-beta** for macOS, Windows and Linux. Release notes live in
+Current release: **v0.3.0-beta**; release candidate: **v0.3.6-beta** for macOS, Windows and Linux. Release notes live in
 [`releases/`](releases/), one file per tag; that file is the GitHub release
 body.
 
