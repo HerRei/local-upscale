@@ -501,6 +501,16 @@ pub fn start_jobs(
         return Err(AppError::Validation("An update is being installed".into()));
     }
     validate_start_input(&input, external_codecs_available(&state))?;
+    if input.task == "video"
+        && input.video_interpolation != "off"
+        && !lock(&state.engine)?
+            .as_ref()
+            .is_some_and(|engine| engine.features.iter().any(|f| f == "video_interpolation"))
+    {
+        return Err(AppError::Validation(
+            "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
+        ));
+    }
 
     // Do not hash the complete model library on the UI command path. A
     // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
