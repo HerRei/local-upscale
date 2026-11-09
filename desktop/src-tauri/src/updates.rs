@@ -170,8 +170,9 @@ impl From<&DownloadFile> for StatedFile {
 }
 
 /// What the Mac signs for each feed entry, format 2 (scripts/beta_update_signing.py,
-/// release_statement_v2). Every field is required: a statement that lacks one is not
-/// format 2, and the client refuses the release.
+/// release_statement_v2). Every field is required, except that `engine_manifest` may be
+/// left out where it would be null (an entry without an engine package); a statement
+/// lacking any other field is not format 2 and the client refuses the release.
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct ReleaseStatement {
@@ -325,12 +326,16 @@ pub fn validate_contract(
             return Err(invalid("Invalid split engine package"));
         }
     }
-    if contract.engine_id != config.engine_id
-        && contract
-            .engine
-            .as_ref()
-            .is_none_or(|engine| engine.id != contract.engine_id)
+    if contract
+        .engine
+        .as_ref()
+        .is_some_and(|engine| engine.id != contract.engine_id)
     {
+        return Err(invalid(
+            "The engine package does not carry the release's engine id",
+        ));
+    }
+    if contract.engine_id != config.engine_id && contract.engine.is_none() {
         return Err(invalid("This release needs a different inference engine but supplies no compatible engine package"));
     }
     Ok(())
@@ -2911,24 +2916,40 @@ mod tests {
         let mut unsigned = contract.clone();
         unsigned.statement_v2_signature.clear();
         assert!(check(&unsigned).is_err());
-        // The format 1 statement of an old feed, whatever its signature.
-        let old = base64::engine::general_purpose::STANDARD.encode(
-            br#"{"backend":"rocm","channel":"beta","engine_id":"linux-x86_64-rocm-0123456789ab","engine_manifest_sha256":"x","kind":"native","protocol":1,"schema_version":1,"sha256":"x","target":"linux-x86_64-rocm-native","unpacked_size":1024,"version":"0.3.7-beta"}"#,
-        );
-        let mut old_format = contract.clone();
-        old_format.statement_v2 = old;
-        assert!(check(&old_format).is_err());
-        // A statement with a field this client does not know is not format 2.
-        let mut extra = contract.clone();
-        let mut text = String::from_utf8(
-            base64::engine::general_purpose::STANDARD
-                .decode(&contract.statement_v2)
-                .unwrap(),
-        )
-        .unwrap();
-        text.insert_str(1, "\"extra\":1,");
-        extra.statement_v2 = base64::engine::general_purpose::STANDARD.encode(text);
-        assert!(check(&extra).is_err());
+        // Statements signed by the right key that are not format 2: the format 1 statement
+        // of an old feed, one with a field this client does not know, one lacking a field.
+        // Each must be refused for what it says, not for a bad signature.
+        let rejected = &release_fixture()["rejected"];
+        for name in ["format_1", "extra_field", "missing_parts"] {
+            let mut other = contract.clone();
+            other.statement_v2 = rejected[name]["statement"].as_str().unwrap().into();
+            other.statement_v2_signature = rejected[name]["signature"].as_str().unwrap().into();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&other.statement_v2)
+                .unwrap();
+            key(&config.public_key)
+                .unwrap()
+                .verify(
+                    &bytes,
+                    &signature(&other.statement_v2_signature).unwrap(),
+                    false,
+                )
+                .unwrap();
+            assert!(check(&other).is_err(), "{name} was accepted");
+        }
+    }
+
+    // An engine package that names another id than the signed engine id is refused even
+    // when the installed engine is unchanged, since that id decides what is downloaded.
+    #[test]
+    fn an_engine_package_must_carry_the_signed_engine_id() {
+        let (mut config, mut contract) = statement_contract();
+        config.engine_id.clone_from(&contract.engine_id);
+        validate_contract(&config, "beta", "0.3.7-beta", &contract).unwrap();
+        contract.engine.as_mut().unwrap().id = "linux-x86_64-rocm-ffffffffffff".into();
+        assert!(validate_contract(&config, "beta", "0.3.7-beta", &contract).is_err());
+        config.engine_id = "linux-x86_64-rocm-old".into();
+        assert!(validate_contract(&config, "beta", "0.3.7-beta", &contract).is_err());
     }
 
     /// Run explicitly against the retained, production-signed CPU AppImage.
