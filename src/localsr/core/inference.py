@@ -1,7 +1,7 @@
 import gc
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 import numpy as np
 import torch
@@ -265,6 +265,7 @@ class InferenceEngine:
         # The active model is the one used by process_frame / process_image.
         # Switching between cached models is instant (no torch reload).
         self._loaded_models: dict[str, tuple[object, torch.device, torch.dtype]] = {}
+        self._memory_cap_safe: dict[str, bool] = {}
         self._loaded_backend_ids: dict[str, str] = {}
         self._active_path: str | None = None
         self._loaded_device: torch.device | None = None
@@ -284,7 +285,12 @@ class InferenceEngine:
         return entry[0] if entry is not None else None
 
     def load_model(
-        self, model_path: str, device_str: str, precision_str: str, model_info
+        self,
+        model_path: str,
+        device_str: str,
+        precision_str: str,
+        model_info,
+        safe_memory: bool | None = None,
     ) -> tuple[torch.device, torch.dtype]:
         """Load a model and cache it. Switching to an already-cached model
         is instant — no torch reload, no VRAM spike.
@@ -326,9 +332,15 @@ class InferenceEngine:
             del self._loaded_models[model_path]
             gc.collect()
 
-        # Apply the memory cap once per device, shared by its cached models.
-        if not any(d == device for _, d, _ in self._loaded_models.values()):
-            _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
+        # Apply the memory cap once per device, shared by its cached models, and again
+        # when the safe-memory choice changes. Video passes it inside model_info.
+        safe = getattr(model_info, "safe_memory", True) if safe_memory is None else safe_memory
+        if (
+            not any(d == device for _, d, _ in self._loaded_models.values())
+            or self._memory_cap_safe.get(str(device)) != safe
+        ):
+            _apply_gpu_memory_limit(device, safe)
+            self._memory_cap_safe[str(device)] = safe
 
         if onnx_route is not None:
             model, _ = self.model_adapter.load(model_path, device, precision, onnx_route=onnx_route)
@@ -396,6 +408,11 @@ class InferenceEngine:
             self._active_path = None
             self._sync_legacy_fields()
             gc.collect()
+
+    def release_models_except(self, keep: Collection[str]) -> None:
+        """Release every cached model whose path is not in keep."""
+        for path in [path for path in self._loaded_models if path not in keep]:
+            self.release_model(path)
 
     def release_all(self) -> None:
         """Release every cached model. Alias for release_model(path=None)."""
@@ -873,7 +890,9 @@ class InferenceEngine:
         temporary_directory: str | None = None,
     ) -> OutputWriter:
 
-        device, precision = self.load_model(model_path, device_str, precision_str, model_info)
+        device, precision = self.load_model(
+            model_path, device_str, precision_str, model_info, safe_memory=safe_memory
+        )
         model = self.active_model
 
         img_tensor = img_data["tensor"]

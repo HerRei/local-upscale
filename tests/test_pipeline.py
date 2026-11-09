@@ -66,12 +66,15 @@ class _Writer:
 class _Adapter:
     allow_unverified_checkpoints = False
 
+    def __init__(self, log=None):
+        self.log = log if log is not None else []
+
     def inspect(self, path):
         scale = 1 if path.endswith("restore.pth") else 2
         return NormalizedModelInfo("Test", scale, 3, 3, True, False, 1, 1, path, [])
 
     def release(self):
-        pass
+        self.log.append(("adapter.release",))
 
 
 class _IncompatibleFaceAdapter(_Adapter):
@@ -87,7 +90,10 @@ class _PipelineEngine:
         cancel_event: threading.Event | None = None,
         fail_path: str = "",
         failure: Exception | None = None,
+        log: list | None = None,
     ):
+        self.log = log if log is not None else []
+        self.halos = []
         self.calls = []
         self.writers = []
         self.cancel_event = cancel_event
@@ -98,6 +104,8 @@ class _PipelineEngine:
     def process_image(self, **kwargs):
         path = kwargs["model_path"]
         self.calls.append(path)
+        self.halos.append(kwargs["halo"])
+        self.log.append(("process", path))
         self.inputs.append(kwargs["img_data"]["tensor"].clone())
         if path == self.fail_path:
             raise self.failure
@@ -115,8 +123,11 @@ class _PipelineEngine:
             self.cancel_event.set()
         return writer
 
-    def release_model(self, _path=None):
-        pass
+    def release_model(self, path=None):
+        self.log.append(("engine.release", path))
+
+    def release_models_except(self, keep):
+        self.log.append(("engine.keep_only", frozenset(keep)))
 
 
 def _job_data(tmp_path):
@@ -287,3 +298,126 @@ def test_a_restore_only_job_still_fails_when_its_model_cannot_process_the_image(
     monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
     with pytest.raises(RuntimeError, match=r"restore stage \(restore\) failed"):
         server._run_job("pipeline-job", data)
+
+
+@pytest.mark.parametrize(("job_halo", "fix_halo"), [(8, 32), (48, 48)])
+def test_a_fix_runs_with_at_least_the_overlap_its_model_needs(
+    tmp_path, monkeypatch, job_halo, fix_halo
+):
+    # NAFNet SIDD recommends 32 pixels; a fast upscaler's 8 would leave seams in the fix.
+    from localsr.core.image_io import ImageManager
+
+    data = _job_data(tmp_path)
+    data["halo"] = job_halo
+    data["stages"][0] = _stage("restore", "nafnet_sidd_width64", str(tmp_path / "restore.pth"))
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(ImageManager, "save", lambda *_args, **_kwargs: None)
+
+    server._run_job("pipeline-job", data)
+    assert engine.halos == [fix_halo, job_halo]
+
+
+def _fix_released_before_upscale(log, fix_path):
+    after_fix = log[log.index(("process", fix_path)) + 1 :]
+    upscale = [i for i, entry in enumerate(after_fix) if entry[0] == "process"]
+    before_upscale = after_fix[: upscale[0]] if upscale else after_fix
+    return ("engine.release", fix_path) in before_upscale and ("adapter.release",) in before_upscale
+
+
+@pytest.mark.parametrize("outcome", ["success", "unstable", "failure", "cancel"])
+def test_the_fix_model_leaves_memory_before_the_upscaler_runs(tmp_path, monkeypatch, outcome):
+    from localsr.core.image_io import ImageManager
+    from localsr.core.inference import UnstableRestorationError
+
+    fix_path = str(tmp_path / "restore.pth")
+    log = []
+    server = WorkerServer()
+    server.model_adapter = _Adapter(log)
+    server.engine = _PipelineEngine(
+        cancel_event=server.cancel_event if outcome == "cancel" else None,
+        fail_path=fix_path if outcome in ("unstable", "failure") else "",
+        failure=UnstableRestorationError("unstable") if outcome == "unstable" else None,
+        log=log,
+    )
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(ImageManager, "save", lambda *_args, **_kwargs: None)
+
+    if outcome == "failure":
+        with pytest.raises(RuntimeError):
+            server._run_job("pipeline-job", _job_data(tmp_path))
+    else:
+        server._run_job("pipeline-job", _job_data(tmp_path))
+    assert _fix_released_before_upscale(log, fix_path)
+
+
+@pytest.mark.parametrize("with_fix", [True, False])
+def test_an_image_job_keeps_only_the_models_it_runs_next_cached(tmp_path, monkeypatch, with_fix):
+    # The engine cache otherwise holds every upscaler used since the engine started. With
+    # a fix, even this job's upscaler (cached by the previous image) must not sit beside it.
+    from localsr.core.image_io import ImageManager
+
+    log = []
+    data = _job_data(tmp_path)
+    data["face_model_path"] = str(tmp_path / "face.pth")
+    if not with_fix:
+        data["stages"] = data["stages"][1:]
+    server = WorkerServer()
+    server.model_adapter = _Adapter(log)
+    server.engine = _PipelineEngine(log=log)
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(ImageManager, "save", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "localsr.worker.image_job.ImageJobRunner._process_faces", lambda *_args, **_kwargs: None
+    )
+
+    server._run_job("pipeline-job", data)
+    keep = [entry for entry in log if entry[0] == "engine.keep_only"]
+    expected = (
+        {str(tmp_path / "restore.pth")}
+        if with_fix
+        else {str(tmp_path / "upscale.pth"), str(tmp_path / "face.pth")}
+    )
+    assert keep == [("engine.keep_only", frozenset(expected))]
+    assert log.index(keep[0]) < next(i for i, entry in enumerate(log) if entry[0] == "process")
+
+
+def test_an_image_job_caps_memory_with_the_users_safe_memory_choice(monkeypatch):
+    # Turning safe memory off must also lift the allocator ceiling, not only the tile backoff.
+    from localsr.core import inference
+
+    applied = []
+    monkeypatch.setattr(
+        inference, "_apply_gpu_memory_limit", lambda device, safe: applied.append(safe)
+    )
+    engine = inference.InferenceEngine(None)
+
+    class _LoadingAdapter:
+        def load(self, *_args, **_kwargs):
+            return object(), None
+
+    engine.model_adapter = _LoadingAdapter()
+    monkeypatch.setattr(engine, "_attach_status", lambda _model: None)
+    info = NormalizedModelInfo("Test", 2, 3, 3, True, False, 1, 1, "a.pth", [])
+    engine.load_model("a.pth", "cpu", "fp32", info, safe_memory=False)
+    engine.load_model("b.pth", "cpu", "fp32", info, safe_memory=False)
+    engine.load_model("c.pth", "cpu", "fp32", info, safe_memory=True)
+    assert applied == [False, True]
+
+
+def test_the_engine_releases_every_cached_model_but_the_ones_to_keep():
+    from localsr.core.inference import InferenceEngine
+
+    engine = InferenceEngine(None)
+    for path in ("old-best.pth", "old-quick.pth", "upscale.pth"):
+        engine._loaded_models[path] = (object(), torch.device("cpu"), torch.float32)
+        engine._loaded_backend_ids[path] = "cpu"
+    engine._active_path = "old-best.pth"
+
+    engine.release_models_except({"upscale.pth", "face.pth"})
+    assert list(engine._loaded_models) == ["upscale.pth"]
+    assert list(engine._loaded_backend_ids) == ["upscale.pth"]
+    assert engine._active_path == "upscale.pth"
