@@ -6,7 +6,12 @@
   import AdvancedSettings from './AdvancedSettings.svelte';
   import HelpTip from './HelpTip.svelte';
   import FFmpegNotice from './FFmpegNotice.svelte';
-  import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
+  import {
+    detectPlatform,
+    exportNeedsExternalFFmpeg,
+    probeNeedsExternalFFmpeg,
+    systemCodecs,
+  } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
@@ -50,6 +55,7 @@
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
   import { engineLabel } from './lib/neuralEngine';
+  import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
     BenchmarkDeviceResult,
@@ -412,16 +418,25 @@
     (canStart || canPrepare)
       ? `${selectedMedia.width} × ${selectedMedia.height} → ${outputDimensions} · ${
           settings.task === 'edit'
-            ? (editingDevice?.name ?? 'no supported GPU')
+            ? editingDevice
+              ? deviceLabel(editingDevice)
+              : 'no supported GPU'
             : usingTemporalVideo
-              ? (activeDevice?.name ?? 'detecting hardware')
+              ? activeDevice
+                ? deviceLabel(activeDevice)
+                : 'detecting hardware'
               : engineLabel(
                   settings,
                   snapshot.capabilities,
                   selectedModel?.architecture,
-                  activeDevice?.name ?? 'detecting hardware',
+                  activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
                 )
         }`
+      : '';
+  // The last failure also stands above Advanced, next to the setting that can fix it.
+  $: lastFailure =
+    snapshot.runtime.status_title === 'Could not finish' && !snapshot.runtime.active_job_id
+      ? snapshot.runtime.status_detail
       : '';
   // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
   // ticks replace the detail line, so the note keeps its own line until the job ends.
@@ -431,6 +446,18 @@
     snapshot.runtime.hardware_note !== snapshot.runtime.status_detail
       ? snapshot.runtime.hardware_note
       : '';
+  // A CPU-only run on a computer with a GPU or NPU it could use says so in the idle status
+  // line, where people look, instead of under Advanced.
+  $: hardwareHint =
+    settings.device_id === 'cpu' &&
+    !snapshot.runtime.active_job_id &&
+    !activeDownload &&
+    !preparing &&
+    !booting &&
+    !lastFailure &&
+    snapshot.runtime.status_title !== 'Warning'
+      ? cpuHint(snapshot.capabilities, detectPlatform())
+      : null;
   $: taskCaption = !settings.task
     ? ''
     : settings.task === 'denoise'
@@ -1969,7 +1996,7 @@
   class:booting
   class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
-  class:status-extra={Boolean(hardwareNote)}
+  class:status-extra={Boolean(hardwareNote || hardwareHint)}
   style={`--ui-scale:${settings.interface_scale / 100}`}
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
@@ -2682,6 +2709,14 @@
             : idleSummary || snapshot.runtime.status_detail}</span
         >
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
+        {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
+            >{hardwareHint.text}
+            {#if hardwareHint.downloads}<button
+                class="link-button"
+                type="button"
+                on:click={() => void api.openDownloadPage()}>Download page</button
+              >{/if}</span
+          >{/if}
         {#if queueEta}<span
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."

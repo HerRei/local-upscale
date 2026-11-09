@@ -1247,6 +1247,16 @@ pub fn open_user_guide() -> AppResult<()> {
         .map_err(|error| AppError::Config(format!("could not open the user guide: {error}")))
 }
 
+/// The editions that use a GPU this one cannot (CUDA, DirectML, ROCm) are on this page;
+/// ci/public-beta-release.json publishes the same address.
+pub(crate) const DOWNLOAD_PAGE_URL: &str = "https://herrei.github.io/localsr/download/";
+
+#[tauri::command]
+pub fn open_download_page() -> AppResult<()> {
+    open::that_detached(DOWNLOAD_PAGE_URL)
+        .map_err(|error| AppError::Config(format!("could not open the download page: {error}")))
+}
+
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.
 #[tauri::command]
 pub fn open_ffmpeg_download_page() -> AppResult<()> {
@@ -2196,6 +2206,13 @@ pub fn open_model_license(
 mod tests {
     use super::*;
     use crate::types::RecipeStage;
+
+    #[test]
+    fn the_download_page_is_the_one_the_release_publishes() {
+        let release: serde_json::Value =
+            serde_json::from_str(include_str!("../../../ci/public-beta-release.json")).unwrap();
+        assert_eq!(release["download_page"], DOWNLOAD_PAGE_URL);
+    }
 
     #[test]
     fn an_update_switch_is_written_at_once_and_rolled_back_when_writing_fails() {

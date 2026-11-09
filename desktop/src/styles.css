@@ -1324,6 +1324,12 @@ input[type='text'],
 .status-copy span.status-note {
   color: var(--text);
 }
+.status-note .link-button {
+  color: var(--text);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .status-actions {
   display: flex;
   gap: 6px;
@@ -2796,6 +2802,11 @@ input[type='text'],
 .label-with-tip {
   display: inline-flex;
   align-items: center;
+}
+/* A long Hardware entry (a GPU and its route) gets the full width under its label. */
+.field-row.stacked {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
 }
 .field-row {
   position: relative;

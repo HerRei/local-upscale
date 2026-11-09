@@ -7,7 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings, WorkerEnvelope } from './lib/types';
+import type {
+  AppSnapshot,
+  DeviceInfo,
+  LaunchIntent,
+  MediaItem,
+  UiSettings,
+  WorkerEnvelope,
+} from './lib/types';
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -41,6 +48,7 @@ const api = vi.hoisted(() => ({
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
   chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
   openFfmpegDownloadPage: vi.fn(async () => undefined),
+  openDownloadPage: vi.fn(async () => undefined),
   ffmpegInstallHint: vi.fn(async () => null),
   openTerminalWithInstallCommand: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
@@ -1171,19 +1179,34 @@ describe('LocalSR desktop interface', () => {
   it.each([
     [
       { name: 'Intel(R) UHD Graphics 620', download: 'DirectML' },
-      /This computer has Intel\(R\) UHD Graphics 620\. The DirectML download of LocalSR can use it/,
+      /Runs on the CPU\. This computer has Intel UHD Graphics 620, which the DirectML download of LocalSR can use\./,
+      true,
     ],
-    [{ name: 'Intel graphics', download: 'intel-driver' }, /once Intel's compute driver/],
+    [
+      { name: 'Intel graphics', download: 'intel-driver' },
+      /Runs on the CPU\. Intel graphics can run models once Intel's compute driver, the intel-opencl-icd package, is installed\./,
+      false,
+    ],
   ] as const)(
-    'names the download or driver for a GPU this edition cannot use',
-    async (suggestion, text) => {
-      const snapshot = readySnapshot();
+    'names the download or driver for a GPU this edition cannot use in the idle status line',
+    async (suggestion, text, downloads) => {
+      const snapshot = readySnapshot([image('photo', true)]);
       snapshot.settings.device_id = 'cpu';
       snapshot.capabilities.gpu_suggestion = suggestion;
       const user = await mountWith(snapshot);
+      const status = document.querySelector('.status-copy') as HTMLElement;
+      expect(within(status).getByText(text)).toBeTruthy();
+      // Another download of LocalSR gets a link; Intel's driver is a system package, named instead.
+      const link = within(status).queryByRole('button', { name: 'Download page' });
+      expect(Boolean(link)).toBe(downloads);
+      if (link) {
+        await user.click(link);
+        expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
+      }
+      // The hint moved: Advanced does not repeat it.
       await chooseTask(user, /^Upscale$/);
       await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-      expect(screen.getByText(text)).toBeTruthy();
+      expect(screen.getAllByText(text)).toHaveLength(1);
     },
   );
 
@@ -1253,8 +1276,9 @@ describe('LocalSR desktop interface', () => {
       'NVIDIA GPU (CUDA)',
       'AMD GPU (ROCm)',
       'Intel GPU (XPU)',
-      'Intel(R) Iris(R) Xe Graphics (DirectML)',
-      'Intel(R) Graphics (iGPU) (OpenVINO)',
+      // Adapter names lose the trademark marks, OpenVINO's (iGPU) and a single route's tag.
+      'Intel Iris Xe Graphics',
+      'Intel Graphics',
     ]) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
@@ -1265,7 +1289,8 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'directml:0' }),
       ),
     );
-    expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
+    expect(screen.getByText(/DirectML has not been tested on real hardware yet/)).toBeTruthy();
+    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
     // The saved scale is a number; the menu must still show the matching option.
     expect((screen.getByLabelText('Interface text') as HTMLSelectElement).selectedIndex).toBe(0);
     // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
@@ -1274,10 +1299,84 @@ describe('LocalSR desktop interface', () => {
     expect(precision.value).toBe('fp32');
 
     await user.selectOptions(hardware, 'openvino:8680677d060000000002000000000000');
-    expect(
-      await screen.findByText(/OpenVINO runs the model on the selected Intel GPU/),
-    ).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
+    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  function gpu(id: string, type: string, name: string): DeviceInfo {
+    return {
+      id,
+      type,
+      name,
+      total_memory: 8 * 1024 ** 3,
+      free_memory: 6 * 1024 ** 3,
+      supports_fp16: false,
+      is_integrated: true,
+      recommended_tile_sizes: [64, 128],
+    };
+  }
+
+  it('groups a GPU reached through DirectML and OpenVINO under its name, with its routes as options', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+      // OpenVINO names the same GPU with its own (iGPU) tag.
+      gpu('openvino:8680', 'openvino', 'Intel(R) UHD Graphics 620 (iGPU) (OpenVINO)'),
+      gpu('openvino:80d1', 'npu', 'Intel(R) AI Boost (NPU)'),
+      gpu('directml:1', 'directml', 'NVIDIA GeForce RTX 3060 (DirectML)'),
+    ];
+    snapshot.settings.device_id = 'directml:0';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+
+    const groups = [...hardware.querySelectorAll('optgroup')];
+    expect(groups.map((group) => group.label)).toEqual(['Intel UHD Graphics 620']);
+    expect([...groups[0].querySelectorAll('option')].map((option) => option.textContent)).toEqual([
+      'Intel UHD Graphics 620 · DirectML',
+      'Intel UHD Graphics 620 · OpenVINO',
+    ]);
+    // A device reached one way is one entry; the NPU keeps its tag.
+    for (const name of ['CPU', 'NVIDIA GeForce RTX 3060', 'Intel AI Boost (NPU)']) {
+      expect(within(hardware).getByRole('option', { name })).toBeTruthy();
+    }
+    // The closed menu shows the whole name and route: the menu gets the row's full width,
+    // and its tooltip repeats the entry.
+    expect(hardware.selectedOptions[0].textContent).toBe('Intel UHD Graphics 620 · DirectML');
+    expect(hardware.title).toBe('Intel UHD Graphics 620 · DirectML');
+    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(true);
+    // The status line names the GPU as the menu and the engine do.
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(
+      /· Intel UHD Graphics 620 \(DirectML\)$/,
+    );
+
+    await user.selectOptions(hardware, 'openvino:8680');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'openvino:8680' }),
+      ),
+    );
+    expect(hardware.title).toBe('Intel UHD Graphics 620 · OpenVINO');
+    await user.selectOptions(hardware, 'openvino:80d1');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'openvino:80d1' }),
+      ),
+    );
+    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+  });
+
+  it('keeps short Hardware entries beside their label', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(hardware.querySelector('optgroup')).toBeNull();
+    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(false);
   });
 
   it('keeps the engine route note for the whole job, through a snapshot refresh', async () => {
@@ -2213,7 +2312,7 @@ describe('LocalSR desktop interface', () => {
     expect(within(library).getByRole('button', { name: /SPAN ×4.*NPU/ })).toBeTruthy();
   });
 
-  it('explains the NPU in Advanced and what a machine without its compiler is missing', async () => {
+  it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices = [
       {
@@ -2241,8 +2340,19 @@ describe('LocalSR desktop interface', () => {
     missing.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
     missing.settings.device_id = 'cpu';
     const user2 = await mountWith(missing);
+    // Like a GPU this edition cannot use, the missing compiler is named in the idle status line;
+    // it is a system package, so there is no link to LocalSR's downloads.
+    const status = document.querySelector('.status-copy') as HTMLElement;
+    expect(
+      within(status).getByText(
+        /Runs on the CPU\. The NPU \(Intel AI Boost\) can run models once the (intel-driver-compiler-npu package|current Intel NPU driver)/,
+      ),
+    ).toBeTruthy();
+    expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
     await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    expect(screen.getByText(/Intel\(R\) AI Boost.*NPU compiler/)).toBeTruthy();
+    expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
+      /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
+    );
   });
 
   it('picks a model for this job from the library and marks the recipe as custom', async () => {
