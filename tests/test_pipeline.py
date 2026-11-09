@@ -618,6 +618,136 @@ def test_multi_fix_cancellation_at_each_boundary(tmp_path, monkeypatch, capsys, 
     assert '"type": "job_cancelled"' in capsys.readouterr().out
 
 
+def _five_stage_job(tmp_path):
+    """Blur, JPEG and noise fixes, then the upscaler with its fused face pass."""
+    data = _job_data(tmp_path)
+    data["face_model_path"] = str(tmp_path / "face.pth")
+    data["stages"] = [
+        _stage("restore", "blur", str(tmp_path / "0-restore.pth"), role="fix", fix="blur"),
+        _stage("deblock", "jpeg", str(tmp_path / "1-restore.pth"), role="fix", fix="jpeg"),
+        _stage("restore", "noise", str(tmp_path / "2-restore.pth"), role="fix", fix="noise"),
+        _stage("upscale", "upscale", data["model_path"], role="primary"),
+        _stage(
+            "face_restore",
+            "face",
+            data["face_model_path"],
+            fidelity=0.7,
+            execution="fused-with-upscale",
+        ),
+    ]
+    return data
+
+
+@pytest.mark.parametrize(
+    ("skipped", "percentages", "stage_progress"),
+    [
+        (
+            (),
+            [10, 20, 30, 40, 50, 60, 80, 100],
+            # The upscaler and its fused face pass share one run: two stages of five.
+            [(0, 10), (0, 20), (1, 30), (1, 40), (2, 50), (2, 60), (3, 80), (4, 80)]
+            + [(3, 100), (4, 100)],
+        ),
+        (
+            # A fix skipped halfway hands over to the next stage's own share.
+            (1,),
+            [10, 20, 30, 50, 60, 80, 100],
+            [(0, 10), (0, 20), (1, 30), (2, 50), (2, 60), (3, 80), (4, 80), (3, 100), (4, 100)],
+        ),
+    ],
+)
+def test_several_fixes_and_a_fused_face_pass_report_exact_progress(
+    tmp_path, monkeypatch, capsys, skipped, percentages, stage_progress
+):
+    from localsr.core.image_io import ImageManager
+    from localsr.core.inference import UnstableRestorationError
+
+    data = _five_stage_job(tmp_path)
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+
+    def process(**kwargs):
+        # Two tiles per stage: half way, then done.
+        engine.calls.append(kwargs["model_path"])
+        kwargs["progress_callback"](1, 2, kwargs["tile_size"])
+        if kwargs["model_path"] in [data["stages"][i]["model_path"] for i in skipped]:
+            raise UnstableRestorationError("unstable values")
+        kwargs["progress_callback"](2, 2, kwargs["tile_size"])
+        tensor = kwargs["img_data"]["tensor"]
+        scale = kwargs["model_info"].scale
+        writer = _Writer(
+            np.zeros((3, tensor.shape[1] * scale, tensor.shape[2] * scale), dtype=np.uint8)
+        )
+        engine.writers.append(writer)
+        return writer
+
+    engine.process_image = process
+    monkeypatch.setattr(
+        "localsr.worker.image_job.ImageJobRunner._process_faces", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(ImageManager, "save", lambda *_a, **_kw: None)
+    server._run_job("pipeline-job", data)
+
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    of = lambda kind: [m["data"] for m in messages if m["type"] == kind]  # noqa: E731
+    assert [round(m["percentage"], 6) for m in of("progress")] == percentages
+    assert [(m["stage_index"], round(m["percentage"], 6)) for m in of("stage_progress")] == (
+        stage_progress
+    )
+    for kind in ("stage_started", "stage_completed"):
+        assert [(m["stage_index"], m["stage_count"]) for m in of(kind)] == [
+            (index, 5) for index in range(5)
+        ]
+    assert [m["stage_kind"] for m in of("stage_started")] == [
+        "restore",
+        "deblock",
+        "restore",
+        "upscale",
+        "face_restore",
+    ]
+
+
+@pytest.mark.parametrize("boundary", range(4))
+def test_a_cancel_between_finished_stages_stops_before_the_next_one(
+    tmp_path, monkeypatch, capsys, boundary
+):
+    # Cancel arrives after a stage has finished and released its model, so only the checks
+    # between stages can stop the job: no later stage runs and nothing is saved.
+    from localsr.core.image_io import ImageManager
+    from localsr.worker.job_progress import ImageJobProgress
+
+    data = _five_stage_job(tmp_path)
+    paths = [stage["model_path"] for stage in data["stages"][:4]]
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+    complete = ImageJobProgress.complete
+
+    def complete_then_cancel(self, index, stage):
+        complete(self, index, stage)
+        if index == boundary:
+            server.cancel_event.set()
+
+    monkeypatch.setattr(ImageJobProgress, "complete", complete_then_cancel)
+    monkeypatch.setattr(
+        "localsr.worker.image_job.ImageJobRunner._process_faces", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(
+        ImageManager, "save", lambda *_a, **_kw: pytest.fail("Cancelled job saved output")
+    )
+    server._run_job("pipeline-job", data)
+    assert engine.calls == paths[: boundary + 1]
+    assert all(writer.cleaned for writer in engine.writers)
+    output = capsys.readouterr().out
+    assert '"type": "job_cancelled"' in output
+    assert '"type": "job_completed"' not in output
+
+
 def test_engine_advertises_ordered_image_fixes():
     from localsr.worker.server import _engine_features
 
