@@ -10,6 +10,7 @@ import { demoSnapshot } from './lib/demo';
 import type {
   AppSnapshot,
   DeviceInfo,
+  JobRecord,
   LaunchIntent,
   MediaItem,
   UiSettings,
@@ -1210,6 +1211,29 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
+  it('keeps the CPU hint out of the status line while a job runs or after a failure', async () => {
+    const running = readySnapshot([image('photo', true)]);
+    running.settings.device_id = 'cpu';
+    running.capabilities.gpu_suggestion = { name: 'an NVIDIA GPU', download: 'CUDA' };
+    await mountWith(running);
+    expect(screen.getByText(/the CUDA download of LocalSR can use/)).toBeTruthy();
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    await waitFor(() =>
+      expect(screen.queryByText(/the CUDA download of LocalSR can use/)).toBeNull(),
+    );
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: 'The output folder is not writable.' },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('alert', { name: 'Last error' }).textContent).toContain(
+        'The output folder is not writable.',
+      ),
+    );
+    expect(screen.queryByText(/the CUDA download of LocalSR can use/)).toBeNull();
+  });
+
   it('preserves every executable backend id from worker discovery to job settings', async () => {
     const snapshot = readySnapshot();
     snapshot.capabilities.devices = [
@@ -1417,6 +1441,84 @@ describe('LocalSR desktop interface', () => {
     api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
     callback({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out.png' } });
     await waitFor(() => expect(document.querySelector('.status-note')).toBeNull());
+  });
+
+  it('shows the last failure above Advanced and offers the CPU when a GPU caused it', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices.push(
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+    );
+    snapshot.settings.device_id = 'directml:0';
+    const user = await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: 'The output folder is not writable.' },
+    });
+    let failure = await screen.findByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('The output folder is not writable.');
+    // Not a GPU's fault: the CPU would not help.
+    expect(within(failure).queryByRole('button', { name: 'Use the CPU' })).toBeNull();
+
+    const rejection =
+      'RealESRGAN gives different results on Intel UHD Graphics 620 (DirectML) than on the CPU, so LocalSR does not use that GPU for this model. Select the CPU for it.';
+    callback({ type: 'job_started', data: { job_id: 'job-2' } });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
+    callback({ type: 'job_failed', data: { job_id: 'job-2', error_message: rejection } });
+    failure = await screen.findByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('Select the CPU for it.');
+    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'cpu' }),
+      ),
+    );
+    expect(
+      within(screen.getByRole('alert', { name: 'Last error' })).queryByRole('button', {
+        name: 'Use the CPU',
+      }),
+    ).toBeNull();
+  });
+
+  it('says in its row that a queue item could not finish, until a later run finishes', async () => {
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    const failed: JobRecord = {
+      id: 'job-1',
+      media_id: 'photo',
+      media_name: 'photo.png',
+      media_kind: 'image',
+      status: 'failed',
+      progress: 0,
+      output_path: '',
+      error: 'The graphics driver stopped Intel UHD Graphics 620 (DirectML).',
+      created_at: 100,
+    };
+    snapshot.jobs = [failed];
+    await mountWith(snapshot);
+    const label = screen.getByText('Could not finish');
+    expect(label.getAttribute('title')).toBe(failed.error);
+    // Sentence case: the row's state style capitalises single words, not this.
+    expect(label.classList.contains('failed')).toBe(true);
+    expect(screen.getAllByText('Could not finish')).toHaveLength(1);
+
+    const later = structuredClone(snapshot);
+    later.jobs = [
+      {
+        ...failed,
+        id: 'job-2',
+        status: 'completed',
+        error: '',
+        output_path: '/out.png',
+        created_at: 200,
+      },
+      failed,
+    ];
+    api.refreshSnapshot.mockResolvedValue(later);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.queryByText('Could not finish')).toBeNull());
   });
 
   it.each(['mps', 'directml:1', 'xpu:0'])(
