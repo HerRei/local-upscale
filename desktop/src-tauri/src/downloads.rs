@@ -17,8 +17,18 @@ use crate::{
     catalog::{safe_model_filename, sha256_file, verified_file},
     error::{AppError, AppResult},
     state::{emit_state_changed, lock, AppState},
-    types::{CatalogModel, CatalogVideoModel, ModelFile, WorkerEnvelope},
+    types::{CatalogManifest, CatalogModel, CatalogVideoModel, ModelFile, WorkerEnvelope},
 };
+
+/// A multi-file bundle by id: a video engine or a frame-interpolation model.
+fn bundle_model(catalog: &CatalogManifest, model_id: &str) -> Option<CatalogVideoModel> {
+    catalog
+        .video_models
+        .iter()
+        .chain(catalog.interpolation_models.iter())
+        .find(|model| model.model_id == model_id)
+        .cloned()
+}
 
 pub async fn download_model(
     state: Arc<AppState>,
@@ -34,12 +44,8 @@ pub async fn download_model(
             .find(|model| model.model_id == model_id)
         {
             DownloadTarget::Image(Box::new(model.clone()))
-        } else if let Some(model) = catalog
-            .video_models
-            .iter()
-            .find(|model| model.model_id == model_id)
-        {
-            DownloadTarget::Video(Box::new(model.clone()))
+        } else if let Some(model) = bundle_model(&catalog, &model_id) {
+            DownloadTarget::Video(Box::new(model))
         } else if let Some(model) = crate::editing::catalog(&state.paths)?
             .into_iter()
             .find(|model| model.model_id == model_id)
@@ -676,6 +682,30 @@ mod tests {
         std::fs::write(&partial, b"short").unwrap();
         assert!(!reuse(&sound).unwrap());
         assert!(partial.exists());
+    }
+
+    #[test]
+    fn interpolation_models_download_as_verified_bundles() {
+        let manifest: crate::types::CatalogManifest =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        let rife = bundle_model(&manifest, "rife_4_25").unwrap();
+        assert_eq!(rife.engine_kind, "rife");
+        assert!(rife.automated_download_allowed);
+        assert!(!rife.terms_acceptance_required);
+        for file in &rife.files {
+            assert!(
+                validate_artifact_metadata(&file.download_url, file.size_bytes, &file.sha256)
+                    .is_ok()
+            );
+        }
+        assert!(DownloadTarget::Video(Box::new(rife))
+            .validate_policy(false)
+            .is_ok());
+        assert_eq!(
+            bundle_model(&manifest, "seedvr2_3b").unwrap().engine_kind,
+            "seedvr2"
+        );
+        assert!(bundle_model(&manifest, "span_photo_x4").is_none());
     }
 
     #[test]
