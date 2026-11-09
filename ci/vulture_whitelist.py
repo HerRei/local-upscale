@@ -89,6 +89,11 @@ workload_version
 HandshakeRequest
 BenchmarkRequest
 MediaProbeRequest
+RegionRequest
+request_id
+target_width
+target_height
+png_base64
 
 # Framework callbacks and third-party object attributes.
 _.MAX_IMAGE_PIXELS  # Pillow reads this only in the isolated export-preview child

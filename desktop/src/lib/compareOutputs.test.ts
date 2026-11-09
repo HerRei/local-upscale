@@ -69,3 +69,28 @@ describe('Compare controls', () => {
     expect(tabFromKey('Enter', 0, 2)).toBeNull();
   });
 });
+
+import { visibleRegion } from './compareRegions';
+
+describe('visible compare regions', () => {
+  it('requests only when the displayed preview is magnified, in source coordinates', () => {
+    const input = {
+      image: { width: 4000, height: 2000 },
+      preview: { width: 1000, height: 500 },
+      cell: { width: 500, height: 500 },
+      fit: { width: 500, height: 250 },
+      zoom: 4,
+      pan: { x: 250, y: 0 },
+    };
+    expect(visibleRegion({ ...input, zoom: 1 })).toBeNull();
+    expect(visibleRegion({ ...input, zoom: 1.5, pixelRatio: 2 })).not.toBeNull();
+    expect(visibleRegion(input)).toEqual({
+      x: 1000,
+      y: 500,
+      width: 1000,
+      height: 1000,
+      target_width: 500,
+      target_height: 500,
+    });
+  });
+});

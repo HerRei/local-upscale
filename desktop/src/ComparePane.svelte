@@ -3,7 +3,8 @@
    * The Compare mode of the main pane: the picked items as a slider (slot 1 against 2) or
    * as boxes (up to four), with one zoom and pan for every box. Escape or Done leaves.
    */
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
+  import { visibleRegion, type Region } from './lib/compareRegions';
   import HelpTip from './HelpTip.svelte';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import { boxColumns, sliderBlock, type CompareItem } from './lib/compareOutputs';
@@ -16,6 +17,12 @@
   } from './lib/viewport';
 
   export let items: CompareItem[];
+  export let generation = 0;
+  export let requestRegions: (
+    generation: number,
+    regions: (Region | null)[],
+  ) => Promise<void> = async () => {};
+  export let clearRegions: () => Promise<void> = async () => {};
   export let layout: 'slider' | 'boxes' = 'slider';
   export let setLayout: (layout: 'slider' | 'boxes') => void;
   export let swapItems: (first: number, second: number) => void;
@@ -42,6 +49,79 @@
   let panStartX = 0;
   let panStartY = 0;
   let hovering = false;
+  let regionTimer: ReturnType<typeof setTimeout> | undefined;
+  let regionKey = '';
+  let regionQueue = Promise.resolve();
+  let destroyed = false;
+
+  function regionsFor(
+    entries: CompareItem[],
+    currentLayout: string,
+    currentCell: { width: number; height: number },
+    mainFit: { width: number; height: number },
+    currentZoom: number,
+    px: number,
+    py: number,
+  ): (Region | null)[] {
+    if (entries.length < 2) return entries.map(() => null);
+    return entries.map((item, index) => {
+      if ((currentLayout === 'slider' && index >= 2) || item.status !== 'ready') return null;
+      const fit =
+        currentLayout === 'boxes'
+          ? fitSize(currentCell, { width: item.width, height: item.height }, 12)
+          : mainFit;
+      const pan =
+        currentLayout === 'boxes'
+          ? clampPan(
+              { x: (px * fit.width) / mainFit.width, y: (py * fit.height) / mainFit.height },
+              panBounds(currentCell, fit, currentZoom),
+            )
+          : { x: px, y: py };
+      return visibleRegion({
+        image: { width: item.width, height: item.height },
+        preview: { width: item.preview_width || 0, height: item.preview_height || 0 },
+        cell: currentCell,
+        fit,
+        zoom: currentZoom,
+        pan,
+        pixelRatio: window.devicePixelRatio || 1,
+      });
+    });
+  }
+
+  function scheduleRegions(
+    key: string,
+    currentGeneration: number,
+    regions: (Region | null)[],
+  ): void {
+    if (key === regionKey || !currentGeneration) return;
+    regionKey = key;
+    clearTimeout(regionTimer);
+    regionTimer = setTimeout(() => {
+      regionQueue = regionQueue
+        .catch(() => {})
+        .then(() => (destroyed ? undefined : requestRegions(currentGeneration, regions)))
+        .catch(() => {});
+    }, 160);
+  }
+
+  function cropStyle(item: CompareItem): string {
+    const r = item.region!.bounds;
+    return `left:${(100 * r.x) / item.width}%;top:${(100 * r.y) / item.height}%;width:${(100 * r.width) / item.width}%;height:${(100 * r.height) / item.height}%`;
+  }
+
+  function currentCrop(item: CompareItem, index: number, desired: (Region | null)[]): boolean {
+    return !!item.region && JSON.stringify(item.region.bounds) === JSON.stringify(desired[index]);
+  }
+
+  onDestroy(() => {
+    destroyed = true;
+    clearTimeout(regionTimer);
+    void regionQueue
+      .catch(() => {})
+      .then(() => clearRegions())
+      .catch(() => {});
+  });
 
   $: block = sliderBlock(items.map((item) => item.pick));
   $: shownLayout = layout === 'slider' && block ? 'boxes' : layout;
@@ -88,6 +168,9 @@
     { x: panX, y: panY },
     compare,
   );
+  $: desiredRegions = regionsFor(items, shownLayout, cell, fitted, zoom, panX, panY);
+  $: desiredKey = JSON.stringify([generation, desiredRegions]);
+  $: scheduleRegions(desiredKey, generation, desiredRegions);
   $: (shownLayout, items.length, tick().then(measure));
 
   onMount(() => {
@@ -367,6 +450,15 @@
           alt={`1: ${items[0].label}`}
           draggable="false"
         />
+        {#if currentCrop(items[0], 0, desiredRegions)}
+          <img
+            class="region-image"
+            style={cropStyle(items[0])}
+            src={items[0].region?.data_url}
+            alt=""
+            draggable="false"
+          />
+        {/if}
         <img
           class="result-image"
           style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}
@@ -374,6 +466,17 @@
           alt={`2: ${items[1].label}`}
           draggable="false"
         />
+        {#if currentCrop(items[1], 1, desiredRegions)}
+          <div class="region-overlay" style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}>
+            <img
+              class="region-image"
+              style={cropStyle(items[1])}
+              src={items[1].region?.data_url}
+              alt=""
+              draggable="false"
+            />
+          </div>
+        {/if}
       </div>
       {#each items.slice(0, 2) as item, index (item.key)}
         {#if item.status !== 'ready'}<div
@@ -435,6 +538,15 @@
                   alt={`${index + 1}: ${item.label}`}
                   draggable="false"
                 />
+                {#if currentCrop(item, index, desiredRegions)}
+                  <img
+                    class="region-image"
+                    style={cropStyle(item)}
+                    src={item.region?.data_url}
+                    alt=""
+                    draggable="false"
+                  />
+                {/if}
               </div>
             </div>
           </div>
@@ -650,6 +762,16 @@
   .box-well {
     position: relative;
     overflow: hidden;
+  }
+  .region-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .region-image {
+    position: absolute;
+    max-width: none;
+    pointer-events: none;
   }
   .box-well .image-stage {
     box-shadow: none;

@@ -974,6 +974,60 @@ pub fn request_compare(
 }
 
 #[tauri::command]
+pub fn request_compare_regions(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    generation: u64,
+    regions: Vec<Option<crate::compare::Region>>,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    if !lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "compare_regions")
+    }) {
+        return Ok(());
+    }
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        if runtime.compare.generation != generation {
+            return Ok(());
+        }
+        crate::compare::plan_regions(&database, &mut runtime.compare, &regions)?
+    };
+    for request in requests {
+        if worker::send(&state, &request).is_err() {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply_region(&database, &mut runtime.compare, &request["data"], true)?;
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_compare_regions(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::plan_regions(&database, &mut runtime.compare, &[])?;
+    }
+    if lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "compare_regions")
+    }) {
+        let _ = worker::send(&state, &json!({"type":"region_clear", "data":{}}));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn start_benchmark(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,

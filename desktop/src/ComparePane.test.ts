@@ -46,3 +46,64 @@ it('uses boxes across inputs and displays each slot state', () => {
   expect(screen.getByText('File missing')).toBeTruthy();
   expect(screen.getByText('Decode failed')).toBeTruthy();
 });
+
+it('debounces region requests while zooming and clears them on leaving Compare', async () => {
+  vi.useFakeTimers();
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    width: 300,
+    height: 300,
+    left: 0,
+    top: 0,
+    right: 300,
+    bottom: 300,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  const requestRegions = vi.fn().mockResolvedValue(undefined);
+  const clearRegions = vi.fn().mockResolvedValue(undefined);
+  const entries = [item('one', 'a'), item('two', 'a')].map((entry) => ({
+    ...entry,
+    width: 2000,
+    height: 2000,
+    preview_width: 300,
+    preview_height: 300,
+  }));
+  try {
+    const view = render(ComparePane, {
+      ...props,
+      items: entries,
+      generation: 1,
+      requestRegions,
+      clearRegions,
+    });
+    await Promise.resolve();
+    const canvas = screen.getByRole('region', { name: 'Compare canvas' });
+    await fireEvent.wheel(canvas, { deltaY: -1, clientX: 150, clientY: 150 });
+    await fireEvent.wheel(canvas, { deltaY: -1, clientX: 150, clientY: 150 });
+    await fireEvent.wheel(canvas, { deltaY: -1, clientX: 150, clientY: 150 });
+    expect(requestRegions).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(160);
+    expect(requestRegions).toHaveBeenCalledTimes(1);
+    const bounds = requestRegions.mock.calls[0][1][0];
+    expect(bounds).toMatchObject({ target_width: expect.any(Number) });
+    await view.rerender({
+      items: [
+        { ...entries[0], region: { bounds, data_url: 'data:image/png;base64,crop' } },
+        entries[1],
+      ],
+    });
+    expect(canvas.querySelector('.region-image')?.getAttribute('src')).toBe(
+      'data:image/png;base64,crop',
+    );
+    await fireEvent.wheel(canvas, { deltaY: -1, clientX: 150, clientY: 150 });
+    expect(canvas.querySelector('.region-image')).toBeNull();
+    view.unmount();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(clearRegions).toHaveBeenCalledTimes(1);
+  } finally {
+    rect.mockRestore();
+    vi.useRealTimers();
+  }
+});

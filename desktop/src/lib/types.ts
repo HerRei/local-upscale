@@ -568,6 +568,7 @@ export interface CompareSlot {
   height: number;
   preview_width: number;
   preview_height: number;
+  region?: { bounds: import('./compareRegions').Region; data_url: string } | null;
 }
 export interface CompareState {
   generation: number;
