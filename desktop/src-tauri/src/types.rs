@@ -581,6 +581,21 @@ impl BenchmarkResult {
     }
 }
 
+impl RuntimeStatus {
+    /// Makes `id` the running job or benchmark; the route note belonged to the one before.
+    pub fn begin_active_job(&mut self, id: String) {
+        self.active_job_id = id;
+        self.hardware_note.clear();
+    }
+
+    /// Ends or abandons the running job, whatever ended it (its own message, a failed
+    /// send, a killed or crashed engine), and returns its id. Its route note goes with it.
+    pub fn take_active_job(&mut self) -> String {
+        self.hardware_note.clear();
+        std::mem::take(&mut self.active_job_id)
+    }
+}
+
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {

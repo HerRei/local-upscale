@@ -619,6 +619,8 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       break;
     case 'benchmark_started':
       next.runtime.active_job_id = String(data.job_id ?? '');
+      // A route note from an ended job (one a killed engine never finished) is not this one's.
+      next.runtime.hardware_note = '';
       next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Benchmark running';
       next.runtime.status_detail = String(data.workload_version ?? '').startsWith(

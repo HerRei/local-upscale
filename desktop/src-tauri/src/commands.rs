@@ -680,14 +680,14 @@ pub fn start_benchmark(
                 "wait for the current work to finish before benchmarking".into(),
             ));
         }
-        runtime.active_job_id = job_id.clone();
+        runtime.begin_active_job(job_id.clone());
         runtime.status_title = "Benchmark preparing".into();
         runtime.status_detail = "Loading the fixed LocalSR benchmark workload.".into();
         runtime.progress = 0.0;
     }
     if let Err(error) = worker::send(&state, &message) {
         lock(&state.worker.cancellation)?.finish()?;
-        lock(&state.runtime)?.active_job_id.clear();
+        lock(&state.runtime)?.take_active_job();
         return Err(error);
     }
     emit_state_changed(&app);
