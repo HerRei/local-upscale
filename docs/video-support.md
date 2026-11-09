@@ -105,6 +105,32 @@ completed tiles or put an earlier frame beneath a newer frame's output.
 
 ## Optional processing
 
+### Frame interpolation · Labs
+
+Frame interpolation is off by default. Under **Advanced > Video > Frame rate**,
+choose 2×, 4×, 60 fps or 120 fps for the frame-by-frame engine. The first job
+downloads and verifies RIFE 4.25 (about 25 MB); its code and weights are MIT
+licensed. **Interpolate** chooses whether RIFE runs after upscaling (the default,
+which upscales fewer frames) or before it (smaller interpolation frames, but more
+upscales). High resolutions can require substantial time and memory.
+
+The 2× and 4× choices divide each source interval, retaining variable timing and
+source frame timestamps. The fixed-rate choices sample a regular grid from the
+first frame; a target at or below roughly the source rate is skipped with a warning.
+The clip's start and end stay the same, and compatible audio is retained under the
+usual media contract. The last frame is held instead of extrapolated. Detected
+scene cuts hold the preceding image, while short runs of repeated frames can be
+bridged for animation. These are heuristics; inspect motion, cuts and fine detail
+for artifacts.
+
+Interpolation is unavailable with SeedVR2, HDR preservation or an explicit
+API/CLI FPS override. It uses CPU when the selected upscaler backend cannot run
+the PyTorch model. Real-weight worker runs on Linux CPU have exercised both
+orders with audio; Mac MPS performance and memory, system HEVC timing and the
+desktop controls still need acceptance on macOS.
+
+### De-flicker
+
 De-flicker is off by default. It blends toward the local temporal median only where neighboring RGB samples differ by at most 12 levels, at half strength. Motion and scene cuts with larger differences bypass filtering. It is deliberately conservative, not optical-flow restoration, and remains Labs. Representative low-contrast motion still needs visual acceptance.
 
 SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
