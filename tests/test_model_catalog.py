@@ -438,3 +438,22 @@ def test_only_the_slow_dat2_models_stay_out_of_the_presets():
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
     }
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_complete_partial_is_verified_before_request(tmp_path, corrupt):
+    content = b"verified model bytes"
+    model = _synthetic_test_model(content=content)
+    destination = tmp_path / model.filename
+    destination.with_name(f"{destination.name}.part").write_bytes(
+        b"x" * len(content) if corrupt else content
+    )
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        assert not request.has_header("Range")
+        return io.BytesIO(content)
+
+    assert download_model(model, destination, opener=opener).read_bytes() == content
+    assert len(requests) == int(corrupt)
