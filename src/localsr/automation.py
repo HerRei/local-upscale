@@ -477,7 +477,8 @@ def _watch(
     state_file = args.state_file or output_directory / ".localsr-watch-state.json"
     ledger = WatchLedger(state_file)
     observations: dict[Path, StableObservation] = {}
-    failed_once: set[Path] = set()
+    # A file that failed is tried again only once it changes, not on every poll.
+    failed_once: dict[Path, FileFingerprint] = {}
     runner.reporter.emit(
         "watch_started",
         folder=str(input_directory),
@@ -496,6 +497,9 @@ def _watch(
         for path, fingerprint in candidates:
             if runner.cancel_event.is_set():
                 break
+            if failed_once.get(path) == fingerprint:
+                observations.pop(path, None)
+                continue
             try:
                 runner.process(path, output_directory, **_processing_kwargs(args, device))
             except InterruptedError:
@@ -511,7 +515,7 @@ def _watch(
                     "job_failed", input_path=str(path), error=str(error), message=str(error)
                 )
                 observations.pop(path, None)
-                failed_once.add(path)
+                failed_once[path] = fingerprint
                 continue
             ledger.mark_completed(path, fingerprint)
             observations.pop(path, None)
