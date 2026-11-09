@@ -284,7 +284,7 @@ def _run_video_job(
     transfer = 18 if probe.hdr_format == "HLG" else 16
     precision_str = "fp32" if preserve_hdr else config.precision_str
     if preserve_hdr:
-        validate_hdr_encoder(config.video_codec, config.external_ffmpeg)
+        validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
         for info in (config.model_info, config.face_model_info):

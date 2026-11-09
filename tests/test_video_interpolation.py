@@ -79,7 +79,8 @@ def test_doubling_after_the_upscale_keeps_vfr_timing_and_upscales_only_source_fr
     for current, following in zip(selected, selected[1:], strict=False):
         start = float(current.timestamp - selected[0].timestamp)
         expected += [start, start + float(following.timestamp - current.timestamp) / 2]
-    expected.append(float(selected[-1].timestamp - selected[0].timestamp))
+    tail = float(selected[-1].timestamp - selected[0].timestamp)
+    expected += [tail, tail + float(selected[-1].duration) / 2]
     assert timestamps(output) == pytest.approx(expected, abs=0.001)
     assert engine.frames == len(selected) == result.frames_processed
     assert {total for _, total in started} == {len(selected)}
@@ -95,9 +96,9 @@ def test_interpolating_before_the_upscale_upscales_every_output_frame(tmp_path):
         source, output, interpolation="x2", interpolation_order="before_upscale"
     )
     count = len(list(decode_timed_frames(str(source))))
-    assert engine.frames == 2 * count - 1 == len(timestamps(output))
-    assert [index for index, _ in started] == list(range(2 * count - 1))
-    assert {total for _, total in started} == {2 * count - 1}
+    assert engine.frames == 2 * count == len(timestamps(output))
+    assert [index for index, _ in started] == list(range(2 * count))
+    assert {total for _, total in started} == {2 * count}
 
 
 def test_sixty_frames_per_second_from_a_24_fps_clip(tmp_path):
@@ -123,7 +124,7 @@ def test_interpolated_video_keeps_the_source_audio_and_its_length(tmp_path):
         audio = next(stream for stream in container.streams if stream.type == "audio")
         assert audio.codec_context.name == "opus"
     assert kinds == ["audio", "video"]
-    assert len(timestamps(output)) == 29
+    assert len(timestamps(output)) == 32
     assert probe_video(str(output)).duration_seconds == pytest.approx(1.0, abs=0.05)
 
 
