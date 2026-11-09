@@ -140,7 +140,8 @@ def automatic_video_codec(bridge: MediaBridge | None, container: str, hdr_mode: 
             pass
         else:
             return "hevc"
-    return "av1"
+    # MOV holds only HEVC or ProRes, so AV1 would be refused there.
+    return "hevc" if container == "mov" else "av1"
 
 
 def load_media_bridge(user_path: str | None) -> MediaBridge | None:

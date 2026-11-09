@@ -729,3 +729,12 @@ def test_uniform_coloured_tile_does_not_decide_gate(fake_coreml):
     tile = torch.tensor([1.0, 0.8, 0.6]).view(1, 3, 1, 1).expand(1, 3, 20, 20)
     torch.testing.assert_close(converted(tile), padded_reference(fake_coreml.original, tile, 32))
     assert not FakeProgram.stores.get(("colour", (32, 32)))
+
+
+def test_automatic_video_format_never_picks_a_codec_the_mov_container_refuses():
+    from localsr.core.media_bridge import automatic_video_codec
+    from localsr.core.media_codecs import MOV_CODECS
+
+    for bridge in (None, SimpleNamespace(system=None)):
+        for hdr_mode in ("reject", "tone_map", "preserve"):
+            assert automatic_video_codec(bridge, "mov", hdr_mode) in MOV_CODECS
