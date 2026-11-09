@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.8-beta] - Unreleased
+
+- Dependency updates.
+
 ## [0.3.7-beta] - Unreleased
 
 ### Added
