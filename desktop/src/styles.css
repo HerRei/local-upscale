@@ -1001,6 +1001,11 @@ input[type='text'],
   height: 100%;
   background: var(--accent-hi);
 }
+/* Memory pressure is information, not an action: grey, so terracotta stays on Start and
+   progress. */
+.hardware-card > i {
+  background: var(--tertiary);
+}
 .inline-warning {
   margin: 8px 0;
   color: #e7bc72;
@@ -1288,12 +1293,11 @@ input[type='text'],
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #6db07f;
-  box-shadow: 0 0 8px rgba(109, 176, 127, 0.2);
+  /* Grey, not green: the dot cannot tell "ready" from a lost device or a failure. */
+  background: var(--tertiary);
 }
 .status-copy > i.working {
   background: var(--accent);
-  animation: pulse 1.2s infinite;
 }
 .status-copy > div {
   min-width: 0;
@@ -1381,12 +1385,6 @@ input[type='text'],
 @media (prefers-reduced-motion: reduce) {
   .progress i::after {
     animation: none;
-  }
-}
-@keyframes pulse {
-  50% {
-    opacity: 0.45;
-    transform: scale(0.8);
   }
 }
 
