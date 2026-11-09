@@ -202,8 +202,13 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .minimize()
         .maximize()
         .separator()
-        .close_window()
-        .build()?;
+        .close_window();
+    // Closing the window only hides it on macOS, so the menu needs a way back to it.
+    #[cfg(target_os = "macos")]
+    let window_menu = window_menu
+        .separator()
+        .item(&MenuItemBuilder::with_id("window.main", "LocalSR").build(manager)?);
+    let window_menu = window_menu.build()?;
     let menu = menu_builder
         .item(&file_menu)
         .item(&presets_menu)
@@ -252,6 +257,10 @@ pub fn dispatch(app: &AppHandle, id: &str) {
                 crate::commands::toggle_update_switch(&state, &app, name);
             }
         });
+        return;
+    }
+    if id == "window.main" {
+        crate::focus_main_window(app);
         return;
     }
     if id == "help.guide" {
