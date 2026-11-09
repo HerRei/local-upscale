@@ -445,6 +445,8 @@ pub struct RuntimeStatus {
     pub video_memory: Option<serde_json::Value>,
     pub worker: String,
     pub active_job_id: String,
+    #[serde(default)]
+    pub active_batch_job_ids: Vec<String>,
     pub status_title: String,
     pub status_detail: String,
     pub progress: f64,
@@ -609,6 +611,7 @@ impl Default for RuntimeStatus {
         Self {
             worker: "starting".into(),
             active_job_id: String::new(),
+            active_batch_job_ids: Vec::new(),
             status_title: "Starting".into(),
             status_detail: "Opening the isolated inference engine.".into(),
             progress: 0.0,

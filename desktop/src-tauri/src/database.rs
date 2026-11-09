@@ -363,6 +363,50 @@ impl Database {
             .optional()?)
     }
 
+    /// The first queued jobs in queue order, for a photo batch.
+    pub fn queued_job_window(&self, limit: usize) -> AppResult<Vec<PendingJob>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, request_json FROM jobs WHERE status='queued' ORDER BY created_at, rowid LIMIT ?1",
+        )?;
+        let rows = statement.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+            Ok(PendingJob {
+                id: row.get(0)?,
+                request_json: row.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Queue a started batch photo again, marked to run on its own (`run_alone`);
+    /// a photo that never started or already ended is left as it is.
+    pub fn requeue_alone(&self, id: &str) -> AppResult<()> {
+        let Some(request) = self
+            .connection
+            .query_row("SELECT request_json FROM jobs WHERE id=?1", [id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+        else {
+            return Ok(());
+        };
+        let mut request: serde_json::Value = serde_json::from_str(&request)?;
+        request["data"]["run_alone"] = true.into();
+        self.connection.execute(
+            "UPDATE jobs SET status='queued', progress=0, error='', request_json=?2, updated_at=?3 WHERE id=?1 AND status IN ('starting','running')",
+            params![id, request.to_string(), now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// A job that started is now stopping; one that never started stays as it is.
+    pub fn mark_cancelling(&self, id: &str) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE jobs SET status='cancelling', updated_at=?2 WHERE id=?1 AND status IN ('starting','running')",
+            params![id, now_millis()],
+        )?;
+        Ok(())
+    }
+
     pub fn set_job_status(&self, id: &str, status: &str) -> AppResult<()> {
         self.connection.execute(
             "UPDATE jobs SET status=?2, updated_at=?3 WHERE id=?1",
@@ -475,6 +519,39 @@ mod tests {
             db.unfinished_requests().unwrap()[0]["data"]["stages"][0]["model_path"],
             "/models/blur"
         );
+    }
+
+    #[test]
+    fn the_queue_window_is_in_order_and_cancelling_spares_photos_that_never_started() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/a.png", "a.png", "image")
+            .unwrap();
+        for id in ["a", "b", "c", "d"] {
+            db.insert_job(id, "m", "{}").unwrap();
+        }
+        db.set_job_status("a", "running").unwrap();
+        let window: Vec<String> = db
+            .queued_job_window(2)
+            .unwrap()
+            .into_iter()
+            .map(|job| job.id)
+            .collect();
+        assert_eq!(window, ["b", "c"]);
+        db.cancel_queued_jobs().unwrap();
+        for id in ["a", "b"] {
+            db.mark_cancelling(id).unwrap();
+        }
+        let status = |id: &str| {
+            db.list_jobs()
+                .unwrap()
+                .into_iter()
+                .find(|job| job.id == id)
+                .unwrap()
+                .status
+        };
+        assert_eq!(status("a"), "cancelling");
+        assert_eq!(status("b"), "cancelled");
     }
 
     #[test]

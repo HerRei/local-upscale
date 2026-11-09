@@ -727,22 +727,38 @@
       message.type === 'video_frame_completed' ||
       message.type === 'benchmark_progress'
     ) {
+      // Only the newest pulse is kept: one from a batch photo saving off screen
+      // must not push out the shown photo's.
+      const jobId = String(message.data.job_id ?? '');
+      if (
+        jobId !== snapshot.runtime.active_job_id &&
+        (snapshot.runtime.active_batch_job_ids ?? []).includes(jobId)
+      )
+        return;
       queueRuntimePulse(message);
       return;
     }
 
     discardRuntimePulse();
 
+    // A batch photo that ends off screen (it was saving) must not reset the one shown.
+    const messageJob = String(message.data.job_id ?? '');
+    const offScreen =
+      messageJob !== snapshot.runtime.active_job_id &&
+      (snapshot.runtime.active_batch_job_ids ?? []).includes(messageJob);
     snapshot = applyWorkerEnvelope(snapshot, message);
     if (message.type === 'job_started') {
       livePreviewWarning = '';
       resetView();
-      resetProgressivePreview(String(message.data.job_id ?? ''));
-    } else if (message.type === 'job_completed' || message.type === 'video_job_completed') {
+      resetProgressivePreview(messageJob);
+    } else if (
+      !offScreen &&
+      (message.type === 'job_completed' || message.type === 'video_job_completed')
+    ) {
       livePreviewWarning = '';
       resetProgressivePreview();
       resetView();
-    } else if (message.type === 'job_cancelled' || message.type === 'job_failed') {
+    } else if (!offScreen && (message.type === 'job_cancelled' || message.type === 'job_failed')) {
       livePreviewWarning = '';
       resetProgressivePreview();
     }

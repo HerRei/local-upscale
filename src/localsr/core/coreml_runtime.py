@@ -191,6 +191,7 @@ class _NativeRunner:
         )
         if features is None:
             raise RuntimeError(str(error))
+        self.unit = unit
         self.model, self.array, self.features = model, array, features
         self.input = self._view(array, np.float32)
 
@@ -394,6 +395,8 @@ class _CoreMLImage(torch.nn.Module):
         # shape -> {"program", "runner", "unit", "pending", "remaining"}
         self.states: OrderedDict[tuple[int, int], dict] = OrderedDict()
         self.active_unit: str | None = None
+        self.batch_shape: tuple[int, int] | None = None
+        self.batch_runners: dict[str, list] = {}
 
     # Engine hooks ---------------------------------------------------------
     def _shape_for(self, height: int, width: int) -> tuple[int, int]:
@@ -545,6 +548,70 @@ class _CoreMLImage(torch.nn.Module):
                 self._announce(unit)
             return
 
+    def batch_lanes(self, sample: torch.Tensor, shape: tuple[int, int], *, gpu: bool) -> list:
+        """Two native runners per accepted unit at one fixed shape, for photo batches.
+
+        Each runner owns its input buffer, so two calls per unit can be in flight.
+        Every unit passes the same accuracy and speed gate as the normal path, at
+        this shape, on ``sample`` (a real padded tile), and stored verdicts are
+        reused. The GPU lane is added only when ``gpu`` is set (on AC power).
+        Without an accepted Neural Engine, or with an inconclusive sample, the
+        result is empty and photos keep the normal path. Only native runners
+        release the GIL, so the coremltools fallback never runs lanes.
+        """
+        if NEURAL_ENGINE not in self.units or shape != self._shape_for(*shape):
+            return []
+        if shape[0] * shape[1] > self.maximum_pixels:
+            return []
+        if self.batch_shape != shape:
+            self.batch_shape = shape
+            self.batch_runners.clear()
+        program = self._state(shape)["program"]
+        if program is None:
+            return []
+        lanes = []
+        for unit in (NEURAL_ENGINE, CORE_ML_GPU) if gpu else (NEURAL_ENGINE,):
+            self._check_cancelled()
+            if unit not in self.units:
+                continue
+            if unit not in self.batch_runners:
+                state = dict(
+                    program=program, runner=None, unit=None, pending=False, remaining=[unit]
+                )
+                try:
+                    self._next_runner(state)
+                    if state["runner"] is not None and state["pending"]:
+                        self._gate(state, sample)
+                    runner = state["runner"]
+                    second = None
+                    if isinstance(runner, _NativeRunner) and not state["pending"]:
+                        second = _load_compiled(program.compiled, unit, LOAD_TIMEOUT_SECONDS)
+                    if not isinstance(second, _NativeRunner):
+                        if unit == NEURAL_ENGINE:
+                            return []
+                        continue
+                    self.batch_runners[unit] = [runner, second]
+                except InterruptedError:
+                    raise
+                except Exception as error:  # A failed lane must not prevent the serial fallback.
+                    logger.warning("Core ML batch lane %s unavailable: %s", unit, error)
+                    if unit == NEURAL_ENGINE:
+                        return []
+                    continue
+            lanes.extend(self.batch_runners[unit])
+        units = [unit for unit in (NEURAL_ENGINE, CORE_ML_GPU) if unit in self.batch_runners]
+        units = units if gpu else [NEURAL_ENGINE]
+        # The gate announces each unit it accepts; name the pair that shares the work.
+        self.active_unit = NEURAL_ENGINE
+        self._status(
+            f"{self.architecture} runs on {' and '.join(UNIT_LABELS[unit] for unit in units)}."
+        )
+        return lanes
+
+    def forget_batch_unit(self, unit: str) -> None:
+        """Drop a unit's batch runners after one failed; the next batch loads new ones."""
+        self.batch_runners.pop(unit, None)
+
     def _announce(self, unit: str) -> None:
         if self.active_unit != unit:
             self.active_unit = unit
@@ -671,6 +738,12 @@ class CoreMLImageDescriptor:
 
     def __call__(self, image):
         return self.descriptor(image)
+
+    def batch_lanes(self, sample: torch.Tensor, shape: tuple[int, int], *, gpu: bool) -> list:
+        return self.model.batch_lanes(sample, shape, gpu=gpu)
+
+    def forget_batch_unit(self, unit: str) -> None:
+        self.model.forget_batch_unit(unit)
 
     def set_cancel_event(self, cancel_event):
         self.model.cancel_event = cancel_event
