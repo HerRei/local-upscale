@@ -11,6 +11,10 @@ pub struct CatalogManifest {
     pub catalog_revision: String,
     pub models: Vec<CatalogModel>,
     pub video_models: Vec<CatalogVideoModel>,
+    // Catalog schema 3: optional frame-interpolation stages of a video job. They share
+    // the bundle layout of video models but are never offered as video engines.
+    #[serde(default)]
+    pub interpolation_models: Vec<CatalogVideoModel>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -264,6 +268,11 @@ pub struct Recipe {
     pub content: String,
     #[serde(default)]
     pub fixes: Vec<String>,
+    // Empty in recipes saved before frame interpolation existed.
+    #[serde(default)]
+    pub video_interpolation: String,
+    #[serde(default)]
+    pub video_interpolation_order: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -321,6 +330,11 @@ pub struct UiSettings {
     #[serde(default = "default_low_memory")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    // Optional frame interpolation: off, x2, x4, fps60 or fps120, before or after the upscale.
+    #[serde(default = "default_interpolation")]
+    pub video_interpolation: String,
+    #[serde(default = "default_interpolation_order")]
+    pub video_interpolation_order: String,
     // Apple silicon: run supported models through Core ML on the Neural Engine.
     #[serde(default = "default_neural_engine")]
     pub neural_engine: bool,
@@ -385,6 +399,14 @@ fn default_hdr_mode() -> String {
     "tone_map".into()
 }
 
+pub(crate) fn default_interpolation() -> String {
+    "off".into()
+}
+
+pub(crate) fn default_interpolation_order() -> String {
+    "after_upscale".into()
+}
+
 pub(crate) fn default_video_codec() -> String {
     // The worker picks the fastest format the computer can write.
     "auto".into()
@@ -420,6 +442,8 @@ impl Default for UiSettings {
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            video_interpolation: default_interpolation(),
+            video_interpolation_order: default_interpolation_order(),
             neural_engine: true,
             anonymous_update_count: true,
             check_updates_at_launch: true,
@@ -708,6 +732,10 @@ pub struct StartBatchInput {
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
+    #[serde(default = "default_interpolation")]
+    pub video_interpolation: String,
+    #[serde(default = "default_interpolation_order")]
+    pub video_interpolation_order: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

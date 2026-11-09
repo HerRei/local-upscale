@@ -49,6 +49,7 @@
     fixesOf,
     formatBytes,
     formatDuration,
+    frameRateChange,
     modelsForTask,
     moveFixStage,
     pendingDownloads,
@@ -248,6 +249,8 @@
             (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
           : Boolean(selectedModel?.installed);
   $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
+  $: interpolationStage = plan.find((stage) => stage.kind === 'interpolate');
+  $: interpolationReady = !interpolationStage || interpolationStage.installed;
   $: fixesReady =
     fixPlanSupported &&
     imageFixes.every((selection) => {
@@ -288,6 +291,7 @@
     hdrModelCompatible &&
     faceReady &&
     fixesReady &&
+    interpolationReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   $: canStart = !snapshot.runtime.active_job_id && canQueue;
   // Edit always takes the selected image, and one item is no batch to count.
@@ -1128,7 +1132,7 @@
   async function prepareAndStart(): Promise<void> {
     if (!canPrepare) return;
     const targets = downloads.stages.map(
-      (stage) => stage.model ?? stage.videoModel ?? stage.editModel,
+      (stage) => stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel,
     );
     if (!(await downloadModels(targets))) return;
     await tick();
@@ -1159,9 +1163,10 @@
     // Apply the model/output contract for selectors, saved recipes and launch presets.
     if (next.task === 'video' && next.video_hdr_mode === 'preserve') {
       if (!supportsHdrPreservation(next)) next.video_hdr_mode = 'tone_map';
-      else {
+      else if (selectedMedia?.hdr_format) {
         next.precision = 'fp32';
         next.deflicker = false;
+        next.video_interpolation = 'off';
       }
     }
     snapshot = { ...snapshot, settings: next };
@@ -1446,6 +1451,12 @@
       face_fidelity: settings.face_fidelity,
       enable_live_preview: settings.enable_live_preview,
       allow_unsafe_pickle_model: settings.allow_unsafe_pickle_model,
+      // Frame interpolation is a frame-by-frame video stage.
+      video_interpolation:
+        settings.task === 'video' && !usingTemporalVideo
+          ? (settings.video_interpolation ?? 'off')
+          : 'off',
+      video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
     };
     startingJob = true;
     try {
@@ -1562,6 +1573,8 @@
       video_crf: settings.video_crf,
       enable_face_model: faceEnabled,
       face_fidelity: settings.face_fidelity,
+      video_interpolation: settings.video_interpolation ?? 'off',
+      video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
       quality: activeQuality,
       content: settings.content,
       fixes: settings.fixes,
@@ -1690,7 +1703,11 @@
       current.safe_memory === recipe.safe_memory &&
       sameFixStages(current.fix_stages, fixes) &&
       current.enable_face_model === face &&
-      (current.quality || 'custom') === (recipe.quality || 'custom')
+      (current.quality || 'custom') === (recipe.quality || 'custom') &&
+      (recipe.task !== 'video' ||
+        ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
+          (current.video_interpolation_order || 'after_upscale') ===
+            (recipe.video_interpolation_order || 'after_upscale')))
     );
   }
 
@@ -1738,6 +1755,9 @@
       video_target_resolution: recipe.video_target_resolution ?? 0,
       video_low_memory: recipe.video_low_memory ?? true,
       video_crf: recipe.video_crf ?? settings.video_crf,
+      // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
+      video_interpolation: recipe.video_interpolation || 'off',
+      video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
       enable_face_model: recipeFace ? true : (recipe.enable_face_model ?? false),
       face_fidelity:
         recipeFace?.fidelity === undefined
@@ -2598,7 +2618,8 @@
 
               <div class="plan" role="list" aria-label="Stages">
                 {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
-                  {@const target = stage.model ?? stage.videoModel ?? stage.editModel}
+                  {@const target =
+                    stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel}
                   {@const changeSlot =
                     stage.role === 'fix'
                       ? stage.fix && 'fix'
@@ -2615,11 +2636,13 @@
                           ? displayName(stage.model)
                           : stage.videoModel
                             ? stage.videoModel.name
-                            : stage.editModel
-                              ? editFamilyLabel(stage.editModel.family)
-                              : stage.missing
-                                ? 'No model for this fix'
-                                : 'Your checkpoint'}
+                            : stage.interpolationModel
+                              ? stage.interpolationModel.name.split(' — ')[0]
+                              : stage.editModel
+                                ? editFamilyLabel(stage.editModel.family)
+                                : stage.missing
+                                  ? 'No model for this fix'
+                                  : 'Your checkpoint'}
                       </div>
                       <div class="meta">
                         <!-- Licenses live in the model library; only exceptions show here. -->
@@ -2641,6 +2664,18 @@
                             .join(' · ')}
                         {:else if stage.videoModel}
                           Labs
+                        {:else if stage.interpolationModel}
+                          {[
+                            settings.video_interpolation && settings.video_interpolation !== 'off'
+                              ? frameRateChange(
+                                  settings.video_interpolation,
+                                  selectedMedia?.fps ?? 0,
+                                )
+                              : '',
+                            'Labs',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
                         {:else if stage.custom !== undefined}
                           <span class="path-text"
                             >{settings.custom_model_path ||
@@ -2898,6 +2933,9 @@
               {editModel}
               capabilities={snapshot.capabilities}
               {usingTemporalVideo}
+              {preservingHdr}
+              interpolationSupported={snapshot.engine?.features.includes('video_interpolation') ===
+                true}
               {updateSettings}
               {chooseOutput}
               refreshCapabilities={api.refreshCapabilities}

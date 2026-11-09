@@ -372,6 +372,15 @@ pub fn save_recipe(
         || recipe
             .deflicker_window
             .is_some_and(|value| !(1..=9).contains(&value))
+        || (!recipe.video_interpolation.is_empty()
+            && !interpolation_choice_is_valid(
+                &recipe.video_interpolation,
+                if recipe.video_interpolation_order.is_empty() {
+                    "after_upscale"
+                } else {
+                    &recipe.video_interpolation_order
+                },
+            ))
     {
         return Err(AppError::Validation(
             "recipe contains unsupported output settings".into(),
@@ -515,6 +524,16 @@ pub fn start_jobs(
     }
     validate_start_input(&input, external_codecs_available(&state))?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
+    if input.task == "video"
+        && input.video_interpolation != "off"
+        && !lock(&state.engine)?
+            .as_ref()
+            .is_some_and(|engine| engine.features.iter().any(|f| f == "video_interpolation"))
+    {
+        return Err(AppError::Validation(
+            "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
+        ));
+    }
 
     // Do not hash the complete model library on the UI command path. A
     // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
@@ -1590,6 +1609,10 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         )
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
+        || !interpolation_choice_is_valid(
+            &settings.video_interpolation,
+            &settings.video_interpolation_order,
+        )
     {
         return Err(AppError::Validation(
             "unsupported output or precision setting".into(),
@@ -1661,6 +1684,12 @@ fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppRes
     Ok(())
 }
 
+/// Frame interpolation targets and orders the worker accepts.
+fn interpolation_choice_is_valid(target: &str, order: &str) -> bool {
+    matches!(target, "off" | "x2" | "x4" | "fps60" | "fps120")
+        && matches!(order, "after_upscale" | "before_upscale")
+}
+
 fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppResult<()> {
     let settings = UiSettings {
         interface_scale: 100,
@@ -1694,9 +1723,19 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         face_fidelity: input.face_fidelity,
         enable_live_preview: input.enable_live_preview,
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
+        video_interpolation: input.video_interpolation.clone(),
+        video_interpolation_order: input.video_interpolation_order.clone(),
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
+    if input.task == "video"
+        && input.video_interpolation != "off"
+        && input.video_model_id != "frame_by_frame"
+    {
+        return Err(AppError::Validation(
+            "Frame interpolation works with the Frame-by-frame video engine in this version. Choose Frame-by-frame or turn interpolation off.".into(),
+        ));
+    }
     if input.task == "video"
         && matches!(input.video_codec.as_str(), "h264" | "hevc")
         && input.external_ffmpeg_path.trim().is_empty()
@@ -1721,6 +1760,7 @@ enum ModelSelection {
         face_path: Option<String>,
         face_model_id: String,
         native_scale: u32,
+        interpolation: Option<ResolvedInterpolation>,
     },
     Temporal {
         model_id: String,
@@ -1729,6 +1769,13 @@ enum ModelSelection {
         temporal_window: u32,
         temporal_overlap: u32,
     },
+}
+
+/// The downloaded frame-interpolation bundle a video job uses.
+#[derive(Clone)]
+struct ResolvedInterpolation {
+    model_id: String,
+    bundle_dir: String,
 }
 
 #[derive(Clone)]
@@ -1897,7 +1944,29 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         native_scale: selected_model
             .map(|model| model.native_scale)
             .unwrap_or(input.output_scale),
+        interpolation: resolve_interpolation(&catalog, input)?,
     })
+}
+
+fn resolve_interpolation(
+    catalog: &crate::types::CatalogManifest,
+    input: &StartBatchInput,
+) -> AppResult<Option<ResolvedInterpolation>> {
+    if input.task != "video" || input.video_interpolation == "off" {
+        return Ok(None);
+    }
+    let model = catalog.interpolation_models.first().ok_or_else(|| {
+        AppError::Validation("this build has no frame interpolation model".into())
+    })?;
+    if !model.installed {
+        return Err(AppError::Validation(
+            "download the frame interpolation model first".into(),
+        ));
+    }
+    Ok(Some(ResolvedInterpolation {
+        model_id: model.model_id.clone(),
+        bundle_dir: model.installed_path.clone().unwrap_or_default(),
+    }))
 }
 
 fn validate_model_for_task(model: &CatalogModel, task: &str) -> AppResult<()> {
@@ -1934,6 +2003,7 @@ fn build_job_message(
             face_path,
             face_model_id,
             native_scale,
+            ..
         } if input.task != "video" => Ok(json!({
             "type": "job_request",
             "data": {
@@ -1969,45 +2039,63 @@ fn build_job_message(
             }
         })),
         ModelSelection::Image {
-            path, face_path, ..
-        } => Ok(json!({
-            "type": "video_job_request",
-            "data": {
-                "job_id": job_id,
-                "video_path": media.path,
-                "hdr_mode": input.video_hdr_mode,
-                "model_path": path,
-                "output_video_path": output,
-                "container": input.video_container,
-                "video_codec": input.video_codec,
-                "external_ffmpeg": input.external_ffmpeg_path,
-                "crf": input.video_crf,
-                "fps": null,
-                "device": input.device,
-                "tile_size": input.tile_size,
-                "halo": input.halo,
-                "precision": input.precision,
-                "safe_memory": input.safe_memory,
-                "neural_engine": input.neural_engine,
-                "keyframe_interval": null,
-                "start_frame": null,
-                "end_frame": null,
-                "face_model_path": face_path,
-                "face_fidelity": f64::from(input.face_fidelity) / 100.0,
-                "deflicker": input.deflicker,
-                "deflicker_window": input.deflicker_window,
-                "model_kind": "spandrel_image",
-                "bundle_dir": null,
-                "temporal_window": 0,
-                "temporal_overlap": 0,
-                "target_resolution": 0,
-                "output_scale": input.output_scale,
-                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
-                "preview_enabled": input.enable_live_preview,
-                "preview_max_fps": 2.0,
-                "preview_max_dimension": 320
+            path,
+            face_path,
+            interpolation,
+            ..
+        } => {
+            if interpolation.is_some()
+                && input.video_hdr_mode == "preserve"
+                && !media.hdr_format.is_empty()
+            {
+                return Err(AppError::Validation(format!(
+                    "Frame interpolation is not yet available with HDR preservation. Choose Convert to SDR for {}, or turn interpolation off.",
+                    media.name
+                )));
             }
-        })),
+            Ok(json!({
+                "type": "video_job_request",
+                "data": {
+                    "job_id": job_id,
+                    "video_path": media.path,
+                    "hdr_mode": input.video_hdr_mode,
+                    "model_path": path,
+                    "output_video_path": output,
+                    "container": input.video_container,
+                    "video_codec": input.video_codec,
+                    "external_ffmpeg": input.external_ffmpeg_path,
+                    "crf": input.video_crf,
+                    "fps": null,
+                    "device": input.device,
+                    "tile_size": input.tile_size,
+                    "halo": input.halo,
+                    "precision": input.precision,
+                    "safe_memory": input.safe_memory,
+                    "neural_engine": input.neural_engine,
+                    "keyframe_interval": null,
+                    "start_frame": null,
+                    "end_frame": null,
+                    "face_model_path": face_path,
+                    "face_fidelity": f64::from(input.face_fidelity) / 100.0,
+                    "deflicker": input.deflicker,
+                    "deflicker_window": input.deflicker_window,
+                    "model_kind": "spandrel_image",
+                    "bundle_dir": null,
+                    "temporal_window": 0,
+                    "temporal_overlap": 0,
+                    "target_resolution": 0,
+                    "output_scale": input.output_scale,
+                    "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                    "preview_enabled": input.enable_live_preview,
+                    "preview_max_fps": 2.0,
+                    "preview_max_dimension": 320,
+                    "interpolation": if interpolation.is_some() { input.video_interpolation.as_str() } else { "off" },
+                    "interpolation_order": input.video_interpolation_order,
+                    "interpolation_model_id": interpolation.as_ref().map(|resolved| resolved.model_id.clone()),
+                    "interpolation_bundle_dir": interpolation.as_ref().map(|resolved| resolved.bundle_dir.clone())
+                }
+            }))
+        }
         ModelSelection::Temporal {
             model_id,
             engine_kind,
@@ -2059,7 +2147,8 @@ fn build_job_message(
                     "allow_unverified_checkpoint": false,
                     "preview_enabled": input.enable_live_preview,
                     "preview_max_fps": 2.0,
-                    "preview_max_dimension": 320
+                    "preview_max_dimension": 320,
+                    "interpolation": "off"
                 }
             }))
         }
@@ -2693,6 +2782,8 @@ mod tests {
             face_fidelity: 70,
             enable_live_preview: true,
             allow_unsafe_pickle_model: false,
+            video_interpolation: "off".into(),
+            video_interpolation_order: "after_upscale".into(),
         }
     }
 
@@ -2852,6 +2943,7 @@ mod tests {
             face_path: None,
             face_model_id: String::new(),
             native_scale: 4,
+            interpolation: None,
         };
 
         let message = build_job_message(
@@ -3012,6 +3104,7 @@ mod tests {
             face_path: Some("/models/face.pth".into()),
             face_model_id: "hat_l_x4_face".into(),
             native_scale: 4,
+            interpolation: None,
         };
         let mut options = input("upscale");
         options.enable_face_model = true;
@@ -3129,6 +3222,8 @@ mod tests {
             quality: String::new(),
             content: String::new(),
             fixes: Vec::new(),
+            video_interpolation: String::new(),
+            video_interpolation_order: String::new(),
         };
         assert!(validate_recipe_stages(&legacy).is_ok());
 
@@ -3193,5 +3288,215 @@ mod tests {
         let digest = catalog::sha256_file(&source).unwrap();
         assert!(import_verified_catalog_file(&source, &destination, 18, &digest).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"conflicting bytes");
+    }
+
+    fn video_media() -> crate::types::MediaItem {
+        crate::types::MediaItem {
+            id: "media".into(),
+            path: "/input/clip.mp4".into(),
+            name: "clip.mp4".into(),
+            kind: "video".into(),
+            width: 640,
+            height: 360,
+            frame_count: 48,
+            fps: 23.976,
+            duration_seconds: 2.0,
+            preview_data_url: String::new(),
+            probe_status: "ready".into(),
+            hdr_format: String::new(),
+            audio_warning: String::new(),
+            error: String::new(),
+            selected: true,
+        }
+    }
+
+    #[test]
+    fn frame_interpolation_reaches_the_worker_with_its_downloaded_model() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::create_dir_all(&paths.model_root).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        {
+            let mut catalog = lock(&state.catalog).unwrap();
+            for model in &mut catalog.models {
+                model.installed = model.model_id == "span_photo_x4";
+                model.installed_path = model.installed.then(|| "/models/span.pth".into());
+            }
+        }
+        let mut options = input("video");
+        options.model_id = "span_photo_x4".into();
+        options.video_interpolation = "x2".into();
+        options.video_interpolation_order = "before_upscale".into();
+        let missing = resolve_model_selection(&state, &options).err().unwrap();
+        assert!(missing
+            .to_string()
+            .contains("download the frame interpolation model first"));
+        {
+            let mut catalog = lock(&state.catalog).unwrap();
+            let rife = catalog
+                .interpolation_models
+                .iter_mut()
+                .find(|model| model.model_id == "rife_4_26")
+                .unwrap();
+            rife.installed = true;
+            rife.installed_path = Some("/models/rife_4_26".into());
+        }
+        let selection = resolve_model_selection(&state, &options).unwrap();
+        let work = Path::new("/app-owned/work");
+        let output = Path::new("/output/clip.mp4");
+        let message =
+            build_job_message("job", &video_media(), output, work, &options, &selection).unwrap();
+        assert_eq!(message["data"]["interpolation"], "x2");
+        assert_eq!(message["data"]["interpolation_order"], "before_upscale");
+        assert_eq!(message["data"]["interpolation_model_id"], "rife_4_26");
+        assert_eq!(
+            message["data"]["interpolation_bundle_dir"],
+            "/models/rife_4_26"
+        );
+
+        options.video_interpolation = "off".into();
+        let plain = resolve_model_selection(&state, &options).unwrap();
+        let message =
+            build_job_message("plain", &video_media(), output, work, &options, &plain).unwrap();
+        assert_eq!(message["data"]["interpolation"], "off");
+        assert!(message["data"]["interpolation_model_id"].is_null());
+        assert!(message["data"]["interpolation_bundle_dir"].is_null());
+
+        // A photo job ignores a leftover video setting.
+        let mut photo = input("upscale");
+        photo.model_id = "span_photo_x4".into();
+        photo.video_interpolation = "x2".into();
+        let selection = resolve_model_selection(&state, &photo).unwrap();
+        let mut image = video_media();
+        image.kind = "image".into();
+        let message = build_job_message(
+            "photo",
+            &image,
+            Path::new("/output/photo.png"),
+            work,
+            &photo,
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(message["type"], "job_request");
+        assert!(message["data"].get("interpolation").is_none());
+    }
+
+    #[test]
+    fn temporal_jobs_always_send_interpolation_off() {
+        let temporal = ModelSelection::Temporal {
+            model_id: "seedvr2_3b".into(),
+            engine_kind: "seedvr2".into(),
+            bundle_dir: "/models/seedvr2".into(),
+            temporal_window: 9,
+            temporal_overlap: 2,
+        };
+        let message = build_job_message(
+            "temporal",
+            &video_media(),
+            Path::new("/output/clip.mp4"),
+            Path::new("/app-owned/work"),
+            &input("video"),
+            &temporal,
+        )
+        .unwrap();
+        assert_eq!(message["data"]["interpolation"], "off");
+    }
+
+    #[test]
+    fn interpolation_settings_are_validated_and_default_to_off() {
+        let defaults = UiSettings::default();
+        assert_eq!(defaults.video_interpolation, "off");
+        assert_eq!(defaults.video_interpolation_order, "after_upscale");
+        let mut older = serde_json::to_value(UiSettings::default()).unwrap();
+        let object = older.as_object_mut().unwrap();
+        object.remove("video_interpolation");
+        object.remove("video_interpolation_order");
+        let older: UiSettings = serde_json::from_value(older).unwrap();
+        assert_eq!(older.video_interpolation, "off");
+        assert_eq!(older.video_interpolation_order, "after_upscale");
+
+        for target in ["off", "x2", "x4", "fps60", "fps120"] {
+            for order in ["after_upscale", "before_upscale"] {
+                assert!(
+                    interpolation_choice_is_valid(target, order),
+                    "{target} {order}"
+                );
+            }
+        }
+        assert!(!interpolation_choice_is_valid("x3", "after_upscale"));
+        assert!(!interpolation_choice_is_valid("x2", "sideways"));
+        let mut settings = UiSettings {
+            video_interpolation: "x8".into(),
+            ..UiSettings::default()
+        };
+        assert!(validate_settings(&settings).is_err());
+        settings.video_interpolation = "fps60".into();
+        assert!(validate_settings(&settings).is_ok());
+
+        let mut video = input("video");
+        video.video_interpolation = "x2".into();
+        assert!(validate_start_input(&video, false).is_ok());
+        video.video_model_id = "seedvr2_3b".into();
+        let error = validate_start_input(&video, false).err().unwrap();
+        assert!(error.to_string().contains("Frame-by-frame"));
+        // Photos never interpolate, so a leftover video setting does not block them.
+        let mut photo = input("upscale");
+        photo.video_interpolation = "x2".into();
+        assert!(validate_start_input(&photo, false).is_ok());
+    }
+
+    #[test]
+    fn hdr_preservation_refuses_interpolation_only_for_hdr_sources() {
+        let selection = ModelSelection::Image {
+            model_id: "span_photo_x4".into(),
+            path: "/models/span.pth".into(),
+            preprocess: Vec::new(),
+            face_path: None,
+            face_model_id: String::new(),
+            native_scale: 4,
+            interpolation: Some(ResolvedInterpolation {
+                model_id: "rife_4_26".into(),
+                bundle_dir: "/models/rife_4_26".into(),
+            }),
+        };
+        let mut options = input("video");
+        options.video_interpolation = "x2".into();
+        options.video_hdr_mode = "preserve".into();
+        let work = Path::new("/app-owned/work");
+        let output = Path::new("/output/clip.mp4");
+        // The saved HDR choice stays "preserve" for an SDR clip; it has no effect there.
+        assert!(
+            build_job_message("sdr", &video_media(), output, work, &options, &selection).is_ok()
+        );
+        let mut hdr = video_media();
+        hdr.hdr_format = "HLG".into();
+        let error = build_job_message("hdr", &hdr, output, work, &options, &selection)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("HDR"));
+        options.video_hdr_mode = "tone_map".into();
+        assert!(build_job_message("tone", &hdr, output, work, &options, &selection).is_ok());
+    }
+
+    #[test]
+    fn start_requests_from_an_older_window_default_to_no_interpolation() {
+        let mut request = serde_json::json!({
+            "media_ids": ["media"], "batch_mode": false, "task": "video", "model_id": "model",
+            "video_model_id": "frame_by_frame", "fix_stages": [], "custom_model_path": "",
+            "output_directory": "", "output_format": "png", "output_scale": 4,
+            "preserve_metadata": true, "jpeg_quality": 98, "device": "cpu", "tile_size": 256,
+            "halo": 32, "precision": "fp32", "safe_memory": false, "deflicker": false,
+            "deflicker_window": 3, "video_container": "mp4", "video_crf": 18,
+            "enable_face_model": false, "face_fidelity": 70, "enable_live_preview": true,
+            "allow_unsafe_pickle_model": false
+        });
+        let parsed: StartBatchInput = serde_json::from_value(request.clone()).unwrap();
+        assert_eq!(parsed.video_interpolation, "off");
+        assert_eq!(parsed.video_interpolation_order, "after_upscale");
+        request["video_interpolation"] = "fps120".into();
+        let parsed: StartBatchInput = serde_json::from_value(request).unwrap();
+        assert_eq!(parsed.video_interpolation, "fps120");
     }
 }

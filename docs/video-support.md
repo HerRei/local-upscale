@@ -105,6 +105,32 @@ completed tiles or put an earlier frame beneath a newer frame's output.
 
 ## Optional processing
 
+### Frame interpolation · Labs
+
+Frame interpolation is off by default. Under **Advanced > Video > Frame rate**,
+choose 2×, 4×, 60 fps or 120 fps for the frame-by-frame engine. The first job
+downloads and verifies RIFE 4.26 (about 25 MB); its code and weights are MIT
+licensed. **Interpolate** chooses whether RIFE runs after upscaling (the default,
+which upscales fewer frames) or before it (smaller interpolation frames, but more
+upscales). High resolutions can require substantial time and memory.
+
+The 2× and 4× choices divide each source interval, retaining variable timing and
+source frame timestamps. The fixed-rate choices sample a regular grid from the
+first frame; a target at or below roughly the source rate is skipped with a warning.
+The clip's start and end stay the same, and compatible audio is retained under the
+usual media contract. The last frame is held instead of extrapolated. Detected
+scene cuts hold the preceding image, while short runs of repeated frames can be
+bridged for animation. These are heuristics; inspect motion, cuts and fine detail
+for artifacts.
+
+Interpolation is unavailable with SeedVR2, HDR preservation or an explicit
+API/CLI FPS override. It uses CPU when the selected upscaler backend cannot run
+the PyTorch model. Real-weight worker runs on Linux CPU have exercised both
+orders with audio; Mac MPS performance and memory, system HEVC timing and the
+desktop controls still need acceptance on macOS.
+
+### De-flicker
+
 De-flicker is off by default. It blends toward the local temporal median only where neighboring RGB samples differ by at most 12 levels, at half strength. Motion and scene cuts with larger differences bypass filtering. It is deliberately conservative, not optical-flow restoration, and remains Labs. Representative low-contrast motion still needs visual acceptance.
 
 SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
@@ -215,3 +241,32 @@ This suite is a regression and visual-inspection aid, not a perceptual quality s
 Processing settings lock from Start until processing or cancellation finishes. Media selection and diagnostics remain available. SeedVR2 checks cancellation between model modules even when live previews are disabled. If a video worker does not stop within eight seconds, the host resets that worker, removes its own partial-output directory and starts a fresh worker. Existing finished exports are preserved.
 
 Reduce GPU memory is available for NVIDIA CUDA and AMD ROCm. Apple Metal and CPU use the smaller clip/tile plan automatically; Metal does not use the CUDA block-offload option. Intel backends do not expose an unimplemented offload switch. HAT’s Safe memory control remains a separate image-pipeline option.
+
+### RIFE checkpoint comparison
+
+On 2026-11-09 we compared the MIT-licensed Practical-RIFE 4.25, 4.26 and
+4.25 lite checkpoints on ddp's CPU (PyTorch 2.13 CPU, four threads). Each
+640×360 synthetic 60 fps clip supplied six even-frame pairs; the intervening
+frames were held out. Scores are mean per-frame RGB PSNR (dB) and Gaussian
+11×11 RGB SSIM. The scene-cut guard was enabled. The 1080p times are median
+synthesis times for three frames after warm-up; they exclude decoding. Lite
+uses its upstream network dimensions and scales. No external footage was named
+in the research, and LPIPS was unavailable. The ddp container had CPU-only
+PyTorch and no `ddp-busy` command, so no GPU result was collected.
+
+| Synthetic clip | 4.25 PSNR / SSIM | 4.26 PSNR / SSIM | 4.25 lite PSNR / SSIM |
+| --- | ---: | ---: | ---: |
+| testsrc2 | 26.68 / 0.9640 | 26.78 / 0.9645 | 26.31 / 0.9621 |
+| mandelbrot | 24.72 / 0.9707 | 24.60 / 0.9701 | 25.42 / 0.9739 |
+| moving text and line art | 25.50 / 0.9868 | 26.65 / 0.9887 | 23.60 / 0.9829 |
+| fast pan | 9.68 / 0.8044 | 9.68 / 0.8044 | 9.68 / 0.8044 |
+| scene cut | 22.24 / 0.8576 | 22.28 / 0.8578 | 22.24 / 0.8576 |
+| 1080p seconds/frame | 1.30 | 1.41 | 1.22 |
+
+The guard identified the intentional cut, but also treated all six fast-pan
+pairs as cuts, so those scores measure the guard's hold behavior rather than
+model quality. These short synthetic clips cannot establish general perceptual
+quality. We chose 4.26 for its stronger text and line-art result and small
+advantage on testsrc2, accepting a small mandelbrot regression and the measured
+CPU cost. The upstream author recommends 4.25 for most scenes. Checkpoint
+provenance and verified hashes are in [model licenses](model-licenses.md).

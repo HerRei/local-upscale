@@ -136,6 +136,8 @@ export interface CatalogManifest {
   catalog_revision: string;
   models: CatalogModel[];
   video_models: CatalogVideoModel[];
+  /** Optional frame-interpolation stages of a video job; never video engines. */
+  interpolation_models: CatalogVideoModel[];
 }
 
 export interface MediaItem {
@@ -253,6 +255,8 @@ export interface Recipe {
   quality?: Quality | '';
   content?: Exclude<ContentKind, 'face'> | '';
   fixes?: FixKind[];
+  video_interpolation?: InterpolationTarget | '';
+  video_interpolation_order?: InterpolationOrder | '';
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
@@ -264,6 +268,10 @@ export interface FixStageSelection {
   /** Empty while no catalog model fixes this problem; Start then waits. */
   model_id: string;
 }
+
+/** Frame interpolation: a frame-rate multiplier or a fixed output rate. */
+export type InterpolationTarget = 'off' | 'x2' | 'x4' | 'fps60' | 'fps120';
+export type InterpolationOrder = 'after_upscale' | 'before_upscale';
 
 export interface RecipeStage {
   /** The problem a restoration stage fixes; recipes saved before several fixes omit it. */
@@ -303,6 +311,9 @@ export interface UiSettings {
   automatic_video_format?: boolean;
   external_ffmpeg_path: string;
   video_crf: number;
+  /** Off by default; the host fills both in for settings saved before 0.3.7. */
+  video_interpolation?: InterpolationTarget;
+  video_interpolation_order?: InterpolationOrder;
   /** Direct builds send version, platform and channel after an update check. Defaults to true. */
   anonymous_update_count?: boolean;
   check_updates_at_launch?: boolean;
@@ -521,6 +532,8 @@ export interface StartBatchInput {
   face_fidelity: number;
   enable_live_preview: boolean;
   allow_unsafe_pickle_model: boolean;
+  video_interpolation?: InterpolationTarget;
+  video_interpolation_order?: InterpolationOrder;
 }
 
 export interface LaunchIntent {

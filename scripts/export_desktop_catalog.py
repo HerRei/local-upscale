@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
 
 from localsr.core.model_catalog import (  # noqa: E402
     CATALOG_REVISION,
+    INTERPOLATION_MODEL_CATALOG,
     MODEL_CATALOG,
     VIDEO_MODEL_CATALOG,
 )
@@ -87,13 +88,25 @@ def build_manifest() -> dict:
         entry["support_tier"] = "labs"
         video_models.append(entry)
 
+    interpolation_models = []
+    for model in INTERPOLATION_MODEL_CATALOG:
+        entry = asdict(model)
+        entry["files"] = [asdict(file) for file in model.files]
+        entry.update(_license_policy(model.license_name, "allowed"))
+        entry["engine_id"] = "localsr.video.rife"
+        entry["support_tier"] = "labs"
+        interpolation_models.append(entry)
+
     return {
         # Schema 2 adds the model-library fields (role, stage, fixes, content,
-        # rights_status, display_name). Every earlier field is unchanged.
-        "schema_version": 2,
+        # rights_status, display_name); schema 3 adds interpolation_models, the
+        # optional frame-interpolation stage of a video job. Every earlier field is
+        # unchanged.
+        "schema_version": 3,
         "catalog_revision": CATALOG_REVISION,
         "models": models,
         "video_models": video_models,
+        "interpolation_models": interpolation_models,
     }
 
 

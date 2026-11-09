@@ -40,6 +40,10 @@ datas = spandrel_datas + [
         str(SOURCE / "localsr" / "video_models" / "seedvr2"),
         "localsr/video_models/seedvr2",
     ),
+    (
+        str(SOURCE / "localsr" / "video_models" / "rife" / "NOTICE.md"),
+        "localsr/video_models/rife",
+    ),
 ]
 edit_runtime = ROOT / ".cache" / "edit-runtime"
 if not edit_runtime.is_dir():

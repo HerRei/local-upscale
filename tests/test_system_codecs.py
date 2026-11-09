@@ -476,3 +476,38 @@ def test_cancellation_stops_a_conversion(tmp_path, bridge):
 def test_frame_header_layout_is_stable():
     assert FRAME_HEADER.size == 16
     assert FRAME_HEADER.pack(-5, 7, 9) == struct.pack("<qiI", -5, 7, 9)
+
+
+def test_encode_frames_sends_scheduled_durations(monkeypatch, tmp_path):
+    import io
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from localsr.core.video_io import TimedVideoFrame
+
+    class Capture(io.BytesIO):
+        def close(self):
+            pass
+
+    output = Capture()
+    process = SimpleNamespace(stdin=output, returncode=0)
+
+    @contextmanager
+    def fake_process(self, arguments, *, stdin=False):
+        yield process
+
+    monkeypatch.setattr(SystemCodecs, "_process", fake_process)
+    monkeypatch.setattr(SystemCodecs, "_wait", lambda *args: None)
+    rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    frames = [
+        TimedVideoFrame(0, rgb, Fraction(0), Fraction(1, 96), Fraction(1, 96)),
+        TimedVideoFrame(1, rgb, Fraction(1, 96), Fraction(1, 24), Fraction(1, 96)),
+    ]
+    SystemCodecs("helper", 1).encode_frames(
+        frames, tmp_path / "out.mp4", fps=96, video_codec="hevc", container="mp4", crf=18
+    )
+    data = output.getvalue().split(b"\n", 1)[1]
+    pts, duration, length = FRAME_HEADER.unpack_from(data)
+    assert (pts, duration) == (0, 1)
+    pts, duration, _ = FRAME_HEADER.unpack_from(data, FRAME_HEADER.size + length)
+    assert (pts, duration) == (1, 4)
