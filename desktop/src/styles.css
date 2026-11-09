@@ -449,6 +449,9 @@ input:focus-visible {
   line-height: 1;
   text-transform: capitalize;
 }
+.media-copy .queue-state.failed {
+  text-transform: none;
+}
 .remove {
   appearance: none;
   flex: 0 0 24px;
@@ -2807,6 +2810,13 @@ input[type='text'],
 .field-row.stacked {
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
+}
+.failure-note p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .field-row {
   position: relative;
