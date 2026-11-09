@@ -124,6 +124,13 @@ input:focus-visible {
 .app-shell.booting {
   cursor: progress;
 }
+/* A route note or a hardware hint adds a status line; the bar grows to hold it. */
+.app-shell.status-extra {
+  grid-template-rows: 1fr minmax(54px, auto);
+}
+.app-shell.status-extra .status-bar {
+  padding-block: 7px;
+}
 .app-shell.queue-timing-visible {
   grid-template-rows: 1fr minmax(90px, auto);
 }
@@ -1304,12 +1311,18 @@ input[type='text'],
 }
 /* A failure or a GPU note can run long; two lines keep its instruction readable, and the
    tooltip holds the rest. */
-.status-copy span.status-detail {
+.status-copy span.status-detail,
+.status-copy span.status-note {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   white-space: normal;
+  line-height: 1.35;
+}
+/* The engine's route note and the hint for a faster unit, on a line of their own. */
+.status-copy span.status-note {
+  color: var(--text);
 }
 .status-actions {
   display: flex;
@@ -2063,6 +2076,9 @@ input[type='text'],
 @media (max-width: 1279px) {
   .app-shell {
     grid-template-rows: 52px 1fr 54px;
+  }
+  .app-shell.status-extra {
+    grid-template-rows: 52px 1fr minmax(54px, auto);
   }
   .app-shell.queue-timing-visible {
     grid-template-rows: 52px 1fr minmax(90px, auto);

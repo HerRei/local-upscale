@@ -1280,6 +1280,46 @@ describe('LocalSR desktop interface', () => {
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
   });
 
+  it('keeps the engine route note for the whole job, through a snapshot refresh', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const note =
+      'RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here (412 ms against 288 ms per tile).';
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({ type: 'engine_status', data: { job_id: 'job-1', message: note } });
+    expect(await screen.findByText(note)).toBeTruthy();
+    callback({
+      type: 'progress',
+      data: { job_id: 'job-1', percentage: 12, completed_tiles: 3, total_tiles: 25 },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toContain('3 of 25 tiles'),
+    );
+    expect(document.querySelector('.status-note')?.textContent).toBe(note);
+
+    // The host keeps the note in its snapshot (worker.rs), so a refresh does not drop it.
+    const running = structuredClone(snapshot);
+    Object.assign(running.runtime, {
+      active_job_id: 'job-1',
+      status_title: 'Enhancing',
+      status_detail: '4 of 25 tiles',
+      progress: 16,
+      hardware_note: note,
+    });
+    api.refreshSnapshot.mockResolvedValue(running);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toContain('4 of 25 tiles'),
+    );
+    expect(document.querySelector('.status-note')?.textContent).toBe(note);
+
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    callback({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out.png' } });
+    await waitFor(() => expect(document.querySelector('.status-note')).toBeNull());
+  });
+
   it.each(['mps', 'directml:1', 'xpu:0'])(
     'submits one image with the selected %s backend',
     async (device) => {

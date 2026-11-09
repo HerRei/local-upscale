@@ -107,6 +107,7 @@ export function demoSnapshot(): AppSnapshot {
       live_system_ram_available: 0,
       live_memory_pressure_percent: 0,
       thermal_status: 'Not exposed by this backend',
+      hardware_note: '',
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '' },

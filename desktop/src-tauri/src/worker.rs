@@ -791,6 +791,17 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.throughput_unit = "tiles/s".into();
             runtime.active_tile_size = 0;
             runtime.result_preview_data_url.clear();
+            runtime.hardware_note.clear();
+        }
+        "engine_status" => {
+            // The engine's word on the hardware route. The next progress tick replaces the
+            // detail line, so the note keeps it for the rest of the job.
+            let mut runtime = lock(&state.runtime)?;
+            if !runtime.active_job_id.is_empty() && runtime.active_job_id == string(data, "job_id")
+            {
+                runtime.status_detail = string(data, "message");
+                runtime.hardware_note = runtime.status_detail.clone();
+            }
         }
         "stage_started" => {
             let stage = stage_label(&string(data, "stage_kind"));
@@ -1147,6 +1158,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?.record_job_duration(&id, number(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id.clear();
+            runtime.hardware_note.clear();
             // A video frame thumbnail is a live preview, not a completed
             // before/after result. The full-output request issued by the host
             // will populate this again only after it has decoded successfully.
@@ -1168,6 +1180,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?.finish_job(&id, "cancelled", "", "Cancelled by the user.")?;
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id.clear();
+            runtime.hardware_note.clear();
             runtime.status_title = "Cancelled".into();
             runtime.status_detail = "Temporary output was cleaned up.".into();
             runtime.estimated_remaining_seconds = 0.0;
@@ -1178,6 +1191,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?.finish_job(&id, "failed", "", &error)?;
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id.clear();
+            runtime.hardware_note.clear();
             runtime.status_title = "Could not finish".into();
             runtime.status_detail = error;
             runtime.estimated_remaining_seconds = 0.0;
@@ -1717,6 +1731,61 @@ mod tests {
             lock(&state.runtime).unwrap().status_detail,
             "The output was written successfully."
         );
+    }
+
+    #[test]
+    fn the_engine_route_note_outlives_progress_until_the_job_ends() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        let envelope = |message_type: &str, data: Value| WorkerEnvelope {
+            message_type: message_type.into(),
+            data,
+        };
+        let note = "SPAN does not run on Intel AI Boost (NPU), so it runs on the CPU.";
+        apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "job"}))).unwrap();
+        // A note for another job (a late message) changes nothing.
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "engine_status",
+                json!({"job_id": "old", "message": "HAT runs on the GPU."}),
+            ),
+        )
+        .unwrap();
+        assert!(lock(&state.runtime).unwrap().hardware_note.is_empty());
+        apply_worker_envelope(
+            &state,
+            &envelope("engine_status", json!({"job_id": "job", "message": note})),
+        )
+        .unwrap();
+        assert_eq!(lock(&state.runtime).unwrap().status_detail, note);
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "progress",
+                json!({"job_id": "job", "percentage": 12.0, "completed_tiles": 3, "total_tiles": 25}),
+            ),
+        )
+        .unwrap();
+        {
+            let runtime = lock(&state.runtime).unwrap();
+            assert_eq!(runtime.status_detail, "3 of 25 tiles");
+            assert_eq!(runtime.hardware_note, note);
+        }
+        // The snapshot the interface refreshes from carries the note.
+        let snapshot = serde_json::to_value(&*lock(&state.runtime).unwrap()).unwrap();
+        assert_eq!(snapshot["hardware_note"], note);
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "job_failed",
+                json!({"job_id": "job", "error_message": "The engine stopped."}),
+            ),
+        )
+        .unwrap();
+        assert!(lock(&state.runtime).unwrap().hardware_note.is_empty());
     }
 
     #[test]
