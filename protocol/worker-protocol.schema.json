@@ -104,6 +104,9 @@
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
                 "comparison": { "type": "boolean" },
+                "slot": { "enum": ["showing", "against"] },
+                "generation": { "type": "integer", "minimum": 0 },
+                "target_id": { "type": "string" },
                 "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 },
                 "external_ffmpeg": { "type": "string" }
               },

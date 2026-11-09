@@ -50,6 +50,10 @@ peak_device_memory_bytes
 preview_enabled
 preview_max_dimension
 preview_max_fps
+# Result preview fields serialized by asdict() and consumed by the Rust host.
+preview_width
+preview_height
+target_id
 process_ram
 processed_megapixels_per_second
 processing_stage

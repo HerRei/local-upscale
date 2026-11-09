@@ -188,3 +188,182 @@ def test_revisiting_result_reuses_preview_until_file_changes(tmp_path, monkeypat
         assert len(calls) == 2
     finally:
         service.close()
+
+
+def test_pair_slots_coalesce_by_generation_without_displacing_either_side(monkeypatch):
+    import localsr.worker.result_preview as module
+
+    entered, release = threading.Event(), threading.Event()
+    emitted = queue.Queue()
+
+    def render(data):
+        if data["image_path"] == "busy":
+            entered.set()
+            assert release.wait(5)
+        return PreviewFailed(image_path=data["image_path"], error_message="missing")
+
+    monkeypatch.setattr(module, "render_result_preview", render)
+    service = ResultPreviewService(emitted.put)
+    try:
+        service.submit({"image_path": "busy"})
+        assert entered.wait(5)
+        for generation in range(1, 101):
+            for slot in ("showing", "against"):
+                service.submit(
+                    {
+                        "image_path": f"{slot}-{generation}",
+                        "comparison": True,
+                        "slot": slot,
+                        "generation": generation,
+                        "target_id": slot,
+                    }
+                )
+        service.submit({"image_path": "automatic"})
+        assert len(service.pending) == 3
+        release.set()
+        results = [emitted.get(timeout=5) for _ in range(4)]
+        pair = {result.slot: result for result in results if result.slot}
+        assert set(pair) == {"showing", "against"}
+        for slot, result in pair.items():
+            assert result.image_path == f"{slot}-100"
+            assert result.generation == 100
+            assert result.target_id == slot
+    finally:
+        release.set()
+        service.close()
+
+
+def test_two_cached_previews_echo_current_identity_and_decoded_dimensions(tmp_path, monkeypatch):
+    import localsr.worker.result_preview as module
+
+    emitted, calls = queue.Queue(), []
+    real_render = module.render_result_preview
+
+    def render(data):
+        calls.append(data)
+        return real_render(data)
+
+    monkeypatch.setattr(module, "render_result_preview", render)
+    service = ResultPreviewService(emitted.put)
+    try:
+        for generation in (1, 2):
+            for index, slot in enumerate(("showing", "against")):
+                path = tmp_path / f"{index}.png"
+                if generation == 1:
+                    Image.new("RGB", (320, 160), "red").save(path)
+                service.submit(
+                    {
+                        "image_path": str(path),
+                        "max_dimension": 96,
+                        "comparison": True,
+                        "slot": slot,
+                        "generation": generation,
+                        "target_id": f"job-{index}",
+                    }
+                )
+                result = emitted.get(timeout=5)
+                assert result.slot == slot
+                assert result.generation == generation
+                assert result.target_id == f"job-{index}"
+                assert (result.preview_width, result.preview_height) == (96, 48)
+        assert len(calls) == 2
+        assert len(service.cache) <= 3
+    finally:
+        service.close()
+
+
+def test_a_newer_pair_drops_older_pending_sides_and_late_older_requests(monkeypatch):
+    import localsr.worker.result_preview as module
+
+    entered, release = threading.Event(), threading.Event()
+    calls, emitted = [], queue.Queue()
+
+    def render(data):
+        calls.append(data["image_path"])
+        if data["image_path"] == "busy":
+            entered.set()
+            assert release.wait(5)
+        return PreviewFailed(image_path=data["image_path"], error_message="missing")
+
+    monkeypatch.setattr(module, "render_result_preview", render)
+    service = ResultPreviewService(emitted.put)
+    pair = {"comparison": True, "target_id": "job"}
+    try:
+        service.submit({"image_path": "busy"})
+        assert entered.wait(5)
+        service.submit({**pair, "image_path": "old showing", "slot": "showing", "generation": 1})
+        service.submit({**pair, "image_path": "old against", "slot": "against", "generation": 1})
+        # Generation 2 needs only its showing side decoded.
+        service.submit({**pair, "image_path": "new showing", "slot": "showing", "generation": 2})
+        service.submit({**pair, "image_path": "late", "slot": "against", "generation": 1})
+        assert set(service.pending) == {"showing"}
+        release.set()
+        emitted.get(timeout=5)
+        answer = emitted.get(timeout=5)
+        assert (answer.image_path, answer.slot, answer.generation) == ("new showing", "showing", 2)
+        assert calls == ["busy", "new showing"]
+    finally:
+        release.set()
+        service.close()
+
+
+def test_a_legacy_selection_keeps_its_own_slot_and_answers_without_identity(monkeypatch):
+    import localsr.worker.result_preview as module
+
+    emitted = queue.Queue()
+    monkeypatch.setattr(
+        module,
+        "render_result_preview",
+        lambda data: PreviewFailed(image_path=data["image_path"], error_message="missing"),
+    )
+    service = ResultPreviewService(emitted.put)
+    try:
+        service.submit({"image_path": "chosen", "comparison": True})
+        answer = emitted.get(timeout=5)
+        assert (answer.slot, answer.generation, answer.target_id) == ("", 0, "")
+    finally:
+        service.close()
+
+
+def test_large_result_child_and_its_timeout_answer_with_the_request_identity(tmp_path, monkeypatch):
+    import subprocess
+
+    path = tmp_path / "finished.png"
+    Image.new("RGB", (320, 160), (180, 40, 20)).save(path)
+    # Larger than the decoder's input limit, as a 4x export of a camera photo is.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10000)
+    emitted = queue.Queue()
+    service = ResultPreviewService(emitted.put)
+    request = {
+        "image_path": str(path),
+        "max_dimension": 96,
+        "comparison": True,
+        "slot": "against",
+        "generation": 7,
+        "target_id": "job-large",
+    }
+    try:
+        service.submit(request)
+        ready = emitted.get(timeout=60)
+        assert isinstance(ready, PreviewReady)
+        assert (ready.slot, ready.generation, ready.target_id) == ("against", 7, "job-large")
+        assert (ready.width, ready.height, ready.preview_width, ready.preview_height) == (
+            320,
+            160,
+            96,
+            48,
+        )
+        Image.new("RGB", (320, 160), "blue").save(path)
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+        def timeout(*args, **kwargs):
+            raise subprocess.TimeoutExpired(args[0], 180)
+
+        monkeypatch.setattr(subprocess, "run", timeout)
+        service.submit({**request, "generation": 8, "slot": "showing"})
+        failed = emitted.get(timeout=5)
+        assert isinstance(failed, PreviewFailed)
+        assert (failed.slot, failed.generation, failed.target_id) == ("showing", 8, "job-large")
+    finally:
+        service.close()
