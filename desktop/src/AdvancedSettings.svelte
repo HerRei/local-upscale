@@ -354,9 +354,9 @@
         </p>
       {:else if !usingTemporalVideo && npuSelected}
         <p class="model-description">
-          The NPU runs SPAN, Real-ESRGAN and FBCNN models; others run on the CPU. LocalSR compiles a
-          model once for the NPU, which can take a minute, and checks once that its result matches
-          the CPU's.
+          The NPU runs SPAN, Real-ESRGAN, FBCNN and NAFNet models; others run on the CPU. LocalSR
+          compiles a model once for the NPU, which can take a minute, and checks once that its
+          result matches the CPU's.
         </p>
       {:else if capabilities.npu_hint}
         <p class="model-description">
