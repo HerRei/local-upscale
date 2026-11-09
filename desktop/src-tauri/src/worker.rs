@@ -446,6 +446,7 @@ fn image_batch_key(message: &Value) -> Option<Value> {
     if message["type"] != "job_request"
         || data["device"] != "mps"
         || data["neural_engine"] == false
+        || data["run_alone"] == true
         || face
         || stages.is_some_and(|stages| stages.len() != 1 || stages[0]["kind"] == "face_restore")
     {
@@ -491,6 +492,10 @@ fn next_dispatch(
         }
     }
     if ids.len() == 1 {
+        let mut message = message;
+        if let Some(data) = message["data"].as_object_mut() {
+            data.remove("run_alone");
+        }
         return Ok(Some((ids, message)));
     }
     let batch = json!({"type": "image_batch_request", "data": {"jobs": jobs}});
@@ -498,8 +503,8 @@ fn next_dispatch(
 }
 
 /// Installed model paths that may run as a photo batch with this engine.
-fn batch_model_paths(state: &AppState) -> AppResult<Vec<String>> {
-    let batches = cfg!(target_os = "macos")
+fn batch_model_paths(state: &AppState, platform: bool) -> AppResult<Vec<String>> {
+    let batches = platform
         && lock(&state.engine)?.as_ref().is_some_and(|engine| {
             engine
                 .features
@@ -523,14 +528,15 @@ pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
 }
 
 pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
-    if begin_dispatch(state)? {
+    if begin_dispatch(state, cfg!(target_os = "macos"))? {
         emit_state_changed(app);
     }
     Ok(())
 }
 
-/// Send the next job or photo batch; true when something was sent.
-fn begin_dispatch(state: &Arc<AppState>) -> AppResult<bool> {
+/// Send the next job or photo batch (batches only where `batches` holds: on a Mac);
+/// true when something was sent.
+fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Ok(false);
     }
@@ -540,7 +546,7 @@ fn begin_dispatch(state: &Arc<AppState>) -> AppResult<bool> {
     if lock(&state.runtime)?.worker != "ready" {
         return Ok(false);
     }
-    let paths = batch_model_paths(state)?;
+    let paths = batch_model_paths(state, batches)?;
     let mut window = Vec::new();
     if !paths.is_empty() {
         window = lock(&state.database)?.queued_job_window(MAX_BATCH_PHOTOS)?;
@@ -554,6 +560,13 @@ fn begin_dispatch(state: &Arc<AppState>) -> AppResult<bool> {
     };
     let first = ids[0].clone();
     lock(&state.worker.cancellation)?.prepare(&first, &mut message)?;
+    // Preparing can end a batch early, before a photo whose folder cannot be used.
+    let ids: Vec<String> = match message["data"]["jobs"].as_array() {
+        Some(jobs) if message["type"] == "image_batch_request" => {
+            jobs.iter().map(|job| string(job, "job_id")).collect()
+        }
+        _ => vec![first.clone()],
+    };
     {
         let mut runtime = lock(&state.runtime)?;
         if runtime.worker != "ready" {
@@ -581,15 +594,27 @@ fn begin_dispatch(state: &Arc<AppState>) -> AppResult<bool> {
 
 /// The rows of the jobs a stopped engine was running. A cancellation that had to
 /// stop it cancels the jobs it covered; otherwise a started job is interrupted
-/// and a batch photo that never started stays queued for the next engine.
+/// (the started photos of a batch first run again alone) and a batch photo that
+/// never started stays queued for the next engine.
 fn settle_stopped_jobs(
     database: &crate::database::Database,
     active: &[String],
     forced: &[String],
     interruption: &str,
 ) {
+    // When an engine running a batch stops on its own, any photo it had started,
+    // or the one it was decoding ahead, may have caused it: the started ones run
+    // again alone, once (a batch never holds a photo marked to run alone), so a
+    // repeat stop names the photo. A photo that stops the engine alone is
+    // interrupted, as before.
+    let batch = forced.is_empty() && active.len() > 1;
     for id in active {
-        let _ = if forced.contains(id) {
+        let _ = if batch {
+            // A photo the user was already cancelling is interrupted instead.
+            database
+                .requeue_alone(id)
+                .and_then(|()| database.interrupt_active_job(id, interruption))
+        } else if forced.contains(id) {
             database.finish_job(
                 id,
                 "cancelled",
@@ -827,7 +852,8 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         envelope.message_type.as_str(),
         "job_completed" | "job_failed" | "job_cancelled"
     ) {
-        leave_batch(&mut *lock(&state.runtime)?, &id);
+        let failed = envelope.message_type == "job_failed";
+        leave_batch(&mut *lock(&state.runtime)?, &id, failed);
     }
     Ok(())
 }
@@ -847,7 +873,10 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
             database.finish_job(&id, "completed", &output, &string(data, "notes"))?;
             database.record_job_duration(&id, number(data, "elapsed_seconds"))?;
             drop(database);
-            lock(&state.runtime)?.last_output_path = output;
+            let mut runtime = lock(&state.runtime)?;
+            // The result shown after the batch belongs to last_output_path.
+            runtime.last_output_path = output;
+            runtime.result_preview_data_url.clear();
         }
         "job_failed" => {
             lock(&state.database)?.finish_job(&id, "failed", "", &string(data, "error_message"))?;
@@ -863,7 +892,7 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
 
 /// A batch photo has ended. While others remain, the batch stays active: when the
 /// shown photo ended before the next one started, the window shows the batch.
-fn leave_batch(runtime: &mut RuntimeStatus, id: &str) {
+fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) {
     runtime.active_batch_job_ids.retain(|member| member != id);
     let Some(next) = runtime.active_batch_job_ids.first().cloned() else {
         return;
@@ -875,7 +904,8 @@ fn leave_batch(runtime: &mut RuntimeStatus, id: &str) {
     runtime.progress = 0.0;
     runtime.estimated_remaining_seconds = 0.0;
     runtime.result_preview_data_url.clear();
-    if runtime.worker != "restarting" {
+    // A failure stays on the status line until the next photo starts.
+    if runtime.worker != "restarting" && !failed {
         runtime.status_title = "Processing".into();
         runtime.status_detail = "Finishing the other photos of this batch.".into();
     }
@@ -2272,6 +2302,95 @@ mod tests {
     fn a_dispatched_batch_shows_its_first_photo_and_keeps_the_others_queued() {
         let directory = tempfile::tempdir().unwrap();
         let state = batch_state(directory.path());
+        ready_for_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        assert!(begin_dispatch(&state, true).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        let runtime = lock(&state.runtime).unwrap().clone();
+        assert_eq!(runtime.active_job_id, "a");
+        assert_eq!(sent["type"], "image_batch_request");
+        assert_eq!(runtime.active_batch_job_ids, ["a", "b", "c"]);
+        // Each photo owns its scratch directory next to its output.
+        let jobs = sent["data"]["jobs"].as_array().unwrap();
+        let scratch: Vec<_> = jobs
+            .iter()
+            .map(|job| PathBuf::from(job["scratch_directory"].as_str().unwrap()))
+            .collect();
+        assert!(scratch.iter().all(|path| path.is_dir()));
+        assert_eq!(
+            scratch
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3
+        );
+        // Only the photo on screen is starting; the others wait as queued photos.
+        assert_eq!(status(&state, "a"), "starting");
+        assert_eq!(status(&state, "b"), "queued");
+        // Nothing else is dispatched while the batch runs.
+        assert!(!begin_dispatch(&state, true).unwrap());
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn hosts_other_than_a_mac_send_one_job_at_a_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        ready_for_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "job_request");
+        assert!(lock(&state.runtime)
+            .unwrap()
+            .active_batch_job_ids
+            .is_empty());
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn a_photo_whose_scratch_folder_cannot_be_made_ends_the_batch_before_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            // The third photo writes to a folder that no longer exists (an ejected drive).
+            let db = lock(&state.database).unwrap();
+            let mut job = photo_job("c");
+            job["data"]["output_path"] = json!(directory.path().join("gone").join("c.png"));
+            db.cancel_queued_jobs().unwrap();
+            for id in ["a2", "b2", "c2"] {
+                db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                    .unwrap();
+            }
+            let mut a = photo_job("a2");
+            a["data"]["output_path"] = json!(directory.path().join("out").join("a2.png"));
+            let mut b = photo_job("b2");
+            b["data"]["output_path"] = json!(directory.path().join("out").join("b2.png"));
+            job["data"]["job_id"] = json!("c2");
+            db.insert_job("a2", "a2", &a.to_string()).unwrap();
+            db.insert_job("b2", "b2", &b.to_string()).unwrap();
+            db.insert_job("c2", "c2", &job.to_string()).unwrap();
+        }
+        ready_for_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, true).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "image_batch_request");
+        assert_eq!(sent["data"]["jobs"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            lock(&state.runtime).unwrap().active_batch_job_ids,
+            ["a2", "b2"]
+        );
+        // The healthy photos run; the other waits for its own turn.
+        assert_eq!(status(&state, "c2"), "queued");
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    fn ready_for_batches(state: &AppState) {
         *lock(&state.engine).unwrap() = Some(
             serde_json::from_value(json!({"protocol_version": 1, "minimum_protocol_version": 1,
                 "engine_id": "e", "engine_version": "1", "features": ["image", "image_batch_v1"],
@@ -2285,40 +2404,6 @@ mod tests {
             }
         }
         lock(&state.runtime).unwrap().worker = "ready".into();
-        let (sender, receiver) = mpsc::channel();
-        *lock(&state.worker.sender).unwrap() = Some(sender);
-
-        assert!(begin_dispatch(&state).unwrap());
-        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
-        let runtime = lock(&state.runtime).unwrap().clone();
-        assert_eq!(runtime.active_job_id, "a");
-        if cfg!(target_os = "macos") {
-            assert_eq!(sent["type"], "image_batch_request");
-            assert_eq!(runtime.active_batch_job_ids, ["a", "b", "c"]);
-            // Each photo owns its scratch directory next to its output.
-            let jobs = sent["data"]["jobs"].as_array().unwrap();
-            let scratch: Vec<_> = jobs
-                .iter()
-                .map(|job| PathBuf::from(job["scratch_directory"].as_str().unwrap()))
-                .collect();
-            assert!(scratch.iter().all(|path| path.is_dir()));
-            assert_eq!(
-                scratch
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len(),
-                3
-            );
-        } else {
-            assert_eq!(sent["type"], "job_request");
-            assert!(runtime.active_batch_job_ids.is_empty());
-        }
-        // Only the photo on screen is starting; the others wait as queued photos.
-        assert_eq!(status(&state, "a"), "starting");
-        assert_eq!(status(&state, "b"), "queued");
-        // Nothing else is dispatched while the batch runs.
-        assert!(!begin_dispatch(&state).unwrap());
-        lock(&state.worker.cancellation).unwrap().finish().unwrap();
     }
 
     fn running_batch(directory: &std::path::Path) -> Arc<AppState> {
@@ -2394,9 +2479,76 @@ mod tests {
         // Still busy: settings stay locked and nothing else is dispatched.
         assert_eq!(runtime.active_job_id, "b");
         assert_eq!(runtime.active_batch_job_ids, ["b", "c"]);
-        assert_eq!(runtime.status_title, "Processing");
+        // The failure stays on the status line until the next photo starts.
+        assert_eq!(runtime.status_title, "Could not finish");
+        assert_eq!(runtime.status_detail, "disk full");
         drop(runtime);
         assert_eq!(status(&state, "a"), "failed");
+        apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "b"}))).unwrap();
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "job_completed",
+                json!({"job_id": "b", "output_path": "/out/b.png"}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(lock(&state.runtime).unwrap().status_title, "Processing");
+    }
+
+    #[test]
+    fn the_last_photo_of_a_batch_gets_its_full_preview() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        let apply = |kind: &str, data: Value| apply_worker_envelope(&state, &envelope(kind, data));
+        apply("job_started", json!({"job_id": "a"})).unwrap();
+        apply("job_started", json!({"job_id": "b"})).unwrap();
+        // a saved off screen: no full preview is requested for it.
+        assert!(is_background_photo(&lock(&state.runtime).unwrap(), "a"));
+        apply(
+            "job_completed",
+            json!({"job_id": "a", "output_path": "/out/a.png"}),
+        )
+        .unwrap();
+        apply("job_cancelled", json!({"job_id": "c"})).unwrap();
+        // b is on screen when it completes, so its preview is requested and shown.
+        assert!(!is_background_photo(&lock(&state.runtime).unwrap(), "b"));
+        let done = envelope(
+            "job_completed",
+            json!({"job_id": "b", "output_path": "/out/b.png"}),
+        );
+        assert!(completion_preview_request(&done).is_some());
+        apply_worker_envelope(&state, &done).unwrap();
+        apply(
+            "preview_ready",
+            json!({"image_path": "/out/b.png", "jpeg_base64": "full-b"}),
+        )
+        .unwrap();
+        assert_eq!(
+            lock(&state.runtime).unwrap().result_preview_data_url,
+            "data:image/jpeg;base64,full-b"
+        );
+    }
+
+    #[test]
+    fn a_photo_saved_off_screen_drops_a_preview_that_is_not_its_own() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "b"}))).unwrap();
+        apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+        lock(&state.runtime).unwrap().result_preview_data_url = "a-pixels".into();
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "job_completed",
+                json!({"job_id": "b", "output_path": "/out/b.png"}),
+            ),
+        )
+        .unwrap();
+        // last_output_path now names b, so no picture of a may stay beside it.
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.last_output_path, "/out/b.png");
+        assert!(runtime.result_preview_data_url.is_empty());
     }
 
     #[test]
@@ -2417,6 +2569,39 @@ mod tests {
     }
 
     #[test]
+    fn after_a_crash_the_started_batch_photos_run_again_alone_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        let ids: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        {
+            let db = lock(&state.database).unwrap();
+            db.set_job_status("a", "running").unwrap();
+            db.set_job_status("b", "running").unwrap();
+            settle_stopped_jobs(&db, &ids, &[], "The engine stopped.");
+        }
+        // Any of the started photos may have crashed the engine: each runs alone next.
+        for id in ["a", "b", "c"] {
+            assert_eq!(status(&state, id), "queued");
+        }
+        let window = lock(&state.database)
+            .unwrap()
+            .queued_job_window(MAX_BATCH_PHOTOS)
+            .unwrap();
+        let (sent, message) = next_dispatch(&window, |_| true).unwrap().unwrap();
+        assert_eq!(sent, ["a"]);
+        assert_eq!(message["type"], "job_request");
+        // The hint stays with the desktop; the engine gets the photo's own request.
+        assert!(message["data"].get("run_alone").is_none());
+        // Run alone, a photo that crashes the engine again is interrupted.
+        {
+            let db = lock(&state.database).unwrap();
+            db.set_job_status("a", "running").unwrap();
+            settle_stopped_jobs(&db, &["a".to_string()], &[], "The engine stopped.");
+        }
+        assert_eq!(status(&state, "a"), "interrupted");
+    }
+
+    #[test]
     fn after_an_engine_stop_unstarted_batch_photos_are_queued_again() {
         let directory = tempfile::tempdir().unwrap();
         let state = batch_state(directory.path());
@@ -2426,8 +2611,19 @@ mod tests {
             db.set_job_status("a", "running").unwrap();
             settle_stopped_jobs(&db, &ids, &[], "The engine stopped.");
         }
-        assert_eq!(status(&state, "a"), "interrupted");
+        // Even one started photo may not be the cause: the photo decoded ahead of it
+        // had not started yet. It runs again alone; the others stay queued.
+        assert_eq!(status(&state, "a"), "queued");
         assert_eq!(status(&state, "b"), "queued");
+        let window = lock(&state.database)
+            .unwrap()
+            .queued_job_window(MAX_BATCH_PHOTOS)
+            .unwrap();
+        let (sent, _) = next_dispatch(&window, |_| true).unwrap().unwrap();
+        assert_eq!(sent, ["a"]);
+        let rest: Vec<_> = window.into_iter().skip(1).collect();
+        let (sent, _) = next_dispatch(&rest, |_| true).unwrap().unwrap();
+        assert_eq!(sent, ["b", "c"]);
         {
             let db = lock(&state.database).unwrap();
             db.set_job_status("b", "running").unwrap();
@@ -2436,5 +2632,20 @@ mod tests {
         // A cancellation that had to stop the engine cancels every photo it covered.
         assert_eq!(status(&state, "b"), "cancelled");
         assert_eq!(status(&state, "c"), "cancelled");
+    }
+
+    #[test]
+    fn a_crash_while_cancelling_a_batch_never_leaves_a_photo_cancelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        let ids: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        {
+            let db = lock(&state.database).unwrap();
+            db.set_job_status("a", "cancelling").unwrap();
+            db.set_job_status("b", "running").unwrap();
+            settle_stopped_jobs(&db, &ids, &[], "The engine stopped.");
+        }
+        assert_eq!(status(&state, "a"), "interrupted");
+        assert_eq!(status(&state, "b"), "queued");
     }
 }
