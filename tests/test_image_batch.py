@@ -253,14 +253,14 @@ def test_save_memory_counts_the_copies_pillow_holds():
 
 
 def test_the_default_memory_budget_is_a_quarter_of_the_memory(monkeypatch):
-    values = {"SC_PHYS_PAGES": 4 * 2**20, "SC_PAGE_SIZE": 4096}  # 16 GiB
-    monkeypatch.setattr(image_batch.os, "sysconf", lambda name: values[name])
+    memory = SimpleNamespace(total=16 * 2**30)
+    monkeypatch.setattr(image_batch.psutil, "virtual_memory", lambda: memory)
     assert image_batch.default_memory_budget() == 4 * 2**30
 
-    def unavailable(_name):
-        raise OSError("no sysconf")
+    def unavailable():
+        raise OSError("no memory information")
 
-    monkeypatch.setattr(image_batch.os, "sysconf", unavailable)
+    monkeypatch.setattr(image_batch.psutil, "virtual_memory", unavailable)
     assert image_batch.default_memory_budget() == 2 * 2**30
 
 
