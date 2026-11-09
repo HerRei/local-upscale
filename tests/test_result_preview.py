@@ -367,3 +367,57 @@ def test_large_result_child_and_its_timeout_answer_with_the_request_identity(tmp
         assert (failed.slot, failed.generation, failed.target_id) == ("showing", 8, "job-large")
     finally:
         service.close()
+
+
+def test_four_compare_slots_coalesce_and_keep_request_identity(monkeypatch):
+    import localsr.worker.result_preview as module
+
+    entered, release = threading.Event(), threading.Event()
+    emitted = queue.Queue()
+
+    def render(data):
+        if data["image_path"] == "busy":
+            entered.set()
+            assert release.wait(5)
+        return PreviewFailed(image_path=data["image_path"], error_message="missing")
+
+    monkeypatch.setattr(module, "render_result_preview", render)
+    service = ResultPreviewService(emitted.put)
+    try:
+        service.submit({"image_path": "busy"})
+        assert entered.wait(5)
+        for slot in ("slot1", "slot2", "slot3", "slot4"):
+            service.submit(
+                {
+                    "image_path": slot,
+                    "comparison": True,
+                    "slot": slot,
+                    "generation": 3,
+                    "target_id": slot,
+                }
+            )
+        assert len(service.pending) == 4
+        release.set()
+        emitted.get(timeout=5)
+        answers = [emitted.get(timeout=5) for _ in range(4)]
+        assert {answer.slot for answer in answers} == {"slot1", "slot2", "slot3", "slot4"}
+        assert all(answer.generation == 3 and answer.target_id == answer.slot for answer in answers)
+    finally:
+        release.set()
+        service.close()
+
+
+def test_preview_cache_is_bounded_by_bytes(tmp_path, monkeypatch):
+    import localsr.worker.result_preview as module
+
+    monkeypatch.setattr(module, "_CACHE_BYTES", 100)
+    emitted = queue.Queue()
+    service = ResultPreviewService(emitted.put)
+    try:
+        path = tmp_path / "image.png"
+        Image.new("RGB", (200, 100), "red").save(path)
+        service.submit({"image_path": str(path), "max_dimension": 96})
+        assert isinstance(emitted.get(timeout=5), PreviewReady)
+        assert sum(len(item.jpeg_base64) for item in service.cache.values()) <= 100
+    finally:
+        service.close()

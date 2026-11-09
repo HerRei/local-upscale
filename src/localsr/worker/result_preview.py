@@ -109,10 +109,13 @@ def large_result_main():
 # Pending requests are kept per purpose: the two sides of the selected pair,
 # a selection from a host without pair slots, and the automatic preview of a
 # job that just finished. Earlier keys are decoded first.
-_PENDING_ORDER = ("showing", "against", "selected", "automatic")
 _PAIR_SLOTS = ("showing", "against")
+_COMPARE_SLOTS = ("slot1", "slot2", "slot3", "slot4")
+_PENDING_ORDER = (*_COMPARE_SLOTS, *_PAIR_SLOTS, "selected", "automatic")
 # The selected pair plus the automatic preview, which is often one of them.
-_CACHE_SIZE = 3
+_CACHE_SIZE = 5
+# Encoded JPEG bytes retained by the worker, independently of image dimensions.
+_CACHE_BYTES = 16 * 1024 * 1024
 
 
 def _generation(data):
@@ -132,7 +135,7 @@ class ResultPreviewService:
         self.closed = False
         self.thread = None
         self.cache = OrderedDict()
-        self.generation = 0
+        self.generations = {"pair": 0, "compare": 0}
 
     def submit(self, data):
         if not isinstance(data, dict):
@@ -145,16 +148,18 @@ class ResultPreviewService:
                 return
             if not data.get("comparison", False):
                 key = "automatic"
-            elif data.get("slot") in _PAIR_SLOTS:
+            elif data.get("slot") in (*_PAIR_SLOTS, *_COMPARE_SLOTS):
                 key = data["slot"]
+                group = "pair" if key in _PAIR_SLOTS else "compare"
+                slots = _PAIR_SLOTS if group == "pair" else _COMPARE_SLOTS
                 generation = _generation(data)
                 # A newer pair replaces both sides of an older one, including
                 # a side the newer pair does not need decoded again.
-                if generation < self.generation:
+                if generation < self.generations[group]:
                     return
-                if generation > self.generation:
-                    self.generation = generation
-                    for slot in _PAIR_SLOTS:
+                if generation > self.generations[group]:
+                    self.generations[group] = generation
+                    for slot in slots:
                         self.pending.pop(slot, None)
             else:
                 key = "selected"
@@ -199,7 +204,10 @@ class ResultPreviewService:
                 message = render_result_preview(data)
                 if isinstance(message, PreviewReady) and cache_key is not None:
                     self.cache[cache_key] = message
-                    while len(self.cache) > _CACHE_SIZE:
+                    while (
+                        len(self.cache) > _CACHE_SIZE
+                        or sum(len(item.jpeg_base64) for item in self.cache.values()) > _CACHE_BYTES
+                    ):
                         self.cache.popitem(last=False)
             # Every answer, a cache hit and a failure from the large-result
             # child or its timeout included, names the request it answers.
