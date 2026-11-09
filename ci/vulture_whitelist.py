@@ -147,3 +147,5 @@ _.describe  # core/media_bridge.py MediaBridge
 
 # ctypes structure field written for Windows to read (core/gpu_guard.py job object).
 LimitFlags  # JOBOBJECT_BASIC_LIMIT_INFORMATION
+
+ImageBatchRequest  # protocol/messages.py: additive batch envelope built by the Rust host

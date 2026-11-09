@@ -218,3 +218,21 @@ def test_the_engine_answers_a_capabilities_request_with_its_hardware():
     assert answer["type"] == "capabilities_info", answer
     assert any(device["id"] == "cpu" for device in answer["data"]["devices"])
     assert "gpu_suggestion" in answer["data"]
+
+
+def test_batch_request_is_additive_and_carries_individual_job_payloads():
+    from localsr.protocol.messages import ImageBatchRequest
+
+    jobs = [{"job_id": "first"}, {"job_id": "second"}]
+    assert _message(ImageBatchRequest(jobs=jobs)) == {
+        "type": "image_batch_request",
+        "data": {"jobs": jobs},
+    }
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    batch = schema["$defs"]["imageBatchRequest"]["allOf"][1]["properties"]
+    assert batch["type"] == {"const": "image_batch_request"}
+    items = batch["data"]["properties"]["jobs"]
+    assert (items["minItems"], items["maxItems"]) == (2, 64)
+    # Each photo is a complete job payload, as in a job_request.
+    assert items["items"] == {"$ref": "#/$defs/jobRequest/allOf/1/properties/data"}
+    assert {"$ref": "#/$defs/imageBatchRequest"} in schema["oneOf"]

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
+import type { AppSnapshot } from './types';
 import {
   applyWorkerEnvelope,
   chooseFixModel,
@@ -786,5 +787,127 @@ describe('several fixes in one pass', () => {
     expect(title(2, 5)).toBe('Restoring · stage 3/5');
     // A one-stage job reads as before.
     expect(title(0, 1)).toBe('Enhancing');
+  });
+});
+
+describe('photo batches', () => {
+  function batch(): AppSnapshot {
+    const snapshot = demoSnapshot();
+    snapshot.runtime = {
+      ...snapshot.runtime,
+      active_job_id: 'a',
+      active_batch_job_ids: ['a', 'b', 'c'],
+    };
+    return snapshot;
+  }
+
+  it('shows the photo that started last while earlier ones finish off screen', () => {
+    let snapshot = applyWorkerEnvelope(batch(), { type: 'job_started', data: { job_id: 'a' } });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'b' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: { job_id: 'b', percentage: 30, completed_tiles: 3, total_tiles: 10 },
+    });
+    expect(snapshot.runtime.active_job_id).toBe('b');
+    const shown = snapshot;
+    expect(
+      applyWorkerEnvelope(shown, { type: 'progress', data: { job_id: 'a', percentage: 100 } }),
+    ).toBe(shown);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'a', output_path: '/out/a.png' },
+    });
+    expect(snapshot.runtime).toMatchObject({
+      active_job_id: 'b',
+      active_batch_job_ids: ['b', 'c'],
+      progress: 30,
+      status_title: 'Enhancing',
+      last_output_path: '/out/a.png',
+    });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_failed',
+      data: { job_id: 'c', error_message: 'cannot identify image file' },
+    });
+    expect(snapshot.runtime.active_job_id).toBe('b');
+    expect(snapshot.runtime.active_batch_job_ids).toEqual(['b']);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'b', output_path: '/out/b.png' },
+    });
+    expect(snapshot.runtime).toMatchObject({
+      active_job_id: '',
+      active_batch_job_ids: [],
+      status_title: 'Complete',
+      last_output_path: '/out/b.png',
+    });
+  });
+
+  it('stays busy when the shown photo ends before the next one starts', () => {
+    let snapshot = applyWorkerEnvelope(batch(), { type: 'job_started', data: { job_id: 'a' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_failed',
+      data: { job_id: 'a', error_message: 'disk full' },
+    });
+    // The failure stays on the status line until the next photo starts.
+    expect(snapshot.runtime).toMatchObject({
+      active_job_id: 'b',
+      active_batch_job_ids: ['b', 'c'],
+      status_title: 'Could not finish',
+      status_detail: 'disk full',
+      result_preview_data_url: '',
+    });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'b' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'b', output_path: '/out/b.png' },
+    });
+    expect(snapshot.runtime.status_title).toBe('Processing');
+  });
+
+  it('never shows the pixels of the failed photo as the result of one saved off screen', () => {
+    let snapshot = batch();
+    snapshot.runtime.active_batch_job_ids = ['b', 'a'];
+    snapshot.media = ['a', 'b'].map((id) => ({
+      id,
+      path: `/in/${id}.png`,
+      name: `${id}.png`,
+      kind: 'image',
+      width: 64,
+      height: 48,
+      frame_count: 1,
+      fps: 0,
+      duration_seconds: 0,
+      preview_data_url: 'source',
+      probe_status: 'ready',
+      error: '',
+      selected: id === 'b',
+    }));
+    snapshot.jobs = ['a', 'b'].map((id, index) => ({
+      id,
+      media_id: id,
+      media_name: `${id}.png`,
+      media_kind: 'image',
+      status: 'running',
+      output_path: '',
+      progress: 0,
+      error: '',
+      created_at: index,
+    }));
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'b' } });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'a' } });
+    snapshot.runtime.result_preview_data_url = 'pixels-of-a';
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'b', output_path: '/out/b.png' },
+    });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_failed',
+      data: { job_id: 'a', error_message: 'disk full' },
+    });
+    // The next refresh brings b's finished row.
+    snapshot.jobs[1] = { ...snapshot.jobs[1], status: 'completed', output_path: '/out/b.png' };
+    snapshot.jobs[0] = { ...snapshot.jobs[0], status: 'failed' };
+    expect(snapshot.runtime.last_output_path).toBe('/out/b.png');
+    expect(resultPreviewForSelectedMedia(snapshot)).toBe('');
   });
 });
