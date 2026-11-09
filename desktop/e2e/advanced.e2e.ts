@@ -1,0 +1,94 @@
+import { expect, test, type Page } from '@playwright/test';
+import { openApp, showPane } from './app';
+import { hostCalls } from './fake-host';
+import { upscale, video, windows } from './fixtures';
+
+async function openAdvanced(page: Page): Promise<void> {
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: /^Advanced/ }).click();
+  await expect(page.locator('#device')).toBeVisible();
+}
+
+const optionTexts = (page: Page, selector: string) =>
+  page.locator(`${selector} option`).evaluateAll((nodes) => nodes.map((node) => node.textContent));
+
+async function lastSaved(page: Page): Promise<Record<string, unknown>> {
+  const call = (await hostCalls(page, 'save_settings')).at(-1);
+  return (call?.args as { settings: Record<string, unknown> }).settings;
+}
+
+test.describe('Advanced settings: hardware', () => {
+  test('a Mac lists the Neural Engine, the Apple GPU and the CPU', async ({ page }) => {
+    await openApp(page, upscale);
+    await openAdvanced(page);
+    expect(await optionTexts(page, '#device')).toEqual(['Neural Engine', 'Apple GPU', 'CPU']);
+    await expect(page.locator('#device optgroup')).toHaveCount(0);
+  });
+
+  test('one GPU reached by two routes is grouped under its name', async ({ page }) => {
+    await openApp(page, windows);
+    await openAdvanced(page);
+    const groups = await page.locator('#device').evaluate((select) =>
+      [...select.children].map((child) => ({
+        tag: child.tagName,
+        label: child.getAttribute('label') ?? child.textContent,
+        options: [...child.querySelectorAll('option')].map((option) => option.textContent),
+      })),
+    );
+    expect(groups).toEqual([
+      { tag: 'OPTION', label: 'Intel Core i7-8550U', options: [] },
+      {
+        tag: 'OPTGROUP',
+        label: 'Intel UHD Graphics 620',
+        options: ['Intel UHD Graphics 620 · DirectML', 'Intel UHD Graphics 620 · OpenVINO'],
+      },
+      { tag: 'OPTION', label: 'NVIDIA GeForce RTX 3060', options: [] },
+    ]);
+    await expect(page.locator('#device')).toHaveValue('directml:0');
+  });
+
+  test('choosing a route saves that device', async ({ page }) => {
+    await openApp(page, windows);
+    await openAdvanced(page);
+    await page.locator('#device').selectOption('openvino:GPU');
+    await expect.poll(async () => (await lastSaved(page)).device_id).toBe('openvino:GPU');
+    await expect(page.locator('#device')).toHaveValue('openvino:GPU');
+  });
+});
+
+test.describe('Advanced settings: frame interpolation', () => {
+  test('lists the frame rates and shows the order only when interpolating', async ({ page }) => {
+    await openApp(page, video);
+    await openAdvanced(page);
+    expect(await optionTexts(page, '#frame-rate')).toEqual([
+      'Original',
+      '2× · interpolated',
+      '4× · interpolated',
+      '60 fps · interpolated',
+      '120 fps · interpolated',
+    ]);
+    await expect(page.locator('#frame-rate')).toHaveValue('x2');
+    expect(await optionTexts(page, '#interpolation-order')).toEqual([
+      'After upscaling · faster',
+      'Before upscaling',
+    ]);
+
+    await page.locator('#frame-rate').selectOption('off');
+    await expect(page.locator('#interpolation-order')).toHaveCount(0);
+    await page.locator('#frame-rate').selectOption('fps60');
+    await expect(page.locator('#interpolation-order')).toHaveValue('after_upscale');
+    await page.locator('#interpolation-order').selectOption('before_upscale');
+    await expect
+      .poll(async () => {
+        const settings = await lastSaved(page);
+        return [settings.video_interpolation, settings.video_interpolation_order];
+      })
+      .toEqual(['fps60', 'before_upscale']);
+  });
+
+  test('an engine without interpolation leaves the frame rate disabled', async ({ page }) => {
+    await openApp(page, { ...video, features: [] });
+    await openAdvanced(page);
+    await expect(page.locator('#frame-rate')).toBeDisabled();
+  });
+});

@@ -47,3 +47,7 @@ desktop/src-tauri/gen/
 .codex/
 publish/
 packaging/updates/verifier/target/
+
+# Playwright
+desktop/test-results/
+desktop/playwright-report/
