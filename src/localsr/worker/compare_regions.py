@@ -34,13 +34,19 @@ class RegionCache:
             path = identity["image_path"]
             stat = os.stat(path)
             key = (path, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-            if key not in self.images:
+            cached = key in self.images
+            image = self.images[key][0] if cached else None
+            if not cached:
                 with Image.open(path) as opened:
                     # Pillow stores RGB pixels in four bytes per pixel internally.
                     size = opened.width * opened.height * 4
-                    if size > self.budget:
+                    # One image above the cache budget is decoded for this crop
+                    # only (a 4x output of a 12 MP photo); beyond twice the
+                    # budget the preview stays.
+                    if size > 2 * self.budget:
                         raise ValueError("Image exceeds the Compare cache budget")
-                    while self.bytes + size > self.budget:
+                    cached = size <= self.budget
+                    while cached and self.bytes + size > self.budget:
                         _, (old, old_size) = self.images.popitem(last=False)
                         old.close()
                         self.bytes -= old_size
@@ -57,10 +63,11 @@ class RegionCache:
                         except (ImageCms.PyCMSError, OSError, ValueError):
                             pass
                     image = image.convert("RGB")
-                self.images[key] = (image, size)
-                self.bytes += size
-            self.images.move_to_end(key)
-            image = self.images[key][0]
+                if cached:
+                    self.images[key] = (image, size)
+                    self.bytes += size
+            if cached:
+                self.images.move_to_end(key)
             x, y, width, height, tw, th = (
                 int(data[k]) for k in ("x", "y", "width", "height", "target_width", "target_height")
             )
@@ -100,6 +107,9 @@ class RegionService:
     def submit(self, data):
         with self.condition:
             if isinstance(data, dict) and data.get("slot") in ("slot1", "slot2", "slot3", "slot4"):
+                # A newer request for a slot queues behind the others, and the
+                # oldest request renders first, so no slot starves.
+                self.pending.pop(data["slot"], None)
                 self.pending[data["slot"]] = (self.epoch, dict(data))
                 self.condition.notify()
 
@@ -127,7 +137,8 @@ class RegionService:
                     self.cache.clear()
                     self.clearing = False
                     continue
-                _, (epoch, data) = self.pending.popitem()
+                slot = next(iter(self.pending))
+                epoch, data = self.pending.pop(slot)
             result = self.cache.render(data)
             with self.condition:
                 if epoch == self.epoch and not self.closed:
