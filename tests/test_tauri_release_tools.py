@@ -1374,6 +1374,60 @@ def test_round3_hard_linked_engine_files_are_archived_whole(tmp_path: Path) -> N
     engine_payload.validate_payload(manifest, output, "p", "CPU", "localsr-worker")
 
 
+linux_symlinks = pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+
+
+@linux_symlinks
+def test_engine_payload_archives_an_internal_file_link_as_a_regular_file(tmp_path: Path) -> None:
+    import tarfile
+
+    engine = fake_engine(tmp_path, "localsr-worker")
+    (engine / "lib/libfoo.so.1").write_bytes(b"shared-library")
+    (engine / "lib/libfoo.so").symlink_to("libfoo.so.1")
+    (engine / "lib/chain.so").symlink_to("libfoo.so")
+    output = tmp_path / "out"
+    written = engine_payload.prepare(engine, output, "p", backend="CPU", worker="localsr-worker")
+    manifest = json.loads(written.read_text())
+    engine_payload.validate_payload(manifest, output, "p", "CPU", "localsr-worker")
+    regular = [p for p in engine.rglob("*") if not p.is_dir()]
+    assert manifest["file_count"] == len(regular)
+    assert manifest["unpacked_bytes"] == sum(p.stat().st_size for p in regular)
+    joined = b"".join((output / part["filename"]).read_bytes() for part in manifest["parts"])
+    archive = tmp_path / "all.tar.gz"
+    archive.write_bytes(joined)
+    with tarfile.open(archive) as tar:
+        for name in ("lib/libfoo.so", "lib/chain.so"):
+            member = tar.getmember(name)
+            assert member.isfile()
+            assert tar.extractfile(member).read() == b"shared-library"
+
+
+@linux_symlinks
+@pytest.mark.parametrize("kind", ["external", "dangling", "loop", "directory", "outside-dir"])
+def test_engine_payload_refuses_links_that_leave_dangle_or_point_at_directories(
+    tmp_path: Path, kind: str
+) -> None:
+    engine = fake_engine(tmp_path, "localsr-worker")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"secret")
+    (tmp_path / "outside-dir").mkdir()
+    link = engine / "lib/bad"
+    if kind == "external":
+        link.symlink_to(outside)
+    elif kind == "dangling":
+        link.symlink_to("missing.so")
+    elif kind == "loop":
+        link.symlink_to("bad")
+    elif kind == "directory":
+        link.symlink_to(engine / "lib")
+    else:
+        link.symlink_to(tmp_path / "outside-dir")
+    with pytest.raises(ValueError, match="link"):
+        engine_payload.prepare(
+            engine, tmp_path / "out", "p", backend="CPU", worker="localsr-worker"
+        )
+
+
 @pytest.mark.parametrize("failure", ["first-part-is-zero", "doubled-slash"])
 def test_round3_engine_parts_are_numbered_from_one_and_names_are_canonical(
     tmp_path: Path, failure: str

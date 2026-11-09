@@ -69,6 +69,31 @@ class PartWriter:
             self.size = 0
 
 
+def _engine_files(engine: Path) -> list[Path]:
+    """The files to archive. A symlink is accepted only as a file link whose target
+    lies inside the engine folder (PyInstaller's libfoo.so -> libfoo.so.1); it is
+    archived as that regular file. Directory links, links leaving the folder,
+    dangling links and loops are refused."""
+    root = engine.resolve()
+    files = []
+    for path in sorted(engine.rglob("*")):
+        if path.is_symlink():
+            try:
+                target_path = path.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise ValueError(f"engine payload contains a broken link: {path.name}") from error
+            if not target_path.is_relative_to(root):
+                raise ValueError(f"engine payload contains a link leaving the engine: {path.name}")
+            if not target_path.is_file():
+                raise ValueError(f"engine payload contains a link to a directory: {path.name}")
+        elif path.is_dir():
+            continue
+        elif not path.is_file():
+            raise ValueError("engine payload contains a non-regular file")
+        files.append(path)
+    return files
+
+
 def prepare(
     engine: Path,
     output: Path,
@@ -87,17 +112,13 @@ def prepare(
     if not (engine / worker).is_file():
         raise ValueError("the frozen worker is missing")
     output.mkdir(parents=True, exist_ok=True)
-    paths = sorted(engine.rglob("*"))
-    if any(path.is_symlink() for path in paths):
-        raise ValueError("engine payload contains a link")
-    files = [path for path in paths if not path.is_dir()]
-    if any(path.is_symlink() or not path.is_file() for path in files):
-        raise ValueError("engine payload contains a link or non-regular file")
+    files = _engine_files(engine)
     writer = PartWriter(output, prefix, part_bytes)
     try:
         with gzip.GzipFile(fileobj=writer, mode="wb", compresslevel=1, mtime=0) as compressed:
-            # Links were refused above; dereferencing keeps tarfile from writing a
-            # zero-length hard-link entry for a second name of the same file.
+            # Links inside the engine were checked above and are archived as the
+            # regular files they point to; dereferencing also keeps tarfile from
+            # writing a zero-length hard-link entry for a second name of a file.
             with tarfile.open(
                 fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT, dereference=True
             ) as archive:
