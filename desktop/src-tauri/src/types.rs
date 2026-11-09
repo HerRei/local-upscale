@@ -439,6 +439,8 @@ impl Default for UiSettings {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeStatus {
     #[serde(default)]
+    pub compare: crate::compare::CompareState,
+    #[serde(default)]
     pub comparison_pair: ComparisonPair,
     #[serde(default)]
     pub video_memory: Option<serde_json::Value>,
@@ -586,6 +588,7 @@ impl BenchmarkResult {
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
+            compare: crate::compare::CompareState::default(),
             comparison_pair: ComparisonPair::default(),
             worker: "starting".into(),
             active_job_id: String::new(),
