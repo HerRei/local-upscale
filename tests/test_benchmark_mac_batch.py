@@ -8,6 +8,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
+# The benchmark is macOS-only and imports the Unix-only resource module.
+pytest.importorskip("resource")
+
 spec = importlib.util.spec_from_file_location(
     "benchmark_mac_batch", Path(__file__).parents[1] / "scripts" / "benchmark_mac_batch.py"
 )
