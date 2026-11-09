@@ -179,7 +179,7 @@
     settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
   $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
     ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
-    : /^(directml|xpu)(:|$)/.test(settings.device_id)
+    : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
       ? 'SeedVR2 cannot run on this device. Choose frame-by-frame video or a compatible CUDA, ROCm or Metal device.'
       : '';
   $: seedMemory = snapshot.runtime.video_memory;

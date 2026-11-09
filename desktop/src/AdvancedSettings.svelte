@@ -24,10 +24,14 @@
   // ONNX Runtime GPU routes always run FP32, whatever the saved precision says.
   $: onnxGpu =
     settings.device_id.startsWith('directml:') || settings.device_id.startsWith('openvino:');
-  // An Intel NPU computes in FP16 whatever the saved precision says.
   $: npuSelected = capabilities.devices.some(
     (device) => device.id === settings.device_id && device.type === 'npu',
   );
+  // An Intel NPU computes in FP16 whatever the saved precision says; a model it does not
+  // run goes to the CPU, which runs FP32.
+  $: npuRunning =
+    npuSelected &&
+    selectedHardware(settings, capabilities, selectedModel?.architecture) === settings.device_id;
   $: gpuSuggestion =
     settings.device_id === 'cpu' && capabilities.gpu_suggestion
       ? capabilities.gpu_suggestion
@@ -413,7 +417,7 @@
               id="precision"
               disabled={onnxGpu ||
                 (settings.task === 'video' && settings.video_hdr_mode === 'preserve')}
-              value={npuSelected ? 'fp16' : onnxGpu ? 'fp32' : settings.precision}
+              value={npuRunning ? 'fp16' : onnxGpu ? 'fp32' : settings.precision}
               on:change={(event) => updateSettings({ precision: event.currentTarget.value })}
               ><option value="fp32">FP32</option><option value="fp16">FP16</option></select
             >

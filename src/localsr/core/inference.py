@@ -317,6 +317,8 @@ class InferenceEngine:
                     )
                 onnx_route = None
                 device_str = "cpu"
+                # The CPU runs FP32 whatever the NPU route was asked for.
+                precision_str = "fp32"
         # ONNX owns the GPU tensors. PyTorch stages tiles and validates returned
         # pixels on CPU; the selected execution backend is tracked separately.
         device = (

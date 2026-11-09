@@ -1150,6 +1150,7 @@ class WorkerServer:
         if model_kind == "seedvr2" and str(data.get("device", "")).split(":", 1)[0] in {
             "directml",
             "xpu",
+            "openvino",
         }:
             raise ValueError(
                 "SeedVR2 does not support this GPU backend. Choose frame-by-frame video "

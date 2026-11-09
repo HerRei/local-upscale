@@ -1307,9 +1307,11 @@ def test_a_model_the_npu_cannot_run_falls_back_to_the_cpu_and_says_so(monkeypatc
     monkeypatch.setattr(engine, "_attach_status", lambda model: None)
     supported = sorted(NPU_ARCHITECTURES)[0]
     for architecture in ("HAT", supported):
-        info = NormalizedModelInfo(architecture, 4, 3, 3, True, False, 1, 1, "m.pth", [])
-        engine.load_model(f"{architecture}.pth", "openvino:80d1", "fp32", info)
-    assert loads == [("cpu", None), ("cpu", npu)]
+        # A half-capable model: a saved FP16 must still not reach the CPU fallback.
+        info = NormalizedModelInfo(architecture, 4, 3, 3, True, True, 1, 1, "m.pth", [])
+        engine.load_model(f"{architecture}.pth", "openvino:80d1", "fp16", info)
+    assert loads[0] == ("cpu", None) and loads[1] == ("cpu", npu)
+    assert engine._loaded_models["HAT.pth"][2] == torch.float32
     assert messages == ["HAT does not run on Intel(R) AI Boost (NPU), so it runs on the CPU."]
 
 
@@ -1383,3 +1385,39 @@ def test_the_npu_compile_cache_keeps_the_newest_programs_within_its_limit(tmp_pa
     _trim_npu_cache(cache, limit=350)
     assert sorted(path.name for path in cache.iterdir()) == ["1.blob", "2.blob"]
     _trim_npu_cache(tmp_path / "missing", limit=1)  # nothing cached yet: nothing to do
+
+
+def test_the_npu_cache_is_trimmed_again_after_a_compile_adds_to_it(monkeypatch, tmp_path):
+    import onnxruntime as ort
+
+    from localsr.core import onnx_runtime
+    from localsr.core.onnx_runtime import OnnxImageDescriptor, OnnxRoute
+
+    monkeypatch.setenv("LOCALSR_ONNX_GATE_CACHE", str(tmp_path))
+    monkeypatch.setattr(onnx_runtime, "NPU_CACHE_LIMIT", 250)
+    cache = tmp_path / "npu-cache"
+    cache.mkdir()
+    old = cache / "old.blob"
+    old.write_bytes(b"x" * 200)
+    os.utime(old, (1_000, 1_000))
+
+    class _Session:
+        def __init__(self, graph, sess_options=None, **kwargs):
+            (cache / "new.blob").write_bytes(b"y" * 200)  # what compiling leaves behind
+
+        def disable_fallback(self):
+            pass
+
+        def get_providers(self):
+            return ["OpenVINOExecutionProvider"]
+
+    monkeypatch.setattr(ort, "InferenceSession", _Session)
+    monkeypatch.setattr(
+        ort.SessionOptions, "add_provider_for_devices", lambda *args: None, raising=False
+    )
+    converted = OnnxImageDescriptor(
+        descriptor(), route=OnnxRoute("OpenVINOExecutionProvider", ep_device=object(), kind="NPU")
+    )
+    session, trace = converted.model._create(b"graph", ("npu-fp16", {}, "all"))
+    trace.cleanup()
+    assert sorted(path.name for path in cache.iterdir()) == ["new.blob"]

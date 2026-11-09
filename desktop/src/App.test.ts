@@ -1106,7 +1106,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
-  it.each(['incompatible-runtime', 'directml:0', 'xpu:0'])(
+  it.each(['incompatible-runtime', 'directml:0', 'xpu:0', 'openvino:80d1d11eb738'])(
     'blocks unavailable SeedVR2 recipes and downloads on %s',
     async (backend) => {
       const snapshot = readySnapshot([video('clip', true)]);
@@ -1131,6 +1131,31 @@ describe('LocalSR desktop interface', () => {
       expect(api.downloadModel).not.toHaveBeenCalled();
     },
   );
+
+  it('shows the precision of the CPU for a model the selected NPU does not run', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      {
+        id: 'openvino:80d1',
+        type: 'npu',
+        name: 'Intel(R) AI Boost (NPU)',
+        total_memory: 16 * 1024 ** 3,
+        free_memory: 8 * 1024 ** 3,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [128, 256],
+      },
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+    ];
+    snapshot.settings.device_id = 'openvino:80d1';
+    snapshot.settings.selected_model_id = 'hat_l_x4_imagenet';
+    snapshot.settings.precision = 'fp32';
+    snapshot.settings.quality = 'custom';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
+    expect(precision.value).toBe('fp32');
+  });
 
   it('keeps processing settings locked while another media item is selected', async () => {
     const snapshot = readySnapshot([image('active-image'), video('next-video', true)]);
