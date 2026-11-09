@@ -216,6 +216,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         runtime.worker = "starting".into();
         runtime.status_title = "Starting engine".into();
         runtime.status_detail = "The inference process is loading.".into();
+        // A new engine has run nothing yet.
+        runtime.hardware_note.clear();
     }
     emit_state_changed(&app);
 
@@ -351,7 +353,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             .err();
         let mut requested_restart = false;
         if let Ok(mut runtime) = state.runtime.lock() {
-            let active = std::mem::take(&mut runtime.active_job_id);
+            // The killed or crashed engine's job ends here, its route note with it.
+            let active = runtime.take_active_job();
             requested_restart = runtime.worker == "restarting" && forced_job.is_empty();
             let last_confirmed_stage = runtime.status_title.clone();
             let exit_summary = match &status {
@@ -456,7 +459,7 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
         if runtime.worker != "ready" {
             return Ok(());
         }
-        runtime.active_job_id = pending.id.clone();
+        runtime.begin_active_job(pending.id.clone());
         runtime.status_title = "Queued".into();
         runtime.status_detail = "Sending the next item to the inference engine.".into();
         runtime.progress = 0.0;
@@ -466,7 +469,7 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
     if let Err(error) = send(state, &message) {
         lock(&state.worker.cancellation)?.finish()?;
         lock(&state.database)?.finish_job(&pending.id, "failed", "", &error.to_string())?;
-        lock(&state.runtime)?.active_job_id.clear();
+        lock(&state.runtime)?.take_active_job();
         return Err(error);
     }
     emit_state_changed(app);
@@ -781,7 +784,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let id = string(data, "job_id");
             lock(&state.database)?.set_job_status(&id, "running")?;
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id = id;
+            runtime.begin_active_job(id);
             runtime.video_memory = None;
             runtime.status_title = "Processing".into();
             runtime.status_detail = "Preparing the selected model.".into();
@@ -791,7 +794,6 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.throughput_unit = "tiles/s".into();
             runtime.active_tile_size = 0;
             runtime.result_preview_data_url.clear();
-            runtime.hardware_note.clear();
         }
         "engine_status" => {
             // The engine's word on the hardware route. The next progress tick replaces the
@@ -1021,7 +1023,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         "live_preview_warning" => {}
         "benchmark_started" => {
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id = string(data, "job_id");
+            runtime.begin_active_job(string(data, "job_id"));
             let is_v2 = string(data, "workload_version").starts_with("localsr-benchmark-v2");
             runtime.status_title = "Benchmark running".into();
             runtime.status_detail = if is_v2 {
@@ -1090,7 +1092,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             settings::save_benchmark(&state.paths, &result)?;
             *lock(&state.latest_benchmark)? = Some(result.clone());
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id.clear();
+            runtime.take_active_job();
             runtime.progress = 100.0;
             runtime.status_title = "Benchmark complete".into();
             runtime.status_detail = if result.is_v2() {
@@ -1135,14 +1137,14 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         }
         "benchmark_cancelled" => {
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id.clear();
+            runtime.take_active_job();
             runtime.progress = 0.0;
             runtime.status_title = "Benchmark cancelled".into();
             runtime.status_detail = "No partial benchmark result was stored.".into();
         }
         "benchmark_failed" => {
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id.clear();
+            runtime.take_active_job();
             hold_until_restart(&mut runtime, data);
             runtime.progress = 0.0;
             runtime.status_title = "Benchmark failed".into();
@@ -1157,8 +1159,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
             lock(&state.database)?.record_job_duration(&id, number(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id.clear();
-            runtime.hardware_note.clear();
+            runtime.take_active_job();
             // A video frame thumbnail is a live preview, not a completed
             // before/after result. The full-output request issued by the host
             // will populate this again only after it has decoded successfully.
@@ -1179,8 +1180,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let id = string(data, "job_id");
             lock(&state.database)?.finish_job(&id, "cancelled", "", "Cancelled by the user.")?;
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id.clear();
-            runtime.hardware_note.clear();
+            runtime.take_active_job();
             runtime.status_title = "Cancelled".into();
             runtime.status_detail = "Temporary output was cleaned up.".into();
             runtime.estimated_remaining_seconds = 0.0;
@@ -1190,8 +1190,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             let error = string(data, "error_message");
             lock(&state.database)?.finish_job(&id, "failed", "", &error)?;
             let mut runtime = lock(&state.runtime)?;
-            runtime.active_job_id.clear();
-            runtime.hardware_note.clear();
+            runtime.take_active_job();
             runtime.status_title = "Could not finish".into();
             runtime.status_detail = error;
             runtime.estimated_remaining_seconds = 0.0;
@@ -1786,6 +1785,45 @@ mod tests {
         )
         .unwrap();
         assert!(lock(&state.runtime).unwrap().hardware_note.is_empty());
+    }
+
+    #[test]
+    fn a_stale_route_note_never_reaches_a_benchmark() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        // A forced cancellation killed the engine mid-job; the next one is ready.
+        lock(&state.runtime).unwrap().hardware_note =
+            "RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here."
+                .into();
+        apply_worker_envelope(
+            &state,
+            &WorkerEnvelope {
+                message_type: "benchmark_started".into(),
+                data: json!({"job_id": "bench", "workload_version": "localsr-benchmark-v2"}),
+            },
+        )
+        .unwrap();
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.active_job_id, "bench");
+        assert!(runtime.hardware_note.is_empty());
+    }
+
+    #[test]
+    fn abandoning_or_replacing_the_active_job_drops_its_route_note() {
+        // The supervisor path (a killed or crashed engine) and the dispatcher use these.
+        let mut runtime = RuntimeStatus {
+            active_job_id: "job".into(),
+            hardware_note: "SPAN runs on the NPU.".into(),
+            ..RuntimeStatus::default()
+        };
+        assert_eq!(runtime.take_active_job(), "job");
+        assert!(runtime.active_job_id.is_empty() && runtime.hardware_note.is_empty());
+        runtime.hardware_note = "SPAN runs on the NPU.".into();
+        runtime.begin_active_job("next".into());
+        assert_eq!(runtime.active_job_id, "next");
+        assert!(runtime.hardware_note.is_empty());
     }
 
     #[test]
