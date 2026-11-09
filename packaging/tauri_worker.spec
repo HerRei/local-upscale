@@ -96,11 +96,22 @@ if find_spec("onnxruntime_ep_openvino") is not None:
         for path in Path(find_spec("onnxruntime_ep_openvino").submodule_search_locations[0]).iterdir()
         if path.is_file() and (".so" in path.name or path.suffix.lower() == ".dll")
     }
+    # On Windows the DLLs load through a side-by-side manifest (openvino_runtime.manifest);
+    # without it Windows refuses them (error 14001) and the plugin cannot register.
     openvino_notices = collect_data_files(
-        "onnxruntime_ep_openvino", includes=["third-party-programs.txt", "cache.json"]
+        "onnxruntime_ep_openvino",
+        includes=["third-party-programs.txt", "cache.json", "*.manifest"],
     )
     if not any(Path(entry[0]).name == "third-party-programs.txt" for entry in openvino_notices):
         raise RuntimeError("The OpenVINO third-party notices must be bundled")
+    package_manifests = {
+        path.name
+        for path in Path(
+            find_spec("onnxruntime_ep_openvino").submodule_search_locations[0]
+        ).glob("*.manifest")
+    }
+    if not package_manifests <= {Path(entry[0]).name for entry in openvino_notices}:
+        raise RuntimeError(f"The OpenVINO manifests must be bundled: {sorted(package_manifests)}")
     datas += openvino_notices + copy_metadata("onnxruntime-ep-openvino")
     onnx_hidden += ["onnxruntime_ep_openvino"]
 coreml_hidden = []

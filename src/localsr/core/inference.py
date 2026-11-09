@@ -197,7 +197,12 @@ def _onnx_route(device_str: str):
         adapter = next((a for a in adapters if a["index"] == index), None)
         if adapter is None:
             return OnnxRoute(
-                "DmlExecutionProvider", index, identity=device_str, label=device_str, persist=False
+                "DmlExecutionProvider",
+                index,
+                identity=device_str,
+                label=device_str,
+                persist=False,
+                device=device_str,
             )
 
         def describe(entry: dict) -> str:
@@ -220,6 +225,7 @@ def _onnx_route(device_str: str):
             identity=identity,
             label=f"{adapter['name']} (DirectML)",
             persist=adapter.get("driver_version") is not None and twins == 1,
+            device=device_str,
         )
     if kind == "openvino":
         from .onnx_runtime import OnnxRoute
@@ -247,6 +253,7 @@ def _onnx_route(device_str: str):
             identity=identity,
             label=f"{device['name']} (OpenVINO)",
             persist=device.get("driver") is not None,
+            device=device_str,
         )
     return None
 
