@@ -1482,6 +1482,41 @@ describe('LocalSR desktop interface', () => {
     ).toBeNull();
   });
 
+  it("drops an ended job's route note before a benchmark, even after a forced stop", async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const note =
+      'RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here.';
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({ type: 'engine_status', data: { job_id: 'job-1', message: note } });
+    expect(await screen.findByText(note)).toBeTruthy();
+    // A forced cancellation kills the engine: the host's snapshot no longer has the job.
+    const stopped = structuredClone(snapshot);
+    // It still carried the old job's note (worker.rs did not clear it on that path).
+    Object.assign(stopped.runtime, {
+      status_title: 'Cancelled',
+      status_detail: 'Work stopped; temporary output removed. Restarting engine…',
+      hardware_note: note,
+    });
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.queryByText(note)).toBeNull());
+    callback({
+      type: 'benchmark_started',
+      data: {
+        job_id: 'bench-1',
+        workload_version: 'localsr-benchmark-v2',
+        measured_frame_count: 3,
+      },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Benchmark/),
+    );
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
   it('says in its row that a queue item could not finish, until a later run finishes', async () => {
     const snapshot = readySnapshot([image('photo', true), image('other')]);
     const failed: JobRecord = {
