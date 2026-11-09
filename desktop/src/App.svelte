@@ -1,12 +1,19 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import PreviewPane from './PreviewPane.svelte';
-  import ResultChooser from './ResultChooser.svelte';
+  import ComparePane from './ComparePane.svelte';
+  import {
+    outputGroups,
+    pickKey,
+    toggleSlot,
+    swapSlots,
+    tabFromKey,
+    type CompareItem,
+  } from './lib/compareOutputs';
   import {
     ORIGINAL,
     alignedFraming,
     chooseTarget,
-    choosersVisible,
     describeSide,
     effectiveChoice,
     slotFor,
@@ -63,6 +70,7 @@
   import { engineLabel } from './lib/neuralEngine';
   import type {
     AppSnapshot,
+    ComparePick,
     BenchmarkDeviceResult,
     BenchmarkRender,
     CatalogModel,
@@ -96,6 +104,98 @@
     : (snapshot.latest_benchmark?.device_results ?? []);
 
   let page: 'media' | 'preview' | 'enhance' = 'preview';
+  let mainTab: 'preview' | 'compare' = 'preview';
+  let compareLayout: 'slider' | 'boxes' = 'slider';
+  let comparePicks: ComparePick[] = [];
+  let bulkHistories: MediaResults[] = [];
+  let bulkHistoryError = '';
+  let bulkKey = '';
+  let bulkRequest = 0;
+  let compareRequestError = '';
+  let comparePending = false;
+  let compareRevision = 0;
+  $: desiredBulkKey = JSON.stringify([
+    snapshot.media.map((m) => m.id),
+    snapshot.jobs.map((j) => [j.id, j.status]),
+  ]);
+  $: if (desiredBulkKey !== bulkKey) void loadBulkHistories(desiredBulkKey);
+  $: compareGroups = outputGroups(snapshot.media, bulkHistories);
+  $: compareItems = comparePicks.map((pick, index): CompareItem => {
+    const group = compareGroups.find((entry) => entry.media.id === pick.media_id);
+    const media = snapshot.media.find((entry) => entry.id === pick.media_id);
+    const result =
+      pick.kind === 'output'
+        ? group?.outputs.find((entry) => pickKey(entry.pick) === pickKey(pick))?.result
+        : undefined;
+    const candidate = snapshot.runtime.compare?.slots[index];
+    const slot = candidate && pickKey(candidate.pick) === pickKey(pick) ? candidate : undefined;
+    return {
+      key: pickKey(pick),
+      pick,
+      media_name: media?.name ?? 'Image',
+      label: pick.kind === 'original' ? 'Original' : result?.model_label || 'Earlier result',
+      meta: result
+        ? [
+            result.ui?.quality,
+            result.scale ? `${result.scale}×` : '',
+            result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : `${media?.width ?? 0} × ${media?.height ?? 0}`,
+      width: slot?.width || media?.width || 1,
+      height: slot?.height || media?.height || 1,
+      preview_data_url: slot?.preview_data_url ?? '',
+      status: slot?.status ?? 'loading',
+      error: slot?.error ?? '',
+    };
+  });
+  function mainTabKey(event: KeyboardEvent): void {
+    const next = tabFromKey(event.key, mainTab === 'preview' ? 0 : 1, 2);
+    if (next === null) return;
+    event.preventDefault();
+    mainTab = next === 0 ? 'preview' : 'compare';
+    (event.currentTarget as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [next]?.focus();
+  }
+  async function loadBulkHistories(key: string): Promise<void> {
+    bulkKey = key;
+    const request = ++bulkRequest;
+    if (!api.isTauri()) return;
+    try {
+      const histories = await api.listAllMediaResults();
+      if (request === bulkRequest) {
+        bulkHistories = histories;
+        bulkHistoryError = '';
+      }
+    } catch (error) {
+      if (request === bulkRequest) bulkHistoryError = String(error);
+    }
+  }
+  function setComparePicks(picks: ComparePick[]): void {
+    if (picks.length >= 3 && comparePicks.length < 3) compareLayout = 'boxes';
+    comparePicks = picks;
+    compareRevision++;
+    void sendComparePicks();
+  }
+  async function sendComparePicks(): Promise<void> {
+    if (comparePending || !api.isTauri()) return;
+    comparePending = true;
+    let sent: number;
+    do {
+      sent = compareRevision;
+      try {
+        await api.requestCompare(comparePicks);
+        if (sent === compareRevision) compareRequestError = '';
+      } catch (error) {
+        if (sent === compareRevision) compareRequestError = String(error);
+      }
+    } while (sent !== compareRevision);
+    comparePending = false;
+    await refresh();
+  }
+
   let recipeEditorOpen = false;
   let recipeName = '';
   let termsAccepted = false;
@@ -326,7 +426,6 @@
           .filter((row): row is ResultSummary => Boolean(row)),
       ]
     : [];
-  $: choosersShown = Boolean(pairMode && choosersVisible(history));
   $: showingSide = selectedImage
     ? describeSide(
         choice.showing,
@@ -2275,6 +2374,16 @@
 
   <main class="workspace">
     <MediaQueue
+      groups={compareGroups}
+      picks={comparePicks}
+      togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
+      clearPicks={() => setComparePicks([])}
+      openCompare={() => {
+        mainTab = 'compare';
+        page = 'preview';
+      }}
+      compareActive={mainTab === 'compare'}
+      historyError={bulkHistoryError}
       items={snapshot.media}
       jobs={snapshot.jobs}
       activeJobId={snapshot.runtime.active_job_id}
@@ -2299,70 +2408,81 @@
       }}
     />
 
-    <PreviewPane
-      bind:this={previewPane}
-      modelLabel={settings.task === 'edit'
-        ? (editModel?.name ?? 'Editing model')
-        : usingTemporalVideo
-          ? (selectedVideoModel?.name ?? 'Video model')
-          : (selectedModel?.name ?? 'Model')}
-      activityLabel={snapshot.runtime.status_title}
-      activityDetail={settings.task === 'edit' ? snapshot.runtime.status_detail : ''}
-      activityProgress={snapshot.runtime.progress}
-      editing={settings.task === 'edit'}
-      processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
-      activeTileSize={snapshot.runtime.active_tile_size}
-      {selectedMedia}
-      {resultPreview}
-      {referenceIsResult}
-      referencePreview={referenceIsResult && againstSide?.state === 'ready' ? againstSide.src : ''}
-      referenceLabel={referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original'}
-      referenceState={againstSide?.state ?? 'ready'}
-      referenceError={againstSide?.error ?? ''}
-      showingLabel={choosersShown && !liveRun ? (showingSide?.label ?? '') : ''}
-      showingState={showingSide?.state ?? 'ready'}
-      showingError={showingSide?.error ?? ''}
-      {singleFrame}
-      {comparisonNote}
-      showLiveTiles={!choice.pinned}
-      resultCount={choosersShown ? (history?.completed_count ?? 0) : 0}
-      showChoosers={choosersShown}
-      comparisonError={selectedComparisonError}
-      {completedVideoOutput}
-      compactHidden={page !== 'preview'}
-      addFiles={() => void addFiles()}
-      dropping={filesDragging}
-    >
-      <svelte:fragment slot="choosers">
-        {#if selectedImage && history}
-          <ResultChooser
-            label="Showing"
-            filename={selectedImage.name}
-            target={choice.showing}
-            liveLabel={liveRun ? 'Live preview' : ''}
-            results={resultRows}
-            completedCount={history.completed_count}
-            choose={(target) => choosePair('showing', target)}
-            openResult={(path) => void api.openResult(path)}
-            revealResult={(path) => void api.revealResult(path)}
-          />
-          <ResultChooser
-            label="against"
-            filename={selectedImage.name}
-            target={choice.against}
-            results={resultRows}
-            completedCount={history.completed_count}
-            choose={(target) => choosePair('against', target)}
-            openResult={(path) => void api.openResult(path)}
-            revealResult={(path) => void api.revealResult(path)}
-          />
-          <HelpTip
-            label="comparing results"
-            text="Both sides are previews reduced to at most 2048 pixels and drawn over the same part of the image, whatever their scale. 1:1 is one source pixel per screen pixel. Open shows the full file. Hold M to see the original."
-          />
-        {/if}
-      </svelte:fragment>
-    </PreviewPane>
+    <div class="main-area" class:compact-hidden={page !== 'preview'}>
+      <div
+        class="main-tabs"
+        role="tablist"
+        tabindex="-1"
+        aria-label="Main pane"
+        on:keydown={mainTabKey}
+      >
+        <button
+          role="tab"
+          aria-selected={mainTab === 'preview'}
+          tabindex={mainTab === 'preview' ? 0 : -1}
+          class:active={mainTab === 'preview'}
+          on:click={() => (mainTab = 'preview')}>Preview</button
+        >
+        <button
+          role="tab"
+          aria-selected={mainTab === 'compare'}
+          tabindex={mainTab === 'compare' ? 0 : -1}
+          class:active={mainTab === 'compare'}
+          on:click={() => (mainTab = 'compare')}
+          >Compare{comparePicks.length ? ` ${comparePicks.length}` : ''}</button
+        >
+      </div>
+      {#if mainTab === 'compare'}
+        {#if compareRequestError}<div class="compare-request-error" role="alert">
+            {compareRequestError}
+          </div>{/if}
+        <ComparePane
+          items={compareItems}
+          layout={compareLayout}
+          setLayout={(layout) => (compareLayout = layout)}
+          swapItems={(first, second) => setComparePicks(swapSlots(comparePicks, first, second))}
+          removeItem={(key) =>
+            setComparePicks(comparePicks.filter((pick) => pickKey(pick) !== key))}
+          close={() => (mainTab = 'preview')}
+          asTab
+        />
+      {:else}
+        <PreviewPane
+          bind:this={previewPane}
+          modelLabel={settings.task === 'edit'
+            ? (editModel?.name ?? 'Editing model')
+            : usingTemporalVideo
+              ? (selectedVideoModel?.name ?? 'Video model')
+              : (selectedModel?.name ?? 'Model')}
+          activityLabel={snapshot.runtime.status_title}
+          activityDetail={settings.task === 'edit' ? snapshot.runtime.status_detail : ''}
+          activityProgress={snapshot.runtime.progress}
+          editing={settings.task === 'edit'}
+          processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
+          activeTileSize={snapshot.runtime.active_tile_size}
+          {selectedMedia}
+          {resultPreview}
+          {referenceIsResult}
+          referencePreview={referenceIsResult && againstSide?.state === 'ready'
+            ? againstSide.src
+            : ''}
+          referenceLabel={referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original'}
+          referenceState={againstSide?.state ?? 'ready'}
+          referenceError={againstSide?.error ?? ''}
+          showingLabel={''}
+          showingState={showingSide?.state ?? 'ready'}
+          showingError={showingSide?.error ?? ''}
+          {singleFrame}
+          {comparisonNote}
+          showLiveTiles={!choice.pinned}
+          comparisonError={selectedComparisonError}
+          {completedVideoOutput}
+          compactHidden={page !== 'preview'}
+          addFiles={() => void addFiles()}
+          dropping={filesDragging}
+        ></PreviewPane>
+      {/if}
+    </div>
 
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>
       <div class="pane-heading" data-tauri-drag-region>

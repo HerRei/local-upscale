@@ -4,7 +4,6 @@ import {
   ORIGINAL,
   alignedFraming,
   chooseTarget,
-  choosersVisible,
   configuredStages,
   describeSide,
   effectiveChoice,
@@ -75,12 +74,6 @@ describe('the chosen pair', () => {
     expect(effectiveChoice(history([result('later'), ...rows]), pinned)).toEqual(pinned);
     // A pinned result whose file disappeared falls back to the default.
     expect(effectiveChoice(history(rows), { ...pinned, against: 'missing' }).pinned).toBe(false);
-  });
-
-  it('shows the choosers only for two saved results with files', () => {
-    expect(choosersVisible(history([result('a'), result('b', { available: false })]))).toBe(false);
-    expect(choosersVisible(history([result('a'), result('b')]))).toBe(true);
-    expect(choosersVisible(undefined)).toBe(false);
   });
 
   it('swaps the sides when one side is given what the other holds', () => {

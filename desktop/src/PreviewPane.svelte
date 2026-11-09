@@ -50,11 +50,8 @@
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
   /** Saved results of this image, for the header's "· 3 results". */
-  export let resultCount = 0;
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
-  /** The "Showing [result] against [Original]" row, filled through the choosers slot. */
-  export let showChoosers = false;
   export let completedVideoOutput: string;
   export let compactHidden = false;
   export let modelLabel = '';
@@ -866,7 +863,7 @@
       <strong data-tauri-drag-region>{selectedMedia?.name ?? 'Preview'}</strong>
       <span
         >{selectedMedia
-          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : resultCount > 1 ? ` · ${resultCount} results` : ''}`
+          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
           : 'No media selected'}</span
       >
     </div>
@@ -882,10 +879,6 @@
           >
         {/each}
       </div>
-    {/if}
-    {#if showChoosers && $$slots.choosers}
-      <!-- Buttons are never drag targets; the row's own gaps are not either. -->
-      <div class="result-selectors"><slot name="choosers" /></div>
     {/if}
   </div>
 
