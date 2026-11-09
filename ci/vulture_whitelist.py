@@ -40,6 +40,7 @@ mps_driver_allocated_memory
 mps_recommended_max_memory
 mps_tensor_allocated_memory
 neural_engine
+npu_hint
 oom
 output_temporary_directory
 p05_ms

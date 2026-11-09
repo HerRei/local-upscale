@@ -86,7 +86,7 @@ jobs:
           "$PYTHON" -m pip install --disable-pip-version-check -e ".[dev,video,face]"
           # The GPU check's tests run the exported graphs on ONNX Runtime's CPU provider;
           # without these they skip. Same pins as requirements/backend-openvino.in.
-          "$PYTHON" -m pip install --disable-pip-version-check "onnx==1.22.0" "onnxruntime==1.24.4"
+          "$PYTHON" -m pip install --disable-pip-version-check "onnx==1.22.0" "onnxruntime==1.31.1"
           "$PYTHON" -m pip install --disable-pip-version-check build
           "$PYTHON" -m pyright --pythonpath "$PYTHON"
           "$PYTHON" -m pytest tests/ -v

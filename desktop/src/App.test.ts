@@ -2136,6 +2136,75 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
   });
 
+  it('names in the library which models run on the Neural Engine or an NPU', async () => {
+    const mac = readySnapshot([image('photo', true)]);
+    mac.capabilities.devices[0].neural_engine = true;
+    const user = await mountWith(mac);
+    await chooseMenuItem('view.models');
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
+    expect(within(library).getByRole('button', { name: /SPAN ×4.*Neural Engine/ })).toBeTruthy();
+    expect(
+      within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }).textContent,
+    ).not.toMatch(/Neural Engine/);
+    await user.click(within(library).getByRole('button', { name: /SPAN ×4/ }));
+    expect(within(library).getByText('Runs on')).toBeTruthy();
+    cleanup();
+
+    const pc = readySnapshot([image('photo', true)]);
+    pc.capabilities.devices = [
+      {
+        id: 'openvino:80d1',
+        type: 'npu',
+        name: 'Intel(R) AI Boost (NPU)',
+        total_memory: 16 * 1024 ** 3,
+        free_memory: 8 * 1024 ** 3,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [128, 256],
+      },
+      ...pc.capabilities.devices.filter((device) => device.id === 'cpu'),
+    ];
+    pc.settings.device_id = 'cpu';
+    const user2 = await mountWith(pc);
+    await chooseMenuItem('view.models');
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user2.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
+    expect(within(library).getByRole('button', { name: /SPAN ×4.*NPU/ })).toBeTruthy();
+  });
+
+  it('explains the NPU in Advanced and what a machine without its compiler is missing', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      {
+        id: 'openvino:80d1',
+        type: 'npu',
+        name: 'Intel(R) AI Boost (NPU)',
+        total_memory: 16 * 1024 ** 3,
+        free_memory: 8 * 1024 ** 3,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [128, 256],
+      },
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+    ];
+    snapshot.settings.device_id = 'openvino:80d1';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
+    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+    cleanup();
+
+    const missing = readySnapshot([image('photo', true)]);
+    missing.capabilities.devices = missing.capabilities.devices.filter((d) => d.id === 'cpu');
+    missing.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
+    missing.settings.device_id = 'cpu';
+    const user2 = await mountWith(missing);
+    await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect(screen.getByText(/Intel\(R\) AI Boost.*NPU compiler/)).toBeTruthy();
+  });
+
   it('picks a model for this job from the library and marks the recipe as custom', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);

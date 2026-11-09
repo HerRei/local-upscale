@@ -24,6 +24,10 @@
   // ONNX Runtime GPU routes always run FP32, whatever the saved precision says.
   $: onnxGpu =
     settings.device_id.startsWith('directml:') || settings.device_id.startsWith('openvino:');
+  // An Intel NPU computes in FP16 whatever the saved precision says.
+  $: npuSelected = capabilities.devices.some(
+    (device) => device.id === settings.device_id && device.type === 'npu',
+  );
   $: gpuSuggestion =
     settings.device_id === 'cpu' && capabilities.gpu_suggestion
       ? capabilities.gpu_suggestion
@@ -344,6 +348,18 @@
           This computer has {gpuSuggestion.name}. The {gpuSuggestion.download} download of LocalSR can
           use it; this one runs on the CPU.
         </p>
+      {:else if !usingTemporalVideo && npuSelected}
+        <p class="model-description">
+          The NPU runs SPAN, Real-ESRGAN and FBCNN models; others run on the CPU. LocalSR compiles a
+          model once for the NPU, which can take a minute, and checks once that its result matches
+          the CPU's.
+        </p>
+      {:else if capabilities.npu_hint}
+        <p class="model-description">
+          This computer has {capabilities.npu_hint.name}, an NPU. LocalSR can use it once Intel's
+          NPU compiler is installed: on Linux the intel-driver-compiler-npu package from Intel's NPU
+          driver, on Windows the current Intel NPU driver.
+        </p>
       {:else if !usingTemporalVideo && settings.device_id.startsWith('openvino:')}
         <p class="model-description">
           OpenVINO runs the model on the selected Intel GPU. The first time a model runs on it,
@@ -392,12 +408,12 @@
           <div>
             <label for="precision">Precision</label><HelpTip
               label="Precision"
-              text="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32."
+              text="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32, an Intel NPU always FP16."
             /><select
               id="precision"
               disabled={onnxGpu ||
                 (settings.task === 'video' && settings.video_hdr_mode === 'preserve')}
-              value={onnxGpu ? 'fp32' : settings.precision}
+              value={npuSelected ? 'fp16' : onnxGpu ? 'fp32' : settings.precision}
               on:change={(event) => updateSettings({ precision: event.currentTarget.value })}
               ><option value="fp32">FP32</option><option value="fp16">FP16</option></select
             >

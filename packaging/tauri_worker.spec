@@ -77,14 +77,11 @@ if find_spec("onnxruntime") is not None:
     onnx_hidden += ["onnxruntime", "torch.onnx"]
 openvino_package_libraries: set[str] = set()
 if find_spec("onnxruntime_ep_openvino") is not None:
-    # Intel GPUs: the OpenVINO plugin and its own OpenVINO runtime, loaded by path
-    # from this package directory. The NPU plugin is left out: LocalSR does not use
-    # the NPU, and it would load Level Zero at device discovery.
-    openvino_binaries = [
-        entry
-        for entry in collect_dynamic_libs("onnxruntime_ep_openvino")
-        if "openvino_intel_npu_plugin" not in Path(entry[0]).name
-    ]
+    # Intel GPUs and NPUs: the OpenVINO plugin and its own OpenVINO runtime, loaded by
+    # path from this package directory. The NPU plugin loads Level Zero at device
+    # discovery; on Windows the wheel also carries the NPU compiler, on Linux the user's
+    # Intel NPU driver provides it.
+    openvino_binaries = collect_dynamic_libs("onnxruntime_ep_openvino")
     if not any("providers_openvino_plugin" in Path(entry[0]).name for entry in openvino_binaries):
         raise RuntimeError("The OpenVINO plugin library was not found for bundling")
     spandrel_binaries += openvino_binaries

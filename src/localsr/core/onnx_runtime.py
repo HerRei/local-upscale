@@ -88,6 +88,12 @@ class _RawImage(torch.nn.Module):
 # Every LocalSR GPU route through ONNX runs FP32, so a correct route lands far above
 # this (OpenVINO FP32 on an Intel iGPU: 128 dB); FP16 arithmetic lands near 50 dB.
 MINIMUM_PSNR = 50.0
+# An Intel NPU computes in FP16 whatever it is asked, so it is held to the bar the Neural
+# Engine's FP16 check uses on a Mac (coreml_runtime), measured on real tiles there.
+NPU_MINIMUM_PSNR = 45.0
+# Spandrel architectures an Intel NPU runs whole and close enough to the CPU, measured on
+# Core Ultra 200 (NPU 3720) with every catalog model; the others run on the CPU instead.
+NPU_ARCHITECTURES = frozenset({"SPAN", "ESRGAN", "FBCNN"})
 _MAXIMUM_VERDICTS = 400
 # Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).
 _LARGE_GRAPH_BYTES = 256 * 1024**2
@@ -141,6 +147,46 @@ ROUTE_CONFIGS = {
     ),
     "CPUExecutionProvider": (("default", {}, "all"),),
 }
+# The NPU has one precision; its compiled programs are kept in the check cache, because
+# compiling a model for it takes from seconds to minutes.
+NPU_ROUTE_CONFIGS = (("npu-fp16", {}, "all"),)
+
+
+def _route_configs(route) -> tuple:
+    return NPU_ROUTE_CONFIGS if route.kind == "NPU" else ROUTE_CONFIGS[route.provider]
+
+
+# A compiled NPU program is about as large as its model (FBCNN: 296 MB).
+NPU_CACHE_LIMIT = 2 * 1024**3
+
+
+def _trim_npu_cache(directory: Path, limit: int = NPU_CACHE_LIMIT) -> None:
+    """Delete the oldest compiled programs until the cache fits its limit."""
+    try:
+        blobs = sorted(
+            (path.stat().st_mtime, path.stat().st_size, path)
+            for path in directory.iterdir()
+            if path.is_file()
+        )
+    except OSError:
+        return
+    total = sum(size for _, size, _ in blobs)
+    for _, size, path in blobs:
+        if total <= limit:
+            break
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        total -= size
+
+
+def _provider_options(route, options: dict) -> dict:
+    if route.kind != "NPU":
+        return dict(options)
+    cache = gate_cache_directory() / "npu-cache"
+    _trim_npu_cache(cache)
+    return {**options, "load_config": json.dumps({"NPU": {"CACHE_DIR": str(cache)}})}
 
 
 class GpuRouteRejected(RuntimeError):
@@ -164,6 +210,8 @@ class OnnxRoute:
     persist: bool = True
     # The app's device id ("directml:0", "openvino:<uuid>"), for the preflight process.
     device: str = ""
+    # OpenVINO's device kind: "GPU", or "NPU" for an Intel NPU, which computes in FP16.
+    kind: str = "GPU"
 
     def __post_init__(self):
         if self.provider not in ROUTE_CONFIGS or self.device_index < 0:
@@ -231,6 +279,7 @@ class _OnnxImage(torch.nn.Module):
         self.scale = descriptor.scale
         self.output_channels = descriptor.output_channels
         self.route = route
+        self.minimum_psnr = NPU_MINIMUM_PSNR if route.kind == "NPU" else MINIMUM_PSNR
         self.provider = route.provider
         self.device_index = route.device_index
         self.sessions = OrderedDict()
@@ -248,6 +297,8 @@ class _OnnxImage(torch.nn.Module):
         # corner). Keeping all four lets the next image or video frame of the same size
         # reuse them; a very large model keeps two to spare shared memory.
         self.session_limit = 4
+        # The one input shape an NPU route runs at, once the engine has said its tile size.
+        self.fixed_shape: tuple[int, int] | None = None
 
     def _check_cancelled(self):
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -340,7 +391,9 @@ class _OnnxImage(torch.nn.Module):
         session = None
         try:
             if self.provider == "OpenVINOExecutionProvider":
-                options.add_provider_for_devices([self.route.ep_device], dict(provider_options))
+                options.add_provider_for_devices(
+                    [self.route.ep_device], _provider_options(self.route, provider_options)
+                )
                 session = ort.InferenceSession(graph, sess_options=options)
             else:
                 if self.provider not in ort.get_available_providers():
@@ -369,7 +422,7 @@ class _OnnxImage(torch.nn.Module):
             self.crash_cause = self.crashes.crashed(self._crash_key()) or self._preflight()
             if self.crash_cause:
                 return []
-        for config in ROUTE_CONFIGS[self.provider]:
+        for config in _route_configs(self.route):
             verdict = (
                 self.verdicts.get(self._verdict_key(graph_hash, config[0])) if self._gated else None
             )
@@ -677,13 +730,13 @@ class _OnnxImage(torch.nn.Module):
             return self._on_cpu(state, image)
         tile = None
         results = [pattern]
-        if pattern[0] >= MINIMUM_PSNR:
+        if pattern[0] >= self.minimum_psnr:
             tile, reference = self._compare(state, image, output)
             if tile is None:
                 return self._on_cpu(state, image, reference)
             results.append(tile)
         psnr = min(result[0] for result in results)
-        accepted = psnr >= MINIMUM_PSNR
+        accepted = psnr >= self.minimum_psnr
         cpu_ms = (tile or pattern)[2]
         gpu_ms = None
         if accepted:
@@ -738,7 +791,7 @@ class _OnnxImage(torch.nn.Module):
                 f"({gpu_ms:.0f} ms against {cpu_ms:.0f} ms per tile)."
             )
         else:
-            fallback = "" if config == ROUTE_CONFIGS[self.provider][0][0] else f" ({config})"
+            fallback = "" if config == _route_configs(self.route)[0][0] else f" ({config})"
             self._status(f"{self.architecture} runs on {self._label()}{fallback}.")
 
     def _attempt(self, state: dict, image, expected) -> tuple[str, np.ndarray | None]:
@@ -963,6 +1016,18 @@ class OnnxImageDescriptor:
 
     def set_status_callback(self, callback):
         self.model.status_callback = callback
+
+    def prepare_tiles(self, tile_size: int, halo: int, frame: tuple[int, int] | None = None):
+        # An NPU compiles every input shape on its own (seconds to minutes, and a cached
+        # program as large as the model), so it gets one: the engine then cuts edge tiles
+        # as full windows of real pixels, as for Core ML.
+        if self.model.route.kind == "NPU":
+            side = tile_size + 2 * halo
+            self.model.fixed_shape = (side, side)
+
+    @property
+    def fixed_input_shape(self) -> tuple[int, int] | None:
+        return self.model.fixed_shape
 
     @property
     def execution_provider(self):
