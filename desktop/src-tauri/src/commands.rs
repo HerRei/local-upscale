@@ -4191,8 +4191,10 @@ mod tests {
                 "{container} with {codec}"
             );
         }
-        let mut settings = UiSettings::default();
-        settings.output_format = "heic".into();
+        let settings = UiSettings {
+            output_format: "heic".into(),
+            ..UiSettings::default()
+        };
         assert_eq!(validate_settings(&settings).is_ok(), mac);
     }
 
