@@ -694,11 +694,66 @@ describe('photo batches', () => {
       type: 'job_failed',
       data: { job_id: 'a', error_message: 'disk full' },
     });
+    // The failure stays on the status line until the next photo starts.
     expect(snapshot.runtime).toMatchObject({
       active_job_id: 'b',
       active_batch_job_ids: ['b', 'c'],
-      status_title: 'Processing',
+      status_title: 'Could not finish',
+      status_detail: 'disk full',
       result_preview_data_url: '',
     });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'b' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'b', output_path: '/out/b.png' },
+    });
+    expect(snapshot.runtime.status_title).toBe('Processing');
+  });
+
+  it('never shows the pixels of the failed photo as the result of one saved off screen', () => {
+    let snapshot = batch();
+    snapshot.runtime.active_batch_job_ids = ['b', 'a'];
+    snapshot.media = ['a', 'b'].map((id) => ({
+      id,
+      path: `/in/${id}.png`,
+      name: `${id}.png`,
+      kind: 'image',
+      width: 64,
+      height: 48,
+      frame_count: 1,
+      fps: 0,
+      duration_seconds: 0,
+      preview_data_url: 'source',
+      probe_status: 'ready',
+      error: '',
+      selected: id === 'b',
+    }));
+    snapshot.jobs = ['a', 'b'].map((id, index) => ({
+      id,
+      media_id: id,
+      media_name: `${id}.png`,
+      media_kind: 'image',
+      status: 'running',
+      output_path: '',
+      progress: 0,
+      error: '',
+      created_at: index,
+    }));
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'b' } });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'a' } });
+    snapshot.runtime.result_preview_data_url = 'pixels-of-a';
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'b', output_path: '/out/b.png' },
+    });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_failed',
+      data: { job_id: 'a', error_message: 'disk full' },
+    });
+    // The next refresh brings b's finished row.
+    snapshot.jobs[1] = { ...snapshot.jobs[1], status: 'completed', output_path: '/out/b.png' };
+    snapshot.jobs[0] = { ...snapshot.jobs[0], status: 'failed' };
+    expect(snapshot.runtime.last_output_path).toBe('/out/b.png');
+    expect(resultPreviewForSelectedMedia(snapshot)).toBe('');
   });
 });
