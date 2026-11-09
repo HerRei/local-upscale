@@ -153,7 +153,8 @@ def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
             assert "\nonnxruntime==" not in lock
             assert "onnxruntime-ep-openvino==1.8.1" in lock
         if target["id"] == "linux-x86_64-cpu":
-            assert "onnxruntime==1.24.4" in lock
+            # ONNX Runtime lists Intel NPUs on Linux only from 1.28 on (/sys/class/accel).
+            assert "onnxruntime==1.31.1" in lock
             assert "onnxruntime-ep-openvino==1.8.1" in lock
             assert "onnxruntime-directml" not in lock
         elif target["backend"] != "DirectML":
