@@ -134,7 +134,7 @@ mod tests {
         let rife = catalog
             .interpolation_models
             .iter()
-            .find(|model| model.model_id == "rife_4_25")
+            .find(|model| model.model_id == "rife_4_26")
             .unwrap()
             .clone();
         let bundle = paths.model_root.join(&rife.family);
