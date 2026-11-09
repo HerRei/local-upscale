@@ -2768,3 +2768,15 @@ input[type='text'],
 .help-tip-text[hidden] {
   display: none;
 }
+.label-with-tip {
+  display: inline-flex;
+  align-items: center;
+}
+.field-row {
+  position: relative;
+}
+.check-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
