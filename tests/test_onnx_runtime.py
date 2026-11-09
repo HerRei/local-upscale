@@ -2,8 +2,9 @@
 
 import json
 import os
-import shutil
+import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -182,7 +183,15 @@ def active_config(converted):
     return state["config"][0]
 
 
-def gated(monkeypatch, tmp_path, configs, broken=frozenset(), failing=frozenset(), device=""):
+def gated(
+    monkeypatch,
+    tmp_path,
+    configs,
+    broken=frozenset(),
+    failing=frozenset(),
+    device="",
+    identity=None,
+):
     """A CPU route that behaves like a GPU route under test.
 
     Configurations named in ``broken`` return a visibly different image and those in
@@ -223,7 +232,11 @@ def gated(monkeypatch, tmp_path, configs, broken=frozenset(), failing=frozenset(
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", run_configured)
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_open_next", track)
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_reference", counted)
-    route = OnnxRoute(provider="CPUExecutionProvider", device=device)
+    route = OnnxRoute(
+        provider="CPUExecutionProvider",
+        device=device,
+        identity=device if identity is None else identity,
+    )
     return OnnxImageDescriptor(descriptor(), route=route), calls
 
 
@@ -248,7 +261,7 @@ def test_gate_refuses_the_route_when_no_configuration_matches(monkeypatch, tmp_p
 
     converted, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a", "b"})
     image = torch.rand(1, 3, 8, 8)
-    with pytest.raises(GpuRouteRejected, match="Select the CPU"):
+    with pytest.raises(GpuRouteRejected, match="gives different results on .* Select the CPU"):
         converted(image)
     assert len(calls) == 2  # each configuration fails on the test pattern
     again, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a", "b"})
@@ -807,56 +820,97 @@ def test_a_profile_that_stays_unreadable_is_tried_once_more_then_the_cpu_runs(
     assert not converted.execution_verified
 
 
-def test_a_gpu_that_crashed_the_engine_is_not_used_again(monkeypatch, tmp_path):
+def _recording_notes(monkeypatch, tmp_path):
+    """Record how many GPU-call notes exist while sessions run and while the CPU works."""
     from localsr.core import onnx_runtime
-    from localsr.core.onnx_runtime import CRASHED_ENGINE_ENV, GpuRouteRejected
 
+    seen = {"gpu": [], "cpu": [], "create": []}
+
+    class Session:
+        def __init__(self, session):
+            self.session = session
+
+        def run(self, *args, **kwargs):
+            seen["gpu"].append(len(list(tmp_path.glob("running-*.json"))))
+            return self.session.run(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.session, name)
+
+    create = onnx_runtime._OnnxImage._create
+
+    def recording_create(self, graph, config):
+        seen["create"].append(len(list(tmp_path.glob("running-*.json"))))
+        session, trace = create(self, graph, config)
+        return Session(session), trace
+
+    reference = onnx_runtime._OnnxImage._reference
+
+    def recording_reference(self, image):
+        seen["cpu"].append(len(list(tmp_path.glob("running-*.json"))))
+        return reference(self, image)
+
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_create", recording_create)
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_reference", recording_reference)
+    return seen
+
+
+def test_a_gpu_that_crashed_the_engine_is_not_used_again(monkeypatch, tmp_path):
+    from localsr.core import gpu_guard
+    from localsr.core.onnx_runtime import GpuRouteRejected
+
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
     original = descriptor()
     image = torch.rand(1, 3, 8, 8)
-    # "a" fails its check, so "b" opens inside the first tile's watch: the note must stay.
+    seen = _recording_notes(monkeypatch, tmp_path)
     converted, _ = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
-    run = onnx_runtime._OnnxImage._run
-    notes = []
-
-    def noting(self, session, image):
-        notes.append(json.loads((tmp_path / "crashes.json").read_text()))
-        return run(self, session, image)
-
-    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", noting)
     np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
-    assert notes and all(
-        [entry["state"] for entry in note.values()] == ["opening"] for note in notes
-    )
-    assert json.loads((tmp_path / "crashes.json").read_text()) == {}  # removed after the check
+    checked_runs = len(seen["gpu"])
+    # Later images on the accepted configuration are GPU calls like the first ones.
+    converted(torch.rand(1, 3, 8, 8))
+    assert len(seen["gpu"]) > checked_runs
+    # A note exists exactly while the GPU works, never during the CPU's own work.
+    assert seen["create"] == [1, 1]
+    assert set(seen["gpu"]) == {1}
+    assert seen["cpu"] and set(seen["cpu"]) == {0}
+    assert list(tmp_path.glob("running-*.json")) == []
+    key = converted.model._crash_key()
+    notes = gpu_guard.CrashNotes(tmp_path)
 
-    # The process died during that step: its note stays behind with its process ID.
-    ((key, entry),) = notes[-1].items()
-    (tmp_path / "crashes.json").write_text(json.dumps({key: {**entry, "pid": 4242}}))
-    monkeypatch.setattr(onnx_runtime._OnnxImage, "_run", run)
+    def died_during_a_gpu_call(pid, age=0.0):
+        note = tmp_path / f"running-0123456789abcdef-{pid}.json"
+        note.write_text(json.dumps({"key": key, "pid": pid}))
+        os.utime(note, (time.time() - age, time.time() - age))
+        return note
 
-    # An engine the app stopped itself (quit, cancel) is no crash: the GPU is used.
-    monkeypatch.setenv(CRASHED_ENGINE_ENV, "999")
-    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
-    np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
-    assert active_config(converted) == "b"  # still runs on the GPU
+    # A recent note of another process may belong to a GPU call still running there.
+    running = died_during_a_gpu_call(5151)
+    gpu_guard.settle()
+    assert running.exists() and notes.crashed(key) is None
+    running.unlink()
+    # An engine the app stopped itself (quit, cancel) left the note: no crash, removed.
+    died_during_a_gpu_call(4242, age=2 * gpu_guard.STALE_NOTE_SECONDS)
+    monkeypatch.setenv(gpu_guard.CRASHED_ENGINE_ENV, "999")
+    gpu_guard.settle()
+    assert list(tmp_path.glob("running-*.json")) == [] and notes.crashed(key) is None
+    again, _ = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
+    again(image)
+    assert active_config(again) == "b"  # still on the GPU
 
-    (tmp_path / "crashes.json").write_text(json.dumps({key: {**entry, "pid": 4242}}))
-    (tmp_path / "verdicts.json").unlink()
-    monkeypatch.setenv(CRASHED_ENGINE_ENV, "4242")
-    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
-    with pytest.raises(GpuRouteRejected, match="crashed while preparing"):
-        converted(image)
-    assert calls == []  # nothing ran on that GPU
-    # Later engines, started without the variable, keep refusing it.
-    monkeypatch.delenv(CRASHED_ENGINE_ENV)
-    converted, calls = gated(monkeypatch, tmp_path, ("a", "b"))
-    with pytest.raises(GpuRouteRejected, match="Select the CPU"):
-        converted(image)
-    assert json.loads((tmp_path / "crashes.json").read_text())[key]["state"] == "crashed"
+    # The engine that died of a native fault left it: the GPU is refused from then on.
+    died_during_a_gpu_call(4242)
+    monkeypatch.setenv(gpu_guard.CRASHED_ENGINE_ENV, "4242")
+    gpu_guard.settle()
+    assert notes.crashed(key) == "engine"
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})  # a new process reads the record
+    refused, calls = gated(monkeypatch, tmp_path, ("a", "b"), broken={"a"})
+    with pytest.raises(GpuRouteRejected, match="engine crashed on .* earlier"):
+        refused(image)
+    assert calls == []
 
 
 def test_a_gpu_whose_preflight_process_crashed_is_refused(monkeypatch, tmp_path):
-    from localsr.core import gpu_preflight, onnx_runtime
+    from localsr.core import gpu_guard
     from localsr.core.onnx_runtime import GpuRouteRejected
 
     original = descriptor()
@@ -867,59 +921,116 @@ def test_a_gpu_whose_preflight_process_crashed_is_refused(monkeypatch, tmp_path)
         outcomes.append(device)
         return "crashed" if device == "gpu:bad" else "passed"
 
-    monkeypatch.setattr(gpu_preflight, "run", preflight)
-    monkeypatch.setattr(onnx_runtime, "_PREFLIGHT_TRIED", set())
+    monkeypatch.setattr(gpu_guard, "run", preflight)
+    monkeypatch.setattr(gpu_guard, "_PREFLIGHT_TRIED", set())
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
+    real_write = gpu_guard._write_json
+
+    def full_disk(path, value):
+        if path.name == "crashes.json":
+            raise OSError("disk full")
+        real_write(path, value)
+
+    monkeypatch.setattr(gpu_guard, "_write_json", full_disk)
     converted, calls = gated(monkeypatch, tmp_path, ("a",), device="gpu:bad")
-    with pytest.raises(GpuRouteRejected, match="crashed while preparing"):
+    with pytest.raises(GpuRouteRejected, match="A test run on .* crashed"):
         converted(image)
     assert outcomes == ["gpu:bad"] and calls == []  # the engine itself ran nothing there
-    (entry,) = json.loads((tmp_path / "crashes.json").read_text()).values()
-    assert entry["state"] == "crashed"
+    # The record could not be stored, but this engine keeps refusing the GPU.
+    again, calls = gated(monkeypatch, tmp_path, ("a",), device="gpu:bad")
+    with pytest.raises(GpuRouteRejected):
+        again(image)
+    assert outcomes == ["gpu:bad"] and calls == []
+
+    # An identical card (same identity) on another device gets its own preflight.
+    twin, _ = gated(monkeypatch, tmp_path, ("a",), device="gpu:twin", identity="gpu:bad")
+    twin(image)
+    assert outcomes == ["gpu:bad", "gpu:twin"]
 
     # A GPU whose preflight finished runs, and later engines skip the preflight.
-    shutil.rmtree(tmp_path)
     converted, _ = gated(monkeypatch, tmp_path, ("a",), device="gpu:good")
     np.testing.assert_allclose(converted(image).numpy(), original(image).numpy(), atol=1e-6)
-    monkeypatch.setattr(onnx_runtime, "_PREFLIGHT_TRIED", set())
+    monkeypatch.setattr(gpu_guard, "_PREFLIGHT_TRIED", set())
     again, _ = gated(monkeypatch, tmp_path, ("a",), device="gpu:good")
     again(image)
-    assert outcomes == ["gpu:bad", "gpu:good"]
+    assert outcomes == ["gpu:bad", "gpu:twin", "gpu:good"]
 
 
-def test_the_preflight_tells_a_crash_from_a_finished_or_stuck_child(monkeypatch, tmp_path):
+def test_the_preflight_counts_only_a_native_fault_during_a_gpu_call(monkeypatch):
     import threading
 
-    from localsr.core import gpu_preflight
+    from localsr.core import gpu_guard
 
     def child(code):
-        monkeypatch.setattr(gpu_preflight, "_command", lambda device: [sys.executable, "-c", code])
+        monkeypatch.setattr(gpu_guard, "_command", lambda device: [sys.executable, "-c", code])
 
-    child("import os; os.abort()")
-    assert gpu_preflight.run("gpu:0") == "crashed"
+    note = (
+        "import os, pathlib; pathlib.Path(os.environ['LOCALSR_ONNX_GATE_CACHE'], "
+        "'running-0123456789abcdef.json').write_text('{}'); "
+    )
+    child(note + "os.abort()")
+    assert gpu_guard.run("gpu:0") == "crashed"
+    child("import os; os.abort()")  # before any GPU call: startup, antivirus, imports
+    assert gpu_guard.run("gpu:0") == "unknown"
+    child(note + "raise SystemExit(1)")  # a plain failure, not a fault
+    assert gpu_guard.run("gpu:0") == "unknown"
+    if os.name != "nt":
+        child(note + "import signal; os.kill(os.getpid(), signal.SIGKILL)")  # the OOM killer
+        assert gpu_guard.run("gpu:0") == "unknown"
     child("raise SystemExit(0)")
-    assert gpu_preflight.run("gpu:0") == "passed"
-    child(f"raise SystemExit({gpu_preflight.FAILED_IN_PYTHON})")  # a Python error is no crash
-    assert gpu_preflight.run("gpu:0") == "passed"
+    assert gpu_guard.run("gpu:0") == "passed"
+    child(f"raise SystemExit({gpu_guard.UNTESTED})")
+    assert gpu_guard.run("gpu:0") == "unknown"
     child("import time; time.sleep(30)")
-    monkeypatch.setattr(gpu_preflight, "TIMEOUT_SECONDS", 0.5)
-    assert gpu_preflight.run("gpu:0") == "unknown"
+    monkeypatch.setattr(gpu_guard, "TIMEOUT_SECONDS", 0.5)
+    assert gpu_guard.run("gpu:0") == "unknown"
     cancelled = threading.Event()
     cancelled.set()
+    child("raise SystemExit(0)")
     with pytest.raises(InterruptedError):
-        gpu_preflight.run("gpu:0", cancelled)
+        gpu_guard.run("gpu:0", cancelled)
+    # Cancelled at the moment the child finishes: the result is not used.
+    cancelled = threading.Event()
+    popen = subprocess.Popen
+
+    class FinishingWhileCancelled(popen):
+        def poll(self):
+            code = super().poll()
+            if code is not None:
+                cancelled.set()
+            return code
+
+    monkeypatch.setattr(gpu_guard.subprocess, "Popen", FinishingWhileCancelled)
+    with pytest.raises(InterruptedError):
+        gpu_guard.run("gpu:0", cancelled)
+
+
+def test_the_preflight_child_ends_itself_when_it_hangs():
+    from pathlib import Path
+
+    # The child's own limit, for a call that blocks or a parent that is gone: here 0.5 s,
+    # while its route lookup hangs for a minute.
+    code = (
+        "import time; from localsr.core import gpu_guard, inference; "
+        "gpu_guard.TIMEOUT_SECONDS = -29.5; "
+        "inference._onnx_route = lambda device: time.sleep(60); "
+        "raise SystemExit(gpu_guard.child_main(['gpu:0']))"
+    )
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    started = time.monotonic()
+    child = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, timeout=120)
+    assert child.returncode == 1 and time.monotonic() - started < 50
 
 
 def test_the_engine_starts_the_preflight_child_from_its_command_line():
-    # The real dispatch: the engine's module entry with --gpu-preflight. An unknown
-    # device fails in Python inside the child, which is no crash.
-    import subprocess
     from pathlib import Path
 
-    from localsr.core import gpu_preflight
+    from localsr.core import gpu_guard
 
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
     child = subprocess.run(
-        gpu_preflight._command("unknown:0"), env=env, stdin=subprocess.DEVNULL, timeout=120
+        gpu_guard._command("unknown:0"), env=env, stdin=subprocess.DEVNULL, timeout=120
     )
-    # The engine's server would exit 0 on the closed input; only the preflight exits 3.
-    assert child.returncode == gpu_preflight.FAILED_IN_PYTHON
+    # The engine's server would exit 0 on the closed input; only the preflight says it
+    # could not test an unknown device.
+    assert child.returncode == gpu_guard.UNTESTED
