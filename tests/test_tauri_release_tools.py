@@ -423,7 +423,7 @@ def test_registry_rejects_a_missing_or_duplicate_update_identity(
             release_targets.targets()
 
 
-def test_ci_build_identity_uses_the_production_key_and_a_commit_engine_id() -> None:
+def test_ci_build_identity_uses_the_production_key_and_a_content_engine_id() -> None:
     environment = release_targets.update_environment("windows-x86_64-cuda", COMMIT)
     assert environment == {
         "LOCALSR_UPDATE_PUBLIC_KEY": (ROOT / "packaging/updates/production.pub")
@@ -431,7 +431,9 @@ def test_ci_build_identity_uses_the_production_key_and_a_commit_engine_id() -> N
         .strip(),
         "LOCALSR_UPDATE_BACKEND": "cuda",
         "LOCALSR_UPDATE_KIND": "native",
-        "LOCALSR_ENGINE_ID": "windows-x86_64-cuda-0123456789ab",
+        "LOCALSR_ENGINE_ID": release_targets.engine_id(
+            release_targets.target("windows-x86_64-cuda"), COMMIT
+        ),
     }
     with pytest.raises(ValueError, match="commit"):
         release_targets.update_environment("linux-x86_64-rocm", "HEAD")
@@ -457,7 +459,8 @@ def test_update_env_cli_writes_github_env_lines() -> None:
     assert lines[1:] == [
         "LOCALSR_UPDATE_BACKEND=rocm",
         "LOCALSR_UPDATE_KIND=native",
-        "LOCALSR_ENGINE_ID=linux-x86_64-rocm-0123456789ab",
+        "LOCALSR_ENGINE_ID="
+        + release_targets.engine_id(release_targets.target("linux-x86_64-rocm"), COMMIT),
     ]
     assert lines[0].startswith("LOCALSR_UPDATE_PUBLIC_KEY=") and "\n" not in lines[0]
 
@@ -467,7 +470,7 @@ def test_mac_release_script_agrees_with_the_registry_identity() -> None:
     mac = release_targets.target("macos-arm64-mps")
     assert f"LOCALSR_UPDATE_BACKEND={mac['update']['backend']}" in script
     assert f"LOCALSR_UPDATE_KIND={mac['update']['kind']}" in script
-    assert 'LOCALSR_ENGINE_ID="macos-arm64-mps-${COMMIT:0:12}"' in script
+    assert "--update-env macos-arm64-mps" in script
     assert f'"{release_targets.platform_key(mac)}"' in script
     files = release_targets.update_files(mac, "1.2.3-beta")
     assert files["update_package"] == "LocalSR-v1.2.3-beta-macOS-arm64.app.tar.gz"
@@ -564,7 +567,7 @@ def test_installed_smoke_must_carry_the_build_update_identity() -> None:
         "target": "linux-x86_64-cuda-native",
         "backend": "cuda",
         "kind": "native",
-        "engine_id": "linux-x86_64-cuda-0123456789ab",
+        "engine_id": release_targets.engine_id(release_targets.target("linux-x86_64-cuda"), COMMIT),
     }
     for change in (
         {"enabled": False},
@@ -720,7 +723,7 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
             "signature": path.with_name(path.name + ".sig").read_text(),
         }
 
-    identity = f"macos-arm64-mps-{COMMIT[:12]}"
+    identity = release_targets.engine_id(release_targets.target("macos-arm64-mps"), COMMIT)
     payload = json.loads(manifest.read_text())
     feed = {
         "version": release_version,
@@ -798,7 +801,11 @@ def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: 
     assert cpu["signature"] == package.with_name(package.name + ".sig").read_text()
     contract = cpu["localsr"]
     assert contract["backend"] == "cpu" and contract["kind"] == "native"
-    assert contract["engine_id"] == contract["engine"]["id"] == "windows-x86_64-cpu-0123456789ab"
+    assert (
+        contract["engine_id"]
+        == contract["engine"]["id"]
+        == release_targets.engine_id(release_targets.target("windows-x86_64-cpu"), COMMIT)
+    )
     assert contract["size"] == package.stat().st_size
     assert contract["sha256"] == hashlib.sha256(package.read_bytes()).hexdigest()
     assert "parts" not in contract
@@ -816,7 +823,10 @@ def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: 
         "backend": "cpu",
         "kind": "native",
         "protocol": 1,
-        "engine_id": "windows-x86_64-cpu-0123456789ab",
+        "engine_id": release_targets.engine_id(
+            release_targets.target("windows-x86_64-cpu"), COMMIT
+        ),
+        "unpacked_size": contract["unpacked_size"],
         "sha256": contract["sha256"],
         "engine_manifest_sha256": manifest["sha256"],
     }
@@ -876,7 +886,17 @@ def test_platform_tool_refuses_artifacts_it_cannot_vouch_for(tmp_path: Path, fai
 # Review findings 7 and 8: a payload the app could not install, or not the one the
 # package was tested with, stops the tool before it signs anything.
 @pytest.mark.parametrize(
-    "failure", ["absolute", "traversal", "link", "no-files", "not-an-archive", "tested-engine"]
+    "failure",
+    [
+        "absolute",
+        "traversal",
+        "link",
+        "no-files",
+        "not-an-archive",
+        "tested-engine",
+        "missing-smoke",
+        "null-smoke",
+    ],
 )
 def test_platform_tool_signs_nothing_for_a_payload_it_cannot_vouch_for(
     tmp_path: Path, failure: str
@@ -884,7 +904,11 @@ def test_platform_tool_signs_nothing_for_a_payload_it_cannot_vouch_for(
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
     _, original = mac_feed(tmp_path)
-    target = "windows-x86_64-cuda" if failure == "tested-engine" else "linux-x86_64-rocm"
+    target = (
+        "windows-x86_64-cuda"
+        if failure in {"tested-engine", "missing-smoke", "null-smoke"}
+        else "linux-x86_64-rocm"
+    )
     directory = downloads / target
     manifest_path = next(directory.glob("*.engine-payload.json"))
     manifest = json.loads(manifest_path.read_text())
@@ -910,7 +934,10 @@ def test_platform_tool_signs_nothing_for_a_payload_it_cannot_vouch_for(
     else:
         smoke_path = next(directory.glob("*.smoke.json"))
         smoke = json.loads(smoke_path.read_text())
-        smoke["engine_payload_sha256"] = "f" * 64
+        if failure == "missing-smoke":
+            del smoke["engine_payload_sha256"]
+        else:
+            smoke["engine_payload_sha256"] = None if failure == "null-smoke" else "f" * 64
         smoke_path.write_text(json.dumps(smoke))
     manifest_path.write_text(json.dumps(manifest))
     signed: list[Path] = []
@@ -1060,7 +1087,8 @@ def test_feed_contract_enforces_every_edition(tmp_path: Path, failure: str) -> N
         "missing-target": "missing",
         "unknown-target": "unknown",
         "backend": "cpu native build",
-        "engine-id": "engine windows-x86_64-cpu-0123456789ab",
+        "engine-id": "engine "
+        + release_targets.engine_id(release_targets.target("windows-x86_64-cpu"), COMMIT),
         "no-engine": "no engine package",
         "part-sum": "add up",
         "oversized-file": "2 GiB",
@@ -1099,3 +1127,108 @@ def test_feed_contract_cli(tmp_path: Path) -> None:
     for changed in (command[:-1] + ["1.2.4-beta"], command[:4] + command[-2:]):
         result = subprocess.run(changed, capture_output=True, text=True, check=False)
         assert result.returncode != 0
+
+
+@pytest.mark.parametrize("failure", ["duplicate", "case-collision", "crc", "trailer"])
+def test_round2_signer_rejects_uninstallable_archives(tmp_path: Path, failure: str) -> None:
+    import gzip
+    import io
+    import tarfile
+
+    tar = io.BytesIO()
+    names = [
+        "localsr-worker",
+        "LOCALSR-WORKER" if failure == "case-collision" else "localsr-worker",
+    ]
+    if failure in {"crc", "trailer"}:
+        names = names[:1]
+    with tarfile.open(fileobj=tar, mode="w") as archive:
+        for name in names:
+            info = tarfile.TarInfo(name)
+            info.size = 3
+            archive.addfile(info, io.BytesIO(b"abc"))
+    data = gzip.compress(tar.getvalue(), mtime=0)
+    if failure == "crc":
+        data = data[:-8] + bytes([data[-8] ^ 1]) + data[-7:]
+    elif failure == "trailer":
+        data = data[:-8]
+    name = "engine.part-0001"
+    (tmp_path / name).write_bytes(data)
+    manifest = {
+        "schema_version": 1,
+        "format": "tar.gz.parts",
+        "backend": "CPU",
+        "file_count": len(names),
+        "unpacked_bytes": 3 * len(names),
+        "parts": [
+            {"filename": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        ],
+    }
+    with pytest.raises(ValueError):
+        engine_payload.validate_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
+
+
+def test_round2_identity_key_cannot_forge_minisign() -> None:
+    identity = b"\x01" + b"\x00" * 31
+    raw = identity + b"\x00" * 32
+    public = base64.b64encode(
+        b"untrusted comment: weak key\n" + base64.b64encode(b"Edlocalsr1" + identity)
+    ).decode()
+    signature = base64.b64encode(
+        b"untrusted comment: signature\n"
+        + base64.b64encode(b"EDlocalsr1" + raw)
+        + b"\ntrusted comment: forged\n"
+        + base64.b64encode(raw)
+    ).decode()
+    for data in [b"arbitrary", b"another message"]:
+        assert not verify_prepared.minisign_verify(public, signature, [data])
+
+
+def test_round2_statement_authenticates_install_space() -> None:
+    contract = {
+        "channel": "beta",
+        "backend": "cpu",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": "engine",
+        "sha256": "a" * 64,
+        "unpacked_size": 1234,
+    }
+    statement = json.loads(update_signing.release_statement("1.2.3", "target", contract))
+    assert statement["unpacked_size"] == 1234
+
+
+@pytest.mark.parametrize("target_id", ["linux-x86_64-cpu", "macos-arm64-mps"])
+def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
+    tmp_path: Path, target_id: str
+) -> None:
+    target = release_targets.target(target_id)
+    for directory in ["src/localsr", "packaging", "scripts", "requirements/locks"]:
+        shutil.copytree(ROOT / directory, tmp_path / directory, dirs_exist_ok=True)
+    shutil.copyfile(
+        ROOT / "requirements/build-tools.txt", tmp_path / "requirements/build-tools.txt"
+    )
+    shutil.copyfile(ROOT / "uv.lock", tmp_path / "uv.lock")
+    shutil.copyfile(ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    before = release_targets.engine_id(target, COMMIT, root=tmp_path)
+    (tmp_path / "desktop").mkdir()
+    (tmp_path / "desktop/app.ts").write_text("app changed")
+    init = tmp_path / "src/localsr/__init__.py"
+    init.write_text(init.read_text().replace("0.3.5-beta", "0.3.7-beta"))
+    assert release_targets.engine_id(target, "f" * 40, root=tmp_path) == before
+    recipe = [
+        "src/localsr/worker/server.py",
+        "packaging/tauri_worker.spec",
+        "src/localsr/__init__.py",
+    ]
+    recipe.append(
+        "requirements/locks/linux-x86_64-cpu.txt"
+        if target_id.startswith("linux")
+        else "packaging/macos/media-helper/main.swift"
+    )
+    for name in recipe:
+        source = tmp_path / name
+        original = source.read_text()
+        source.write_text(original + "\nENGINE_CHANGED = True\n")
+        assert release_targets.engine_id(target, COMMIT, root=tmp_path) != before, name
+        source.write_text(original)

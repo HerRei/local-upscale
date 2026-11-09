@@ -190,8 +190,11 @@ def validate_payload(
     joined = _JoinedParts(paths)
     count = total = 0
     has_worker = False
+    names: set[str] = set()
     try:
-        with tarfile.open(fileobj=joined, mode="r|gz") as archive:
+        with gzip.GzipFile(fileobj=joined, mode="rb") as decoded, tarfile.open(
+            fileobj=decoded, mode="r|"
+        ) as archive:
             for member in archive:
                 relative = PurePosixPath(member.name)
                 if (
@@ -201,11 +204,17 @@ def validate_payload(
                     or ".." in relative.parts
                     or "\\" in member.name
                     or ":" in member.name
+                    or str(relative).lower() in names
                 ):
                     raise ValueError(f"engine payload holds an unsafe entry: {member.name!r}")
+                names.add(str(relative).lower())
                 count += 1
                 total += member.size
                 has_worker |= member.name == worker
+            # tar stops at its end markers; finish the gzip decoder as the runtime
+            # does, so a corrupt or missing trailer cannot be signed.
+            while decoded.read(4 * 1024**2):
+                pass
         while joined.read(4 * 1024**2):
             pass
     except (tarfile.TarError, EOFError, OSError, zlib.error) as error:

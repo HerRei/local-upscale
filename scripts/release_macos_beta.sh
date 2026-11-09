@@ -38,7 +38,7 @@ COMMIT=$(git rev-parse HEAD)
 export LOCALSR_UPDATE_PUBLIC_KEY="$(tr -d '\n' < packaging/updates/production.pub)"
 export LOCALSR_UPDATE_BACKEND=mps
 export LOCALSR_UPDATE_KIND=native
-export LOCALSR_ENGINE_ID="macos-arm64-mps-${COMMIT:0:12}"
+export LOCALSR_ENGINE_ID="$(python scripts/release_targets.py --update-env macos-arm64-mps --commit "$COMMIT" | sed -n 's/^LOCALSR_ENGINE_ID=//p')"
 echo "commit $COMMIT engine $LOCALSR_ENGINE_ID"
 
 step "verify licensing-clean media runtime"

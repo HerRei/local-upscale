@@ -268,7 +268,9 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
     # Where the smoke test installed the engine manifest (Windows CUDA), the published
     # engine package must be that one, not merely a valid one.
     installed = smoke.get("engine_payload_sha256")
-    if installed is not None and installed != hashlib.sha256(manifest_bytes).hexdigest():
+    if (target.get("external_engine") or installed is not None) and installed != hashlib.sha256(
+        manifest_bytes
+    ).hexdigest():
         raise ValueError(
             f"{target['id']}: the engine payload is not the one the installed package was "
             "tested with"
@@ -320,6 +322,7 @@ def release_statement(release_version: str, key: str, contract: dict) -> bytes:
             "kind": contract["kind"],
             "protocol": contract["protocol"],
             "engine_id": contract["engine_id"],
+            "unpacked_size": contract["unpacked_size"],
             "sha256": contract["sha256"],
             "engine_manifest_sha256": engine["manifest"]["sha256"] if engine else None,
         },

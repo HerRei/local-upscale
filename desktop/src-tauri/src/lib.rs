@@ -49,6 +49,15 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
 static EARLY_OPEN_INTENTS: std::sync::Mutex<Vec<LaunchIntent>> = std::sync::Mutex::new(Vec::new());
 
 pub fn run() {
+    // No UI, profile or worker: other updater processes query the file they are
+    // about to replace, rather than trusting their own running package version.
+    if env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--headless-update-version")
+    {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if let Some(exit_code) = engine_payload::run_arguments(&env::args_os().collect::<Vec<_>>()) {
         std::process::exit(exit_code);
     }
