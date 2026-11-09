@@ -598,3 +598,63 @@ def test_gate_times_fallback_on_fallback_device(fake_coreml, monkeypatch):
     )
     run(converted)
     assert devices == [None, torch.device("mps")]
+
+
+def test_batch_lanes_gate_both_units_at_one_shape_and_own_their_buffers(fake_coreml, monkeypatch):
+    monkeypatch.setattr(coreml_runtime, "_NativeRunner", FakeRunner)
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="batch"
+    )
+    lanes = descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True)
+    assert len(lanes) == 4 and len({id(runner) for runner in lanes}) == 4
+    assert [runner.unit for runner in lanes] == [NEURAL_ENGINE] * 2 + [CORE_ML_GPU] * 2
+    verdicts = FakeProgram.stores[("batch", (32, 32))]
+    assert all(verdicts[unit]["accepted"] for unit in (NEURAL_ENGINE, CORE_ML_GPU))
+    assert descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True) == lanes
+    battery = descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=False)
+    assert battery == lanes[:2]
+    descriptor.batch_lanes(image(48, 48)[None], (48, 48), gpu=False)
+    assert FakeProgram.stores[("batch", (48, 48))][NEURAL_ENGINE]["accepted"]
+
+
+@pytest.mark.parametrize("unit", [NEURAL_ENGINE, CORE_ML_GPU])
+def test_batch_lanes_never_use_a_unit_rejected_by_the_gate(fake_coreml, monkeypatch, unit):
+    monkeypatch.setattr(coreml_runtime, "_NativeRunner", FakeRunner)
+    fake_coreml.behaviours[unit] = "wrong"
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="reject-batch"
+    )
+    lanes = descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True)
+    assert len(lanes) == (0 if unit == NEURAL_ENGINE else 2)
+    assert not FakeProgram.stores[("reject-batch", (32, 32))][unit]["accepted"]
+
+
+def test_batch_requires_native_gil_releasing_runners(fake_coreml):
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="no-native"
+    )
+    assert descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True) == []
+
+
+def test_batch_lanes_say_which_units_share_the_work(fake_coreml, monkeypatch):
+    monkeypatch.setattr(coreml_runtime, "_NativeRunner", FakeRunner)
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="status"
+    )
+    messages = []
+    descriptor.set_status_callback(messages.append)
+    descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True)
+    assert messages[-1] == "SPAN runs on the Neural Engine and the GPU (Core ML)."
+    descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=False)
+    assert messages[-1] == "SPAN runs on the Neural Engine."
+
+
+def test_batch_lanes_keep_the_normal_path_when_the_gate_is_inconclusive(fake_coreml, monkeypatch):
+    monkeypatch.setattr(coreml_runtime, "_NativeRunner", FakeRunner)
+    descriptor = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="unstable"
+    )
+    # A reference that leaves the normal value range cannot decide the gate.
+    descriptor.model.fallback_call = lambda _model, value: torch.full_like(value, 9.0)
+    assert descriptor.batch_lanes(image(32, 32)[None], (32, 32), gpu=True) == []
+    assert NEURAL_ENGINE not in FakeProgram.stores[("unstable", (32, 32))]
