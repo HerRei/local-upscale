@@ -248,7 +248,11 @@
                     "temporal_window": { "type": "integer", "minimum": 0 },
                     "temporal_overlap": { "type": "integer", "minimum": 0 },
                     "target_resolution": { "type": "integer", "minimum": 0 },
-                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 }
+                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+                    "interpolation": { "enum": ["off", "x2", "x4", "fps60", "fps120"], "default": "off" },
+                    "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
+                    "interpolation_model_id": { "type": ["string", "null"] },
+                    "interpolation_bundle_dir": { "type": ["string", "null"] }
                   }
                 }
               ]
