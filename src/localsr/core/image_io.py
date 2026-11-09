@@ -21,7 +21,7 @@ WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
 GREY_MODES = frozenset({"1", "L", "LA", "La"}) | WIDE_GREY_MODES
 
 
-def _narrow_wide_grey(image: Image.Image) -> Image.Image:
+def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
     """Scale 16- and 32-bit grey to 8 bits.
 
     Pillow's own conversion clips every value above 255, so a 16-bit scan turned
@@ -30,7 +30,7 @@ def _narrow_wide_grey(image: Image.Image) -> Image.Image:
     """
     values = np.asarray(image).astype(np.float64)
     if image.mode != "I" or values.max() > 255:
-        values = values / 257.0
+        values = values * (255.0 / ((1 << sample_bits) - 1))
     narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
     narrowed.info.update(image.info)
     return narrowed
@@ -183,6 +183,14 @@ class ImageManager:
                 stacklevel=2,
             )
 
+        sample_bits = 16
+        if metadata_img is not None:
+            bits = getattr(metadata_img, "tag_v2", {}).get(258)
+            if isinstance(bits, tuple) and len(bits) == 1:
+                bits = bits[0]
+            if isinstance(bits, int) and 8 < bits <= 16:
+                sample_bits = bits
+
         if is_raw:
             try:
                 rgb = _develop_raw(path)
@@ -199,24 +207,33 @@ class ImageManager:
 
         self.original_mode = img.mode
         grey_source = img.mode in GREY_MODES
-        if img.mode in WIDE_GREY_MODES:
-            img = _narrow_wide_grey(img)
-
         icc_profile_bytes = None if is_raw else img.info.get("icc_profile")
         has_invalid_icc = False
 
         if icc_profile_bytes:
+            profile_image = img
             try:
                 f = io.BytesIO(icc_profile_bytes)
                 src_profile = ImageCms.ImageCmsProfile(f)
                 srgb_profile = ImageCms.createProfile("sRGB")
+                if img.mode in WIDE_GREY_MODES:
+                    values = np.asarray(img).astype(np.float64)
+                    maximum = (1 << sample_bits) - 1
+                    if img.mode == "I" and values.max() <= 255:
+                        maximum = 255
+                    values = np.clip(np.rint(values * (65535 / maximum)), 0, 65535)
+                    img = Image.fromarray(values.astype(np.uint16))
                 img = _to_srgb(img, src_profile, srgb_profile)
 
                 # Embed the output sRGB profile when saving.
                 converted_icc = ImageCms.ImageCmsProfile(srgb_profile).tobytes()
             except (ImageCms.PyCMSError, OSError, ValueError) as e:
+                img = profile_image
                 has_invalid_icc = True
                 warnings.warn(f"Invalid ICC profile: {e}", RuntimeWarning, stacklevel=2)
+
+        if img.mode in WIDE_GREY_MODES:
+            img = _narrow_wide_grey(img, sample_bits)
 
         # Handle Alpha. Palette and grey images (GIF, PNG) keep their transparency.
         if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
