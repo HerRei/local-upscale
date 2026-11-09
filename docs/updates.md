@@ -144,13 +144,28 @@ entry:
 }
 ```
 
-Each entry's `localsr.statement` is a small JSON document, base64-encoded, signed with
-the updater key (`statement_signature`): the release version, channel, platform key,
-backend, kind, worker protocol, engine id, required unpacked size, and the SHA-256
-of the package and of the engine manifest. The feed itself is not signed, so the app trusts those fields only
-when they equal the verified statement, and refuses a version that is not newer than
-the installed one. A feed that relabels an older or another edition's signed package
-is rejected before anything is downloaded.
+Each entry's `localsr.statement_v2` is a small JSON document, base64-encoded, signed
+with the updater key (`statement_v2_signature`). It states the release version,
+channel, platform key, backend, kind, worker protocol, engine id, package `size`,
+required unpacked size and package SHA-256, and for every application part
+(`parts`), the engine manifest (`engine_manifest`) and every engine part
+(`engine_parts`) its `name`, `size` and `sha256`. The feed itself is not signed, so the
+app trusts those fields only when they equal the verified statement, and refuses a
+version that is not newer than the installed one. A feed that relabels an older or
+another edition's signed package, inflates a size, or renames, adds or drops a part is
+rejected when the app reads it, before anything is downloaded. Only the download URLs
+stay outside the statement: each file's own signature and the signed digest still decide
+whether its bytes are accepted.
+
+Statement format. `schema_version` 2 is the format above; the app accepts exactly this
+format and requires it: an entry with no `statement_v2`, or with one that is unsigned,
+unknown or of another version, is refused. A future format gets a new field name
+(`statement_v3`) so one feed can serve several app versions. Clients before 0.3.8 read
+only `localsr.statement` (`schema_version` 1: the same fields without the sizes and part
+lists, and only the engine manifest's digest), which accepts no other fields, so every
+entry keeps it unchanged next to `statement_v2` and those clients work with a new feed.
+The signer writes and the feed check verifies both. Drop format 1 once no supported
+client older than 0.3.8 remains.
 
 The updater file is the `.app.tar.gz` on macOS, the NSIS installer on Windows and
 the AppImage on Linux. A package above GitHub's 2 GiB file limit (the Linux CUDA
@@ -175,13 +190,13 @@ manifest must be the one the smoke test installed. If anything fails it signs no
 Then it copies each file into a private temporary folder, checks the copy against
 what it checked before, and signs only the copy, so a file that changes meanwhile is
 never signed; a split AppImage is joined there and its parts are cut from that copy.
-It adds the entries, each with its signed statement, next to the macOS entry;
-`release_macos_beta.sh` signs the macOS statement with
+It adds the entries, each with its two signed statements, next to the macOS entry;
+`release_macos_beta.sh` signs the macOS statements with
 `beta_update_signing.py statement`. `python scripts/verify_prepared_release.py --feed
 build/release-<version>/beta.json --commit <sha> --files build/release-<version>
 --files <downloads>` then checks that the feed has exactly one entry per release
 target with the right backend, kind, protocol and engine id, an engine package and
-files below the size limit, and verifies every statement and every signature against
+files below the size limit, and verifies both statements of every entry (including that the sizes and part lists match the entry) and every signature against
 the updater public key over the local copies of the files. The engine manifest must
 list the engine parts the feed names, and `unpacked_size` must cover the engine. All
 files must be at the release's own GitHub download URL, or at the prefix named with
@@ -333,8 +348,8 @@ without touching the public feed:
    --engine build/tauri-preview/worker-dist/engine`, copy the package there and
    sign every file with `tauri signer sign`.
 3. Write `beta.json` with the newer version and an entry for the edition's
-   platform key whose `engine_id` differs from the config's, with a release statement
-   signed by the test key (see [Feed format](#feed-format)), serve the folder with
+   platform key whose `engine_id` differs from the config's, with a format 2 release
+   statement (`statement_v2`) signed by the test key (see [Feed format](#feed-format)), serve the folder with
    `python3 -m http.server --bind 127.0.0.1`, and start the older build with
    `LOCALSR_TEST_UPDATE_CONFIG` pointing at a config with the test public key.
 
