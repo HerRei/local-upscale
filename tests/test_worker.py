@@ -29,6 +29,9 @@ class DummyWriter:
 
 
 class DummyEngine:
+    def release_models_except(self, keep):
+        pass
+
     def process_image(
         self,
         img_data,
@@ -214,6 +217,9 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
     writer_instance = DummyWriter()
 
     class InstantEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             return writer_instance
 
@@ -296,6 +302,9 @@ def test_worker_hands_progressive_tiles_to_nonblocking_preview_encoder(monkeypat
     writer = DummyWriter()
 
     class FastTiledEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             callback = kwargs["tile_callback"]
             tile = SimpleNamespace(out_x=0, out_y=0, out_w=16, out_h=16)
@@ -420,6 +429,9 @@ def test_worker_memmap_cleanup_on_error(monkeypatch):
     writer_instance = DummyWriter()
 
     class InstantEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             return writer_instance
 

@@ -62,7 +62,11 @@ def test_failed_or_cancelled_job_cleans_up_and_next_job_completes(tmp_path, monk
         writers.append(writer)
         return writer
 
-    server.engine = SimpleNamespace(process_image=process_image, release_model=lambda *args: None)
+    server.engine = SimpleNamespace(
+        process_image=process_image,
+        release_model=lambda *args: None,
+        release_models_except=lambda *args: None,
+    )
     monkeypatch.setattr(server_module, "LatestPreviewEncoder", preview_factory)
     # Feed the actual worker loop without a stdin thread cancelling on EOF.
     monkeypatch.setattr(server, "reader_thread_func", lambda: None)
@@ -205,7 +209,11 @@ def test_a_lost_device_exits_before_the_native_cleanup(tmp_path, monkeypatch):
     def process_image(**kwargs):
         raise GpuDeviceLost("The graphics driver stopped the GPU.")
 
-    server.engine = SimpleNamespace(process_image=process_image, release_model=lambda *a: None)
+    server.engine = SimpleNamespace(
+        process_image=process_image,
+        release_model=lambda *a: None,
+        release_models_except=lambda *a: None,
+    )
     monkeypatch.setattr(server, "reader_thread_func", lambda: None)
 
     def emit(message):

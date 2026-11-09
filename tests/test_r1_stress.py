@@ -289,6 +289,9 @@ def test_worker_run_job_memmap_cleanup_normal_completion(tmp_path, monkeypatch):
     assert os.path.exists(dat_file_path), "Real memmap .dat file must exist initially"
 
     class MockEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             return writer
 
@@ -337,6 +340,9 @@ def test_worker_run_job_memmap_cleanup_on_cancellation(tmp_path):
     assert os.path.exists(dat_file_path)
 
     class CancellingEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, cancel_event, **kwargs):
             cancel_event.set()
             return writer
@@ -383,6 +389,9 @@ def test_worker_run_job_memmap_cleanup_on_forced_exception(tmp_path):
     assert os.path.exists(dat_file_path)
 
     class FailingSaveEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             return writer
 
