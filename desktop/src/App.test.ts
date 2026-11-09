@@ -7,7 +7,52 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings, WorkerEnvelope } from './lib/types';
+import type {
+  AppSnapshot,
+  LaunchIntent,
+  MediaItem,
+  MediaResults,
+  ResultSummary,
+  StartBatchInput,
+  TrialEstimate,
+  UiSettings,
+  WorkerEnvelope,
+} from './lib/types';
+
+/** One finished attempt of an image, as list_media_results reports it. */
+function row(id: string, overrides: Partial<ResultSummary> = {}): ResultSummary {
+  return {
+    job_id: id,
+    completed_at: 1_700_000_000_000,
+    status: 'completed',
+    kind: 'upscale',
+    output_path: `/out/${id}.png`,
+    output_name: `${id}.png`,
+    available: true,
+    model_id: id,
+    model_label: id,
+    scale: 4,
+    stages: [],
+    notes: '',
+    elapsed_seconds: 12,
+    ui: null,
+    ...overrides,
+  };
+}
+
+function historyOf(mediaId: string, rows: ResultSummary[]): MediaResults {
+  const saved = rows.filter((result) => result.status === 'completed');
+  const available = saved.filter((result) => result.available);
+  return {
+    media_id: mediaId,
+    results: rows,
+    total_count: rows.length,
+    completed_count: saved.length,
+    available_count: available.length,
+    default_result_id: available[0]?.job_id ?? null,
+    next_before: null,
+  };
+}
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -35,7 +80,22 @@ const api = vi.hoisted(() => ({
     original_url: 'asset://localhost/original.mp4',
     enhanced_url: 'asset://localhost/enhanced.mp4',
   })),
-  requestImageComparison: vi.fn(async (_mediaId: string): Promise<void> => undefined),
+  requestImageComparison: vi.fn(
+    async (_mediaId: string, _pair?: { showing: string; against: string }): Promise<void> =>
+      undefined,
+  ),
+  listMediaResults: vi.fn(async (mediaId: string): Promise<MediaResults> => historyOf(mediaId, [])),
+  startModelTrials: vi.fn(
+    async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
+  ),
+  estimateModelTrials: vi.fn(
+    async (
+      _mediaId: string,
+      _modelIds: string[],
+      _base: StartBatchInput,
+    ): Promise<TrialEstimate[]> => [],
+  ),
+  cancelJobsForMedia: vi.fn(async (_mediaId: string): Promise<void> => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
@@ -421,6 +481,10 @@ beforeEach(() => {
   api.takeLaunchIntents.mockResolvedValue([]);
   api.chooseMediaFolder.mockReset().mockResolvedValue(null);
   api.requestImageComparison.mockReset().mockResolvedValue(undefined);
+  api.listMediaResults.mockReset().mockImplementation(async (id: string) => historyOf(id, []));
+  api.startModelTrials.mockReset().mockResolvedValue([]);
+  api.estimateModelTrials.mockReset().mockResolvedValue([]);
+  api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
@@ -2407,4 +2471,295 @@ it('asks for FFmpeg before starting an H.264 export instead of failing later', a
   expect(api.startJobs).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: 'Not now' }));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+describe('Comparing saved results', () => {
+  /** A host with pair slots, answering every pair request with decoded previews. */
+  function pairHost(snapshot: AppSnapshot): AppSnapshot {
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    const slot = (target: string) =>
+      target === 'original'
+        ? { target_id: target, preview_data_url: '', width: 640, height: 480 }
+        : {
+            target_id: target,
+            preview_data_url: `data:image/jpeg;base64,${target}`,
+            width: 2560,
+            height: 1920,
+            preview_width: 2048,
+            preview_height: 1536,
+          };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing: slot(pair.showing),
+        against: slot(pair.against),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return snapshot;
+  }
+
+  function completedJob(id: string, media = 'photo') {
+    return {
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status: 'completed' as const,
+      progress: 100,
+      output_path: `/out/${id}.png`,
+      error: '',
+      created_at: 1,
+    };
+  }
+
+  it('waits for the history, then decodes the newest result against the Original by id', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('saved')];
+    let answer: (history: MediaResults) => void = () => {};
+    api.listMediaResults.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await mountWith(snapshot);
+    expect(api.requestImageComparison).not.toHaveBeenCalled();
+    answer(historyOf('photo', [row('saved')]));
+    await waitFor(() =>
+      expect(api.requestImageComparison).toHaveBeenCalledWith('photo', {
+        showing: 'saved',
+        against: 'original',
+      }),
+    );
+    // One saved result keeps the compact view: no choosers, no side labels.
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('saved'),
+    );
+    expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
+    expect(document.querySelector('.divider-labels')).toBeNull();
+  });
+
+  it('offers Showing and against once two results exist, and labels each side', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [
+        row('new', {
+          model_label: 'HAT-L',
+          ui: { quality: 'best', content: 'photo', recipe_name: '' },
+        }),
+        row('old', { model_label: 'SwinIR-M', scale: 2 }),
+        row('broken', { status: 'failed', available: false, notes: 'Out of memory' }),
+      ]),
+    );
+    const user = await mountWith(snapshot);
+    expect(await screen.findByText('640 × 480 · 2 results')).toBeTruthy();
+    const showing = screen.getByRole('button', { name: /^Showing: HAT-L · Best · Photo/ });
+    expect(screen.getByRole('button', { name: 'against: Original' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'against: Original' }));
+    const list = screen.getByRole('listbox');
+    // The failed run is listed apart, with its reason, and cannot be chosen.
+    expect(within(list).queryByText(/Out of memory/)).toBeNull();
+    expect(screen.getByText(/Failed · broken/)).toBeTruthy();
+    await user.click(within(list).getByRole('option', { name: /^SwinIR-M/ }));
+    await waitFor(() =>
+      expect(api.requestImageComparison).toHaveBeenLastCalledWith('photo', {
+        showing: 'new',
+        against: 'old',
+      }),
+    );
+    expect(await screen.findByRole('radio', { name: 'Reference' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Showing' })).toBeTruthy();
+    const labels = document.querySelector('.divider-labels')?.textContent ?? '';
+    expect(labels).toContain('SwinIR-M · 4× output');
+    expect(labels).toContain('HAT-L · 4× output');
+    expect(document.querySelector('.reference-image')?.getAttribute('src')).toContain('old');
+    expect(showing).toBeTruthy();
+  });
+
+  it('pins a chosen pair through later completions; Open follows Showing; the other side swaps', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    let changed: (() => void) | undefined;
+    api.listenForStateChange.mockImplementationOnce(async (callback) => {
+      changed = callback;
+      return () => {};
+    });
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('new'), row('old')]));
+    const user = await mountWith(snapshot);
+    await user.click(await screen.findByRole('button', { name: /^Showing: new/ }));
+    await user.click(screen.getByRole('option', { name: /^old/ }));
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    expect(api.openResult).toHaveBeenLastCalledWith('/out/old.png');
+    // A later run finishes: the pinned pair stays.
+    snapshot.jobs = [completedJob('later'), ...snapshot.jobs];
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row('later'), row('new'), row('old')]),
+    );
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    await waitFor(() => expect(changed).toBeTruthy());
+    changed!();
+    await screen.findByText('640 × 480 · 3 results');
+    expect(screen.getByRole('button', { name: /^Showing: old/ })).toBeTruthy();
+    // Choosing for against what Showing holds swaps the two sides.
+    await user.click(screen.getByRole('button', { name: 'against: Original' }));
+    await user.click(screen.getByRole('option', { name: /^old/ }));
+    expect(screen.getByRole('button', { name: 'Showing: Original' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^against: old/ })).toBeTruthy();
+  });
+
+  it('steps Showing older and newer from the View menu, skipping missing files and the reference', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('newest'), completedJob('middle'), completedJob('oldest')];
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [
+        row('newest'),
+        row('gone', { available: false }),
+        row('middle'),
+        row('oldest'),
+      ]),
+    );
+    const user = await mountWith(snapshot);
+    await user.click(await screen.findByRole('button', { name: 'against: Original' }));
+    await user.click(screen.getByRole('option', { name: /^middle/ }));
+    await chooseMenuItem('view.previous-result');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Showing: oldest/ })).toBeTruthy(),
+    );
+    // At the oldest end nothing changes.
+    await chooseMenuItem('view.previous-result');
+    expect(screen.getByRole('button', { name: /^Showing: oldest/ })).toBeTruthy();
+    // Newer skips the reference (middle) and the missing file.
+    await chooseMenuItem('view.next-result');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Showing: newest/ })).toBeTruthy(),
+    );
+    expect(screen.getByRole('button', { name: /^against: middle/ })).toBeTruthy();
+  });
+
+  it('keeps live tiles for a running job until a saved result is chosen, and a new run unpins', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [
+      { ...completedJob('third'), status: 'running', output_path: '' },
+      completedJob('second'),
+      completedJob('first'),
+    ];
+    snapshot.runtime.active_job_id = 'third';
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('second'), row('first')]));
+    const user = await mountWith(snapshot);
+    const showing = await screen.findByRole('button', { name: 'Showing: Live preview' });
+    expect(api.requestImageComparison).not.toHaveBeenCalled();
+    // Completed results stay selectable while the next model runs.
+    await user.click(showing);
+    await user.click(screen.getByRole('option', { name: /^first/ }));
+    await waitFor(() =>
+      expect(api.requestImageComparison).toHaveBeenCalledWith('photo', {
+        showing: 'first',
+        against: 'original',
+      }),
+    );
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('first'),
+    );
+    expect(document.querySelector('.progressive-image.visible')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+  });
+
+  it('drops a late history answer that belongs to another image', async () => {
+    const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
+    snapshot.jobs = [completedJob('a1', 'first'), completedJob('a2', 'first')];
+    api.listMediaResults.mockImplementation(async () =>
+      historyOf('second', [row('b1'), row('b2')]),
+    );
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listMediaResults).toHaveBeenCalledWith('first'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
+    expect(screen.queryByText(/b1/)).toBeNull();
+  });
+
+  it('shows a side that failed to decode as an error, never as the Original', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('new'), row('old')]));
+    const user = await mountWith(snapshot);
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation: 9,
+        showing: { target_id: pair!.showing, preview_data_url: 'data:image/jpeg;base64,new' },
+        against: { target_id: pair!.against, preview_data_url: '', error: 'truncated file' },
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    await user.click(await screen.findByRole('button', { name: 'against: Original' }));
+    await user.click(screen.getByRole('option', { name: /^old/ }));
+    expect(await screen.findByText(/old · 4× output: truncated file/)).toBeTruthy();
+    expect(document.querySelector('.reference-image')).toBeNull();
+  });
+
+  it('cancels only the selected image runs and keeps Cancel queue for everything', async () => {
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    snapshot.runtime.active_job_id = 'trial-1';
+    snapshot.jobs = [
+      { ...completedJob('other-job', 'other'), status: 'queued', output_path: '' },
+      { ...completedJob('trial-1'), status: 'running', output_path: '' },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
+    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo');
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('runs 2 to 4 installed models from Try others with the settings the plan card showed', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.batch_mode = false;
+    api.estimateModelTrials.mockImplementation(async (_media, ids) =>
+      ids.map((id, index) => ({
+        model_id: id,
+        model_label: id,
+        seconds: index === 0 ? 30 : null,
+      })),
+    );
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(
+      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByText('Try other upscalers on photo.png')).toBeTruthy();
+    const boxes = within(dialog)
+      .getAllByRole('checkbox')
+      .filter((box) => !(box as HTMLInputElement).disabled);
+    expect(boxes.length).toBeGreaterThanOrEqual(2);
+    await user.click(boxes[0]);
+    expect(
+      (within(dialog).getByRole('button', { name: 'Run 1 model' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(boxes[1]);
+    // A total only when every model was measured; here one is not.
+    expect(await within(dialog).findByText(/not yet measured for/)).toBeTruthy();
+    const run = within(dialog).getByRole('button', { name: 'Run 2 models' });
+    expect(run.classList.contains('primary')).toBe(false);
+    await user.click(run);
+    expect(api.startModelTrials).toHaveBeenCalledTimes(1);
+    expect(api.startJobs).not.toHaveBeenCalled();
+    const [media, ids, base] = api.startModelTrials.mock.calls[0];
+    expect(media).toBe('photo');
+    expect(ids).toHaveLength(2);
+    expect(base).toMatchObject({
+      media_ids: ['photo'],
+      batch_mode: false,
+      task: 'upscale',
+      output_scale: snapshot.settings.output_scale,
+      ui: expect.objectContaining({ content: expect.any(String) }),
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  });
 });

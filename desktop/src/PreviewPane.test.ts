@@ -506,6 +506,102 @@ describe('image comparison', () => {
     return { ...rendered, clip };
   }
 
+  const pair = {
+    selectedMedia: photo,
+    resultPreview: 'data:image/png;base64,showing',
+    completedVideoOutput: '',
+    referenceIsResult: true,
+    referencePreview: 'data:image/png;base64,reference',
+    referenceLabel: 'SwinIR-M · 2× output',
+    showingLabel: 'HAT-L · 4× output',
+  };
+
+  it('labels both results, keeps M for the real Original and the slider values in step', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender(pair);
+    expect(screen.getByRole('radio', { name: 'Reference' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Showing' })).toBeTruthy();
+    const labels = container.querySelector('.divider-labels')?.textContent ?? '';
+    expect(labels).toContain('SwinIR-M · 2× output');
+    expect(labels).toContain('HAT-L · 4× output');
+    expect(labels).not.toContain('enlarged');
+    const slider = screen.getByRole('slider');
+    const before = Number(slider.getAttribute('aria-valuenow'));
+    await fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    const now = Number(slider.getAttribute('aria-valuenow'));
+    expect(now).toBeGreaterThan(before);
+    expect(slider.getAttribute('aria-valuetext')).toBe(
+      `${now}% SwinIR-M · 2× output, ${100 - now}% HAT-L · 4× output`,
+    );
+    // The source stays the real Original under the reference layer.
+    expect((container.querySelector('.source-image') as HTMLImageElement).src).toContain('source');
+    expect((container.querySelector('.reference-image') as HTMLImageElement).src).toContain(
+      'reference',
+    );
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(container.querySelector('.reference-image')).toBeNull();
+    expect(container.querySelector('.original-chip')?.textContent).toBe('Original');
+    await fireEvent.keyUp(window, { key: 'm' });
+    expect(container.querySelector('.reference-image')).toBeTruthy();
+  });
+
+  it('shows the reference result in the Reference view without the Original chip', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender(pair);
+    await fireEvent.click(screen.getByRole('radio', { name: 'Reference' }));
+    expect(container.querySelector('.reference-image')).toBeTruthy();
+    expect(container.querySelector('.original-chip')?.textContent).toBe('SwinIR-M · 2× output');
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(container.querySelector('.original-chip')?.textContent).toBe('Original');
+    expect(container.querySelector('.reference-image')).toBeNull();
+  });
+
+  it('shows a side that is decoding or failed as such, never the Original under it', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({
+      ...pair,
+      resultPreview: '',
+      showingState: 'loading',
+      referencePreview: '',
+      referenceState: 'error',
+      referenceError: 'truncated file',
+    });
+    expect(screen.getByRole('slider')).toBeTruthy();
+    expect(container.querySelector('.result-image')).toBeNull();
+    const placeholders = [...container.querySelectorAll('.side-placeholder')].map(
+      (element) => element.textContent?.trim() ?? '',
+    );
+    expect(placeholders).toEqual([
+      'SwinIR-M · 2× output: truncated file. The saved file is unchanged.',
+      'Loading HAT-L · 4× output…',
+    ]);
+  });
+
+  it('shows a result with a different framing on its own, in its own shape', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({
+      selectedMedia: photo,
+      resultPreview: 'data:image/png;base64,edit',
+      completedVideoOutput: '',
+      singleFrame: { width: 1000, height: 1000 },
+      comparisonNote: 'Edit has a different framing from the original, so it is shown on its own.',
+    });
+    await waitFor(() =>
+      expect(container.querySelector<HTMLElement>('.image-stage')?.style.width).toBe(
+        container.querySelector<HTMLElement>('.image-stage')?.style.height,
+      ),
+    );
+    expect(screen.queryByRole('slider')).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+    expect(screen.getByText(/different framing/)).toBeTruthy();
+    const source = container.querySelector('.source-image') as HTMLElement;
+    expect(source.classList.contains('covered')).toBe(true);
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(source.classList.contains('covered')).toBe(false);
+    expect(source.classList.contains('contained')).toBe(true);
+    expect(container.querySelector('.original-chip')?.textContent).toBe('Original');
+  });
+
   it('keeps the divider in place on screen while zooming into a corner', async () => {
     const { container, clip } = await renderComparison();
     const divider = screen.getByRole('slider', { name: 'Before and after comparison' });
@@ -581,4 +677,118 @@ describe('image comparison', () => {
     await fireEvent.pointerLeave(canvas);
     expect(zoom.classList.contains('shown')).toBe(false);
   });
+});
+
+it('hides the live tiles once a saved result was chosen while the image runs', async () => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    fillStyle: '',
+    fillRect: vi.fn(),
+    clearRect: vi.fn(),
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal(
+    'Image',
+    class {
+      onload?: () => void;
+      set src(_value: string) {
+        this.onload?.();
+      }
+    },
+  );
+  const selectedMedia: MediaItem = {
+    id: 'photo',
+    path: '/photo.png',
+    name: 'photo.png',
+    kind: 'image',
+    width: 100,
+    height: 100,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const { component, container, rerender } = render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    processing: true,
+  });
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'trial-2',
+        phase: 'started',
+        output_x: 0,
+        output_y: 0,
+        output_width: 200,
+        output_height: 200,
+        image_width: 400,
+        image_height: 400,
+      },
+    } as WorkerEnvelope,
+    'trial-2',
+  );
+  await waitFor(() => expect(container.querySelector('.progressive-image.visible')).toBeTruthy());
+  // The user picks the finished first trial: its saved pair replaces the tiles.
+  await rerender({
+    selectedMedia,
+    resultPreview: 'data:image/jpeg;base64,first',
+    completedVideoOutput: '',
+    processing: true,
+    showLiveTiles: false,
+  });
+  expect(container.querySelector('.progressive-image.visible')).toBeNull();
+  expect(container.querySelector('.active-tile')).toBeNull();
+  expect(container.querySelector('.result-image')?.getAttribute('src')).toContain('first');
+  // A pinned pair whose Showing side is still decoding does not fall back to tiles either.
+  await rerender({
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    processing: true,
+    showLiveTiles: false,
+  });
+  expect(container.querySelector('.progressive-image.visible')).toBeNull();
+});
+
+it('puts the result choosers in the header only when asked to', async () => {
+  const selectedMedia: MediaItem = {
+    id: 'photo',
+    path: '/photo.png',
+    name: 'photo.png',
+    kind: 'image',
+    width: 640,
+    height: 480,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const { container, rerender } = render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    resultCount: 3,
+  });
+  expect(container.querySelector('.result-selectors')).toBeNull();
+  expect(screen.getByText('640 × 480 · 3 results')).toBeTruthy();
+  await rerender({
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    showChoosers: true,
+  });
+  // Without slot content there is still nothing to show.
+  expect(container.querySelector('.result-selectors')).toBeNull();
+  // The header stays a window drag region; the choosers row is not one.
+  expect(container.querySelector('.preview-header')?.hasAttribute('data-tauri-drag-region')).toBe(
+    true,
+  );
 });

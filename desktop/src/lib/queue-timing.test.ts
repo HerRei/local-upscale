@@ -67,4 +67,24 @@ describe('whole queue timing', () => {
     s.jobs[0].status = 'cancelled';
     expect(queueTiming(s)).toBeNull();
   });
+
+  it('names the model of the next run when the queue runs one image more than once', () => {
+    const s = demoSnapshot();
+    const trial = (id: string, status: JobRecord['status'], model: string): JobRecord => ({
+      ...job(id, status, 4),
+      media_id: 'photo',
+      media_name: 'photo.png',
+      model_label: model,
+    });
+    // Newest first, as in a snapshot: SwinIR runs, then HAT, then DAT2.
+    s.jobs = [
+      trial('third', 'queued', 'DAT2'),
+      trial('second', 'queued', 'HAT'),
+      trial('first', 'running', 'SwinIR'),
+    ];
+    s.runtime.active_job_id = 'first';
+    expect(queueTiming(s)?.nextName).toBe('photo.png · HAT');
+    s.jobs = [job('other', 'queued', 4), trial('first', 'running', 'SwinIR')];
+    expect(queueTiming(s)?.nextName).toBe('other.png');
+  });
 });

@@ -163,6 +163,41 @@ input:focus-visible {
   grid-template-columns: minmax(0, 1fr) 96px auto;
   padding-right: 12px;
 }
+/* "Try others…": a checkbox per model; the whole row toggles it. */
+.trial-row {
+  grid-template-columns: 18px minmax(0, 1fr) 96px;
+  cursor: pointer;
+}
+.trial-row input {
+  margin: 0;
+}
+.trial-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.trial-summary h3,
+.trial-summary p {
+  margin: 0;
+}
+.trial-summary p {
+  color: var(--secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.try-others {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* With work queued the footer may take a second line for its buttons. */
+.app-shell.queue-timing-visible .status-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .installed-row .row-select {
   min-width: 0;
   padding: 0;
@@ -484,13 +519,17 @@ input:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 52px 1fr;
+  /* The header grows by one row when an image has results to choose from. */
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--base);
 }
 .preview-header {
+  min-height: 52px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  column-gap: 12px;
   padding: 0 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   background: #1b1b1d;
@@ -540,6 +579,133 @@ input:focus-visible {
 .view-switch button.active {
   color: var(--text);
   box-shadow: inset 0 -1px 0 var(--text);
+}
+/* Showing [result] against [Original]: a row under the file name. */
+.result-selectors {
+  position: relative;
+  flex: 1 0 100%;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 0 0 8px;
+}
+.result-chooser {
+  min-width: 0;
+  flex: 0 1 320px;
+}
+.result-trigger {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--recess);
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  text-align: left;
+}
+.result-trigger:hover {
+  background: var(--hover);
+}
+.result-trigger .result-side {
+  flex: none;
+  color: var(--secondary);
+}
+.result-trigger b {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.result-popover {
+  position: fixed;
+  z-index: 80;
+  width: min(420px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+.result-popover > strong {
+  font-size: calc(12px * var(--ui-scale));
+}
+.result-list {
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+.result-list:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
+.result-list [role='option'] {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.result-list [role='option'] span,
+.result-unfinished span,
+.result-popover p {
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  overflow-wrap: anywhere;
+}
+.result-list [aria-selected='true'] {
+  border-color: var(--border);
+}
+.result-list .focused {
+  background: var(--hover);
+}
+.result-list [aria-disabled='true'] b {
+  color: var(--secondary);
+}
+.result-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: calc(11px * var(--ui-scale));
+}
+.result-row-actions span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--secondary);
+}
+.result-unfinished {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.result-unfinished p,
+.result-older {
+  margin: 0;
+}
+.result-unfinished b {
+  display: block;
+  font-size: calc(11px * var(--ui-scale));
+  font-weight: 500;
 }
 .canvas-well {
   position: relative;
@@ -600,11 +766,52 @@ input:focus-visible {
   pointer-events: none;
   image-rendering: auto;
 }
-.result-image {
+.result-image,
+.reference-image {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+/* A side whose preview is decoding or failed: never the Original underneath. */
+.side-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #18181a;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  text-align: center;
+}
+.side-placeholder.failed {
+  color: #ffc6bd;
+  background: #241514;
+}
+/* One label per side of the divider, in the lower corners. */
+.divider-labels {
+  position: absolute;
+  z-index: 5;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  pointer-events: none;
+}
+.divider-labels span {
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius);
+  background: rgba(24, 24, 26, 0.78);
+  color: #d0d0d3;
+  font-size: calc(11px * var(--ui-scale));
 }
 .progressive-image {
   position: absolute;

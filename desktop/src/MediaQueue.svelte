@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatDuration } from './lib/state';
+  import { queueModelState } from './lib/results';
   import type { JobRecord, MediaItem } from './lib/types';
 
   export let items: MediaItem[];
@@ -114,11 +115,13 @@
               >
               {#if media.hdr_format}<small class="queue-state">{media.hdr_format} HDR</small>{/if}
               {#if inflightMediaIds.has(media.id)}<small class="queue-state"
-                  >{jobs.find(
-                    (job) =>
-                      job.media_id === media.id &&
-                      ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
-                  )?.status ?? 'queued'}</small
+                  >{media.kind === 'image'
+                    ? queueModelState(jobs, media.id, activeJobId)
+                    : (jobs.find(
+                        (job) =>
+                          job.media_id === media.id &&
+                          ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
+                      )?.status ?? 'queued')}</small
                 >{/if}
             </div>
           </button>

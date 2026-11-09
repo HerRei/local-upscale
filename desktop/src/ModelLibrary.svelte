@@ -14,6 +14,8 @@
     rightsAllowPreset,
   } from './lib/state';
   import { acceleratorFor } from './lib/neuralEngine';
+  import { estimateModelTrials } from './lib/api';
+  import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/results';
   import {
     EDIT_FAMILIES,
     EDIT_FIT_LABELS,
@@ -34,7 +36,9 @@
     EditModel,
     FixKind,
     Quality,
+    StartBatchInput,
     TaskKind,
+    TrialEstimate,
     UiSettings,
   } from './lib/types';
 
@@ -44,7 +48,7 @@
     task: TaskKind | '';
     content: Exclude<ContentKind, 'face'>;
     quality: Quality | '';
-    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit';
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
   };
   export let device: DeviceInfo | undefined;
@@ -58,6 +62,13 @@
   export let forgetFix: (fix: Exclude<FixKind, 'faces'>) => void;
   export let useEditModel: (model: EditModel) => void;
   export let pin: (model: CatalogModel, quality: 'quick' | 'best') => void;
+  // "Try others…": the image, the settings frozen when the sheet opened, and
+  // the action that queues one run per ticked model.
+  export let trialMedia: { id: string; name: string } | undefined = undefined;
+  export let trialBase: StartBatchInput | undefined = undefined;
+  export let runTrials: (modelIds: string[]) => Promise<void> = async () => {};
+  /** Trials queue behind other work, so only starting one blocks the sheet. */
+  export let trialBusy = false;
   export let download: (
     model: CatalogModel | CatalogVideoModel | EditModel,
     accepted?: boolean,
@@ -90,6 +101,11 @@
           : '';
   let termsAccepted = false;
   let showHeavyEdit = false;
+  let trialIds: string[] = [];
+  let trialEstimates: TrialEstimate[] = [];
+  let estimateKey = '';
+  let estimateError = '';
+  let runningTrials = false;
 
   $: models = snapshot.catalog.models;
   $: videoModels = snapshot.catalog.video_models;
@@ -149,6 +165,51 @@
           right.speed_tier - left.speed_tier,
       );
   })();
+  // Installed models for this job first; the rest say why they cannot join.
+  $: trialModels =
+    context.slot === 'try'
+      ? [
+          ...jobModels,
+          ...modelsForTask(snapshot, context.task).filter(
+            (model) =>
+              model.installed &&
+              !jobModels.includes(model) &&
+              (context.task !== 'denoise' || !context.fix || fixesOf(model).includes(context.fix)),
+          ),
+        ].sort((left, right) => Number(right.installed) - Number(left.installed))
+      : [];
+  $: trialReason = (model: CatalogModel): string => trialIncompatibility(model, settings, models);
+  $: if (context.slot === 'try' && trialIds.join('|') !== estimateKey)
+    void estimateTrials(trialIds.join('|'));
+
+  async function estimateTrials(key: string): Promise<void> {
+    estimateKey = key;
+    estimateError = '';
+    trialEstimates = [];
+    if (!trialIds.length || !trialBase || !trialMedia) return;
+    const ids = [...trialIds];
+    try {
+      const estimates = await estimateModelTrials(trialMedia.id, ids, trialBase);
+      if (estimateKey === key) trialEstimates = estimates;
+    } catch (error) {
+      if (estimateKey === key) estimateError = String(error);
+    }
+  }
+
+  function toggleTrial(id: string): void {
+    trialIds = trialIds.includes(id) ? trialIds.filter((value) => value !== id) : [...trialIds, id];
+    selectedId = id;
+  }
+
+  async function startTrials(): Promise<void> {
+    runningTrials = true;
+    try {
+      await runTrials([...trialIds]);
+    } finally {
+      runningTrials = false;
+    }
+  }
+
   $: groups = [
     ...(context.slot !== 'browse' &&
     context.slot !== 'edit' &&
@@ -263,7 +324,7 @@
     context.slot !== 'browse' &&
     jobModels.some((candidate) => candidate.model_id === model.model_id);
   $: canPin = (model: CatalogModel): boolean =>
-    context.slot === 'primary' &&
+    (context.slot === 'primary' || context.slot === 'try') &&
     context.task !== 'denoise' &&
     canUseForJob(model) &&
     rightsAllowPreset(model);
@@ -315,7 +376,12 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="library-title" tabindex="-1">
     <div class="sheet-head">
       <h2 id="library-title">Model library</h2>
-      {#if context.slot === 'edit'}
+      {#if context.slot === 'try'}
+        <span class="sheet-context"
+          >Try other {context.task === 'denoise' ? 'restoration models' : 'upscalers'} on {trialMedia?.name ??
+            'this image'}</span
+        >
+      {:else if context.slot === 'edit'}
         <span class="sheet-context">Choosing for Edit</span>
       {:else if context.slot !== 'browse' && context.task}
         <span class="sheet-context"
@@ -353,7 +419,7 @@
     </div>
     <div class="sheet-body">
       <nav class="rail" aria-label="Model groups">
-        {#each groups as item (item.id)}
+        {#each context.slot === 'try' ? groups.filter((item) => item.id === 'job') : groups as item (item.id)}
           <button
             class="rail-item"
             class:active={group === item.id}
@@ -372,7 +438,44 @@
       </nav>
 
       <section class="list" aria-label="Models">
-        {#if group === 'video'}
+        {#if context.slot === 'try'}
+          <div class="list-head">For this job<span>Pick 2 to 4 installed models</span></div>
+          {#each trialModels as model (model.model_id)}
+            {@const reason = trialReason(model)}
+            {@const picked = trialIds.includes(model.model_id)}
+            <label
+              class="row trial-row"
+              class:dimmed={Boolean(reason)}
+              class:selected={selected?.model_id === model.model_id}
+            >
+              <input
+                type="checkbox"
+                checked={picked}
+                disabled={trialBusy || Boolean(reason) || (!picked && trialIds.length >= 4)}
+                on:change={() => toggleTrial(model.model_id)}
+              />
+              <div>
+                <div class="name">{displayName(model)}</div>
+                <div class="role">{reason || model.role || model.description}</div>
+                {#if model.model_id === quickId || model.model_id === bestId || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
+                  <div class="pills">
+                    {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
+                    {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
+                    {#if fitFor(model, device) === 'heavy'}<span class="pill warn">Heavy here</span
+                      >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
+                        >Too heavy</span
+                      >{/if}
+                  </div>
+                {/if}
+              </div>
+              <div class="right">
+                <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
+                    >Installed</span
+                  >{:else}<span>Not installed</span>{/if}
+              </div>
+            </label>
+          {/each}
+        {:else if group === 'video'}
           <div class="list-head">Video · Labs<span>SeedVR2 engines</span></div>
           {#each videoModels as model (model.model_id)}
             <button
@@ -588,6 +691,39 @@
       </section>
 
       <aside class="detail" aria-label="Model details">
+        {#if context.slot === 'try'}
+          <div class="trial-summary" aria-live="polite">
+            <h3>{trialIds.length === 1 ? '1 model picked' : `${trialIds.length} models picked`}</h3>
+            <p>
+              Each runs the full image with your current settings ({keptTrialSettings(
+                settings,
+                Boolean(trialBase?.enable_face_model),
+              )}).
+            </p>
+            {#if trialIds.length && trialEstimates.length === trialIds.length}
+              <p>{trialTime(trialEstimates)}</p>
+            {/if}
+            <p>
+              {trialIds.length || 'No'} new file{trialIds.length === 1 ? '' : 's'} in
+              <span class="path-text"
+                >{trialBase?.output_directory || 'the LocalSR output folder'}</span
+              >, named by model.
+            </p>
+            <button
+              class="button"
+              type="button"
+              disabled={trialBusy || runningTrials || trialIds.length < 2 || trialIds.length > 4}
+              on:click={() => void startTrials()}
+              >{runningTrials
+                ? 'Queueing…'
+                : `Run ${trialIds.length} model${trialIds.length === 1 ? '' : 's'}`}</button
+            >
+            <p>Pick 2 to 4. Results appear under Showing in the preview.</p>
+            {#if estimateError}<p role="status">
+                Run time estimate unavailable: {estimateError}
+              </p>{/if}
+          </div>
+        {/if}
         {#if group === 'video' && selectedVideo}
           <div>
             <h3>{selectedVideo.name}</h3>

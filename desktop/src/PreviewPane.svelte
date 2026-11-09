@@ -4,6 +4,8 @@
   import EmptyStage from './EmptyStage.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
+  import SplitComparison from './SplitComparison.svelte';
+  import type { ComparisonSide } from './lib/results';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import {
@@ -29,8 +31,30 @@
   } from './lib/types';
 
   export let selectedMedia: MediaItem | undefined;
+  /** The Showing side: a saved result's preview, '' while there is none to compare. */
   export let resultPreview: string;
   export let comparisonError = '';
+  // A saved result as the reference (against). The Original then stays under it
+  // and only holding M shows it.
+  export let referenceIsResult = false;
+  export let referencePreview = '';
+  /** Side labels; '' keeps the single-result view without labels. */
+  export let showingLabel = '';
+  export let referenceLabel = 'Original';
+  export let showingState: ComparisonSide['state'] = 'ready';
+  export let referenceState: ComparisonSide['state'] = 'ready';
+  export let showingError = '';
+  export let referenceError = '';
+  /** Showing alone in its own framing (an Edit result that does not match the source). */
+  export let singleFrame: { width: number; height: number } | null = null;
+  /** Live tiles of a running job; off once a saved result was chosen for this image. */
+  export let showLiveTiles = true;
+  /** Saved results of this image, for the header's "· 3 results". */
+  export let resultCount = 0;
+  /** Why a pair is shown as a single result, for example a different framing. */
+  export let comparisonNote = '';
+  /** The "Showing [result] against [Original]" row, filled through the choosers slot. */
+  export let showChoosers = false;
   export let completedVideoOutput: string;
   export let compactHidden = false;
   export let modelLabel = '';
@@ -80,19 +104,69 @@
     compare,
   );
   // The header switch keeps a view; holding M peeks at the original from any of them.
+  // With a saved result as the reference the views are Reference / Split /
+  // Showing, and M still shows the real Original, not the reference.
   type ComparisonView = 'original' | 'split' | 'enhanced';
-  const comparisonViews: { id: ComparisonView; label: string; title: string }[] = [
-    { id: 'original', label: 'Original', title: 'Show only the original · hold M to peek' },
-    { id: 'split', label: 'Split', title: 'Original left, result right · drag the divider' },
-    { id: 'enhanced', label: 'Enhanced', title: 'Show only the result' },
-  ];
+  $: comparisonViews = (
+    referenceIsResult
+      ? [
+          {
+            id: 'original',
+            label: 'Reference',
+            title: 'Show only the reference · hold M to peek at the original',
+          },
+          {
+            id: 'split',
+            label: 'Split',
+            title: 'Reference left, Showing right · drag the divider',
+          },
+          { id: 'enhanced', label: 'Showing', title: 'Show only the Showing result' },
+        ]
+      : [
+          { id: 'original', label: 'Original', title: 'Show only the original · hold M to peek' },
+          { id: 'split', label: 'Split', title: 'Original left, result right · drag the divider' },
+          { id: 'enhanced', label: 'Enhanced', title: 'Show only the result' },
+        ]
+  ) as { id: ComparisonView; label: string; title: string }[];
   let comparisonView: ComparisonView = 'split';
   let holdingOriginal = false;
-  $: canCompare = Boolean(resultPreview || videoComparison?.enhanced_url);
-  $: if (!canCompare) holdingOriginal = false;
+  // Two saved sides compare even while one of them is still decoding.
+  $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image';
+  $: canCompare = Boolean(
+    (resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url,
+  );
+  $: canPeek = canCompare || Boolean(singleFrame && resultPreview);
+  $: if (!canPeek) holdingOriginal = false;
   $: shownView = holdingOriginal ? 'original' : comparisonView;
-  $: resultClip =
-    shownView === 'original' ? 100 : shownView === 'enhanced' ? 0 : comparison.imagePercent;
+  $: resultClip = singleFrame
+    ? holdingOriginal
+      ? 100
+      : 0
+    : shownView === 'original'
+      ? 100
+      : shownView === 'enhanced'
+        ? 0
+        : comparison.imagePercent;
+  $: splitActive = canCompare && !videoComparison;
+  let showingSide: ComparisonSide;
+  $: showingSide = {
+    src: resultPreview,
+    label: showingLabel,
+    state: pairShown ? showingState : 'ready',
+    error: showingError,
+  };
+  let referenceSide: ComparisonSide | undefined;
+  $: referenceSide = pairShown
+    ? { src: referencePreview, label: referenceLabel, state: referenceState, error: referenceError }
+    : undefined;
+  $: dividerPercent = Math.round(100 - comparison.enhancedPercent);
+  $: liveTilesShown = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
+  $: frameKey = singleFrame ? `${singleFrame.width}x${singleFrame.height}` : '';
+  let laidOutFrame = '';
+  $: if (frameKey !== laidOutFrame) {
+    laidOutFrame = frameKey;
+    scheduleViewportReset();
+  }
   let minZoom = 1;
   let maxZoom = 8;
   let actualPixelZoom = 1;
@@ -499,7 +573,7 @@
   function pointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     const target = event.target instanceof Element ? event.target : null;
-    if (resultPreview && (target?.closest('.compare-line') || pointerNearComparison(event))) {
+    if (splitActive && (target?.closest('.compare-line') || pointerNearComparison(event))) {
       draggingComparison = true;
       dragging = false;
       updateComparisonFromPointer(event.clientX);
@@ -519,7 +593,7 @@
   }
 
   function comparisonPointerDown(event: PointerEvent): void {
-    if (event.button !== 0 || !resultPreview) return;
+    if (event.button !== 0 || !splitActive) return;
     draggingComparison = true;
     dragging = false;
     updateComparisonFromPointer(event.clientX);
@@ -567,7 +641,7 @@
   }
 
   function pointerNearComparison(event: PointerEvent): boolean {
-    if (!canvasWell || !resultPreview || shownView !== 'split') return false;
+    if (!canvasWell || !splitActive || shownView !== 'split') return false;
     const rectangle = canvasWell.getBoundingClientRect();
     const y = event.clientY - rectangle.top;
     return (
@@ -608,7 +682,7 @@
   }
 
   function windowKeyDown(event: KeyboardEvent): void {
-    if (!canCompare || !holdsOriginalKey(event)) return;
+    if (!canPeek || !holdsOriginalKey(event)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
     holdingOriginal = true;
@@ -714,8 +788,16 @@
     const rectangle = canvasWell.getBoundingClientRect();
     canvasWidth = Math.max(1, rectangle.width);
     canvasHeight = Math.max(1, rectangle.height);
-    const sourceWidth = Math.max(1, selectedMedia?.width || previewNaturalWidth);
-    const sourceHeight = Math.max(1, selectedMedia?.height || previewNaturalHeight);
+    // A result in its own framing sets the stage; otherwise the source does,
+    // and every result is drawn into that source-shaped stage.
+    const sourceWidth = Math.max(
+      1,
+      singleFrame?.width || selectedMedia?.width || previewNaturalWidth,
+    );
+    const sourceHeight = Math.max(
+      1,
+      singleFrame?.height || selectedMedia?.height || previewNaturalHeight,
+    );
     const fitted = fitSize(
       { width: canvasWidth, height: canvasHeight },
       { width: sourceWidth, height: sourceHeight },
@@ -784,7 +866,7 @@
       <strong data-tauri-drag-region>{selectedMedia?.name ?? 'Preview'}</strong>
       <span
         >{selectedMedia
-          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
+          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : resultCount > 1 ? ` · ${resultCount} results` : ''}`
           : 'No media selected'}</span
       >
     </div>
@@ -801,12 +883,16 @@
         {/each}
       </div>
     {/if}
+    {#if showChoosers && $$slots.choosers}
+      <!-- Buttons are never drag targets; the row's own gaps are not either. -->
+      <div class="result-selectors"><slot name="choosers" /></div>
+    {/if}
   </div>
 
   <div
     bind:this={canvasWell}
     class="canvas-well"
-    class:rendering={progressiveVisible && !resultPreview}
+    class:rendering={liveTilesShown}
     class:panning={dragging}
     class:comparing={draggingComparison}
     role="application"
@@ -822,6 +908,8 @@
     {#if selectedMedia}
       {#if comparisonError}<p class="comparison-error" role="alert">
           Comparison unavailable: {comparisonError}
+        </p>{:else if comparisonNote}<p class="comparison-note" role="status">
+          {comparisonNote}
         </p>{/if}
       {#if processing}
         {#if editing}<div class="edit-sweep" aria-hidden="true"></div>{/if}
@@ -856,13 +944,28 @@
           />
         {/key}
       {:else if renderableSourcePreview}
-        <div
-          class="image-stage"
-          style={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+        <SplitComparison
+          stageStyle={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+          split={splitActive}
+          view={comparisonView}
+          peeking={holdingOriginal}
+          {resultClip}
+          showing={showingSide}
+          reference={referenceSide}
+          showingAlt={referenceIsResult || showingLabel
+            ? `Showing: ${showingLabel || 'result'}`
+            : 'Enhanced result'}
+          divider={{ ...comparison, percent: dividerPercent }}
+          dividerDown={comparisonPointerDown}
+          dividerMove={comparisonPointerMove}
+          dividerUp={comparisonPointerUp}
+          dividerKey={compareKeyDown}
         >
           <img
             class="source-image"
             class:waiting-frame={waitingForVideoFrame}
+            class:contained={Boolean(singleFrame)}
+            class:covered={Boolean(singleFrame) && !holdingOriginal}
             src={displayedSourcePreview}
             alt={videoSourcePreview
               ? `Source frame ${videoSourceFrame + 1} of ${selectedMedia.name}`
@@ -874,50 +977,17 @@
           <canvas
             bind:this={progressiveCanvas}
             class="progressive-image"
-            class:visible={progressiveVisible && !resultPreview}
+            class:visible={liveTilesShown}
             aria-label="Progressive tiled preview"
           ></canvas>
-          {#if progressiveVisible && activeTileVisible && !resultPreview}
+          {#if liveTilesShown && activeTileVisible}
             <div
               class="active-tile"
               aria-hidden="true"
               style={`left:${activeTileX}%;top:${activeTileY}%;width:${activeTileWidth}%;height:${activeTileHeight}%`}
             ></div>
           {/if}
-          {#if resultPreview}
-            <img
-              class="result-image"
-              style={`clip-path: inset(0 0 0 ${resultClip}%)`}
-              src={resultPreview}
-              alt="Enhanced result"
-              draggable="false"
-            />
-          {/if}
-        </div>
-        {#if resultPreview}
-          <div
-            class="compare-line"
-            class:held={shownView !== 'split'}
-            role="slider"
-            tabindex={shownView === 'split' ? 0 : -1}
-            aria-hidden={shownView !== 'split'}
-            aria-label="Before and after comparison"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
-            aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
-            style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
-            on:pointerdown|stopPropagation={comparisonPointerDown}
-            on:pointermove|stopPropagation={comparisonPointerMove}
-            on:pointerup|stopPropagation={comparisonPointerUp}
-            on:pointercancel|stopPropagation={comparisonPointerUp}
-            on:keydown={compareKeyDown}
-          >
-            <span aria-hidden="true">↔</span>
-          </div>
-          {#if shownView === 'original'}<span class="original-chip" role="status">Original</span
-            >{/if}
-        {/if}
+        </SplitComparison>
         {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
@@ -1153,8 +1223,28 @@
       background-position: -125% 0;
     }
   }
-  .source-image.waiting-frame {
+  .source-image.waiting-frame,
+  .source-image.covered {
     visibility: hidden;
+  }
+  /* A result in its own framing sets the stage; the peeked Original keeps its shape. */
+  .source-image.contained {
+    object-fit: contain;
+  }
+  .comparison-note {
+    position: absolute;
+    z-index: 5;
+    left: 16px;
+    bottom: 16px;
+    max-width: calc(100% - 32px);
+    margin: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: rgba(24, 24, 26, 0.84);
+    color: var(--secondary);
+    font-size: calc(11px * var(--ui-scale));
+    pointer-events: none;
   }
   @keyframes model-spin {
     to {
