@@ -102,7 +102,7 @@ class InterpolationTarget:
         if frame_count <= 0:
             return 0
         if self.frame_rate is None:
-            return (frame_count - 1) * self.multiplier + 1
+            return frame_count * self.multiplier
         if source_fps <= 0:
             return frame_count
         return max(frame_count, math.ceil(frame_count * float(self.frame_rate) / source_fps - 1e-9))
@@ -178,11 +178,9 @@ class _Schedule:
         self.index = 0
 
     def times(self, start: Fraction, end: Fraction, final: bool) -> list[Fraction]:
-        """Output times in [start, end); a multiplier shows the final frame once."""
+        """Output times in [start, end); a multiplier splits the final frame's slot too."""
         rate = self.target.frame_rate
         if rate is None:
-            if final:
-                return [start]
             count = self.target.multiplier
             return [start + (end - start) * step / count for step in range(count)]
         first = math.ceil((start - self.origin) * rate)
