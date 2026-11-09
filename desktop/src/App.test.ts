@@ -1482,6 +1482,59 @@ describe('LocalSR desktop interface', () => {
     ).toBeNull();
   });
 
+  const driverReset =
+    'The graphics driver stopped Intel UHD Graphics 620 (DirectML) while it ran RealESRGAN (device removed or reset). The engine restarts with a fresh device; if this repeats, choose a smaller tile or the CPU.';
+
+  async function failOnTheGpu(): Promise<(message: WorkerEnvelope) => void> {
+    // The newest mount's listener.
+    const callback = api.listenForWorker.mock.lastCall![0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: driverReset, restart_required: true },
+    });
+    await screen.findByRole('alert', { name: 'Last error' });
+    return callback;
+  }
+
+  function onTheGpu(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices.push(
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+    );
+    snapshot.settings.device_id = 'directml:0';
+    snapshot.settings.task = 'upscale';
+    return snapshot;
+  }
+
+  it('keeps a GPU failure and its CPU shortcut while the engine restarts after it', async () => {
+    const snapshot = onTheGpu();
+    await mountWith(snapshot);
+    const callback = await failOnTheGpu();
+    // The host restarts the engine for a driver reset: its snapshot says so, then Ready.
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    for (const [worker, title, detail] of [
+      ['starting', 'Starting engine', 'The inference process is loading.'],
+      ['ready', 'Ready', 'The isolated inference engine is ready.'],
+    ]) {
+      const restarted = structuredClone(snapshot);
+      Object.assign(restarted.runtime, { worker, status_title: title, status_detail: detail });
+      api.refreshSnapshot.mockResolvedValue(restarted);
+      refresh();
+      await waitFor(() =>
+        expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(
+          new RegExp(`^${title}`),
+        ),
+      );
+    }
+    const failure = screen.getByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('device removed or reset');
+    expect(within(failure).getByRole('button', { name: 'Use the CPU' })).toBeTruthy();
+    // The next job starts without it.
+    callback({ type: 'job_started', data: { job_id: 'job-2' } });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
+  });
+
   it("drops an ended job's route note before a benchmark, even after a forced stop", async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     await mountWith(snapshot);

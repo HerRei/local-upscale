@@ -433,11 +433,13 @@
                 )
         }`
       : '';
-  // The last failure also stands above Advanced, next to the setting that can fix it.
-  $: lastFailure =
-    snapshot.runtime.status_title === 'Could not finish' && !snapshot.runtime.active_job_id
-      ? snapshot.runtime.status_detail
-      : '';
+  // The last failure also stands above Advanced, next to the setting that can fix it. It stays
+  // until the next job starts, also while the engine restarts after it (a driver reset) and
+  // the status line moves on to "Starting engine" and "Ready".
+  let lastFailure = '';
+  $: if (snapshot.runtime.active_job_id) lastFailure = '';
+  else if (snapshot.runtime.status_title === 'Could not finish')
+    lastFailure = snapshot.runtime.status_detail;
   // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
   // needs a GPU, so it gets no such button.
   $: acceleratorFailure =
