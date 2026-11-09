@@ -131,6 +131,7 @@ def _engine_features() -> list[str]:
         "benchmark_v1",
         "image_edit",
         "video_interpolation",
+        "compare_regions",
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
@@ -176,6 +177,9 @@ class WorkerServer:
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
         self.result_previews = ResultPreviewService(send_message)
+        from localsr.worker.compare_regions import RegionService
+
+        self.compare_regions = RegionService(send_message)
         # Set when a job lost its GPU device: only a new process gets a working one.
         self.restart_after_job = False
 
@@ -241,6 +245,12 @@ class WorkerServer:
                 continue
 
             request_type = msg.get("type")
+            if request_type == "region_request":
+                self.compare_regions.submit(msg.get("data", {}))
+                continue
+            if request_type == "region_clear":
+                self.compare_regions.clear()
+                continue
             if request_type == "preview_request":
                 self.result_previews.submit(msg.get("data", {}))
                 continue
@@ -520,6 +530,7 @@ class WorkerServer:
                 send_message(LogMessage(level="error", message=f"Worker loop error: {e}"))
 
         self.result_previews.close()
+        self.compare_regions.close()
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
         """Authenticate and execute the fixed, production-path benchmark."""

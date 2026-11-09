@@ -11,15 +11,18 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::{
-    catalog, downloads,
+    catalog,
+    database::NewJob,
+    downloads,
     error::{AppError, AppResult},
     integrations,
     launch::LaunchIntent,
     native_menu,
+    results::{MediaResults, ResultUi},
     state::{emit_state_changed, lock, AppState},
     types::{
-        AppSnapshot, CatalogModel, Recipe, StartBatchInput, StartBenchmarkInput, UiSettings,
-        VideoComparisonSources,
+        AppSnapshot, CatalogModel, ComparisonPair, ComparisonSlot, Recipe, StartBatchInput,
+        StartBenchmarkInput, UiSettings, VideoComparisonSources,
     },
     worker,
 };
@@ -215,6 +218,7 @@ pub fn add_media(
 
 #[tauri::command]
 pub fn select_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
+    native_menu::set_comparison_labels(&app, false);
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
@@ -584,11 +588,6 @@ pub fn start_jobs(
         ));
     }
 
-    let mut reserved: HashSet<_> = lock(&state.database)?
-        .unfinished_output_paths()?
-        .into_iter()
-        .collect();
-    let mut jobs = Vec::with_capacity(media.len());
     for item in &media {
         if item.probe_status == "failed" {
             return Err(AppError::Validation(format!(
@@ -614,22 +613,32 @@ pub fn start_jobs(
                 "the chosen task does not match one or more media items".into(),
             ));
         }
-        let job_id = Uuid::new_v4().to_string();
-        let output = unique_output_path(&output_directory, &item.path, &input, &mut reserved);
-        let message = build_job_message(
-            &job_id,
-            item,
-            &output,
-            &state.paths.work_root,
-            &input,
-            &selection,
-        )?;
-        jobs.push((job_id, item.id.clone(), serde_json::to_string(&message)?));
     }
-
-    for (id, media_id, request) in jobs {
-        lock(&state.database)?.insert_job(&id, &media_id, &request)?;
-    }
+    let ui_json = ui_json(input.ui.as_ref())?;
+    let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
+    lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
+        media
+            .iter()
+            .map(|item| -> AppResult<NewJob> {
+                let job_id = Uuid::new_v4().to_string();
+                let output = unique_output_path(&output_directory, &item.path, &input, reserved);
+                let message = build_job_message(
+                    &job_id,
+                    item,
+                    &output,
+                    &state.paths.work_root,
+                    &input,
+                    &selection,
+                )?;
+                Ok(NewJob {
+                    id: job_id,
+                    media_id: item.id.clone(),
+                    request_json: serde_json::to_string(&message)?,
+                    ui_json: ui_json.clone(),
+                })
+            })
+            .collect()
+    })?;
     worker::dispatch_next_locked(&state, &app)?;
     emit_state_changed(&app);
     Ok(())
@@ -660,6 +669,409 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
         )?;
     }
     emit_state_changed(&app);
+    Ok(())
+}
+
+/// "Cancel runs for this image": its queued jobs are cancelled and its active
+/// job is signalled. Other media keep their queued work, and completed results
+/// stay. The queue-wide action remains `cancel_jobs` ("Cancel queue").
+#[tauri::command]
+pub fn cancel_jobs_for_media(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let mut cancellation = lock(&state.worker.cancellation)?;
+    let active = lock(&state.database)?.cancel_jobs_for_media(&media_id)?;
+    if let Some(active) = active {
+        cancellation.request(&active, std::time::Instant::now());
+        {
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.active_job_id == active {
+                runtime.status_title = "Cancelling".into();
+                runtime.status_detail =
+                    "Stopping this image's run at the next model step. Other images stay queued."
+                        .into();
+            }
+        }
+        worker::send(
+            &state,
+            &json!({"type": "cancel_request", "data": {"job_id": active}}),
+        )?;
+    }
+    drop(cancellation);
+    emit_state_changed(&app);
+    Ok(())
+}
+
+/// "Try others…": the same image once per model, as ordinary jobs admitted
+/// together. Returns their ids in queue order.
+#[tauri::command]
+pub fn start_model_trials(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+    model_ids: Vec<String>,
+    base_settings: StartBatchInput,
+) -> AppResult<Vec<String>> {
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
+    let ids = admit_model_trials(&state, &media_id, &model_ids, &base_settings)?;
+    worker::dispatch_next_locked(&state, &app)?;
+    emit_state_changed(&app);
+    Ok(ids)
+}
+
+struct TrialCandidate {
+    input: StartBatchInput,
+    selection: ModelSelection,
+}
+
+/// Problems a 1× checkpoint fixes; mirrors `fixesOf` in desktop/src/lib/state.ts.
+fn model_fixes(model: &CatalogModel) -> Vec<String> {
+    if !model.fixes.is_empty() {
+        return model.fixes.clone();
+    }
+    let has = |purpose: &str| model.purposes.iter().any(|item| item == purpose);
+    if model.native_scale != 1 || has("face") {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    if has("denoise") {
+        found.push("noise".to_owned());
+    }
+    if has("deblur") {
+        found.push("blur".to_owned());
+    }
+    if has("restoration") && found.is_empty() {
+        found.push("jpeg".to_owned());
+    }
+    found
+}
+
+/// Validate every candidate against the settings the plan card shows. A model
+/// that cannot keep the scale, the fix recipe or Faces is refused; nothing is
+/// adjusted to make it fit, except that a model gets at least the tile overlap
+/// it needs (as choosing it in the library does).
+fn trial_candidates(
+    state: &AppState,
+    media_id: &str,
+    model_ids: &[String],
+    base: &StartBatchInput,
+) -> AppResult<Vec<TrialCandidate>> {
+    if model_ids.is_empty()
+        || model_ids.len() > 4
+        || model_ids.iter().collect::<HashSet<_>>().len() != model_ids.len()
+    {
+        return Err(AppError::Validation(
+            "Pick 2 to 4 different installed models.".into(),
+        ));
+    }
+    if !matches!(base.task.as_str(), "upscale" | "denoise")
+        || base.batch_mode
+        || base.media_ids != [media_id]
+    {
+        return Err(AppError::Validation(
+            "Try others needs one selected image in Upscale or Restore.".into(),
+        ));
+    }
+    validate_start_input(base, external_codecs_available(state))?;
+    // The Restore model is the fix: each candidate must fix the active problem.
+    // With several fixes it is the last one: the fixes before it keep their models.
+    let active_fix = base.fix_stages.last().map(|stage| stage.fix.clone());
+    let mut candidates = Vec::with_capacity(model_ids.len());
+    for model_id in model_ids {
+        let (halo, fixes, name) = {
+            let catalog = lock(&state.catalog)?;
+            let model = catalog
+                .models
+                .iter()
+                .find(|model| model.model_id == *model_id)
+                .ok_or_else(|| {
+                    AppError::Validation("Try others uses installed catalog models.".into())
+                })?;
+            let name = crate::results::catalog_label(&catalog, model_id)
+                .unwrap_or_else(|| model.name.clone());
+            if !model.installed {
+                return Err(AppError::Validation(format!("{name} is not installed.")));
+            }
+            (model.recommended_halo, model_fixes(model), name)
+        };
+        if base.task == "denoise" && active_fix.as_ref().is_some_and(|fix| !fixes.contains(fix)) {
+            return Err(AppError::Validation(format!(
+                "{name} does not fix the selected problem."
+            )));
+        }
+        let mut input = base.clone();
+        input.model_id = model_id.clone();
+        if base.task == "denoise" {
+            if let Some(last) = input.fix_stages.last_mut() {
+                last.model_id = model_id.clone();
+            }
+        }
+        input.name_by_model = true;
+        input.halo = base.halo.max(halo);
+        input.allow_unsafe_pickle_model = false;
+        if *model_id != base.model_id {
+            // Another model under the same settings is a custom choice, not
+            // the Quick, Best or recipe pick that was showing.
+            if let Some(ui) = &mut input.ui {
+                ui.quality = "custom".into();
+                ui.recipe_name.clear();
+            }
+        }
+        // Scale, the fix stage and the Faces companion are checked here, as
+        // for any job; the candidate is refused rather than changed.
+        let selection = resolve_model_selection(state, &input)
+            .map_err(|error| AppError::Validation(format!("{name}: {error}")))?;
+        if let ModelSelection::Image {
+            path,
+            preprocess,
+            face_path,
+            ..
+        } = &selection
+        {
+            let missing = std::iter::once(path.as_str())
+                .chain(preprocess.iter().map(|stage| stage.path.as_str()))
+                .chain(face_path.iter().map(String::as_str))
+                .any(|path| !Path::new(path).is_file());
+            if missing {
+                return Err(AppError::Validation(format!(
+                    "{name}: a checkpoint is no longer installed."
+                )));
+            }
+        }
+        candidates.push(TrialCandidate { input, selection });
+    }
+    Ok(candidates)
+}
+
+/// Admit 2-4 candidates for one idle image under the scheduler lock (held by
+/// the caller): all of them, in the order given, or none.
+fn admit_model_trials(
+    state: &AppState,
+    media_id: &str,
+    model_ids: &[String],
+    base: &StartBatchInput,
+) -> AppResult<Vec<String>> {
+    if model_ids.len() < 2 {
+        return Err(AppError::Validation(
+            "Pick 2 to 4 different installed models.".into(),
+        ));
+    }
+    let candidates = trial_candidates(state, media_id, model_ids, base)?;
+    let directory = prepare_output_directory(state, &base.output_directory)?;
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(media_id)?
+        .ok_or_else(|| AppError::Validation("The selected image is no longer queued.".into()))?;
+    if media.kind != "image" || media.probe_status != "ready" || !Path::new(&media.path).is_file() {
+        return Err(AppError::Validation(
+            "Choose an available image with a ready preview.".into(),
+        ));
+    }
+    let mut ids = Vec::with_capacity(candidates.len());
+    database.admit_jobs(&[media_id], |reserved| {
+        candidates
+            .iter()
+            .map(|candidate| -> AppResult<NewJob> {
+                let id = Uuid::new_v4().to_string();
+                let output =
+                    unique_output_path(&directory, &media.path, &candidate.input, reserved);
+                let message = build_job_message(
+                    &id,
+                    &media,
+                    &output,
+                    &state.paths.work_root,
+                    &candidate.input,
+                    &candidate.selection,
+                )?;
+                ids.push(id.clone());
+                Ok(NewJob {
+                    id,
+                    media_id: media_id.to_owned(),
+                    request_json: serde_json::to_string(&message)?,
+                    ui_json: ui_json(candidate.input.ui.as_ref())?,
+                })
+            })
+            .collect()
+    })?;
+    Ok(ids)
+}
+
+fn ui_json(ui: Option<&ResultUi>) -> AppResult<String> {
+    Ok(ui
+        .map(serde_json::to_string)
+        .transpose()?
+        .unwrap_or_default())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct TrialEstimate {
+    model_id: String,
+    model_label: String,
+    /// Measured run time of the same work on this device; None when unknown.
+    seconds: Option<f64>,
+}
+
+/// Run times for "Try others…" before anything is queued, from earlier jobs
+/// with the same work profile.
+#[tauri::command]
+pub fn estimate_model_trials(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+    model_ids: Vec<String>,
+    base_settings: StartBatchInput,
+) -> AppResult<Vec<TrialEstimate>> {
+    let candidates = trial_candidates(&state, &media_id, &model_ids, &base_settings)?;
+    let labels: Vec<String> = {
+        let catalog = lock(&state.catalog)?;
+        candidates
+            .iter()
+            .map(|candidate| {
+                crate::results::catalog_label(&catalog, &candidate.input.model_id)
+                    .unwrap_or_else(|| candidate.input.model_id.clone())
+            })
+            .collect()
+    };
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(&media_id)?
+        .ok_or_else(|| AppError::Validation("The selected image is no longer queued.".into()))?;
+    candidates
+        .iter()
+        .zip(labels)
+        .map(|(candidate, model_label)| -> AppResult<TrialEstimate> {
+            // The work profile ignores paths and ids; these placeholders never run.
+            let message = build_job_message(
+                "estimate",
+                &media,
+                Path::new(""),
+                &state.paths.work_root,
+                &candidate.input,
+                &candidate.selection,
+            )?;
+            Ok(TrialEstimate {
+                model_label,
+                model_id: candidate.input.model_id.clone(),
+                seconds: database.estimate_request_seconds(&message.to_string(), &media)?,
+            })
+        })
+        .collect()
+}
+
+/// The finished attempts of one media for the result choosers, with catalog
+/// names. `before` is the `next_before` of the previous page.
+#[tauri::command]
+pub fn list_media_results(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+    limit: Option<u32>,
+    before: Option<String>,
+) -> AppResult<MediaResults> {
+    let mut history = lock(&state.database)?.list_media_results(
+        &media_id,
+        limit.unwrap_or(50),
+        before.as_deref(),
+    )?;
+    let catalog = lock(&state.catalog)?;
+    for result in &mut history.results {
+        crate::results::label_summary(&catalog, result);
+    }
+    Ok(history)
+}
+
+/// All image histories in one IPC call for the Outputs pane.
+#[tauri::command]
+pub fn list_all_media_results(state: State<'_, Arc<AppState>>) -> AppResult<Vec<MediaResults>> {
+    let mut histories = lock(&state.database)?.list_all_media_results()?;
+    let catalog = lock(&state.catalog)?;
+    for history in &mut histories {
+        for result in &mut history.results {
+            crate::results::label_summary(&catalog, result);
+        }
+    }
+    Ok(histories)
+}
+
+/// Replace the Compare tab's picks in slot order, using only host-owned files.
+#[tauri::command]
+pub fn request_compare(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    picks: Vec<crate::compare::ComparePick>,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::plan(&database, &mut runtime.compare, &picks)?
+    };
+    for request in requests {
+        if let Err(error) = worker::send(&state, &request) {
+            let mut failure = request["data"].clone();
+            failure["error_message"] = json!(error.to_string());
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply(&database, &mut runtime.compare, &failure, true)?;
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn request_compare_regions(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    generation: u64,
+    regions: Vec<Option<crate::compare::Region>>,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    if !lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "compare_regions")
+    }) {
+        return Ok(());
+    }
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        if runtime.compare.generation != generation {
+            return Ok(());
+        }
+        crate::compare::plan_regions(&database, &mut runtime.compare, &regions)?
+    };
+    for request in requests {
+        if worker::send(&state, &request).is_err() {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply_region(&database, &mut runtime.compare, &request["data"], true)?;
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_compare_regions(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::plan_regions(&database, &mut runtime.compare, &[])?;
+    }
+    if lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "compare_regions")
+    }) {
+        let _ = worker::send(&state, &json!({"type":"region_clear", "data":{}}));
+    }
     Ok(())
 }
 
@@ -805,11 +1217,133 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
     export_result
 }
 
+/// Decode saved results for the preview. With `showing` (and `against`, which
+/// defaults to the Original), each target is "original" or the id of a
+/// completed job of this media whose file exists; the host checks that before
+/// anything is decoded, and the two previews arrive in the pair slots. The
+/// Original side is drawn from the probe thumbnail and is never decoded here.
+/// Without targets, the newest completed result is decoded on its own: the
+/// fallback the preview uses when the result history cannot be read.
 #[tauri::command]
 pub fn request_image_comparison(
     state: State<'_, Arc<AppState>>,
+    app: AppHandle,
     media_id: String,
+    showing: Option<String>,
+    against: Option<String>,
 ) -> AppResult<()> {
+    let Some(showing) = showing else {
+        native_menu::set_comparison_labels(&app, false);
+        return request_latest_comparison(&state, media_id);
+    };
+    let against = against.unwrap_or_else(|| "original".into());
+    let (media, showing_path, against_path) = {
+        let database = lock(&state.database)?;
+        let media = database
+            .get_media(&media_id)?
+            .ok_or_else(|| AppError::Validation("the selected image is no longer queued".into()))?;
+        if media.kind != "image" {
+            return Err(AppError::Validation(
+                "select an image for this comparison".into(),
+            ));
+        }
+        let resolve = |target: &str| -> AppResult<String> {
+            if target == "original" {
+                Ok(String::new())
+            } else {
+                database.media_result_output(&media_id, target)
+            }
+        };
+        let showing_path = resolve(&showing)?;
+        let against_path = resolve(&against)?;
+        (media, showing_path, against_path)
+    };
+    native_menu::set_comparison_labels(&app, against != "original");
+    let requests = plan_pair_requests(
+        &mut *lock(&state.runtime)?,
+        &media,
+        (&showing, &showing_path),
+        (&against, &against_path),
+    );
+    for request in requests {
+        worker::send(&state, &request)?;
+    }
+    Ok(())
+}
+
+/// Record the requested pair and return the decodes it still needs. A side
+/// that already shows the same file keeps its preview, also on the other side;
+/// asking again for a fully decoded pair changes nothing. `(target, path)`:
+/// the path is empty for the Original.
+fn plan_pair_requests(
+    runtime: &mut crate::types::RuntimeStatus,
+    media: &crate::types::MediaItem,
+    showing: (&str, &str),
+    against: (&str, &str),
+) -> Vec<Value> {
+    let previous = &runtime.comparison_pair;
+    let current = |slot: &ComparisonSlot, (target, path): (&str, &str)| {
+        slot.target_id == target && slot.output_path == path
+    };
+    let settled =
+        |slot: &ComparisonSlot| slot.target_id == "original" || !slot.preview_data_url.is_empty();
+    // A side that is still loading or failed is asked for again, as after an
+    // engine restart.
+    if previous.media_id == media.id
+        && current(&previous.showing, showing)
+        && current(&previous.against, against)
+        && settled(&previous.showing)
+        && settled(&previous.against)
+    {
+        return Vec::new();
+    }
+    let generation = previous.generation + 1;
+    let side = |(target, path): (&str, &str)| -> ComparisonSlot {
+        if target == "original" {
+            return ComparisonSlot {
+                target_id: target.into(),
+                width: media.width,
+                height: media.height,
+                ..Default::default()
+            };
+        }
+        [&previous.showing, &previous.against]
+            .into_iter()
+            .filter(|_| previous.media_id == media.id)
+            .find(|slot| current(slot, (target, path)) && !slot.preview_data_url.is_empty())
+            .cloned()
+            .unwrap_or_else(|| ComparisonSlot {
+                target_id: target.into(),
+                output_path: path.into(),
+                ..Default::default()
+            })
+    };
+    let pair = ComparisonPair {
+        media_id: media.id.clone(),
+        generation,
+        showing: side(showing),
+        against: side(against),
+    };
+    let requests = [("showing", &pair.showing), ("against", &pair.against)]
+        .into_iter()
+        .filter(|(_, slot)| slot.target_id != "original" && slot.preview_data_url.is_empty())
+        .map(|(name, slot)| {
+            json!({"type": "preview_request", "data": {
+                "image_path": slot.output_path,
+                "max_dimension": worker::RESULT_PREVIEW_MAX_DIMENSION,
+                "comparison": true,
+                "slot": name,
+                "generation": generation,
+                "target_id": slot.target_id,
+            }})
+        })
+        .collect();
+    runtime.comparison_pair = pair;
+    requests
+}
+
+/// The newest completed result of an image, as one bounded comparison.
+fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()> {
     let output = {
         let database = lock(&state.database)?;
         let media = database
@@ -846,9 +1380,10 @@ pub fn request_image_comparison(
     // job. The worker response carries its path, so a late response from a
     // previously selected result cannot replace the current comparison.
     worker::send(
-        &state,
+        state,
         &json!({
-            "type": "preview_request", "data": {"image_path": output, "max_dimension": 2048, "comparison": true}
+            "type": "preview_request",
+            "data": {"image_path": output, "max_dimension": worker::RESULT_PREVIEW_MAX_DIMENSION, "comparison": true}
         }),
     )
 }
@@ -2218,7 +2753,7 @@ fn unique_output_path(
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("output");
-    let suffix = match input.task.as_str() {
+    let mut suffix = match input.task.as_str() {
         "denoise" => "_denoised".to_owned(),
         "video"
             if input.video_model_id != "frame_by_frame" && input.video_target_resolution > 0 =>
@@ -2228,6 +2763,10 @@ fn unique_output_path(
         "video" => format!("_video_{}x", input.output_scale),
         _ => format!("_upscaled_{}x", input.output_scale),
     };
+    if input.name_by_model && input.task != "video" {
+        suffix.push('_');
+        suffix.push_str(&model_slug(&input.model_id));
+    }
     let extension = if input.task == "video" {
         input.video_container.as_str()
     } else {
@@ -2245,6 +2784,26 @@ fn unique_output_path(
             return candidate;
         }
         counter = counter.saturating_add(1);
+    }
+}
+
+fn model_slug(id: &str) -> String {
+    let mut slug = String::new();
+    for character in id.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.len() == 24 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "model".into()
+    } else {
+        slug.into()
     }
 }
 
@@ -2751,6 +3310,8 @@ mod tests {
 
     fn input(task: &str) -> StartBatchInput {
         StartBatchInput {
+            name_by_model: false,
+            ui: None,
             media_ids: vec!["media".into()],
             batch_mode: false,
             task: task.into(),
@@ -2785,6 +3346,371 @@ mod tests {
             video_interpolation: "off".into(),
             video_interpolation_order: "after_upscale".into(),
         }
+    }
+
+    /// An app state with one ready image and `count` installed catalog models
+    /// matching `pick`, all pointing at a real file.
+    fn trial_state(
+        directory: &Path,
+        count: usize,
+        pick: impl Fn(&CatalogModel) -> bool,
+    ) -> (AppState, Vec<String>) {
+        let state = AppState::from_paths(crate::paths::AppPaths::under(directory)).unwrap();
+        let image = directory.join("photo.png");
+        fs::write(&image, "source").unwrap();
+        {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("media", image.to_str().unwrap(), "photo.png", "image")
+                .unwrap();
+            db.update_media_probe(
+                image.to_str().unwrap(),
+                "image",
+                100,
+                80,
+                1,
+                0.0,
+                0.0,
+                "preview",
+                "",
+                "",
+            )
+            .unwrap();
+        }
+        let ids: Vec<String> = {
+            let mut catalog = lock(&state.catalog).unwrap();
+            catalog
+                .models
+                .iter_mut()
+                .filter(|m| pick(m))
+                .take(count)
+                .map(|m| {
+                    m.installed = true;
+                    m.installed_path = Some(image.to_string_lossy().into_owned());
+                    m.model_id.clone()
+                })
+                .collect()
+        };
+        assert_eq!(ids.len(), count, "the bundled catalog has enough models");
+        (state, ids)
+    }
+
+    fn upscaler(model: &CatalogModel) -> bool {
+        model.native_scale == 4 && !model.purposes.iter().any(|p| p == "face")
+    }
+
+    fn no_jobs(state: &AppState) -> bool {
+        lock(&state.database)
+            .unwrap()
+            .list_jobs()
+            .unwrap()
+            .is_empty()
+    }
+
+    #[test]
+    fn model_trials_validate_every_candidate_before_admitting_any() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 2, upscaler);
+        let mut base = input("upscale");
+        base.output_directory = directory.path().to_string_lossy().into_owned();
+        for invalid in [
+            vec![ids[0].clone()],
+            vec![ids[0].clone(), ids[0].clone()],
+            vec![ids[0].clone(), "missing".into()],
+            vec![ids[0].clone(), "__custom__".into()],
+            vec![
+                ids[0].clone(),
+                ids[1].clone(),
+                "a".into(),
+                "b".into(),
+                "c".into(),
+            ],
+        ] {
+            assert!(admit_model_trials(&state, "media", &invalid, &base).is_err());
+            assert!(no_jobs(&state));
+        }
+        let mut batch = base.clone();
+        batch.batch_mode = true;
+        let mut video = base.clone();
+        video.task = "video".into();
+        let mut other_media = base.clone();
+        other_media.media_ids = vec!["elsewhere".into()];
+        // Faces, a fix stage and a scale no candidate can keep.
+        let mut faces = base.clone();
+        faces.enable_face_model = true;
+        let mut fix = base.clone();
+        fix.fix_stages = vec![crate::types::FixStageSelection {
+            fix: "blur".into(),
+            model_id: "missing-fix".into(),
+        }];
+        let mut scale = base.clone();
+        scale.output_scale = 8;
+        for refused in [batch, video, other_media, faces, fix, scale] {
+            assert!(admit_model_trials(&state, "media", &ids, &refused).is_err());
+            assert!(no_jobs(&state));
+        }
+        // The second checkpoint vanished: the first is not queued alone.
+        lock(&state.catalog)
+            .unwrap()
+            .models
+            .iter_mut()
+            .find(|m| m.model_id == ids[1])
+            .unwrap()
+            .installed_path = Some("/missing-checkpoint.pth".into());
+        assert!(admit_model_trials(&state, "media", &ids, &base).is_err());
+        assert!(no_jobs(&state));
+    }
+
+    #[test]
+    fn model_trials_queue_ordinary_jobs_in_order_named_by_model() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 3, upscaler);
+        let mut base = input("upscale");
+        base.output_directory = directory.path().to_string_lossy().into_owned();
+        base.model_id = ids[0].clone();
+        base.halo = 0;
+        base.ui = Some(ResultUi {
+            quality: "best".into(),
+            content: "photo".into(),
+            recipe_name: "Mine".into(),
+            fixes: vec![],
+        });
+        let jobs = admit_model_trials(&state, "media", &ids, &base).unwrap();
+        assert_eq!(jobs.len(), 3);
+        let db = lock(&state.database).unwrap();
+        assert_eq!(db.next_queued_job().unwrap().unwrap().id, jobs[0]);
+        // Snapshot order is newest first; the queue runs the reverse.
+        let queued: Vec<String> = db
+            .list_jobs()
+            .unwrap()
+            .into_iter()
+            .rev()
+            .map(|j| j.id)
+            .collect();
+        assert_eq!(queued, jobs);
+        let requests = db.unfinished_requests().unwrap();
+        let catalog = lock(&state.catalog).unwrap();
+        for request in &requests {
+            let data = &request["data"];
+            assert!(data.get("ui").is_none() && data.get("name_by_model").is_none());
+            let model_id = data["stages"][0]["model_id"].as_str().unwrap();
+            let output = data["output_path"].as_str().unwrap();
+            assert!(
+                output.contains(&format!("_upscaled_4x_{}", model_slug(model_id))),
+                "{output}"
+            );
+            let model = catalog
+                .models
+                .iter()
+                .find(|m| m.model_id == model_id)
+                .unwrap();
+            assert!(data["halo"].as_u64().unwrap() >= u64::from(model.recommended_halo));
+        }
+        drop(catalog);
+        drop(db);
+        // The image now has work: a second submission is refused whole.
+        assert!(admit_model_trials(&state, "media", &ids[..2], &base).is_err());
+        assert_eq!(lock(&state.database).unwrap().list_jobs().unwrap().len(), 3);
+        // The current model keeps its labels; another model reads Custom.
+        let db = lock(&state.database).unwrap();
+        for id in &jobs {
+            db.finish_job(id, "failed", "", "stopped").unwrap();
+        }
+        let history = db.list_media_results("media", 50, None).unwrap();
+        let ui_of = |job: &str| {
+            history
+                .results
+                .iter()
+                .find(|r| r.job_id == job)
+                .and_then(|r| r.ui.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            (ui_of(&jobs[0]).quality, ui_of(&jobs[0]).recipe_name),
+            ("best".to_owned(), "Mine".to_owned())
+        );
+        assert_eq!(
+            (ui_of(&jobs[1]).quality, ui_of(&jobs[1]).recipe_name),
+            ("custom".to_owned(), String::new())
+        );
+        assert_eq!(ui_of(&jobs[1]).content, "photo");
+    }
+
+    #[test]
+    fn restore_trials_need_models_that_fix_the_selected_problem() {
+        let directory = tempfile::tempdir().unwrap();
+        let restorer =
+            |m: &CatalogModel| m.native_scale == 1 && !m.purposes.iter().any(|p| p == "face");
+        let (state, ids) = trial_state(directory.path(), 2, restorer);
+        let catalog = lock(&state.catalog).unwrap().clone();
+        let fixes =
+            |id: &str| model_fixes(catalog.models.iter().find(|m| m.model_id == id).unwrap());
+        let mut base = input("denoise");
+        base.output_scale = 1;
+        base.output_directory = directory.path().to_string_lossy().into_owned();
+        // A problem one of the models does not fix refuses the whole trial.
+        let missing = ["noise", "blur", "jpeg"]
+            .into_iter()
+            .find(|fix| !fixes(&ids[0]).iter().any(|f| f == fix))
+            .expect("a restorer that does not fix everything");
+        base.fix_stages = vec![crate::types::FixStageSelection {
+            fix: missing.into(),
+            model_id: ids[1].clone(),
+        }];
+        assert!(admit_model_trials(&state, "media", &ids, &base).is_err());
+        assert!(no_jobs(&state));
+        // Without an active problem both run, named like Restore outputs.
+        base.fix_stages.clear();
+        base.ui = Some(ResultUi::default());
+        admit_model_trials(&state, "media", &ids, &base).unwrap();
+        let requests = lock(&state.database)
+            .unwrap()
+            .unfinished_requests()
+            .unwrap();
+        assert!(requests.iter().all(|r| r["data"]["output_path"]
+            .as_str()
+            .unwrap()
+            .contains("_denoised_")));
+    }
+
+    #[test]
+    fn restore_trials_replace_the_last_fix_model_with_each_candidate() {
+        let directory = tempfile::tempdir().unwrap();
+        let restorer =
+            |m: &CatalogModel| m.native_scale == 1 && !m.purposes.iter().any(|p| p == "face");
+        let (state, ids) = trial_state(directory.path(), 2, restorer);
+        let catalog = lock(&state.catalog).unwrap().clone();
+        let fixes =
+            |id: &str| model_fixes(catalog.models.iter().find(|m| m.model_id == id).unwrap());
+        let Some(common) = ["noise", "blur", "jpeg"]
+            .into_iter()
+            .find(|fix| ids.iter().all(|id| fixes(id).iter().any(|f| f == fix)))
+        else {
+            return;
+        };
+        let mut base = input("denoise");
+        base.output_scale = 1;
+        base.model_id = ids[0].clone();
+        base.output_directory = directory.path().to_string_lossy().into_owned();
+        base.fix_stages = vec![crate::types::FixStageSelection {
+            fix: common.into(),
+            model_id: ids[0].clone(),
+        }];
+        admit_model_trials(&state, "media", &ids, &base).unwrap();
+        let requests = lock(&state.database)
+            .unwrap()
+            .unfinished_requests()
+            .unwrap();
+        assert_eq!(requests.len(), 2);
+        for id in &ids {
+            assert!(requests.iter().any(|r| {
+                let stages = r["data"]["stages"].as_array().unwrap();
+                stages.len() == 1 && stages[0]["model_id"] == id.as_str()
+            }));
+        }
+    }
+
+    #[test]
+    fn trial_estimates_check_candidates_without_queueing_or_creating_folders() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 2, upscaler);
+        let mut base = input("upscale");
+        let output = directory.path().join("not-yet");
+        base.output_directory = output.to_string_lossy().into_owned();
+        let candidates = trial_candidates(&state, "media", &ids, &base).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert!(!output.exists());
+        assert!(no_jobs(&state));
+    }
+
+    #[test]
+    fn a_pair_decodes_each_result_once_and_never_the_original() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&directory.path().join("q.db")).unwrap();
+        db.insert_media("photo", "/tmp/photo.png", "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            "/tmp/photo.png",
+            "image",
+            640,
+            480,
+            1,
+            0.0,
+            0.0,
+            "thumb",
+            "",
+            "",
+        )
+        .unwrap();
+        let media = db.get_media("photo").unwrap().unwrap();
+        let mut runtime = crate::types::RuntimeStatus::default();
+        let sent = |requests: Vec<Value>| -> Vec<(String, String, u64)> {
+            requests
+                .iter()
+                .map(|r| {
+                    let data = &r["data"];
+                    assert_eq!(data["max_dimension"], worker::RESULT_PREVIEW_MAX_DIMENSION);
+                    (
+                        data["slot"].as_str().unwrap().to_owned(),
+                        data["target_id"].as_str().unwrap().to_owned(),
+                        data["generation"].as_u64().unwrap(),
+                    )
+                })
+                .collect()
+        };
+        // Result against Original: one decode, the Original keeps its size.
+        let first = plan_pair_requests(&mut runtime, &media, ("a", "/a.png"), ("original", ""));
+        assert_eq!(sent(first), vec![("showing".into(), "a".into(), 1)]);
+        assert_eq!(
+            (
+                runtime.comparison_pair.against.width,
+                runtime.comparison_pair.against.height
+            ),
+            (640, 480)
+        );
+        // Still loading: asking again sends it again under a new generation.
+        let again = plan_pair_requests(&mut runtime, &media, ("a", "/a.png"), ("original", ""));
+        assert_eq!(sent(again), vec![("showing".into(), "a".into(), 2)]);
+        runtime.comparison_pair.showing.preview_data_url = "data:a".into();
+        // Decoded: the same pair needs nothing.
+        assert!(
+            plan_pair_requests(&mut runtime, &media, ("a", "/a.png"), ("original", "")).is_empty()
+        );
+        // A second result: only it is decoded; the first moves sides intact.
+        let pair = plan_pair_requests(&mut runtime, &media, ("b", "/b.png"), ("a", "/a.png"));
+        assert_eq!(sent(pair), vec![("showing".into(), "b".into(), 3)]);
+        assert_eq!(runtime.comparison_pair.against.preview_data_url, "data:a");
+        runtime.comparison_pair.showing.preview_data_url = "data:b".into();
+        // Swapping both decoded sides decodes nothing.
+        assert!(
+            plan_pair_requests(&mut runtime, &media, ("a", "/a.png"), ("b", "/b.png")).is_empty()
+        );
+        assert_eq!(runtime.comparison_pair.showing.preview_data_url, "data:a");
+        assert_eq!(runtime.comparison_pair.against.preview_data_url, "data:b");
+        // Another image never reuses these previews.
+        db.insert_media("other", "/tmp/other.png", "other.png", "image")
+            .unwrap();
+        let other = db.get_media("other").unwrap().unwrap();
+        let fresh = plan_pair_requests(&mut runtime, &other, ("a", "/a.png"), ("original", ""));
+        assert_eq!(sent(fresh).len(), 1);
+        assert!(runtime.comparison_pair.showing.preview_data_url.is_empty());
+    }
+
+    #[test]
+    fn trial_names_sanitize_models_and_keep_collision_counters() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut base = input("upscale");
+        base.name_by_model = true;
+        base.model_id = "../SwinIR_M///".into();
+        let mut reserved = HashSet::new();
+        let first = unique_output_path(directory.path(), "/photo.png", &base, &mut reserved);
+        assert_eq!(first.file_name().unwrap(), "photo_upscaled_4x_swinir-m.png");
+        let second = unique_output_path(directory.path(), "/photo.png", &base, &mut reserved);
+        assert_eq!(
+            second.file_name().unwrap(),
+            "photo_upscaled_4x_swinir-m_1.png"
+        );
+        assert_eq!(model_slug("///"), "model");
+        assert!(model_slug(&"a".repeat(100)).len() <= 24);
     }
 
     #[test]

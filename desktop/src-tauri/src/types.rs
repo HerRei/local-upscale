@@ -134,6 +134,11 @@ pub struct MediaItem {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct JobRecord {
+    /// The primary model of the recorded request, and its catalog name.
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub model_label: String,
     pub id: String,
     pub media_id: String,
     pub media_name: String,
@@ -466,6 +471,10 @@ impl Default for UiSettings {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeStatus {
     #[serde(default)]
+    pub compare: crate::compare::CompareState,
+    #[serde(default)]
+    pub comparison_pair: ComparisonPair,
+    #[serde(default)]
     pub video_memory: Option<serde_json::Value>,
     pub worker: String,
     pub active_job_id: String,
@@ -633,6 +642,8 @@ impl RuntimeStatus {
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
+            compare: crate::compare::CompareState::default(),
+            comparison_pair: ComparisonPair::default(),
             worker: "starting".into(),
             active_job_id: String::new(),
             active_batch_job_ids: Vec::new(),
@@ -661,6 +672,34 @@ impl Default for RuntimeStatus {
             hardware_note: String::new(),
         }
     }
+}
+
+/// The two saved results the preview compares. The host numbers each request;
+/// a worker answer updates a slot only when its slot, generation and target
+/// match, so a late answer for an earlier pair or media is dropped.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ComparisonPair {
+    pub media_id: String,
+    pub generation: u64,
+    pub showing: ComparisonSlot,
+    pub against: ComparisonSlot,
+}
+
+/// One side of the pair. The Original is drawn from the probe thumbnail the
+/// media already carries, so its slot holds only the target and dimensions.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ComparisonSlot {
+    /// "original" or a job id.
+    pub target_id: String,
+    #[serde(skip)]
+    pub output_path: String,
+    pub preview_data_url: String,
+    pub error: String,
+    /// The saved file's dimensions, and the bounded preview's.
+    pub width: u32,
+    pub height: u32,
+    pub preview_width: u32,
+    pub preview_height: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -695,6 +734,14 @@ pub struct VideoComparisonSources {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartBatchInput {
+    /// Host-only: "Try others…" names each output after its model. The UI
+    /// cannot set it, so Start, Finder and the CLI keep their names.
+    #[serde(skip)]
+    pub name_by_model: bool,
+    /// The quality, content and recipe the plan card showed, kept with the job
+    /// (`jobs.ui_json`) and never sent to the worker.
+    #[serde(default)]
+    pub ui: Option<crate::results::ResultUi>,
     pub media_ids: Vec<String>,
     pub batch_mode: bool,
     pub task: String,

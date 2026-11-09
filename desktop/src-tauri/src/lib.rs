@@ -1,6 +1,7 @@
 mod cancellation;
 mod catalog;
 mod commands;
+mod compare;
 mod database;
 mod distribution;
 mod downloads;
@@ -15,6 +16,7 @@ mod media_server;
 mod native_menu;
 mod paths;
 mod queue_timing;
+mod results;
 mod settings;
 mod state;
 mod types;
@@ -160,7 +162,15 @@ pub fn run() {
             commands::prepare_video_comparison,
             commands::cancel_video_comparison,
             commands::request_image_comparison,
+            commands::request_compare,
+            commands::request_compare_regions,
+            commands::clear_compare_regions,
             commands::cancel_jobs,
+            commands::cancel_jobs_for_media,
+            commands::start_model_trials,
+            commands::estimate_model_trials,
+            commands::list_media_results,
+            commands::list_all_media_results,
             commands::refresh_capabilities,
             commands::probe_path,
             commands::download_model,

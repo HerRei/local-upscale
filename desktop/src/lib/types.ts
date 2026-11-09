@@ -161,6 +161,9 @@ export interface MediaItem {
 }
 
 export interface JobRecord {
+  /** The primary model of the recorded request, and its catalog name. */
+  model_id?: string;
+  model_label?: string;
   id: string;
   media_id: string;
   media_name: string;
@@ -361,6 +364,8 @@ export interface VideoMemoryStatus {
 }
 
 export interface RuntimeStatus {
+  comparison_pair?: ComparisonPair;
+  compare?: CompareState;
   video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
   active_job_id: string;
@@ -501,6 +506,7 @@ export interface WorkerEnvelope {
 }
 
 export interface StartBatchInput {
+  ui?: ResultUi;
   media_ids: string[];
   batch_mode: boolean;
   task: TaskKind;
@@ -534,6 +540,93 @@ export interface StartBatchInput {
   allow_unsafe_pickle_model: boolean;
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
+}
+
+/** The plan card's labels when a job was queued; host-only, never sent to the worker. */
+export interface ResultUi {
+  quality: string;
+  content: string;
+  recipe_name: string;
+  fixes?: string[];
+}
+export interface ResultStage {
+  kind: string;
+  model_id: string;
+  model_label: string;
+}
+/** One finished attempt of a media item, as `list_media_results` returns it. */
+export interface ResultSummary {
+  job_id: string;
+  completed_at: number;
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted' | string;
+  kind: 'upscale' | 'restore' | 'edit' | 'video' | string;
+  output_path: string;
+  output_name: string;
+  /** Completed and its file exists. */
+  available: boolean;
+  model_id: string;
+  model_label: string;
+  scale: number;
+  stages: ResultStage[];
+  notes: string;
+  /** Run time including loading and saving; 0 when unknown. */
+  elapsed_seconds: number;
+  ui: ResultUi | null;
+}
+export interface MediaResults {
+  media_id: string;
+  /** Newest first, up to the requested page size. */
+  results: ResultSummary[];
+  total_count: number;
+  completed_count: number;
+  available_count: number;
+  default_result_id: string | null;
+  next_before: string | null;
+}
+export type ComparePick =
+  { kind: 'original'; media_id: string } | { kind: 'output'; media_id: string; job_id: string };
+export interface CompareSlot {
+  pick: ComparePick;
+  status: 'loading' | 'ready' | 'error' | 'missing';
+  preview_data_url: string;
+  error: string;
+  width: number;
+  height: number;
+  preview_width: number;
+  preview_height: number;
+  region?: { bounds: import('./compareRegions').Region; data_url: string } | null;
+}
+export interface CompareState {
+  generation: number;
+  slots: CompareSlot[];
+}
+/** "original" or the job id of a saved result. */
+export type ResultTarget = string;
+export interface PairChoice {
+  showing: ResultTarget;
+  against: ResultTarget;
+  /** A manual choice; it holds through later completions for this session. */
+  pinned: boolean;
+}
+export interface ComparisonSlot {
+  target_id: string;
+  preview_data_url: string;
+  error?: string;
+  width?: number;
+  height?: number;
+  preview_width?: number;
+  preview_height?: number;
+}
+export interface ComparisonPair {
+  media_id: string;
+  generation: number;
+  showing: ComparisonSlot;
+  against: ComparisonSlot;
+}
+export interface TrialEstimate {
+  model_id: string;
+  model_label: string;
+  seconds: number | null;
 }
 
 export interface LaunchIntent {

@@ -1,6 +1,24 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import PreviewPane from './PreviewPane.svelte';
+  import ComparePane from './ComparePane.svelte';
+  import {
+    outputGroups,
+    pickKey,
+    toggleSlot,
+    swapSlots,
+    tabFromKey,
+    type CompareItem,
+  } from './lib/compareOutputs';
+  import {
+    ORIGINAL,
+    alignedFraming,
+    chooseTarget,
+    describeSide,
+    effectiveChoice,
+    slotFor,
+    stepShowing,
+  } from './lib/results';
   import { queueTiming } from './lib/queue-timing';
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
@@ -63,6 +81,7 @@
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
+    ComparePick,
     BenchmarkDeviceResult,
     BenchmarkRender,
     CatalogModel,
@@ -72,8 +91,11 @@
     FixStageSelection,
     IntegrationStatus,
     LaunchIntent,
+    MediaResults,
+    PairChoice,
     Quality,
     Recipe,
+    ResultSummary,
     StartBatchInput,
     TaskKind,
     UiSettings,
@@ -94,6 +116,101 @@
     : (snapshot.latest_benchmark?.device_results ?? []);
 
   let page: 'media' | 'preview' | 'enhance' = 'preview';
+  let mainTab: 'preview' | 'compare' = 'preview';
+  let compareLayout: 'slider' | 'boxes' = 'slider';
+  let comparePicks: ComparePick[] = [];
+  let bulkHistories: MediaResults[] = [];
+  let bulkHistoryError = '';
+  let bulkKey = '';
+  let bulkRequest = 0;
+  let compareRequestError = '';
+  let comparePending = false;
+  let compareRevision = 0;
+  $: desiredBulkKey = JSON.stringify([
+    snapshot.media.map((m) => m.id),
+    snapshot.jobs.map((j) => [j.id, j.status]),
+  ]);
+  $: if (desiredBulkKey !== bulkKey) void loadBulkHistories(desiredBulkKey);
+  $: compareGroups = outputGroups(snapshot.media, bulkHistories);
+  $: compareItems = comparePicks.map((pick, index): CompareItem => {
+    const group = compareGroups.find((entry) => entry.media.id === pick.media_id);
+    const media = snapshot.media.find((entry) => entry.id === pick.media_id);
+    const result =
+      pick.kind === 'output'
+        ? group?.outputs.find((entry) => pickKey(entry.pick) === pickKey(pick))?.result
+        : undefined;
+    const candidate = snapshot.runtime.compare?.slots[index];
+    const slot = candidate && pickKey(candidate.pick) === pickKey(pick) ? candidate : undefined;
+    return {
+      key: pickKey(pick),
+      pick,
+      media_name: media?.name ?? 'Image',
+      label: pick.kind === 'original' ? 'Original' : result?.model_label || 'Earlier result',
+      meta: result
+        ? [
+            result.ui?.quality,
+            result.scale ? `${result.scale}×` : '',
+            result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : `${media?.width ?? 0} × ${media?.height ?? 0}`,
+      width: slot?.width || media?.width || 1,
+      height: slot?.height || media?.height || 1,
+      preview_data_url: slot?.preview_data_url ?? '',
+      preview_width: slot?.preview_width ?? 0,
+      preview_height: slot?.preview_height ?? 0,
+      region: slot?.region,
+      status: slot?.status ?? 'loading',
+      error: slot?.error ?? '',
+    };
+  });
+  function mainTabKey(event: KeyboardEvent): void {
+    const next = tabFromKey(event.key, mainTab === 'preview' ? 0 : 1, 2);
+    if (next === null) return;
+    event.preventDefault();
+    mainTab = next === 0 ? 'preview' : 'compare';
+    (event.currentTarget as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [next]?.focus();
+  }
+  async function loadBulkHistories(key: string): Promise<void> {
+    bulkKey = key;
+    const request = ++bulkRequest;
+    if (!api.isTauri()) return;
+    try {
+      const histories = await api.listAllMediaResults();
+      if (request === bulkRequest) {
+        bulkHistories = histories;
+        bulkHistoryError = '';
+      }
+    } catch (error) {
+      if (request === bulkRequest) bulkHistoryError = String(error);
+    }
+  }
+  function setComparePicks(picks: ComparePick[]): void {
+    if (picks.length >= 3 && comparePicks.length < 3) compareLayout = 'boxes';
+    comparePicks = picks;
+    compareRevision++;
+    void sendComparePicks();
+  }
+  async function sendComparePicks(): Promise<void> {
+    if (comparePending || !api.isTauri()) return;
+    comparePending = true;
+    let sent: number;
+    do {
+      sent = compareRevision;
+      try {
+        await api.requestCompare(comparePicks);
+        if (sent === compareRevision) compareRequestError = '';
+      } catch (error) {
+        if (sent === compareRevision) compareRequestError = String(error);
+      }
+    } while (sent !== compareRevision);
+    comparePending = false;
+    await refresh();
+  }
+
   let recipeEditorOpen = false;
   let recipeName = '';
   // Model terms are accepted per model: several fixes can each need their own.
@@ -131,7 +248,7 @@
   const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
   let libraryOpen = false;
   let libraryContext: {
-    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit';
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
   } = { slot: 'browse' };
   let startingJob = false;
@@ -300,17 +417,131 @@
     Boolean(snapshot.runtime.active_job_id) && canQueue && settings.task !== 'edit';
   $: queuedCount = snapshot.jobs.filter((job) => job.status === 'queued').length;
   $: queueEta = queueTiming(snapshot);
-  $: resultPreview = resultPreviewForSelectedMedia(snapshot);
-  // Open and Reveal follow the selected item. Jobs arrive newest first, so this
-  // is the selected item's latest result, not whichever job finished last.
-  $: selectedOutputPath =
-    selectedMedia && selectedMedia.id !== activeJobMediaId
+  // Saved results of the selected image and the pair the preview compares. The
+  // host lists the history and checks every target before it decodes one; a
+  // manual choice is pinned per image for this session (a restart resets it).
+  let histories: Record<string, MediaResults> = {};
+  let historyFailures: Record<string, string> = {};
+  let pairChoices: Record<string, PairChoice> = {};
+  let rememberedResults: Record<string, ResultSummary> = {};
+  let historyKey = '';
+  let historyRequest = 0;
+  let pairKey = '';
+  let pairError = '';
+  $: selectedImage = selectedMedia?.kind === 'image' ? selectedMedia : undefined;
+  // Any new, finished or cancelled job of this image can change its history.
+  $: desiredHistoryKey = selectedImage
+    ? `${selectedImage.id}|${snapshot.jobs
+        .filter((job) => job.media_id === selectedImage?.id)
+        .map((job) => `${job.id}:${job.status}`)
+        .join(',')}`
+    : '';
+  $: if (desiredHistoryKey !== historyKey) void loadResultHistory(desiredHistoryKey);
+  // A host with pair slots compares by job id once the history is known. If the
+  // history cannot be read, the newest result is compared alone, as before.
+  $: pairMode = Boolean(
+    selectedImage && snapshot.runtime.comparison_pair && !historyFailures[selectedImage.id],
+  );
+  $: history = selectedImage ? histories[selectedImage.id] : undefined;
+  $: choice = effectiveChoice(history, selectedImage ? pairChoices[selectedImage.id] : undefined);
+  // While this image runs and nothing was chosen, its live tiles stay in view.
+  $: liveRun = Boolean(selectedImage && activeJobMediaId === selectedImage.id && !choice.pinned);
+  $: pairShown = Boolean(pairMode && history && !liveRun);
+  $: resultRows = history
+    ? [
+        ...history.results,
+        ...[choice.showing, choice.against]
+          .filter((id) => id !== ORIGINAL && !history?.results.some((row) => row.job_id === id))
+          .map((id) => rememberedResults[id])
+          .filter((row): row is ResultSummary => Boolean(row)),
+      ]
+    : [];
+  $: showingSide = selectedImage
+    ? describeSide(
+        choice.showing,
+        resultRows.find((row) => row.job_id === choice.showing),
+        slotFor(snapshot.runtime.comparison_pair, selectedImage.id, 'showing', choice.showing),
+        selectedImage,
+        // The completion preview of the job that just finished bridges the
+        // decode; while a job runs that field holds live frames, never a result.
+        !snapshot.runtime.active_job_id &&
+          resultRows.find((row) => row.job_id === choice.showing)?.output_path ===
+            snapshot.runtime.last_output_path
+          ? snapshot.runtime.result_preview_data_url
+          : '',
+      )
+    : undefined;
+  $: againstSide =
+    selectedImage && choice.against !== ORIGINAL
+      ? describeSide(
+          choice.against,
+          resultRows.find((row) => row.job_id === choice.against),
+          slotFor(snapshot.runtime.comparison_pair, selectedImage.id, 'against', choice.against),
+          selectedImage,
+        )
+      : undefined;
+  // A result whose framing differs from the source (an Edit can) is shown on
+  // its own; stretching it over the source would fake an alignment.
+  $: showingFramed = Boolean(
+    pairShown && showingSide && selectedImage && !alignedFraming(showingSide, selectedImage),
+  );
+  $: againstFramed = Boolean(
+    pairShown && againstSide && selectedImage && !alignedFraming(againstSide, selectedImage),
+  );
+  $: singleFrame =
+    pairShown && showingSide && (showingFramed || againstFramed) && showingSide.width
+      ? { width: showingSide.width, height: showingSide.height }
+      : null;
+  $: comparisonNote = showingFramed
+    ? `${showingSide?.label} has a different framing from the original, so it is shown on its own.`
+    : againstFramed
+      ? `${againstSide?.label} has a different framing, so it cannot share a split with ${showingSide?.label}.`
+      : '';
+  $: referenceIsResult = Boolean(pairShown && againstSide && !singleFrame);
+  $: resultPreview =
+    !pairMode || !history
+      ? resultPreviewForSelectedMedia(snapshot)
+      : liveRun || !showingSide || showingSide.state !== 'ready'
+        ? ''
+        : choice.showing === ORIGINAL && !referenceIsResult
+          ? ''
+          : showingSide.src;
+  $: desiredPairKey =
+    pairShown &&
+    selectedImage &&
+    snapshot.runtime.worker === 'ready' &&
+    (choice.showing !== ORIGINAL || choice.against !== ORIGINAL)
+      ? `${selectedImage.id}|${choice.showing}|${choice.against}`
+      : '';
+  $: if (desiredPairKey !== pairKey) void requestPair(desiredPairKey);
+  // Open and Reveal follow Showing. Without a history they follow the selected
+  // item's latest result (jobs arrive newest first), not whichever job finished last.
+  $: selectedOutputPath = pairShown
+    ? (resultRows.find((row) => row.job_id === choice.showing && row.available)?.output_path ?? '')
+    : selectedMedia && selectedMedia.id !== activeJobMediaId
       ? (snapshot.jobs.find(
           (job) =>
             job.media_id === selectedMedia?.id && job.status === 'completed' && job.output_path,
         )?.output_path ?? '')
       : '';
   $: selectedOutputName = selectedOutputPath.split(/[\\/]/).pop() ?? '';
+  // Try others…: one image in Upscale or Restore with a catalog model; the
+  // runs queue behind other work but not beside this image's own.
+  $: canTryOthers = Boolean(
+    selectedImage &&
+    !batchLabel &&
+    (settings.task === 'upscale' || settings.task === 'denoise') &&
+    settings.selected_model_id !== '__custom__',
+  );
+  $: canOpenTrials = Boolean(
+    canTryOthers &&
+    selectedImage &&
+    !startingJob &&
+    !cancelling &&
+    snapshot.runtime.worker === 'ready' &&
+    selectedImage.probe_status === 'ready' &&
+    !inflightMediaIds.has(selectedImage.id),
+  );
   let imageComparisonKey = '';
   let imageComparisonError = '';
   $: completedImageJob =
@@ -321,16 +552,18 @@
         )
       : undefined;
   $: desiredImageComparisonKey =
-    completedImageJob && snapshot.runtime.worker === 'ready'
+    !pairMode && completedImageJob && snapshot.runtime.worker === 'ready'
       ? `${completedImageJob.media_id}:${completedImageJob.output_path}`
       : '';
   $: if (desiredImageComparisonKey !== imageComparisonKey)
     void loadImageComparison(desiredImageComparisonKey);
   $: selectedComparisonError =
     imageComparisonError ||
-    (snapshot.runtime.comparison_media_id === selectedMedia?.id
-      ? (snapshot.runtime.comparison_error ?? '')
-      : '');
+    (pairShown
+      ? pairError || (!referenceIsResult && showingSide?.state === 'error' ? showingSide.error : '')
+      : snapshot.runtime.comparison_media_id === selectedMedia?.id
+        ? (snapshot.runtime.comparison_error ?? '')
+        : '');
   $: completedVideoOutput =
     selectedMedia?.kind === 'video' && selectedMedia.id !== activeJobMediaId
       ? (snapshot.jobs.find(
@@ -751,9 +984,11 @@
       messageJob !== snapshot.runtime.active_job_id &&
       (snapshot.runtime.active_batch_job_ids ?? []).includes(messageJob);
     snapshot = applyWorkerEnvelope(snapshot, message);
+    // A pinned pair keeps its zoom, pan and divider while other runs start and finish.
+    const pinned = Boolean(selectedMedia && pairChoices[selectedMedia.id]?.pinned);
     if (message.type === 'job_started') {
       livePreviewWarning = '';
-      resetView();
+      if (!pinned) resetView();
       resetProgressivePreview(messageJob);
     } else if (
       !offScreen &&
@@ -761,7 +996,7 @@
     ) {
       livePreviewWarning = '';
       resetProgressivePreview();
-      resetView();
+      if (!pinned) resetView();
     } else if (!offScreen && (message.type === 'job_cancelled' || message.type === 'job_failed')) {
       livePreviewWarning = '';
       resetProgressivePreview();
@@ -1025,15 +1260,56 @@
   }
 
   function openLibrary(
-    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit',
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',
     fix = settings.fix_stages.at(-1)?.fix,
   ): void {
     // Restore's model is the fix itself, so with a chip on it is chosen like one.
     libraryContext =
-      slot === 'fix' || (slot === 'primary' && settings.task === 'denoise' && fix)
+      slot === 'fix' ||
+      ((slot === 'primary' || slot === 'try') && settings.task === 'denoise' && fix)
         ? { slot, fix }
         : { slot };
+    // Try others… keeps the settings the plan card shows now, whatever the
+    // library changes before the runs are queued.
+    trialBase =
+      slot === 'try' &&
+      selectedImage &&
+      (settings.task === 'upscale' || settings.task === 'denoise')
+        ? makeStartInput([selectedImage.id], settings.task, false)
+        : undefined;
+    trialMedia =
+      trialBase && selectedImage ? { id: selectedImage.id, name: selectedImage.name } : undefined;
     libraryOpen = true;
+  }
+
+  let trialBase: StartBatchInput | undefined;
+  let trialMedia: { id: string; name: string } | undefined;
+
+  function closeLibrary(): void {
+    const returnToTry = libraryContext.slot === 'try';
+    libraryOpen = false;
+    // Focus goes back to where the sheet was opened, as for Change….
+    if (returnToTry)
+      void tick().then(() =>
+        document.querySelector<HTMLButtonElement>('.try-others button')?.focus(),
+      );
+  }
+
+  /** One ordinary job per model for the image, admitted together by the host. */
+  async function runTrials(modelIds: string[]): Promise<void> {
+    if (!trialBase || !trialMedia) return;
+    const media = trialMedia;
+    startingJob = true;
+    try {
+      await api.startModelTrials(media.id, modelIds, trialBase);
+      unpinResults([media.id]);
+      closeLibrary();
+      await refresh();
+    } catch (error) {
+      showModal('Could not run these models', String(error));
+    } finally {
+      startingJob = false;
+    }
   }
 
   /**
@@ -1265,6 +1541,68 @@
     }
   }
 
+  async function loadResultHistory(key: string): Promise<void> {
+    historyKey = key;
+    const request = ++historyRequest;
+    const media = selectedImage;
+    if (!key || !media || !api.isTauri()) return;
+    try {
+      const loaded = await api.listMediaResults(media.id);
+      // A late answer for an earlier request, or for another image, is dropped.
+      if (request !== historyRequest || loaded.media_id !== media.id) return;
+      histories = { ...histories, [media.id]: loaded };
+      if (historyFailures[media.id]) historyFailures = without(historyFailures, media.id);
+    } catch (error) {
+      if (request === historyRequest)
+        historyFailures = { ...historyFailures, [media.id]: String(error) };
+    }
+  }
+
+  async function requestPair(key: string): Promise<void> {
+    pairKey = key;
+    pairError = '';
+    if (!key || !api.isTauri()) return;
+    const [mediaId, showing, against] = key.split('|');
+    try {
+      await api.requestImageComparison(mediaId, { showing, against });
+      if (key === pairKey) await refresh();
+    } catch (error) {
+      if (key === pairKey) pairError = String(error);
+    }
+  }
+
+  function without<T>(record: Record<string, T>, key: string): Record<string, T> {
+    const copy = { ...record };
+    delete copy[key];
+    return copy;
+  }
+
+  /** A manual choice pins the pair of this image until a new run starts. */
+  function choosePair(side: 'showing' | 'against', target: string): void {
+    if (!selectedImage) return;
+    const remembered = { ...rememberedResults };
+    for (const id of [target, choice.showing, choice.against]) {
+      const row = resultRows.find((candidate) => candidate.job_id === id);
+      if (row) remembered[id] = row;
+    }
+    rememberedResults = remembered;
+    pairChoices = { ...pairChoices, [selectedImage.id]: chooseTarget(choice, side, target) };
+  }
+
+  /** Previous Result (older) and Next Result (newer) move Showing only. */
+  function stepResult(direction: 'older' | 'newer'): void {
+    if (!pairMode || !history) return;
+    const next = stepShowing(resultRows, choice, direction);
+    if (next) choosePair('showing', next);
+  }
+
+  /** A new run shows its own results again: the image's pair is no longer pinned. */
+  function unpinResults(mediaIds: string[]): void {
+    let next = pairChoices;
+    for (const id of mediaIds) if (next[id]) next = without(next, id);
+    pairChoices = next;
+  }
+
   let filesDragging = false;
 
   async function addDroppedMedia(paths: string[]): Promise<void> {
@@ -1407,22 +1745,18 @@
     }
   }
 
-  async function start(mediaIds?: string[]): Promise<void> {
-    if ((!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
-    if (settings.task === 'edit') {
-      await startEdit();
-      return;
-    }
-    const ids = mediaIds ?? queueSelection.map((media) => media.id);
-    if (!ids.length) return;
-    if (exportNeedsExternalFFmpeg(settings, snapshot.capabilities)) {
-      ffmpegNotice = { context: 'export', paths: [] };
-      return;
-    }
-    const input: StartBatchInput = {
+  function makeStartInput(ids: string[], task: TaskKind, batchMode: boolean): StartBatchInput {
+    return {
       media_ids: ids,
-      batch_mode: mediaIds ? ids.length > 1 : settings.batch_mode,
-      task: settings.task,
+      // What the plan card showed, kept with the job for the result history.
+      ui: {
+        quality: settings.quality,
+        content: settings.content,
+        recipe_name: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
+        fixes: [...settings.fixes],
+      },
+      batch_mode: batchMode,
+      task,
       model_id: settings.selected_model_id,
       video_model_id: settings.selected_video_model_id,
       fix_stages: imageFixes,
@@ -1458,9 +1792,29 @@
           : 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
     };
+  }
+
+  async function start(mediaIds?: string[]): Promise<void> {
+    if ((!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
+    if (settings.task === 'edit') {
+      await startEdit();
+      return;
+    }
+    const ids = mediaIds ?? queueSelection.map((media) => media.id);
+    if (!ids.length) return;
+    if (exportNeedsExternalFFmpeg(settings, snapshot.capabilities)) {
+      ffmpegNotice = { context: 'export', paths: [] };
+      return;
+    }
+    const input = makeStartInput(
+      ids,
+      settings.task,
+      mediaIds ? ids.length > 1 : settings.batch_mode,
+    );
     startingJob = true;
     try {
       await api.startJobs(input);
+      unpinResults(ids);
       await refresh();
     } catch (error) {
       showModal('Could not start', String(error));
@@ -1486,6 +1840,7 @@
         accepted_terms: Boolean(termsAccepted[editModel.model_id]),
         output_directory: settings.output_directory,
       });
+      unpinResults([selectedMedia.id]);
       page = 'preview';
       await refresh();
     } catch (error) {
@@ -1521,6 +1876,31 @@
     return isEditModelId(modelId)
       ? api.openEditLink(modelId, 'source')
       : api.openModelSource(modelId);
+  }
+
+  // Only when it differs from Cancel queue, or names what a trial is doing.
+  $: selectedInflight = selectedImage
+    ? snapshot.jobs.filter(
+        (job) =>
+          job.media_id === selectedImage?.id &&
+          ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
+      ).length
+    : 0;
+  $: canCancelSelectedImage =
+    selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
+  let cancellingImage = false;
+
+  async function cancelSelectedImage(): Promise<void> {
+    if (!selectedImage) return;
+    cancellingImage = true;
+    try {
+      await api.cancelJobsForMedia(selectedImage.id);
+      await refresh();
+    } catch (error) {
+      showModal('Could not cancel', String(error));
+    } finally {
+      cancellingImage = false;
+    }
   }
 
   async function cancelWork(): Promise<void> {
@@ -1972,6 +2352,12 @@
         case 'view.compare-enhanced':
           previewPane?.setComparisonView('enhanced');
           break;
+        case 'view.previous-result':
+          stepResult('older');
+          break;
+        case 'view.next-result':
+          stepResult('newer');
+          break;
         case 'view.refresh-hardware':
           await api.refreshCapabilities();
           scheduleRefresh();
@@ -2218,6 +2604,16 @@
 
   <main class="workspace">
     <MediaQueue
+      groups={compareGroups}
+      picks={comparePicks}
+      togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
+      clearPicks={() => setComparePicks([])}
+      openCompare={() => {
+        mainTab = 'compare';
+        page = 'preview';
+      }}
+      compareActive={mainTab === 'compare'}
+      historyError={bulkHistoryError}
       items={snapshot.media}
       jobs={snapshot.jobs}
       activeJobId={snapshot.runtime.active_job_id}
@@ -2242,27 +2638,85 @@
       }}
     />
 
-    <PreviewPane
-      bind:this={previewPane}
-      modelLabel={settings.task === 'edit'
-        ? (editModel?.name ?? 'Editing model')
-        : usingTemporalVideo
-          ? (selectedVideoModel?.name ?? 'Video model')
-          : (selectedModel?.name ?? 'Model')}
-      activityLabel={snapshot.runtime.status_title}
-      activityDetail={settings.task === 'edit' ? snapshot.runtime.status_detail : ''}
-      activityProgress={snapshot.runtime.progress}
-      editing={settings.task === 'edit'}
-      processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
-      activeTileSize={snapshot.runtime.active_tile_size}
-      {selectedMedia}
-      {resultPreview}
-      comparisonError={selectedComparisonError}
-      {completedVideoOutput}
-      compactHidden={page !== 'preview'}
-      addFiles={() => void addFiles()}
-      dropping={filesDragging}
-    />
+    <div class="main-area" class:compact-hidden={page !== 'preview'}>
+      <div
+        class="main-tabs"
+        role="tablist"
+        tabindex="-1"
+        aria-label="Main pane"
+        on:keydown={mainTabKey}
+      >
+        <button
+          role="tab"
+          aria-selected={mainTab === 'preview'}
+          tabindex={mainTab === 'preview' ? 0 : -1}
+          class:active={mainTab === 'preview'}
+          on:click={() => (mainTab = 'preview')}>Preview</button
+        >
+        <button
+          role="tab"
+          aria-selected={mainTab === 'compare'}
+          tabindex={mainTab === 'compare' ? 0 : -1}
+          class:active={mainTab === 'compare'}
+          on:click={() => (mainTab = 'compare')}
+          >Compare{comparePicks.length ? ` ${comparePicks.length}` : ''}</button
+        >
+      </div>
+      {#if mainTab === 'compare'}
+        {#if compareRequestError}<div class="compare-request-error" role="alert">
+            {compareRequestError}
+          </div>{/if}
+        <ComparePane
+          items={compareItems}
+          generation={snapshot.runtime.compare?.generation ?? 0}
+          requestRegions={(generation, regions) =>
+            api.isTauri() ? api.requestCompareRegions(generation, regions) : Promise.resolve()}
+          clearRegions={() => (api.isTauri() ? api.clearCompareRegions() : Promise.resolve())}
+          layout={compareLayout}
+          setLayout={(layout) => (compareLayout = layout)}
+          swapItems={(first, second) => setComparePicks(swapSlots(comparePicks, first, second))}
+          removeItem={(key) =>
+            setComparePicks(comparePicks.filter((pick) => pickKey(pick) !== key))}
+          close={() => (mainTab = 'preview')}
+          asTab
+        />
+      {:else}
+        <PreviewPane
+          bind:this={previewPane}
+          modelLabel={settings.task === 'edit'
+            ? (editModel?.name ?? 'Editing model')
+            : usingTemporalVideo
+              ? (selectedVideoModel?.name ?? 'Video model')
+              : (selectedModel?.name ?? 'Model')}
+          activityLabel={snapshot.runtime.status_title}
+          activityDetail={settings.task === 'edit' ? snapshot.runtime.status_detail : ''}
+          activityProgress={snapshot.runtime.progress}
+          editing={settings.task === 'edit'}
+          processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
+          activeTileSize={snapshot.runtime.active_tile_size}
+          {selectedMedia}
+          {resultPreview}
+          {referenceIsResult}
+          referencePreview={referenceIsResult && againstSide?.state === 'ready'
+            ? againstSide.src
+            : ''}
+          referenceLabel={referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original'}
+          referenceState={againstSide?.state ?? 'ready'}
+          referenceError={againstSide?.error ?? ''}
+          showingLabel={''}
+          showingState={showingSide?.state ?? 'ready'}
+          showingError={showingSide?.error ?? ''}
+          {singleFrame}
+          {comparisonNote}
+          showLiveTiles={!choice.pinned}
+          comparisonError={selectedComparisonError}
+          {completedVideoOutput}
+          compactHidden={page !== 'preview'}
+          addFiles={() => void addFiles()}
+          dropping={filesDragging}
+        ></PreviewPane>
+      {/if}
+    </div>
 
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>
       <div class="pane-heading" data-tauri-drag-region>
@@ -2810,6 +3264,22 @@
                             on:click={() => void moveFix(stage.fix!, 1)}>Move later</button
                           >{/if}
                       {/if}
+                      {#if stage.role === 'primary' && canTryOthers}
+                        <span class="try-others"
+                          ><button
+                            class="link-button"
+                            type="button"
+                            aria-label={settings.task === 'denoise'
+                              ? 'Try other restoration models on this image'
+                              : 'Try other upscalers on this image'}
+                            disabled={!canOpenTrials}
+                            on:click={() => openLibrary('try', stage.fix)}>Try others…</button
+                          ><HelpTip
+                            label="Try others"
+                            text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
+                          /></span
+                        >
+                      {/if}
                     </div>
                   </div>
                 {/each}
@@ -3008,6 +3478,14 @@
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}
           >{batchLabel ? `Add ${queueSelection.length} to queue` : 'Add selected to queue'}</button
         >
+        {#if canCancelSelectedImage}
+          <button
+            class="button"
+            disabled={cancelling || cancellingImage}
+            title="Cancel this image's queued runs and stop its running one. Other images stay queued; finished results stay."
+            on:click={() => void cancelSelectedImage()}>Cancel runs for this image</button
+          >
+        {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
           >{cancelling ? 'Cancelling…' : 'Cancel queue'}</button
         >
@@ -3051,7 +3529,11 @@
     {activeDownload}
     downloadProgress={snapshot.runtime.download_progress}
     busy={settingsLocked || preparing}
-    close={() => (libraryOpen = false)}
+    close={closeLibrary}
+    {trialMedia}
+    {trialBase}
+    trialBusy={startingJob || preparing}
+    {runTrials}
     useForJob={useModelForJob}
     rememberFix={rememberFixModel}
     forgetFix={forgetFixModel}

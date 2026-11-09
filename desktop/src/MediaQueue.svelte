@@ -1,7 +1,28 @@
 <script lang="ts">
+  import OutputsList from './OutputsList.svelte';
+  import { tabFromKey, type OutputGroup } from './lib/compareOutputs';
+  import type { ComparePick } from './lib/types';
   import { formatDuration } from './lib/state';
+  import { queueModelState } from './lib/results';
   import type { JobRecord, MediaItem } from './lib/types';
 
+  export let groups: OutputGroup[];
+  export let picks: ComparePick[];
+  export let togglePick: (pick: ComparePick) => void;
+  export let clearPicks: () => void;
+  export let openCompare: () => void;
+  export let compareActive: boolean;
+  export let historyError = '';
+  let tab: 'inputs' | 'outputs' = 'inputs';
+  function tabKey(event: KeyboardEvent): void {
+    const next = tabFromKey(event.key, tab === 'inputs' ? 0 : 1, 2);
+    if (next === null) return;
+    event.preventDefault();
+    tab = next === 0 ? 'inputs' : 'outputs';
+    (event.currentTarget as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [next]?.focus();
+  }
   export let items: MediaItem[];
   export let jobs: JobRecord[];
   export let activeJobId: string;
@@ -33,9 +54,24 @@
 
 <aside class="media-pane pane" class:compact-hidden={compactHidden}>
   <div class="pane-heading" data-tauri-drag-region>
-    <h1 data-tauri-drag-region>Media</h1>
-    <span class="pane-heading-meta" data-tauri-drag-region>{items.length || ''}</span>
-    {#if items.length}
+    <div class="pane-tabs" role="tablist" tabindex="-1" aria-label="Media" on:keydown={tabKey}>
+      <button
+        role="tab"
+        aria-selected={tab === 'inputs'}
+        tabindex={tab === 'inputs' ? 0 : -1}
+        class:active={tab === 'inputs'}
+        on:click={() => (tab = 'inputs')}>Inputs {items.length || ''}</button
+      >
+      <button
+        role="tab"
+        aria-selected={tab === 'outputs'}
+        tabindex={tab === 'outputs' ? 0 : -1}
+        class:active={tab === 'outputs'}
+        on:click={() => (tab = 'outputs')}
+        >Outputs {groups.reduce((n, group) => n + group.outputs.length, 0) || ''}</button
+      >
+    </div>
+    {#if items.length && tab === 'inputs'}
       <button
         class="icon-button add-media"
         title="Add Media…"
@@ -57,7 +93,18 @@
     {/if}
   </div>
 
-  {#if items.length === 0}
+  {#if tab === 'outputs'}
+    <OutputsList
+      {groups}
+      {picks}
+      {togglePick}
+      {clearPicks}
+      {openCompare}
+      {compareActive}
+      error={historyError}
+      selectMedia={(id) => void selectQueueMedia(id)}
+    />
+  {:else if items.length === 0}
     <div class="empty-card">
       <div class="empty-plus" aria-hidden="true">
         <svg
@@ -129,11 +176,13 @@
                   title={failedJob(media.id)?.error}>Could not finish</small
                 >{/if}
               {#if inflightMediaIds.has(media.id)}<small class="queue-state"
-                  >{jobs.find(
-                    (job) =>
-                      job.media_id === media.id &&
-                      ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
-                  )?.status ?? 'queued'}</small
+                  >{media.kind === 'image'
+                    ? queueModelState(jobs, media.id, activeJobId)
+                    : (jobs.find(
+                        (job) =>
+                          job.media_id === media.id &&
+                          ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
+                      )?.status ?? 'queued')}</small
                 >{/if}
             </div>
           </button>
@@ -160,7 +209,7 @@
     </div>
   {/if}
 
-  {#if items.length}
+  {#if items.length && tab === 'inputs'}
     <div class="media-actions">
       <button
         class="button ghost"
@@ -174,3 +223,23 @@
     </div>
   {/if}
 </aside>
+
+<style>
+  .pane-tabs {
+    display: flex;
+    gap: 12px;
+    min-width: 0;
+  }
+  .pane-tabs button {
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--secondary);
+    padding: 8px 0;
+    white-space: nowrap;
+  }
+  .pane-tabs button.active {
+    color: var(--text);
+    border-bottom-color: var(--text);
+  }
+</style>

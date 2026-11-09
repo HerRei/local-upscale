@@ -57,9 +57,15 @@ export function queueTiming(snapshot: AppSnapshot) {
     durations.filter((value) => value === null).length + Number(currentSeconds === null);
   const knownSeconds =
     (currentSeconds ?? 0) + durations.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  // Several runs of one image share a file name; then the model tells them apart.
+  const next = queued[0];
+  const sameImage = [active, ...queued].filter((job) => job.media_id === next.media_id).length;
   return {
     currentSeconds,
-    nextName: queued[0].media_name,
+    nextName:
+      sameImage > 1 && next.model_label
+        ? `${next.media_name} · ${next.model_label}`
+        : next.media_name,
     nextSeconds: durations[0],
     queueSeconds: unknownItems ? null : knownSeconds,
     knownSeconds,
