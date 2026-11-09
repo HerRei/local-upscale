@@ -601,7 +601,10 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
     let active = lock(&state.runtime)?.active_job_id.clone();
     if !active.is_empty() {
         cancellation.request(&active, std::time::Instant::now());
-        lock(&state.database)?.set_job_status(&active, "cancelling")?;
+        // Photos of a batch that never started were cancelled with the queue above.
+        for id in &cancellation.job_ids {
+            lock(&state.database)?.mark_cancelling(id)?;
+        }
         {
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = "Cancelling".into();
