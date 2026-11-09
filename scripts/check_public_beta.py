@@ -11,6 +11,7 @@ import tomllib
 from pathlib import Path
 
 from check_beta_readiness import validate as validate_readiness
+from release_targets import validate_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,6 +54,12 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
         )
     if any(t.get("coverage") not in {"main-path", "labs"} for t in actual):
         raise ValueError("Every beta backend needs an explicit coverage label")
+    # The artifact manifest carries each edition's update platform key, so a target
+    # without a build identity (no in-app updates) cannot slip into a release.
+    artifacts = json.loads((root / "ci/tauri-release-artifacts.json").read_text())
+    if artifacts.get("version") != version:
+        raise ValueError("ci/tauri-release-artifacts.json names another version")
+    validate_manifest(artifacts)
     validate_readiness(root / plan["readiness"], root)
     public = base64.b64decode((root / plan["update_public_key"]).read_text().strip(), validate=True)
     if not public.startswith(b"untrusted comment: minisign public key"):

@@ -1,5 +1,6 @@
-//! Install the existing frozen worker from verified, adjacent NSIS payloads.
-//! This does not download packages or manage a Python environment.
+//! Install a frozen worker from verified payload parts: the parts beside the Windows CUDA
+//! installer, or an updater's engine package on any edition. This does not download
+//! packages or manage a Python environment.
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -42,9 +43,45 @@ fn safe_relative(path: &Path) -> bool {
         && !path.to_string_lossy().contains(['\\', ':'])
 }
 
+// Hash exactly the bytes supplied to gzip/tar, and finish every part before
+// publishing extraction. An open descriptor alone does not stop in-place writes.
+struct VerifiedPart {
+    file: File,
+    expected: Part,
+    digest: Sha256,
+    bytes: u64,
+}
+impl Read for VerifiedPart {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let count = self.file.read(buffer)?;
+        self.digest.update(&buffer[..count]);
+        self.bytes += count as u64;
+        if self.bytes > self.expected.size {
+            return Err(invalid("engine payload exceeds its manifest"));
+        }
+        if count == 0 {
+            let actual: String = self
+                .digest
+                .clone()
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if self.bytes != self.expected.size || actual != self.expected.sha256 {
+                return Err(invalid(
+                    "engine payload checksum mismatch during extraction",
+                ));
+            }
+        }
+        Ok(count)
+    }
+}
 struct PartsReader {
-    files: std::vec::IntoIter<File>,
-    current: Option<File>,
+    files: std::vec::IntoIter<VerifiedPart>,
+    current: Option<VerifiedPart>,
 }
 
 impl Read for PartsReader {
@@ -68,12 +105,27 @@ impl Read for PartsReader {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_PART_VERIFICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::Result<()> {
-    let manifest: Manifest = serde_json::from_slice(&fs::read(manifest_path)?)
-        .map_err(|error| invalid(error.to_string()))?;
+    install_manifest(&fs::read(manifest_path)?, source, destination)
+}
+
+/// Install from manifest bytes the caller has verified, so a manifest file replaced
+/// after verification is never read.
+pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> io::Result<()> {
+    let manifest: Manifest =
+        serde_json::from_slice(manifest).map_err(|error| invalid(error.to_string()))?;
     if manifest.schema_version != 1
         || manifest.format != "tar.gz.parts"
-        || !matches!(manifest.backend.as_str(), "CUDA" | "ROCM" | "CPU" | "MPS")
+        // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
+        || !matches!(
+            manifest.backend.as_str(),
+            "CUDA" | "ROCM" | "CPU" | "MPS" | "DIRECTML"
+        )
         || manifest.parts.is_empty()
         || manifest.parts.len() > 64
         || manifest.file_count == 0
@@ -112,35 +164,27 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
             return Err(invalid("invalid or duplicate engine payload part"));
         }
         println!("Verifying {}", part.filename);
-        let mut file = File::open(source.join(name))?;
+        let file = File::open(source.join(name))?;
         if file.metadata()?.len() != part.size {
             return Err(invalid(format!("incomplete payload: {}", part.filename)));
         }
-        let mut digest = Sha256::new();
-        let mut buffer = vec![0u8; 1024 * 1024];
-        loop {
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            digest.update(&buffer[..count]);
-        }
-        let actual: String = digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        if actual != part.sha256 {
-            return Err(invalid(format!(
-                "payload checksum mismatch: {}",
-                part.filename
-            )));
-        }
-        // Retain the same open file handles used for verification.
-        use std::io::{Seek, SeekFrom};
-        file.seek(SeekFrom::Start(0))?;
-        files.push(file);
+        files.push(VerifiedPart {
+            file,
+            expected: Part {
+                filename: part.filename.clone(),
+                size: part.size,
+                sha256: part.sha256.clone(),
+            },
+            digest: Sha256::new(),
+            bytes: 0,
+        });
     }
+    #[cfg(test)]
+    AFTER_PART_VERIFICATION.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
     let staging = parent.join(format!("engine.installing-{}", std::process::id()));
     let backup = parent.join(format!("engine.previous-{}", std::process::id()));
     if backup.exists() {
@@ -179,10 +223,14 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
             }
         }
         // Finish decoding to verify the gzip checksum, with a bounded padding allowance.
-        let mut tail = archive.into_inner().take(1024 * 1024 + 1);
+        let mut decoded = archive.into_inner();
+        let mut tail = (&mut decoded).take(1024 * 1024 + 1);
         if io::copy(&mut tail, &mut io::sink())? > 1024 * 1024 {
             return Err(invalid("excess trailing engine archive data"));
         }
+        // gzip can finish without another underlying read: explicitly reach EOF on
+        // the compressed parts so the final part's digest is checked as well.
+        io::copy(&mut decoded.into_inner(), &mut io::sink())?;
         if count != manifest.file_count
             || bytes != manifest.unpacked_bytes
             || !(staging.join("localsr-worker.exe").is_file()
@@ -291,6 +339,58 @@ mod tests {
     }
 
     #[test]
+    fn mutated_engine_parts_are_checked_as_they_are_extracted() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest_path = payload(root.path(), false, false);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let parts: Vec<_> = manifest["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    root.path().join(p["filename"].as_str().unwrap()),
+                    p["size"].as_u64().unwrap() as usize,
+                )
+            })
+            .collect();
+        let compressed: Vec<_> = parts
+            .iter()
+            .flat_map(|(path, _)| fs::read(path).unwrap())
+            .collect();
+        let mut archive = Vec::new();
+        GzDecoder::new(compressed.as_slice())
+            .read_to_end(&mut archive)
+            .unwrap();
+        archive[512..515].copy_from_slice(b"bad");
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&archive).unwrap();
+        let replacement = encoder.finish().unwrap();
+        AFTER_PART_VERIFICATION.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let mut remaining = replacement.as_slice();
+                let last = parts.len() - 1;
+                for (index, (path, size)) in parts.into_iter().enumerate() {
+                    let count = if index == last {
+                        remaining.len()
+                    } else {
+                        size.min(remaining.len())
+                    };
+                    // Truncate/write the same inode: held handles are not a snapshot.
+                    fs::write(path, &remaining[..count]).unwrap();
+                    remaining = &remaining[count..];
+                }
+            }))
+        });
+        let destination = root.path().join("engine");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("old"), b"keep").unwrap();
+        assert!(install(&manifest_path, root.path(), &destination).is_err());
+        assert_eq!(fs::read(destination.join("old")).unwrap(), b"keep");
+    }
+
+    #[test]
     fn installs_multiple_verified_parts_and_replaces_previous_engine() {
         let root = tempfile::tempdir().unwrap();
         let manifest = payload(root.path(), false, false);
@@ -303,6 +403,31 @@ mod tests {
             b"exe"
         );
         assert!(!destination.join("old.exe").exists());
+    }
+
+    #[test]
+    fn installs_the_engine_package_of_every_edition() {
+        for (backend, accepted) in [
+            ("CUDA", true),
+            ("ROCM", true),
+            ("CPU", true),
+            ("MPS", true),
+            ("DIRECTML", true),
+            ("XPU", false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let manifest = payload(root.path(), false, false);
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+            value["backend"] = backend.into();
+            fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+            let destination = root.path().join("engine");
+            assert_eq!(
+                install(&manifest, root.path(), &destination).is_ok(),
+                accepted,
+                "{backend}"
+            );
+        }
     }
 
     #[test]

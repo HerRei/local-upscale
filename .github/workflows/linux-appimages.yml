@@ -12,9 +12,12 @@ name: Linux AppImages
 # bundle (LocalSR, the media runtime, OpenCV, LibRaw, the GCC runtime and Ubuntu sources
 # for the bundled LGPL host libraries). The ROCm wheel's own libnuma and libelf are
 # swapped for this runner's Ubuntu copies so those sources correspond, and every
-# AppImage must pass the NVIDIA redistribution policy. Given a release tag, the verified
-# AppImages (split into 1.9 GB parts when larger than GitHub's asset limit) and their
-# bundles are attached.
+# AppImage must pass the NVIDIA redistribution policy. Every AppImage carries its update
+# identity (updater public key, backend, kind, engine id), so it checks its own feed
+# entry; the AppImage is its own updater file, and its engine package is written next to
+# it. Their signatures are made on the Mac (scripts/beta_update_signing.py platforms).
+# Given a release tag, the verified AppImages (split into 1.9 GB parts when larger than
+# GitHub's asset limit), engine packages and bundles are attached.
 
 on:
   workflow_dispatch:
@@ -100,6 +103,13 @@ jobs:
           python scripts/check_desktop_architecture.py
           python scripts/export_desktop_catalog.py --check
 
+      - name: Give the build its update identity
+        run: |
+          # Compiled into the host: without them it never checks its feed and shows no
+          # update switches.
+          python scripts/release_targets.py --update-env "${{ matrix.id }}" --commit "$GITHUB_SHA" \
+            >> "$GITHUB_ENV"
+
       - name: Install native packaging dependencies and the locked backend
         run: |
           sudo apt-get update
@@ -155,7 +165,8 @@ jobs:
           chmod +x "$ARTIFACT"
           python scripts/verify_codec_allowlist.py --tree "$BUNDLE" --output "/mnt/lsr/out/$NAME.codec-policy.json"
           python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 900 \
-            --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json"
+            --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json" \
+            --update-target "${{ matrix.id }}" --commit "$GITHUB_SHA"
           python scripts/verify_tauri_release_package.py "$ARTIFACT" \
             --platform linux --architecture x86_64 --report "/mnt/lsr/out/$NAME.architecture.json"
           mkdir -p /mnt/lsr/extract
@@ -188,6 +199,11 @@ jobs:
             split --bytes=1900M --numeric-suffixes=1 --suffix-length=4 "$NAME" "$NAME.part-"
             rm "$NAME"
           fi
+          # The updater's engine package, installed as the versioned engine by an update.
+          # Written after the split so the two copies of the AppImage never share the disk
+          # with it.
+          python "$GITHUB_WORKSPACE/scripts/prepare_engine_payload.py" --target "${{ matrix.id }}" \
+            --output /mnt/lsr/out --engine "$GITHUB_WORKSPACE/build/tauri-preview/worker-dist/engine"
           ls -la /mnt/lsr/out
           df -h / /mnt
 
@@ -218,6 +234,7 @@ jobs:
         run: |
           shopt -s nullglob
           files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.AppImage.sha256 \
+            assets/*.engine.tar.gz.part-* assets/*.engine-payload.json \
             assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0
           gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

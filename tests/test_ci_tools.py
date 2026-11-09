@@ -173,3 +173,23 @@ def test_manual_acceptance_requires_evidence(tmp_path):
     data["gates"][0]["evidence"] = "docs/acceptance/local-run.json"
     path.write_text(json.dumps(data))
     beta_readiness.validate(path, ROOT)
+
+
+def test_beta_contract_requires_the_update_target_of_every_edition(tmp_path):
+    copy_release_metadata(tmp_path)
+    public_beta.check(root=tmp_path)
+    path = tmp_path / "ci/tauri-release-artifacts.json"
+    manifest = json.loads(path.read_text())
+    assert {entry["id"]: entry["update_target"] for entry in manifest["artifacts"]} == {
+        "macos-arm64-mps": "darwin-aarch64-mps-native",
+        "windows-x86_64-cuda": "windows-x86_64-cuda-native",
+        "windows-x86_64-cpu": "windows-x86_64-cpu-native",
+        "windows-x86_64-directml": "windows-x86_64-directml-native",
+        "linux-x86_64-cpu": "linux-x86_64-cpu-native",
+        "linux-x86_64-cuda": "linux-x86_64-cuda-native",
+        "linux-x86_64-rocm": "linux-x86_64-rocm-native",
+    }
+    del manifest["artifacts"][3]["update_target"]
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="every target"):
+        public_beta.check(root=tmp_path)

@@ -1,5 +1,5 @@
 use tauri::{
-    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{CheckMenuItemBuilder, IsMenuItem, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     App, AppHandle, Emitter, Manager, Runtime,
 };
 
@@ -20,6 +20,31 @@ pub fn switches(settings: &UiSettings) -> Switches {
 }
 
 pub const EVENT_NAME: &str = "native-menu-action";
+
+/// The update entries in menu order: macOS shows them in the LocalSR menu, Windows and
+/// Linux at the end of Help. The two switches exist only in builds that check a signed
+/// feed themselves (crate::updates::checks_for_updates); the others, such as Store
+/// builds, neither check at launch nor send the count.
+fn update_items(switchable: bool) -> &'static [&'static str] {
+    if switchable {
+        &[
+            "app.updates",
+            "app.check-updates-at-launch",
+            "app.update-count",
+        ]
+    } else {
+        &["app.updates"]
+    }
+}
+
+/// The saved setting a switch's menu entry flips.
+fn switch_setting(id: &str) -> Option<&'static str> {
+    match id {
+        "app.check-updates-at-launch" => Some("check_updates_at_launch"),
+        "app.update-count" => Some("anonymous_update_count"),
+        _ => None,
+    }
+}
 
 pub fn install<R: Runtime>(
     app: &App<R>,
@@ -133,11 +158,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
 
     let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
-    // macOS keeps update checks in the app menu; elsewhere they sit under Help.
     let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
-    // Builds without their own update feed (the Store and, for now, Windows and Linux)
-    // neither check at launch nor send the count, so they have no switches.
-    let switchable = crate::updates::checks_for_updates();
     let check_at_launch =
         CheckMenuItemBuilder::with_id("app.check-updates-at-launch", "Check for Updates at Launch")
             .checked(switches.check_at_launch)
@@ -146,24 +167,27 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         CheckMenuItemBuilder::with_id("app.update-count", "Send Anonymous Update Count")
             .checked(switches.update_count)
             .build(manager)?;
+    let update_entries: Vec<&dyn IsMenuItem<R>> =
+        update_items(crate::updates::checks_for_updates())
+            .iter()
+            .map(|id| match *id {
+                "app.check-updates-at-launch" => &check_at_launch as &dyn IsMenuItem<R>,
+                "app.update-count" => &update_count,
+                _ => &updates,
+            })
+            .collect();
     #[cfg(target_os = "macos")]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
         .item(&github)
         .build()?;
     #[cfg(not(target_os = "macos"))]
-    let help_menu = {
-        let builder = SubmenuBuilder::new(manager, "Help")
-            .item(&guide)
-            .item(&github)
-            .separator()
-            .item(&updates);
-        if switchable {
-            builder.item(&check_at_launch).item(&update_count).build()?
-        } else {
-            builder.build()?
-        }
-    };
+    let help_menu = SubmenuBuilder::new(manager, "Help")
+        .item(&guide)
+        .item(&github)
+        .separator()
+        .items(&update_entries)
+        .build()?;
 
     #[cfg(target_os = "macos")]
     let menu_builder = {
@@ -177,13 +201,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
                 ),
                 ..Default::default()
             }))
-            .item(&updates);
-        let app_menu = if switchable {
-            app_menu.item(&check_at_launch).item(&update_count)
-        } else {
-            app_menu
-        };
-        let app_menu = app_menu
+            .items(&update_entries)
             .separator()
             .services()
             .separator()
@@ -244,12 +262,7 @@ pub fn reconcile(app: &AppHandle) {
 pub fn dispatch(app: &AppHandle, id: &str) {
     // The update switches are the host's own settings: it flips the saved value, so a
     // window that has not caught up cannot send the opposite.
-    let switch = match id {
-        "app.check-updates-at-launch" => Some("check_updates_at_launch"),
-        "app.update-count" => Some("anonymous_update_count"),
-        _ => None,
-    };
-    if let Some(name) = switch {
+    if let Some(name) = switch_setting(id) {
         // Off the menu's thread: saving writes a file.
         let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -272,4 +285,40 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         return;
     }
     let _ = app.emit(EVENT_NAME, id.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_update_switches_follow_the_check_wherever_a_build_checks_its_feed() {
+        // Help menu on Windows and Linux, the LocalSR menu on macOS: the same entries.
+        assert_eq!(
+            update_items(true),
+            [
+                "app.updates",
+                "app.check-updates-at-launch",
+                "app.update-count"
+            ]
+        );
+        // A build without an update identity (or a Store build) keeps only the check.
+        assert_eq!(update_items(false), ["app.updates"]);
+    }
+
+    #[test]
+    fn each_switch_flips_its_own_saved_setting() {
+        assert_eq!(
+            switch_setting("app.check-updates-at-launch"),
+            Some("check_updates_at_launch")
+        );
+        assert_eq!(
+            switch_setting("app.update-count"),
+            Some("anonymous_update_count")
+        );
+        assert_eq!(switch_setting("app.updates"), None);
+        for id in update_items(true) {
+            assert!(*id == "app.updates" || switch_setting(id).is_some());
+        }
+    }
 }
