@@ -95,28 +95,40 @@ def _read_json(path: Path) -> dict:
 class CrashNotes:
     def __init__(self, directory: Path):
         self.directory = directory
-        self.path = directory / "crashes.json"
         self.depth: dict[str, int] = {}
 
+    @staticmethod
+    def _digest(key: str) -> str:
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
+
     def _note(self, key: str) -> Path:
-        digest = hashlib.sha256(key.encode()).hexdigest()[:16]
-        return self.directory / f"running-{digest}-{os.getpid()}.json"
+        return self.directory / f"running-{self._digest(key)}-{os.getpid()}.json"
+
+    def _record(self, key: str) -> Path:
+        # One file per GPU: processes recording different GPUs never overwrite each other.
+        return self.directory / f"crash-{self._digest(key)}.json"
 
     def crashed(self, key: str) -> str | None:
         """How this GPU crashed before ("engine" or "preflight"), or None."""
         if key in _CRASHED:
             return _CRASHED[key]
-        entry = _read_json(self.path).get(key)
-        return entry.get("cause", "engine") if isinstance(entry, dict) else None
+        entry = _read_json(self._record(key))
+        return entry.get("cause", "engine") if entry.get("key") == key else None
 
-    def mark(self, key: str, cause: str) -> None:
+    def mark(self, key: str, cause: str) -> bool:
+        """Record a crash; False when the record could not be stored on disk."""
         _CRASHED[key] = cause
-        entries = _read_json(self.path)
-        entries[key] = {"cause": cause, "recorded": datetime.now(UTC).isoformat(timespec="seconds")}
+        record = {
+            "key": key,
+            "cause": cause,
+            "recorded": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
         try:
-            _write_json(self.path, entries)
+            _write_json(self._record(key), record)
         except OSError:
             logger.warning("Could not store the GPU crash record", exc_info=True)
+            return False
+        return True
 
     def running(self) -> list[dict]:
         notes = []
@@ -133,14 +145,15 @@ class CrashNotes:
             path = note["path"]
             if note.get("pid") == crashed_pid and isinstance(note.get("key"), str):
                 logger.warning("The engine crashed during a GPU call before: %s", note["key"])
-                self.mark(note["key"], "engine")
+                if not self.mark(note["key"], "engine"):
+                    continue  # the note stays as the evidence
             elif note.get("pid") != os.getpid():
                 try:
                     if time.time() - path.stat().st_mtime < STALE_NOTE_SECONDS:
                         continue
                 except OSError:
                     continue
-            path.unlink(missing_ok=True)
+            self._remove(path)
 
     @contextmanager
     def watch(self, key: str):
