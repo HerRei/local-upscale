@@ -337,12 +337,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 thread::sleep(Duration::from_millis(20));
             }
         }
-        state.worker.pid.store(0, Ordering::SeqCst);
-        if state.worker.generation.load(Ordering::SeqCst) != generation
-            || state.worker.shutting_down.load(Ordering::SeqCst)
-        {
+        if supervisor_should_return(&state.worker, generation) {
+            state.worker.pid.store(0, Ordering::SeqCst);
             return;
         }
+        state.worker.pid.store(0, Ordering::SeqCst);
         state.worker.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut sender) = state.worker.sender.lock() {
             *sender = None;
@@ -472,6 +471,21 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
     }
     emit_state_changed(app);
     Ok(())
+}
+
+fn supervisor_should_return(worker: &crate::state::WorkerControl, generation: u64) -> bool {
+    if worker.generation.load(Ordering::SeqCst) != generation {
+        return true;
+    }
+    if worker.shutting_down.load(Ordering::SeqCst) {
+        if let Err(error) =
+            lock(&worker.cancellation).and_then(|mut cancellation| cancellation.finish())
+        {
+            eprintln!("LocalSR could not clean up job scratch: {error}");
+        }
+        return true;
+    }
+    false
 }
 
 pub fn shutdown(state: &AppState) {
@@ -1459,6 +1473,25 @@ fn first_run_device(devices: &[DeviceInfo]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_supervisor_cleans_scratch() {
+        let directory = tempfile::tempdir().unwrap();
+        let worker = crate::state::WorkerControl::default();
+        let mut message = json!({"type":"job_request", "data":{"output_path":directory.path().join("output.png")}});
+        worker
+            .cancellation
+            .lock()
+            .unwrap()
+            .prepare("job", &mut message)
+            .unwrap();
+        let scratch =
+            std::path::PathBuf::from(message["data"]["scratch_directory"].as_str().unwrap());
+        std::fs::write(scratch.join("partial"), b"unfinished").unwrap();
+        worker.shutting_down.store(true, Ordering::SeqCst);
+        assert!(supervisor_should_return(&worker, 0));
+        assert!(!scratch.exists(), "shutdown must remove scratch");
+    }
 
     #[test]
     fn the_apple_gpu_reports_whether_the_neural_engine_is_available() {

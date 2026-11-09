@@ -167,6 +167,13 @@ pub fn run() {
         if matches!(&event, tauri::RunEvent::Exit) {
             let state = app.state::<Arc<AppState>>();
             worker::shutdown(&state);
+            // Keep the process alive until the supervisor has removed the job's scratch.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while state.worker.pid.load(std::sync::atomic::Ordering::SeqCst) != 0
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             #[cfg(target_os = "linux")]
             if let Ok(mut server) = state.media_server.lock() {
                 server.take();

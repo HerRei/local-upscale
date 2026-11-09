@@ -312,6 +312,46 @@ impl Database {
             .is_some())
     }
 
+    pub fn unfinished_requests(&self) -> AppResult<Vec<serde_json::Value>> {
+        let mut statement = self.connection.prepare(
+            "SELECT request_json FROM jobs WHERE status IN ('queued','starting','running','cancelling')",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut requests = Vec::new();
+        for row in rows {
+            requests.push(serde_json::from_str(&row?)?);
+        }
+        Ok(requests)
+    }
+
+    pub fn unfinished_output_paths(&self) -> AppResult<Vec<std::path::PathBuf>> {
+        Ok(self
+            .unfinished_requests()?
+            .iter()
+            .filter_map(|request| {
+                request["data"]["output_path"]
+                    .as_str()
+                    .or_else(|| request["data"]["output_video_path"].as_str())
+                    .filter(|path| !path.is_empty())
+                    .map(std::path::PathBuf::from)
+            })
+            .collect())
+    }
+
+    pub fn unfinished_job_needs_model(&self, path: &Path) -> AppResult<bool> {
+        let path = path.to_string_lossy();
+        Ok(self.unfinished_requests()?.iter().any(|request| {
+            let data = &request["data"];
+            data["model_path"].as_str() == Some(path.as_ref())
+                || data["face_model_path"].as_str() == Some(path.as_ref())
+                || data["stages"].as_array().is_some_and(|stages| {
+                    stages
+                        .iter()
+                        .any(|stage| stage["model_path"].as_str() == Some(path.as_ref()))
+                })
+        }))
+    }
+
     pub fn next_queued_job(&self) -> AppResult<Option<PendingJob>> {
         Ok(self
             .connection
@@ -407,6 +447,28 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unfinished_jobs_protect_all_model_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/a.png", "a.png", "image")
+            .unwrap();
+        db.insert_job("j", "m", r#"{"data":{"model_path":"/models/main","face_model_path":"/models/face","stages":[{"model_path":"/models/stage"}]}}"#).unwrap();
+        for path in ["/models/main", "/models/face", "/models/stage"] {
+            assert!(
+                db.unfinished_job_needs_model(Path::new(path)).unwrap(),
+                "unfinished job must protect {path}"
+            );
+        }
+        assert!(!db
+            .unfinished_job_needs_model(Path::new("/models/other"))
+            .unwrap());
+        db.set_job_status("j", "completed").unwrap();
+        assert!(!db
+            .unfinished_job_needs_model(Path::new("/models/main"))
+            .unwrap());
+    }
 
     #[test]
     fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
