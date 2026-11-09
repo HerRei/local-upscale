@@ -403,10 +403,14 @@ def decode_timed_frames(
             yield pending
 
 
-def validate_hdr_encoder(video_codec: str = "av1", external_ffmpeg=None) -> None:
+def validate_hdr_encoder(
+    video_codec: str = "av1", external_ffmpeg=None, container: str | None = None
+) -> None:
     """Fail before inference if this export cannot carry 10-bit HDR."""
     try:
-        validate_output(video_codec, "mkv" if video_codec == "ffv1" else "mp4", hdr=True)
+        validate_output(
+            video_codec, container or ("mkv" if video_codec == "ffv1" else "mp4"), hdr=True
+        )
         if video_codec in EXTERNAL_OUTPUT_CODECS:
             if external_ffmpeg is None:
                 raise ValueError("HEVC HDR export requires a selected external FFmpeg.")
@@ -603,7 +607,7 @@ def encode_video(
     if hdr_format:
         if hdr_format not in {"HLG", "PQ"} or sdr_bt709:
             raise ValueError("HDR output must be HLG or PQ, without SDR conversion.")
-        validate_hdr_encoder(video_codec, external_ffmpeg)
+        validate_hdr_encoder(video_codec, external_ffmpeg, container_format)
     validate_output(video_codec, container_format, hdr=bool(hdr_format))
     if video_codec in EXTERNAL_OUTPUT_CODECS + SYSTEM_OUTPUT_CODECS:
         return _external_export(
