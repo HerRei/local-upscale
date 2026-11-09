@@ -1002,7 +1002,7 @@
     // Apply the model/output contract for selectors, saved recipes and launch presets.
     if (next.task === 'video' && next.video_hdr_mode === 'preserve') {
       if (!supportsHdrPreservation(next)) next.video_hdr_mode = 'tone_map';
-      else {
+      else if (selectedMedia?.hdr_format) {
         next.precision = 'fp32';
         next.deflicker = false;
         next.video_interpolation = 'off';
@@ -1485,7 +1485,11 @@
       current.safe_memory === recipe.safe_memory &&
       (current.preprocess_model_id || '') === preprocess &&
       current.enable_face_model === face &&
-      (current.quality || 'custom') === (recipe.quality || 'custom')
+      (current.quality || 'custom') === (recipe.quality || 'custom') &&
+      (recipe.task !== 'video' ||
+        ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
+          (current.video_interpolation_order || 'after_upscale') ===
+            (recipe.video_interpolation_order || 'after_upscale')))
     );
   }
 
@@ -2677,6 +2681,9 @@
               {editModel}
               capabilities={snapshot.capabilities}
               {usingTemporalVideo}
+              {preservingHdr}
+              interpolationSupported={snapshot.engine?.features.includes('video_interpolation') ===
+                true}
               {updateSettings}
               {chooseOutput}
               refreshCapabilities={api.refreshCapabilities}

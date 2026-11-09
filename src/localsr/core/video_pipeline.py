@@ -515,7 +515,13 @@ def _run_video_job(
 
             if progress_cb is not None:
                 elapsed = time.perf_counter() - job_started_at
-                progress_cb(frames_processed, total_frames, elapsed)
+                progress_cb(
+                    min(frames_processed, max(0, total_frames - 1))
+                    if interpolation is not None and not before_upscale and total_frames > 0
+                    else frames_processed,
+                    total_frames,
+                    elapsed,
+                )
 
             yield source_frame.with_pixels(out_rgb)
 
@@ -530,6 +536,15 @@ def _run_video_job(
             output_frames = interpolate_frames(
                 output_frames, interpolation, synthesizer, cancel_event
             )
+            if progress_cb is not None:
+
+                def report_interpolation_done(frames):
+                    yield from frames
+                    progress_cb(
+                        frames_processed, total_frames, time.perf_counter() - job_started_at
+                    )
+
+                output_frames = report_interpolation_done(output_frames)
         fps = interpolation.output_fps(fps)
     # Restore the next frames while the encoder writes the previous ones.
     output_frames = _prefetch(output_frames, 2)

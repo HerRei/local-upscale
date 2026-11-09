@@ -408,3 +408,33 @@ def test_the_protocol_carries_interpolation_with_off_by_default():
     assert properties["interpolation_order"]["enum"] == ["after_upscale", "before_upscale"]
     assert properties["interpolation_model_id"]["type"] == ["string", "null"]
     assert properties["interpolation_bundle_dir"]["type"] == ["string", "null"]
+
+
+def test_progress_does_not_finish_before_synthesis(tmp_path):
+    source = make_cfr(tmp_path / "source.webm", frames=3)
+    progress = []
+
+    class CheckingSynthesizer(RecordingSynthesizer):
+        def synthesize(self, first, second, timesteps, cancel_event=None):
+            assert not progress or progress[-1][0] < progress[-1][1]
+            return super().synthesize(first, second, timesteps, cancel_event)
+
+    run_video_job(
+        VideoJobConfig(
+            str(source),
+            "test",
+            str(tmp_path / "out.mkv"),
+            SimpleNamespace(scale=1),
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+            interpolation="x4",
+        ),
+        CountingEngine(),
+        threading.Event(),
+        synthesizer=CheckingSynthesizer(),
+        progress_cb=lambda done, total, elapsed: progress.append((done, total)),
+    )
+    assert progress[-1][0] == progress[-1][1]
