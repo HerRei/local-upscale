@@ -13,6 +13,7 @@
     rememberedFixModel,
     rightsAllowPreset,
   } from './lib/state';
+  import { acceleratorFor } from './lib/neuralEngine';
   import {
     EDIT_FAMILIES,
     EDIT_FIT_LABELS,
@@ -240,6 +241,9 @@
     ? undefined
     : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
   $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
+  // The accelerator a model can use here: the Neural Engine on a Mac, an Intel NPU elsewhere.
+  $: accelerator = (model: CatalogModel) =>
+    acceleratorFor(snapshot.capabilities, model.architecture);
   $: quickId = fixing
     ? chooseFixModel(snapshot, fixing, 'quick', settings.preset_pins)?.model_id
     : context.task
@@ -511,10 +515,11 @@
                   <div class="role">{model.role || model.description}</div>
                   <!-- Badges mark exceptions only: a license that limits use, a model that
                        will struggle here. Everything else is in the details. -->
-                  {#if model.model_id === quickId || model.model_id === bestId || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
+                  {#if model.model_id === quickId || model.model_id === bestId || accelerator(model) || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
                     <div class="pills">
                       {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
                       {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
+                      {#if accelerator(model)}<span class="pill ok">{accelerator(model)}</span>{/if}
                       {#if model.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
                       {#if model.commercial_use_allowed !== true}<span class="pill warn"
                           >{rightsLabel(model)}</span
@@ -774,6 +779,12 @@
               <dt>Speed</dt>
               <dd>{speedLabel(selected)}</dd>
             </div>
+            {#if accelerator(selected)}
+              <div>
+                <dt>Runs on</dt>
+                <dd>{accelerator(selected)}</dd>
+              </div>
+            {/if}
           </dl>
           {#if device && fitFor(selected, device) !== 'unknown'}
             <div class="fit">

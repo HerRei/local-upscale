@@ -324,6 +324,7 @@ def get_capability_report() -> dict:
         "devices": devices,
         "media": media_capabilities(),
         "gpu_suggestion": _gpu_suggestion(devices),
+        "npu_hint": _npu_hint() if sys.platform in {"win32", "linux"} else None,
     }
     report.update(_system_pressure_snapshot(total_ram, available_ram))
     return report
@@ -374,15 +375,44 @@ def _linux_gpu_name(device: Path) -> str:
     return {"0x10de": "an NVIDIA GPU", "0x1002": "an AMD GPU", "0x8086": "Intel graphics"}[vendor]
 
 
-def _detect_openvino(devices: list[dict], available_ram: int) -> None:
-    """Intel GPUs through ONNX Runtime's OpenVINO plugin, where the build ships it."""
+def _npu_hint() -> dict | None:
+    """An Intel NPU this machine has but cannot use yet, and what it is missing."""
     try:
-        from .openvino_devices import gpu_devices
+        from .openvino_devices import npu_compiler_present, npu_devices
+
+        for device in npu_devices():
+            if not npu_compiler_present(device):
+                return {"name": device["name"], "missing": "compiler"}
+    except Exception:  # noqa: BLE001 - a hint must never break the capability report
+        logger.debug("NPU hint failed", exc_info=True)
+    return None
+
+
+def _detect_openvino(devices: list[dict], available_ram: int) -> None:
+    """Intel GPUs and NPUs through ONNX Runtime's OpenVINO plugin, where the build ships it."""
+    try:
+        from .openvino_devices import gpu_devices, npu_compiler_present, npu_devices
 
         found = gpu_devices()
+        npus = [device for device in npu_devices() if npu_compiler_present(device)]
     except Exception:  # noqa: BLE001 - discovery must never hide the other devices
         logger.debug("OpenVINO discovery failed", exc_info=True)
         return
+    for device in npus:
+        # The NPU works in the computer's own memory and computes in FP16 whatever the
+        # Precision setting says; LocalSR checks its result against the CPU.
+        devices.append(
+            {
+                "id": f"openvino:{device['key']}",
+                "type": "npu",
+                "name": f"{device['name']} (NPU)",
+                "total_memory": available_ram,
+                "free_memory": available_ram // 2,
+                "supports_fp16": False,
+                "recommended_tile_sizes": _recommended_tiles(available_ram // 2),
+                "is_integrated": True,
+            }
+        )
     for device in found:
         integrated = device["integrated"]
         budget = available_ram // 2

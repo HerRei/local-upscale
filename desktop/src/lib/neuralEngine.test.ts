@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   NEURAL_ENGINE_ID,
+  acceleratorFor,
   engineLabel,
   hardwareChoices,
   hardwarePatch,
@@ -77,5 +78,51 @@ describe('Neural Engine hardware entry', () => {
     expect(engineLabel({ ...on, neural_engine: false }, caps, 'SPAN', 'Apple GPU (Metal)')).toBe(
       'Apple GPU (Metal)',
     );
+  });
+});
+
+function npuMachine(): CapabilityInfo {
+  return {
+    devices: [
+      device('openvino:gpu1', { type: 'openvino', name: 'Intel(R) Graphics (OpenVINO)' }),
+      device('openvino:npu1', { type: 'npu', name: 'Intel(R) AI Boost (NPU)' }),
+      device('cpu'),
+    ],
+  } as CapabilityInfo;
+}
+
+describe('Intel NPU hardware entry', () => {
+  it('is offered only for models it runs', () => {
+    expect(hardwareChoices(npuMachine(), 'SPAN').map((entry) => entry.id)).toEqual([
+      'openvino:gpu1',
+      'openvino:npu1',
+      'cpu',
+    ]);
+    expect(hardwareChoices(npuMachine(), 'HAT').map((entry) => entry.id)).toEqual([
+      'openvino:gpu1',
+      'cpu',
+    ]);
+  });
+
+  it('shows the CPU for a model it cannot run, which is where that model runs', () => {
+    expect(selectedHardware({ device_id: 'openvino:npu1' }, npuMachine(), 'HAT')).toBe('cpu');
+    expect(selectedHardware({ device_id: 'openvino:npu1' }, npuMachine(), 'SPAN')).toBe(
+      'openvino:npu1',
+    );
+    expect(
+      engineLabel({ device_id: 'openvino:npu1' }, npuMachine(), 'SPAN', 'Intel(R) AI Boost (NPU)'),
+    ).toBe('Intel(R) AI Boost (NPU)');
+    expect(
+      engineLabel({ device_id: 'openvino:npu1' }, npuMachine(), 'HAT', 'Intel(R) AI Boost (NPU)'),
+    ).toBe('CPU · this model does not run on the NPU');
+  });
+
+  it('names, for the model library, the accelerator a model can use on this computer', () => {
+    expect(acceleratorFor(npuMachine(), 'SPAN')).toBe('NPU');
+    expect(acceleratorFor(npuMachine(), 'RealESRGAN')).toBe('NPU');
+    expect(acceleratorFor(npuMachine(), 'HAT')).toBeUndefined();
+    expect(acceleratorFor(capabilities(true), 'FBCNN')).toBe('Neural Engine');
+    expect(acceleratorFor(capabilities(false), 'SPAN')).toBeUndefined();
+    expect(acceleratorFor(npuMachine(), undefined)).toBeUndefined();
   });
 });

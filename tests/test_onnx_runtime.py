@@ -193,6 +193,8 @@ def gated(
     device="",
     identity=None,
     persist=True,
+    slight=frozenset(),
+    kind="GPU",
 ):
     """A CPU route that behaves like a GPU route under test.
 
@@ -208,6 +210,9 @@ def gated(
         "CPUExecutionProvider",
         tuple((name, {}, False) for name in configs),
     )
+    monkeypatch.setattr(
+        onnx_runtime, "NPU_ROUTE_CONFIGS", tuple((name, {}, False) for name in configs)
+    )
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_gated", property(lambda self: True))
     run = onnx_runtime._OnnxImage._run
 
@@ -216,6 +221,8 @@ def gated(
         if name in failing:
             raise RuntimeError(f"configuration {name} crashed")
         output = run(self, session, image)
+        if name in slight:
+            return output + 0.0045  # about 47 dB: what FP16 arithmetic leaves
         return output + 0.25 if name in broken else output
 
     open_next = onnx_runtime._OnnxImage._open_next
@@ -239,6 +246,7 @@ def gated(
         device=device,
         identity=device if identity is None else identity,
         persist=persist,
+        kind=kind,
     )
     return OnnxImageDescriptor(descriptor(), route=route), calls
 
@@ -1183,3 +1191,195 @@ def test_timed_out_preflight_refuses_gpu_for_process_only(monkeypatch, tmp_path)
             converted(torch.rand(1, 3, 8, 8))
         assert calls == []
     assert not list(tmp_path.glob("crash-*.json"))
+
+
+def _ep_device(kind, ep_name="OpenVINOExecutionProvider", **metadata):
+    return SimpleNamespace(
+        ep_name=ep_name,
+        device=SimpleNamespace(type=f"OrtHardwareDeviceType.{kind}"),
+        ep_metadata={"ov_device": kind, **metadata},
+    )
+
+
+def test_npus_are_found_apart_from_gpus_with_a_driver_identity(monkeypatch):
+    import onnxruntime as ort
+
+    from localsr.core import openvino_devices
+
+    npu = _ep_device(
+        "NPU",
+        DEVICE_UUID="80D1D11EB73811EAB3DE0242AC130004",
+        FULL_DEVICE_NAME="Intel(R) AI Boost",
+        DEVICE_ARCHITECTURE="3720",
+        NPU_DRIVER_VERSION="1779321600",
+        NPU_COMPILER_VERSION="458781",
+        version="1.8.1",
+    )
+    gpu = _ep_device("GPU", DEVICE_UUID="8680677d060000000002000000000000")
+    auto = _ep_device("NPU", ep_name="OpenVINOExecutionProvider.AUTO", DEVICE_UUID="ff")
+    monkeypatch.setattr(openvino_devices, "plugin_registered", lambda: True)
+    monkeypatch.setattr(openvino_devices, "_driver", lambda luid: None)
+    monkeypatch.setattr(ort, "get_ep_devices", lambda: [gpu, npu, auto], raising=False)
+    (found,) = openvino_devices.npu_devices()
+    assert found["key"] == "80d1d11eb73811eab3de0242ac130004"
+    assert found["kind"] == "NPU" and found["name"] == "Intel(R) AI Boost"
+    assert found["compiler"] == "458781"
+    assert found["driver"] == "npu-driver:1779321600|npu-compiler:458781"
+    assert found["ep_device"] is npu
+    assert [device["key"] for device in openvino_devices.gpu_devices()] == [
+        "8680677d060000000002000000000000"
+    ]
+    assert openvino_devices.device_for("80D1D11EB73811EAB3DE0242AC130004")["kind"] == "NPU"
+    # Without a driver version the device still runs; its verdicts are just not stored.
+    npu.ep_metadata.pop("NPU_DRIVER_VERSION")
+    assert openvino_devices.npu_devices()[0]["driver"] is None
+
+
+def test_an_npu_device_id_becomes_an_openvino_route_that_knows_it_is_an_npu(monkeypatch):
+    from localsr.core import inference, openvino_devices
+
+    entry = {
+        "key": "80d1d11eb73811eab3de0242ac130004",
+        "kind": "NPU",
+        "name": "Intel(R) AI Boost",
+        "device_id": "",
+        "architecture": "3720",
+        "plugin_version": "1.8.1",
+        "driver": "npu-driver:1779321600|npu-compiler:458781",
+        "ep_device": object(),
+    }
+    monkeypatch.setattr(openvino_devices, "device_for", lambda key: entry)
+    route = inference._onnx_route("openvino:80d1d11eb73811eab3de0242ac130004")
+    assert route.provider == "OpenVINOExecutionProvider" and route.kind == "NPU"
+    assert route.label == "Intel(R) AI Boost (NPU)"
+    assert "npu-compiler:458781" in route.identity and route.persist
+    entry["driver"] = None
+    assert not inference._onnx_route("openvino:80d1d11eb73811eab3de0242ac130004").persist
+
+
+def test_an_npu_route_accepts_the_fp16_difference_a_gpu_route_refuses(monkeypatch, tmp_path):
+    from localsr.core.onnx_runtime import GpuRouteRejected
+
+    image = torch.rand(1, 3, 8, 8)
+    npu, _ = gated(monkeypatch, tmp_path / "npu", ("fp16",), slight={"fp16"}, kind="NPU")
+    npu(image)
+    assert active_config(npu) == "fp16"
+    gpu, _ = gated(monkeypatch, tmp_path / "gpu", ("fp16",), slight={"fp16"})
+    with pytest.raises(GpuRouteRejected):
+        gpu(image)
+
+
+def test_npu_sessions_compile_once_into_the_check_cache(monkeypatch, tmp_path):
+    from localsr.core import onnx_runtime
+    from localsr.core.onnx_runtime import OnnxRoute
+
+    monkeypatch.setenv("LOCALSR_ONNX_GATE_CACHE", str(tmp_path))
+    npu = OnnxRoute("OpenVINOExecutionProvider", ep_device=object(), kind="NPU")
+    options = onnx_runtime._provider_options(npu, {})
+    assert json.loads(options["load_config"]) == {"NPU": {"CACHE_DIR": str(tmp_path / "npu-cache")}}
+    assert [config[0] for config in onnx_runtime._route_configs(npu)] == ["npu-fp16"]
+    gpu = OnnxRoute("OpenVINOExecutionProvider", ep_device=object())
+    assert onnx_runtime._provider_options(gpu, {"load_config": "x"}) == {"load_config": "x"}
+    assert (
+        onnx_runtime._route_configs(gpu) == onnx_runtime.ROUTE_CONFIGS["OpenVINOExecutionProvider"]
+    )
+
+
+def test_a_model_the_npu_cannot_run_falls_back_to_the_cpu_and_says_so(monkeypatch):
+    from localsr.core import inference
+    from localsr.core.model_adapter import NormalizedModelInfo
+    from localsr.core.onnx_runtime import NPU_ARCHITECTURES, OnnxRoute
+
+    npu = OnnxRoute(
+        "OpenVINOExecutionProvider", ep_device=object(), kind="NPU", label="Intel(R) AI Boost (NPU)"
+    )
+    monkeypatch.setattr(inference, "_onnx_route", lambda device: npu)
+    loads = []
+
+    class _Adapter:
+        def load(self, path, device, precision, **kwargs):
+            loads.append((device.type, kwargs.get("onnx_route")))
+            return object(), None
+
+    engine = inference.InferenceEngine(_Adapter())
+    messages = []
+    engine.status_callback = messages.append
+    monkeypatch.setattr(engine, "_attach_status", lambda model: None)
+    supported = sorted(NPU_ARCHITECTURES)[0]
+    for architecture in ("HAT", supported):
+        info = NormalizedModelInfo(architecture, 4, 3, 3, True, False, 1, 1, "m.pth", [])
+        engine.load_model(f"{architecture}.pth", "openvino:80d1", "fp32", info)
+    assert loads == [("cpu", None), ("cpu", npu)]
+    assert messages == ["HAT does not run on Intel(R) AI Boost (NPU), so it runs on the CPU."]
+
+
+def test_desktop_names_the_same_npu_architectures_as_the_worker():
+    import re
+    from pathlib import Path
+
+    from localsr.core.model_catalog import CATALOG_BY_FILENAME
+    from localsr.core.onnx_runtime import NPU_ARCHITECTURES
+
+    source = (
+        Path(__file__).resolve().parents[1] / "desktop" / "src" / "lib" / "neuralEngine.ts"
+    ).read_text(encoding="utf-8")
+    listed = set(
+        re.findall(r"'(\w+)'", re.search(r"NPU_ARCHITECTURES = new Set\(\[(.*?)\]\)", source)[1])
+    )
+    # The catalog names two Spandrel architectures differently.
+    catalog_name = {"ESRGAN": "RealESRGAN", "PLKSR": "RealPLKSR"}
+    expected = {catalog_name.get(name, name) for name in NPU_ARCHITECTURES}
+    assert listed == expected
+    assert expected <= {model.architecture for model in CATALOG_BY_FILENAME.values()}
+
+
+def test_openvino_discovery_that_crashed_the_engine_is_skipped_from_then_on(monkeypatch, tmp_path):
+    # Device discovery loads Intel's GPU and NPU drivers (Level Zero) inside the engine. A
+    # driver that crashes there would crash every start; after one crash the app goes on
+    # without OpenVINO devices.
+    from localsr.core import gpu_guard, openvino_devices
+
+    monkeypatch.setenv(gpu_guard.GATE_CACHE_ENV, str(tmp_path))
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
+    openvino_devices.plugin_registered.cache_clear()
+    gpu_guard.CrashNotes(tmp_path).mark(openvino_devices.discovery_key(), "engine")
+    try:
+        assert openvino_devices.plugin_registered() is False
+        assert "crashed" in openvino_devices.registration_error
+        assert openvino_devices.npu_devices() == [] and openvino_devices.gpu_devices() == []
+    finally:
+        openvino_devices.plugin_registered.cache_clear()
+
+
+def test_an_npu_runs_one_window_shape_so_each_model_compiles_once():
+    # Every input shape is a separate NPU compile (seconds to minutes, and a cached program
+    # as large as the model). Edge tiles therefore come as full windows of real pixels.
+    from localsr.core.onnx_runtime import OnnxImageDescriptor, OnnxRoute
+
+    npu = OnnxImageDescriptor(
+        descriptor(), route=OnnxRoute("OpenVINOExecutionProvider", ep_device=object(), kind="NPU")
+    )
+    assert npu.fixed_input_shape is None
+    npu.prepare_tiles(256, 16)
+    assert npu.fixed_input_shape == (288, 288)
+    npu.prepare_tiles(128, 16)  # smaller tiles after running out of memory
+    assert npu.fixed_input_shape == (160, 160)
+    gpu = OnnxImageDescriptor(
+        descriptor(), route=OnnxRoute("OpenVINOExecutionProvider", ep_device=object())
+    )
+    gpu.prepare_tiles(256, 16)
+    assert gpu.fixed_input_shape is None
+
+
+def test_the_npu_compile_cache_keeps_the_newest_programs_within_its_limit(tmp_path):
+    from localsr.core.onnx_runtime import _trim_npu_cache
+
+    cache = tmp_path / "npu-cache"
+    cache.mkdir()
+    for index, size in enumerate((300, 200, 100)):
+        blob = cache / f"{index}.blob"
+        blob.write_bytes(b"x" * size)
+        os.utime(blob, (1_000 + index, 1_000 + index))
+    _trim_npu_cache(cache, limit=350)
+    assert sorted(path.name for path in cache.iterdir()) == ["1.blob", "2.blob"]
+    _trim_npu_cache(tmp_path / "missing", limit=1)  # nothing cached yet: nothing to do

@@ -1,4 +1,4 @@
-"""Intel GPUs through ONNX Runtime's OpenVINO plugin (onnxruntime-ep-openvino).
+"""Intel GPUs and NPUs through ONNX Runtime's OpenVINO plugin (onnxruntime-ep-openvino).
 
 The plugin carries its own OpenVINO runtime. A GPU appears only where the host has
 Intel's graphics compute driver; on any other machine, or when anything here fails,
@@ -19,18 +19,38 @@ REGISTRATION_NAME = "localsr_openvino"
 registration_error = ""
 
 
+def discovery_key() -> str:
+    """Crash-note key for loading the plugin and listing its devices in this LocalSR."""
+    from .. import __version__
+
+    return f"openvino-discovery|{__version__}"
+
+
+def _crash_notes():
+    from .gpu_guard import CrashNotes, gate_cache_directory
+
+    return CrashNotes(gate_cache_directory())
+
+
 @functools.cache
 def plugin_registered() -> bool:
+    global registration_error
+    # Registering loads Intel's GPU and NPU drivers inside the engine. One that crashed
+    # the engine here before is not loaded again by this LocalSR version.
+    notes = _crash_notes()
+    if notes.crashed(discovery_key()):
+        registration_error = "OpenVINO crashed the engine while listing its devices before"
+        return False
     try:
         import onnxruntime as ort
         import onnxruntime_ep_openvino as plugin
     except ImportError:
         return False
     try:
-        ort.disable_telemetry_events()
-        ort.register_execution_provider_library(REGISTRATION_NAME, plugin.get_library_path())
+        with notes.watch(discovery_key()):
+            ort.disable_telemetry_events()
+            ort.register_execution_provider_library(REGISTRATION_NAME, plugin.get_library_path())
     except Exception as error:  # noqa: BLE001 - a native load failure means no OpenVINO route
-        global registration_error
         registration_error = f"{type(error).__name__}: {error}"[:500]
         logger.info("OpenVINO plugin could not be registered: %s", error)
         return False
@@ -148,20 +168,32 @@ def _number(value) -> int:
         return 0
 
 
-def gpu_devices() -> list[dict]:
-    """The GPUs the plugin can run on, each with its ONNX Runtime device handle."""
+def _npu_driver(metadata: dict) -> str | None:
+    """An NPU's driver and compiler versions, both reported by the device itself."""
+    driver = metadata.get("NPU_DRIVER_VERSION")
+    if not driver:
+        return None
+    return f"npu-driver:{driver}|npu-compiler:{metadata.get('NPU_COMPILER_VERSION', '')}"
+
+
+def _devices(kind: str) -> list[dict]:
+    """The plugin's devices of one kind ("GPU" or "NPU"), each with its ONNX Runtime handle.
+
+    ONNX Runtime lists an NPU on Linux only from 1.28 on, where it reads /sys/class/accel;
+    on Windows it finds one through DXCore."""
     if not plugin_registered():
         return []
     import onnxruntime as ort
 
     try:
-        ep_devices = ort.get_ep_devices()
+        with _crash_notes().watch(discovery_key()):
+            ep_devices = ort.get_ep_devices()
     except Exception as error:  # noqa: BLE001
         logger.info("OpenVINO device enumeration failed: %s", error)
         return []
     found = {}
     for ep_device in ep_devices:
-        if ep_device.ep_name != EP_NAME or "GPU" not in str(ep_device.device.type):
+        if ep_device.ep_name != EP_NAME or kind not in str(ep_device.device.type):
             continue
         metadata = dict(ep_device.ep_metadata)
         key = (metadata.get("DEVICE_UUID") or metadata.get("DEVICE_LUID") or "").lower()
@@ -169,20 +201,41 @@ def gpu_devices() -> list[dict]:
             continue
         found[key] = {
             "key": key,
-            "name": metadata.get("FULL_DEVICE_NAME") or "Intel GPU",
-            "integrated": metadata.get("DEVICE_TYPE") == "integrated",
+            "kind": kind,
+            "name": metadata.get("FULL_DEVICE_NAME") or f"Intel {kind}",
+            "integrated": kind == "NPU" or metadata.get("DEVICE_TYPE") == "integrated",
             "total_memory": _number(metadata.get("GPU_DEVICE_TOTAL_MEM_SIZE")),
             "max_allocation": _number(metadata.get("GPU_DEVICE_MAX_ALLOC_MEM_SIZE")),
             "luid": metadata.get("DEVICE_LUID", ""),
             "device_id": metadata.get("GPU_DEVICE_ID", ""),
             "architecture": metadata.get("DEVICE_ARCHITECTURE", ""),
             "plugin_version": metadata.get("version", ""),
-            "driver": _driver(metadata.get("DEVICE_LUID", "")),
+            "driver": (
+                _npu_driver(metadata) if kind == "NPU" else _driver(metadata.get("DEVICE_LUID", ""))
+            ),
+            # Without its compiler (Fedora's driver package has none) an NPU compiles nothing.
+            "compiler": metadata.get("NPU_COMPILER_VERSION", "") if kind == "NPU" else "",
             "ep_device": ep_device,
         }
     return [found[key] for key in sorted(found)]
 
 
+def gpu_devices() -> list[dict]:
+    """The GPUs the plugin can run on, each with its ONNX Runtime device handle."""
+    return _devices("GPU")
+
+
+def npu_devices() -> list[dict]:
+    """Intel NPUs (Core Ultra "AI Boost"), whether or not their compiler is installed."""
+    return _devices("NPU")
+
+
+def npu_compiler_present(device: dict) -> bool:
+    return device["compiler"] not in ("", "0")
+
+
 def device_for(key: str) -> dict | None:
     key = key.lower()
-    return next((device for device in gpu_devices() if device["key"] == key), None)
+    return next(
+        (device for device in (*gpu_devices(), *npu_devices()) if device["key"] == key), None
+    )

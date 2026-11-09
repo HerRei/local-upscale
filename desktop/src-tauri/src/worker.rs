@@ -1885,6 +1885,7 @@ mod tests {
             ("xpu:0", "xpu", true),
             ("directml:0", "directml", true),
             ("openvino:8680677d06", "openvino", true),
+            ("openvino:80d1d11eb7", "npu", true),
         ];
 
         for (id, backend, integrated) in device_specs {

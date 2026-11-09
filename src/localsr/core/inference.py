@@ -237,9 +237,10 @@ def _onnx_route(device_str: str):
         device = device_for(key)
         if device is None:
             raise RuntimeError(
-                "The selected Intel GPU is no longer available through OpenVINO. "
+                "The selected Intel GPU or NPU is no longer available through OpenVINO. "
                 "Choose another device in the Hardware settings."
             )
+        kind = device.get("kind", "GPU")
         identity = "|".join(
             (
                 device["key"],
@@ -254,9 +255,10 @@ def _onnx_route(device_str: str):
             "OpenVINOExecutionProvider",
             ep_device=device["ep_device"],
             identity=identity,
-            label=f"{device['name']} (OpenVINO)",
+            label=f"{device['name']} ({'NPU' if kind == 'NPU' else 'OpenVINO'})",
             persist=device.get("driver") is not None,
             device=device_str,
+            kind=kind,
         )
     return None
 
@@ -304,6 +306,17 @@ class InferenceEngine:
         calls this internally.
         """
         onnx_route = _onnx_route(device_str)
+        if onnx_route is not None and onnx_route.kind == "NPU":
+            from .onnx_runtime import NPU_ARCHITECTURES
+
+            architecture = str(getattr(model_info, "architecture", ""))
+            if architecture not in NPU_ARCHITECTURES:
+                if self.status_callback is not None:
+                    self.status_callback(
+                        f"{architecture} does not run on {onnx_route.label}, so it runs on the CPU."
+                    )
+                onnx_route = None
+                device_str = "cpu"
         # ONNX owns the GPU tensors. PyTorch stages tiles and validates returned
         # pixels on CPU; the selected execution backend is tracked separately.
         device = (
