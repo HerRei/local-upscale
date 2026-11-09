@@ -22,6 +22,7 @@ from PIL import Image
 
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
+from .frame_interpolation import ORDERS, InterpolationTarget, interpolate_frames
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine
 from .media_codecs import validate_output
@@ -185,6 +186,10 @@ class VideoJobConfig:
     external_ffmpeg: object | None = None
     # Source of audio/subtitles when it differs from the decoded picture source.
     audio_path: str | None = None
+    # Optional frame interpolation (see frame_interpolation.py): "off", "x2", "x4",
+    # "fps60" or "fps120", run before or after the upscale.
+    interpolation: str = "off"
+    interpolation_order: str = "after_upscale"
 
 
 @dataclass
@@ -208,13 +213,15 @@ def run_video_job(
     warning_callback: Callable[[str], None] | None = None,
     source_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
     stage_cb: Callable[[str], None] | None = None,
+    synthesizer=None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
 
     frame_started_cb(frame_index, total_frames) and
     frame_completed_cb(frame_index, total_frames, jpeg_b64) are called
     per frame. progress_cb(frames_done, total_frames, elapsed_seconds)
-    is called after each frame. All callbacks are optional.
+    is called after each frame. All callbacks are optional. With
+    ``config.interpolation`` set, ``synthesizer`` makes the in-between frames.
 
     Sources in a format LocalSR does not include are first converted to a
     lossless intermediate by the user's selected FFmpeg, if any.
@@ -246,6 +253,7 @@ def run_video_job(
             warning_callback=warning_callback,
             source_frame_cb=source_frame_cb,
             stage_cb=stage_cb,
+            synthesizer=synthesizer,
         )
 
 
@@ -263,6 +271,7 @@ def _run_video_job(
     warning_callback,
     source_frame_cb,
     stage_cb,
+    synthesizer=None,
 ) -> VideoJobResult:
     # Python 3.11's Windows monotonic clock can tick more slowly than a tile.
     # Measure short inference intervals with the highest-resolution clock so
@@ -288,8 +297,19 @@ def _run_video_job(
     fps = config.fps_override if config.fps_override else probe.fps
     if fps <= 0:
         fps = 25.0
+    interpolation = _interpolation_target(config, probe.fps, preserve_hdr, synthesizer)
+    if interpolation is not None and not interpolation.applies_to(probe.fps):
+        if warning_callback:
+            warning_callback(
+                f"This video already plays at {probe.fps:g} fps, so frame interpolation to "
+                f"{interpolation.output_fps(probe.fps):g} fps was skipped."
+            )
+        interpolation = None
+    before_upscale = interpolation is not None and config.interpolation_order == "before_upscale"
 
     total_frames = selected_frame_count(probe.frame_count, config.start_frame, config.end_frame)
+    if before_upscale and interpolation is not None:
+        total_frames = interpolation.expected_frames(total_frames, fps)
 
     model_info = config.model_info
     native_scale = int(getattr(model_info, "scale", 1))
@@ -339,6 +359,9 @@ def _run_video_job(
             ),
             4,
         )
+        if before_upscale and interpolation is not None:
+            # On this thread, not the decoder's: one thread drives the GPU.
+            decoded = interpolate_frames(decoded, interpolation, synthesizer, cancel_event)
         for output_frame_index, source_frame in enumerate(decoded):
             rgb = source_frame.rgb
             if cancel_event.is_set():
@@ -502,6 +525,12 @@ def _run_video_job(
         output_frames = _deflicker_frames(frame_generator(), config.deflicker_window, cancel_event)
     else:
         output_frames = frame_generator()
+    if interpolation is not None:
+        if not before_upscale:
+            output_frames = interpolate_frames(
+                output_frames, interpolation, synthesizer, cancel_event
+            )
+        fps = interpolation.output_fps(fps)
     # Restore the next frames while the encoder writes the previous ones.
     output_frames = _prefetch(output_frames, 2)
 
@@ -545,6 +574,32 @@ def _run_video_job(
         elapsed_seconds=completed_at - job_started_at,
         inference_seconds=(completed_at - (inference_started_at or completed_at)),
     )
+
+
+def _interpolation_target(
+    config: VideoJobConfig, source_fps: float, preserve_hdr: bool, synthesizer
+) -> InterpolationTarget | None:
+    """Validate the interpolation request before any model loads."""
+    target = InterpolationTarget.parse(config.interpolation)
+    if target is None:
+        return None
+    if config.interpolation_order not in ORDERS:
+        raise ValueError("Frame interpolation runs before or after the upscale.")
+    if config.fps_override is not None:
+        raise ValueError(
+            "Frame interpolation keeps the source timing; it cannot be combined with an "
+            "FPS override."
+        )
+    if preserve_hdr:
+        raise ValueError(
+            "Frame interpolation is not yet available with HDR preservation. "
+            "Convert to SDR or turn interpolation off."
+        )
+    if synthesizer is None:
+        raise ValueError("Frame interpolation needs its interpolation model; download it first.")
+    if source_fps <= 0:
+        raise ValueError("Frame interpolation needs the source frame rate.")
+    return target
 
 
 def process_frame_face_aware(
