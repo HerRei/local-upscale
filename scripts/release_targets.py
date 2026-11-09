@@ -91,6 +91,11 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
         root / "requirements/build-tools.txt",
         root / "scripts/backend_wheelhouse.py",
         root / "scripts/build_tauri_preview.py",
+        # Scripts the worker build runs; they pick the native executables it bundles.
+        root / "scripts/build_edit_runtime.py",
+        root / "scripts/build_media_helper.py",
+        root / "scripts/build_source_bundle.py",
+        root / "scripts/thin_macho_binaries.py",
         root / "scripts/collect_xpu_runtime.py",
         root / "scripts/filter_macho_architecture.py",
     ]
