@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
+import shutil
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -371,3 +374,865 @@ def test_release_matrix_accepts_crlf_and_lf_wheelhouse_locks(tmp_path: Path) -> 
     path.write_text(json.dumps(data))
     index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
     assert index_path.is_file()
+
+
+# In-app updates on every edition: build identity, updater files and feed entries.
+
+update_signing = load_script("beta_update_signing")
+engine_payload = load_script("prepare_engine_payload")
+release_targets = load_script("release_targets")
+verify_prepared = load_script("verify_prepared_release")
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+UPDATE_TARGETS = {
+    "macos-arm64-mps": "darwin-aarch64-mps-native",
+    "windows-x86_64-cuda": "windows-x86_64-cuda-native",
+    "windows-x86_64-cpu": "windows-x86_64-cpu-native",
+    "windows-x86_64-directml": "windows-x86_64-directml-native",
+    "linux-x86_64-cpu": "linux-x86_64-cpu-native",
+    "linux-x86_64-cuda": "linux-x86_64-cuda-native",
+    "linux-x86_64-rocm": "linux-x86_64-rocm-native",
+}
+
+
+def test_every_edition_has_its_own_update_platform_key() -> None:
+    # The key is what UpdateConfig::target() builds: <os>-<arch>-<backend>-<kind>.
+    assert {
+        target["id"]: release_targets.platform_key(target) for target in release_targets.targets()
+    } == UPDATE_TARGETS
+    assert [entry["update_target"] for entry in release_targets.artifact_entries("1-beta")] == list(
+        UPDATE_TARGETS.values()
+    )
+
+
+def test_registry_rejects_a_missing_or_duplicate_update_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    registry = json.loads(release_targets.REGISTRY.read_text())
+    path = tmp_path / "targets.json"
+    monkeypatch.setattr(release_targets, "REGISTRY", path)
+    for change, match in (
+        (lambda targets: targets[1].pop("update"), "update identity"),
+        (lambda targets: targets[1]["update"].update(kind="installer"), "update identity"),
+        (lambda targets: targets[1]["update"].update(backend="CUDA"), "update identity"),
+        (lambda targets: targets[2]["update"].update(backend="cuda"), "platform key"),
+    ):
+        broken = json.loads(json.dumps(registry))
+        change(broken["targets"])
+        path.write_text(json.dumps(broken))
+        with pytest.raises(ValueError, match=match):
+            release_targets.targets()
+
+
+def test_ci_build_identity_uses_the_production_key_and_a_content_engine_id() -> None:
+    environment = release_targets.update_environment("windows-x86_64-cuda", COMMIT)
+    assert environment == {
+        "LOCALSR_UPDATE_PUBLIC_KEY": (ROOT / "packaging/updates/production.pub")
+        .read_text()
+        .strip(),
+        "LOCALSR_UPDATE_BACKEND": "cuda",
+        "LOCALSR_UPDATE_KIND": "native",
+        "LOCALSR_ENGINE_ID": release_targets.engine_id(
+            release_targets.target("windows-x86_64-cuda"), COMMIT
+        ),
+    }
+    with pytest.raises(ValueError, match="commit"):
+        release_targets.update_environment("linux-x86_64-rocm", "HEAD")
+    with pytest.raises(ValueError, match="unknown release target"):
+        release_targets.update_environment("linux-x86_64-xpu", COMMIT)
+
+
+def test_update_env_cli_writes_github_env_lines() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/release_targets.py"),
+            "--update-env",
+            "linux-x86_64-rocm",
+            "--commit",
+            COMMIT,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+    assert lines[1:] == [
+        "LOCALSR_UPDATE_BACKEND=rocm",
+        "LOCALSR_UPDATE_KIND=native",
+        "LOCALSR_ENGINE_ID="
+        + release_targets.engine_id(release_targets.target("linux-x86_64-rocm"), COMMIT),
+    ]
+    assert lines[0].startswith("LOCALSR_UPDATE_PUBLIC_KEY=") and "\n" not in lines[0]
+
+
+def test_mac_release_script_agrees_with_the_registry_identity() -> None:
+    script = (ROOT / "scripts/release_macos_beta.sh").read_text()
+    mac = release_targets.target("macos-arm64-mps")
+    assert f"LOCALSR_UPDATE_BACKEND={mac['update']['backend']}" in script
+    assert f"LOCALSR_UPDATE_KIND={mac['update']['kind']}" in script
+    assert "--update-env macos-arm64-mps" in script
+    assert f'"{release_targets.platform_key(mac)}"' in script
+    files = release_targets.update_files(mac, "1.2.3-beta")
+    assert files["update_package"] == "LocalSR-v1.2.3-beta-macOS-arm64.app.tar.gz"
+    assert files["engine_manifest"] == "LocalSR-v1.2.3-beta-macOS-arm64.engine-payload.json"
+
+
+def test_updater_file_names_follow_the_published_package_names() -> None:
+    cuda = release_targets.update_files(release_targets.target("windows-x86_64-cuda"), "1.2.3-beta")
+    # The NSIS hook's adjacent parts and the updater's engine package are the same files.
+    assert cuda == {
+        "package": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.exe",
+        "update_package": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.exe",
+        "engine_prefix": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz",
+        "engine_manifest": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-payload.json",
+        "payload_backend": "CUDA",
+        "worker": "localsr-worker.exe",
+    }
+    rocm = release_targets.update_files(release_targets.target("linux-x86_64-rocm"), "1.2.3-beta")
+    assert rocm["update_package"] == "LocalSR-v1.2.3-beta-Linux-ROCm-x86_64.AppImage"
+    assert rocm["payload_backend"] == "ROCM"
+    assert rocm["worker"] == "localsr-worker"
+    directml = release_targets.update_files(
+        release_targets.target("windows-x86_64-directml"), "1.2.3-beta"
+    )
+    assert directml["payload_backend"] == "DIRECTML"
+
+
+def fake_engine(root: Path, worker: str) -> Path:
+    engine = root / "engine"
+    (engine / "lib").mkdir(parents=True)
+    (engine / worker).write_bytes(b"worker")
+    (engine / "lib" / "model.bin").write_bytes(bytes(range(256)) * 8)
+    return engine
+
+
+def test_engine_payload_cli_names_the_payload_for_its_edition(tmp_path: Path) -> None:
+    engine = fake_engine(tmp_path, "localsr-worker.exe")
+    output = tmp_path / "out"
+    output.mkdir()
+    manifest = engine_payload.prepare_for_target(
+        "windows-x86_64-directml", output, engine=engine, release_version="1.2.3-beta"
+    )
+    assert manifest.name == "LocalSR-v1.2.3-beta-Windows-DirectML-x86_64.engine-payload.json"
+    data = json.loads(manifest.read_text())
+    assert data["backend"] == "DIRECTML"
+    assert [part["filename"] for part in data["parts"]] == [
+        "LocalSR-v1.2.3-beta-Windows-DirectML-x86_64.engine.tar.gz.part-0001"
+    ]
+    assert not (output / "engine-payload.json").exists()
+
+
+def test_engine_payload_cli_reuses_the_cuda_installer_payload_only_when_it_matches(
+    tmp_path: Path,
+) -> None:
+    built = tmp_path / "built"
+    prefix = "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz"
+    source = engine_payload.prepare(fake_engine(tmp_path, "localsr-worker.exe"), built, prefix)
+    output = tmp_path / "out"
+    output.mkdir()
+    for part in built.glob("*.part-*"):
+        (output / part.name).write_bytes(part.read_bytes())
+    manifest = engine_payload.prepare_for_target(
+        "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+    )
+    assert manifest.read_bytes() == source.read_bytes()
+    next(output.glob("*.part-0001")).write_bytes(b"truncated")
+    with pytest.raises(ValueError, match="does not match"):
+        engine_payload.prepare_for_target(
+            "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+        )
+
+
+def test_engine_payload_backends_cover_every_edition() -> None:
+    for target in release_targets.targets():
+        backend = release_targets.update_files(target, "1-beta")["payload_backend"]
+        assert backend in engine_payload.BACKENDS
+    rust = (ROOT / "desktop/src-tauri/src/engine_payload.rs").read_text()
+    for backend in engine_payload.BACKENDS:
+        assert f'"{backend}"' in rust
+
+
+def update_smoke(target_id: str, release_version: str) -> dict[str, object]:
+    target = release_targets.target(target_id)
+    return installed_smoke(release_version) | {
+        "update": release_targets.expected_update_identity(target, COMMIT)
+    }
+
+
+def test_installed_smoke_must_carry_the_build_update_identity() -> None:
+    report = update_smoke("linux-x86_64-cuda", "1-beta")
+    smoke_installer.check_update_identity(report, "linux-x86_64-cuda", COMMIT)
+    assert report["update"] == {
+        "enabled": True,
+        "target": "linux-x86_64-cuda-native",
+        "backend": "cuda",
+        "kind": "native",
+        "engine_id": release_targets.engine_id(release_targets.target("linux-x86_64-cuda"), COMMIT),
+    }
+    for change in (
+        {"enabled": False},
+        {"target": "linux-x86_64-cpu-native"},
+        {"engine_id": "linux-x86_64-cuda-ffffffffffff"},
+    ):
+        broken = report | {"update": report["update"] | change}
+        with pytest.raises(RuntimeError, match="update identity"):
+            smoke_installer.check_update_identity(broken, "linux-x86_64-cuda", COMMIT)
+    with pytest.raises(RuntimeError, match="update identity"):
+        smoke_installer.check_update_identity(
+            installed_smoke("1-beta"), "linux-x86_64-cuda", COMMIT
+        )
+
+
+def _compress(point: tuple[int, int, int, int]) -> bytes:
+    prime = verify_prepared._P
+    inverse = pow(point[2], prime - 2, prime)
+    x, y = point[0] * inverse % prime, point[1] * inverse % prime
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+class SigningKey:
+    """A disposable minisign key that signs the way tauri signer does (prehashed)."""
+
+    def __init__(self, seed: bytes, key_id: bytes):
+        digest = hashlib.sha512(seed).digest()
+        scalar = int.from_bytes(digest[:32], "little")
+        self.scalar = (scalar & ((1 << 254) - 8)) | (1 << 254)
+        self.prefix = digest[32:]
+        self.key_id = key_id
+        self.point = _compress(verify_prepared._mul(self.scalar, verify_prepared._G))
+        text = (
+            f"untrusted comment: minisign public key: {key_id.hex().upper()}\n"
+            + base64.b64encode(b"Ed" + key_id + self.point).decode()
+            + "\n"
+        )
+        self.public_key = base64.b64encode(text.encode()).decode()
+
+    def _raw(self, message: bytes) -> bytes:
+        order = verify_prepared._Q
+        r = int.from_bytes(hashlib.sha512(self.prefix + message).digest(), "little") % order
+        commitment = _compress(verify_prepared._mul(r, verify_prepared._G))
+        h = (
+            int.from_bytes(hashlib.sha512(commitment + self.point + message).digest(), "little")
+            % order
+        )
+        return commitment + ((r + h * self.scalar) % order).to_bytes(32, "little")
+
+    def signature(self, data: bytes, name: str = "file") -> str:
+        signature = self._raw(hashlib.blake2b(data, digest_size=64).digest())
+        trusted = f"timestamp:0\tfile:{name}"
+        text = (
+            "untrusted comment: signature from tauri secret key\n"
+            + base64.b64encode(b"ED" + self.key_id + signature).decode()
+            + f"\ntrusted comment: {trusted}\n"
+            + base64.b64encode(self._raw(signature + trusted.encode())).decode()
+            + "\n"
+        )
+        return base64.b64encode(text.encode()).decode()
+
+    def sign_file(self, path: Path) -> None:
+        path.with_name(path.name + ".sig").write_text(self.signature(path.read_bytes(), path.name))
+
+
+TEST_KEY = SigningKey(b"\x01" * 32, b"localsr1")
+OTHER_KEY = SigningKey(b"\x02" * 32, b"localsr1")
+
+
+def fake_sign(path: Path) -> None:
+    """Stand-in for the Keychain signer: a disposable key, the same signature format."""
+    TEST_KEY.sign_file(path)
+
+
+def test_the_feed_check_verifies_signatures_as_the_app_does() -> None:
+    # Real tauri signer output from the app's test fixtures.
+    fixtures = ROOT / "desktop/src-tauri/tests/fixtures"
+    single = json.loads((fixtures / "update-signature.json").read_text())
+    data = single["data"].encode()
+    assert verify_prepared.minisign_verify(single["public_key"], single["signature"], [data])
+    assert not verify_prepared.minisign_verify(
+        single["public_key"], single["signature"], [data + b"x"]
+    )
+    split = json.loads((fixtures / "update-parts.json").read_text())
+    parts = [part["data"].encode() for part in split["parts"]]
+    assert verify_prepared.minisign_verify(split["public_key"], split["whole"]["signature"], parts)
+    assert not verify_prepared.minisign_verify(
+        single["public_key"], split["whole"]["signature"], parts
+    )
+    # The test signer writes the same format.
+    assert verify_prepared.minisign_verify(TEST_KEY.public_key, TEST_KEY.signature(data), [data])
+    assert not verify_prepared.minisign_verify(
+        TEST_KEY.public_key, OTHER_KEY.signature(data), [data]
+    )
+
+
+def platform_downloads(tmp_path: Path, release_version: str = "1.2.3-beta") -> Path:
+    """What `gh run download` leaves for the Windows and Linux runs: one folder per edition."""
+    downloads = tmp_path / "downloads"
+    for target in release_targets.targets():
+        if target["platform"] == "macos":
+            continue
+        directory = downloads / target["id"]
+        directory.mkdir(parents=True)
+        files = release_targets.update_files(target, release_version)
+        name = files["package"]
+        data = f"package {target['id']} ".encode() * 64
+        if target["id"] in {"linux-x86_64-cuda", "linux-x86_64-rocm"}:
+            # Larger than GitHub's limit in reality: CI keeps only 1,900 MiB parts.
+            for index, start in enumerate(range(0, len(data), 1000), start=1):
+                (directory / f"{name}.part-{index:04d}").write_bytes(data[start : start + 1000])
+        else:
+            (directory / name).write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        (directory / f"{name}.sha256").write_text(f"{digest}  {name}\n")
+        engine = fake_engine(tmp_path / target["id"], files["worker"])
+        manifest = engine_payload.prepare_for_target(
+            target["id"], directory, engine=engine, release_version=release_version
+        )
+        smoke = update_smoke(target["id"], release_version)
+        if target.get("external_engine"):
+            # The Windows CUDA smoke test installs from this manifest and records it.
+            smoke["engine_payload_sha256"] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        (directory / f"{name}.smoke.json").write_text(json.dumps(smoke))
+    return downloads
+
+
+def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path, dict]:
+    """The files and the feed release_macos_beta.sh writes, with its signed statement."""
+    mac = tmp_path / "mac"
+    mac.mkdir()
+    base = f"https://github.com/HerRei/local-upscale/releases/download/v{release_version}"
+    stem = f"LocalSR-v{release_version}-macOS-arm64"
+    archive = mac / f"{stem}.app.tar.gz"
+    archive.write_bytes(b"mac app archive" * 32)
+    written = engine_payload.prepare(
+        fake_engine(tmp_path / "mac-engine", "localsr-worker"),
+        mac,
+        f"{stem}.engine.tar.gz",
+        backend="MPS",
+        worker="localsr-worker",
+    )
+    manifest = written.rename(mac / f"{stem}.engine-payload.json")
+    for path in mac.iterdir():
+        fake_sign(path)
+
+    def file(path: Path) -> dict:
+        return {
+            "name": path.name,
+            "url": f"{base}/{path.name}",
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "signature": path.with_name(path.name + ".sig").read_text(),
+        }
+
+    identity = release_targets.engine_id(release_targets.target("macos-arm64-mps"), COMMIT)
+    payload = json.loads(manifest.read_text())
+    feed = {
+        "version": release_version,
+        "pub_date": "2026-11-09T12:00:00Z",
+        "notes": "Notes.",
+        "platforms": {
+            "darwin-aarch64-mps-native": {
+                "url": f"{base}/{archive.name}",
+                "signature": archive.with_name(archive.name + ".sig").read_text(),
+                "localsr": {
+                    "channel": "beta",
+                    "backend": "mps",
+                    "kind": "native",
+                    "protocol": 1,
+                    "engine_id": identity,
+                    "size": archive.stat().st_size,
+                    "unpacked_size": 10 * archive.stat().st_size,
+                    "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                    "engine": {
+                        "id": identity,
+                        "manifest": file(manifest),
+                        "parts": [file(mac / part["filename"]) for part in payload["parts"]],
+                    },
+                },
+            }
+        },
+    }
+    feed_path = tmp_path / "beta.json"
+    feed_path.write_text(json.dumps(feed, indent=2) + "\n")
+    assert update_signing.add_statements(feed_path, sign=fake_sign) == ["darwin-aarch64-mps-native"]
+    assert update_signing.add_statements(feed_path, sign=fake_sign) == []
+    return mac, json.loads(feed_path.read_text())
+
+
+def verify_feed(feed_path: Path, folders: list[Path], **options) -> None:
+    verify_prepared.verify_feed(
+        feed_path,
+        COMMIT,
+        files=folders,
+        release_version="1.2.3-beta",
+        public_key=TEST_KEY.public_key,
+        **options,
+    )
+
+
+def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    mac, original = mac_feed(tmp_path)
+    signed: dict[str, str] = {}
+
+    def recording(path: Path) -> None:
+        # Only private copies are signed, never the downloaded files themselves.
+        assert downloads not in path.parents
+        signed[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        fake_sign(path)
+
+    signatures = update_signing.add_platforms(
+        downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=recording
+    )
+    feed = json.loads(feed_path.read_text())
+    assert set(feed["platforms"]) == set(UPDATE_TARGETS.values())
+    # The macOS entry and the release text are left exactly as the Mac build wrote them.
+    assert (
+        feed["platforms"]["darwin-aarch64-mps-native"]
+        == (original["platforms"]["darwin-aarch64-mps-native"])
+    )
+    assert {key: feed[key] for key in ("version", "pub_date", "notes")} == {
+        key: original[key] for key in ("version", "pub_date", "notes")
+    }
+    base = "https://github.com/HerRei/local-upscale/releases/download/v1.2.3-beta"
+    cpu = feed["platforms"]["windows-x86_64-cpu-native"]
+    package = downloads / "windows-x86_64-cpu" / "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.exe"
+    assert cpu["url"] == f"{base}/{package.name}"
+    assert cpu["signature"] == package.with_name(package.name + ".sig").read_text()
+    contract = cpu["localsr"]
+    assert contract["backend"] == "cpu" and contract["kind"] == "native"
+    assert (
+        contract["engine_id"]
+        == contract["engine"]["id"]
+        == release_targets.engine_id(release_targets.target("windows-x86_64-cpu"), COMMIT)
+    )
+    assert contract["size"] == package.stat().st_size
+    assert contract["sha256"] == hashlib.sha256(package.read_bytes()).hexdigest()
+    assert "parts" not in contract
+    manifest = contract["engine"]["manifest"]
+    assert manifest["name"] == "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.engine-payload.json"
+    engine = json.loads((package.parent / manifest["name"]).read_text())
+    # A bundled engine is installed twice: in the package and as the versioned engine.
+    assert contract["unpacked_size"] == contract["size"] + 2 * engine["unpacked_bytes"]
+    statement = json.loads(base64.b64decode(contract["statement"]))
+    assert statement == {
+        "schema_version": 1,
+        "version": "1.2.3-beta",
+        "channel": "beta",
+        "target": "windows-x86_64-cpu-native",
+        "backend": "cpu",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": release_targets.engine_id(
+            release_targets.target("windows-x86_64-cpu"), COMMIT
+        ),
+        "unpacked_size": contract["unpacked_size"],
+        "sha256": contract["sha256"],
+        "engine_manifest_sha256": manifest["sha256"],
+    }
+
+    rocm = feed["platforms"]["linux-x86_64-rocm-native"]["localsr"]
+    names = [part["name"] for part in rocm["parts"]]
+    assert names[0].endswith(".AppImage.part-0001") and len(names) > 1
+    assert feed["platforms"]["linux-x86_64-rocm-native"]["url"] == f"{base}/{names[0]}"
+    assert sum(part["size"] for part in rocm["parts"]) == rocm["size"]
+    directory = downloads / "linux-x86_64-rocm"
+    whole = b"".join((directory / name).read_bytes() for name in names)
+    assert rocm["sha256"] == hashlib.sha256(whole).hexdigest()
+    # The whole AppImage was put together only to sign it; GitHub cannot host it.
+    assert not (directory / "LocalSR-v1.2.3-beta-Linux-ROCm-x86_64.AppImage").exists()
+    assert not [path for path in directory.iterdir() if path.name.startswith(".")]
+    assert (directory / "LocalSR-v1.2.3-beta-Linux-ROCm-x86_64.AppImage.sig").is_file()
+    assert all(path.is_file() and path.suffix == ".sig" for path in signatures)
+    # Every signed copy had exactly the bytes the feed describes.
+    for entry in feed["platforms"].values():
+        contract = entry["localsr"]
+        for item in [*contract.get("parts", []), contract["engine"]["manifest"]]:
+            if item["name"] in signed:
+                assert signed[item["name"]] == item["sha256"]
+    verify_feed(feed_path, [downloads, mac])
+
+
+@pytest.mark.parametrize("failure", ["checksum", "identity", "engine", "missing"])
+def test_platform_tool_refuses_artifacts_it_cannot_vouch_for(tmp_path: Path, failure: str) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    _, original = mac_feed(tmp_path)
+    directory = downloads / "linux-x86_64-cpu"
+    name = "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage"
+    match = {
+        "checksum": "checksum",
+        "identity": "update identity",
+        "engine": "engine payload",
+        "missing": "linux-x86_64-cpu",
+    }[failure]
+    if failure == "checksum":
+        (directory / name).write_bytes(b"substituted")
+    elif failure == "identity":
+        smoke = json.loads((directory / f"{name}.smoke.json").read_text())
+        smoke["update"]["engine_id"] = "linux-x86_64-cpu-ffffffffffff"
+        (directory / f"{name}.smoke.json").write_text(json.dumps(smoke))
+    elif failure == "engine":
+        next(directory.glob("*.engine.tar.gz.part-0001")).write_bytes(b"corrupt")
+    else:
+        shutil.rmtree(directory)
+    with pytest.raises(ValueError, match=match):
+        update_signing.add_platforms(
+            downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+        )
+    assert json.loads(feed_path.read_text()) == original
+
+
+# Review findings 7 and 8: a payload the app could not install, or not the one the
+# package was tested with, stops the tool before it signs anything.
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "absolute",
+        "traversal",
+        "link",
+        "no-files",
+        "not-an-archive",
+        "tested-engine",
+        "missing-smoke",
+        "null-smoke",
+    ],
+)
+def test_platform_tool_signs_nothing_for_a_payload_it_cannot_vouch_for(
+    tmp_path: Path, failure: str
+) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    _, original = mac_feed(tmp_path)
+    target = (
+        "windows-x86_64-cuda"
+        if failure in {"tested-engine", "missing-smoke", "null-smoke"}
+        else "linux-x86_64-rocm"
+    )
+    directory = downloads / target
+    manifest_path = next(directory.glob("*.engine-payload.json"))
+    manifest = json.loads(manifest_path.read_text())
+    part = directory / manifest["parts"][0]["filename"]
+    outside = tmp_path / "outside" / part.name
+    outside.parent.mkdir()
+    if failure == "absolute":
+        shutil.copyfile(part, outside)
+        manifest["parts"][0]["filename"] = str(outside)
+    elif failure == "traversal":
+        shutil.copyfile(part, outside)
+        manifest["parts"][0]["filename"] = f"{part.name}/../../../outside/{part.name}"
+    elif failure == "link":
+        part.rename(outside)
+        part.symlink_to(outside)
+    elif failure == "no-files":
+        manifest["file_count"] = 0
+    elif failure == "not-an-archive":
+        part.write_bytes(b"not an engine archive" * 8)
+        manifest["parts"][0].update(
+            size=part.stat().st_size, sha256=hashlib.sha256(part.read_bytes()).hexdigest()
+        )
+    else:
+        smoke_path = next(directory.glob("*.smoke.json"))
+        smoke = json.loads(smoke_path.read_text())
+        if failure == "missing-smoke":
+            del smoke["engine_payload_sha256"]
+        else:
+            smoke["engine_payload_sha256"] = None if failure == "null-smoke" else "f" * 64
+        smoke_path.write_text(json.dumps(smoke))
+    manifest_path.write_text(json.dumps(manifest))
+    signed: list[Path] = []
+    with pytest.raises(ValueError):
+        update_signing.add_platforms(
+            downloads,
+            feed_path,
+            COMMIT,
+            release_version="1.2.3-beta",
+            sign=lambda path: (signed.append(path), fake_sign(path)),
+        )
+    assert signed == []
+    assert json.loads(feed_path.read_text()) == original
+
+
+@pytest.mark.parametrize("failure", ["traversal", "no-files", "not-an-archive"])
+def test_engine_payload_reuse_refuses_what_the_installer_would_refuse(
+    tmp_path: Path, failure: str
+) -> None:
+    built = tmp_path / "built"
+    prefix = "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz"
+    source = engine_payload.prepare(fake_engine(tmp_path, "localsr-worker.exe"), built, prefix)
+    output = tmp_path / "out"
+    output.mkdir()
+    for part in built.glob("*.part-*"):
+        (output / part.name).write_bytes(part.read_bytes())
+    manifest = json.loads(source.read_text())
+    if failure == "traversal":
+        (tmp_path / "elsewhere").mkdir()
+        shutil.copyfile(next(built.glob("*.part-*")), tmp_path / "elsewhere/x")
+        manifest["parts"][0]["filename"] = f"{prefix}.part-0001/../../elsewhere/x"
+    elif failure == "no-files":
+        manifest["file_count"] = 0
+    else:
+        part = next(output.glob("*.part-*"))
+        part.write_bytes(b"plain bytes")
+        manifest["parts"][0].update(size=11, sha256=hashlib.sha256(b"plain bytes").hexdigest())
+    source.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        engine_payload.prepare_for_target(
+            "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+        )
+
+
+# Review finding 9: files that change during signing are never signed as checked.
+def test_platform_tool_signs_only_copies_of_what_it_checked(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    _, original = mac_feed(tmp_path)
+    later = downloads / "linux-x86_64-cpu" / "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage"
+    signed: list[Path] = []
+
+    def swapping(path: Path) -> None:
+        signed.append(path)
+        if len(signed) == 1:
+            later.write_bytes(b"replaced while the first file was being signed")
+        fake_sign(path)
+
+    with pytest.raises(ValueError, match="changed after it was checked"):
+        update_signing.add_platforms(
+            downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=swapping
+        )
+    assert later.name not in [path.name for path in signed]
+    assert all(downloads not in path.parents for path in signed)
+    assert json.loads(feed_path.read_text()) == original
+
+
+def test_platform_tool_needs_the_mac_feed_of_the_same_release(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    with pytest.raises(ValueError, match="release_macos_beta.sh"):
+        update_signing.add_platforms(
+            downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+        )
+    mac_feed(tmp_path, "1.2.2-beta")
+    with pytest.raises(ValueError, match="version"):
+        update_signing.add_platforms(
+            downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+        )
+
+
+def feed_with_every_target(tmp_path: Path) -> tuple[Path, list[Path]]:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    mac, _ = mac_feed(tmp_path)
+    update_signing.add_platforms(
+        downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+    )
+    return feed_path, [downloads, mac]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing-target",
+        "unknown-target",
+        "backend",
+        "engine-id",
+        "no-engine",
+        "part-sum",
+        "oversized-file",
+        "http",
+        "unsigned",
+        "statement",
+        "unsigned-statement",
+        "other-key",
+        "other-bytes",
+    ],
+)
+def test_feed_contract_enforces_every_edition(tmp_path: Path, failure: str) -> None:
+    feed_path, folders = feed_with_every_target(tmp_path)
+    feed = json.loads(feed_path.read_text())
+    platforms = feed["platforms"]
+    cpu = platforms["windows-x86_64-cpu-native"]
+    rocm = platforms["linux-x86_64-rocm-native"]
+    package = folders[0] / "windows-x86_64-cpu" / "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.exe"
+    if failure == "missing-target":
+        del platforms["linux-x86_64-cuda-native"]
+    elif failure == "unknown-target":
+        platforms["linux-x86_64-xpu-native"] = cpu
+    elif failure == "backend":
+        cpu["localsr"]["backend"] = "cuda"
+    elif failure == "engine-id":
+        cpu["localsr"]["engine_id"] = cpu["localsr"]["engine"]["id"] = "windows-x86_64-cpu-old"
+    elif failure == "no-engine":
+        del cpu["localsr"]["engine"]
+    elif failure == "part-sum":
+        rocm["localsr"]["parts"][0]["size"] += 1
+    elif failure == "oversized-file":
+        cpu["localsr"]["size"] = cpu["localsr"]["unpacked_size"] = 3 * 1024**3
+    elif failure == "http":
+        cpu["url"] = cpu["url"].replace("https://", "http://")
+    elif failure == "unsigned":
+        cpu["signature"] = ""
+    elif failure == "statement":
+        # A relabelled package: well-formed, but not what the signed statement says.
+        cpu["localsr"]["sha256"] = "f" * 64
+    elif failure == "unsigned-statement":
+        cpu["localsr"]["statement_signature"] = OTHER_KEY.signature(
+            base64.b64decode(cpu["localsr"]["statement"])
+        )
+    elif failure == "other-key":
+        cpu["signature"] = OTHER_KEY.signature(package.read_bytes(), package.name)
+    else:
+        package.write_bytes(b"other bytes of the same length".ljust(package.stat().st_size))
+    match = {
+        "missing-target": "missing",
+        "unknown-target": "unknown",
+        "backend": "cpu native build",
+        "engine-id": "engine "
+        + release_targets.engine_id(release_targets.target("windows-x86_64-cpu"), COMMIT),
+        "no-engine": "no engine package",
+        "part-sum": "add up",
+        "oversized-file": "2 GiB",
+        "http": "HTTPS",
+        "unsigned": "signature",
+        "statement": "statement does not match",
+        "unsigned-statement": "signed release statement from the updater key",
+        "other-key": "no valid signature from the updater key",
+        "other-bytes": "does not match its feed entry",
+    }[failure]
+    feed_path.write_text(json.dumps(feed))
+    with pytest.raises(ValueError, match=match):
+        verify_feed(feed_path, folders)
+
+
+def test_feed_contract_cli(tmp_path: Path) -> None:
+    feed_path, folders = feed_with_every_target(tmp_path)
+    key = tmp_path / "test.pub"
+    key.write_text(TEST_KEY.public_key + "\n")
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/verify_prepared_release.py"),
+        "--feed",
+        str(feed_path),
+        "--commit",
+        COMMIT,
+        "--public-key",
+        str(key),
+        *[argument for folder in folders for argument in ("--files", str(folder))],
+        "--version",
+        "1.2.3-beta",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "7 update targets and their signatures" in result.stdout
+    for changed in (command[:-1] + ["1.2.4-beta"], command[:4] + command[-2:]):
+        result = subprocess.run(changed, capture_output=True, text=True, check=False)
+        assert result.returncode != 0
+
+
+@pytest.mark.parametrize("failure", ["duplicate", "case-collision", "crc", "trailer"])
+def test_round2_signer_rejects_uninstallable_archives(tmp_path: Path, failure: str) -> None:
+    import gzip
+    import io
+    import tarfile
+
+    tar = io.BytesIO()
+    names = [
+        "localsr-worker",
+        "LOCALSR-WORKER" if failure == "case-collision" else "localsr-worker",
+    ]
+    if failure in {"crc", "trailer"}:
+        names = names[:1]
+    with tarfile.open(fileobj=tar, mode="w") as archive:
+        for name in names:
+            info = tarfile.TarInfo(name)
+            info.size = 3
+            archive.addfile(info, io.BytesIO(b"abc"))
+    data = gzip.compress(tar.getvalue(), mtime=0)
+    if failure == "crc":
+        data = data[:-8] + bytes([data[-8] ^ 1]) + data[-7:]
+    elif failure == "trailer":
+        data = data[:-8]
+    name = "engine.part-0001"
+    (tmp_path / name).write_bytes(data)
+    manifest = {
+        "schema_version": 1,
+        "format": "tar.gz.parts",
+        "backend": "CPU",
+        "file_count": len(names),
+        "unpacked_bytes": 3 * len(names),
+        "parts": [
+            {"filename": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        ],
+    }
+    with pytest.raises(ValueError):
+        engine_payload.validate_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
+
+
+def test_round2_identity_key_cannot_forge_minisign() -> None:
+    identity = b"\x01" + b"\x00" * 31
+    raw = identity + b"\x00" * 32
+    public = base64.b64encode(
+        b"untrusted comment: weak key\n" + base64.b64encode(b"Edlocalsr1" + identity)
+    ).decode()
+    signature = base64.b64encode(
+        b"untrusted comment: signature\n"
+        + base64.b64encode(b"EDlocalsr1" + raw)
+        + b"\ntrusted comment: forged\n"
+        + base64.b64encode(raw)
+    ).decode()
+    for data in [b"arbitrary", b"another message"]:
+        assert not verify_prepared.minisign_verify(public, signature, [data])
+
+
+def test_round2_statement_authenticates_install_space() -> None:
+    contract = {
+        "channel": "beta",
+        "backend": "cpu",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": "engine",
+        "sha256": "a" * 64,
+        "unpacked_size": 1234,
+    }
+    statement = json.loads(update_signing.release_statement("1.2.3", "target", contract))
+    assert statement["unpacked_size"] == 1234
+
+
+@pytest.mark.parametrize("target_id", ["linux-x86_64-cpu", "macos-arm64-mps"])
+def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
+    tmp_path: Path, target_id: str
+) -> None:
+    target = release_targets.target(target_id)
+    for directory in ["src/localsr", "packaging", "scripts", "requirements/locks"]:
+        shutil.copytree(ROOT / directory, tmp_path / directory, dirs_exist_ok=True)
+    shutil.copyfile(
+        ROOT / "requirements/build-tools.txt", tmp_path / "requirements/build-tools.txt"
+    )
+    shutil.copyfile(ROOT / "uv.lock", tmp_path / "uv.lock")
+    shutil.copyfile(ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    before = release_targets.engine_id(target, COMMIT, root=tmp_path)
+    (tmp_path / "desktop").mkdir()
+    (tmp_path / "desktop/app.ts").write_text("app changed")
+    init = tmp_path / "src/localsr/__init__.py"
+    init.write_text(init.read_text().replace("0.3.5-beta", "0.3.7-beta"))
+    assert release_targets.engine_id(target, "f" * 40, root=tmp_path) == before
+    # Release tooling is not engine content: editing it must not force a new engine.
+    tooling = tmp_path / "scripts/release_targets.py"
+    tooling.write_text(tooling.read_text() + "\n# release tooling edit\n")
+    assert release_targets.engine_id(target, COMMIT, root=tmp_path) == before
+    recipe = [
+        "src/localsr/worker/server.py",
+        "packaging/tauri_worker.spec",
+        "src/localsr/__init__.py",
+    ]
+    recipe.append(
+        "requirements/locks/linux-x86_64-cpu.txt"
+        if target_id.startswith("linux")
+        else "packaging/macos/media-helper/main.swift"
+    )
+    for name in recipe:
+        source = tmp_path / name
+        original = source.read_text()
+        source.write_text(original + "\nENGINE_CHANGED = True\n")
+        assert release_targets.engine_id(target, COMMIT, root=tmp_path) != before, name
+        source.write_text(original)

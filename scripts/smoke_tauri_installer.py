@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from release_targets import expected_update_identity, target
+
 PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
@@ -391,6 +393,19 @@ def validate_report(report: Path) -> dict[str, object]:
     return payload
 
 
+def check_update_identity(payload: dict[str, object], target_id: str, commit: str) -> None:
+    """The installed host must carry its edition's updater key, feed target and engine id.
+
+    Without them the build never checks its feed and shows no update switches.
+    """
+    expected = expected_update_identity(target(target_id), commit)
+    if payload.get("update") != expected:
+        raise RuntimeError(
+            f"installed host has the wrong update identity: {payload.get('update')} "
+            f"instead of {expected}"
+        )
+
+
 def resolve_artifact(pattern: str) -> Path:
     matches = [Path(value).resolve() for value in glob.glob(pattern)]
     if len(matches) != 1:
@@ -449,10 +464,20 @@ def main() -> int:
     parser.add_argument(
         "--backend", choices=("CPU", "CUDA", "DirectML", "Intel-XPU", "AMD-ROCm", "MPS")
     )
+    parser.add_argument(
+        "--update-target",
+        metavar="TARGET",
+        help="Release target whose update identity the installed host must report",
+    )
+    parser.add_argument("--commit", help="Release commit for --update-target")
     args = parser.parse_args()
+    if args.update_target and not args.commit:
+        parser.error("--update-target requires --commit")
     if args.backend:
         os.environ["LOCALSR_SMOKE_BACKEND"] = args.backend
-    smoke(resolve_artifact(args.artifact_glob), args.report, args.timeout)
+    payload = smoke(resolve_artifact(args.artifact_glob), args.report, args.timeout)
+    if args.update_target:
+        check_update_identity(payload, args.update_target, args.commit)
     return 0
 
 
