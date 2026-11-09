@@ -246,7 +246,7 @@ def test_hosted_pr_workflows_run_in_parallel_on_fresh_runners() -> None:
         assert "--system-site-packages" not in workflow
 
     assert "needs:" not in ci
-    assert ci.count("runs-on: ubuntu-24.04") == 2
+    assert ci.count("runs-on: ubuntu-24.04") == 3
     assert "runs-on: windows-2022" in ci
     assert "runs-on: macos-latest" in ci
     assert preview.count("needs:") == 1
