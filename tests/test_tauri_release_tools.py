@@ -1225,6 +1225,11 @@ def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
         "src/localsr/worker/server.py",
         "packaging/tauri_worker.spec",
         "src/localsr/__init__.py",
+        # Scripts the worker build runs choose the native executables it bundles.
+        "scripts/build_edit_runtime.py",
+        "scripts/build_media_helper.py",
+        "scripts/thin_macho_binaries.py",
+        "scripts/build_source_bundle.py",
     ]
     recipe.append(
         "requirements/locks/linux-x86_64-cpu.txt"
