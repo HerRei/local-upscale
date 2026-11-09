@@ -1,9 +1,8 @@
 import base64
 import io
+import threading
 
 from PIL import Image
-
-import threading
 
 from localsr.worker.compare_regions import RegionCache, RegionService
 
