@@ -700,8 +700,9 @@ mod tests {
             serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
         for entry in catalog["models"].as_array().unwrap() {
             let model: CatalogModel = serde_json::from_value(entry.clone()).unwrap();
-            let slow = model.model_id.contains("dat2");
-            assert_eq!(model.preset_eligible, !slow, "{}", model.model_id);
+            let excluded =
+                model.model_id.contains("dat2") || model.model_id == "realplksr_hfa2k_anime_x4";
+            assert_eq!(model.preset_eligible, !excluded, "{}", model.model_id);
             let mut older = entry.clone();
             older.as_object_mut().unwrap().remove("preset_eligible");
             let older: CatalogModel = serde_json::from_value(older).unwrap();
