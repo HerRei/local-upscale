@@ -1,0 +1,24 @@
+{
+  "_comment": "Disposable key; the private key was discarded. A package, an engine package and the release statement that binds them, each signed.",
+  "public_key": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNENDcyNzRCRTk2QkRENjEKUldSaDNXdnBTeWRIUFNtcTJQNnVETWovVFZpbGNkcVNQeHBXWjUzMitvTE9heEJla041N0ZBQVoK",
+  "package": {
+    "data": "LocalSR test package\n",
+    "sha256": "196a8ac8c520c84eed618f725f1d620cea07d07fafa49f14178290344c2a8c24",
+    "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaDNXdnBTeWRIUFVkUlNXZ1F4Yy80ay9WVzZndHdSK1d6Qkw5cEwwSWpuUUUwOVFmeEEwbWQ1eE9wTXNUMGl4UXdOanFhRlRockk4V085N2FCVGhPOERIWHBKU3A3a2d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1MDYzCWZpbGU6cGFja2FnZQpCUUpRNFJQdXJuRXBneW4wejRoVFIwL1pNSm4rb3FTc1BjZWdQUC9ZQWJXTGU1STRTUGFEcWpkM2prVlNPTWFyUkpmUUkzSm0rRG9rTDRIRkgxY3JEZz09Cg=="
+  },
+  "engine": {
+    "manifest": "{\n  \"backend\": \"ROCM\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"schema_version\": 1,\n  \"unpacked_bytes\": 20\n}\n",
+    "manifest_sha256": "16525769af08c0fb0920a45a5ce2d4f4b10658b7b6a4864c32d0fcbda229a616",
+    "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaDNXdnBTeWRIUFllblY2NlpGOHVuVUQ0eXZsck5HNFN4eFZxZm84Nlo3aFhwMGJDeFp6cVdrc1BkT3NiU2owdE9JZFJSdldUK1l3TDAzdVZxS2hjZDk1WDhMZ0NNcVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1MDYzCWZpbGU6ZW5naW5lLXBheWxvYWQuanNvbgpvWnpGMko5REx6cVp2U09OcFJVQWF1WENFMmVONWhYaDBJTm55Vkp6OHlGR2dqQlNuWXlwa0M4MWFzemZyWTl4VmF3cjVLbTZod1hYSlp2WUIra1JCUT09Cg==",
+    "parts": [
+      {
+        "name": "LocalSR-test.engine.tar.gz.part-0001",
+        "data": "H4sIAAAAAAAE/+3TSw7CIBCAYdaeohfQ0BbxPFWJNqIkUNPrS23sgoW7WTT9ZwMMCY9vMj5cOp/ifgzx4aISCZ3DGqOmMUc55pT95eb9Wtu2UZUWeU1x6DsNXczXF+mtLCXrvhXDNf/zGa7OH879S/ATU1P/7f+66H99OraG/hcsyXL0t/7V6PrbfUi7Jc0EAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAYCUCHzY9GVIAKAAA",
+        "sha256": "5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418",
+        "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaDNXdnBTeWRIUGZKeC8zTGR1dWR4bXVZaVZvUVN3akpBQ2RaanpNUlhTckJZMStIc3M0QTUzMVZJcHk3OWsxUmpNdHowSmtFZFFnaEsrczVSWVB0TExwcEh5TWl1eEE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1MDYzCWZpbGU6TG9jYWxTUi10ZXN0LmVuZ2luZS50YXIuZ3oucGFydC0wMDAxCk8rY3pQNHMzY2l2bVVVaTRpeTVGOTRiM2hKWEZPbytJbWtndUtNbVZ5VHVZVGpOdFZjd0laOC9LWloxUWRHL2hZa2tVQ1ZwWG5udnF2azdoNEU4aEJnPT0K"
+      }
+    ]
+  },
+  "statement": "eyJiYWNrZW5kIjoicm9jbSIsImNoYW5uZWwiOiJiZXRhIiwiZW5naW5lX2lkIjoibGludXgteDg2XzY0LXJvY20tMDEyMzQ1Njc4OWFiIiwiZW5naW5lX21hbmlmZXN0X3NoYTI1NiI6IjE2NTI1NzY5YWYwOGMwZmIwOTIwYTQ1YTVjZTJkNGY0YjEwNjU4YjdiNmE0ODY0YzMyZDBmY2JkYTIyOWE2MTYiLCJraW5kIjoibmF0aXZlIiwicHJvdG9jb2wiOjEsInNjaGVtYV92ZXJzaW9uIjoxLCJzaGEyNTYiOiIxOTZhOGFjOGM1MjBjODRlZWQ2MThmNzI1ZjFkNjIwY2VhMDdkMDdmYWZhNDlmMTQxNzgyOTAzNDRjMmE4YzI0IiwidGFyZ2V0IjoibGludXgteDg2XzY0LXJvY20tbmF0aXZlIiwidmVyc2lvbiI6IjAuMy43LWJldGEifQ==",
+  "statement_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaDNXdnBTeWRIUGFjSzcwNGNNc09ZTk9vRjQrRWRENEhxRFMrSG42Ris0VFlCVXdObUpBRXlrcW92akorWGxXaFczZW90M1dueXNvV0RXeXF6U3d0YUZPOUtZLzM0a0FnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1MDYzCWZpbGU6c3RhdGVtZW50Lmpzb24KSEcrdWhrWTJvRVpDa0N4SWJhc3p4M3B0OTNkb0IrVmRCZmJlMFJnYUh4M2lTU0ttNHRhd29xY2RMTSszczlvYkFUQ2RBTklBRndicFFjOWljVWtCQ0E9PQo="
+}

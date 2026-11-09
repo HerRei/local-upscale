@@ -70,8 +70,14 @@ impl Read for PartsReader {
 }
 
 pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::Result<()> {
-    let manifest: Manifest = serde_json::from_slice(&fs::read(manifest_path)?)
-        .map_err(|error| invalid(error.to_string()))?;
+    install_manifest(&fs::read(manifest_path)?, source, destination)
+}
+
+/// Install from manifest bytes the caller has verified, so a manifest file replaced
+/// after verification is never read.
+pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> io::Result<()> {
+    let manifest: Manifest =
+        serde_json::from_slice(manifest).map_err(|error| invalid(error.to_string()))?;
     if manifest.schema_version != 1
         || manifest.format != "tar.gz.parts"
         // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
