@@ -750,7 +750,7 @@ class InferenceEngine:
         out_array = new_output()
 
         current_tile_size = tile_size
-        min_tile_size = 64 if safe_memory else 4
+        min_tile_size = min(tile_size, 64) if safe_memory else 4
         frame_shape = getattr(model, "whole_frame_shape", None)
         whole = bool(whole_frame and callable(frame_shape) and frame_shape(h, w, halo))
         if whole:
@@ -888,7 +888,7 @@ class InferenceEngine:
 
         current_tile_size = tile_size
 
-        min_tile_size = 64 if safe_memory else 4
+        min_tile_size = min(tile_size, 64) if safe_memory else 4
         try:
             while current_tile_size >= min_tile_size:
                 try:
