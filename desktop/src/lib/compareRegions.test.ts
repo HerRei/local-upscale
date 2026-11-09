@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { visibleRegion } from './compareRegions';
+import { mapRegion, visibleRegion } from './compareRegions';
 
 const base = {
   cell: { width: 800, height: 600 },
@@ -42,5 +42,14 @@ describe('visibleRegion', () => {
     expect(small && large).toBeTruthy();
     expect(large!.x).toBe(small!.x * 4);
     expect(large!.width).toBe(small!.width * 4);
+  });
+
+  it('keeps a mapped edge crop inside the smaller image', () => {
+    const region = { x: 7, y: 7, width: 1, height: 1, target_width: 1, target_height: 1 };
+    const mapped = mapRegion(region, { width: 8, height: 8 }, { width: 2, height: 2 });
+    expect(mapped.x + mapped.width).toBeLessThanOrEqual(2);
+    expect(mapped.y + mapped.height).toBeLessThanOrEqual(2);
+    expect(mapped.x).toBeLessThan(2);
+    expect(mapped.y).toBeLessThan(2);
   });
 });
