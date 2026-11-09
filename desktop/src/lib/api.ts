@@ -185,6 +185,11 @@ export async function openUserGuide(): Promise<void> {
   if (isTauri()) await invoke('open_user_guide');
 }
 
+/** LocalSR's download page, for the editions that use a GPU this one cannot (CUDA, DirectML, ROCm). */
+export async function openDownloadPage(): Promise<void> {
+  if (isTauri()) await invoke('open_download_page');
+}
+
 /** Open ffmpeg.org's download page; installing FFmpeg stays the user's own action. */
 export async function openFfmpegDownloadPage(): Promise<void> {
   if (isTauri()) await invoke('open_ffmpeg_download_page');
