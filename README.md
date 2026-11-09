@@ -109,7 +109,7 @@ The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`
   and still differ from the real scene, especially at 4×.
 - Video is upscaled one frame at a time, so fine detail can flicker.
 - Large images and long videos can take hours. Try a small one first.
-- I test the Mac build the most, and only the Mac build updates itself.
+- I test the Mac build the most.
 - On Windows and Linux, phone videos (H.264, HEVC, AAC) need an FFmpeg you
   install yourself. On the Mac they open through the system.
 
@@ -118,14 +118,15 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-There is no account, and your images and videos are never uploaded. On the Mac,
-the app reads its update feed on GitHub Pages at launch (for the beta,
+There is no account, and your images and videos are never uploaded. The app
+reads its update feed on GitHub Pages at launch (for the beta,
 `herrei.github.io/localsr/updates/beta.json`). After a check it
 sends one anonymous count with the app version, platform and channel to my Mac
 mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both are
-on by default, and you can turn off either one in the LocalSR menu (**Check for
-Updates at Launch**, **Send Anonymous Update Count**) or in the Software Update
-dialog; **Check for Updates…** still works when you ask.
+on by default, and you can turn off either one in the LocalSR menu on the Mac or
+the Help menu on Windows and Linux (**Check for Updates at Launch**, **Send
+Anonymous Update Count**) or in the Software Update dialog; **Check for Updates…**
+still works when you ask. The Microsoft Store edition does neither.
 
 Updates come from GitHub Releases, and the app checks their signature before it
 replaces anything. Models download from their authors on GitHub or Hugging Face

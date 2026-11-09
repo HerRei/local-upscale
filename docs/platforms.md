@@ -27,8 +27,10 @@ The Windows and Linux packages of v0.3.0-beta were built on GitHub-hosted runner
 allowlisted LGPL media runtime, passed the codec policy and an automated smoke test
 of the installed app, and ship with their corresponding-source bundles. The Windows
 CPU installer of v0.2.0-beta was also installed and used in a Windows 11 virtual
-machine; later versions passed the same automated build and smoke tests. None of them
-update themselves yet. The CUDA and DirectML packages are published **untested**: they pass
+machine; later versions passed the same automated build and smoke tests. They update
+themselves in the app like the Mac build ([Updates](updates.md)); that path is covered
+by the automated tests but has not yet been tried on a real Windows or Linux
+installation. The CUDA and DirectML packages are published **untested**: they pass
 the same automated checks on runners without a GPU, but CUDA has never run on an
 NVIDIA GPU and DirectML has not produced results within the accuracy tolerance on
 one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in parts.
