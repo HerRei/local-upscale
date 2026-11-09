@@ -50,6 +50,8 @@ pub fn run() -> i32 {
         "mode": "headless-installed-host",
         "managed_by_store": crate::distribution::managed_by_store(),
         "package_identity": crate::distribution::package_identity(),
+        // Release CI checks that the package carries its updater key and feed target.
+        "update": crate::updates::identity_report(),
         "worker": worker,
         "worker_path": worker_path.ok().map(|path| path.to_string_lossy().into_owned()),
         "passed": passed,

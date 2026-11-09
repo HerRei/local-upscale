@@ -37,3 +37,15 @@ it('checks the feed at launch only while the setting is on', async () => {
   await startUpdateWatcher(true);
   expect(api.checkUpdate).toHaveBeenCalledWith('beta');
 });
+
+it.each([
+  'windows-x86_64-cuda-native',
+  'windows-x86_64-directml-native',
+  'linux-x86_64-rocm-native',
+])('a %s build follows the launch-check setting as the Mac build does', async (target) => {
+  api.updateStatus.mockResolvedValue({ ...(await api.updateStatus()), target });
+  await startUpdateWatcher(false);
+  expect(api.checkUpdate).not.toHaveBeenCalled();
+  await startUpdateWatcher(true);
+  expect(api.checkUpdate).toHaveBeenCalledWith('beta');
+});
