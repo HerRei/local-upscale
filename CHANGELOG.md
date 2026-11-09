@@ -7,6 +7,8 @@
 - The model plan shows how many compatible models remain in the library and opens
   the library filtered to the current task. Model details identify each author
   beside its source link and link the catalog license name.
+- Add fixed-seed property tests for video timing, image colour handling, tiling,
+  Compare geometry and signed update validation.
 
 ### Changed
 
@@ -22,6 +24,7 @@
   longer leaves a staged or backup file (or a stale journal temporary), a killed
   engine package install restores the previous engine and removes its half-unpacked
   folder, and the Windows install marker leaves no temporary file.
+
 
 ## [0.3.7-beta] - Unreleased
 

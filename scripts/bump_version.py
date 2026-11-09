@@ -157,17 +157,26 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
         f"Current release: **v{current}**; release candidate: **v{new}**",
     )
     set_readme_notice(root, candidate_notice(current, new))
-    changelog = root / "CHANGELOG.md"
+    changelog_path = root / "CHANGELOG.md"
+    changelog = changelog_path.read_text(encoding="utf-8")
     heading = f"## [{new}] - Unreleased"
-    changelog_text = changelog.read_text(encoding="utf-8")
-    if heading in changelog_text:
-        replace(root, "CHANGELOG.md", f"{heading}\n\n", f"{heading}\n\n{notes.strip()}\n\n")
+    if heading in changelog:
+        if changelog.count(heading) != 1:
+            raise ValueError(f"CHANGELOG.md: expected one {heading!r} heading")
+        start = changelog.index(heading)
+        next_section = changelog.find("\n## ", start + len(heading))
+        if next_section < 0:
+            next_section = len(changelog)
+        section = changelog[start:next_section].rstrip()
+        remainder = changelog[next_section:].lstrip("\n")
+        changelog = f"{changelog[:start]}{section}\n\n{notes.strip()}\n\n{remainder}"
+        changelog_path.write_text(changelog, encoding="utf-8")
     else:
         sub(
             root,
             "CHANGELOG.md",
             r"\A# Changelog\n\n",
-            f"# Changelog\n\n{heading}\n\n{notes.strip()}\n\n",
+            f"# Changelog\n\n## [{new}] - Unreleased\n\n{notes.strip()}\n\n",
         )
     (root / f"docs/releases/v{new}.md").write_text(
         f"# LocalSR v{new}\n\n"
