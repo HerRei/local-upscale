@@ -670,6 +670,7 @@ mod tests {
     use super::*;
     /// The folders of one swap: the executable's, and the profile's with the journal; the
     /// same folder, or two (a swap then takes two locks).
+    #[cfg(unix)]
     struct Swap {
         _root: tempfile::TempDir,
         folders: Vec<PathBuf>,
@@ -677,6 +678,7 @@ mod tests {
         journal: PathBuf,
     }
 
+    #[cfg(unix)]
     impl Swap {
         fn new(separate: bool) -> Swap {
             let root = tempfile::tempdir().unwrap();
@@ -727,6 +729,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn swap(current: &Path, journal: &Path, accept: bool) -> AppResult<()> {
         replace_executable(
             current,
@@ -747,6 +750,7 @@ mod tests {
 
     /// After a failure or a crash: the next start's recovery leaves exactly one working
     /// executable at the original path, no journal and no staging or backup file.
+    #[cfg(unix)]
     fn assert_recovered(swap: &Swap, expected: &[u8], why: &str) {
         fault::recover_swap(&swap.journal)
             .unwrap_or_else(|e| panic!("{why}: recovery failed: {e}"));
@@ -759,6 +763,7 @@ mod tests {
 
     /// Every combination the swap runs in: the journal beside the executable or in
     /// another folder, a hard-linked or a copied backup, an accepted or a refused update.
+    #[cfg(unix)]
     fn layouts() -> Vec<(bool, bool, bool)> {
         let mut all = Vec::new();
         for separate in [false, true] {
@@ -772,6 +777,7 @@ mod tests {
     }
 
     /// A crashed swap, left as a killed process leaves it: crashed at step `index`.
+    #[cfg(unix)]
     fn crashed_swap(separate: bool, accept: bool, index: usize) -> Swap {
         let folder = Swap::new(separate);
         fault::arm(Some((index, fault::Mode::Crash)));
@@ -884,6 +890,7 @@ mod tests {
     }
 
     /// Which of the synced paths came after `after` steps, in order.
+    #[cfg(unix)]
     fn synced_after(after: usize) -> Vec<PathBuf> {
         fault::synced()
             .into_iter()
