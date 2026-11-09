@@ -474,3 +474,27 @@ def test_heic_export_preserves_colour_metadata_and_quality(tmp_path):
             error = np.abs(np.asarray(decoded.convert("RGB"), dtype=int) - pixels.astype(int))
             assert error.mean() < 55
     assert sizes[1] > sizes[0]
+
+
+def test_heic_export_needs_macos(tmp_path, monkeypatch):
+    monkeypatch.setattr("localsr.core.image_io.sys.platform", "linux")
+    path = tmp_path / "out.heic"
+    with pytest.raises(ValueError, match="needs macOS"):
+        ImageManager().save_from_writer(
+            np.zeros((3, 8, 8), dtype=np.uint8), str(path), "heic", 90, True, None, {}, 1
+        )
+    assert not path.exists() and not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is encoded by macOS")
+def test_heic_export_keeps_transparency(tmp_path):
+    rng = np.random.default_rng(95)
+    pixels = rng.integers(0, 256, (3, 64, 64), dtype=np.uint8)
+    manager = ImageManager()
+    manager.alpha_channel = Image.fromarray(
+        np.repeat(np.array([0, 255], dtype=np.uint8), 32)[:, None].repeat(64, axis=1)
+    )
+    path = tmp_path / "alpha.heic"
+    manager.save_from_writer(pixels, str(path), "heic", 90, True, None, {}, 1)
+    alpha = np.asarray(open_image(path).convert("RGBA"))[..., 3]
+    assert alpha[:24].max() <= 8 and alpha[40:].min() >= 247

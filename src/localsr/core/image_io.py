@@ -1,6 +1,7 @@
 import io
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import warnings
@@ -97,6 +98,45 @@ def _decode_with_macos(path: str) -> Image.Image:
             image.info["icc_profile"] = icc
         image.getexif().update(exif)
     return image
+
+
+def _encode_with_macos(image: Image.Image, destination: Path, quality: int, **kwargs: Any) -> None:
+    """Write HEIC with macOS (ImageIO, through /usr/bin/sips), the mirror of the decoder.
+
+    LocalSR ships no HEVC encoder: Apple licenses its own for apps that use the system
+    API. Pillow writes a lossless TIFF that carries the colour profile, the allow-listed
+    EXIF tags and any transparency; sips turns it into HEIC at the chosen quality.
+    """
+    if sys.platform != "darwin":
+        raise ValueError("HEIC output needs macOS, which provides the HEIC encoder.")
+    with tempfile.TemporaryDirectory(prefix="localsr-encode-", dir=destination.parent) as work:
+        source = Path(work) / "source.tiff"
+        image.save(source, format="TIFF", compression="tiff_deflate", **kwargs)
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/bin/sips",
+                    "-s",
+                    "format",
+                    "heic",
+                    "-s",
+                    "formatOptions",
+                    str(max(1, min(100, int(quality)))),
+                    str(source),
+                    "--out",
+                    str(destination),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise OSError(f"macOS could not write the HEIC image: {error}") from error
+    if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise OSError(
+            "macOS could not write the HEIC image" + (f": {detail[-1][:200]}" if detail else ".")
+        )
 
 
 def open_image(path: str | Path) -> Image.Image:
@@ -336,7 +376,7 @@ class ImageManager:
             luma = out_img.convert("L")
             out_img = Image.merge("RGB", (luma, luma, luma))
 
-        if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp"]:
+        if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp", "heic"]:
             new_size = (
                 self.alpha_channel.width * final_scale,
                 self.alpha_channel.height * final_scale,
@@ -384,6 +424,8 @@ class ImageManager:
                 out_img.save(tmp_path, format="TIFF", compression="tiff_deflate", **kwargs)
             elif fmt == "webp":
                 out_img.save(tmp_path, format="WEBP", quality=quality, method=6, **kwargs)
+            elif fmt == "heic":
+                _encode_with_macos(out_img, tmp_path, quality, **kwargs)
             else:
                 out_img.save(tmp_path, format=fmt, **kwargs)
 
