@@ -1006,12 +1006,30 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             lock(&state.database)?
                 .fail_media_probe(&string(data, "media_path"), &string(data, "error_message"))?;
         }
+        "region_ready" | "region_failed" => {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply_region(
+                &database,
+                &mut runtime.compare,
+                data,
+                envelope.message_type == "region_failed",
+            )?;
+        }
         "preview_ready" => {
+            {
+                let database = lock(&state.database)?;
+                let mut runtime = lock(&state.runtime)?;
+                crate::compare::apply(&database, &mut runtime.compare, data, false)?;
+            }
+            apply_pair_preview(&mut *lock(&state.runtime)?, data, false);
             let path = string(data, "image_path");
             let encoded = string(data, "jpeg_base64");
             if !encoded.is_empty() {
                 let mut runtime = lock(&state.runtime)?;
-                if runtime.comparison_output_path == path {
+                // A selection without pair slots (the fallback when the
+                // result history is unavailable) is matched by its path.
+                if string(data, "slot").is_empty() && runtime.comparison_output_path == path {
                     runtime.comparison_preview_data_url =
                         format!("data:image/jpeg;base64,{encoded}");
                     runtime.comparison_error.clear();
@@ -1022,8 +1040,16 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
         }
         "preview_failed" => {
+            {
+                let database = lock(&state.database)?;
+                let mut runtime = lock(&state.runtime)?;
+                crate::compare::apply(&database, &mut runtime.compare, data, true)?;
+            }
             let mut runtime = lock(&state.runtime)?;
-            if runtime.comparison_output_path == string(data, "image_path") {
+            apply_pair_preview(&mut runtime, data, true);
+            if string(data, "slot").is_empty()
+                && runtime.comparison_output_path == string(data, "image_path")
+            {
                 runtime.comparison_preview_data_url.clear();
                 runtime.comparison_error = string(data, "error_message");
             }
@@ -1449,6 +1475,45 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
     Ok(())
 }
 
+/// A side of the selected pair takes an answer only when the slot, the request
+/// generation, the target and the decoded file all match. Late answers for an
+/// earlier pair, another media or another side are dropped, cache hits too.
+fn apply_pair_preview(runtime: &mut RuntimeStatus, data: &Value, failed: bool) {
+    let pair = &mut runtime.comparison_pair;
+    if data["generation"].as_u64() != Some(pair.generation) || pair.generation == 0 {
+        return;
+    }
+    let slot = match data["slot"].as_str() {
+        Some("showing") => &mut pair.showing,
+        Some("against") => &mut pair.against,
+        _ => return,
+    };
+    if slot.target_id == "original"
+        || slot.target_id != string(data, "target_id")
+        || slot.output_path != string(data, "image_path")
+    {
+        return;
+    }
+    if failed {
+        slot.preview_data_url.clear();
+        slot.error = string(data, "error_message");
+        if slot.error.is_empty() {
+            slot.error = "The preview could not be decoded. The saved file is unchanged.".into();
+        }
+        return;
+    }
+    let encoded = string(data, "jpeg_base64");
+    if encoded.is_empty() {
+        return;
+    }
+    slot.preview_data_url = format!("data:image/jpeg;base64,{encoded}");
+    slot.error.clear();
+    slot.width = u32::try_from(integer(data, "width")).unwrap_or_default();
+    slot.height = u32::try_from(integer(data, "height")).unwrap_or_default();
+    slot.preview_width = u32::try_from(integer(data, "preview_width")).unwrap_or_default();
+    slot.preview_height = u32::try_from(integer(data, "preview_height")).unwrap_or_default();
+}
+
 /// A media probe carries the user's optional FFmpeg for formats LocalSR omits.
 pub(crate) fn media_probe_request(state: &AppState, path: &str) -> serde_json::Value {
     let external = state
@@ -1713,6 +1778,11 @@ fn should_emit_state_changed(message_type: &str) -> bool {
     )
 }
 
+/// One bound for every result preview, the automatic one after a job and both
+/// sides of a comparison, so a finished result is decoded once and then served
+/// from the decoder's cache.
+pub const RESULT_PREVIEW_MAX_DIMENSION: u32 = 2048;
+
 /// A completed comparison must come from the full output file, never from the
 /// last progressive tile or video frame. Keep this request in the native host
 /// so it cannot race the completion state applied above.
@@ -1724,7 +1794,7 @@ fn completion_preview_request(envelope: &WorkerEnvelope) -> Option<Value> {
     match envelope.message_type.as_str() {
         "job_completed" => Some(json!({
             "type": "preview_request",
-            "data": {"image_path": output_path, "max_dimension": 2048}
+            "data": {"image_path": output_path, "max_dimension": RESULT_PREVIEW_MAX_DIMENSION}
         })),
         "video_job_completed" => Some(json!({
             "type": "media_probe_request",
@@ -1996,6 +2066,191 @@ mod tests {
         assert_eq!(runtime.comparison_media_id, "second");
         assert!(runtime.result_preview_data_url.is_empty());
         assert_eq!(runtime.active_job_id, "running-third");
+    }
+
+    #[test]
+    fn compare_answers_and_snapshots_revalidate_the_selected_job() {
+        use crate::compare::{ComparePick, CompareStatus};
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(directory.path());
+        let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        std::fs::write(&input, "input").unwrap();
+        std::fs::write(&output, "output").unwrap();
+        let request = {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("a", input.to_str().unwrap(), "a", "image")
+                .unwrap();
+            db.insert_job("job", "a", "{}").unwrap();
+            db.finish_job("job", "completed", output.to_str().unwrap(), "")
+                .unwrap();
+            let mut runtime = lock(&state.runtime).unwrap();
+            crate::compare::plan(
+                &db,
+                &mut runtime.compare,
+                &[ComparePick::Output {
+                    media_id: "a".into(),
+                    job_id: "job".into(),
+                }],
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let mut data = request["data"].clone();
+        data["jpeg_base64"] = json!("decoded");
+        apply_worker_envelope(
+            &state,
+            &WorkerEnvelope {
+                message_type: "preview_ready".into(),
+                data: data.clone(),
+            },
+        )
+        .unwrap();
+        let snapshot = state.snapshot().unwrap();
+        assert_eq!(
+            snapshot.runtime.compare.slots[0].status,
+            CompareStatus::Ready
+        );
+        assert!(
+            serde_json::to_value(&snapshot.runtime.compare).unwrap()["slots"][0]
+                .get("path")
+                .is_none()
+        );
+        rusqlite::Connection::open(&paths.database)
+            .unwrap()
+            .execute("DELETE FROM jobs WHERE id='job'", [])
+            .unwrap();
+        assert_eq!(
+            state.snapshot().unwrap().runtime.compare.slots[0].status,
+            CompareStatus::Missing
+        );
+        apply_worker_envelope(
+            &state,
+            &WorkerEnvelope {
+                message_type: "preview_ready".into(),
+                data,
+            },
+        )
+        .unwrap();
+        let snapshot = state.snapshot().unwrap();
+        assert_eq!(
+            snapshot.runtime.compare.slots[0].status,
+            CompareStatus::Missing
+        );
+        assert!(snapshot.runtime.compare.slots[0]
+            .preview_data_url
+            .is_empty());
+    }
+
+    #[test]
+    fn pair_previews_reject_stale_success_and_failure_even_for_the_same_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        {
+            let mut runtime = lock(&state.runtime).unwrap();
+            runtime.comparison_pair.generation = 2;
+            runtime.comparison_pair.showing.target_id = "job-a".into();
+            runtime.comparison_pair.showing.output_path = "/a.png".into();
+            runtime.comparison_pair.against.target_id = "job-b".into();
+            runtime.comparison_pair.against.output_path = "/b.png".into();
+        }
+        for (slot, target, path) in [
+            ("showing", "job-a", "/a.png"),
+            ("against", "job-b", "/b.png"),
+        ] {
+            apply_worker_envelope(&state, &WorkerEnvelope { message_type:"preview_ready".into(), data:json!({"slot":slot,"target_id":target,"generation":2,"image_path":path,"jpeg_base64":"correct","width":800,"height":600,"preview_width":400,"preview_height":300}) }).unwrap();
+            for generation in [1, 3] {
+                for kind in ["preview_ready", "preview_failed"] {
+                    apply_worker_envelope(&state, &WorkerEnvelope { message_type:kind.into(), data:json!({"slot":slot,"target_id":target,"generation":generation,"image_path":path,"jpeg_base64":"stale","error_message":"stale"}) }).unwrap();
+                }
+            }
+        }
+        let runtime = lock(&state.runtime).unwrap();
+        for slot in [
+            &runtime.comparison_pair.showing,
+            &runtime.comparison_pair.against,
+        ] {
+            assert_eq!(slot.preview_data_url, "data:image/jpeg;base64,correct");
+            assert!(slot.error.is_empty());
+            assert_eq!(
+                (
+                    slot.width,
+                    slot.height,
+                    slot.preview_width,
+                    slot.preview_height
+                ),
+                (800, 600, 400, 300)
+            );
+        }
+    }
+
+    #[test]
+    fn pair_previews_need_the_same_target_and_file_and_show_failures_per_side() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        {
+            let mut runtime = lock(&state.runtime).unwrap();
+            runtime.comparison_pair.generation = 4;
+            runtime.comparison_pair.media_id = "photo".into();
+            runtime.comparison_pair.showing.target_id = "original".into();
+            runtime.comparison_pair.against.target_id = "job-b".into();
+            runtime.comparison_pair.against.output_path = "/b.png".into();
+        }
+        let answer = |kind: &str, data: Value| {
+            apply_worker_envelope(
+                &state,
+                &WorkerEnvelope {
+                    message_type: kind.into(),
+                    data,
+                },
+            )
+            .unwrap()
+        };
+        // The Original side is never filled from the result decoder.
+        answer(
+            "preview_ready",
+            json!({"slot":"showing","target_id":"original","generation":4,"image_path":"","jpeg_base64":"x"}),
+        );
+        // Another target, or another file under the right target, is dropped.
+        answer(
+            "preview_ready",
+            json!({"slot":"against","target_id":"job-c","generation":4,"image_path":"/b.png","jpeg_base64":"x"}),
+        );
+        answer(
+            "preview_ready",
+            json!({"slot":"against","target_id":"job-b","generation":4,"image_path":"/c.png","jpeg_base64":"x"}),
+        );
+        {
+            let runtime = lock(&state.runtime).unwrap();
+            assert!(runtime.comparison_pair.showing.preview_data_url.is_empty());
+            assert!(runtime.comparison_pair.against.preview_data_url.is_empty());
+            // A slot answer never fills the automatic or single comparison.
+            assert!(runtime.comparison_preview_data_url.is_empty());
+        }
+        answer(
+            "preview_failed",
+            json!({"slot":"against","target_id":"job-b","generation":4,"image_path":"/b.png","error_message":"truncated file"}),
+        );
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.comparison_pair.against.error, "truncated file");
+        assert!(runtime.comparison_pair.against.preview_data_url.is_empty());
+    }
+
+    #[test]
+    fn completion_and_comparison_previews_share_one_bound() {
+        let image = WorkerEnvelope {
+            message_type: "job_completed".into(),
+            data: json!({"job_id": "j", "output_path": "/output/enhanced.png"}),
+        };
+        assert_eq!(
+            completion_preview_request(&image).unwrap()["data"]["max_dimension"],
+            RESULT_PREVIEW_MAX_DIMENSION
+        );
     }
 
     #[test]

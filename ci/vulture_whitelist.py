@@ -52,6 +52,10 @@ peak_device_memory_bytes
 preview_enabled
 preview_max_dimension
 preview_max_fps
+# Result preview fields serialized by asdict() and consumed by the Rust host.
+preview_width
+preview_height
+target_id
 process_ram
 processed_megapixels_per_second
 processing_stage
@@ -87,6 +91,11 @@ workload_version
 HandshakeRequest
 BenchmarkRequest
 MediaProbeRequest
+RegionRequest
+request_id
+target_width
+target_height
+png_base64
 
 # Framework callbacks and third-party object attributes.
 _.MAX_IMAGE_PIXELS  # Pillow reads this only in the isolated export-preview child

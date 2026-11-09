@@ -14,6 +14,9 @@ import type {
   VideoComparisonProgress,
   WorkerEnvelope,
   StartEditInput,
+  MediaResults,
+  TrialEstimate,
+  ComparePick,
 } from './types';
 
 export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window;
@@ -249,8 +252,35 @@ export const listenVideoComparisonProgress = (
 ): Promise<UnlistenFn> =>
   listen<VideoComparisonProgress>('video-comparison-progress', (event) => callback(event.payload));
 export const refreshCapabilities = (): Promise<void> => invoke('refresh_capabilities');
-export const requestImageComparison = (mediaId: string): Promise<void> =>
-  invoke('request_image_comparison', { mediaId });
+/** With a pair, both targets ("original" or a job id of this image) are decoded
+ * into the runtime's pair slots; without one, the newest result is decoded alone. */
+export const requestImageComparison = (
+  mediaId: string,
+  pair?: { showing: string; against: string },
+): Promise<void> =>
+  pair
+    ? invoke('request_image_comparison', { mediaId, showing: pair.showing, against: pair.against })
+    : invoke('request_image_comparison', { mediaId });
+export const listAllMediaResults = (): Promise<MediaResults[]> => invoke('list_all_media_results');
+export const requestCompare = (picks: ComparePick[]): Promise<void> =>
+  invoke('request_compare', { picks });
+export const listMediaResults = (
+  mediaId: string,
+  limit = 50,
+  before: string | null = null,
+): Promise<MediaResults> => invoke('list_media_results', { mediaId, limit, before });
+export const startModelTrials = (
+  mediaId: string,
+  modelIds: string[],
+  baseSettings: StartBatchInput,
+): Promise<string[]> => invoke('start_model_trials', { mediaId, modelIds, baseSettings });
+export const estimateModelTrials = (
+  mediaId: string,
+  modelIds: string[],
+  baseSettings: StartBatchInput,
+): Promise<TrialEstimate[]> => invoke('estimate_model_trials', { mediaId, modelIds, baseSettings });
+export const cancelJobsForMedia = (mediaId: string): Promise<void> =>
+  invoke('cancel_jobs_for_media', { mediaId });
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>
   invoke('download_model', { modelId, acceptedTerms });
@@ -346,3 +376,9 @@ export const discardUpdate = (): Promise<void> => invoke('discard_update');
 export const recoverUpdateSettings = (): Promise<void> => invoke('recover_update_settings');
 export const listenForUpdates = (callback: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
   listen<UpdateStatus>('update-status', (event) => callback(event.payload));
+
+export const requestCompareRegions = (
+  generation: number,
+  regions: (import('./compareRegions').Region | null)[],
+): Promise<void> => invoke('request_compare_regions', { generation, regions });
+export const clearCompareRegions = (): Promise<void> => invoke('clear_compare_regions');

@@ -13,10 +13,49 @@ import type {
   JobRecord,
   LaunchIntent,
   MediaItem,
+  MediaResults,
   Recipe,
+  ResultSummary,
+  StartBatchInput,
+  TrialEstimate,
   UiSettings,
   WorkerEnvelope,
 } from './lib/types';
+
+/** One finished attempt of an image, as list_media_results reports it. */
+function row(id: string, overrides: Partial<ResultSummary> = {}): ResultSummary {
+  return {
+    job_id: id,
+    completed_at: 1_700_000_000_000,
+    status: 'completed',
+    kind: 'upscale',
+    output_path: `/out/${id}.png`,
+    output_name: `${id}.png`,
+    available: true,
+    model_id: id,
+    model_label: id,
+    scale: 4,
+    stages: [],
+    notes: '',
+    elapsed_seconds: 12,
+    ui: null,
+    ...overrides,
+  };
+}
+
+function historyOf(mediaId: string, rows: ResultSummary[]): MediaResults {
+  const saved = rows.filter((result) => result.status === 'completed');
+  const available = saved.filter((result) => result.available);
+  return {
+    media_id: mediaId,
+    results: rows,
+    total_count: rows.length,
+    completed_count: saved.length,
+    available_count: available.length,
+    default_result_id: available[0]?.job_id ?? null,
+    next_before: null,
+  };
+}
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -44,7 +83,24 @@ const api = vi.hoisted(() => ({
     original_url: 'asset://localhost/original.mp4',
     enhanced_url: 'asset://localhost/enhanced.mp4',
   })),
-  requestImageComparison: vi.fn(async (_mediaId: string): Promise<void> => undefined),
+  requestImageComparison: vi.fn(
+    async (_mediaId: string, _pair?: { showing: string; against: string }): Promise<void> =>
+      undefined,
+  ),
+  listMediaResults: vi.fn(async (mediaId: string): Promise<MediaResults> => historyOf(mediaId, [])),
+  listAllMediaResults: vi.fn(async (): Promise<MediaResults[]> => []),
+  requestCompare: vi.fn(async (): Promise<void> => undefined),
+  startModelTrials: vi.fn(
+    async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
+  ),
+  estimateModelTrials: vi.fn(
+    async (
+      _mediaId: string,
+      _modelIds: string[],
+      _base: StartBatchInput,
+    ): Promise<TrialEstimate[]> => [],
+  ),
+  cancelJobsForMedia: vi.fn(async (_mediaId: string): Promise<void> => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
@@ -431,6 +487,12 @@ beforeEach(() => {
   api.takeLaunchIntents.mockResolvedValue([]);
   api.chooseMediaFolder.mockReset().mockResolvedValue(null);
   api.requestImageComparison.mockReset().mockResolvedValue(undefined);
+  api.listMediaResults.mockReset().mockImplementation(async (id: string) => historyOf(id, []));
+  api.listAllMediaResults.mockReset().mockResolvedValue([]);
+  api.requestCompare.mockReset().mockResolvedValue(undefined);
+  api.startModelTrials.mockReset().mockResolvedValue([]);
+  api.estimateModelTrials.mockReset().mockResolvedValue([]);
+  api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
@@ -558,7 +620,7 @@ describe('LocalSR desktop interface', () => {
   it('mounts the complete three-pane workspace after native bootstrap', async () => {
     await mountWith(readySnapshot());
 
-    expect(screen.getByRole('heading', { name: 'Media' })).toBeTruthy();
+    expect(screen.getByRole('tablist', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Drop photos or videos here')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(1);
@@ -3623,4 +3685,175 @@ describe('Several fixes in one pass', () => {
       }
     },
   );
+});
+
+describe('Comparing saved results', () => {
+  /** A host with pair slots, answering every pair request with decoded previews. */
+  function pairHost(snapshot: AppSnapshot): AppSnapshot {
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    const slot = (target: string) =>
+      target === 'original'
+        ? { target_id: target, preview_data_url: '', width: 640, height: 480 }
+        : {
+            target_id: target,
+            preview_data_url: `data:image/jpeg;base64,${target}`,
+            width: 2560,
+            height: 1920,
+            preview_width: 2048,
+            preview_height: 1536,
+          };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing: slot(pair.showing),
+        against: slot(pair.against),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return snapshot;
+  }
+
+  function completedJob(id: string, media = 'photo') {
+    return {
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status: 'completed' as const,
+      progress: 100,
+      output_path: `/out/${id}.png`,
+      error: '',
+      created_at: 1,
+    };
+  }
+
+  it('waits for the history, then decodes the newest result against the Original by id', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('saved')];
+    let answer: (history: MediaResults) => void = () => {};
+    api.listMediaResults.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await mountWith(snapshot);
+    expect(api.requestImageComparison).not.toHaveBeenCalled();
+    answer(historyOf('photo', [row('saved')]));
+    await waitFor(() =>
+      expect(api.requestImageComparison).toHaveBeenCalledWith('photo', {
+        showing: 'saved',
+        against: 'original',
+      }),
+    );
+    // One saved result keeps the compact view: no choosers, no side labels.
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('saved'),
+    );
+    expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
+    expect(document.querySelector('.divider-labels')).toBeNull();
+  });
+
+  it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('new'), row('old')])]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+    const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
+    await user.click(original);
+    await user.click(output);
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([
+        { kind: 'original', media_id: 'photo' },
+        { kind: 'output', media_id: 'photo', job_id: 'old' },
+      ]),
+    );
+    await user.click(screen.getByRole('button', { name: 'Show in Compare 2' }));
+    expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Preview' }));
+    await user.click(screen.getByRole('tab', { name: 'Compare 2' }));
+    expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
+    const tabs = screen.getByRole('tablist', { name: 'Main pane' });
+    await fireEvent.keyDown(tabs, { key: 'ArrowLeft' });
+    expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('drops a late history answer that belongs to another image', async () => {
+    const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
+    snapshot.jobs = [completedJob('a1', 'first'), completedJob('a2', 'first')];
+    api.listMediaResults.mockImplementation(async () =>
+      historyOf('second', [row('b1'), row('b2')]),
+    );
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listMediaResults).toHaveBeenCalledWith('first'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
+    expect(screen.queryByText(/b1/)).toBeNull();
+  });
+
+  it('cancels only the selected image runs and keeps Cancel queue for everything', async () => {
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    snapshot.runtime.active_job_id = 'trial-1';
+    snapshot.jobs = [
+      { ...completedJob('other-job', 'other'), status: 'queued', output_path: '' },
+      { ...completedJob('trial-1'), status: 'running', output_path: '' },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
+    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo');
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('runs 2 to 4 installed models from Try others with the settings the plan card showed', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.batch_mode = false;
+    api.estimateModelTrials.mockImplementation(async (_media, ids) =>
+      ids.map((id, index) => ({
+        model_id: id,
+        model_label: id,
+        seconds: index === 0 ? 30 : null,
+      })),
+    );
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(
+      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByText('Try other upscalers on photo.png')).toBeTruthy();
+    const boxes = within(dialog)
+      .getAllByRole('checkbox')
+      .filter((box) => !(box as HTMLInputElement).disabled);
+    expect(boxes.length).toBeGreaterThanOrEqual(2);
+    await user.click(boxes[0]);
+    expect(
+      (within(dialog).getByRole('button', { name: 'Run 1 model' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(boxes[1]);
+    // A total only when every model was measured; here one is not.
+    expect(await within(dialog).findByText(/not yet measured for/)).toBeTruthy();
+    const run = within(dialog).getByRole('button', { name: 'Run 2 models' });
+    expect(run.classList.contains('primary')).toBe(false);
+    await user.click(run);
+    expect(api.startModelTrials).toHaveBeenCalledTimes(1);
+    expect(api.startJobs).not.toHaveBeenCalled();
+    const [media, ids, base] = api.startModelTrials.mock.calls[0];
+    expect(media).toBe('photo');
+    expect(ids).toHaveLength(2);
+    expect(base).toMatchObject({
+      media_ids: ['photo'],
+      batch_mode: false,
+      task: 'upscale',
+      output_scale: snapshot.settings.output_scale,
+      ui: expect.objectContaining({ content: expect.any(String) }),
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  });
 });

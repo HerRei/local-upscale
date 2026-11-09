@@ -32,6 +32,14 @@ def test_protocol_schema_and_python_version_stay_synchronized():
     assert f"pub const PROTOCOL_VERSION: u32 = {PROTOCOL_VERSION};" in rust_types
 
 
+def test_preview_request_schema_supports_identified_pair_slots():
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    fields = schema["$defs"]["pathRequest"]["allOf"][1]["properties"]["data"]["properties"]
+    assert fields["slot"]["enum"] == ["showing", "against", "slot1", "slot2", "slot3", "slot4"]
+    assert fields["generation"]["minimum"] == 0
+    assert fields["target_id"]["type"] == "string"
+
+
 def test_additive_desktop_metadata_uses_one_version():
     npm = json.loads((ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
     tauri = json.loads(
@@ -236,3 +244,17 @@ def test_batch_request_is_additive_and_carries_individual_job_payloads():
     # Each photo is a complete job payload, as in a job_request.
     assert items["items"] == {"$ref": "#/$defs/jobRequest/allOf/1/properties/data"}
     assert {"$ref": "#/$defs/imageBatchRequest"} in schema["oneOf"]
+
+
+def test_compare_region_protocol_has_identity_and_bounds():
+    from localsr.protocol.messages import RegionFailed, RegionReady, RegionRequest
+
+    request = RegionRequest("image.png", "slot1", 2, "job", 3, 1, 2, 30, 40, 60, 80)
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    fields = schema["$defs"]["regionRequest"]["allOf"][1]["properties"]["data"]["required"]
+    assert set(_message(request)["data"]) == set(fields)
+    for result in (
+        RegionReady("image.png", "slot1", 2, "job", 3, "pixels"),
+        RegionFailed("image.png", "slot1", 2, "job", 3, "error"),
+    ):
+        assert _message(result)["data"]["request_id"] == 3
