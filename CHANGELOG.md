@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.8-beta] - Unreleased
+
+### Fixed
+
+- The in-app updater cleans up after a crash at any step: a killed AppImage swap no
+  longer leaves a staged or backup file (or a stale journal temporary), a killed
+  engine package install restores the previous engine and removes its half-unpacked
+  folder, and the Windows install marker leaves no temporary file.
+
 ## [0.3.7-beta] - Unreleased
 
 ### Added
