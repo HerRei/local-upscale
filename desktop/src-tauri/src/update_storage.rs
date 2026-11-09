@@ -280,12 +280,25 @@ fn lock_folder(directory: &Path) -> AppResult<fs::File> {
     {
         use fs2::FileExt;
         let folder = fs::File::open(directory)?;
-        folder.try_lock_exclusive().map_err(|_| {
-            AppError::Validation(
-                "Another LocalSR is installing an update; try again when it has finished".into(),
-            )
-        })?;
-        Ok(folder)
+        // In tests another thread may have forked a child while this folder was locked
+        // before; the child holds the descriptor, and with it the lock, until its exec a
+        // moment later. Wait that out instead of reporting a rival installer.
+        #[cfg(test)]
+        let attempts = 200;
+        #[cfg(not(test))]
+        let attempts = 1;
+        for attempt in 1..=attempts {
+            match folder.try_lock_exclusive() {
+                Ok(()) => return Ok(folder),
+                Err(_) if attempt < attempts => {
+                    std::thread::sleep(std::time::Duration::from_millis(25))
+                }
+                Err(_) => break,
+            }
+        }
+        Err(AppError::Validation(
+            "Another LocalSR is installing an update; try again when it has finished".into(),
+        ))
     }
     #[cfg(not(unix))]
     {
