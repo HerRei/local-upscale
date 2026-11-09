@@ -771,10 +771,13 @@ class WorkerServer:
                 )
             return
         terminal: set[str] = set()
+        started: set[str] = set()
 
         def emit(message) -> None:
             if isinstance(message, (JobCompleted, JobFailed, JobCancelled)):
                 terminal.add(message.job_id)
+            elif isinstance(message, JobStarted):
+                started.add(message.job_id)
             send_message(message)
 
         self._activate_batch(ids)
@@ -795,7 +798,7 @@ class WorkerServer:
             traceback.print_exc(file=sys.stderr)
             self.restart_after_job = _device_lost(error)
             for job_id in ids:
-                if job_id not in terminal:
+                if job_id in started and job_id not in terminal:
                     send_message(
                         JobFailed(
                             job_id=job_id,
@@ -803,7 +806,13 @@ class WorkerServer:
                             restart_required=self.restart_after_job,
                         )
                     )
-            returned = []
+            # A photo that never started runs on its own, as it would have in the
+            # queue; after a lost device the desktop sends it to the next engine.
+            returned = [
+                job
+                for job in jobs
+                if str(job["job_id"]) not in started | terminal and not self.restart_after_job
+            ]
         finally:
             self.model_adapter.release()
             self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
