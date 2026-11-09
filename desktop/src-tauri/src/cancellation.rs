@@ -18,7 +18,8 @@ pub struct Cancellation {
     pub job_id: String,
     pub requested_at: Option<Instant>,
     pub resetting: bool,
-    scratch: Option<PathBuf>,
+    pub job_ids: Vec<String>,
+    scratch: Vec<(String, PathBuf)>,
 }
 
 impl Cancellation {
@@ -27,37 +28,73 @@ impl Cancellation {
         self.job_id = id.into();
         self.requested_at = None;
         self.resetting = false;
-        let video = message["type"] == "video_job_request";
-        if video || message["type"] == "job_request" || message["type"] == "edit_job_request" {
-            if let Some(output) = message["data"][if video {
-                "output_video_path"
-            } else {
-                "output_path"
-            }]
-            .as_str()
-            {
-                let output = PathBuf::from(output);
-                if let Some(parent) = output.parent() {
-                    let scratch = parent.join(format!(".localsr-job-{}", Uuid::new_v4()));
-                    fs::create_dir(&scratch)?;
-                    if video {
-                        message["data"]["temporary_directory"] =
-                            scratch.to_string_lossy().into_owned().into();
-                    } else {
-                        message["data"]["scratch_directory"] =
-                            scratch.to_string_lossy().into_owned().into();
-                        message["data"]["output_temporary_directory"] =
-                            scratch.to_string_lossy().into_owned().into();
+        if message["type"] == "image_batch_request" {
+            if let Some(jobs) = message["data"]["jobs"].as_array_mut() {
+                for data in jobs {
+                    let member = data["job_id"].as_str().unwrap_or_default().to_owned();
+                    self.job_ids.push(member.clone());
+                    if let Err(error) = self.prepare_scratch(&member, data, false) {
+                        self.finish()?;
+                        return Err(error);
                     }
-                    self.scratch = Some(scratch);
                 }
+            }
+        } else {
+            self.job_ids = vec![id.into()];
+            let video = message["type"] == "video_job_request";
+            if video || message["type"] == "job_request" || message["type"] == "edit_job_request" {
+                self.prepare_scratch(id, &mut message["data"], video)?;
             }
         }
         Ok(())
     }
 
+    fn prepare_scratch(&mut self, id: &str, data: &mut Value, video: bool) -> AppResult<()> {
+        if let Some(output) = data[if video {
+            "output_video_path"
+        } else {
+            "output_path"
+        }]
+        .as_str()
+        {
+            let output = PathBuf::from(output);
+            if let Some(parent) = output.parent() {
+                let scratch = parent.join(format!(".localsr-job-{}", Uuid::new_v4()));
+                fs::create_dir(&scratch)?;
+                if video {
+                    data["temporary_directory"] = scratch.to_string_lossy().into_owned().into();
+                } else {
+                    data["scratch_directory"] = scratch.to_string_lossy().into_owned().into();
+                    data["output_temporary_directory"] =
+                        scratch.to_string_lossy().into_owned().into();
+                }
+                self.scratch.push((id.into(), scratch));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finish_member(&mut self, id: &str) -> AppResult<()> {
+        if let Some(index) = self.scratch.iter().position(|(member, _)| member == id) {
+            let path = &self.scratch[index].1;
+            match fs::remove_dir_all(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.scratch.remove(index);
+        }
+        self.job_ids.retain(|member| member != id);
+        if self.job_ids.is_empty() {
+            self.finish()?;
+        } else {
+            self.job_id = self.job_ids[0].clone();
+        }
+        Ok(())
+    }
+
     pub fn request(&mut self, id: &str, now: Instant) {
-        if self.job_id == id && self.requested_at.is_none() {
+        if self.job_ids.iter().any(|member| member == id) && self.requested_at.is_none() {
             self.requested_at = Some(now);
         }
     }
@@ -70,14 +107,15 @@ impl Cancellation {
     }
 
     pub fn cleanup(&mut self) -> AppResult<()> {
-        if let Some(path) = &self.scratch {
+        for (_, path) in &self.scratch {
             match fs::remove_dir_all(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        self.scratch = None;
+        self.scratch.clear();
+        self.job_ids.clear();
         Ok(())
     }
 
@@ -163,5 +201,29 @@ mod tests {
         control.finish().unwrap();
         assert!(!scratch.exists());
         assert_eq!(fs::read(output).unwrap(), b"existing image");
+    }
+    #[test]
+    fn batch_scratch_and_deadline_survive_an_early_member_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut message = json!({"type":"image_batch_request", "data":{"jobs":[
+            {"job_id":"a", "output_path":directory.path().join("a.png")},
+            {"job_id":"b", "output_path":directory.path().join("b.png")}
+        ]}});
+        let mut control = Cancellation::default();
+        control.prepare("a", &mut message).unwrap();
+        let paths: Vec<PathBuf> = message["data"]["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|job| PathBuf::from(job["scratch_directory"].as_str().unwrap()))
+            .collect();
+        let now = Instant::now();
+        control.request("b", now);
+        control.finish_member("a").unwrap();
+        assert!(!paths[0].exists());
+        assert!(paths[1].exists());
+        assert!(control.expired(now + CANCEL_GRACE));
+        control.finish().unwrap();
+        assert!(!paths[1].exists());
     }
 }
