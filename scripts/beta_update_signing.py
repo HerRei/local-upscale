@@ -33,6 +33,7 @@ from prepare_engine_payload import validate_payload
 from release_targets import engine_id, expected_update_identity, targets, update_files, version
 
 ROOT = Path(__file__).resolve().parents[1]
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 KEY_ROOT = Path.home() / ".local/share/localsr-release-signing"
 HELPER = KEY_ROOT / "update-keychain"
 SERVICE = "com.localsr.release.updater"
@@ -42,7 +43,30 @@ PUBLIC = ROOT / "packaging/updates/production.pub"
 TAURI = ROOT / "desktop/node_modules/.bin/tauri"
 
 
+HELPER_REQUIREMENT = (
+    '=identifier "com.localsr.release.update-keychain" and anchor apple generic '
+    'and certificate leaf[subject.OU] = "Z2TU844D84"'
+)
+
+
+def _private_key_folder() -> None:
+    if KEY_ROOT.is_symlink() or not KEY_ROOT.is_dir() or KEY_ROOT.stat().st_mode & 0o077:
+        raise ValueError("The release signing directory must be private (mode 0700)")
+
+
+def _verify_helper() -> None:
+    subprocess.run(
+        ["codesign", "--verify", "--strict", "-R", HELPER_REQUIREMENT, str(HELPER)],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
 def load_identity() -> dict[str, str] | None:
+    # Every read of the key first checks who may reach it and what program reads it.
+    _private_key_folder()
+    _verify_helper()
     result = subprocess.run(
         [str(HELPER), "read", SERVICE, ACCOUNT], capture_output=True, check=False
     )
@@ -72,8 +96,7 @@ def signing_environment() -> dict[str, str]:
 
 def prepare() -> dict[str, str]:
     KEY_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if KEY_ROOT.is_symlink() or KEY_ROOT.stat().st_mode & 0o077:
-        raise ValueError("The release signing directory must be private (mode 0700)")
+    _private_key_folder()
     if not HELPER.exists():
         subprocess.run(
             [
@@ -105,20 +128,6 @@ def prepare() -> dict[str, str]:
             capture_output=True,
             timeout=300,
         )
-    subprocess.run(
-        [
-            "codesign",
-            "--verify",
-            "--strict",
-            "-R",
-            '=identifier "com.localsr.release.update-keychain" and anchor apple generic '
-            'and certificate leaf[subject.OU] = "Z2TU844D84"',
-            str(HELPER),
-        ],
-        check=True,
-        capture_output=True,
-        timeout=30,
-    )
     identity = load_identity()
     created = identity is None
     if created:
@@ -258,6 +267,11 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
         raise ValueError(
             f"{target['id']}: the installed smoke report does not show this release's "
             "update identity"
+        )
+    if smoke.get("commit") != commit:
+        raise ValueError(
+            f"{target['id']}: the build was taken for commit {smoke.get('commit')!r}, "
+            f"not the release commit {commit}"
         )
     manifest_path = _regular(directory / files["engine_manifest"])
     manifest_bytes = manifest_path.read_bytes()
@@ -419,7 +433,7 @@ def platform_entries(
             bundled = target["platform"] == "windows" and not target.get("external_engine")
             size = item["digest"][1]
             contract: dict[str, object] = {
-                "channel": "beta",
+                "channel": "beta" if "-" in release_version else "stable",
                 "backend": target["update"]["backend"],
                 "kind": target["update"]["kind"],
                 "protocol": protocol,
@@ -489,6 +503,9 @@ def add_statements(feed: Path, sign: Callable[[Path], None] = sign_artifact) -> 
         for key, entry in data["platforms"].items():
             contract = entry["localsr"]
             if not contract.get("statement"):
+                digest = ((contract.get("engine") or {}).get("manifest") or {}).get("sha256")
+                if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+                    raise ValueError(f"{key} has no engine package to sign a statement for")
                 _sign_statement(contract, data["version"], key, Path(temporary), sign)
                 added.append(key)
     _write_feed(feed, data)

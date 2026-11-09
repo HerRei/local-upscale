@@ -273,8 +273,24 @@ pub fn validate_contract(
         }
     }
     if let Some(engine) = &contract.engine {
+        // Every downloaded file lands in one folder: the names must not collide with the
+        // application package, its parts or a partial download.
+        let mut names: std::collections::HashSet<&str> = contract
+            .parts
+            .iter()
+            .map(|part| part.name.as_str())
+            .chain([APPLICATION_FILE])
+            .collect();
         if engine.parts.len() > 64
+            || engine.manifest.size == 0
             || engine.manifest.size > 1024 * 1024
+            || std::iter::once(&engine.manifest)
+                .chain(&engine.parts)
+                .any(|file| {
+                    !safe_file_name(&file.name)
+                        || file.name.ends_with(".partial")
+                        || !names.insert(file.name.as_str())
+                })
             || engine
                 .parts
                 .iter()
@@ -483,6 +499,12 @@ pub async fn check_update(
                     });
             status.stage = "available".into();
             status.message = "A compatible signed update is available.".into();
+            // The install checks the entry against this file: write it first, so a
+            // failed write never leaves an update that no longer matches its channel.
+            update_storage::write_atomic(
+                &state.paths.next_root.join("update-channel.json"),
+                channel.as_bytes(),
+            )?;
             *lock(&state.updates.checked)? = Some(CheckedUpdate {
                 update,
                 contract,
@@ -491,8 +513,11 @@ pub async fn check_update(
         } else {
             status.stage = "current".into();
             status.message = "No newer compatible release is available in this channel.".into();
+            update_storage::write_atomic(
+                &state.paths.next_root.join("update-channel.json"),
+                channel.as_bytes(),
+            )?;
         }
-        fs::write(state.paths.next_root.join("update-channel.json"), channel)?;
         Ok(())
     })();
     if let Err(error) = validated {
@@ -834,8 +859,17 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
         .map(|part| part.size)
         .max()
         .unwrap_or(0);
+    // Files an earlier attempt left complete are on the disk already: the free space
+    // measured now no longer includes them.
+    let engine_files = contract
+        .engine
+        .iter()
+        .filter(|engine| engine.id != config.engine_id)
+        .flat_map(|engine| std::iter::once(&engine.manifest).chain(&engine.parts));
+    let present = already_downloaded(&directory, std::iter::once(&file).chain(engine_files));
     let needed = status
         .size
+        .saturating_sub(present)
         .checked_add(contract.unpacked_size)
         .and_then(|s| s.checked_add(joining))
         .and_then(|s| s.checked_add(256 * 1024 * 1024))
@@ -941,6 +975,16 @@ pub fn ensure_not_installing(state: &AppState) -> AppResult<()> {
     }
     Ok(())
 }
+/// The bytes of those files that already exist in `directory` at their full size.
+fn already_downloaded<'a>(directory: &Path, files: impl Iterator<Item = &'a DownloadFile>) -> u64 {
+    files
+        .filter(|file| {
+            safe_file_name(&file.name)
+                && fs::metadata(directory.join(&file.name)).is_ok_and(|m| m.len() == file.size)
+        })
+        .map(|file| file.size)
+        .sum()
+}
 fn require_space(available: u64, needed: u64) -> AppResult<()> {
     if available < needed {
         return Err(invalid(
@@ -977,8 +1021,14 @@ fn active_engine_for_distribution(
     if managed_by_store {
         return None;
     }
-    let id = fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?;
-    if !safe_id(&id) || (!bundled_engine_id.is_empty() && id != bundled_engine_id) {
+    // A host compiled for an engine id runs exactly that id's engine: the shared
+    // active-engine.txt may already name the engine of an installer that was cancelled.
+    let id = if bundled_engine_id.is_empty() {
+        fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?
+    } else {
+        bundled_engine_id.to_string()
+    };
+    if !safe_id(&id) {
         return None;
     }
     let executable = paths
@@ -998,6 +1048,8 @@ pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
     crate::distribution::require_direct_updates()?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // A second request while one runs must not rewrite the first one's status.
+        let _busy = acquire(&state.updates.busy)?;
         let result = install_checked(&state, &app);
         if let Err(error) = &result {
             let mut status = lock(&state.updates.status)?.clone();
@@ -1045,8 +1097,8 @@ fn prepare_update_engine(
     Ok(engine_exe)
 }
 
+/// The caller holds `updates.busy`.
 fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
-    let _busy = acquire(&state.updates.busy)?;
     let _installing = acquire(&state.updates.installing)?;
     // Scheduling and new settings/media mutations are blocked for the complete
     // transaction. Cancellation must have really finished, not merely been sent.
@@ -1116,7 +1168,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         }
         lock(&state.database)?.close_for_update()?;
         if contract.engine_id != config.engine_id {
-            fs::write(&active_file, &contract.engine_id)?;
+            update_storage::write_atomic(&active_file, contract.engine_id.as_bytes())?;
         }
         if config.kind == "portable" && cfg!(target_os = "linux") {
             // Unpack only a copy of our own that was verified after it was made.
@@ -1133,13 +1185,13 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
                 fs::remove_dir_all(&unpacked)?;
             }
             update_storage::extract_portable(&verified, &unpacked, contract.unpacked_size)?;
-            update_storage::replace_executable(
-                &std::env::current_exe()?,
+            // The path this process started from: after a swap /proc/self/exe reads
+            // "... (deleted)", so it is never asked again.
+            replace_portable_host(
+                &tauri::utils::platform::current_exe()?,
+                &unpacked.join("localsr-next"),
                 &state.paths.next_root.join(SWAP_JOURNAL),
-                |staged| {
-                    require_newer_executable(&std::env::current_exe()?, &checked.update.version)?;
-                    update_storage::copy_new(&unpacked.join("localsr-next"), staged)
-                },
+                &checked.update.version,
                 |path| update_storage::smoke(path, Duration::from_secs(60)),
             )
         } else {
@@ -1147,15 +1199,26 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         }
     })();
     if let Err(error) = result {
-        match previous_engine {
-            Some(bytes) => fs::write(&active_file, bytes)?,
-            None => {
-                let _ = fs::remove_file(&active_file);
-            }
+        let restored_engine = match previous_engine {
+            Some(bytes) => update_storage::write_atomic(&active_file, &bytes),
+            None => match fs::remove_file(&active_file) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                _ => Ok(()),
+            },
+        };
+        if let Err(restore) = restored_engine {
+            eprintln!("LocalSR: could not restore the active engine: {restore}");
         }
-        *lock(&state.database)? = crate::database::Database::open(&state.paths.database)?;
-        state.worker.shutting_down.store(false, Ordering::SeqCst);
-        worker::start_worker(state.clone(), app.clone())?;
+        if let Err(resume) = resume_after_failed_install(
+            state,
+            || {
+                *lock(&state.database)? = crate::database::Database::open(&state.paths.database)?;
+                Ok(())
+            },
+            || worker::start_worker(state.clone(), app.clone()),
+        ) {
+            eprintln!("LocalSR: could not resume after the failed update: {resume}");
+        }
         // On Windows the downloads are gone once the installer was handed over.
         status.stage = if lock(&state.updates.staged)?.is_some() {
             "downloaded"
@@ -1167,8 +1230,32 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         publish(state, app, status);
         return Err(error);
     }
-    finish_install(&backup, &checked.update.version, &directory)?;
+    // The new application is in place and this process has stopped its worker and closed
+    // its database: from here it only leaves, whatever the cleanup or restart says.
+    if let Err(error) = finish_install(&backup, &checked.update.version, &directory) {
+        eprintln!("LocalSR: could not clean up after the update: {error}");
+    }
     restart_application(app)
+}
+
+/// Take the application back to work after an install failed before it was handed over.
+/// The worker is only started again when the old one really ended: a worker that did not
+/// stop within the wait must not get a second one beside it. Every step runs, and the
+/// flag that blocks new workers is cleared first, so one failure cannot leave the worker
+/// disabled for the rest of the session.
+fn resume_after_failed_install(
+    state: &AppState,
+    reopen_database: impl FnOnce() -> AppResult<()>,
+    start_worker: impl FnOnce() -> AppResult<()>,
+) -> AppResult<()> {
+    let database = reopen_database();
+    state.worker.shutting_down.store(false, Ordering::SeqCst);
+    let worker = if state.worker.pid.load(Ordering::SeqCst) == 0 {
+        start_worker()
+    } else {
+        Ok(())
+    };
+    database.and(worker)
 }
 
 /// Keep profile backups; discard only downloaded/staged update material.
@@ -1280,11 +1367,10 @@ fn record_pending_install(
         downloads: downloads.into(),
         backup: backup.into(),
     };
-    fs::write(
-        next_root.join(PENDING_INSTALL),
-        serde_json::to_vec(&pending)?,
-    )?;
-    Ok(())
+    update_storage::write_atomic(
+        &next_root.join(PENDING_INSTALL),
+        &serde_json::to_vec(&pending)?,
+    )
 }
 
 /// At start: when the version the installer was given is the one running, finish its
@@ -1323,15 +1409,12 @@ pub fn recover_interrupted_update() -> bool {
             let running = std::env::var_os("APPIMAGE")
                 .map(PathBuf::from)
                 .or_else(|| std::env::current_exe().ok());
-            if running.as_deref() != Some(restored.as_path()) {
+            if !running.is_some_and(|running| same_file(&running, &restored)) {
                 return false;
             }
             match restart_service() {
                 Ok(true) => true,
-                Ok(false) => std::process::Command::new(&restored)
-                    .args(std::env::args_os().skip(1))
-                    .spawn()
-                    .is_ok(),
+                Ok(false) => relaunch(&restored),
                 Err(error) => {
                     eprintln!("LocalSR: restored the previous version; reopen LocalSR: {error}");
                     // Exit the unaccepted process even when the service manager failed.
@@ -1347,6 +1430,26 @@ pub fn recover_interrupted_update() -> bool {
     }
 }
 
+/// Whether two paths name one file, also through links.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Start the restored executable. This process is the unaccepted one and exits either
+/// way: a failed start leaves the user to reopen LocalSR, never to keep it running.
+fn relaunch(restored: &Path) -> bool {
+    if let Err(error) = std::process::Command::new(restored)
+        .args(std::env::args_os().skip(1))
+        .spawn()
+    {
+        eprintln!("LocalSR: restored the previous version; reopen LocalSR: {error}");
+    }
+    true
+}
+
 /// The AppImage file this process runs from: $APPIMAGE, when this executable really
 /// lives inside the image's mount ($APPDIR). Anything else is no AppImage to replace.
 #[cfg(any(target_os = "linux", test))]
@@ -1355,7 +1458,11 @@ fn running_appimage(
     appdir: Option<PathBuf>,
     executable: &Path,
 ) -> Option<PathBuf> {
-    let appimage = appimage.filter(|path| path.is_absolute() && path.is_file())?;
+    // The file itself, not a link to it: the swap renames over this path.
+    let appimage = appimage
+        .filter(|path| path.is_absolute() && path.is_file())?
+        .canonicalize()
+        .ok()?;
     let appdir = appdir?.canonicalize().ok()?;
     executable
         .canonicalize()
@@ -1404,6 +1511,27 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
         ));
     }
     Ok(())
+}
+
+/// Replace the unpacked Linux host at `current` with `new_host`, which the caller has
+/// unpacked from a verified package. `current` is also where the installed version is read
+/// under the swap lock.
+fn replace_portable_host(
+    current: &Path,
+    new_host: &Path,
+    journal: &Path,
+    version: &str,
+    smoke: impl Fn(&Path) -> AppResult<()>,
+) -> AppResult<()> {
+    update_storage::replace_executable(
+        current,
+        journal,
+        |staged| {
+            require_newer_executable(current, version)?;
+            update_storage::copy_new(new_host, staged)
+        },
+        smoke,
+    )
 }
 
 /// Swap the AppImage for a verified copy of the update made next to it, run the new
@@ -1462,12 +1590,35 @@ fn restart_service() -> AppResult<bool> {
     Ok(false)
 }
 
-fn restart_application(app: &AppHandle) -> AppResult<()> {
-    if restart_service()? {
-        app.exit(0);
-        return Ok(());
+#[derive(Debug, PartialEq)]
+enum RestartPlan {
+    /// The service manager restarts LocalSR, or only the user can: this process exits.
+    Exit,
+    /// Start the application again ourselves.
+    Respawn,
+}
+
+fn restart_plan(service: AppResult<bool>) -> RestartPlan {
+    match service {
+        Ok(false) => RestartPlan::Respawn,
+        Ok(true) => RestartPlan::Exit,
+        Err(error) => {
+            // The update is installed: a process with a stopped worker and a closed
+            // database must not carry on, so it exits and the user reopens LocalSR.
+            eprintln!("LocalSR: {error}");
+            RestartPlan::Exit
+        }
     }
-    app.restart();
+}
+
+fn restart_application(app: &AppHandle) -> AppResult<()> {
+    match restart_plan(restart_service()) {
+        RestartPlan::Exit => {
+            app.exit(0);
+            Ok(())
+        }
+        RestartPlan::Respawn => app.restart(),
+    }
 }
 
 #[cfg(test)]
@@ -2682,5 +2833,227 @@ mod tests {
                     .contains("signature"));
             }
         }
+    }
+
+    // Round 3, finding 1: a cancelled installer leaves the next engine's id in the shared
+    // file; the host still runs the engine it was built for.
+    #[test]
+    fn round3_a_cancelled_update_does_not_hide_the_engine_this_host_was_built_for() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let worker = |id: &str| {
+            let path = paths
+                .next_root
+                .join("engines")
+                .join(id)
+                .join("engine")
+                .join(if cfg!(windows) {
+                    "localsr-worker.exe"
+                } else {
+                    "localsr-worker"
+                });
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"engine").unwrap();
+            path
+        };
+        let current = worker("windows-x86_64-cuda-e2");
+        fs::write(
+            paths.next_root.join("active-engine.txt"),
+            b"windows-x86_64-cuda-e3",
+        )
+        .unwrap();
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "windows-x86_64-cuda-e2"),
+            Some(current)
+        );
+        // The engine of a release that never started is not this host's engine.
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "windows-x86_64-cuda-e4"),
+            None
+        );
+        // The identity is a file name, never a path.
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "../escape"),
+            None
+        );
+    }
+
+    // Round 3, finding 5: every engine file the feed names is a plain, distinct name that
+    // cannot replace the application package or a partial download.
+    #[test]
+    fn round3_engine_file_names_are_safe_distinct_and_never_the_application_file() {
+        let (_, file, config) = fixture();
+        let contract = |manifest: &str, parts: &[&str]| ReleaseContract {
+            channel: "beta".into(),
+            backend: "rocm".into(),
+            kind: "portable".into(),
+            protocol: PROTOCOL_VERSION,
+            engine_id: "abc".into(),
+            size: file.size,
+            unpacked_size: 1024,
+            sha256: file.sha256.clone(),
+            parts: Vec::new(),
+            statement: String::new(),
+            statement_signature: String::new(),
+            engine: Some(EngineUpdate {
+                id: "abc".into(),
+                manifest: part(manifest, 100),
+                parts: parts.iter().map(|name| part(name, 10)).collect(),
+            }),
+        };
+        let valid = |manifest: &str, parts: &[&str]| {
+            validate_contract(&config, "beta", "0.0.13-beta.1", &contract(manifest, parts)).is_ok()
+        };
+        assert!(valid(
+            "m.engine-payload.json",
+            &["m.part-0001", "m.part-0002"]
+        ));
+        assert!(!valid("m.engine-payload.json", &[APPLICATION_FILE]));
+        assert!(!valid(APPLICATION_FILE, &["m.part-0001"]));
+        assert!(!valid(
+            "m.engine-payload.json",
+            &["m.part-0001", "m.part-0001"]
+        ));
+        assert!(!valid("m.part-0001", &["m.part-0001"]));
+        assert!(!valid("m.engine-payload.json", &["../m.part-0001"]));
+        assert!(!valid("m.engine-payload.json", &["m.part-0001.partial"]));
+        let mut empty_manifest = contract("m.engine-payload.json", &["m.part-0001"]);
+        empty_manifest.engine.as_mut().unwrap().manifest.size = 0;
+        assert!(validate_contract(&config, "beta", "0.0.13-beta.1", &empty_manifest).is_err());
+        // Application parts and engine files share one folder and so one namespace.
+        let mut clash = contract("m.engine-payload.json", &["app.part-0001"]);
+        clash.parts = vec![
+            part("app.part-0001", file.size / 2 + 1),
+            part("app.part-0002", file.size / 2),
+        ];
+        clash.size = file.size / 2 + 1 + file.size / 2;
+        assert!(validate_contract(&config, "beta", "0.0.13-beta.1", &clash).is_err());
+    }
+
+    // Round 3, finding 9: a link in $APPIMAGE is followed, so the swap replaces the image
+    // and not the link.
+    #[cfg(unix)]
+    #[test]
+    fn round3_a_symlinked_appimage_variable_names_the_file_it_points_to() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let image = root_path.join("LocalSR.AppImage");
+        let link = root_path.join("localsr");
+        let mount = root_path.join(".mount_LocalSR");
+        let executable = mount.join("usr/bin/localsr-next");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&image, b"image").unwrap();
+        fs::write(&executable, b"host").unwrap();
+        std::os::unix::fs::symlink(&image, &link).unwrap();
+        assert_eq!(
+            running_appimage(Some(link), Some(mount), &executable),
+            Some(image)
+        );
+    }
+
+    // Round 3, finding 2: the process of an interrupted swap exits after its rollback,
+    // also when the restored executable cannot be started.
+    #[test]
+    fn round3_the_unaccepted_process_exits_even_when_the_restored_one_will_not_start() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(relaunch(&root.path().join("missing")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round3_a_link_to_the_restored_executable_is_the_restored_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("LocalSR.AppImage");
+        let link = root.path().join("localsr");
+        fs::write(&image, b"image").unwrap();
+        std::os::unix::fs::symlink(&image, &link).unwrap();
+        assert!(same_file(&link, &image));
+        assert!(!same_file(&root.path().join("other"), &image));
+    }
+
+    // Round 3, finding 4: once the new application is in place, a failed service restart
+    // ends this process instead of returning into a session without worker or database.
+    #[test]
+    fn round3_a_failed_service_restart_after_the_swap_exits_the_process() {
+        assert_eq!(restart_plan(Ok(true)), RestartPlan::Exit);
+        assert_eq!(restart_plan(Ok(false)), RestartPlan::Respawn);
+        assert_eq!(
+            restart_plan(Err(invalid("systemctl failed"))),
+            RestartPlan::Exit
+        );
+    }
+
+    // Round 3, finding 7: a failed install resumes the worker only when the old one ended,
+    // and always clears the flag that blocks workers.
+    #[test]
+    fn round3_resuming_after_a_failed_install_never_doubles_the_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(crate::paths::AppPaths::under(root.path())).unwrap();
+        let started = std::cell::Cell::new(0);
+        state.worker.shutting_down.store(true, Ordering::SeqCst);
+        state.worker.pid.store(4242, Ordering::SeqCst);
+        resume_after_failed_install(
+            &state,
+            || Ok(()),
+            || {
+                started.set(started.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(started.get(), 0, "the old worker is still alive");
+        assert!(!state.worker.shutting_down.load(Ordering::SeqCst));
+
+        state.worker.shutting_down.store(true, Ordering::SeqCst);
+        state.worker.pid.store(0, Ordering::SeqCst);
+        let failed = resume_after_failed_install(
+            &state,
+            || Err(invalid("database")),
+            || {
+                started.set(started.get() + 1);
+                Ok(())
+            },
+        );
+        assert!(failed.is_err());
+        assert_eq!(
+            started.get(),
+            1,
+            "a database error must not skip the worker"
+        );
+        assert!(!state.worker.shutting_down.load(Ordering::SeqCst));
+    }
+
+    // Round 3, finding 3: the portable swap reads the installed version at the path it
+    // replaces, not at whatever /proc/self/exe says by then.
+    #[cfg(unix)]
+    #[test]
+    fn round3_a_portable_host_is_replaced_at_the_one_path_it_was_given() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("localsr-next");
+        let new_host = root.path().join("unpacked-localsr-next");
+        let journal = root.path().join("swap-journal.json");
+        fs::write(&current, OLD_IMAGE).unwrap();
+        fs::set_permissions(&current, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&new_host, b"#!/bin/sh\nprintf '0.3.7-beta\\n'\n").unwrap();
+        replace_portable_host(&current, &new_host, &journal, "0.3.5-beta", |_| Ok(())).unwrap_err();
+        replace_portable_host(&current, &new_host, &journal, "0.3.7-beta", |_| Ok(())).unwrap();
+        assert_eq!(fs::read(&current).unwrap(), fs::read(&new_host).unwrap());
+        assert!(!journal.exists());
+    }
+
+    // Round 3, finding 8: a retry is not charged again for what is already downloaded.
+    #[test]
+    fn round3_a_retry_is_not_charged_for_files_it_already_holds() {
+        let root = tempfile::tempdir().unwrap();
+        let complete = part("complete", 5);
+        let short = part("short", 5);
+        let absent = part("absent", 7);
+        fs::write(root.path().join("complete"), b"12345").unwrap();
+        fs::write(root.path().join("short"), b"123").unwrap();
+        assert_eq!(
+            already_downloaded(root.path(), [&complete, &short, &absent].into_iter()),
+            5
+        );
     }
 }

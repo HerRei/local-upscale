@@ -199,24 +199,32 @@ fn lock_folder(directory: &Path) -> AppResult<fs::File> {
     }
 }
 
-/// Publish through a fresh inode, never following a pre-existing file or link.
-fn write_journal(journal: &Path, record: &SwapJournal) -> AppResult<()> {
+/// Replace `path` with `bytes` through a fresh file and a rename: a crash leaves the old
+/// or the new content, never a prefix, and a link at `path` is replaced, never followed.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     use std::io::Write;
-    let temporary = journal.with_extension(format!("new-{}", uuid::Uuid::new_v4()));
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Validation("The file has no folder".into()))?;
+    let temporary = path.with_extension(format!("new-{}", uuid::Uuid::new_v4()));
     let result = (|| -> AppResult<()> {
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        file.write_all(&serde_json::to_vec(record)?)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&temporary, journal)?;
-        sync_dir(journal.parent().unwrap())
+        fs::rename(&temporary, path)?;
+        sync_dir(parent)
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+fn write_journal(journal: &Path, record: &SwapJournal) -> AppResult<()> {
+    write_atomic(journal, &serde_json::to_vec(record)?)
 }
 
 /// Replace the executable at `current` with the file `stage` writes, keep it only when
@@ -578,5 +586,25 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round3_state_files_are_replaced_whole_and_never_through_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let marker = root.path().join("update-pending.json");
+        fs::write(&target, b"precious").unwrap();
+        std::os::unix::fs::symlink(&target, &marker).unwrap();
+        write_atomic(&marker, b"{\"version\":\"1\"}").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"precious");
+        assert_eq!(fs::read(&marker).unwrap(), b"{\"version\":\"1\"}");
+        write_atomic(&marker, b"2").unwrap();
+        assert_eq!(fs::read(&marker).unwrap(), b"2");
+        let names: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names.len(), 2, "no temporary file stays behind: {names:?}");
     }
 }
