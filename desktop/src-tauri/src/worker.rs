@@ -549,11 +549,16 @@ fn handle_worker_envelope(
 
     match envelope.message_type.as_str() {
         "job_completed" | "video_job_completed" => {
+            let body = if string(&envelope.data, "notes").is_empty() {
+                "Your enhanced media is ready."
+            } else {
+                "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
+            };
             let _ = app
                 .notification()
                 .builder()
                 .title("LocalSR finished")
-                .body("Your enhanced media is ready.")
+                .body(body)
                 .show();
         }
         "job_failed" => {
@@ -1121,7 +1126,10 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         "job_completed" | "video_job_completed" => {
             let id = string(data, "job_id");
             let output = string(data, "output_path");
-            lock(&state.database)?.finish_job(&id, "completed", &output, "")?;
+            // What the user should know about the finished job, such as a skipped fix;
+            // kept with the job and on the status line.
+            let notes = string(data, "notes");
+            lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
             lock(&state.database)?.record_job_duration(&id, number(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
             runtime.active_job_id.clear();
@@ -1132,7 +1140,11 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             runtime.progress = 100.0;
             runtime.last_output_path = output;
             runtime.status_title = "Complete".into();
-            runtime.status_detail = "The output was written successfully.".into();
+            runtime.status_detail = if notes.is_empty() {
+                "The output was written successfully.".into()
+            } else {
+                notes
+            };
             runtime.elapsed_seconds =
                 number(data, "inference_seconds").max(number(data, "elapsed_seconds"));
             runtime.estimated_remaining_seconds = 0.0;
@@ -1634,6 +1646,28 @@ mod tests {
         assert_eq!(runtime.comparison_media_id, "second");
         assert!(runtime.result_preview_data_url.is_empty());
         assert_eq!(runtime.active_job_id, "running-third");
+    }
+
+    #[test]
+    fn a_completed_job_keeps_its_note_on_the_status_line() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        let completed = |notes: Value| WorkerEnvelope {
+            message_type: "job_completed".into(),
+            data: json!({"job_id": "job", "output_path": "/out.png", "notes": notes}),
+        };
+        apply_worker_envelope(&state, &completed(json!("The fix was skipped."))).unwrap();
+        assert_eq!(
+            lock(&state.runtime).unwrap().status_detail,
+            "The fix was skipped."
+        );
+        apply_worker_envelope(&state, &completed(Value::Null)).unwrap();
+        assert_eq!(
+            lock(&state.runtime).unwrap().status_detail,
+            "The output was written successfully."
+        );
     }
 
     #[test]

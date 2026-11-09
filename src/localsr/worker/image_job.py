@@ -157,11 +157,10 @@ class ImageJobRunner:
             # pictures) must not stop the job: the image goes on without this fix, the job
             # says so, and nothing damaged is kept.
             model = CATALOG_BY_ID.get(stage.model_id)
+            reason = str(error).split(". ")[0].rstrip(".")
             note = (
                 f"The fix before upscaling ({model.name if model else stage.model_id}) was "
-                "skipped for this image: the model could not process it without damaging it, "
-                "which happens with line art, screentone and already sharp pictures. The rest "
-                "of the job ran as usual."
+                f"skipped for this image, which is upscaled without it. Reason: {reason}."
             )
             self._log(f"{note} ({error})")
             self.emit(WarningMessage(message=note))
