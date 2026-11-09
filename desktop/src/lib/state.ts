@@ -87,18 +87,64 @@ export function presetSlot(task: TaskKind, content: ContentKind, quality: Qualit
   return `${task}/${content}/${quality}`;
 }
 
-/** The 1× checkpoint a Fix chip resolves to for the chosen quality. */
+/**
+ * Fix models that can fail on some pictures (#95: NAFNet's deblur runs away on line art
+ * and already sharp photos). The engine skips such a fix before an upscale.
+ */
+export const UNSTABLE_FIX_MODELS = new Set(['nafnet_gopro_deblur']);
+
+const FIX_ROW_LABELS: Record<Exclude<FixKind, 'faces'>, string> = {
+  noise: 'Fix noise',
+  jpeg: 'Fix JPEG',
+  blur: 'Fix blur',
+};
+
+/**
+ * Where the user's own fix model is remembered. One choice per problem and quality,
+ * shared by Upscale and Restore and by Photo and Illustration; it cannot collide with
+ * `presetSlot`, whose first part is a task.
+ */
+export function fixSlot(fix: Exclude<FixKind, 'faces'>, quality: 'quick' | 'best'): string {
+  return `fix/${fix}/${quality}`;
+}
+
+/** The quality whose fix a job uses. A hand-picked upscaler uses Best's. */
+export function fixQuality(quality: Quality | ''): 'quick' | 'best' {
+  return quality === 'quick' ? 'quick' : 'best';
+}
+
+function fitsFix(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): boolean {
+  return (
+    model.native_scale === 1 && !model.purposes.includes('face') && fixesOf(model).includes(fix)
+  );
+}
+
+/**
+ * The remembered fix model, checked on every read: a pin left behind by a catalog
+ * change, or edited by hand, must still fix that problem and allow a preset.
+ */
+export function rememberedFixModel(
+  snapshot: AppSnapshot,
+  fix: Exclude<FixKind, 'faces'>,
+  quality: 'quick' | 'best',
+  pins: Record<string, string> = {},
+): CatalogModel | undefined {
+  const id = pins[fixSlot(fix, quality)];
+  const model = id ? snapshot.catalog.models.find((entry) => entry.model_id === id) : undefined;
+  return model && fitsFix(model, fix) && rightsAllowPreset(model) ? model : undefined;
+}
+
+/** The 1× checkpoint a Fix chip resolves to: the user's own choice, else by quality. */
 export function chooseFixModel(
   snapshot: AppSnapshot,
   fix: Exclude<FixKind, 'faces'>,
   quality: 'quick' | 'best',
+  pins: Record<string, string> = {},
 ): CatalogModel | undefined {
+  const remembered = rememberedFixModel(snapshot, fix, quality, pins);
+  if (remembered) return remembered;
   const candidates = snapshot.catalog.models.filter(
-    (model) =>
-      model.native_scale === 1 &&
-      !model.purposes.includes('face') &&
-      fixesOf(model).includes(fix) &&
-      presetMayPick(model),
+    (model) => fitsFix(model, fix) && presetMayPick(model),
   );
   return rankForQuality(candidates, quality)[0];
 }
@@ -128,6 +174,12 @@ export const FIT_LABELS: Record<Fit, string> = {
 
 export interface PlanStage {
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video' | 'edit';
+  /** What the row's Change opens: the fix before the upscaler, the main model, or Faces. */
+  role: 'fix' | 'primary' | 'face';
+  /** The problem this row's model fixes, when it fixes one. */
+  fix?: Exclude<FixKind, 'faces'>;
+  /** The model is the user's remembered choice for that problem and quality. */
+  remembered?: boolean;
   label: string;
   model?: CatalogModel;
   videoModel?: CatalogVideoModel;
@@ -164,6 +216,7 @@ export function resolvePlan(
     if (model) {
       stages.push({
         kind: 'edit',
+        role: 'primary',
         label: 'Edit',
         editModel: model,
         installed: model.installed,
@@ -176,13 +229,23 @@ export function resolvePlan(
   }
   const byId = (id: string): CatalogModel | undefined =>
     snapshot.catalog.models.find((model) => model.model_id === id);
+  const chip = settings.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
+  const remembered = (model: CatalogModel, fix?: Exclude<FixKind, 'faces'>): boolean =>
+    Boolean(fix) &&
+    rememberedFixModel(snapshot, fix!, fixQuality(settings.quality), settings.preset_pins)
+      ?.model_id === model.model_id;
   const stageFor = (
     kind: PlanStage['kind'],
+    role: PlanStage['role'],
     label: string,
     model: CatalogModel | undefined,
+    fix?: Exclude<FixKind, 'faces'>,
   ): PlanStage | undefined =>
     model && {
       kind,
+      role,
+      fix,
+      remembered: remembered(model, fix),
       label,
       model,
       installed: model.installed,
@@ -193,11 +256,14 @@ export function resolvePlan(
 
   if (settings.task === 'upscale' && settings.preprocess_model_id) {
     const model = byId(settings.preprocess_model_id);
-    const kind =
-      model?.stage === 'deblock' || fixesOf(model ?? ({} as CatalogModel)).includes('jpeg')
-        ? 'deblock'
-        : 'restore';
-    const stage = stageFor(kind, kind === 'deblock' ? 'Fix JPEG' : 'Fix first', model);
+    const fixes = (model ? fixesOf(model) : []).filter(
+      (item): item is Exclude<FixKind, 'faces'> => item !== 'faces',
+    );
+    const kind = model?.stage === 'deblock' || fixes.includes('jpeg') ? 'deblock' : 'restore';
+    // The chip names the problem; a recipe saved before chips existed falls back to
+    // the model, when it fixes only one thing.
+    const fix = chip && fixes.includes(chip) ? chip : fixes.length === 1 ? fixes[0] : undefined;
+    const stage = stageFor(kind, 'fix', fix ? FIX_ROW_LABELS[fix] : 'Fix first', model, fix);
     if (stage) stages.push(stage);
   }
 
@@ -205,6 +271,7 @@ export function resolvePlan(
     const video = options.selectedVideoModel;
     stages.push({
       kind: 'video',
+      role: 'primary',
       label: 'Video',
       videoModel: video,
       installed: video.installed,
@@ -215,6 +282,7 @@ export function resolvePlan(
   } else if (settings.selected_model_id === '__custom__') {
     stages.push({
       kind: settings.task === 'denoise' ? 'restore' : 'upscale',
+      role: 'primary',
       label: settings.task === 'denoise' ? 'Restore' : `Upscale ×${settings.output_scale}`,
       custom: settings.custom_model_path,
       installed: Boolean(settings.custom_model_path),
@@ -224,16 +292,19 @@ export function resolvePlan(
     });
   } else {
     const primary = byId(settings.selected_model_id);
+    const restoring = settings.task === 'denoise';
     const stage = stageFor(
-      settings.task === 'denoise' ? 'restore' : 'upscale',
-      settings.task === 'denoise' ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      restoring ? 'restore' : 'upscale',
+      'primary',
+      restoring ? 'Restore' : `Upscale ×${settings.output_scale}`,
       primary,
+      restoring && primary && chip && fixesOf(primary).includes(chip) ? chip : undefined,
     );
     if (stage) stages.push(stage);
   }
 
   if (options.faceEnabled && options.faceModel && settings.task !== 'denoise') {
-    const stage = stageFor('face_restore', 'Faces', options.faceModel);
+    const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
   return stages;
@@ -252,7 +323,9 @@ export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): Catal
     );
   }
   if (task === 'denoise') {
-    return snapshot.catalog.models.filter((model) => model.native_scale === 1);
+    return snapshot.catalog.models.filter(
+      (model) => model.native_scale === 1 && !model.purposes.includes('face'),
+    );
   }
   if (task === 'video') {
     return snapshot.catalog.models.filter(
