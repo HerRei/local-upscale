@@ -28,7 +28,6 @@ import json
 import math
 import os
 import platform
-import resource
 import shutil
 import statistics
 import sys
@@ -352,6 +351,8 @@ def main(argv=None) -> int:
             if "bench" not in locals() or bench.guard.lowest is None
             else round(bench.guard.lowest / 2**30, 2)
         )
+        import resource
+
         report["peak_rss_gb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**30, 2)
         text = json.dumps(report, indent=2, default=str, allow_nan=True)
         if args.report:

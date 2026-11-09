@@ -220,7 +220,7 @@ def test_when_every_lane_fails_the_unfinished_photos_go_to_the_normal_path_in_or
 
 
 def test_slow_encoders_bound_the_photos_in_memory_and_the_tiles_in_flight():
-    release, saturated = threading.Event(), threading.Event()
+    release, saturated, encoders_full = threading.Event(), threading.Event(), threading.Event()
     lock = threading.Lock()
     counts = Counter()
 
@@ -236,6 +236,8 @@ def test_slow_encoders_bound_the_photos_in_memory_and_the_tiles_in_flight():
             with lock:
                 counts["active"] += 1
                 counts["peak_active"] = max(counts["peak_active"], counts["active"])
+                if counts["active"] == 4:
+                    encoders_full.set()
             assert release.wait(10)
             with lock:
                 counts["active"] -= 1
@@ -264,7 +266,7 @@ def test_slow_encoders_bound_the_photos_in_memory_and_the_tiles_in_flight():
     worker.start()
     try:
         assert saturated.wait(10)
-        time.sleep(0.2)
+        assert encoders_full.wait(10)
         # Four encoding, one waiting for an encoder, one being inferred or decoded.
         assert counts["live"] == 6
         assert counts["peak_active"] == 4
@@ -320,12 +322,22 @@ def test_cancel_while_encoders_are_full_does_not_deadlock_and_keeps_committed_sa
         photo.encode = encode
         return photo
 
-    timer = threading.Timer(0.2, cancel.set)
-    timer.start()
-    try:
-        outcomes, _ = run(range(20), open_photo, [echo] * 2, cancel=cancel)
-    finally:
-        timer.cancel()
+    outcomes = []
+
+    def finished(key, result):
+        outcomes.append((key, "done", result))
+        if key == 0:
+            cancel.set()
+
+    run_photo_batch(
+        range(20),
+        open_photo=open_photo,
+        lanes=[echo] * 2,
+        cancel=cancel,
+        finished=finished,
+        failed=lambda key, error: outcomes.append((key, "failed", str(error))),
+        cancelled=lambda key: outcomes.append((key, "cancelled", None)),
+    )
     statuses = dict((key, status) for key, status, _ in outcomes)
     assert statuses[0] == "done"
     assert len(outcomes) == 20
@@ -493,7 +505,7 @@ def test_the_queue_holds_one_tile_per_lane():
     assert counts["peak_out"] <= 4 * 3
 
 
-def sized_photos(nbytes, counts, lock, release=None, hold=0.0):
+def sized_photos(nbytes, counts, lock, release=None, hold=0.0, opened=None, saving=None):
     def open_photo(key):
         photo = Photo(key, tiles=1)
         photo.nbytes = nbytes
@@ -504,6 +516,8 @@ def sized_photos(nbytes, counts, lock, release=None, hold=0.0):
                 counts["peak_saving"] = max(counts["peak_saving"], counts["saving"])
                 counts["savers"] += 1
                 counts["peak_savers"] = max(counts["peak_savers"], counts["savers"])
+                if saving is not None:
+                    saving.set()
             if release is not None:
                 assert release.wait(10)
             time.sleep(hold)
@@ -520,6 +534,8 @@ def sized_photos(nbytes, counts, lock, release=None, hold=0.0):
         with lock:
             counts["open"] += 1
             counts["peak_open"] = max(counts["peak_open"], counts["open"])
+            if opened is not None and counts["open"] == 2:
+                opened.set()
         photo.encode, photo.close = encode, close
         return photo
 
@@ -543,9 +559,9 @@ def test_a_photo_larger_than_the_budget_still_saves_alone():
 
 
 def test_large_photos_stop_opening_at_the_budget():
-    release = threading.Event()
+    release, opened, saving = threading.Event(), threading.Event(), threading.Event()
     lock, counts = threading.Lock(), Counter()
-    open_photo = sized_photos(600, counts, lock, release=release)
+    open_photo = sized_photos(600, counts, lock, release=release, opened=opened, saving=saving)
     outcomes = []
     worker = threading.Thread(
         target=lambda: outcomes.extend(
@@ -554,7 +570,7 @@ def test_large_photos_stop_opening_at_the_budget():
     )
     worker.start()
     try:
-        time.sleep(0.3)
+        assert opened.wait(10) and saving.wait(10)
         # One saving and one waiting for room; no third photo is decoded.
         assert counts["peak_open"] == 2 and counts["peak_savers"] == 1
     finally:
@@ -597,6 +613,12 @@ def test_the_budget_holds_with_real_large_outputs():
 def test_on_cancel_photos_outside_an_encoder_are_reported_while_a_save_still_runs():
     cancel, release = threading.Event(), threading.Event()
     outcomes = []
+    cancelled_all = threading.Event()
+
+    def cancelled(key):
+        outcomes.append((key, "cancelled"))
+        if len(outcomes) == 5:
+            cancelled_all.set()
 
     def open_photo(key):
         photo = Photo(key, tiles=3)
@@ -622,14 +644,12 @@ def test_on_cancel_photos_outside_an_encoder_are_reported_while_a_save_still_run
             cancel=cancel,
             finished=lambda key, result: outcomes.append((key, "done")),
             failed=lambda key, error: outcomes.append((key, "failed")),
-            cancelled=lambda key: outcomes.append((key, "cancelled")),
+            cancelled=cancelled,
         )
     )
     worker.start()
     try:
-        deadline = time.monotonic() + 5
-        while len(outcomes) < 5 and time.monotonic() < deadline:
-            time.sleep(0.01)
+        assert cancelled_all.wait(5)
         # Everything but the running save is reported before that save ends.
         assert sorted(outcomes) == [(key, "cancelled") for key in range(1, 6)]
     finally:

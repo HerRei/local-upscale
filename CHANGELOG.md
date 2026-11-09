@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.8-beta] - Unreleased
+
+### Changed
+
+- Hardened cross-platform CI and test isolation.
+
 ## [0.3.7-beta] - Unreleased
 
 ### Added
