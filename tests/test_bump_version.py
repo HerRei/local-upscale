@@ -59,6 +59,14 @@ def tree(tmp_path: Path) -> Path:
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, target)
+    # Exercise a fresh release bump, independent of notes already drafted for it.
+    changelog = tmp_path / "CHANGELOG.md"
+    text = changelog.read_text()
+    next_heading = f"## [{bump_version.next_patch(VERSION)}] - Unreleased\n"
+    if next_heading in text:
+        before, after = text.split(next_heading, 1)
+        text = before + after[after.index(f"## [{VERSION}]") :]
+        changelog.write_text(text)
     return tmp_path
 
 

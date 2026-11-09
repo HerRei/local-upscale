@@ -17,6 +17,7 @@
   `statement_v2`). The app checks them before it downloads anything, so a tampered feed
   can no longer make it fetch oversized or extra files. Older apps keep reading the
   unchanged format 1 statement from the same feed.
+- Hardened cross-platform CI and test isolation.
 
 ### Fixed
 

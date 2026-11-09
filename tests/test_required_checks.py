@@ -73,3 +73,17 @@ def test_verifier_applies_only_to_its_paths():
         assert required.applies(verifier, event, ["packaging/updates/verifier/src/main.rs"])
         assert required.applies(verifier, event, [".github/workflows/verifier.yml"])
         assert not required.applies(verifier, event, ["docs/updates.md"])
+
+
+def test_ci_covers_release_pushes_pull_requests_and_all_rust_hosts():
+    ci = (WORKFLOWS / "ci.yml").read_text()
+    triggers = ci.split("permissions:", 1)[0]
+    assert 'branches: [main, "release/**"]' in triggers
+    assert "  pull_request:\n  workflow_dispatch:" in triggers
+    for job, next_job in (("test-linux", "test-windows"), ("test-windows", "test-macos")):
+        section = ci.split(f"  {job}:\n", 1)[1].split(f"  {next_job}:\n", 1)[0]
+        assert "cargo clippy --all-targets -- -D warnings" in section
+    assert "cargo clippy --all-targets -- -D warnings" in ci.split("  test-macos:\n", 1)[1]
+    assert "-m pyright --pythonpath" in ci
+    assert "--random-order --random-order-seed=38037" in ci
+    assert "-m pytest tests/" in ci  # Includes test_worker_protocol_contract.py.

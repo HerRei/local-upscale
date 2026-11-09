@@ -214,7 +214,8 @@ def test_the_engine_answers_a_capabilities_request_with_its_hardware():
                 done.set()
                 return
 
-    threading.Thread(target=read, daemon=True).start()
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
     try:
         engine.stdin.write(json.dumps({"type": "capabilities_request", "data": {}}) + "\n")
         engine.stdin.flush()
@@ -222,6 +223,8 @@ def test_the_engine_answers_a_capabilities_request_with_its_hardware():
     finally:
         engine.kill()
         engine.wait()
+        reader.join(timeout=5)
+        assert not reader.is_alive()
     answer = answers[-1]
     assert answer["type"] == "capabilities_info", answer
     assert any(device["id"] == "cpu" for device in answer["data"]["devices"])
