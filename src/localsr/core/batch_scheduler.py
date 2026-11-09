@@ -7,15 +7,19 @@ tile coordinates in photo order (a photo's tiles enter the queue only after the
 previous photo's), stitches each lane result into its own photo, and hands a
 finished photo to a pool of encoder threads.
 
-Bounds: the queue holds one tile per lane, so at most two tiles per lane exist
-at a time; at most ``encoders + 2`` photos are open at once, counting the one
-being decoded, the one being tiled and every photo that waits for or occupies
-an encoder. A slow disk therefore stalls the lanes instead of filling memory.
+Bounds: the queue holds one tile per lane. At most ``encoders + 2`` photos are
+open at once, counting the one being decoded, the one being tiled and every
+photo that waits for or occupies an encoder. With a ``memory_budget`` (bytes),
+saves run together only while the ``nbytes`` of their photos fit in it, and no
+further photo is decoded while the open photos already reach it; a photo larger
+than the budget still runs, alone. A slow disk therefore stalls the lanes
+instead of filling memory.
 
-A photo provides ``tiles``; ``start()`` before its first tile is queued;
-``dispatch(tile)`` as each tile is queued; ``stitch(tile, pixels)`` for each
-result; ``encode()`` once, on an encoder thread, after its last stitch; and
-``close()`` exactly once, last, on the calling thread.
+A photo provides ``tiles`` and optionally ``nbytes`` (its peak memory while it
+saves); ``start()`` before its first tile is queued; ``dispatch(tile)`` as each
+tile is queued; ``stitch(tile, pixels)`` for each result; ``encode()`` once, on
+an encoder thread, after its last stitch; and ``close()`` exactly once, last, on
+the calling thread.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import queue
 import threading
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,6 +46,7 @@ class _Entry:
     photo: Any
     tiles: deque = field(default_factory=deque)
     total: int = 0
+    nbytes: int = 0
     stitched: int = 0
     in_flight: int = 0
     error: Exception | None = None
@@ -70,8 +75,9 @@ def _render(lane, entry: _Entry, tile, cancel: threading.Event) -> tuple:
         return entry, tile, _DONE, lane(entry.photo, tile)
     except PhotoFallback as error:
         return entry, tile, _PHOTO, error
-    except InterruptedError:
-        return entry, tile, _SKIPPED, None
+    except InterruptedError as error:
+        # Without a cancellation, an interrupted lane cannot be trusted with tiles.
+        return entry, tile, (_SKIPPED if cancel.is_set() else _LANE), error
     except BaseException as error:  # noqa: BLE001 - every taken tile must be reported
         return entry, tile, _LANE, error
 
@@ -85,8 +91,9 @@ def run_photo_batch(
     finished: Callable[[Any, Any], None],
     failed: Callable[[Any, Exception], None],
     cancelled: Callable[[Any], None],
-    lane_failed: Callable[[BaseException], None] | None = None,
+    lane_failed: Callable[[Any, BaseException], None] | None = None,
     encoders: int = 4,
+    memory_budget: int | None = None,
     poll: float = 0.02,
 ) -> list[Any]:
     """Process ``items`` and report each exactly once, or return it.
@@ -94,10 +101,12 @@ def run_photo_batch(
     ``open_photo(item)`` decodes an item into a photo. A failure to open, start,
     stitch or encode a photo reports only that item as failed. A lane raising
     :class:`PhotoFallback` returns its photo, unfinished, to the caller. Any other
-    lane error retires that lane, and its tile runs on another; once no lane is
-    left, every unfinished photo is returned. On cancellation, running native
-    calls and saves finish before their photos are released, a save that already
-    committed still counts as finished, and every other item is cancelled.
+    lane error retires that lane (``lane_failed(lane, error)``), and its tile runs
+    on another; once no lane that may take tiles is left (all retired, or only
+    idle ones such as a GPU lane on battery), every unfinished photo is returned.
+    On cancellation, running native calls finish before their photos are
+    released, every photo outside an encoder is reported cancelled at once, and
+    each running save is reported as it ends: finished if it committed.
 
     Returns the items for the normal per-photo runner, in their original order.
     """
@@ -117,12 +126,14 @@ def run_photo_batch(
     ready: deque[_Entry] = deque()
     tiling: deque[_Entry] = deque()
     retry: deque[tuple[_Entry, Any]] = deque()
+    waiting: deque[_Entry] = deque()  # tiled, waiting for an encoder or for memory
     encoding: dict[_Entry, Future] = {}
     resolved: set[int] = set()
     returned: list[int] = []
-    counts = {"open": 0, "lanes": len(lanes)}
+    alive = set(range(len(lanes)))
+    state = {"open": 0, "open_bytes": 0, "usable": True}
 
-    def lane_loop(lane) -> None:
+    def lane_loop(number: int, lane) -> None:
         while not stop.is_set():
             if not _available(lane):
                 stop.wait(poll)
@@ -131,9 +142,9 @@ def run_photo_batch(
                 entry, tile = work.get(timeout=poll)
             except queue.Empty:
                 continue
-            result = _render(lane, entry, tile, cancel)
+            result = (number, *_render(lane, entry, tile, cancel))
             results.put(result)
-            retired = result[2] == _LANE
+            retired = result[3] == _LANE
             # An idle lane must not keep the last tile's input or output alive.
             del entry, tile, result
             if retired:
@@ -149,7 +160,8 @@ def run_photo_batch(
             returned.append(index)
 
     def close(entry: _Entry) -> None:
-        counts["open"] -= 1
+        state["open"] -= 1
+        state["open_bytes"] -= entry.nbytes
         entry.photo.close()
 
     def take_opened() -> None:
@@ -159,25 +171,27 @@ def run_photo_batch(
         try:
             photo = future.result()
         except (InterruptedError, CancelledError):
-            counts["open"] -= 1
+            state["open"] -= 1
             return
         except Exception as error:  # noqa: BLE001 - this photo only
-            counts["open"] -= 1
+            state["open"] -= 1
             resolve(index, "failed", error)
             return
-        entry = _Entry(index, photo, deque(photo.tiles))
+        entry = _Entry(index, photo, deque(photo.tiles), nbytes=int(getattr(photo, "nbytes", 0)))
         entry.total = len(entry.tiles)
-        entry.deferred = counts["lanes"] == 0
+        entry.deferred = not state["usable"]
+        state["open_bytes"] += entry.nbytes
         ready.append(entry)
 
     def start_opening() -> None:
-        if not opening and pending and not ready and counts["open"] < max_open:
+        room = memory_budget is None or state["open_bytes"] < memory_budget
+        if not opening and pending and not ready and state["open"] < max_open and room:
             index = pending.popleft()
-            counts["open"] += 1
+            state["open"] += 1
             opening.append((index, decoder.submit(open_photo, items[index])))
 
     def feed() -> None:
-        while counts["lanes"] and not work.full():
+        while state["usable"] and not work.full():
             if retry:
                 entry, tile = retry.popleft()
                 if entry.broken:
@@ -209,12 +223,12 @@ def run_photo_batch(
         except queue.Empty:
             return
         while True:
-            entry, tile, kind, value = result
+            number, entry, tile, kind, value = result
             entry.in_flight -= 1
             if kind == _LANE:
-                counts["lanes"] -= 1
+                alive.discard(number)
                 if lane_failed is not None:
-                    lane_failed(value)
+                    lane_failed(lanes[number], value)
                 retry.append((entry, tile))
             elif kind == _PHOTO:
                 entry.deferred = True
@@ -230,8 +244,11 @@ def run_photo_batch(
             except queue.Empty:
                 return
 
-    def without_lanes() -> None:
-        """Every lane retired: return each unfinished photo to the normal runner."""
+    def check_lanes() -> None:
+        """No lane may take tiles: return each unfinished photo to the normal runner."""
+        state["usable"] = any(_available(lanes[number]) for number in alive)
+        if state["usable"]:
+            return
         while True:
             try:
                 entry, _tile = work.get_nowait()
@@ -255,11 +272,19 @@ def run_photo_batch(
                 close(entry)
                 resolve(entry.index, "returned")
             else:
-                encoding[entry] = encoder.submit(entry.photo.encode)
+                waiting.append(entry)
         while ready and ready[0].deferred:
             entry = ready.popleft()
             close(entry)
             resolve(entry.index, "returned")
+
+    def start_saves() -> None:
+        while waiting and len(encoding) < encoders:
+            busy = sum(entry.nbytes for entry in encoding)
+            if encoding and memory_budget is not None and busy + waiting[0].nbytes > memory_budget:
+                return
+            entry = waiting.popleft()
+            encoding[entry] = encoder.submit(entry.photo.encode)
 
     def finish_encoded(report: bool = True) -> None:
         for entry, future in [(e, f) for e, f in encoding.items() if f.done()]:
@@ -269,15 +294,27 @@ def run_photo_batch(
                 continue
             try:
                 result = future.result()
-            except (InterruptedError, CancelledError):
-                continue  # Cancelled before or during the save; reported below.
+            except (InterruptedError, CancelledError) as error:
+                if index_open(entry.index):
+                    if cancel.is_set():
+                        resolve_cancelled(entry.index)
+                    else:
+                        resolve(entry.index, "failed", InterruptedError(str(error)))
+                continue
             except Exception as error:  # noqa: BLE001 - this photo only
                 resolve(entry.index, "failed", error)
             else:
                 resolve(entry.index, "finished", result)
 
+    def index_open(index: int) -> bool:
+        return index not in resolved
+
+    def resolve_cancelled(index: int) -> None:
+        resolved.add(index)
+        cancelled(items[index])
+
     threads = [
-        threading.Thread(target=lane_loop, args=(lane,), name=f"localsr-batch-lane-{i}")
+        threading.Thread(target=lane_loop, args=(i, lane), name=f"localsr-batch-lane-{i}")
         for i, lane in enumerate(lanes)
     ]
     decoder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="localsr-batch-decode")
@@ -288,41 +325,51 @@ def run_photo_batch(
     try:
         while not cancel.is_set():
             take_opened()
-            if counts["lanes"] == 0:
-                without_lanes()
+            check_lanes()
             feed()
             start_opening()
-            if not (tiling or encoding or opening or ready or pending):
+            if not (tiling or waiting or encoding or opening or ready or pending):
                 break
             collect(poll)
             finish_tiled()
             finish_encoded()
+            start_saves()
         aborted = False
     finally:
         # Native calls cannot be interrupted: let them return before any photo
-        # they read is released. A running save commits or raises InterruptedError;
-        # one that has not started is dropped.
+        # they read is released.
         stop.set()
         for thread in threads:
             thread.join()
         decoder.shutdown(wait=True, cancel_futures=True)
-        encoder.shutdown(wait=True, cancel_futures=True)
         if aborted:
+            encoder.shutdown(wait=True, cancel_futures=True)
             for _, future in opening:
                 if not future.cancelled() and future.exception() is None:
                     future.result().close()
+            for entry in (*tiling, *ready, *waiting):
+                close(entry)
+            finish_encoded(report=False)
         else:
             take_opened()
-        for entry in (*tiling, *ready):
-            close(entry)
-        tiling.clear()
-        ready.clear()
-        finish_encoded(report=not aborted)
-    for index, item in enumerate(items):
-        if index in resolved:
-            continue
-        if cancel.is_set():
-            cancelled(item)
-        else:
-            failed(item, InterruptedError("The photo was interrupted without a cancellation."))
+            for entry in (*tiling, *ready, *waiting):
+                close(entry)
+            tiling.clear()
+            ready.clear()
+            waiting.clear()
+            in_encoder = {entry.index for entry in encoding}
+            for index in range(len(items)):
+                if index_open(index) and index not in in_encoder:
+                    if cancel.is_set():
+                        resolve_cancelled(index)
+                    else:
+                        resolve(index, "failed", InterruptedError("The photo was interrupted."))
+            # A running save commits or raises InterruptedError; one that has not
+            # started is dropped. Report each as it ends.
+            for future in encoding.values():
+                future.cancel()
+            while encoding:
+                wait(list(encoding.values()), return_when=FIRST_COMPLETED)
+                finish_encoded()
+            encoder.shutdown(wait=True)
     return [items[index] for index in sorted(returned)]
