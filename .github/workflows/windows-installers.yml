@@ -45,14 +45,6 @@ jobs:
             backend: CPU
             suffix: Windows-CPU-x86_64.exe
             source: Windows-CPU-source-and-notices.tar.gz
-          - id: windows-x86_64-directml
-            backend: DirectML
-            suffix: Windows-DirectML-x86_64.exe
-            source: Windows-DirectML-source-and-notices.tar.gz
-          - id: windows-x86_64-cuda
-            backend: CUDA
-            suffix: Windows-CUDA-x86_64.exe
-            source: Windows-CUDA-source-and-notices.tar.gz
     defaults:
       run:
         shell: pwsh
@@ -123,6 +115,7 @@ jobs:
           # update switches.
           python scripts/release_targets.py --update-env "${{ matrix.id }}" --commit $env:GITHUB_SHA |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LOCALSR_UPDATE_FEED=https://localhost:8443/updates" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install the locked backend
         run: |
