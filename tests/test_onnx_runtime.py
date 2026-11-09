@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -191,6 +192,7 @@ def gated(
     failing=frozenset(),
     device="",
     identity=None,
+    persist=True,
 ):
     """A CPU route that behaves like a GPU route under test.
 
@@ -236,6 +238,7 @@ def gated(
         provider="CPUExecutionProvider",
         device=device,
         identity=device if identity is None else identity,
+        persist=persist,
     )
     return OnnxImageDescriptor(descriptor(), route=route), calls
 
@@ -927,7 +930,7 @@ def test_a_gpu_whose_preflight_process_crashed_is_refused(monkeypatch, tmp_path)
     real_write = gpu_guard._write_json
 
     def full_disk(path, value):
-        if path.name == "crashes.json":
+        if path.name.startswith("crash-"):
             raise OSError("disk full")
         real_write(path, value)
 
@@ -968,9 +971,15 @@ def test_the_preflight_counts_only_a_native_fault_during_a_gpu_call(monkeypatch)
         "import os, pathlib; pathlib.Path(os.environ['LOCALSR_ONNX_GATE_CACHE'], "
         "'running-0123456789abcdef.json').write_text('{}'); "
     )
-    child(note + "os.abort()")
+    # A real native fault would make the system write a crash report for every test run;
+    # SIGTERM stands in for one here (native_fault itself is tested on exit codes).
+    stand_in = "import signal; os.kill(os.getpid(), signal.SIGTERM)"
+    monkeypatch.setattr(
+        gpu_guard, "native_fault", lambda code: code in (-signal.SIGTERM, signal.SIGTERM)
+    )
+    child(note + stand_in)
     assert gpu_guard.run("gpu:0") == "crashed"
-    child("import os; os.abort()")  # before any GPU call: startup, antivirus, imports
+    child("import os; " + stand_in)  # before any GPU call: startup, antivirus, imports
     assert gpu_guard.run("gpu:0") == "unknown"
     child(note + "raise SystemExit(1)")  # a plain failure, not a fault
     assert gpu_guard.run("gpu:0") == "unknown"
@@ -1005,6 +1014,19 @@ def test_the_preflight_counts_only_a_native_fault_during_a_gpu_call(monkeypatch)
         gpu_guard.run("gpu:0", cancelled)
 
 
+def test_native_faults_are_told_apart_from_kills_and_failures():
+    from localsr.core.gpu_guard import native_fault
+
+    if os.name == "nt":
+        faults, others = (0xC0000005, 0xC0000409, 3), (0, 1, 2, 75)
+    else:
+        faults = (-signal.SIGSEGV, -signal.SIGABRT, -signal.SIGBUS, -signal.SIGILL)
+        others = (0, 1, 2, 75, -signal.SIGKILL, -signal.SIGTERM)
+    assert all(native_fault(code) for code in faults)
+    assert not any(native_fault(code) for code in others)
+    assert not native_fault(None)
+
+
 def test_the_preflight_child_ends_itself_when_it_hangs():
     from pathlib import Path
 
@@ -1034,3 +1056,76 @@ def test_the_engine_starts_the_preflight_child_from_its_command_line():
     # The engine's server would exit 0 on the closed input; only the preflight says it
     # could not test an unknown device.
     assert child.returncode == gpu_guard.UNTESTED
+
+
+def test_crash_records_survive_locked_notes_full_disks_and_other_writers(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from localsr.core import gpu_guard
+
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
+    monkeypatch.setenv("LOCALSR_ONNX_GATE_CACHE", str(tmp_path))
+    notes = gpu_guard.CrashNotes(tmp_path)
+    locked = tmp_path / "running-aaaaaaaaaaaaaaaa-77.json"
+    crashed = tmp_path / "running-bbbbbbbbbbbbbbbb-4242.json"
+    locked.write_text(json.dumps({"key": "gpu A", "pid": 77}))
+    crashed.write_text(json.dumps({"key": "gpu B", "pid": 4242}))
+    os.utime(locked, (0, 0))  # stale
+    unlink = Path.unlink
+
+    def sharing_violation(self, missing_ok=False):
+        if self == locked:
+            raise PermissionError("in use")
+        unlink(self, missing_ok=missing_ok)
+
+    def listing(*entries):
+        return lambda self: [{"key": key, "pid": pid, "path": path} for key, pid, path in entries]
+
+    # A note that cannot be removed does not stop settling before the crashed engine's note.
+    monkeypatch.setattr(Path, "unlink", sharing_violation)
+    monkeypatch.setattr(
+        gpu_guard.CrashNotes, "running", listing(("gpu A", 77, locked), ("gpu B", 4242, crashed))
+    )
+    monkeypatch.setenv(gpu_guard.CRASHED_ENGINE_ENV, "4242")
+    gpu_guard.settle()
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
+    assert notes.crashed("gpu B") == "engine" and not crashed.exists()
+
+    # Each GPU has its own record: another process recording another GPU keeps both.
+    assert gpu_guard.CrashNotes(tmp_path).mark("gpu C", "preflight")
+    assert notes.crashed("gpu B") == "engine" and notes.crashed("gpu C") == "preflight"
+
+    # A record that cannot be stored keeps its note as the evidence.
+    crashed.write_text(json.dumps({"key": "gpu D", "pid": 4242}))
+    monkeypatch.setattr(gpu_guard.CrashNotes, "running", listing(("gpu D", 4242, crashed)))
+
+    def full_disk(path, value):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(gpu_guard, "_write_json", full_disk)
+    monkeypatch.setenv(gpu_guard.CRASHED_ENGINE_ENV, "4242")
+    gpu_guard.settle()
+    assert crashed.exists()
+
+
+def test_a_stored_preflight_pass_needs_a_gpu_that_can_be_told_apart(monkeypatch, tmp_path):
+    from localsr.core import gpu_guard
+
+    outcomes = []
+
+    def preflight(device, cancel_event=None):
+        outcomes.append(device)
+        return "passed"
+
+    monkeypatch.setattr(gpu_guard, "run", preflight)
+    monkeypatch.setattr(gpu_guard, "_PREFLIGHT_TRIED", set())
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
+    image = torch.rand(1, 3, 8, 8)
+    first, _ = gated(monkeypatch, tmp_path, ("a",), device="gpu:0")
+    first(image)
+    assert (tmp_path / "preflight.json").exists()
+    # The same identity and device, now one of two identical cards: tested again.
+    monkeypatch.setattr(gpu_guard, "_PREFLIGHT_TRIED", set())
+    twin, _ = gated(monkeypatch, tmp_path, ("a",), device="gpu:0", persist=False)
+    twin(image)
+    assert outcomes == ["gpu:0", "gpu:0"]

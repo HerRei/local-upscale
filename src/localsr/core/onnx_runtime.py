@@ -386,7 +386,8 @@ class _OnnxImage(torch.nn.Module):
             not self.route.device
             or os.environ.get(gpu_guard.CHILD_ENV)
             or key in gpu_guard._PREFLIGHT_TRIED
-            or key in self.preflight_passed
+            # A stored pass only counts for a GPU that can be told apart across restarts.
+            or (self.route.persist and key in self.preflight_passed)
         ):
             return None
         self._status(
