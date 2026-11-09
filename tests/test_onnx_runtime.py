@@ -1027,21 +1027,56 @@ def test_native_faults_are_told_apart_from_kills_and_failures():
     assert not native_fault(None)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="on Windows the engine's job object ends it")
 def test_the_preflight_child_ends_itself_when_it_hangs():
     from pathlib import Path
 
-    # The child's own limit, for a call that blocks or a parent that is gone: here 0.5 s,
+    # The child's own limit, for a call that blocks or a parent that is gone: here 1 s,
     # while its route lookup hangs for a minute.
     code = (
         "import time; from localsr.core import gpu_guard, inference; "
-        "gpu_guard.TIMEOUT_SECONDS = -29.5; "
+        "gpu_guard.TIMEOUT_SECONDS = -29; "
         "inference._onnx_route = lambda device: time.sleep(60); "
         "raise SystemExit(gpu_guard.child_main(['gpu:0']))"
     )
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
     started = time.monotonic()
     child = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, timeout=120)
-    assert child.returncode == 1 and time.monotonic() - started < 50
+    assert child.returncode == -signal.SIGALRM and time.monotonic() - started < 50
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the job object is Windows only")
+def test_a_killed_engine_takes_its_preflight_child_along(tmp_path):
+    from pathlib import Path
+
+    # A stand-in engine runs a preflight whose child writes its process ID and hangs.
+    pid_file = tmp_path / "child.pid"
+    child = (
+        f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(120)"
+    )
+    engine = (
+        "import sys; from localsr.core import gpu_guard; "
+        f"gpu_guard._command = lambda device: [sys.executable, '-c', {child!r}]; "
+        "gpu_guard.run('gpu:0')"
+    )
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    process = subprocess.Popen([sys.executable, "-c", engine], env=env)
+    deadline = time.monotonic() + 60
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    child_pid = int(pid_file.read_text())
+    process.kill()  # what the app does on quit or an overdue cancel
+    process.wait()
+
+    def alive(pid):
+        # Bytes: the listing is in the console's code page, not UTF-8.
+        listing = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True)
+        return str(pid).encode() in listing.stdout
+
+    deadline = time.monotonic() + 10
+    while alive(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert not alive(child_pid)
 
 
 def test_the_engine_starts_the_preflight_child_from_its_command_line():
