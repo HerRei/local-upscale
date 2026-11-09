@@ -16,9 +16,14 @@ use crate::{
 const CATALOG_JSON: &str = include_str!("../resources/model-catalog.json");
 
 pub fn load_catalog(paths: &AppPaths) -> AppResult<CatalogManifest> {
-    let mut catalog: CatalogManifest = serde_json::from_str(CATALOG_JSON)?;
+    let mut catalog = bundled_catalog()?;
     refresh_install_state(&mut catalog, paths);
     Ok(catalog)
+}
+
+/// The catalog shipped with this build, without install state.
+pub fn bundled_catalog() -> AppResult<CatalogManifest> {
+    Ok(serde_json::from_str(CATALOG_JSON)?)
 }
 
 pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
