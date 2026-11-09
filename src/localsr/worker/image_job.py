@@ -33,6 +33,9 @@ from localsr.protocol.messages import (
 )
 from localsr.worker.job_progress import ImageJobProgress
 
+# How a skip note names the problem a fix was chosen for.
+_FIX_NAMES = {"blur": "blur", "jpeg": "JPEG", "noise": "noise"}
+
 
 class ImageJobRunner:
     def __init__(
@@ -69,8 +72,8 @@ class ImageJobRunner:
         # fix runs alone: the upscaler is loaded after it, not kept beside it.
         face_path = data.get("face_model_path")
         self.engine.release_models_except(
-            {pipeline.preprocess.model_path}
-            if pipeline.preprocess is not None
+            {pipeline.preprocess_stages[0].model_path}
+            if pipeline.preprocess_stages
             else {stage.model_path for stage in pipeline.stages}
             | ({face_path} if face_path else set())
         )
@@ -99,9 +102,9 @@ class ImageJobRunner:
                 processing_started_at = time.monotonic()
                 working_image = image
                 notes: list[str] = []
-                if pipeline.preprocess is not None:
+                for index, stage in enumerate(pipeline.preprocess_stages):
                     working_image = self._preprocess(
-                        image, pipeline.preprocess, data, progress, notes
+                        working_image, stage, index, data, progress, notes
                     )
                 self._check_cancelled()
                 writer, info = self._primary(working_image, pipeline, data, progress, resources)
@@ -130,12 +133,13 @@ class ImageJobRunner:
         self,
         image: dict[str, Any],
         stage: PipelineStage,
+        index: int,
         data: Mapping[str, Any],
         progress: ImageJobProgress,
         notes: list[str],
     ) -> dict[str, Any]:
         self._check_cancelled()
-        progress.start(0, stage)
+        progress.start(index, stage)
         self._log(f"Running {stage.kind} stage with {stage.model_id}...")
         try:
             with ExitStack() as resources:
@@ -144,6 +148,9 @@ class ImageJobRunner:
                     raise ValueError(
                         "A preprocessing restoration checkpoint must have native scale 1×."
                     )
+                channels = image["tensor"].shape[0]
+                if info.in_channels != channels or info.out_channels != channels:
+                    raise ValueError("A fix must preserve the working image channels.")
                 # A fix keeps at least the overlap its own model needs, whatever the
                 # upscaler after it uses.
                 model = CATALOG_BY_ID.get(stage.model_id)
@@ -156,11 +163,15 @@ class ImageJobRunner:
                 # Copy before releasing the memmap; metadata and alpha remain
                 # attached to the original image until the final atomic save.
                 restored = np.asarray(writer.get_array())
+                if restored.shape != tuple(image["tensor"].shape):
+                    raise ValueError(
+                        "A fix must preserve the working image dimensions and channels."
+                    )
                 working_image = {
                     **image,
                     "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(255.0),
                 }
-                progress.complete(0, stage)
+                progress.complete(index, stage)
                 return working_image
         except InterruptedError:
             raise
@@ -171,14 +182,16 @@ class ImageJobRunner:
             # says so, and nothing damaged is kept.
             model = CATALOG_BY_ID.get(stage.model_id)
             reason = str(error).split(". ")[0].rstrip(".")
+            problem = _FIX_NAMES.get(stage.fix or "", "")
             note = (
-                f"The fix before upscaling ({model.name if model else stage.model_id}) was "
-                f"skipped for this image, which is upscaled without it. Reason: {reason}."
+                f"The {problem + ' ' if problem else ''}fix "
+                f"({model.display_name if model else stage.model_id}) was skipped for this "
+                f"image; the next step used the picture without it. Reason: {reason}."
             )
             self._log(f"{note} ({error})")
             self.emit(WarningMessage(message=note))
             notes.append(note)
-            progress.complete(0, stage)
+            progress.complete(index, stage)
             return image
         except Exception as error:  # noqa: BLE001
             raise PipelineStageError(stage, str(error)) from error
