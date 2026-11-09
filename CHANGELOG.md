@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.8-beta] - Unreleased
+
+### Added
+
+- End-to-end tests of the desktop interface with Playwright in Chromium and WebKit:
+  the Inputs, Outputs and Compare tabs, the plan card, Advanced settings, keyboard
+  navigation at 1024×700 and 1440×900, and screenshot baselines of nine key screens. A
+  new CI job runs the behaviour tests on Linux.
+
 ## [0.3.7-beta] - Unreleased
 
 ### Added
