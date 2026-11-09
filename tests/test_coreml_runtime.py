@@ -619,3 +619,23 @@ def test_gate_times_fallback_on_fallback_device(fake_coreml, monkeypatch):
     )
     run(converted)
     assert devices == [None, torch.device("mps")]
+
+
+def test_old_cached_verdict_is_not_trusted(tmp_path, monkeypatch):
+    monkeypatch.setitem(
+        __import__("sys").modules, "coremltools", SimpleNamespace(__version__="test")
+    )
+    program = coreml_runtime._Program(tmp_path, "SPAN", "abc", (32, 32))
+    program.directory.mkdir(parents=True)
+    program.verdicts_path.write_text(
+        json.dumps({program._verdict_key(CORE_ML_GPU): {"accepted": True}})
+    )
+    assert program.verdict(CORE_ML_GPU) is None
+
+
+def test_uniform_coloured_tile_does_not_decide_gate(fake_coreml):
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(CORE_ML_GPU,), identity="colour")
+    converted.prepare_tiles(16, 4)
+    tile = torch.tensor([1.0, 0.8, 0.6]).view(1, 3, 1, 1).expand(1, 3, 20, 20)
+    torch.testing.assert_close(converted(tile), padded_reference(fake_coreml.original, tile, 32))
+    assert not FakeProgram.stores.get(("colour", (32, 32)))
