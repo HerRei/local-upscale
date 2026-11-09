@@ -2,11 +2,18 @@
 """Stream a frozen engine into bounded, checksummed payload parts.
 
 Used for the adjacent Windows CUDA installer payloads and for the updater's
-separate engine package on every platform.
+separate engine package on every platform. As a command it writes the updater's
+engine package for one release target under its public names:
+
+    prepare_engine_payload.py --target ID --output DIR (--engine DIR | --reuse MANIFEST)
+
+--reuse adopts a payload that already exists in DIR (the CUDA installer's parts)
+after checking every part against its manifest.
 """
 
 from __future__ import annotations
 
+import argparse
 import gzip
 import hashlib
 import json
@@ -14,7 +21,11 @@ import re
 import tarfile
 from pathlib import Path
 
+from release_targets import target, update_files, version
+
 PART_BYTES = 1900 * 1024**2
+# desktop/src-tauri/src/engine_payload.rs accepts the same backend names.
+BACKENDS = {"CUDA", "ROCM", "CPU", "MPS", "DIRECTML"}
 
 
 class PartWriter:
@@ -70,7 +81,7 @@ def prepare(
         raise ValueError("invalid engine payload prefix")
     if not 1 <= part_bytes < 2 * 1024**3:
         raise ValueError("payload parts must be smaller than 2 GiB")
-    if backend not in {"CUDA", "ROCM", "CPU", "MPS"}:
+    if backend not in BACKENDS:
         raise ValueError("unsupported engine payload backend")
     if not (engine / worker).is_file():
         raise ValueError("the frozen worker is missing")
@@ -106,3 +117,68 @@ def prepare(
     path = output / "engine-payload.json"
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(4 * 1024**2), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prepare_for_target(
+    target_id: str,
+    output: Path,
+    *,
+    engine: Path | None = None,
+    reuse: Path | None = None,
+    release_version: str | None = None,
+) -> Path:
+    """Write the updater's engine package of one edition into ``output``."""
+    files = update_files(target(target_id), release_version or version())
+    destination = output / files["engine_manifest"]
+    if (engine is None) == (reuse is None):
+        raise ValueError("give either the engine directory or the payload to reuse")
+    if engine is not None:
+        written = prepare(
+            engine,
+            output,
+            files["engine_prefix"],
+            backend=files["payload_backend"],
+            worker=files["worker"],
+        )
+        written.replace(destination)
+        return destination
+    assert reuse is not None
+    manifest = json.loads(reuse.read_text(encoding="utf-8"))
+    parts = manifest.get("parts") or []
+    if manifest.get("backend") != files["payload_backend"] or not parts:
+        raise ValueError(f"{reuse} is not the {files['payload_backend']} engine payload")
+    for part in parts:
+        path = output / part["filename"]
+        if (
+            not part["filename"].startswith(files["engine_prefix"] + ".part-")
+            or not path.is_file()
+            or path.stat().st_size != part["size"]
+            or _sha256(path) != part["sha256"]
+        ):
+            raise ValueError(f"{part['filename']} does not match its engine payload manifest")
+    destination.write_bytes(reuse.read_bytes())
+    return destination
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", required=True, help="Release target ID, e.g. linux-x86_64-cpu")
+    parser.add_argument("--output", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--engine", type=Path, help="Frozen engine directory to package")
+    source.add_argument("--reuse", type=Path, help="Existing payload manifest to adopt")
+    args = parser.parse_args()
+    print(prepare_for_target(args.target, args.output, engine=args.engine, reuse=args.reuse))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
