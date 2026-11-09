@@ -400,13 +400,14 @@ def _add_processing_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=WORKLOAD_MODEL_ID, choices=sorted(CATALOG_BY_ID))
     parser.add_argument("--device", default="auto", help="auto, cpu, mps, cuda:0, or xpu:0.")
     parser.add_argument("--scale", type=int, default=4)
-    parser.add_argument("--format", choices=["png", "jpg", "tif", "webp"], default="png")
-    parser.add_argument("--video-container", choices=["mp4", "mkv"], default="mp4")
+    parser.add_argument("--format", choices=["png", "jpg", "tif", "webp", "heic"], default="png")
+    parser.add_argument("--video-container", choices=["mp4", "mkv", "mov"], default="mp4")
     parser.add_argument(
         "--video-codec",
-        choices=["av1", "vp9", "ffv1", "h264", "hevc"],
+        choices=["av1", "vp9", "ffv1", "h264", "hevc", "prores"],
         default="av1",
-        help="H.264/HEVC are written by the system codecs (macOS) or an installed FFmpeg.",
+        help="H.264/HEVC are written by the system codecs (macOS) or an installed FFmpeg; "
+        "ProRes, and MOV, by the system codecs only.",
     )
     parser.add_argument(
         "--external-ffmpeg",
@@ -602,7 +603,14 @@ def _validate_automation_args(args: argparse.Namespace) -> None:
         validate_output(args.video_codec, args.video_container)
     except ValueError as error:
         raise AutomationError(str(error)) from error
-    if args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
+    if args.format == "heic" and sys.platform != "darwin":
+        raise AutomationError("HEIC output needs macOS, which provides the HEIC encoder.")
+    if args.video_container == "mov" or args.video_codec == "prores":
+        from localsr.core.media_bridge import MACOS_ONLY_MESSAGE, system_codecs_available
+
+        if not system_codecs_available():
+            raise AutomationError(MACOS_ONLY_MESSAGE)
+    elif args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
         from localsr.core.media_bridge import system_codecs_available
 
         if not system_codecs_available():

@@ -18,8 +18,12 @@ import av
 
 BUNDLED_OUTPUT_CODECS = ("av1", "vp9", "ffv1")
 EXTERNAL_OUTPUT_CODECS = ("h264", "hevc")
-OUTPUT_CODECS = BUNDLED_OUTPUT_CODECS + EXTERNAL_OUTPUT_CODECS
-OUTPUT_CONTAINERS = ("mp4", "mkv")
+# Apple ProRes is written only by macOS (AVFoundation), into MOV.
+SYSTEM_OUTPUT_CODECS = ("prores",)
+OUTPUT_CODECS = BUNDLED_OUTPUT_CODECS + EXTERNAL_OUTPUT_CODECS + SYSTEM_OUTPUT_CODECS
+OUTPUT_CONTAINERS = ("mp4", "mkv", "mov")
+# MOV is written by macOS only; it holds HEVC or ProRes.
+MOV_CODECS = ("hevc", "prores")
 
 # Container names as PyAV/FFmpeg muxers know them.
 MUXER_FORMATS = {"mp4": "mp4", "mkv": "matroska", "webm": "webm"}
@@ -77,7 +81,7 @@ def validate_output(video_codec: str, container: str, *, hdr: bool = False) -> N
     container = normalize_container(container)
     if video_codec not in OUTPUT_CODECS:
         raise ValueError(
-            f"Unsupported video codec {video_codec!r}; choose AV1, VP9, FFV1, H.264 or HEVC."
+            f"Unsupported video codec {video_codec!r}; choose AV1, VP9, FFV1, H.264, HEVC or ProRes."
         )
     if container not in (*OUTPUT_CONTAINERS, "webm"):
         raise ValueError(f"Unsupported video container: {container}")
@@ -85,6 +89,12 @@ def validate_output(video_codec: str, container: str, *, hdr: bool = False) -> N
         raise ValueError("Lossless FFV1 video requires the MKV container.")
     if container == "webm" and video_codec not in {"av1", "vp9"}:
         raise ValueError("WebM holds only AV1 or VP9 video.")
+    if container == "mov" and video_codec not in MOV_CODECS:
+        raise ValueError("MOV holds only HEVC or Apple ProRes video.")
+    if video_codec == "prores" and container != "mov":
+        raise ValueError("Apple ProRes video requires the MOV container.")
+    if hdr and video_codec == "prores":
+        raise ValueError("ProRes export is SDR. Choose HEVC to preserve HDR.")
     if hdr and video_codec == "h264":
         raise ValueError(
             "H.264 cannot preserve HDR. Choose AV1, VP9, FFV1 or HEVC for HDR preservation."

@@ -27,6 +27,7 @@ from .hdr import tone_map_to_sdr
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     EXTERNAL_OUTPUT_CODECS,
+    SYSTEM_OUTPUT_CODECS,
     UNDECODABLE_VIDEO_MESSAGE,
     UndecodableVideoError,
     encode_spec,
@@ -604,7 +605,7 @@ def encode_video(
             raise ValueError("HDR output must be HLG or PQ, without SDR conversion.")
         validate_hdr_encoder(video_codec, external_ffmpeg)
     validate_output(video_codec, container_format, hdr=bool(hdr_format))
-    if video_codec in EXTERNAL_OUTPUT_CODECS:
+    if video_codec in EXTERNAL_OUTPUT_CODECS + SYSTEM_OUTPUT_CODECS:
         return _external_export(
             frames,
             Path(destination_path),

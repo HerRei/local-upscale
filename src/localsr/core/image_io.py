@@ -100,6 +100,12 @@ def _decode_with_macos(path: str) -> Image.Image:
     return image
 
 
+def require_output_format(format: str) -> None:
+    """Fail before any inference when this computer cannot write ``format``."""
+    if format.lower() == "heic" and sys.platform != "darwin":
+        raise ValueError("HEIC output needs macOS, which provides the HEIC encoder.")
+
+
 def _encode_with_macos(image: Image.Image, destination: Path, quality: int, **kwargs: Any) -> None:
     """Write HEIC with macOS (ImageIO, through /usr/bin/sips), the mirror of the decoder.
 
@@ -107,8 +113,7 @@ def _encode_with_macos(image: Image.Image, destination: Path, quality: int, **kw
     API. Pillow writes a lossless TIFF that carries the colour profile, the allow-listed
     EXIF tags and any transparency; sips turns it into HEIC at the chosen quality.
     """
-    if sys.platform != "darwin":
-        raise ValueError("HEIC output needs macOS, which provides the HEIC encoder.")
+    require_output_format("heic")
     with tempfile.TemporaryDirectory(prefix="localsr-encode-", dir=destination.parent) as work:
         source = Path(work) / "source.tiff"
         image.save(source, format="TIFF", compression="tiff_deflate", **kwargs)
