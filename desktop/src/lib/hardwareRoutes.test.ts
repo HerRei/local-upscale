@@ -79,17 +79,37 @@ describe('hardware routes', () => {
       [{ id: 'directml:1', label: 'NVIDIA GeForce RTX 3060 (1)' }],
       [{ id: 'directml:2', label: 'NVIDIA GeForce RTX 3060 (2)' }],
     ]);
-    // Two Intel cards, each through both routes: two groups of two.
-    const second = [
-      device('directml:3', 'Intel(R) Arc(TM) A380 Graphics (DirectML)'),
-      device('directml:4', 'Intel(R) Arc(TM) A380 Graphics (DirectML)'),
-      device('openvino:a', 'Intel(R) Arc(TM) A380 Graphics (dGPU) (OpenVINO)'),
-      device('openvino:b', 'Intel(R) Arc(TM) A380 Graphics (dGPU) (OpenVINO)'),
+  });
+
+  it('leaves the routes of two identical cards apart: nothing pairs them for certain', () => {
+    // DirectML lists adapters by index and OpenVINO by UUID, so card A can come first in one
+    // list and second in the other. Grouping by name and order would switch cards with the route.
+    const a380 = (id: string, route: string, kind = '') =>
+      device(id, `Intel(R) Arc(TM) A380 Graphics${kind} (${route})`);
+    const twins = [
+      a380('directml:3', 'DirectML'),
+      a380('directml:4', 'DirectML'),
+      a380('openvino:b', 'OpenVINO', ' (dGPU)'),
+      a380('openvino:a', 'OpenVINO', ' (dGPU)'),
     ];
-    expect(groupedHardware(second).map((group) => group.options.map((o) => o.id))).toEqual([
-      ['directml:3', 'openvino:a'],
-      ['directml:4', 'openvino:b'],
+    const groups = groupedHardware(twins);
+    expect(groups.every((group) => group.options.length === 1)).toBe(true);
+    expect(groups.map((group) => group.options[0])).toEqual([
+      { id: 'directml:3', label: 'Intel Arc A380 Graphics · DirectML (1)' },
+      { id: 'directml:4', label: 'Intel Arc A380 Graphics · DirectML (2)' },
+      { id: 'openvino:b', label: 'Intel Arc A380 Graphics · OpenVINO (1)' },
+      { id: 'openvino:a', label: 'Intel Arc A380 Graphics · OpenVINO (2)' },
     ]);
+    // One route seeing two cards and the other one: still not certain which one.
+    expect(
+      groupedHardware([twins[0], twins[1], twins[2]]).map((group) => group.options[0].label),
+    ).toEqual([
+      'Intel Arc A380 Graphics · DirectML (1)',
+      'Intel Arc A380 Graphics · DirectML (2)',
+      'Intel Arc A380 Graphics · OpenVINO',
+    ]);
+    // The menu shows a single entry by its label.
+    expect(groups[0].name).toBe('Intel Arc A380 Graphics · DirectML (1)');
   });
 
   it('names what a CPU-only run could use, and links only to another LocalSR download', () => {
