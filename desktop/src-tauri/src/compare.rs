@@ -167,21 +167,27 @@ pub fn plan(
             Some((path, file)) => (path, Some(file)),
             None => (String::new(), None),
         };
+        // A decoded, unchanged selection keeps its preview when picks are
+        // reordered, so a swap does not decode and flash it again.
+        let kept = compare
+            .slots
+            .iter()
+            .find(|slot| &slot.pick == pick && slot.status == CompareStatus::Ready && file.is_some());
         slots.push(CompareSlot {
             pick: pick.clone(),
-            status: if file.is_some() {
-                CompareStatus::Loading
-            } else {
-                CompareStatus::Missing
+            status: match (&file, kept) {
+                (None, _) => CompareStatus::Missing,
+                (Some(_), Some(_)) => CompareStatus::Ready,
+                (Some(_), None) => CompareStatus::Loading,
             },
             path,
             file,
-            preview_data_url: String::new(),
+            preview_data_url: kept.map(|k| k.preview_data_url.clone()).unwrap_or_default(),
             error: String::new(),
-            width: 0,
-            height: 0,
-            preview_width: 0,
-            preview_height: 0,
+            width: kept.map_or(0, |k| k.width),
+            height: kept.map_or(0, |k| k.height),
+            preview_width: kept.map_or(0, |k| k.preview_width),
+            preview_height: kept.map_or(0, |k| k.preview_height),
             region: None,
             requested_region: None,
         });
@@ -588,5 +594,119 @@ mod tests {
             compare.slots[0].preview_data_url,
             "data:image/jpeg;base64,preview"
         );
+    }
+
+    fn one_image_db(
+        dir: &std::path::Path,
+        names: &[&str],
+    ) -> (Database, Vec<std::path::PathBuf>) {
+        let db = Database::open(&dir.join("queue.db")).unwrap();
+        let mut paths = Vec::new();
+        for (index, name) in names.iter().enumerate() {
+            let path = dir.join(name);
+            std::fs::write(&path, name).unwrap();
+            db.insert_media(&format!("m{index}"), path.to_str().unwrap(), name, "image")
+                .unwrap();
+            paths.push(path);
+        }
+        (db, paths)
+    }
+
+    fn original(id: &str) -> ComparePick {
+        ComparePick::Original {
+            media_id: id.into(),
+        }
+    }
+
+    fn decode(db: &Database, compare: &mut CompareState, request: &Value) {
+        let mut answer = request["data"].clone();
+        answer["jpeg_base64"] = json!("pixels");
+        answer["width"] = json!(100);
+        answer["height"] = json!(100);
+        answer["preview_width"] = json!(50);
+        answer["preview_height"] = json!(50);
+        apply(db, compare, &answer, false).unwrap();
+    }
+
+    #[test]
+    fn swapping_decoded_picks_keeps_their_previews_and_asks_for_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, _) = one_image_db(dir.path(), &["a.png", "b.png"]);
+        let mut compare = CompareState::default();
+        let picks = [original("m0"), original("m1")];
+        let requests = plan(&db, &mut compare, &picks).unwrap();
+        for request in &requests {
+            decode(&db, &mut compare, request);
+        }
+        let swapped = [original("m1"), original("m0")];
+        assert!(plan(&db, &mut compare, &swapped).unwrap().is_empty());
+        assert_eq!(compare.slots[0].pick, swapped[0]);
+        for slot in &compare.slots {
+            assert_eq!(slot.status, CompareStatus::Ready);
+            assert_eq!(slot.preview_data_url, "data:image/jpeg;base64,pixels");
+            assert_eq!(
+                (slot.width, slot.preview_width, slot.region.is_none()),
+                (100, 50, true)
+            );
+        }
+        // An answer of the earlier generation cannot reach the reordered slots.
+        let mut late = requests[0]["data"].clone();
+        late["jpeg_base64"] = json!("late");
+        apply(&db, &mut compare, &late, false).unwrap();
+        assert_eq!(
+            compare.slots[0].preview_data_url,
+            "data:image/jpeg;base64,pixels"
+        );
+    }
+
+    #[test]
+    fn a_pick_that_was_still_loading_is_requested_again_after_a_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, _) = one_image_db(dir.path(), &["a.png", "b.png"]);
+        let mut compare = CompareState::default();
+        let requests = plan(&db, &mut compare, &[original("m0"), original("m1")]).unwrap();
+        decode(&db, &mut compare, &requests[0]);
+        let again = plan(&db, &mut compare, &[original("m1"), original("m0")]).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0]["data"]["slot"], "slot1");
+        assert_eq!(again[0]["data"]["target_id"], "m1");
+    }
+
+    #[test]
+    fn a_changed_pick_recovers_by_choosing_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, paths) = one_image_db(dir.path(), &["a.png"]);
+        let mut compare = CompareState::default();
+        let picks = [original("m0")];
+        plan(&db, &mut compare, &picks).unwrap();
+        std::fs::remove_file(&paths[0]).unwrap();
+        std::fs::write(&paths[0], "a different file").unwrap();
+        refresh(&db, &mut compare).unwrap();
+        assert_eq!(compare.slots[0].status, CompareStatus::Missing);
+        // The slot stays missing while it is picked; removing and picking it
+        // again reads the file as it is now.
+        plan(&db, &mut compare, &[]).unwrap();
+        assert_eq!(plan(&db, &mut compare, &picks).unwrap().len(), 1);
+        assert_eq!(compare.slots[0].status, CompareStatus::Loading);
+    }
+
+    #[test]
+    fn regions_for_slots_that_are_not_ready_are_null_and_do_not_reject_the_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, _) = one_image_db(dir.path(), &["a.png", "b.png"]);
+        let mut compare = CompareState::default();
+        let requests = plan(&db, &mut compare, &[original("m0"), original("m1")]).unwrap();
+        decode(&db, &mut compare, &requests[0]);
+        let region = Region {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            target_width: 20,
+            target_height: 20,
+        };
+        let sent = plan_regions(&db, &mut compare, &[Some(region), None]).unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["data"]["slot"], "slot1");
     }
 }
