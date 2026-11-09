@@ -160,8 +160,13 @@ def _route_configs(route) -> tuple:
 NPU_CACHE_LIMIT = 2 * 1024**3
 
 
-def _trim_npu_cache(directory: Path, limit: int = NPU_CACHE_LIMIT) -> None:
+def _npu_cache_directory() -> Path:
+    return gate_cache_directory() / "npu-cache"
+
+
+def _trim_npu_cache(directory: Path, limit: int | None = None) -> None:
     """Delete the oldest compiled programs until the cache fits its limit."""
+    limit = NPU_CACHE_LIMIT if limit is None else limit
     try:
         blobs = sorted(
             (path.stat().st_mtime, path.stat().st_size, path)
@@ -184,7 +189,7 @@ def _trim_npu_cache(directory: Path, limit: int = NPU_CACHE_LIMIT) -> None:
 def _provider_options(route, options: dict) -> dict:
     if route.kind != "NPU":
         return dict(options)
-    cache = gate_cache_directory() / "npu-cache"
+    cache = _npu_cache_directory()
     _trim_npu_cache(cache)
     return {**options, "load_config": json.dumps({"NPU": {"CACHE_DIR": str(cache)}})}
 
@@ -409,6 +414,9 @@ class _OnnxImage(torch.nn.Module):
                     ]
                 session = ort.InferenceSession(graph, sess_options=options, providers=providers)
             session.disable_fallback()
+            if self.route.kind == "NPU":
+                # Compiling just wrote this model's program; keep the cache within its limit.
+                _trim_npu_cache(_npu_cache_directory())
             if self.provider not in session.get_providers():
                 raise RuntimeError(f"{self.provider} failed to initialize; select CPU explicitly.")
         except BaseException:
