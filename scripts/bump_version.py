@@ -81,6 +81,19 @@ def write_manifest(root: Path, version: str) -> None:
     (root / "ci/tauri-release-artifacts.json").write_text(json.dumps(data, indent=2) + "\n")
 
 
+def published_version(root: Path) -> str:
+    """The version the README download labels show, i.e. the last published release.
+
+    Candidates in between (0.3.1-0.3.7 were never published) do not count, so the
+    previous repo version is the wrong answer.
+    """
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    labels = set(re.findall(r"\*\*(?:macOS|Windows|Linux) v([^:*\s]+):\*\*", readme))
+    if len(labels) != 1:
+        raise ValueError(f"README.md download labels name {sorted(labels) or 'no'} versions")
+    return labels.pop()
+
+
 def candidate_notice(current: str, new: str) -> str:
     return (
         f"{CANDIDATE_START}\n"
@@ -156,10 +169,15 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
         r"^Current release: \*\*v[^*]+\*\*(?:; release candidate: \*\*v[^*]+\*\*)?",
         f"Current release: **v{current}**; release candidate: **v{new}**",
     )
-    set_readme_notice(root, candidate_notice(current, new))
+    set_readme_notice(root, candidate_notice(published_version(root), new))
     changelog_path = root / "CHANGELOG.md"
     changelog = changelog_path.read_text(encoding="utf-8")
     heading = f"## [{new}] - Unreleased"
+    if "\n## [Unreleased]\n" in changelog:
+        # Work collected under [Unreleased] belongs to the version being prepared.
+        if heading in changelog:
+            raise ValueError(f"CHANGELOG.md has both [Unreleased] and {heading!r}; merge them")
+        changelog = changelog.replace("\n## [Unreleased]\n", f"\n{heading}\n", 1)
     if heading in changelog:
         if changelog.count(heading) != 1:
             raise ValueError(f"CHANGELOG.md: expected one {heading!r} heading")

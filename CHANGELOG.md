@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.8-beta] - Unreleased
 
 ### Added
 
@@ -23,6 +23,7 @@
 
 ### Changed
 
+- Dependency updates.
 - The signed release statement of an update now also covers the package size and the
   name, size and digest of every package part and engine part (format 2,
   `statement_v2`). The app checks them before it downloads anything, so a tampered feed
