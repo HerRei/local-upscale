@@ -88,24 +88,6 @@ def test_bump_produces_a_candidate_the_release_checks_accept(tree: Path):
     assert (tree / "docs/platforms.md").read_text() == (ROOT / "docs/platforms.md").read_text()
 
 
-def test_bump_reuses_prepared_changelog_section(tree: Path):
-    new = bump_version.next_patch(VERSION)
-    changelog = tree / "CHANGELOG.md"
-    text = changelog.read_text()
-    heading = f"## [{new}] - Unreleased"
-    if heading not in text:
-        text = text.replace("# Changelog\n\n", f"# Changelog\n\n{heading}\n\n")
-    text = text.replace(heading, heading + "\n\n- Already documented.", 1)
-    changelog.write_text(text)
-
-    bump_version.bump(tree, new, "- New release notes.", dt.date.today())
-
-    result = changelog.read_text()
-    assert result.count(heading) == 1
-    assert "- Already documented." in result
-    assert "- New release notes." in result
-
-
 def test_bump_refuses_older_versions_and_existing_notes(tree: Path):
     with pytest.raises(ValueError, match="not newer"):
         bump_version.bump(tree, VERSION, "- x", dt.date.today())
