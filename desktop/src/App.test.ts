@@ -1106,6 +1106,62 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
+  it('offers frame interpolation for video, off by default, and sends it with Start', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
+    expect(rate.value).toBe('off');
+    expect(screen.queryByLabelText('Interpolate')).toBeNull();
+    expect(screen.queryByText('Interpolate to 60 fps')).toBeNull();
+
+    await user.selectOptions(rate, 'fps60');
+    const order = screen.getByLabelText('Interpolate') as HTMLSelectElement;
+    expect(order.value).toBe('after_upscale');
+    expect(screen.getByText('Interpolate to 60 fps')).toBeTruthy();
+    expect(screen.getByText(/24 → 60 fps/)).toBeTruthy();
+    await user.selectOptions(order, 'before_upscale');
+
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: 'video',
+        video_interpolation: 'fps60',
+        video_interpolation_order: 'before_upscale',
+      }),
+    );
+  });
+
+  it('downloads the interpolation model when Start needs it', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Download 23 MB, then start video' }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('rife_4_25', false));
+  });
+
+  it('keeps interpolation out of SeedVR2 jobs and HDR preservation', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
+    const user = await mountWith(snapshot);
+    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect(screen.queryByLabelText('Frame rate')).toBeNull();
+    expect(screen.queryByText('Interpolate 2×')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ video_model_id: 'seedvr2_3b', video_interpolation: 'off' }),
+    );
+  });
+
   it.each(['incompatible-runtime', 'directml:0', 'xpu:0', 'openvino:80d1d11eb738'])(
     'blocks unavailable SeedVR2 recipes and downloads on %s',
     async (backend) => {

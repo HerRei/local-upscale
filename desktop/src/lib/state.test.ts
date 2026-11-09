@@ -8,6 +8,8 @@ import {
   fitFor,
   formatBytes,
   formatDuration,
+  frameRateChange,
+  interpolationLabel,
   modelsForTask,
   pendingDownloads,
   resolvePlan,
@@ -606,6 +608,57 @@ describe('model library resolution', () => {
     const pending = pendingDownloads(plan);
     expect(pending.stages.map((stage) => stage.model?.model_id)).toEqual(['fbcnn_color']);
     expect(pending.bytes).toBe(plan[0].model!.size_bytes);
+  });
+
+  it('adds frame interpolation to a frame-by-frame video plan in the order it runs', () => {
+    const snapshot = demoSnapshot();
+    const settings = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      selected_model_id: 'span_photo_x4',
+      video_interpolation: 'fps60' as const,
+      video_interpolation_order: 'after_upscale' as const,
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    let plan = resolvePlan(snapshot, settings, options);
+    expect(plan.map((stage) => stage.kind)).toEqual(['upscale', 'interpolate']);
+    const interpolate = plan[1];
+    expect(interpolate.label).toBe('Interpolate to 60 fps');
+    expect(interpolate.interpolationModel?.model_id).toBe('rife_4_25');
+    expect(interpolate.canDownload).toBe(true);
+    expect(interpolate.sizeBytes).toBe(24_636_301);
+    expect(pendingDownloads(plan).stages).toContain(interpolate);
+
+    plan = resolvePlan(
+      snapshot,
+      { ...settings, video_interpolation_order: 'before_upscale' },
+      options,
+    );
+    expect(plan.map((stage) => stage.kind)).toEqual(['interpolate', 'upscale']);
+    for (const changed of [
+      { video_interpolation: 'off' as const },
+      { video_interpolation: undefined },
+      { task: 'upscale' as const },
+    ]) {
+      expect(
+        resolvePlan(snapshot, { ...settings, ...changed }, options).map((s) => s.kind),
+      ).toEqual(['upscale']);
+    }
+    expect(
+      resolvePlan(snapshot, settings, { ...options, usingTemporalVideo: true }).some(
+        (stage) => stage.kind === 'interpolate',
+      ),
+    ).toBe(false);
+  });
+
+  it('names interpolation targets and the frame rate they produce', () => {
+    expect(interpolationLabel('x2')).toBe('Interpolate 2×');
+    expect(interpolationLabel('x4')).toBe('Interpolate 4×');
+    expect(interpolationLabel('fps120')).toBe('Interpolate to 120 fps');
+    expect(frameRateChange('x2', 29.97)).toBe('29.97 → 59.94 fps');
+    expect(frameRateChange('fps60', 23.976)).toBe('23.976 → 60 fps');
+    expect(frameRateChange('fps60', 59.94)).toBe('Already 59.94 fps · kept as it is');
+    expect(frameRateChange('fps60', 0)).toBe('');
   });
 
   it('judges hardware fit against the device memory', () => {
