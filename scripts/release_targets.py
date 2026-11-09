@@ -98,19 +98,27 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
     inputs.append(lock if entry["platform"] != "macos" else root / "uv.lock")
     if not lock.is_file() and entry["platform"] != "macos":
         raise ValueError(f"missing engine dependency lock: {lock}")
+    missing = [path for path in inputs if not path.exists()]
+    if missing:
+        raise ValueError(f"missing engine input: {missing[0].relative_to(root).as_posix()}")
     paths = sorted(
         {
             file
             for path in inputs
             for file in (path.rglob("*") if path.is_dir() else [path])
-            if file.is_file() and "__pycache__" not in file.parts and file.suffix != ".pyc"
+            # Hidden files (Finder, build tools) are not recipe content.
+            if file.is_file()
+            and "__pycache__" not in file.parts
+            and file.suffix != ".pyc"
+            and not any(part.startswith(".") for part in file.relative_to(root).parts)
         }
     )
     records = []
     for path in paths:
         name = path.relative_to(root).as_posix()
         data = path.read_bytes()
-        if path.suffix in {".py", ".spec", ".json", ".txt", ".swift", ".plist", ".lock"}:
+        if b"\0" not in data:
+            # Text, whatever its suffix, hashes the same with Windows or Unix line endings.
             data = data.replace(b"\r\n", b"\n")
         if name == "src/localsr/__init__.py":
             data = b"\n".join(

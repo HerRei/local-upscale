@@ -555,7 +555,8 @@ def test_engine_payload_backends_cover_every_edition() -> None:
 def update_smoke(target_id: str, release_version: str) -> dict[str, object]:
     target = release_targets.target(target_id)
     return installed_smoke(release_version) | {
-        "update": release_targets.expected_update_identity(target, COMMIT)
+        "update": release_targets.expected_update_identity(target, COMMIT),
+        "commit": COMMIT,
     }
 
 
@@ -1236,3 +1237,212 @@ def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
         source.write_text(original + "\nENGINE_CHANGED = True\n")
         assert release_targets.engine_id(target, COMMIT, root=tmp_path) != before, name
         source.write_text(original)
+
+
+# Round 3 (independent review of the release tools).
+def test_round3_signer_refuses_a_build_from_another_commit(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    mac_feed(tmp_path)
+    directory = downloads / "linux-x86_64-cpu"
+    report = directory / "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage.smoke.json"
+    for commit in ("b" * 40, None):
+        smoke = json.loads(report.read_text())
+        smoke.pop("commit")
+        if commit:
+            smoke["commit"] = commit
+        report.write_text(json.dumps(smoke))
+        with pytest.raises(ValueError, match="commit"):
+            update_signing.add_platforms(
+                downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+            )
+
+
+def test_round3_smoke_report_records_the_commit_it_was_taken_for(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps(installed_smoke("1-beta")))
+    smoke_installer.record_commit(report, COMMIT)
+    assert json.loads(report.read_text())["commit"] == COMMIT
+
+
+@pytest.mark.parametrize("failure", ["unpacked-too-small", "part-digest", "part-order"])
+def test_round3_feed_check_compares_the_engine_manifest_with_the_feed(
+    tmp_path: Path, failure: str
+) -> None:
+    feed_path, (downloads, mac) = feed_with_every_target(tmp_path)
+    feed = json.loads(feed_path.read_text())
+    contract = feed["platforms"]["darwin-aarch64-mps-native"]["localsr"]
+    if failure == "unpacked-too-small":
+        contract["unpacked_size"] = contract["size"]
+    else:
+        item = contract["engine"]["manifest"]
+        manifest_path = mac / item["name"]
+        payload = json.loads(manifest_path.read_text())
+        if failure == "part-digest":
+            payload["parts"][0]["sha256"] = "0" * 64
+        else:
+            payload["parts"][0]["filename"] = "other.part-0001"
+        manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        fake_sign(manifest_path)
+        item.update(
+            size=manifest_path.stat().st_size,
+            sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            signature=manifest_path.with_name(manifest_path.name + ".sig").read_text(),
+        )
+    contract.pop("statement")
+    contract.pop("statement_signature")
+    feed_path.write_text(json.dumps(feed))
+    update_signing.add_statements(feed_path, sign=fake_sign)
+    with pytest.raises(ValueError, match="engine manifest|unpacked"):
+        verify_feed(feed_path, [downloads, mac])
+
+
+def test_round3_feed_check_does_not_adopt_the_feeds_own_download_host(tmp_path: Path) -> None:
+    feed_path, folders = feed_with_every_target(tmp_path)
+    official = "https://github.com/HerRei/local-upscale/releases/download/v1.2.3-beta"
+    staging = "https://staging.example.org/files"
+    feed_path.write_text(feed_path.read_text().replace(official, staging))
+    with pytest.raises(ValueError, match="HTTPS"):
+        verify_feed(feed_path, folders)
+    verify_feed(feed_path, folders, host=staging)
+
+
+def test_round3_stable_release_signs_the_stable_channel(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path, "1.2.3")
+    feed_path = tmp_path / "beta.json"
+    mac_feed(tmp_path, "1.2.3")
+    update_signing.add_platforms(
+        downloads, feed_path, COMMIT, release_version="1.2.3", sign=fake_sign
+    )
+    feed = json.loads(feed_path.read_text())
+    for key, entry in feed["platforms"].items():
+        if key.startswith("darwin"):
+            continue
+        contract = entry["localsr"]
+        assert contract["channel"] == "stable", key
+        assert json.loads(base64.b64decode(contract["statement"]))["channel"] == "stable"
+
+
+def test_round3_statements_are_signed_only_for_entries_with_an_engine_package(
+    tmp_path: Path,
+) -> None:
+    _, feed = mac_feed(tmp_path)
+    entry = feed["platforms"]["darwin-aarch64-mps-native"]["localsr"]
+    entry.pop("statement")
+    entry.pop("statement_signature")
+    entry.pop("engine")
+    path = tmp_path / "unsigned.json"
+    path.write_text(json.dumps(feed))
+    with pytest.raises(ValueError, match="engine"):
+        update_signing.add_statements(path, sign=fake_sign)
+    assert json.loads(path.read_text()) == feed
+
+
+def test_round3_engine_id_ignores_finder_files_and_line_endings_but_not_missing_inputs(
+    tmp_path: Path,
+) -> None:
+    target = release_targets.target("linux-x86_64-cpu")
+    for directory in ["src/localsr", "packaging", "scripts", "requirements/locks"]:
+        shutil.copytree(ROOT / directory, tmp_path / directory, dirs_exist_ok=True)
+    shutil.copyfile(
+        ROOT / "requirements/build-tools.txt", tmp_path / "requirements/build-tools.txt"
+    )
+    before = release_targets.engine_id(target, COMMIT, root=tmp_path)
+    (tmp_path / "packaging/hooks/.DS_Store").write_bytes(b"finder")
+    leftover = tmp_path / "packaging/macos/media-helper/.build"
+    leftover.mkdir(parents=True)
+    (leftover / "output.o").write_bytes(b"build output")
+    assert release_targets.engine_id(target, COMMIT, root=tmp_path) == before
+    script = tmp_path / "packaging/nvidia/extra.cmd"
+    script.write_bytes(b"echo one\necho two\n")
+    unix = release_targets.engine_id(target, COMMIT, root=tmp_path)
+    script.write_bytes(b"echo one\r\necho two\r\n")
+    assert release_targets.engine_id(target, COMMIT, root=tmp_path) == unix
+    shutil.rmtree(tmp_path / "packaging/ffmpeg")
+    with pytest.raises(ValueError, match="missing"):
+        release_targets.engine_id(target, COMMIT, root=tmp_path)
+
+
+def test_round3_hard_linked_engine_files_are_archived_whole(tmp_path: Path) -> None:
+    import os
+
+    engine = fake_engine(tmp_path, "localsr-worker")
+    os.link(engine / "lib/model.bin", engine / "lib/model-copy.bin")
+    output = tmp_path / "out"
+    written = engine_payload.prepare(engine, output, "p", backend="CPU", worker="localsr-worker")
+    manifest = json.loads(written.read_text())
+    engine_payload.validate_payload(manifest, output, "p", "CPU", "localsr-worker")
+
+
+@pytest.mark.parametrize("failure", ["first-part-is-zero", "doubled-slash"])
+def test_round3_engine_parts_are_numbered_from_one_and_names_are_canonical(
+    tmp_path: Path, failure: str
+) -> None:
+    import gzip
+    import io
+    import tarfile
+
+    tar = io.BytesIO()
+    names = ["localsr-worker", "lib//model.bin" if failure == "doubled-slash" else "lib/model.bin"]
+    with tarfile.open(fileobj=tar, mode="w") as archive:
+        for name in names:
+            info = tarfile.TarInfo(name)
+            info.size = 3
+            archive.addfile(info, io.BytesIO(b"abc"))
+    data = gzip.compress(tar.getvalue(), mtime=0)
+    name = "engine.part-0000" if failure == "first-part-is-zero" else "engine.part-0001"
+    (tmp_path / name).write_bytes(data)
+    manifest = {
+        "schema_version": 1,
+        "format": "tar.gz.parts",
+        "backend": "CPU",
+        "file_count": 2,
+        "unpacked_bytes": 6,
+        "parts": [
+            {"filename": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        ],
+    }
+    with pytest.raises(ValueError):
+        engine_payload.validate_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
+
+
+def test_round3_checksum_file_lines_are_unique_and_well_formed() -> None:
+    digest = "a" * 64
+    assert verify_prepared.parse_checksums([f"{digest}  one", f"{'b' * 64}  two"]) == {
+        "one": digest,
+        "two": "b" * 64,
+    }
+    for lines in (
+        [f"{digest}  one", f"{'b' * 64}  one"],
+        [f"{digest} one"],
+        [f"{digest}  dir/one"],
+        ["short  one"],
+    ):
+        with pytest.raises(ValueError, match="checksum"):
+            verify_prepared.parse_checksums(lines)
+
+
+def test_round3_every_key_read_first_checks_the_key_folder_and_the_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    folder = tmp_path / "keys"
+    folder.mkdir(mode=0o755)
+    folder.chmod(0o755)
+    helper = folder / "update-keychain"
+    monkeypatch.setattr(update_signing, "KEY_ROOT", folder)
+    monkeypatch.setattr(update_signing, "HELPER", helper)
+    calls: list[str] = []
+
+    def run(command, **options):
+        calls.append(command[0])
+        return types.SimpleNamespace(returncode=44, stdout=b"")
+
+    monkeypatch.setattr(update_signing.subprocess, "run", run)
+    with pytest.raises(ValueError, match="private"):
+        update_signing.load_identity()
+    assert calls == []
+    folder.chmod(0o700)
+    assert update_signing.load_identity() is None
+    assert calls == ["codesign", str(helper)]
