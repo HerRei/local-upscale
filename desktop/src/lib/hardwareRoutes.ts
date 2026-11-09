@@ -37,51 +37,59 @@ export interface HardwareOption {
 }
 
 export interface HardwareGroup {
+  /** The GPU's name over its routes, or a single entry's own label. */
   name: string;
-  /** One option per route; a device reached one way has a single option named like the group. */
+  /** One option per route of a paired GPU; anything else is a single option. */
   options: HardwareOption[];
 }
 
 /**
- * One group per physical device. A GPU that ONNX Runtime reaches through both DirectML and
- * OpenVINO becomes one group with an option per route; the option still names the GPU, so
- * the closed menu says which GPU and which route.
+ * One group per physical device where that is certain. A GPU that ONNX Runtime reaches through
+ * both DirectML and OpenVINO becomes one group with an option per route; the option still names
+ * the GPU, so the closed menu says which GPU and which route.
+ *
+ * The device list carries no shared adapter identity (DirectML ids are adapter indices,
+ * OpenVINO ids UUIDs, and the two lists can order identical cards differently), so the routes
+ * are paired only when each route sees exactly one GPU of that name. Otherwise every route of
+ * every card is its own entry, named with its route and numbered within it.
  */
 export function groupedHardware(devices: DeviceInfo[]): HardwareGroup[] {
-  const groups: { name: string; entries: { id: string; route: GpuRoute | null }[] }[] = [];
-  for (const device of devices) {
-    const route = routeOf(device);
-    const name = cleanDeviceName(device.name);
-    // A second entry of the same route is a second card with the same name, not a route.
-    const shared =
-      route &&
-      groups.find(
-        (group) =>
-          group.name === name &&
-          group.entries.every((entry) => entry.route && entry.route !== route),
-      );
-    if (shared) shared.entries.push({ id: device.id, route });
-    else groups.push({ name, entries: [{ id: device.id, route }] });
-  }
-  // Two cards with one name are numbered, so the closed menu tells them apart.
-  const total = new Map<string, number>();
-  for (const group of groups) total.set(group.name, (total.get(group.name) ?? 0) + 1);
-  const seen = new Map<string, number>();
-  return groups.map((group) => {
-    let name = group.name;
-    if ((total.get(name) ?? 0) > 1) {
-      const number = (seen.get(name) ?? 0) + 1;
-      seen.set(name, number);
-      name = `${name} (${number})`;
+  const entries = devices.map((device) => ({
+    id: device.id,
+    route: routeOf(device),
+    name: cleanDeviceName(device.name),
+  }));
+  const count = (name: string, route: GpuRoute | null) =>
+    entries.filter((entry) => entry.name === name && entry.route === route).length;
+  const paired = (name: string) => count(name, 'DirectML') === 1 && count(name, 'OpenVINO') === 1;
+  const groups: HardwareGroup[] = [];
+  const pairs = new Map<string, HardwareGroup>();
+  const numbers = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.route && paired(entry.name)) {
+      let group = pairs.get(entry.name);
+      if (!group) {
+        group = { name: entry.name, options: [] };
+        pairs.set(entry.name, group);
+        groups.push(group);
+      }
+      group.options.push({ id: entry.id, label: `${entry.name} · ${entry.route}` });
+      continue;
     }
-    return {
-      name,
-      options:
-        group.entries.length > 1
-          ? group.entries.map((entry) => ({ id: entry.id, label: `${name} · ${entry.route}` }))
-          : [{ id: group.entries[0].id, label: name }],
-    };
-  });
+    // On its own, an entry names its route when the same GPU also shows up through the other.
+    const otherRoute = entries.some(
+      (other) => other.name === entry.name && other.route && other.route !== entry.route,
+    );
+    let label = entry.route && otherRoute ? `${entry.name} · ${entry.route}` : entry.name;
+    // Two cards with one name are numbered, so the closed menu tells them apart.
+    if (count(entry.name, entry.route) > 1) {
+      const number = (numbers.get(label) ?? 0) + 1;
+      numbers.set(label, number);
+      label = `${label} (${number})`;
+    }
+    groups.push({ name: label, options: [{ id: entry.id, label }] });
+  }
+  return groups;
 }
 
 /** The label of the option with this id, for the closed menu's tooltip. */
