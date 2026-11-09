@@ -51,3 +51,4 @@ packaging/updates/verifier/target/
 # Playwright
 desktop/test-results/
 desktop/playwright-report/
+.venv
