@@ -256,7 +256,16 @@ export interface Recipe {
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
 export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
 
+/** One fix in run order; in Restore the last one is the model itself. */
+export interface FixStageSelection {
+  fix: Exclude<FixKind, 'faces'>;
+  /** Empty while no catalog model fixes this problem; Start then waits. */
+  model_id: string;
+}
+
 export interface RecipeStage {
+  /** The problem a restoration stage fixes; recipes saved before several fixes omit it. */
+  fix?: Exclude<FixKind, 'faces'>;
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
   model_id: string;
   fidelity?: number;
@@ -268,7 +277,7 @@ export interface UiSettings {
   task: TaskKind | '';
   selected_model_id: string;
   selected_video_model_id: string;
-  preprocess_model_id: string;
+  fix_stages: FixStageSelection[];
   custom_model_path: string;
   output_scale: number;
   output_directory: string;
@@ -480,7 +489,7 @@ export interface StartBatchInput {
   task: TaskKind;
   model_id: string;
   video_model_id: string;
-  preprocess_model_id: string;
+  fix_stages: FixStageSelection[];
   custom_model_path: string;
   output_directory: string;
   output_format: string;
