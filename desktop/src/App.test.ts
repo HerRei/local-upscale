@@ -332,7 +332,7 @@ describe('Edit task', () => {
     restricted.terms_acceptance_required = true;
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Edit$/);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the edit model' }));
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText('Choosing for Edit')).toBeTruthy();
     expect(within(dialog).getByText('FLUX.2 klein 4B')).toBeTruthy();
@@ -959,7 +959,7 @@ describe('LocalSR desktop interface', () => {
     );
     await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
@@ -1034,7 +1034,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: /^Quick\s*Fast, clean result/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Best\s*Finest detail, slower/i })).toBeTruthy();
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Change…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
     const hardware = screen.getByLabelText('Hardware');
@@ -1915,10 +1915,203 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it('chooses the fix model without touching the upscaler and remembers it', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: ['noise'], preprocess_model_id: 'nafnet_sidd_width64' }),
+      ),
+    );
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change the fix model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
+    // Only models that fix noise; the JPEG model is not offered for this job.
+    expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    expect(within(library).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          halo: 16,
+          preprocess_model_id: 'scunet_color_real_psnr',
+          preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+        }),
+      ),
+    );
+    expect(screen.getByText('Model')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Back to Best' })).toBeNull();
+    expect(within(stages).getByText(/Your pick/)).toBeTruthy();
+
+    // The choice survives the chip going off and on, Quick and back, and the content switch.
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ preprocess_model_id: 'scunet_color_real_psnr' }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ preprocess_model_id: 'denoise_realplksr_1x' }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          content: 'illustration',
+          preprocess_model_id: 'scunet_color_real_psnr',
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Change the fix model' }));
+    const again = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(again).getByRole('button', { name: 'Back to the default' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ preprocess_model_id: 'nafnet_sidd_width64', preset_pins: {} }),
+      ),
+    );
+  });
+
+  it('keeps a fix chosen for a hand-picked upscaler through a chip round trip', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the fix model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'custom',
+          selected_model_id: 'hat_l_x4_imagenet',
+          preprocess_model_id: 'scunet_color_real_psnr',
+        }),
+      ),
+    );
+  });
+
+  it('lets Restore choose its model per problem and replaces a pick that cannot fix it', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Restore · Noise')).toBeTruthy();
+    expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'scunet_color_real_psnr',
+          output_scale: 1,
+          halo: 16,
+          preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+        }),
+      ),
+    );
+    // The blur chip cannot keep a denoiser: it brings a model that fixes blur.
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: ['blur'], selected_model_id: 'nafnet_gopro_deblur' }),
+      ),
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText(
+        'Can add artifacts to sharp pictures and line art.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('warns before the blur fix that it can fail on sharp pictures', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText(
+        'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Fix first' })).toBeTruthy();
+  });
+
+  it('names the fix of a recipe saved before fix chips existed', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    snapshot.recipes = [
+      {
+        id: 'old',
+        name: 'Old scans',
+        task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp32',
+        safe_memory: true,
+        stages: [
+          { kind: 'deblock', model_id: 'fbcnn_color' },
+          { kind: 'upscale', model_id: 'span_photo_x4' },
+        ],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Old scans/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: ['jpeg'], preprocess_model_id: 'fbcnn_color' }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'JPEG artifacts', pressed: true })).toBeTruthy();
+  });
+
+  it('keeps Faces on when the newly picked upscaler has a face companion', async () => {
+    const snapshot = readySnapshot([image('portrait', true)]);
+    snapshot.engine!.features.push('face_aware');
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-S ×4/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'hat_s_x4', enable_face_model: true }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
+  });
+
   it('picks a model for this job from the library and marks the recipe as custom', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
@@ -1945,7 +2138,7 @@ describe('LocalSR desktop interface', () => {
   it('uses the tile overlap a library model needs', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /DAT2 ×4 BHI Real/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
@@ -1967,7 +2160,7 @@ describe('LocalSR desktop interface', () => {
     api.removeModel.mockResolvedValue(undefined);
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Make my Best · Photo' }));
@@ -1980,7 +2173,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const reopened = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(reopened).getByRole('button', { name: /^Installed/ }));
     await user.click(within(reopened).getByRole('button', { name: 'Remove SPAN ×4 NomosUni' }));
