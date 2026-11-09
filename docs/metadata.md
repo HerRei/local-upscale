@@ -7,7 +7,7 @@ privacy leakage, metadata preservation is intentionally an allow-list: DateTime 
 maker notes, and embedded thumbnails are not copied.
 
 When a readable source ICC profile is present, pixels are converted to sRGB and the resulting sRGB
-profile is embedded in JPEG, PNG, TIFF, and WebP outputs when that encoder supports it. DNG pixels
+profile is embedded in JPEG, PNG, TIFF, WebP, and (on macOS) HEIC outputs when that encoder supports it. DNG pixels
 are developed through LibRaw into sRGB; LocalSR does not claim to preserve the original RAW camera
 profile or full DNG metadata. Invalid ICC data produces a warning rather than being copied.
 Grey and CMYK profiles convert to sRGB the same way. 16-bit grey PNG and TIFF files are scaled
@@ -23,9 +23,13 @@ them is preserved. HEIC/HEIF and JPEG XL are decoded by macOS, which applies the
 keeps the colour profile and the allow-listed tags. GIF, HEIC and other multi-image files use
 their first image.
 
-PNG, TIFF, and WebP preserve and resize an input alpha channel. JPEG cannot carry alpha and is
+PNG, TIFF, WebP, and HEIC preserve and resize an input alpha channel. JPEG cannot carry alpha and is
 written as RGB. EXIF fields unsupported by an output encoder are not claimed as preserved. Turning
 metadata preservation off omits both the safe EXIF subset and ICC profile.
+
+HEIC output exists on macOS only. LocalSR writes a lossless TIFF carrying the sRGB profile, the safe
+EXIF subset and any alpha, and `/usr/bin/sips` (ImageIO) encodes it at the chosen quality (the same
+slider as JPEG), so metadata is kept as for the other formats. HEIC stores 8-bit colour here.
 
 Every final image is encoded to a LocalSR-owned temporary sibling and atomically replaces the final
 path only after encoding succeeds. Existing outputs are not selected for overwrite by default.

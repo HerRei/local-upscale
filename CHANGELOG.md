@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- On the Mac, HEIC image output and MOV video output
+  ([#94](https://github.com/HerRei/local-upscale/issues/94)). HEIC joins PNG,
+  JPEG, TIFF and WebP under Advanced > Format with the same quality slider as JPEG;
+  it keeps the sRGB profile, the safe metadata and transparency. MOV joins MP4 and
+  MKV as a container and holds HEVC or Apple ProRes 422, and the video format menu
+  lists only the codecs the chosen container holds. macOS writes both with its own
+  encoders, so Windows and Linux do not offer them.
+
 ## [0.3.7-beta] - Unreleased
 
 ### Added

@@ -381,7 +381,13 @@ class ImageManager:
             luma = out_img.convert("L")
             out_img = Image.merge("RGB", (luma, luma, luma))
 
-        if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp", "heic"]:
+        if self.alpha_channel is not None and format.lower() in [
+            "png",
+            "tif",
+            "tiff",
+            "webp",
+            "heic",
+        ]:
             new_size = (
                 self.alpha_channel.width * final_scale,
                 self.alpha_channel.height * final_scale,

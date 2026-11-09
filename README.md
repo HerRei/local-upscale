@@ -53,9 +53,9 @@ benchmarks can be hard to grasp, so it's good to have one built around a real
 use case.
 
 It opens JPEG, PNG, WebP, TIFF, AVIF, GIF, JPEG 2000 and camera RAW files, and
-on the Mac also HEIC and JPEG XL. It saves PNG, JPEG, TIFF or WebP. Videos can
+on the Mac also HEIC and JPEG XL. It saves PNG, JPEG, TIFF or WebP, and on the Mac also HEIC. Videos can
 be MP4, MOV, MKV, WebM and other common formats, and are saved as AV1, VP9 or
-FFV1, or on the Mac also as HEVC. [Video support](docs/video-support.md).
+FFV1, or on the Mac also as HEVC or Apple ProRes (MOV). [Video support](docs/video-support.md).
 
 Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by Philip
 Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and

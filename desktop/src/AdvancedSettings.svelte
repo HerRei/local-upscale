@@ -2,6 +2,14 @@
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
   import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
+  import {
+    codecPatch,
+    codecsForContainer,
+    containerChoices,
+    containerPatch,
+    imageFormatChoices,
+    imageQualityName,
+  } from './lib/outputFormats';
   import HelpTip from './HelpTip.svelte';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
@@ -75,11 +83,34 @@
       ? 'via FFmpeg'
       : 'needs your FFmpeg';
 
+  $: imageFormats = imageFormatChoices(capabilities, settings.output_format);
+  $: qualityName = imageQualityName(settings.output_format);
+  $: containers = containerChoices(capabilities, settings.video_container);
+  $: codecs = codecsForContainer(settings.video_container ?? 'mp4');
+
+  function codecLabel(value: VideoCodec): string {
+    switch (value) {
+      case 'auto':
+        return `Automatic · ${automaticHardware ? 'HEVC, hardware encoder' : 'AV1'}`;
+      case 'ffv1':
+        return 'FFV1 · lossless, MKV';
+      case 'h264':
+        return `H.264 · ${codecSuffix}`;
+      case 'hevc':
+        return `HEVC · ${codecSuffix}`;
+      case 'prores':
+        return `Apple ProRes 422 · ${codecSuffix}`;
+      default:
+        return value.toUpperCase();
+    }
+  }
+
   function chooseCodec(value: VideoCodec): void {
-    // FFV1 is lossless and only fits MKV; the others keep the chosen container.
-    updateSettings(
-      value === 'ffv1' ? { video_codec: value, video_container: 'mkv' } : { video_codec: value },
-    );
+    updateSettings(codecPatch(value));
+  }
+
+  function chooseContainer(value: UiSettings['video_container']): void {
+    updateSettings(containerPatch(value, codec));
   }
 
   async function findFFmpeg(): Promise<void> {
@@ -194,18 +225,12 @@
               updateSettings({
                 output_format: event.currentTarget.value as UiSettings['output_format'],
               })}
-            ><option value="png">PNG</option><option value="jpg">JPEG</option><option value="tif"
-              >TIFF</option
-            ><option value="webp">WebP</option></select
+            >{#each imageFormats as choice}<option value={choice.value}>{choice.label}</option
+              >{/each}</select
           >
         </div>
-        {#if settings.output_format === 'jpg' || settings.output_format === 'webp'}<div
-            class="range-row"
-          >
-            <label for="quality"
-              >{settings.output_format === 'webp' ? 'WebP' : 'JPEG'} quality
-              <b>{settings.jpeg_quality}</b></label
-            ><input
+        {#if qualityName}<div class="range-row">
+            <label for="quality">{qualityName} quality <b>{settings.jpeg_quality}</b></label><input
               id="quality"
               type="range"
               min="70"
@@ -225,37 +250,36 @@
         >
       {:else if settings.task === 'video'}
         <div class="field-row">
-          <label for="video-codec">Video format</label><select
-            id="video-codec"
-            value={codec}
-            on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
-            ><option value="auto"
-              >Automatic · {automaticHardware ? 'HEVC, hardware encoder' : 'AV1'}</option
-            ><option value="av1">AV1</option><option value="vp9">VP9</option><option value="ffv1"
-              >FFV1 · lossless, MKV</option
-            ><option value="h264">H.264 · {codecSuffix}</option><option value="hevc"
-              >HEVC · {codecSuffix}</option
-            ></select
-          >
-        </div>
-        <div class="field-row">
           <label for="container">Container</label><select
             id="container"
             value={settings.video_container}
             on:change={(event) =>
-              updateSettings({
-                video_container: event.currentTarget.value as UiSettings['video_container'],
-              })}
-            ><option value="mp4" disabled={codec === 'ffv1'}>MP4</option><option value="mkv"
-              >MKV</option
-            ></select
+              chooseContainer(event.currentTarget.value as UiSettings['video_container'])}
+            >{#each containers as choice}<option
+                value={choice.value}
+                disabled={choice.value === 'mp4' && codec === 'ffv1'}>{choice.label}</option
+              >{/each}</select
           >
         </div>
-        {#if externalCodec && system}
+        <div class="field-row">
+          <label for="video-codec">Video format</label><select
+            id="video-codec"
+            value={codec}
+            on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
+            >{#each codecs as value}<option {value}>{codecLabel(value)}</option>{/each}</select
+          >
+        </div>
+        {#if codec === 'prores'}
+          <p class="model-description">
+            Apple ProRes 422 is written by {system?.label}'s own encoder into MOV. It is made for
+            editing: files are many times larger than HEVC, and the quality setting does not apply.
+          </p>
+        {:else if externalCodec && system}
           <p class="model-description">
             LocalSR does not include patent-licensed H.264/HEVC encoders. This export is written by
-            {system.label}'s own encoder into MP4, from a temporary lossless copy that needs extra
-            disk space. MKV output needs an FFmpeg installed on your computer.
+            {system.label}'s own encoder into {settings.video_container === 'mov' ? 'MOV' : 'MP4'},
+            from a temporary lossless copy that needs extra disk space. MKV output needs an FFmpeg
+            installed on your computer.
           </p>
         {:else if externalCodec}
           <p class="model-description">
