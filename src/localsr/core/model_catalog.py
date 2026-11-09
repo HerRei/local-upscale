@@ -346,11 +346,14 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="realplksr_hfa2k_anime_x4",
-        role="Anime, illustration and clean line art",
+        role="Anime video frames · Labs",
         stage="upscale",
         name="RealPLKSR 4x HFA2k — Anime",
         filename="4xHFA2k_ludvae_realplksr_dysample.pth",
-        description="Fast RealPLKSR model trained for anime, illustrations, and clean line art.",
+        description=(
+            "Experimental anime-frame upscaler. It can soften fine lines and screentones, "
+            "darken white paper, and reduce colour saturation."
+        ),
         size_bytes=29_715_988,
         sha256="c6e44af18fd3159787b0dbf81d432a6c1ba12c736fc1184b107ed091e49e327c",
         download_url=(
@@ -371,6 +374,7 @@ MODEL_CATALOG = (
         speed_factor=0.85,
         vram_estimate_mb=800,
         commercial_use_status="allowed",
+        preset_eligible=False,
     ),
     CatalogModel(
         model_id="span_photo_x4",

@@ -156,6 +156,8 @@ checkpoint rights.
   "CC-BY-0.4", and the author's
   [Hugging Face card](https://huggingface.co/Phips/1xDeNoise_realplksr_otf) for the same model
   declares `cc-by-4.0`, which LocalSR records.
+- Training-data provenance: [NomosUni](https://openmodeldb.info/models/4x-NomosUni-span-multijpg)
+  identifies `nomos_uni`; its constituent image permissions have not been verified here.
 
 ### NAFNet SIDD and GoPro (`nafnet_sidd_width64`, `nafnet_gopro_deblur`)
 
@@ -186,6 +188,12 @@ verification as every other model, credits the author and links the source and l
 app. HFA2k's `.pth` hash matches the catalog, and all 340 NomosWebPhoto tensors match the
 author's licensed conversion. CC BY 4.0 permits sharing and commercial use with attribution and
 retained notices; it does not imply the author's endorsement of LocalSR.
+
+The [NomosWebPhoto card](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR)
+identifies Nomos-v2 as training data. The [dataset publisher](https://github.com/neosr-project/neosr#-datasets)
+describes the Nomos series as drawn from multiple sources, including datasets with
+different terms, but does not provide a per-image licence manifest there. The
+checkpoint licence above is verified; clearance of every training image is not.
 
 ### DAT2 BHI Real and RealWebPhoto v4 (`bhi_dat2_real_x4`, `realwebphoto_v4_dat2_x4`)
 

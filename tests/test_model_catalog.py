@@ -193,7 +193,11 @@ def test_spandrel_compatible_models_metadata():
     assert anime.speed_factor == 0.85
     assert anime.memory_factor == 0.88
     assert anime.quality_tier == QualityTier.HIGH
-    assert "anime, illustrations, and clean line art" in anime.description
+    assert anime.role == "Anime video frames · Labs"
+    assert "soften fine lines and screentones" in anime.description
+    assert "darken white paper" in anime.description
+    assert "reduce colour saturation" in anime.description
+    assert not anime.preset_eligible
 
     # 2. SPAN Photo
     span_photo = get_model_by_id("span_photo_x4")
@@ -433,9 +437,10 @@ def test_default_model_directory():
     assert dir_path.name == "models"
 
 
-def test_only_the_slow_dat2_models_stay_out_of_the_presets():
+def test_specialist_models_stay_out_of_the_presets():
     assert {model.model_id for model in MODEL_CATALOG if not model.preset_eligible} == {
         "bhi_dat2_real_x4",
+        "realplksr_hfa2k_anime_x4",
         "realwebphoto_v4_dat2_x4",
     }
 
