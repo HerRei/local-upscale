@@ -579,7 +579,7 @@ wheels = [
 
 [[package]]
 name = "localsr"
-version = "0.3.4b0"
+version = "0.3.5b0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.5-beta] - Unreleased
+
+### Fixed
+
+- A fix before upscaling that its model cannot process no longer stops the whole job
+  ([#95](https://github.com/HerRei/local-upscale/issues/95)). NAFNet's deblur, which
+  **Blur** under Fix first uses, runs away on line art, screentone, QR codes and already
+  sharp pictures. LocalSR never keeps that damaged result, and it used to end the job with
+  "Could not finish". Now the image is upscaled without that fix, and the finished job
+  says that the fix was skipped.
+
 ## [0.3.4-beta] - Unreleased
 
 ### Added
