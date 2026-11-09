@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.4-beta] - Unreleased
+
+### Added
+
+- Two DAT2 models in the model library, both by Philip Hofmann under CC BY 4.0:
+  **DAT2 ×4 BHI Real** for lettering and buildings, and **DAT2 ×4 RealWebPhoto v4** for
+  noisy photos. They take about ten times as long as Best (around 73 seconds per input
+  megapixel on an M1 Pro), so no preset picks them on its own; choose one in the library,
+  or pin it to Best. Their licences and training data are listed in
+  [docs/model-licenses.md](../model-licenses.md).
+
+### Fixed
+
+- A model chosen in the library now uses the overlap between tiles it needs, as the
+  presets already did. Before, it kept the previous model's overlap.
+
 ## [0.3.3-beta] - Unreleased
 
 ### Added
