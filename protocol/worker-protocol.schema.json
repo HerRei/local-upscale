@@ -9,6 +9,7 @@
     { "$ref": "#/$defs/emptyRequest" },
     { "$ref": "#/$defs/pathRequest" },
     { "$ref": "#/$defs/jobRequest" },
+    { "$ref": "#/$defs/imageBatchRequest" },
     { "$ref": "#/$defs/editJobRequest" },
     { "$ref": "#/$defs/videoJobRequest" },
     { "$ref": "#/$defs/benchmarkRequest" },
@@ -18,6 +19,23 @@
     { "$ref": "#/$defs/workerResponse" }
   ],
   "$defs": {
+    "imageBatchRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "image_batch_request" },
+          "data": {
+            "type": "object", "required": ["jobs"],
+            "properties": { "jobs": {
+              "type": "array", "minItems": 2, "maxItems": 64,
+              "description": "Queued photos sharing one model and every setting; each keeps its own job_id, paths and terminal message. Sent only to engines that list the image_batch_v1 feature.",
+              "items": { "$ref": "#/$defs/jobRequest/allOf/1/properties/data" }
+            }},
+            "additionalProperties": false
+          }
+        }}
+      ]
+    },
     "editJobRequest": {
       "allOf": [
         { "$ref": "#/$defs/envelope" },

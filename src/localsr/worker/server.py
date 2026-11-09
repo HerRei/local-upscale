@@ -52,6 +52,7 @@ from localsr.protocol.messages import (
     EngineInfo,
     EngineStatus,
     JobCancelled,
+    JobCompleted,
     JobFailed,
     JobStarted,
     LivePreviewFrame,
@@ -108,9 +109,14 @@ def _video_engines() -> list[str]:
     return ["spandrel_image"] + (["seedvr2"] if seedvr2_runtime_issue() is None else [])
 
 
+# The most photos one batch request carries; the desktop sends at most this many.
+MAX_BATCH_PHOTOS = 64
+
+
 def _engine_features() -> list[str]:
     features = [
         "image",
+        "image_batch_v1",
         "video_frame",
         "camera_raw",
         "cancellation",
@@ -156,6 +162,7 @@ class WorkerServer:
         self.state_lock = threading.Lock()
         self.running = True
         self.active_job_id = None
+        self.active_batch_job_ids: set[str] = set()
         self.pending_cancel_job_ids: set[str] = set()
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
@@ -170,7 +177,12 @@ class WorkerServer:
             return
         with self.state_lock:
             self.pending_cancel_job_ids.add(requested_job_id)
-            if requested_job_id == self.active_job_id:
+            if requested_job_id in self.active_batch_job_ids:
+                # The desktop cancels a whole queue: every photo of the batch,
+                # also those that later run on their own, is cancelled.
+                self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.cancel_event.set()
+            elif requested_job_id == self.active_job_id:
                 self.cancel_event.set()
 
     def _activate_job(self, job_id: str) -> None:
@@ -185,6 +197,22 @@ class WorkerServer:
         with self.state_lock:
             self.active_job_id = None
             self.pending_cancel_job_ids.discard(job_id)
+            self.cancel_event.clear()
+
+    def _activate_batch(self, job_ids: list[str]) -> None:
+        with self.state_lock:
+            self.active_batch_job_ids = set(job_ids)
+            if self.active_batch_job_ids & self.pending_cancel_job_ids:
+                self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.cancel_event.set()
+            else:
+                self.cancel_event.clear()
+
+    def _deactivate_batch(self, job_ids: list[str]) -> None:
+        with self.state_lock:
+            self.active_job_id = None
+            self.active_batch_job_ids = set()
+            self.pending_cancel_job_ids.difference_update(job_ids)
             self.cancel_event.clear()
 
     def reader_thread_func(self):
@@ -352,6 +380,9 @@ class WorkerServer:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
 
+                elif req_type == "image_batch_request":
+                    self._run_image_batch(data.get("jobs"))
+
                 elif req_type == "job_request":
                     if self.active_job_id is not None:
                         send_message(
@@ -360,45 +391,7 @@ class WorkerServer:
                             )
                         )
                         continue
-
-                    job_id = data["job_id"]
-                    self._activate_job(job_id)
-                    previous_checkpoint_policy = getattr(
-                        self.model_adapter, "allow_unverified_checkpoints", False
-                    )
-                    requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
-                    self.model_adapter.allow_unverified_checkpoints = (
-                        previous_checkpoint_policy
-                        if requested_checkpoint_policy is None
-                        else bool(requested_checkpoint_policy)
-                    )
-
-                    try:
-                        send_message(JobStarted(job_id=job_id))
-                        self._run_job(job_id, data)
-                    # The process boundary must turn any inference/I/O failure
-                    # into a job_failed message instead of killing the worker.
-                    except Exception as e:  # noqa: BLE001
-                        traceback.print_exc(file=sys.stderr)
-                        self.restart_after_job = _device_lost(e)
-                        send_message(
-                            JobFailed(
-                                job_id=job_id,
-                                error_message=str(e),
-                                restart_required=self.restart_after_job,
-                            )
-                        )
-                        self._restart_if_required()
-                    finally:
-                        self._deactivate_job(job_id)
-                        self.model_adapter.release()
-                        self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
-                        # Release the face model from the engine cache if it
-                        # was loaded for this job. The general model stays
-                        # cached for the next image.
-                        face_path = data.get("face_model_path")
-                        if face_path:
-                            self.engine.release_model(face_path)
+                    self._run_image_job(data)
 
                 elif req_type == "edit_job_request":
                     job_id = str(data.get("job_id") or "")
@@ -718,6 +711,108 @@ class WorkerServer:
 
         result = aggregate_v2(device_results, time.monotonic() - started_at)
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
+
+    def _run_image_job(self, data) -> None:
+        """One image job: its own activation, checkpoint policy and failure boundary."""
+        job_id = data["job_id"]
+        self._activate_job(job_id)
+        previous_checkpoint_policy = getattr(
+            self.model_adapter, "allow_unverified_checkpoints", False
+        )
+        requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
+        self.model_adapter.allow_unverified_checkpoints = (
+            previous_checkpoint_policy
+            if requested_checkpoint_policy is None
+            else bool(requested_checkpoint_policy)
+        )
+
+        try:
+            send_message(JobStarted(job_id=job_id))
+            self._run_job(job_id, data)
+        # The process boundary must turn any inference/I/O failure
+        # into a job_failed message instead of killing the worker.
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc(file=sys.stderr)
+            self.restart_after_job = _device_lost(e)
+            send_message(
+                JobFailed(
+                    job_id=job_id,
+                    error_message=str(e),
+                    restart_required=self.restart_after_job,
+                )
+            )
+            self._restart_if_required()
+        finally:
+            self._deactivate_job(job_id)
+            self.model_adapter.release()
+            self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+            # Release the face model from the engine cache if it
+            # was loaded for this job. The general model stays
+            # cached for the next image.
+            face_path = data.get("face_model_path")
+            if face_path:
+                self.engine.release_model(face_path)
+
+    def _run_image_batch(self, jobs) -> None:
+        """Photos of one recipe: lanes first, then each photo they hand back on its own.
+
+        Every photo gets exactly one terminal message, as if it were its own job.
+        """
+        from localsr.worker.image_batch import ImageBatchRunner
+
+        named = [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
+        ids = [str(job.get("job_id") or "") for job in named]
+        if len(ids) != len(jobs or ()) or not all(ids) or len(set(ids)) != len(ids):
+            ids = []
+        if not 2 <= len(ids) <= MAX_BATCH_PHOTOS:
+            for job_id in {str(job.get("job_id")) for job in named if job.get("job_id")}:
+                send_message(
+                    JobFailed(job_id=job_id, error_message="The photo batch request is invalid.")
+                )
+            return
+        terminal: set[str] = set()
+
+        def emit(message) -> None:
+            if isinstance(message, (JobCompleted, JobFailed, JobCancelled)):
+                terminal.add(message.job_id)
+            send_message(message)
+
+        self._activate_batch(ids)
+        previous_checkpoint_policy = self.model_adapter.allow_unverified_checkpoints
+        requested_checkpoint_policy = jobs[0].get("allow_unverified_checkpoint")
+        if requested_checkpoint_policy is not None:
+            self.model_adapter.allow_unverified_checkpoints = bool(requested_checkpoint_policy)
+        try:
+            returned = ImageBatchRunner(
+                engine=self.engine,
+                model_adapter=self.model_adapter,
+                cancel_event=self.cancel_event,
+                emit=emit,
+                emit_preview=self._emit_live_preview,
+                preview_factory=LatestPreviewEncoder,
+            ).run(jobs)
+        except Exception as error:  # noqa: BLE001 - the process boundary, as for one job
+            traceback.print_exc(file=sys.stderr)
+            self.restart_after_job = _device_lost(error)
+            for job_id in ids:
+                if job_id not in terminal:
+                    send_message(
+                        JobFailed(
+                            job_id=job_id,
+                            error_message=str(error),
+                            restart_required=self.restart_after_job,
+                        )
+                    )
+            returned = []
+        finally:
+            self.model_adapter.release()
+            self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+        try:
+            self._restart_if_required()
+            for data in returned:
+                self._run_image_job(data)
+        finally:
+            self._deactivate_batch(ids)
 
     def _run_job(self, job_id, data):
         from localsr.worker.image_job import ImageJobRunner
