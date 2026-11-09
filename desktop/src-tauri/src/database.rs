@@ -449,6 +449,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn queued_multi_fix_snapshot_protects_each_stage_after_reopening() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.db");
+        let mut request = serde_json::json!({"data":{"stages":[
+            {"model_path":"/models/blur"}, {"model_path":"/models/jpeg"}, {"model_path":"/models/noise"}, {"model_path":"/models/main"}, {"model_path":"/models/face"}
+        ]}});
+        {
+            let db = Database::open(&path).unwrap();
+            db.insert_media("m", "/tmp/a.png", "a.png", "image")
+                .unwrap();
+            db.insert_job("j", "m", &request.to_string()).unwrap();
+        }
+        request["data"]["stages"][0]["model_path"] = serde_json::json!("/models/changed");
+        let db = Database::open(&path).unwrap();
+        for model in ["blur", "jpeg", "noise", "main", "face"] {
+            assert!(db
+                .unfinished_job_needs_model(Path::new(&format!("/models/{model}")))
+                .unwrap());
+        }
+        assert!(!db
+            .unfinished_job_needs_model(Path::new("/models/changed"))
+            .unwrap());
+        assert_eq!(
+            db.unfinished_requests().unwrap()[0]["data"]["stages"][0]["model_path"],
+            "/models/blur"
+        );
+    }
+
+    #[test]
     fn unfinished_jobs_protect_all_model_paths() {
         let directory = tempfile::tempdir().unwrap();
         let db = Database::open(&directory.path().join("queue.db")).unwrap();

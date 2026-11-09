@@ -44,9 +44,13 @@ policy questions about presets could not be answered from the data.
   Illustration, Faces, Fix noise/blur/JPEG, Video (Labs)), plus Installed as the storage view
   with `remove_model`. Only checkpoints that passed the evidence gates in
   `docs/model-licenses.md` are listed. Below 920 px the sheet fills the window.
-- **One restoration stage before the upscaler.** The host runs a single preprocess stage, so
-  the noise/JPEG/blur chips are exclusive; Faces is an independent companion pass. Chaining
-  several 1× stages is a host change and stays out of scope here.
+- **Fixes before the model.** Noise, JPEG and blur are independent chips. Each one runs
+  as its own 1× stage before the upscaler, up to three, in an order the plan card can
+  change; a newly chosen fix takes its place in blur → JPEG → noise. In Restore the last fix
+  is the Restore model and the ones before it run first. An optional fix that turns unstable
+  is skipped with a note. Settings keep the ordered list as `fix_stages` (schema 2); each
+  fix's model is remembered per problem and quality in `preset_pins["fix/<problem>/<quality>"]`.
+  Faces is an independent companion pass; video runs no fixes.
 - **Rename.** The *Denoise* task is labelled *Restore* ("Noise, blur, JPEG"); its identifier
   stays `denoise` for settings, recipes, the CLI and the worker protocol.
 

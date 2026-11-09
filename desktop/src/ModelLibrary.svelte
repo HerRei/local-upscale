@@ -84,7 +84,7 @@
     context.fix === undefined
       ? ''
       : context.slot === 'fix'
-        ? settings.preprocess_model_id
+        ? (settings.fix_stages.find((selection) => selection.fix === context.fix)?.model_id ?? '')
         : context.slot === 'primary' && context.task === 'denoise'
           ? settings.selected_model_id
           : '';
@@ -846,11 +846,21 @@
           </dl>
           <div class="actions">
             {#if !selected.installed && selected.automated_download_allowed}
+              {#if selected.terms_acceptance_required}
+                <label class="terms"
+                  ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model license
+                  and restrictions.</label
+                >
+              {/if}
               <button
                 class="button primary"
                 type="button"
-                disabled={busy || (Boolean(activeDownload) && activeDownload !== selected.model_id)}
-                on:click={() => void download(selected)}
+                disabled={busy ||
+                  (Boolean(activeDownload) && activeDownload !== selected.model_id) ||
+                  (selected.terms_acceptance_required &&
+                    !termsAccepted &&
+                    activeDownload !== selected.model_id)}
+                on:click={() => void download(selected, termsAccepted)}
                 >{activeDownload === selected.model_id
                   ? `Downloading ${Math.round(downloadProgress)}% · Cancel`
                   : `Download ${formatBytes(selected.size_bytes)}`}</button

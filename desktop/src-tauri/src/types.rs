@@ -268,10 +268,18 @@ pub struct Recipe {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecipeStage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
     pub kind: String,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FixStageSelection {
+    pub fix: String,
+    pub model_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -282,7 +290,7 @@ pub struct UiSettings {
     pub task: String,
     pub selected_model_id: String,
     pub selected_video_model_id: String,
-    pub preprocess_model_id: String,
+    pub fix_stages: Vec<FixStageSelection>,
     pub custom_model_path: String,
     pub output_scale: u32,
     pub output_directory: String,
@@ -390,7 +398,7 @@ impl Default for UiSettings {
             task: String::new(),
             selected_model_id: String::new(),
             selected_video_model_id: "frame_by_frame".into(),
-            preprocess_model_id: String::new(),
+            fix_stages: Vec::new(),
             custom_model_path: String::new(),
             output_scale: 4,
             output_directory: String::new(),
@@ -665,7 +673,7 @@ pub struct StartBatchInput {
     pub task: String,
     pub model_id: String,
     pub video_model_id: String,
-    pub preprocess_model_id: String,
+    pub fix_stages: Vec<FixStageSelection>,
     pub custom_model_path: String,
     pub output_directory: String,
     pub output_format: String,
