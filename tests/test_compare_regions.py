@@ -3,7 +3,9 @@ import io
 
 from PIL import Image
 
-from localsr.worker.compare_regions import RegionCache
+import threading
+
+from localsr.worker.compare_regions import RegionCache, RegionService
 
 
 def test_regions_use_source_pixels_and_reuse_decode(tmp_path, monkeypatch):
@@ -128,3 +130,60 @@ def test_region_coordinates_follow_exif_orientation(tmp_path):
     )
     with Image.open(io.BytesIO(base64.b64decode(result.png_base64))) as crop:
         assert crop.getpixel((0, 0)) == (0, 0, 255)
+
+
+def _region(path, slot="slot1"):
+    return {
+        "image_path": str(path),
+        "x": 0,
+        "y": 0,
+        "width": 2,
+        "height": 2,
+        "target_width": 2,
+        "target_height": 2,
+        "slot": slot,
+        "generation": 1,
+        "target_id": slot,
+        "request_id": 1,
+    }
+
+
+def test_an_image_above_the_cache_budget_is_cropped_without_being_kept(tmp_path):
+    path = tmp_path / "big.png"
+    Image.new("RGB", (20, 20), "red").save(path)  # 1600 bytes in memory
+    cache = RegionCache(1000)
+    assert cache.render(_region(path)).png_base64
+    assert not cache.images and cache.bytes == 0
+    path2 = tmp_path / "huge.png"
+    Image.new("RGB", (40, 40), "red").save(path2)  # above twice the budget
+    assert cache.render(_region(path2)).error_message
+
+
+def test_a_slot_resubmitted_while_others_wait_does_not_starve_them(tmp_path):
+    started, release = threading.Event(), threading.Event()
+    order = []
+    done = threading.Event()
+    service = RegionService(lambda result: None)
+
+    def render(data):
+        order.append(data["slot"])
+        if len(order) == 1:
+            started.set()
+            release.wait(5)
+        elif len(order) <= 3:
+            service.submit(_region("x", "slot4"))
+        if len(order) >= 4:
+            done.set()
+        return object()
+
+    service.cache.render = render
+    try:
+        service.submit(_region("x", "slot1"))
+        assert started.wait(5)
+        for slot in ("slot2", "slot3", "slot4"):
+            service.submit(_region("x", slot))
+        release.set()
+        assert done.wait(5)
+        assert order[1:3] == ["slot2", "slot3"]
+    finally:
+        service.close()
