@@ -1895,7 +1895,7 @@ describe('LocalSR desktop interface', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           content: 'illustration',
-          selected_model_id: 'realesrgan_x4plus_anime_6b',
+          selected_model_id: 'span_photo_x4',
         }),
       ),
     );
@@ -1908,7 +1908,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          model_id: 'realplksr_hfa2k_anime_x4',
+          model_id: 'realplksr_nomoswebphoto_x4',
         }),
       ),
     );
@@ -2334,7 +2334,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          selected_model_id: 'realplksr_hfa2k_anime_x4',
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
         }),
       ),
     );
