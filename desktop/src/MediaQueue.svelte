@@ -18,6 +18,17 @@
   export let addFolder: () => Promise<void>;
   export let removeMedia: (id: string) => Promise<void>;
   export let clearMedia: () => Promise<void>;
+
+  /** The item's newest job when it failed, so the row says it has no result and why (tooltip).
+   *  A later run that finished clears it. */
+  const failedJob = (mediaId: string) => {
+    // The host lists the newest job first; created_at decides whatever the order.
+    let latest: JobRecord | undefined;
+    for (const job of jobs) {
+      if (job.media_id === mediaId && (!latest || job.created_at > latest.created_at)) latest = job;
+    }
+    return latest?.status === 'failed' ? latest : undefined;
+  };
 </script>
 
 <aside class="media-pane pane" class:compact-hidden={compactHidden}>
@@ -113,6 +124,10 @@
                       : 'Preparing preview…'}</span
               >
               {#if media.hdr_format}<small class="queue-state">{media.hdr_format} HDR</small>{/if}
+              {#if !inflightMediaIds.has(media.id) && failedJob(media.id)}<small
+                  class="queue-state failed"
+                  title={failedJob(media.id)?.error}>Could not finish</small
+                >{/if}
               {#if inflightMediaIds.has(media.id)}<small class="queue-state"
                   >{jobs.find(
                     (job) =>

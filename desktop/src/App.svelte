@@ -54,7 +54,7 @@
     resultPreviewForSelectedMedia,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
-  import { engineLabel } from './lib/neuralEngine';
+  import { engineLabel, hardwarePatch } from './lib/neuralEngine';
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
@@ -438,6 +438,12 @@
     snapshot.runtime.status_title === 'Could not finish' && !snapshot.runtime.active_job_id
       ? snapshot.runtime.status_detail
       : '';
+  // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
+  // needs a GPU, so it gets no such button.
+  $: acceleratorFailure =
+    settings.task !== 'edit' &&
+    settings.device_id !== 'cpu' &&
+    /\b[GN]PU\b|graphics driver/.test(lastFailure);
   // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
   // ticks replace the detail line, so the note keeps its own line until the job ends.
   $: hardwareNote =
@@ -2676,6 +2682,18 @@
               {/if}
             </section>
 
+            {#if lastFailure}
+              <section class="control-section failure-note" role="alert" aria-label="Last error">
+                <p>{lastFailure}</p>
+                {#if acceleratorFailure}
+                  <button
+                    class="button"
+                    type="button"
+                    on:click={() => updateSettings(hardwarePatch('cpu'))}>Use the CPU</button
+                  >
+                {/if}
+              </section>
+            {/if}
             <AdvancedSettings
               {settings}
               {selectedModel}
