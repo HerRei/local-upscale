@@ -48,14 +48,8 @@ class DummyEngine:
         temporary_directory=None,
     ):
         progress_callback(0, 4, tile_size)
-        import time
-
-        for i in range(4):
-            time.sleep(0.05)
-            if cancel_event.is_set():
-                raise InterruptedError()
-            progress_callback(i + 1, 4, tile_size)
-        return DummyWriter()
+        assert cancel_event.wait(timeout=2)
+        raise InterruptedError()
 
 
 def test_worker_cancellation(monkeypatch, capsys):
@@ -92,12 +86,18 @@ def test_worker_cancellation(monkeypatch, capsys):
         safe_memory=True,
     )
 
-    import time
+    started = threading.Event()
+    original_process = server.engine.process_image
+
+    def process_image(*args, **kwargs):
+        started.set()
+        return original_process(*args, **kwargs)
+
+    server.engine.process_image = process_image
 
     def delayed_cancel():
-        time.sleep(0.08)
+        assert started.wait(timeout=2)
         server.cancel_event.set()
-        time.sleep(0.1)
         server.message_queue.put({"type": "shutdown_request"})
 
     t = threading.Thread(target=delayed_cancel)
@@ -123,7 +123,8 @@ def test_worker_cancellation(monkeypatch, capsys):
     finally:
         output = sys.stdout.getvalue()
         sys.stdout = old_stdout
-        t.join()
+        t.join(timeout=2)
+        assert not t.is_alive()
 
     assert "job_cancelled" in output
 

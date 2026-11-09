@@ -1,7 +1,5 @@
 """Memory policy and failure evidence without allocating GPU checkpoints."""
 
-import time
-
 import pytest
 
 from localsr.core.video_memory import VideoMemoryMonitor, seed_memory_plan
@@ -71,7 +69,6 @@ def test_sampler_failure_is_unavailable_and_monitor_stops_with_job():
     ) as monitor:
         assert not packets[-1].gpu_sample_available
     count = len(packets)
-    time.sleep(0.03)
     assert len(packets) == count
     assert not monitor.thread.is_alive()
 
