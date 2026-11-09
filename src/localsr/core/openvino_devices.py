@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 EP_NAME = "OpenVINOExecutionProvider"
 REGISTRATION_NAME = "localsr_openvino"
+# Why the plugin did not register, for the build probe and bug reports.
+registration_error = ""
 
 
 @functools.cache
@@ -28,6 +30,8 @@ def plugin_registered() -> bool:
         ort.disable_telemetry_events()
         ort.register_execution_provider_library(REGISTRATION_NAME, plugin.get_library_path())
     except Exception as error:  # noqa: BLE001 - a native load failure means no OpenVINO route
+        global registration_error
+        registration_error = f"{type(error).__name__}: {error}"[:500]
         logger.info("OpenVINO plugin could not be registered: %s", error)
         return False
     return True

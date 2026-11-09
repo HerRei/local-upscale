@@ -177,8 +177,19 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         command.env("PYTHONPATH", path);
     }
     command.env("PYTHONUNBUFFERED", "1");
+    let crashed_engine = state.worker.crashed_engine.swap(0, Ordering::SeqCst);
+    if crashed_engine != 0 {
+        command.env("LOCALSR_CRASHED_ENGINE", crashed_engine.to_string());
+    }
 
     let mut child = command.spawn().map_err(|error| {
+        // The next attempt still has to tell its engine which one crashed.
+        if crashed_engine != 0 {
+            state
+                .worker
+                .crashed_engine
+                .store(crashed_engine, Ordering::SeqCst);
+        }
         AppError::Worker(format!(
             "could not start the LocalSR inference engine: {error}"
         ))
@@ -262,6 +273,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     thread::spawn(move || {
         let mut forced_job = String::new();
         let mut restart_requested: Option<Instant> = None;
+        let engine_pid = child.id();
+        let mut stopped_by_app = false;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -269,6 +282,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 Ok(None) => {}
             }
             if state.worker.shutting_down.load(Ordering::SeqCst) {
+                stopped_by_app = true;
                 let _ = child.kill();
                 break child.wait();
             }
@@ -280,6 +294,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             if restart_overdue(restarting, &mut restart_requested, Instant::now()) {
                 // The engine asked for a restart but has not exited, for example because
                 // freeing a lost GPU hangs; the queue waits for its replacement.
+                stopped_by_app = true;
                 let _ = child.kill();
                 break child.wait();
             }
@@ -295,12 +310,19 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                             "Stopping the inference engine and releasing memory…".into();
                     }
                     emit_state_changed(&app);
+                    stopped_by_app = true;
                     let _ = child.kill();
                     break child.wait();
                 }
             }
             thread::sleep(Duration::from_millis(100));
         };
+        if !stopped_by_app && engine_crashed(&status) {
+            state
+                .worker
+                .crashed_engine
+                .store(engine_pid, Ordering::SeqCst);
+        }
         if state.worker.generation.load(Ordering::SeqCst) == generation {
             if let Ok(mut runtime) = state.runtime.lock() {
                 mark_exited(&mut runtime);
@@ -582,6 +604,31 @@ const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 
 /// How long an engine that asked for a restart may take to exit before it is stopped.
 const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
+
+/// Whether an engine that ended on its own died of a fault in native code, such as an
+/// access violation in a graphics driver. A kill (the OOM killer, Task Manager) or an
+/// ordinary failing exit is not one: the engine then cannot blame the GPU it was using.
+fn engine_crashed(status: &std::io::Result<std::process::ExitStatus>) -> bool {
+    let Ok(exit) = status else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        // SIGILL, SIGABRT, SIGFPE, SIGSEGV and SIGBUS (7 on Linux, 10 on macOS).
+        let bus = if cfg!(target_os = "linux") { 7 } else { 10 };
+        exit.signal()
+            .is_some_and(|signal| [4, 6, 8, 11, bus].contains(&signal))
+    }
+    #[cfg(windows)]
+    {
+        // NTSTATUS error codes (0xC0000005 access violation, 0xC0000409 fast fail, ...)
+        // and 3, the exit code of abort().
+        exit.code()
+            .is_some_and(|code| code == 3 || code as u32 >= 0xC000_0000)
+    }
+}
 
 fn restart_overdue(restarting: bool, since: &mut Option<Instant>, now: Instant) -> bool {
     if !restarting {
@@ -1681,6 +1728,39 @@ mod tests {
         runtime.worker = "restarting".into();
         mark_exited(&mut runtime);
         assert_eq!(runtime.worker, "restarting");
+    }
+
+    #[test]
+    fn only_a_native_fault_counts_as_a_crash() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::ExitStatus;
+
+        #[cfg(unix)]
+        let (clean, restart, failure, killed, faults) = (
+            ExitStatus::from_raw(0),
+            ExitStatus::from_raw(75 << 8),
+            ExitStatus::from_raw(1 << 8),
+            ExitStatus::from_raw(9), // SIGKILL, as from the OOM killer
+            vec![ExitStatus::from_raw(11), ExitStatus::from_raw(6)], // SIGSEGV, SIGABRT
+        );
+        #[cfg(windows)]
+        let (clean, restart, failure, killed, faults) = (
+            ExitStatus::from_raw(0),
+            ExitStatus::from_raw(75),
+            ExitStatus::from_raw(2),
+            ExitStatus::from_raw(1), // TerminateProcess from Task Manager
+            vec![ExitStatus::from_raw(0xC000_0005), ExitStatus::from_raw(3)],
+        );
+        for status in [clean, restart, failure, killed] {
+            assert!(!engine_crashed(&Ok(status)), "{status:?}");
+        }
+        for status in faults {
+            assert!(engine_crashed(&Ok(status)), "{status:?}");
+        }
+        assert!(!engine_crashed(&Err(std::io::Error::other("no status"))));
     }
 
     #[test]
