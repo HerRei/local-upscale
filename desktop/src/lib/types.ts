@@ -342,6 +342,7 @@ export interface RuntimeStatus {
   video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
   active_job_id: string;
+  active_batch_job_ids?: string[];
   status_title: string;
   status_detail: string;
   progress: number;
