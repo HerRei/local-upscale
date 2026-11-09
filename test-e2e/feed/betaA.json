@@ -1,0 +1,41 @@
+{
+  "version": "0.3.8-beta",
+  "notes": "Local update test.",
+  "platforms": {
+    "windows-x86_64-cpu-native": {
+      "url": "https://localhost:8443/updates/LocalSR-new.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRFdmSkpnNkt2bXl5VHdFcmpKNzBFRHFNQ0w1dVp1OWQxVnBNQkRtbTV1d0NVRnJvNjJDTmdWcVFFZTBlWjJZMmQ4bkFZNmZEdFhEU3JvM1VGZ1VsdXlpZXVmOUF5L3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjU2MDAxCWZpbGU6TG9jYWxTUi1uZXcuZXhlCjZsK0hqVGFZajZ4ZlIrd1M1SXRTV2FnUTVjTDB4RjZtM0NCbko1MWlwSVJrQWFFa3lmUUt1VS94Zk8yaHhUZGw2bHVXSmFDMEw1aytjWllmM1R4ckF3PT0K",
+      "localsr": {
+        "channel": "beta",
+        "backend": "cpu",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": "windows-x86_64-cpu-4a2a7bfd9a2a6ecbf53c37025f0f3f61a9e861e3eff1d3d6d4fd07c589e10a0a",
+        "size": 179699486,
+        "unpacked_size": 887417412,
+        "sha256": "ed501f2b20d889ea6e5de093bb4140e95cc52870ecd9d211b3f3f2114ae21b40",
+        "engine": {
+          "id": "windows-x86_64-cpu-4a2a7bfd9a2a6ecbf53c37025f0f3f61a9e861e3eff1d3d6d4fd07c589e10a0a",
+          "manifest": {
+            "name": "LocalSR-v0.3.8-beta-Windows-CPU-x86_64.engine-payload.json",
+            "url": "https://localhost:8443/updates/LocalSR-v0.3.8-beta-Windows-CPU-x86_64.engine-payload.json",
+            "size": 363,
+            "sha256": "0471bad2add0d10f90133b9d33b8183136f4731e128dc665e9d33d3f6fe1c294",
+            "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRFdmSkpnNkt2bTZQRndwalJhTXN1bHp2REsyMG9QaTJNelU1ZmhmQkN6aVkybTlHUDNMYTF0TjQwT3lBYXN6VnpXT1g2Z1M1WEZOUWkwQzhnUGFoUHNHN3lEelVKalFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjU1OTk5CWZpbGU6TG9jYWxTUi12MC4zLjgtYmV0YS1XaW5kb3dzLUNQVS14ODZfNjQuZW5naW5lLXBheWxvYWQuanNvbgo0WHc4TUV3Y2tqV0x4SVhML3FsaVVPREdkbmdDcDJVYVVWYnhlT1NIR0FHbzQxRXlxTTRVbGlqYnFTejU1SFlYU3ltcEViOGpjKzZEaVRiMWJwRURBZz09Cg=="
+          },
+          "parts": [
+            {
+              "name": "LocalSR-v0.3.8-beta-Windows-CPU-x86_64.engine.tar.gz.part-0001",
+              "url": "https://localhost:8443/updates/LocalSR-v0.3.8-beta-Windows-CPU-x86_64.engine.tar.gz.part-0001",
+              "size": 288022731,
+              "sha256": "b418bc7fc219c41c6478524eeb570865135943787fa715c3a2baec198bf0a36f",
+              "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRFdmSkpnNkt2bXpuTHhlT2Q3OXUwaHRyVWpmcHExd3pvVlJuc0lxT0hUSVIxYW9taGlEZHZxVXJvSDNjWkNGZ1lMUGhCODhwSjRlTjZTWVZmemdlRHZMRGlUOFUzd0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjU2MDAwCWZpbGU6TG9jYWxTUi12MC4zLjgtYmV0YS1XaW5kb3dzLUNQVS14ODZfNjQuZW5naW5lLnRhci5nei5wYXJ0LTAwMDEKUzVES1VrUkpnVTlieitjTFpIZ2RoSnhJdElNU0laRFNEUVd5Y1ZOVWMxbEhjNUJLa2hYNXF5YUN0Ynl6WDh4YnRVQ2w1eDVWNTJzYWtOOXF4d1lCREE9PQo="
+            }
+          ]
+        },
+        "statement": "eyJiYWNrZW5kIjoiY3B1IiwiY2hhbm5lbCI6ImJldGEiLCJlbmdpbmVfaWQiOiJ3aW5kb3dzLXg4Nl82NC1jcHUtNGEyYTdiZmQ5YTJhNmVjYmY1M2MzNzAyNWYwZjNmNjFhOWU4NjFlM2VmZjFkM2Q2ZDRmZDA3YzU4OWUxMGEwYSIsImVuZ2luZV9tYW5pZmVzdF9zaGEyNTYiOiIwNDcxYmFkMmFkZDBkMTBmOTAxMzNiOWQzM2I4MTgzMTM2ZjQ3MzFlMTI4ZGM2NjVlOWQzM2QzZjZmZTFjMjk0Iiwia2luZCI6Im5hdGl2ZSIsInByb3RvY29sIjoxLCJzY2hlbWFfdmVyc2lvbiI6MSwic2hhMjU2IjoiZWQ1MDFmMmIyMGQ4ODllYTZlNWRlMDkzYmI0MTQwZTk1Y2M1Mjg3MGVjZDlkMjExYjNmM2YyMTE0YWUyMWI0MCIsInRhcmdldCI6IndpbmRvd3MteDg2XzY0LWNwdS1uYXRpdmUiLCJ1bnBhY2tlZF9zaXplIjo4ODc0MTc0MTIsInZlcnNpb24iOiIwLjMuOC1iZXRhIn0=",
+        "statement_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRRFdmSkpnNkt2bXpKeDczYkRaWnBGT2Q2Vm5naXBKa2VzQkZjQzFEdnNiQzZ0UHZvcUQvMHpNei9FNjE0TjFhMUt1STMxMVUrNm9mdUNnYzhia3J3QVQxRjFqT25pNWdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjU2MDAxCWZpbGU6c3RhdGVtZW50Lmpzb24KdkNoWmpxSUxqcnR3bzY0clRjWWM2dkc1UzdOYVUvek5yNU9OS25kNTQ1bTdvMEEwb1I1RCtOL0JraXFVZGNya213WVFZOTV5b3dnblVtNUc0M1YzQUE9PQo="
+      }
+    }
+  }
+}
