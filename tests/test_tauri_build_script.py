@@ -489,13 +489,22 @@ def test_engine_library_copies_need_exactly_one_engine(tmp_path) -> None:
         build.remove_engine_library_copies(tmp_path)
 
 
-def test_a_managed_cuda_update_removes_the_engine_the_previous_installer_left() -> None:
+def test_a_managed_cuda_update_keeps_an_engine_without_proven_ownership() -> None:
     # Tauri's NSIS /UPDATE install skips the previous uninstaller, so its hook does not
     # remove $INSTDIR\engine; with the managed flag the updater's versioned engine is used
-    # instead, and the stale copy must go.
+    # instead. The flag alone cannot establish ownership of the old directory.
     hook = (ROOT / "packaging/windows/engine-payload.nsh").read_text(encoding="utf-8")
     managed = hook.split('${If} $LocalSREngineManaged == "1"', 1)[1].split("${Else}", 1)[0]
-    assert 'RMDir /r "$INSTDIR\\engine"' in managed
+    assert "RMDir" not in managed
     # Without the flag (a download from the website) the parts beside it are installed.
     unmanaged = hook.split("${Else}", 1)[1]
     assert "--install-engine" in unmanaged
+
+
+def test_round2_recovery_uses_the_systemd_restart_path() -> None:
+    source = (ROOT / "desktop/src-tauri/src/updates.rs").read_text()
+    recovery = source.split("pub fn recover_interrupted_update()", 1)[1].split(
+        "fn running_appimage", 1
+    )[0]
+    assert "restart_service(" in recovery
+    assert "restart_service(" in source.split("fn restart_application", 1)[1]

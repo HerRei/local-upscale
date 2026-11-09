@@ -6,9 +6,8 @@ Var LocalSREngineManaged
   ${GetOptions} $CMDLINE "/LOCALSR_ENGINE_MANAGED=" $LocalSREngineManaged
   ${If} $LocalSREngineManaged == "1"
     DetailPrint "Using the updater's verified versioned inference engine."
-    ; An /UPDATE install skips the previous uninstaller, so the engine it installed is
-    ; still here; the host runs the updater's engine, so remove the stale copy.
-    RMDir /r "$INSTDIR\engine"
+    ; The flag does not prove ownership of an existing engine at the install
+    ; destination. Keep it: the host uses the verified versioned engine instead.
   ${Else}
   DetailPrint "Verifying and installing the CUDA inference engine..."
   nsExec::ExecToLog '"$INSTDIR\localsr-next.exe" --install-engine "$INSTDIR\engine-payload.json" "$EXEDIR" "$INSTDIR\engine"'

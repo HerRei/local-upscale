@@ -132,8 +132,9 @@ pub fn copy_new(source: &Path, destination: &Path) -> AppResult<()> {
         .write(true)
         .create_new(true)
         .open(destination)?;
-    let result =
-        std::io::copy(&mut fs::File::open(source)?, &mut output).and_then(|_| output.sync_all());
+    let result = std::io::copy(&mut fs::File::open(source)?, &mut output)
+        .and_then(|_| output.set_permissions(fs::metadata(source)?.permissions()))
+        .and_then(|_| output.sync_all());
     if let Err(error) = result {
         drop(output);
         let _ = fs::remove_file(destination);
@@ -150,7 +151,24 @@ struct SwapJournal {
     staged: PathBuf,
 }
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_SYNC_AFTER_RENAME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 fn sync_dir(directory: &Path) -> AppResult<()> {
+    #[cfg(test)]
+    FAIL_SYNC_AFTER_RENAME.with(|fail| {
+        let mut fail = fail.borrow_mut();
+        if fail
+            .as_ref()
+            .is_some_and(|path| fs::read(path).ok().as_deref() == Some(b"new"))
+        {
+            *fail = None;
+            return Err(std::io::Error::other("injected sync failure"));
+        }
+        Ok(())
+    })?;
     #[cfg(unix)]
     fs::File::open(directory)?.sync_all()?;
     #[cfg(not(unix))]
@@ -181,6 +199,26 @@ fn lock_folder(directory: &Path) -> AppResult<fs::File> {
     }
 }
 
+/// Publish through a fresh inode, never following a pre-existing file or link.
+fn write_journal(journal: &Path, record: &SwapJournal) -> AppResult<()> {
+    use std::io::Write;
+    let temporary = journal.with_extension(format!("new-{}", uuid::Uuid::new_v4()));
+    let result = (|| -> AppResult<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec(record)?)?;
+        file.sync_all()?;
+        fs::rename(&temporary, journal)?;
+        sync_dir(journal.parent().unwrap())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
 /// Replace the executable at `current` with the file `stage` writes, keep it only when
 /// `check` passes it, and otherwise put the previous one back.
 ///
@@ -201,39 +239,67 @@ pub fn replace_executable(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| AppError::Validation("The application has no usable name".into()))?;
-    let _lock = lock_folder(parent)?;
+    let journal_parent = journal
+        .parent()
+        .ok_or_else(|| AppError::Validation("The journal has no folder".into()))?;
+    // Lock the shared profile before touching its journal, including recovery reads.
+    let _journal_lock = lock_folder(journal_parent)?;
+    let _app_lock = if journal_parent.canonicalize()? != parent.canonicalize()? {
+        Some(lock_folder(parent)?)
+    } else {
+        None
+    };
+    if fs::symlink_metadata(journal).is_ok() {
+        return Err(AppError::Validation(
+            "An interrupted update requires recovery first".into(),
+        ));
+    }
     let id = uuid::Uuid::new_v4();
     let record = SwapJournal {
         current: current.to_path_buf(),
         backup: parent.join(format!(".{name}.before-update-{id}")),
         staged: parent.join(format!(".{name}.update-{id}")),
     };
-    fs::write(journal, serde_json::to_vec(&record)?)?;
-    fs::File::open(journal)?.sync_all()?;
+    let mut replaced = false;
     let prepared = (|| -> AppResult<()> {
         stage(&record.staged)?;
         fs::set_permissions(&record.staged, fs::metadata(current)?.permissions())?;
+        fs::File::open(&record.staged)?.sync_all()?;
         if fs::hard_link(current, &record.backup).is_err() {
             copy_new(current, &record.backup)?;
         }
         sync_dir(parent)?;
+        // A record can only name a complete, durable backup. A crash while copying
+        // it leaves the original untouched and no journal that could restore a prefix.
+        write_journal(journal, &record)?;
         fs::rename(&record.staged, current)?;
+        replaced = true;
         sync_dir(parent)
     })();
     if let Err(error) = prepared {
+        if replaced {
+            // Keep the journal/backup if restoration itself fails.
+            fs::rename(&record.backup, current)?;
+            sync_dir(parent)?;
+        }
         let _ = fs::remove_file(&record.staged);
         let _ = fs::remove_file(&record.backup);
-        let _ = fs::remove_file(journal);
+        if journal.exists() {
+            fs::remove_file(journal)?;
+            sync_dir(journal_parent)?;
+        }
         return Err(error);
     }
     if let Err(error) = check(current) {
         fs::rename(&record.backup, current)?;
         sync_dir(parent)?;
-        let _ = fs::remove_file(journal);
+        fs::remove_file(journal)?;
+        sync_dir(journal_parent)?;
         return Err(error);
     }
     // Accepted: the journal goes first, so from here on a crash keeps the new file.
     fs::remove_file(journal)?;
+    sync_dir(journal_parent)?;
     let _ = fs::remove_file(&record.backup);
     Ok(())
 }
@@ -241,10 +307,37 @@ pub fn replace_executable(
 /// Roll back a swap that a crash interrupted: the previous executable takes its name
 /// back and the staged file goes. Returns the path it restored, if any.
 pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
-    let Ok(bytes) = fs::read(journal) else {
+    let journal_parent = journal
+        .parent()
+        .ok_or_else(|| AppError::Validation("The journal has no folder".into()))?;
+    if !journal_parent.exists() {
         return Ok(None);
+    }
+    let _journal_lock = lock_folder(journal_parent)?;
+    let metadata = match fs::symlink_metadata(journal) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     };
-    let record: SwapJournal = serde_json::from_slice(&bytes)?;
+    if metadata.file_type().is_symlink() {
+        fs::remove_file(journal)?;
+        sync_dir(journal_parent)?;
+        return Err(AppError::Validation(
+            "Removed an unsafe update journal link".into(),
+        ));
+    }
+    let bytes = fs::read(journal)?;
+    let record: SwapJournal = match serde_json::from_slice(&bytes) {
+        Ok(record) => record,
+        Err(error) => {
+            fs::rename(
+                journal,
+                journal.with_extension(format!("invalid-{}", uuid::Uuid::new_v4())),
+            )?;
+            sync_dir(journal_parent)?;
+            return Err(error.into());
+        }
+    };
     let foreign =
         || AppError::Validation("The interrupted update names files outside its folder".into());
     let parent = record.current.parent().ok_or_else(foreign)?;
@@ -263,7 +356,11 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
     if !ours(&record.backup, "before-update") || !ours(&record.staged, "update") {
         return Err(foreign());
     }
-    let _lock = lock_folder(parent)?;
+    let _app_lock = if journal_parent.canonicalize()? != parent.canonicalize()? {
+        Some(lock_folder(parent)?)
+    } else {
+        None
+    };
     let restored = if record.backup.is_file() {
         fs::rename(&record.backup, &record.current)?;
         sync_dir(parent)?;
@@ -273,12 +370,131 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
     };
     let _ = fs::remove_file(&record.staged);
     fs::remove_file(journal)?;
+    sync_dir(journal_parent)?;
     Ok(restored)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn round2_journal_link_never_truncates_its_target() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("app");
+        let journal = root.path().join("journal");
+        fs::write(&current, b"old").unwrap();
+        std::os::unix::fs::symlink(&current, &journal).unwrap();
+        let _ = replace_executable(
+            &current,
+            &journal,
+            |_| Err(AppError::Worker("stop".into())),
+            |_| Ok(()),
+        );
+        assert_eq!(fs::read(current).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round2_journal_is_published_only_after_a_complete_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("app");
+        let journal = root.path().join("journal");
+        fs::write(&current, b"old").unwrap();
+        replace_executable(
+            &current,
+            &journal,
+            |staged| {
+                assert!(
+                    !journal.exists(),
+                    "a crash during staging/backup must leave no recovery record"
+                );
+                fs::write(staged, b"new")?;
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round2_copy_backup_preserves_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("app");
+        let backup = root.path().join("backup");
+        fs::write(&source, b"old").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o751)).unwrap();
+        copy_new(&source, &backup).unwrap();
+        assert_eq!(
+            fs::metadata(backup).unwrap().permissions().mode() & 0o777,
+            0o751
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round2_post_rename_sync_error_rolls_back() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join("app");
+        let journal = root.path().join("journal");
+        fs::write(&current, b"old").unwrap();
+        FAIL_SYNC_AFTER_RENAME.with(|fail| *fail.borrow_mut() = Some(current.clone()));
+        assert!(replace_executable(
+            &current,
+            &journal,
+            |staged| {
+                fs::write(staged, b"new")?;
+                Ok(())
+            },
+            |_| panic!("sync failed first")
+        )
+        .is_err());
+        assert_eq!(fs::read(current).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round2_torn_journal_is_quarantined_once() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = root.path().join("journal");
+        fs::write(&journal, b"{broken").unwrap();
+        assert!(recover_swap(&journal).is_err());
+        assert!(!journal.exists());
+        assert_eq!(recover_swap(&journal).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round2_shared_journal_serializes_different_app_folders_and_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = root.path().join("journal");
+        let a = root.path().join("a/app");
+        let b = root.path().join("b/app");
+        for path in [&a, &b] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"old").unwrap();
+        }
+        replace_executable(
+            &a,
+            &journal,
+            |staged| {
+                fs::write(staged, b"new")?;
+                Ok(())
+            },
+            |_| {
+                assert!(
+                    replace_executable(&b, &journal, |_| panic!("journal in use"), |_| Ok(()))
+                        .is_err()
+                );
+                assert!(recover_swap(&journal).is_err());
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn failed_startup_restores_old_host_and_leaves_models_and_profile_untouched() {
