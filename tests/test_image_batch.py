@@ -61,8 +61,17 @@ class Runner:
 
 
 class Setup:
-    def __init__(self, tmp_path, architecture="SPAN", ac=True, lanes=True, behaviour=None):
+    def __init__(
+        self,
+        tmp_path,
+        architecture="SPAN",
+        ac=True,
+        lanes=True,
+        behaviour=None,
+        memory_budget=None,
+    ):
         self.calls, self.messages, self.samples, self.order = [], [], [], []
+        self.forgotten = []
         self.tmp_path = tmp_path
         self.cancel = threading.Event()
         test = self
@@ -78,6 +87,9 @@ class Setup:
                 units = [NEURAL_ENGINE] * 2 + ([CORE_ML_GPU] * 2 if gpu else [])
                 return [Runner(unit, test.calls, behaviour) for unit in units]
 
+            def forget_batch_unit(self, unit):
+                test.forgotten.append(unit)
+
         def load_model(*_args, **_kwargs):
             test.order.append("load")
 
@@ -90,7 +102,7 @@ class Setup:
         )
         info = NormalizedModelInfo(architecture, 2, 3, 3, True, True, 1, 1, "span.pth", [])
         self.adapter = SimpleNamespace(inspect=lambda path: info)
-        self.power = PowerSource(read=lambda: ac)
+        self.power = PowerSource(read=ac if callable(ac) else (lambda: ac), interval=0)
 
         def emit(message):
             if message.__class__.__name__ == "JobStarted":
@@ -104,6 +116,7 @@ class Setup:
             emit=emit,
             emit_preview=lambda _packet: None,
             power=self.power,
+            memory_budget=memory_budget,
         )
 
     def run(self, jobs):
@@ -170,9 +183,173 @@ def test_the_first_photo_is_announced_before_the_model_loads(tmp_path):
 def test_battery_runs_the_neural_engine_lanes_only(tmp_path):
     setup = Setup(tmp_path, ac=False)
     assert setup.run([job(tmp_path, i) for i in range(3)]) == []
-    assert [gpu for *_, gpu in setup.samples] == [False]
+    # The GPU lanes are ready but idle, so they can join once the Mac is plugged in.
+    assert [gpu for *_, gpu in setup.samples] == [True]
     assert {unit for unit, _ in setup.calls} == {NEURAL_ENGINE}
     assert setup.terminal() == [(str(i), "job_completed") for i in range(3)]
+
+
+def test_gpu_lanes_join_a_batch_once_the_mac_is_plugged_in(tmp_path):
+    power = {"ac": False}
+
+    def plug_in(output, _image):
+        power["ac"] = True
+        time.sleep(0.005)
+        return output
+
+    setup = Setup(tmp_path, ac=lambda: power["ac"], behaviour=plug_in)
+    assert setup.run([job(tmp_path, i, size=(800, 400)) for i in range(6)]) == []
+    assert CORE_ML_GPU in {unit for unit, _ in setup.calls}
+    assert setup.terminal() == [(str(i), "job_completed") for i in range(6)]
+
+
+def test_large_outputs_save_one_at_a_time_within_the_memory_budget(tmp_path, monkeypatch):
+    lock = threading.Lock()
+    counts = {"now": 0, "peak": 0}
+    real_save = image_batch.save_output
+
+    def counting_save(*args):
+        with lock:
+            counts["now"] += 1
+            counts["peak"] = max(counts["peak"], counts["now"])
+        time.sleep(0.05)
+        try:
+            real_save(*args)
+        finally:
+            with lock:
+                counts["now"] -= 1
+
+    monkeypatch.setattr(image_batch, "save_output", counting_save)
+    # Each 19x17 photo saves a 38x34 output: 8 bytes per pixel is 10336 bytes.
+    one = image_batch.save_bytes(38, 34, scale=2, output_scale=2, alpha=False)
+    assert one == 8 * 38 * 34
+    setup = Setup(tmp_path, memory_budget=one + one // 2)
+    assert setup.run([job(tmp_path, i) for i in range(5)]) == []
+    assert setup.terminal() == [(str(i), "job_completed") for i in range(5)]
+    assert counts["peak"] == 1
+    counts["peak"] = 0
+    roomy = Setup(tmp_path / "roomy", memory_budget=100 * one)
+    (tmp_path / "roomy").mkdir()
+    assert roomy.run([job(tmp_path / "roomy", i) for i in range(5)]) == []
+    assert counts["peak"] >= 2
+
+
+def test_save_memory_counts_the_copies_pillow_holds():
+    native = 16128 * 12096  # a 12 MP photo at 4x
+    assert image_batch.save_bytes(16128, 12096, 4, 4, alpha=False) == 8 * native
+    # Downscaled to 2x: the resized copy; alpha: the RGBA image and the alpha plane.
+    final = 8064 * 6048
+    assert image_batch.save_bytes(16128, 12096, 4, 2, alpha=False) == 8 * native + 4 * final
+    assert image_batch.save_bytes(16128, 12096, 4, 4, alpha=True) == 8 * native + 5 * native
+
+
+def test_the_default_memory_budget_is_a_quarter_of_the_memory(monkeypatch):
+    values = {"SC_PHYS_PAGES": 4 * 2**20, "SC_PAGE_SIZE": 4096}  # 16 GiB
+    monkeypatch.setattr(image_batch.os, "sysconf", lambda name: values[name])
+    assert image_batch.default_memory_budget() == 4 * 2**30
+
+    def unavailable(_name):
+        raise OSError("no sysconf")
+
+    monkeypatch.setattr(image_batch.os, "sysconf", unavailable)
+    assert image_batch.default_memory_budget() == 2 * 2**30
+
+
+def test_the_first_photo_is_released_once_it_is_inferred(tmp_path, monkeypatch):
+    import gc
+    import weakref
+
+    loaded = []
+
+    class Recording(image_batch.ImageManager):
+        def load(self, path):
+            image = super().load(path)
+            loaded.append(weakref.ref(image["tensor"]))
+            return image
+
+    monkeypatch.setattr(image_batch, "ImageManager", Recording)
+    seen = {}
+    real_save = image_batch.save_output
+
+    def check_then_save(*args):
+        # A photo saves after its last tile: its decoded input must be gone by then.
+        if args[4]["job_id"] == "0":
+            gc.collect()
+            seen["first"] = loaded[0]() is not None
+        real_save(*args)
+
+    monkeypatch.setattr(image_batch, "save_output", check_then_save)
+    setup = Setup(tmp_path)
+    assert setup.run([job(tmp_path, i, size=(400, 400)) for i in range(4)]) == []
+    assert seen == {"first": False}
+
+
+def test_a_retried_tile_keeps_progress_in_range_and_its_lane_is_not_reused(tmp_path):
+    failures = []
+
+    def fail_once(output, _image):
+        if not failures:
+            failures.append(True)
+            raise RuntimeError("Error computing NN outputs")
+        return output
+
+    setup = Setup(tmp_path, behaviour=fail_once)
+    assert setup.run([job(tmp_path, i, size=(800, 400)) for i in range(3)]) == []
+    assert setup.terminal() == [(str(i), "job_completed") for i in range(3)]
+    for message in setup.messages:
+        if message["type"] == "tile_update" and message["data"]["phase"] == "started":
+            assert message["data"]["completed_tiles"] < message["data"]["total_tiles"]
+    # The failed runner leaves the model's cache, so the next batch loads a fresh one.
+    assert len(setup.forgotten) == 1
+
+
+def test_batch_output_matches_the_normal_runner_for_a_real_convolution(tmp_path):
+    """Halo, windows and stitching agree with the per-photo path, not only for pointwise fakes."""
+    from localsr.core.inference import InferenceEngine
+
+    torch.manual_seed(3)
+    network = torch.nn.Sequential(
+        torch.nn.Conv2d(3, 8, 3, padding=1),
+        torch.nn.Tanh(),
+        torch.nn.Conv2d(8, 12, 3, padding=1),
+        torch.nn.PixelShuffle(2),
+        torch.nn.Sigmoid(),
+    ).eval()
+
+    def convolve(_output, image):
+        with torch.no_grad():
+            return network(torch.from_numpy(np.array(image)))
+
+    setup = Setup(tmp_path, behaviour=convolve)
+    jobs = [job(tmp_path, i, size=(731, 389)) for i in range(2)]
+    assert setup.run(jobs) == []
+    info = NormalizedModelInfo("SPAN", 2, 3, 3, True, True, 1, 1, "span.pth", [])
+    engine = InferenceEngine(model_adapter=None)
+    engine._loaded_models["span.pth"] = (network, torch.device("cpu"), torch.float32)
+    engine._loaded_backend_ids["span.pth"] = "cpu"
+    engine._memory_cap_safe["cpu"] = False
+    for data in jobs:
+        manager = image_batch.ImageManager()
+        normal = engine.process_image(
+            manager.load(data["image_path"]),
+            info,
+            "span.pth",
+            "cpu",
+            "fp32",
+            256,
+            16,
+            threading.Event(),
+            lambda *_: None,
+            safe_memory=False,
+            temporary_directory=str(tmp_path),
+        )
+        try:
+            expected = np.transpose(np.asarray(normal.get_array()), (1, 2, 0)).astype(int)
+        finally:
+            normal.cleanup()
+        actual = np.array(Image.open(data["output_path"])).astype(int)
+        assert actual.shape == expected.shape
+        assert np.abs(actual - expected).max() <= 1
 
 
 def test_the_gate_sample_is_a_real_tile_at_the_lane_shape(tmp_path):

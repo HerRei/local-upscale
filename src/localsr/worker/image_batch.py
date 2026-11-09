@@ -16,6 +16,7 @@ runs them through the normal per-photo runner.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -77,6 +78,33 @@ def batch_settings(data: Mapping[str, Any]) -> dict[str, Any] | None:
     if pipeline.preprocess is not None or pipeline.face is not None:
         return None
     return {key: value for key, value in data.items() if key not in _PHOTO_FIELDS}
+
+
+def save_bytes(width: int, height: int, scale: int, output_scale: int, alpha: bool) -> int:
+    """Peak bytes one save holds for a ``width`` x ``height`` native-scale output.
+
+    Pillow copies the transposed output (3 B/px) into an RGB image (4 B/px), and
+    the save reads the output's pages; on Linux with fake lanes each further save
+    of a 110 MP output added 862 MiB of RSS (8.2 B/px), so 8 B/px. A smaller
+    output scale adds the resized RGB copy; alpha adds the RGBA image (4 B/px) and
+    its scaled alpha plane (1 B/px).
+    """
+    native = width * height
+    final = round(width * output_scale / scale) * round(height * output_scale / scale)
+    total = 8 * native
+    if output_scale != scale:
+        total += 4 * final
+    if alpha:
+        total += 5 * final
+    return total
+
+
+def default_memory_budget() -> int:
+    """What saves may hold at once: a quarter of the memory, 2 GiB when unknown."""
+    try:
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // 4
+    except (OSError, ValueError):
+        return 2 * 2**30
 
 
 def read_ac_power() -> bool:
@@ -179,7 +207,14 @@ class _Photo:
         self.progress = ImageJobProgress(
             data["job_id"], self.pipeline, data["device"], batch.emit, preview, clock=batch.clock
         )
-        self.dispatched = self.completed = 0
+        self.completed = 0
+        self.nbytes = save_bytes(
+            self.width,
+            self.height,
+            info.scale,
+            int(data.get("output_scale") or info.scale),
+            getattr(manager, "alpha_channel", None) is not None,
+        )
         self.writer = OutputWriter(
             (info.out_channels, self.height, self.width),
             temporary_directory=data.get("scratch_directory"),
@@ -190,17 +225,17 @@ class _Photo:
         self.progress.start(self.pipeline.primary_index, self.pipeline.primary)
 
     def dispatch(self, tile) -> None:
+        # A retried tile starts again; the count stays the tiles done so far.
         self.progress.tile(
             "started",
             tile,
             None,
-            self.dispatched,
+            self.completed,
             len(self.tiles),
             self.width,
             self.height,
             self.core,
         )
-        self.dispatched += 1
 
     def stitch(self, tile, pixels) -> None:
         try:
@@ -243,6 +278,7 @@ class ImageBatchRunner:
         emit_preview: Callable[[PreviewPacket], None],
         preview_factory: Callable[..., LatestPreviewEncoder] = LatestPreviewEncoder,
         power: PowerSource | None = None,
+        memory_budget: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.engine = engine
@@ -252,6 +288,7 @@ class ImageBatchRunner:
         self.emit_preview = emit_preview
         self.preview_factory = preview_factory
         self.power = power or PowerSource()
+        self.memory_budget = memory_budget or default_memory_budget()
         self.clock = clock
         self.lane_tile_counts: dict[str, int] = {}
         self._announced: set[str] = set()
@@ -296,12 +333,15 @@ class ImageBatchRunner:
             if not callable(getattr(model, "batch_lanes", None)):
                 return remaining
             model.set_cancel_event(self.cancel_event)
-            first = self._decode_first(remaining)
-            if first is None:
+            handed = self._decode_first(remaining)
+            if not handed:
                 return []
-            sample = self._sample(first[1]["tensor"], shape, int(data["halo"]), info.scale)
+            tensor = handed["first"][1]["tensor"]
+            sample = self._sample(tensor, shape, int(data["halo"]), info.scale)
+            del tensor
+            # The GPU lanes are loaded on battery too; they take tiles only on AC power.
             with torch.inference_mode():
-                runners = model.batch_lanes(sample, shape, gpu=self.power.on_ac())
+                runners = model.batch_lanes(sample, shape, gpu=True)
             del sample
         except InterruptedError:
             for item in remaining:
@@ -312,7 +352,7 @@ class ImageBatchRunner:
             return remaining
         if not runners:
             return remaining
-        return self._run_lanes(remaining, first, runners, info, shape)
+        return self._run_lanes(remaining, handed, model, runners, info, shape)
 
     def _plan(self, jobs: list[dict[str, Any]]) -> NormalizedModelInfo | None:
         if len(jobs) < 2:
@@ -329,19 +369,23 @@ class ImageBatchRunner:
             return None
         return info if side > 2 * int(jobs[0]["halo"]) else None
 
-    def _decode_first(self, remaining: list[dict[str, Any]]):
-        """Decode the first photo that opens; it supplies the gate's sample tile."""
+    def _decode_first(self, remaining: list[dict[str, Any]]) -> dict[str, tuple]:
+        """Decode the first photo that opens; it supplies the gate's sample tile.
+
+        It comes in a dict that the batch empties when it opens that photo, so no
+        other reference keeps the decoded input alive for the whole batch.
+        """
         while remaining:
             self._check_cancelled()
             data = remaining[0]
             manager = ImageManager()
             try:
-                return data, manager.load(data["image_path"]), manager
+                return {"first": (data, manager.load(data["image_path"]), manager)}
             except Exception as error:  # noqa: BLE001 - this photo only, as in the normal runner
                 remaining.pop(0)
                 self.announce(data)
                 self.emit(JobFailed(job_id=str(data["job_id"]), error_message=str(error)))
-        return None
+        return {}
 
     @staticmethod
     def _sample(tensor: torch.Tensor, shape, halo: int, scale: int) -> torch.Tensor:
@@ -352,7 +396,7 @@ class ImageBatchRunner:
             raise ValueError("The batch overlap does not fit the lane shape.")
         return window[0][None].contiguous()
 
-    def _run_lanes(self, remaining, first, runners, info, shape) -> list[dict[str, Any]]:
+    def _run_lanes(self, remaining, handed, model, runners, info, shape) -> list[dict[str, Any]]:
         data = remaining[0]
         preview = self.preview_factory(
             self.emit_preview,
@@ -365,7 +409,6 @@ class ImageBatchRunner:
             _Lane(runner, shape, info, self.power if runner.unit == CORE_ML_GPU else None)
             for runner in runners
         ]
-        handed = {"first": first}
 
         def open_photo(item):
             self._check_cancelled()
@@ -404,8 +447,9 @@ class ImageBatchRunner:
                     JobFailed(job_id=str(item["job_id"]), error_message=str(error))
                 ),
                 cancelled=lambda item: self.emit(JobCancelled(job_id=str(item["job_id"]))),
-                lane_failed=lambda error: self._log(f"A batch lane stopped: {error}"),
+                lane_failed=lambda lane, error: self._lane_failed(model, lane, error),
                 encoders=ENCODERS.get(info.architecture, DEFAULT_ENCODERS),
+                memory_budget=self.memory_budget,
             )
         finally:
             preview.close()
@@ -415,6 +459,13 @@ class ImageBatchRunner:
                     self.lane_tile_counts.get(lane.unit, 0) + lane.tiles
                 )
         return returned
+
+    def _lane_failed(self, model, lane: _Lane, error: BaseException) -> None:
+        self._log(f"A batch lane on {lane.unit} stopped: {error}")
+        # The next batch loads fresh runners instead of this one again.
+        forget = getattr(model, "forget_batch_unit", None)
+        if callable(forget):
+            forget(lane.unit)
 
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():
