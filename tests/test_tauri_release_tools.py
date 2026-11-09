@@ -580,11 +580,85 @@ def test_installed_smoke_must_carry_the_build_update_identity() -> None:
         )
 
 
+def _compress(point: tuple[int, int, int, int]) -> bytes:
+    prime = verify_prepared._P
+    inverse = pow(point[2], prime - 2, prime)
+    x, y = point[0] * inverse % prime, point[1] * inverse % prime
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+class SigningKey:
+    """A disposable minisign key that signs the way tauri signer does (prehashed)."""
+
+    def __init__(self, seed: bytes, key_id: bytes):
+        digest = hashlib.sha512(seed).digest()
+        scalar = int.from_bytes(digest[:32], "little")
+        self.scalar = (scalar & ((1 << 254) - 8)) | (1 << 254)
+        self.prefix = digest[32:]
+        self.key_id = key_id
+        self.point = _compress(verify_prepared._mul(self.scalar, verify_prepared._G))
+        text = (
+            f"untrusted comment: minisign public key: {key_id.hex().upper()}\n"
+            + base64.b64encode(b"Ed" + key_id + self.point).decode()
+            + "\n"
+        )
+        self.public_key = base64.b64encode(text.encode()).decode()
+
+    def _raw(self, message: bytes) -> bytes:
+        order = verify_prepared._Q
+        r = int.from_bytes(hashlib.sha512(self.prefix + message).digest(), "little") % order
+        commitment = _compress(verify_prepared._mul(r, verify_prepared._G))
+        h = (
+            int.from_bytes(hashlib.sha512(commitment + self.point + message).digest(), "little")
+            % order
+        )
+        return commitment + ((r + h * self.scalar) % order).to_bytes(32, "little")
+
+    def signature(self, data: bytes, name: str = "file") -> str:
+        signature = self._raw(hashlib.blake2b(data, digest_size=64).digest())
+        trusted = f"timestamp:0\tfile:{name}"
+        text = (
+            "untrusted comment: signature from tauri secret key\n"
+            + base64.b64encode(b"ED" + self.key_id + signature).decode()
+            + f"\ntrusted comment: {trusted}\n"
+            + base64.b64encode(self._raw(signature + trusted.encode())).decode()
+            + "\n"
+        )
+        return base64.b64encode(text.encode()).decode()
+
+    def sign_file(self, path: Path) -> None:
+        path.with_name(path.name + ".sig").write_text(self.signature(path.read_bytes(), path.name))
+
+
+TEST_KEY = SigningKey(b"\x01" * 32, b"localsr1")
+OTHER_KEY = SigningKey(b"\x02" * 32, b"localsr1")
+
+
 def fake_sign(path: Path) -> None:
-    """Stand-in for the Keychain signer: writes <path>.sig the way tauri signer does."""
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    text = f"untrusted comment: test signature\n{digest}\n".encode()
-    path.with_name(path.name + ".sig").write_text(base64.b64encode(text).decode())
+    """Stand-in for the Keychain signer: a disposable key, the same signature format."""
+    TEST_KEY.sign_file(path)
+
+
+def test_the_feed_check_verifies_signatures_as_the_app_does() -> None:
+    # Real tauri signer output from the app's test fixtures.
+    fixtures = ROOT / "desktop/src-tauri/tests/fixtures"
+    single = json.loads((fixtures / "update-signature.json").read_text())
+    data = single["data"].encode()
+    assert verify_prepared.minisign_verify(single["public_key"], single["signature"], [data])
+    assert not verify_prepared.minisign_verify(
+        single["public_key"], single["signature"], [data + b"x"]
+    )
+    split = json.loads((fixtures / "update-parts.json").read_text())
+    parts = [part["data"].encode() for part in split["parts"]]
+    assert verify_prepared.minisign_verify(split["public_key"], split["whole"]["signature"], parts)
+    assert not verify_prepared.minisign_verify(
+        single["public_key"], split["whole"]["signature"], parts
+    )
+    # The test signer writes the same format.
+    assert verify_prepared.minisign_verify(TEST_KEY.public_key, TEST_KEY.signature(data), [data])
+    assert not verify_prepared.minisign_verify(
+        TEST_KEY.public_key, OTHER_KEY.signature(data), [data]
+    )
 
 
 def platform_downloads(tmp_path: Path, release_version: str = "1.2.3-beta") -> Path:
@@ -606,67 +680,106 @@ def platform_downloads(tmp_path: Path, release_version: str = "1.2.3-beta") -> P
             (directory / name).write_bytes(data)
         digest = hashlib.sha256(data).hexdigest()
         (directory / f"{name}.sha256").write_text(f"{digest}  {name}\n")
-        (directory / f"{name}.smoke.json").write_text(
-            json.dumps(update_smoke(target["id"], release_version))
-        )
         engine = fake_engine(tmp_path / target["id"], files["worker"])
-        engine_payload.prepare_for_target(
+        manifest = engine_payload.prepare_for_target(
             target["id"], directory, engine=engine, release_version=release_version
         )
+        smoke = update_smoke(target["id"], release_version)
+        if target.get("external_engine"):
+            # The Windows CUDA smoke test installs from this manifest and records it.
+            smoke["engine_payload_sha256"] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        (directory / f"{name}.smoke.json").write_text(json.dumps(smoke))
     return downloads
 
 
-def mac_feed(path: Path, release_version: str = "1.2.3-beta") -> dict:
-    """A feed as release_macos_beta.sh writes it."""
+def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path, dict]:
+    """The files and the feed release_macos_beta.sh writes, with its signed statement."""
+    mac = tmp_path / "mac"
+    mac.mkdir()
     base = f"https://github.com/HerRei/local-upscale/releases/download/v{release_version}"
-    signature = base64.b64encode(b"untrusted comment: signature\nRW\n").decode()
+    stem = f"LocalSR-v{release_version}-macOS-arm64"
+    archive = mac / f"{stem}.app.tar.gz"
+    archive.write_bytes(b"mac app archive" * 32)
+    written = engine_payload.prepare(
+        fake_engine(tmp_path / "mac-engine", "localsr-worker"),
+        mac,
+        f"{stem}.engine.tar.gz",
+        backend="MPS",
+        worker="localsr-worker",
+    )
+    manifest = written.rename(mac / f"{stem}.engine-payload.json")
+    for path in mac.iterdir():
+        fake_sign(path)
 
-    def file(name: str) -> dict:
+    def file(path: Path) -> dict:
         return {
-            "name": name,
-            "url": f"{base}/{name}",
-            "size": 10,
-            "sha256": "a" * 64,
-            "signature": signature,
+            "name": path.name,
+            "url": f"{base}/{path.name}",
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "signature": path.with_name(path.name + ".sig").read_text(),
         }
 
-    stem = f"LocalSR-v{release_version}-macOS-arm64"
+    identity = f"macos-arm64-mps-{COMMIT[:12]}"
+    payload = json.loads(manifest.read_text())
     feed = {
         "version": release_version,
         "pub_date": "2026-11-09T12:00:00Z",
         "notes": "Notes.",
         "platforms": {
             "darwin-aarch64-mps-native": {
-                "url": f"{base}/{stem}.app.tar.gz",
-                "signature": signature,
+                "url": f"{base}/{archive.name}",
+                "signature": archive.with_name(archive.name + ".sig").read_text(),
                 "localsr": {
                     "channel": "beta",
                     "backend": "mps",
                     "kind": "native",
                     "protocol": 1,
-                    "engine_id": f"macos-arm64-mps-{COMMIT[:12]}",
-                    "size": 100,
-                    "unpacked_size": 300,
-                    "sha256": "b" * 64,
+                    "engine_id": identity,
+                    "size": archive.stat().st_size,
+                    "unpacked_size": 10 * archive.stat().st_size,
+                    "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                     "engine": {
-                        "id": f"macos-arm64-mps-{COMMIT[:12]}",
-                        "manifest": file(f"{stem}.engine-payload.json"),
-                        "parts": [file(f"{stem}.engine.tar.gz.part-0001")],
+                        "id": identity,
+                        "manifest": file(manifest),
+                        "parts": [file(mac / part["filename"]) for part in payload["parts"]],
                     },
                 },
             }
         },
     }
-    path.write_text(json.dumps(feed, indent=2) + "\n")
-    return feed
+    feed_path = tmp_path / "beta.json"
+    feed_path.write_text(json.dumps(feed, indent=2) + "\n")
+    assert update_signing.add_statements(feed_path, sign=fake_sign) == ["darwin-aarch64-mps-native"]
+    assert update_signing.add_statements(feed_path, sign=fake_sign) == []
+    return mac, json.loads(feed_path.read_text())
+
+
+def verify_feed(feed_path: Path, folders: list[Path], **options) -> None:
+    verify_prepared.verify_feed(
+        feed_path,
+        COMMIT,
+        files=folders,
+        release_version="1.2.3-beta",
+        public_key=TEST_KEY.public_key,
+        **options,
+    )
 
 
 def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: Path) -> None:
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
-    original = mac_feed(feed_path)
+    mac, original = mac_feed(tmp_path)
+    signed: dict[str, str] = {}
+
+    def recording(path: Path) -> None:
+        # Only private copies are signed, never the downloaded files themselves.
+        assert downloads not in path.parents
+        signed[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        fake_sign(path)
+
     signatures = update_signing.add_platforms(
-        downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+        downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=recording
     )
     feed = json.loads(feed_path.read_text())
     assert set(feed["platforms"]) == set(UPDATE_TARGETS.values())
@@ -694,6 +807,19 @@ def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: 
     engine = json.loads((package.parent / manifest["name"]).read_text())
     # A bundled engine is installed twice: in the package and as the versioned engine.
     assert contract["unpacked_size"] == contract["size"] + 2 * engine["unpacked_bytes"]
+    statement = json.loads(base64.b64decode(contract["statement"]))
+    assert statement == {
+        "schema_version": 1,
+        "version": "1.2.3-beta",
+        "channel": "beta",
+        "target": "windows-x86_64-cpu-native",
+        "backend": "cpu",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": "windows-x86_64-cpu-0123456789ab",
+        "sha256": contract["sha256"],
+        "engine_manifest_sha256": manifest["sha256"],
+    }
 
     rocm = feed["platforms"]["linux-x86_64-rocm-native"]["localsr"]
     names = [part["name"] for part in rocm["parts"]]
@@ -708,14 +834,20 @@ def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: 
     assert not [path for path in directory.iterdir() if path.name.startswith(".")]
     assert (directory / "LocalSR-v1.2.3-beta-Linux-ROCm-x86_64.AppImage.sig").is_file()
     assert all(path.is_file() and path.suffix == ".sig" for path in signatures)
-    verify_prepared.verify_feed(feed_path, COMMIT, release_version="1.2.3-beta")
+    # Every signed copy had exactly the bytes the feed describes.
+    for entry in feed["platforms"].values():
+        contract = entry["localsr"]
+        for item in [*contract.get("parts", []), contract["engine"]["manifest"]]:
+            if item["name"] in signed:
+                assert signed[item["name"]] == item["sha256"]
+    verify_feed(feed_path, [downloads, mac])
 
 
 @pytest.mark.parametrize("failure", ["checksum", "identity", "engine", "missing"])
 def test_platform_tool_refuses_artifacts_it_cannot_vouch_for(tmp_path: Path, failure: str) -> None:
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
-    original = mac_feed(feed_path).copy()
+    _, original = mac_feed(tmp_path)
     directory = downloads / "linux-x86_64-cpu"
     name = "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage"
     match = {
@@ -741,6 +873,111 @@ def test_platform_tool_refuses_artifacts_it_cannot_vouch_for(tmp_path: Path, fai
     assert json.loads(feed_path.read_text()) == original
 
 
+# Review findings 7 and 8: a payload the app could not install, or not the one the
+# package was tested with, stops the tool before it signs anything.
+@pytest.mark.parametrize(
+    "failure", ["absolute", "traversal", "link", "no-files", "not-an-archive", "tested-engine"]
+)
+def test_platform_tool_signs_nothing_for_a_payload_it_cannot_vouch_for(
+    tmp_path: Path, failure: str
+) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    _, original = mac_feed(tmp_path)
+    target = "windows-x86_64-cuda" if failure == "tested-engine" else "linux-x86_64-rocm"
+    directory = downloads / target
+    manifest_path = next(directory.glob("*.engine-payload.json"))
+    manifest = json.loads(manifest_path.read_text())
+    part = directory / manifest["parts"][0]["filename"]
+    outside = tmp_path / "outside" / part.name
+    outside.parent.mkdir()
+    if failure == "absolute":
+        shutil.copyfile(part, outside)
+        manifest["parts"][0]["filename"] = str(outside)
+    elif failure == "traversal":
+        shutil.copyfile(part, outside)
+        manifest["parts"][0]["filename"] = f"{part.name}/../../../outside/{part.name}"
+    elif failure == "link":
+        part.rename(outside)
+        part.symlink_to(outside)
+    elif failure == "no-files":
+        manifest["file_count"] = 0
+    elif failure == "not-an-archive":
+        part.write_bytes(b"not an engine archive" * 8)
+        manifest["parts"][0].update(
+            size=part.stat().st_size, sha256=hashlib.sha256(part.read_bytes()).hexdigest()
+        )
+    else:
+        smoke_path = next(directory.glob("*.smoke.json"))
+        smoke = json.loads(smoke_path.read_text())
+        smoke["engine_payload_sha256"] = "f" * 64
+        smoke_path.write_text(json.dumps(smoke))
+    manifest_path.write_text(json.dumps(manifest))
+    signed: list[Path] = []
+    with pytest.raises(ValueError):
+        update_signing.add_platforms(
+            downloads,
+            feed_path,
+            COMMIT,
+            release_version="1.2.3-beta",
+            sign=lambda path: (signed.append(path), fake_sign(path)),
+        )
+    assert signed == []
+    assert json.loads(feed_path.read_text()) == original
+
+
+@pytest.mark.parametrize("failure", ["traversal", "no-files", "not-an-archive"])
+def test_engine_payload_reuse_refuses_what_the_installer_would_refuse(
+    tmp_path: Path, failure: str
+) -> None:
+    built = tmp_path / "built"
+    prefix = "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz"
+    source = engine_payload.prepare(fake_engine(tmp_path, "localsr-worker.exe"), built, prefix)
+    output = tmp_path / "out"
+    output.mkdir()
+    for part in built.glob("*.part-*"):
+        (output / part.name).write_bytes(part.read_bytes())
+    manifest = json.loads(source.read_text())
+    if failure == "traversal":
+        (tmp_path / "elsewhere").mkdir()
+        shutil.copyfile(next(built.glob("*.part-*")), tmp_path / "elsewhere/x")
+        manifest["parts"][0]["filename"] = f"{prefix}.part-0001/../../elsewhere/x"
+    elif failure == "no-files":
+        manifest["file_count"] = 0
+    else:
+        part = next(output.glob("*.part-*"))
+        part.write_bytes(b"plain bytes")
+        manifest["parts"][0].update(size=11, sha256=hashlib.sha256(b"plain bytes").hexdigest())
+    source.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        engine_payload.prepare_for_target(
+            "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+        )
+
+
+# Review finding 9: files that change during signing are never signed as checked.
+def test_platform_tool_signs_only_copies_of_what_it_checked(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    _, original = mac_feed(tmp_path)
+    later = downloads / "linux-x86_64-cpu" / "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage"
+    signed: list[Path] = []
+
+    def swapping(path: Path) -> None:
+        signed.append(path)
+        if len(signed) == 1:
+            later.write_bytes(b"replaced while the first file was being signed")
+        fake_sign(path)
+
+    with pytest.raises(ValueError, match="changed after it was checked"):
+        update_signing.add_platforms(
+            downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=swapping
+        )
+    assert later.name not in [path.name for path in signed]
+    assert all(downloads not in path.parents for path in signed)
+    assert json.loads(feed_path.read_text()) == original
+
+
 def test_platform_tool_needs_the_mac_feed_of_the_same_release(tmp_path: Path) -> None:
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
@@ -748,21 +985,21 @@ def test_platform_tool_needs_the_mac_feed_of_the_same_release(tmp_path: Path) ->
         update_signing.add_platforms(
             downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
         )
-    mac_feed(feed_path, "1.2.2-beta")
+    mac_feed(tmp_path, "1.2.2-beta")
     with pytest.raises(ValueError, match="version"):
         update_signing.add_platforms(
             downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
         )
 
 
-def feed_with_every_target(tmp_path: Path) -> Path:
+def feed_with_every_target(tmp_path: Path) -> tuple[Path, list[Path]]:
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
-    mac_feed(feed_path)
+    mac, _ = mac_feed(tmp_path)
     update_signing.add_platforms(
         downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
     )
-    return feed_path
+    return feed_path, [downloads, mac]
 
 
 @pytest.mark.parametrize(
@@ -777,14 +1014,19 @@ def feed_with_every_target(tmp_path: Path) -> Path:
         "oversized-file",
         "http",
         "unsigned",
+        "statement",
+        "unsigned-statement",
+        "other-key",
+        "other-bytes",
     ],
 )
 def test_feed_contract_enforces_every_edition(tmp_path: Path, failure: str) -> None:
-    feed_path = feed_with_every_target(tmp_path)
+    feed_path, folders = feed_with_every_target(tmp_path)
     feed = json.loads(feed_path.read_text())
     platforms = feed["platforms"]
     cpu = platforms["windows-x86_64-cpu-native"]
     rocm = platforms["linux-x86_64-rocm-native"]
+    package = folders[0] / "windows-x86_64-cpu" / "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.exe"
     if failure == "missing-target":
         del platforms["linux-x86_64-cuda-native"]
     elif failure == "unknown-target":
@@ -801,8 +1043,19 @@ def test_feed_contract_enforces_every_edition(tmp_path: Path, failure: str) -> N
         cpu["localsr"]["size"] = cpu["localsr"]["unpacked_size"] = 3 * 1024**3
     elif failure == "http":
         cpu["url"] = cpu["url"].replace("https://", "http://")
-    else:
+    elif failure == "unsigned":
         cpu["signature"] = ""
+    elif failure == "statement":
+        # A relabelled package: well-formed, but not what the signed statement says.
+        cpu["localsr"]["sha256"] = "f" * 64
+    elif failure == "unsigned-statement":
+        cpu["localsr"]["statement_signature"] = OTHER_KEY.signature(
+            base64.b64decode(cpu["localsr"]["statement"])
+        )
+    elif failure == "other-key":
+        cpu["signature"] = OTHER_KEY.signature(package.read_bytes(), package.name)
+    else:
+        package.write_bytes(b"other bytes of the same length".ljust(package.stat().st_size))
     match = {
         "missing-target": "missing",
         "unknown-target": "unknown",
@@ -813,14 +1066,20 @@ def test_feed_contract_enforces_every_edition(tmp_path: Path, failure: str) -> N
         "oversized-file": "2 GiB",
         "http": "HTTPS",
         "unsigned": "signature",
+        "statement": "statement does not match",
+        "unsigned-statement": "signed release statement from the updater key",
+        "other-key": "no valid signature from the updater key",
+        "other-bytes": "does not match its feed entry",
     }[failure]
     feed_path.write_text(json.dumps(feed))
     with pytest.raises(ValueError, match=match):
-        verify_prepared.verify_feed(feed_path, COMMIT, release_version="1.2.3-beta")
+        verify_feed(feed_path, folders)
 
 
 def test_feed_contract_cli(tmp_path: Path) -> None:
-    feed_path = feed_with_every_target(tmp_path)
+    feed_path, folders = feed_with_every_target(tmp_path)
+    key = tmp_path / "test.pub"
+    key.write_text(TEST_KEY.public_key + "\n")
     command = [
         sys.executable,
         str(ROOT / "scripts/verify_prepared_release.py"),
@@ -828,13 +1087,15 @@ def test_feed_contract_cli(tmp_path: Path) -> None:
         str(feed_path),
         "--commit",
         COMMIT,
+        "--public-key",
+        str(key),
+        *[argument for folder in folders for argument in ("--files", str(folder))],
         "--version",
         "1.2.3-beta",
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
-    assert "7 update targets" in result.stdout
-    result = subprocess.run(
-        command[:-1] + ["1.2.4-beta"], capture_output=True, text=True, check=False
-    )
-    assert result.returncode != 0
+    assert "7 update targets and their signatures" in result.stdout
+    for changed in (command[:-1] + ["1.2.4-beta"], command[:4] + command[-2:]):
+        result = subprocess.run(changed, capture_output=True, text=True, check=False)
+        assert result.returncode != 0

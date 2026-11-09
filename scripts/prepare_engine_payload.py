@@ -19,7 +19,8 @@ import hashlib
 import json
 import re
 import tarfile
-from pathlib import Path
+import zlib
+from pathlib import Path, PurePosixPath
 
 from release_targets import target, update_files, version
 
@@ -119,12 +120,101 @@ def prepare(
     return path
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(4 * 1024**2), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+class _JoinedParts:
+    """The parts read in order as one stream, each hashed on the way."""
+
+    def __init__(self, paths: list[Path]):
+        self.pending = list(paths)
+        self.stream = None
+        self.digest = hashlib.sha256()
+        self.size = 0
+        self.digests: list[tuple[str, int]] = []
+
+    def read(self, count: int = -1) -> bytes:
+        while True:
+            if self.stream is None:
+                if not self.pending:
+                    return b""
+                self.stream = self.pending.pop(0).open("rb")
+                self.digest, self.size = hashlib.sha256(), 0
+            data = self.stream.read(count if count and count > 0 else 4 * 1024**2)
+            if data:
+                self.digest.update(data)
+                self.size += len(data)
+                return data
+            self.stream.close()
+            self.stream = None
+            self.digests.append((self.digest.hexdigest(), self.size))
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def validate_payload(
+    manifest: object, directory: Path, prefix: str, backend: str, worker: str
+) -> list[Path]:
+    """Check an engine payload in ``directory`` the way the app's installer will.
+
+    Every part must be a regular file named ``<prefix>.part-NNNN`` directly in the
+    folder, of the listed size and digest; together they must be a gzip tar archive of
+    exactly ``file_count`` regular files with safe relative paths, ``unpacked_bytes`` in
+    all, and the worker at the top. Returns the part paths in order.
+    """
+    parts = manifest.get("parts") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or manifest.get("format") != "tar.gz.parts"
+        or manifest.get("backend") != backend
+        or not _positive_int(manifest.get("file_count"))
+        or not _positive_int(manifest.get("unpacked_bytes"))
+        or not isinstance(parts, list)
+        or not 1 <= len(parts) <= 64
+    ):
+        raise ValueError(f"invalid {backend} engine payload manifest")
+    name_re = re.compile(re.escape(prefix) + r"\.part-\d{4}")
+    paths = []
+    for part in parts:
+        name = part.get("filename") if isinstance(part, dict) else None
+        if not isinstance(name, str) or not name_re.fullmatch(name):
+            raise ValueError(f"engine payload part {name!r} is not a part of {prefix}")
+        path = directory / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"engine payload part {name} is missing or a link")
+        if not _positive_int(part.get("size")) or part["size"] >= 2 * 1024**3:
+            raise ValueError(f"engine payload part {name} has an invalid size")
+        if path.stat().st_size != part["size"]:
+            raise ValueError(f"{name} does not match its engine payload manifest")
+        paths.append(path)
+    joined = _JoinedParts(paths)
+    count = total = 0
+    has_worker = False
+    try:
+        with tarfile.open(fileobj=joined, mode="r|gz") as archive:
+            for member in archive:
+                relative = PurePosixPath(member.name)
+                if (
+                    not member.isfile()
+                    or relative.is_absolute()
+                    or not relative.parts
+                    or ".." in relative.parts
+                    or "\\" in member.name
+                    or ":" in member.name
+                ):
+                    raise ValueError(f"engine payload holds an unsafe entry: {member.name!r}")
+                count += 1
+                total += member.size
+                has_worker |= member.name == worker
+        while joined.read(4 * 1024**2):
+            pass
+    except (tarfile.TarError, EOFError, OSError, zlib.error) as error:
+        raise ValueError(f"the {prefix} parts are not an engine archive: {error}") from error
+    if joined.digests != [(part["sha256"], part["size"]) for part in parts]:
+        raise ValueError(f"the {prefix} parts do not match their engine payload manifest")
+    if count != manifest["file_count"] or total != manifest["unpacked_bytes"] or not has_worker:
+        raise ValueError(f"the {prefix} archive does not match its engine payload manifest")
+    return paths
 
 
 def prepare_for_target(
@@ -151,20 +241,15 @@ def prepare_for_target(
         written.replace(destination)
         return destination
     assert reuse is not None
-    manifest = json.loads(reuse.read_text(encoding="utf-8"))
-    parts = manifest.get("parts") or []
-    if manifest.get("backend") != files["payload_backend"] or not parts:
-        raise ValueError(f"{reuse} is not the {files['payload_backend']} engine payload")
-    for part in parts:
-        path = output / part["filename"]
-        if (
-            not part["filename"].startswith(files["engine_prefix"] + ".part-")
-            or not path.is_file()
-            or path.stat().st_size != part["size"]
-            or _sha256(path) != part["sha256"]
-        ):
-            raise ValueError(f"{part['filename']} does not match its engine payload manifest")
-    destination.write_bytes(reuse.read_bytes())
+    data = reuse.read_bytes()
+    validate_payload(
+        json.loads(data),
+        output,
+        files["engine_prefix"],
+        files["payload_backend"],
+        files["worker"],
+    )
+    destination.write_bytes(data)
     return destination
 
 
