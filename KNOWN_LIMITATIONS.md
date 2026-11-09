@@ -16,9 +16,11 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 - The macOS build is the most tested. The Windows and Linux packages pass the
   codec policy and an automated smoke test of the installed app, but this release
   has not been run through the manual desktop checks on those systems.
-- Only the macOS app updates itself. On Windows and Linux, download new versions
-  from the website. The Windows installers are not code-signed, so SmartScreen warns
-  before it runs; the Microsoft Store edition, when it ships, is signed by the Store.
+- Every direct download updates itself; the Microsoft Store edition, when it ships,
+  updates through the Store. An update downloads the package and its inference
+  engine, so a Linux CUDA or ROCm update is about twice the AppImage's size. The
+  Windows installers are not code-signed, so SmartScreen warns before one runs; the
+  Microsoft Store edition is signed by the Store.
 - A working launch does not prove GPU compatibility. Some operators fall back to
   the CPU (for example `aten::roll` on DirectML), and drivers vary.
 - On Apple Silicon, the first job with a Neural Engine model (Quick photo, Real-ESRGAN,
@@ -110,8 +112,13 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 
 ## Installation and updates
 
-- macOS updates are downloaded and verified in the app. Settings, recipes and
-  the queue are backed up before an update is installed.
+- Updates are downloaded and verified in the app on macOS, Windows and Linux.
+  Settings, recipes and the queue are backed up before an update is installed.
+- An AppImage replaces itself only when it runs as an AppImage from a folder you
+  can write to; an AppImage under `/opt` owned by root has to be updated by hand.
+- The Windows installer cannot roll back an update that fails halfway, for example
+  on a full disk. Run the full installer from the website; settings, recipes, the
+  queue and models are kept.
 - Uninstalling the Store edition can delete its data folder, including settings
   and recipes. Back it up first; downloaded models live in the shared
   `LocalSR/models` folder and survive.

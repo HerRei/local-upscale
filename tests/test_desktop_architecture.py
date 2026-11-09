@@ -155,6 +155,25 @@ def test_rejects_an_unsigned_or_unnotarized_macos_release() -> None:
     assert any("notarization" in violation for violation in violations)
 
 
+@pytest.mark.parametrize("name", ["linux-appimages.yml", "windows-installers.yml"])
+def test_release_workflows_keep_the_update_identity_and_updater_files(name: str) -> None:
+    workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    gates = architecture.RELEASE_PACKAGE_WORKFLOWS[name]
+    assert architecture.release_package_violations(name, workflow, gates) == []
+
+    # Without the identity the build has no updater key, so it never checks its feed and
+    # shows no switches; without the payload its feed entry cannot change the engine.
+    stripped = (
+        workflow.replace("release_targets.py --update-env", "release_targets.py")
+        .replace("prepare_engine_payload.py", "true")
+        .replace("--update-target", "--target")
+    )
+    violations = architecture.release_package_violations(name, stripped, gates)
+    assert any("update build identity" in violation for violation in violations)
+    assert any("updater engine payload" in violation for violation in violations)
+    assert any("installed update identity" in violation for violation in violations)
+
+
 def test_rejects_workflows_on_self_hosted_runners(tmp_path: Path) -> None:
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)

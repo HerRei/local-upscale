@@ -82,13 +82,45 @@ Public installers, source bundles and updater files use
    `shasum -a 256 -c SHA256SUMS`.
 3. Install the previous version on a test Mac and confirm that the update
    downloads, installs and relaunches on the new version.
-4. Add the entry to the website's `updates/beta.json`, update `release.json` and
-   run `localsr/tools/sync_release.py` and `validate_site.py`, then publish.
-   GitHub Pages caches the feed for ten minutes.
+4. Add the Windows and Linux entries ([Windows and Linux updates](#windows-and-linux-updates)).
+5. Copy `build/release-<version>/beta.json` to the website's `updates/beta.json`,
+   update `release.json` and run `localsr/tools/sync_release.py` and
+   `validate_site.py`, then publish. GitHub Pages caches the feed for ten minutes.
 
 The release requires a Developer ID signing identity and notarization credentials.
 The updater signing key is managed by `scripts/beta_update_signing.py`; see
 [Updates](updates.md).
+
+### Windows and Linux updates
+
+Every Windows and Linux package carries its update identity and updates itself
+([Updates](updates.md)); its feed entry is written and signed on the Mac, after the
+macOS build, from the workflow runs at the same commit:
+
+1. Download both runs into one folder: `gh run download <run> -D
+   build/release-<version>/platforms` for the Windows and the Linux run. Every
+   artifact lands in its target's folder (`windows-x86_64-cpu`, …). With the Linux
+   CUDA and ROCm AppImages and their engine packages this is roughly 45 GB; signing
+   a split AppImage needs room for one more copy of it.
+2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
+   --feed build/release-<version>/beta.json --commit <sha>` checks every package
+   against its checksum file, its installed smoke report (version and update
+   identity) and its engine package, and signs nothing unless all of them pass. It
+   then signs private copies of exactly those files with the Keychain key, adds the
+   entries with their signed release statements next to the macOS entry, and prints
+   the `.sig` files it wrote. The copies need room for the largest package once more.
+3. `python scripts/verify_prepared_release.py --feed
+   build/release-<version>/beta.json --commit <sha> --files build/release-<version>
+   --files build/release-<version>/platforms` must pass: one entry per release
+   target, with its backend, kind, protocol, engine id and engine package, and every
+   statement and signature verified against the public key over the local files.
+4. Attach the packages, their parts and engine packages from the same runs
+   (`release_tag`, or `attach-release-assets.yml`), and upload the printed `.sig`
+   files from the Mac to the release. The signatures cover the exact files of those
+   runs; a rerun produces different files and needs new signatures.
+5. Install the previous version on a Windows machine and from an AppImage on Linux
+   and confirm that the update downloads, installs and relaunches, before the feed
+   goes live.
 
 ## Windows and Linux packages
 
@@ -97,6 +129,10 @@ GitHub-hosted runners. Both start only by hand, at the release tag or commit
 (`--ref`). Given `release_tag`, they attach the verified files to that existing
 release; otherwise the files stay run artifacts for 14 days, and
 `attach-release-assets.yml` can copy one reviewed artifact to a release later.
+Each build gets its update identity from `scripts/release_targets.py --update-env`
+and writes its engine package (`<package>.engine-payload.json` and its
+`.engine.tar.gz.part-*` files) next to the package; the updater signatures are made
+on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
 
 ### Targets
 
@@ -132,16 +168,22 @@ need at most glibc 2.35 (`verify_appimage_libc.py`) and show its window without
 network within 30 seconds (`verify_appimage_window.py`), as AppImageHub tests
 it. Each package gets its corresponding source bundle.
 
+The installed host's smoke report must also show the edition's update identity
+(`smoke_tauri_installer.py --update-target`), so a package built without its updater
+key cannot reach a release.
+
 `scripts/check_desktop_architecture.py` fails when either workflow loses one of
-these gates, starts on anything but a manual run, or lets a job other than the
-attach job write to releases, and when `release_macos_beta.sh` loses its
-signing, notarization or smoke tests.
+these gates, its update identity or its engine package, starts on anything but a
+manual run, or lets a job other than the attach job write to releases, and when
+`release_macos_beta.sh` loses its signing, notarization or smoke tests.
 
 ### Signing
 
 macOS: `release_macos_beta.sh` signs with the Developer ID identity, notarizes,
 staples and checks the app and the disk image with Gatekeeper, and signs the
-update archive with the updater key. No workflow uses signing secrets.
+update archive with the updater key. The Windows and Linux updater files are signed
+with the same key on the Mac (`beta_update_signing.py platforms`). No workflow uses
+signing secrets.
 
 Windows: the beta's direct installers are not Authenticode-signed until a
 certificate is bought; the Microsoft Store package is signed by the Store.

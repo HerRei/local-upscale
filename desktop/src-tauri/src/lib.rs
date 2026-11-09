@@ -49,6 +49,15 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
 static EARLY_OPEN_INTENTS: std::sync::Mutex<Vec<LaunchIntent>> = std::sync::Mutex::new(Vec::new());
 
 pub fn run() {
+    // No UI, profile or worker: other updater processes query the file they are
+    // about to replace, rather than trusting their own running package version.
+    if env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--headless-update-version")
+    {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if let Some(exit_code) = engine_payload::run_arguments(&env::args_os().collect::<Vec<_>>()) {
         std::process::exit(exit_code);
     }
@@ -65,6 +74,11 @@ pub fn run() {
         if exit_code != 0 {
             std::process::exit(exit_code);
         }
+        return;
+    }
+
+    // A crash during an executable swap is rolled back before anything opens the profile.
+    if updates::recover_interrupted_update() {
         return;
     }
 
@@ -87,6 +101,11 @@ pub fn run() {
         .on_window_event(hide_instead_of_close)
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
+            // A Windows installer that finished while LocalSR was closed.
+            updates::confirm_pending_install(
+                &state.paths.next_root,
+                &app.package_info().version.to_string(),
+            );
             if !initial_intent.is_empty() {
                 lock(&state.launch_intents)?.push(initial_intent.clone());
             }
