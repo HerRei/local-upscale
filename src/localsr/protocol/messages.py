@@ -147,6 +147,12 @@ class VideoJobRequest:
     preview_enabled: bool = True
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
+    # Optional frame interpolation (frame-by-frame engine): "off", "x2", "x4", "fps60"
+    # or "fps120", run "after_upscale" or "before_upscale" with a catalog RIFE bundle.
+    interpolation: str = "off"
+    interpolation_order: str = "after_upscale"
+    interpolation_model_id: str | None = None
+    interpolation_bundle_dir: str | None = None
 
     hdr_mode: str = "reject"
     neural_engine: bool = True

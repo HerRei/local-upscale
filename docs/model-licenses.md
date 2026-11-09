@@ -213,6 +213,39 @@ they take about ten times as long as Best. A model pinned to Best by the user is
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
 
+## Frame interpolation
+
+### RIFE 4.25 (`rife_4_25`)
+
+- Model: Practical-RIFE v4.25 by hzwer ([hzwer/Practical-RIFE](https://github.com/hzwer/Practical-RIFE)),
+  the README's "recommended to choose 4.25 by default for most scenes" checkpoint. RIFE is
+  described in Huang et al., ECCV 2022.
+- Terms: the project is [MIT](https://github.com/hzwer/Practical-RIFE/blob/main/LICENSE), and its
+  README states for the trained models: "The content of these links is under the same MIT license
+  as this project." The vendored network code and the MIT text are in
+  `src/localsr/video_models/rife/NOTICE.md`.
+- Official copy: `train_log/flownet.pkl` inside the v4.25 archive on the README's Google Drive
+  link (file `1ZKjcbmt1hypiFprJPIKW0Tt0lr_2i7bg`), which cannot serve pinned, scriptable
+  downloads.
+- Download route: `flownet_v4.25.pkl` from the `model` release of
+  [HolyWu/vs-rife](https://github.com/HolyWu/vs-rife/releases/tag/model) (MIT). The mirror is
+  not the author's release; on 2026-11-09 its bytes were identical to the official archive's
+  file, and the size and digest check before installation is what makes it trustworthy.
+- Size: `24,636,301` bytes.
+- SHA-256: `6615790efd627772917205db291f51cd392528a157ecbb2ecaeec3bff8eb6de2`.
+- Load: tensors only (`torch.load(weights_only=True)`); the archive's training-only
+  `teacher` tensors are ignored, every network tensor must be present with its shape.
+- Training data: not stated by the README; the RIFE paper trains on Vimeo-90K, whose terms are
+  not published on its [project page](http://toflow.csail.mit.edu/). As for the other checkpoints
+  here, LocalSR follows the license the author grants for the weights and records this.
+- Alternatives checked on the same day: v4.26 (same network and size, SHA-256
+  `45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f`, identical in the Drive
+  archive, in hzwer's own [Hugging Face repository](https://huggingface.co/hzwer/RIFE) zip and in
+  the vs-rife release) and v4.25 lite (`81cdba223fe72a120130cc8552e5d2ecac824259d406f0c15323b3decf96b8b1`).
+  The "heavy" files some tools ship are not official Practical-RIFE releases and are not offered.
+  GMFSS was not added: its forward-warping kernel derives from softmax splatting, whose README
+  says "strictly for academic purposes only".
+
 ## Image-editing models
 
 The Edit task's bundles are listed in `src/localsr/core/edit_catalog.json` with the exact
