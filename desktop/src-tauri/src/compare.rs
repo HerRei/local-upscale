@@ -169,10 +169,9 @@ pub fn plan(
         };
         // A decoded, unchanged selection keeps its preview when picks are
         // reordered, so a swap does not decode and flash it again.
-        let kept = compare
-            .slots
-            .iter()
-            .find(|slot| &slot.pick == pick && slot.status == CompareStatus::Ready && file.is_some());
+        let kept = compare.slots.iter().find(|slot| {
+            &slot.pick == pick && slot.status == CompareStatus::Ready && file.is_some()
+        });
         slots.push(CompareSlot {
             pick: pick.clone(),
             status: match (&file, kept) {
@@ -596,10 +595,7 @@ mod tests {
         );
     }
 
-    fn one_image_db(
-        dir: &std::path::Path,
-        names: &[&str],
-    ) -> (Database, Vec<std::path::PathBuf>) {
+    fn one_image_db(dir: &std::path::Path, names: &[&str]) -> (Database, Vec<std::path::PathBuf>) {
         let db = Database::open(&dir.join("queue.db")).unwrap();
         let mut paths = Vec::new();
         for (index, name) in names.iter().enumerate() {
