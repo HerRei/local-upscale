@@ -569,7 +569,9 @@ class _CoreMLImage(torch.nn.Module):
         coreml_ms = torch_ms = None
         if accepted:
             coreml_ms = self._time(lambda: self._predict(runner, padded))
-            torch_ms = self._time(lambda: self._run_fallback(padded), synchronize=padded.device)
+            torch_ms = self._time(
+                lambda: self._run_fallback(padded), synchronize=self.fallback_device
+            )
             margin = NEURAL_ENGINE_SPEED_MARGIN if unit == NEURAL_ENGINE else 1.0
             accepted = coreml_ms <= torch_ms * margin
         reason = (

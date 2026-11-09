@@ -124,7 +124,7 @@ def estimate_resources(
     blocking = False
     if (
         device_type in {"cuda", "rocm", "xpu"}
-        and available_device_memory
+        and available_device_memory is not None
         and device_memory > available_device_memory * 0.9
     ):
         warnings.append(
@@ -135,15 +135,17 @@ def estimate_resources(
         blocking = True
     elif (
         device_type in {"cuda", "rocm", "xpu"}
-        and available_device_memory
+        and available_device_memory is not None
         and device_memory > available_device_memory * 0.7
     ):
         warnings.append("GPU memory will be tight; Safe Memory Mode is recommended.")
 
-    if device_type == "mps" and available_device_memory:
+    if device_type == "mps" and available_device_memory is not None:
         unified_available = min(
             available_device_memory,
-            available_system_memory or available_device_memory,
+            available_system_memory
+            if available_system_memory is not None
+            else available_device_memory,
         )
         if system_memory > unified_available * 0.9:
             warnings.append(
@@ -159,7 +161,7 @@ def estimate_resources(
 
     if (
         device_type != "mps"
-        and available_system_memory
+        and available_system_memory is not None
         and system_memory > available_system_memory * 0.9
     ):
         warnings.append(
@@ -169,12 +171,12 @@ def estimate_resources(
         blocking = True
     elif (
         device_type != "mps"
-        and available_system_memory
+        and available_system_memory is not None
         and system_memory > available_system_memory * 0.7
     ):
         warnings.append("Available RAM is tight; close other applications first.")
 
-    if available_disk and working_disk > available_disk * 0.9:
+    if available_disk is not None and working_disk > available_disk * 0.9:
         warnings.append(
             f"Not enough working disk space: about {format_bytes(working_disk)} is required."
         )

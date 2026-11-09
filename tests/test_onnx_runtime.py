@@ -992,7 +992,7 @@ def test_the_preflight_counts_only_a_native_fault_during_a_gpu_call(monkeypatch)
     assert gpu_guard.run("gpu:0") == "unknown"
     child("import time; time.sleep(30)")
     monkeypatch.setattr(gpu_guard, "TIMEOUT_SECONDS", 0.5)
-    assert gpu_guard.run("gpu:0") == "unknown"
+    assert gpu_guard.run("gpu:0") == "timeout"
     cancelled = threading.Event()
     cancelled.set()
     child("raise SystemExit(0)")
@@ -1164,3 +1164,22 @@ def test_a_stored_preflight_pass_needs_a_gpu_that_can_be_told_apart(monkeypatch,
     twin, _ = gated(monkeypatch, tmp_path, ("a",), device="gpu:0", persist=False)
     twin(image)
     assert outcomes == ["gpu:0", "gpu:0"]
+
+
+def test_timed_out_preflight_refuses_gpu_for_process_only(monkeypatch, tmp_path):
+    from localsr.core import gpu_guard
+    from localsr.core.onnx_runtime import GpuRouteRejected
+
+    monkeypatch.setattr(gpu_guard, "run", lambda *args: "timeout")
+    monkeypatch.setattr(gpu_guard, "_PREFLIGHT_TRIED", set())
+    monkeypatch.setattr(gpu_guard, "_PREFLIGHT_TIMEOUTS", set())
+    monkeypatch.setattr(gpu_guard, "_CRASHED", {})
+    for _ in range(2):
+        converted, calls = gated(monkeypatch, tmp_path, ("a",), device="gpu:timeout")
+        with pytest.raises(
+            GpuRouteRejected,
+            match=r"did not finish a test run within five minutes, so LocalSR does not use that GPU for now\. Select the CPU, or restart LocalSR to try again\.",
+        ):
+            converted(torch.rand(1, 3, 8, 8))
+        assert calls == []
+    assert not list(tmp_path.glob("crash-*.json"))

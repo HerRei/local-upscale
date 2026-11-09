@@ -382,6 +382,8 @@ class _OnnxImage(torch.nn.Module):
         """Run the GPU once in a separate process before this engine opens a session on
         it; "preflight" when that process crashed on it."""
         key = self._crash_key()
+        if key in gpu_guard._PREFLIGHT_TIMEOUTS:
+            return "timeout"
         if (
             not self.route.device
             or os.environ.get(gpu_guard.CHILD_ENV)
@@ -396,6 +398,9 @@ class _OnnxImage(torch.nn.Module):
         )
         outcome = gpu_guard.run(self.route.device, self.cancel_event)
         gpu_guard._PREFLIGHT_TRIED.add(key)
+        if outcome == "timeout":
+            gpu_guard._PREFLIGHT_TIMEOUTS.add(key)
+            return "timeout"
         if outcome == "crashed":
             self.crashes.mark(key, "preflight")
             return "preflight"
@@ -405,6 +410,11 @@ class _OnnxImage(torch.nn.Module):
         return None
 
     def _rejected(self) -> GpuRouteRejected:
+        if self.crash_cause == "timeout":
+            return GpuRouteRejected(
+                f"{self._label()} did not finish a test run within five minutes, so LocalSR "
+                "does not use that GPU for now. Select the CPU, or restart LocalSR to try again."
+            )
         if self.crash_cause:
             happened = (
                 f"A test run on {self._label()} crashed"

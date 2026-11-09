@@ -977,6 +977,7 @@ def download_model(
 
     attempts = 0
     last_error: Exception | None = None
+    restarted_after_416 = False
     while attempts < max_attempts:
         attempts += 1
         check_cancel()
@@ -984,6 +985,17 @@ def download_model(
         try:
             offset = partial_path.stat().st_size if partial_path.is_file() else 0
         except OSError:
+            offset = 0
+        if offset == model.size_bytes and partial_path.is_file():
+            hasher = hashlib.sha256()
+            with partial_path.open("rb") as completed:
+                while block := completed.read(chunk_size):
+                    check_cancel()
+                    hasher.update(block)
+            if hasher.hexdigest() == model.sha256:
+                os.replace(partial_path, destination)
+                return destination
+            partial_path.unlink()
             offset = 0
         if offset > model.size_bytes:
             try:
@@ -1023,6 +1035,12 @@ def download_model(
         except ModelDownloadCancelled:
             raise
         except (OSError, urllib.error.URLError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code == 416 and offset:
+                partial_path.unlink(missing_ok=True)
+                if not restarted_after_416:
+                    restarted_after_416 = True
+                    attempts -= 1
+                    continue
             last_error = error
             if attempts >= max_attempts:
                 break

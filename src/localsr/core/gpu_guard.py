@@ -50,6 +50,7 @@ UNTESTED = 2
 _CRASHED: dict[str, str] = {}
 # GPUs whose preflight ran in this process, whatever its outcome.
 _PREFLIGHT_TRIED: set[str] = set()
+_PREFLIGHT_TIMEOUTS: set[str] = set()
 
 
 def gate_cache_directory() -> Path:
@@ -326,7 +327,7 @@ def _command(device: str) -> list[str]:
 
 
 def run(device: str, cancel_event: threading.Event | None = None) -> str:
-    """ "passed", "crashed" (a native fault during a GPU call) or "unknown"."""
+    """ "passed", "crashed", "timeout" or "unknown"."""
 
     def check_cancelled():
         if cancel_event is not None and cancel_event.is_set():
@@ -364,7 +365,7 @@ def run(device: str, cancel_event: threading.Event | None = None) -> str:
                         process.kill()
                         process.wait()
                         logger.warning("The GPU preflight on %s did not finish in time", device)
-                        return "unknown"
+                        return "timeout"
                     time.sleep(0.1)
             finally:
                 _release_binding(job)
