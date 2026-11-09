@@ -14,6 +14,52 @@ from PIL import Image, ImageCms, ImageOps
 from localsr.core.image_formats import is_raw_input, is_system_decoded
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
+# 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
+# converts those to 8 bits by clipping, not scaling.
+WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
+# Pillow modes without colour.
+GREY_MODES = frozenset({"1", "L", "LA", "La"}) | WIDE_GREY_MODES
+
+
+def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
+    """Scale 16- and 32-bit grey to 8 bits.
+
+    Pillow's own conversion clips every value above 255, so a 16-bit scan turned
+    white apart from its blackest pixels. A 32-bit I image holding only 8-bit
+    values is taken as it is.
+    """
+    values = np.asarray(image).astype(np.float64)
+    if image.mode != "I" or values.max() > 255:
+        values = values * (255.0 / ((1 << sample_bits) - 1))
+    narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
+    narrowed.info.update(image.info)
+    return narrowed
+
+
+def _to_srgb(
+    image: Image.Image, source: ImageCms.ImageCmsProfile, srgb: ImageCms.ImageCmsProfile
+) -> Image.Image:
+    """Convert pixels through their embedded profile to sRGB.
+
+    profileToProfile keeps the input mode unless told otherwise, and a grey,
+    palette or CMYK image cannot hold sRGB: those transforms failed, and their
+    profile was ignored. Such images now convert to RGB, keeping any alpha.
+    """
+    if image.mode in ("RGB", "RGBA"):
+        return ImageCms.profileToProfile(image, source, srgb)
+    alpha = None
+    if image.mode in ("LA", "PA") or (image.mode == "P" and "transparency" in image.info):
+        with_alpha = image.convert("LA" if image.mode == "LA" else "RGBA")
+        alpha = with_alpha.getchannel("A")
+        image = with_alpha.convert("L" if image.mode == "LA" else "RGB")
+    elif image.mode == "P":
+        image = image.convert("RGB")
+    elif image.mode == "1":
+        image = image.convert("L")
+    converted = ImageCms.profileToProfile(image, source, srgb, outputMode="RGB")
+    if alpha is not None:
+        converted.putalpha(alpha)
+    return converted
 
 
 def _decode_with_macos(path: str) -> Image.Image:
@@ -85,6 +131,8 @@ class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
         self.alpha_channel = None
+        # A grey source has no colour, so save() keeps only the luma a model returns.
+        self.grayscale = False
 
     def load(self, path: str) -> dict:
         """
@@ -95,6 +143,7 @@ class ImageManager:
         - Returns a dict containing the tensor and metadata.
         """
         self.alpha_channel = None
+        self.grayscale = False
         is_raw = is_raw_input(path)
 
         # Pillow can read metadata from many DNG containers even though it cannot
@@ -134,6 +183,14 @@ class ImageManager:
                 stacklevel=2,
             )
 
+        sample_bits = 16
+        if metadata_img is not None:
+            bits = getattr(metadata_img, "tag_v2", {}).get(258)
+            if isinstance(bits, tuple) and len(bits) == 1:
+                bits = bits[0]
+            if isinstance(bits, int) and 8 < bits <= 16:
+                sample_bits = bits
+
         if is_raw:
             try:
                 rgb = _develop_raw(path)
@@ -148,23 +205,35 @@ class ImageManager:
             img = ImageOps.exif_transpose(metadata_img)
             converted_icc = None
 
+        self.original_mode = img.mode
+        grey_source = img.mode in GREY_MODES
         icc_profile_bytes = None if is_raw else img.info.get("icc_profile")
         has_invalid_icc = False
 
         if icc_profile_bytes:
+            profile_image = img
             try:
                 f = io.BytesIO(icc_profile_bytes)
                 src_profile = ImageCms.ImageCmsProfile(f)
                 srgb_profile = ImageCms.createProfile("sRGB")
-                img = ImageCms.profileToProfile(img, src_profile, srgb_profile)
+                if img.mode in WIDE_GREY_MODES:
+                    values = np.asarray(img).astype(np.float64)
+                    maximum = (1 << sample_bits) - 1
+                    if img.mode == "I" and values.max() <= 255:
+                        maximum = 255
+                    values = np.clip(np.rint(values * (65535 / maximum)), 0, 65535)
+                    img = Image.fromarray(values.astype(np.uint16))
+                img = _to_srgb(img, src_profile, srgb_profile)
 
                 # Embed the output sRGB profile when saving.
                 converted_icc = ImageCms.ImageCmsProfile(srgb_profile).tobytes()
             except (ImageCms.PyCMSError, OSError, ValueError) as e:
+                img = profile_image
                 has_invalid_icc = True
                 warnings.warn(f"Invalid ICC profile: {e}", RuntimeWarning, stacklevel=2)
 
-        self.original_mode = img.mode
+        if img.mode in WIDE_GREY_MODES:
+            img = _narrow_wide_grey(img, sample_bits)
 
         # Handle Alpha. Palette and grey images (GIF, PNG) keep their transparency.
         if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
@@ -175,7 +244,12 @@ class ImageManager:
         elif img.mode != "RGB":
             img = img.convert("RGB")
 
-        arr = np.array(img).astype(np.float32) / 255.0
+        pixels = np.array(img)
+        # Grey modes, grey palettes and RGB files whose channels are all equal.
+        self.grayscale = grey_source or bool(
+            (pixels[..., 0] == pixels[..., 1]).all() and (pixels[..., 1] == pixels[..., 2]).all()
+        )
+        arr = pixels.astype(np.float32) / 255.0
         tensor = torch.from_numpy(arr).permute(2, 0, 1)
 
         return {
@@ -185,6 +259,7 @@ class ImageManager:
             "has_invalid_icc": has_invalid_icc,
             "original_mode": self.original_mode,
             "alpha_image": self.alpha_channel,
+            "grayscale": self.grayscale,
         }
 
     def save(
@@ -254,6 +329,12 @@ class ImageManager:
                 round(out_img.height * final_scale / scale),
             )
             out_img = out_img.resize(target_size, Image.Resampling.LANCZOS)
+
+        if self.grayscale:
+            # Colour-trained models add chroma to grey pages (issue #97); a grey source
+            # has none, so keep the model's luma only.
+            luma = out_img.convert("L")
+            out_img = Image.merge("RGB", (luma, luma, luma))
 
         if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp"]:
             new_size = (

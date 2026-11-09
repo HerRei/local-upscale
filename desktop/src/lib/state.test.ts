@@ -442,11 +442,16 @@ describe('model library resolution', () => {
   it('resolves Quick and Best by content and honours a pinned slot', () => {
     const snapshot = demoSnapshot();
     expect(choosePresetModel(snapshot, 'upscale', 'best', 'illustration')?.model_id).toBe(
-      'realplksr_hfa2k_anime_x4',
+      'realplksr_nomoswebphoto_x4',
     );
     expect(choosePresetModel(snapshot, 'upscale', 'quick', 'illustration')?.model_id).toBe(
-      'realesrgan_x4plus_anime_6b',
+      'span_photo_x4',
     );
+    expect(
+      choosePresetModel(snapshot, 'upscale', 'best', 'illustration', {
+        'upscale/illustration/best': 'realplksr_hfa2k_anime_x4',
+      })?.model_id,
+    ).toBe('realplksr_hfa2k_anime_x4');
     expect(
       choosePresetModel(snapshot, 'upscale', 'best', 'photo', {
         'upscale/photo/best': 'hat_l_x4_imagenet',
