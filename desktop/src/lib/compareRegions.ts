@@ -13,16 +13,16 @@ export interface Region {
 export function mapRegion(region: Region, from: Size, to: Size): Region {
   const xScale = to.width / from.width;
   const yScale = to.height / from.height;
-  const x = Math.round(region.x * xScale);
-  const y = Math.round(region.y * yScale);
+  const x = Math.min(Math.max(0, to.width - 1), Math.round(region.x * xScale));
+  const y = Math.min(Math.max(0, to.height - 1), Math.round(region.y * yScale));
   const right = Math.round((region.x + region.width) * xScale);
   const bottom = Math.round((region.y + region.height) * yScale);
   return {
     ...region,
     x,
     y,
-    width: Math.max(1, right - x),
-    height: Math.max(1, bottom - y),
+    width: Math.min(Math.max(1, right - x), Math.max(1, to.width - x)),
+    height: Math.min(Math.max(1, bottom - y), Math.max(1, to.height - y)),
   };
 }
 
