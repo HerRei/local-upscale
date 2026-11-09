@@ -9,6 +9,7 @@ from collections import OrderedDict
 from PIL import Image, ImageCms, ImageOps
 
 from localsr.protocol.messages import RegionFailed, RegionReady
+from localsr.worker.result_preview import open_result_image
 
 REGION_CACHE_BYTES = 256 * 1024 * 1024
 
@@ -37,7 +38,7 @@ class RegionCache:
             cached = key in self.images
             image = self.images[key][0] if cached else None
             if not cached:
-                with Image.open(path) as opened:
+                with open_result_image(path) as opened:
                     # Pillow stores RGB pixels in four bytes per pixel internally.
                     size = opened.width * opened.height * 4
                     # One image above the cache budget is decoded for this crop

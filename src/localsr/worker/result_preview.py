@@ -13,14 +13,24 @@ from dataclasses import replace
 
 from PIL import Image, ImageCms, ImageOps
 
+from localsr.core.image_formats import is_system_decoded
 from localsr.protocol.messages import PreviewFailed, PreviewReady
+
+
+def open_result_image(path):
+    """Open an export: macOS decodes HEIC; the codec-only child avoids loading the engine."""
+    if is_system_decoded(path):
+        from localsr.core.image_io import open_image
+
+        return open_image(path)
+    return Image.open(path)
 
 
 def render_result_preview(data):
     path = str(data.get("image_path", ""))
     try:
         maximum = max(64, min(2048, int(data.get("max_dimension", 1600))))
-        with Image.open(path) as opened:
+        with open_result_image(path) as opened:
             width, height = opened.size
             if opened.getexif().get(274, 1) in (5, 6, 7, 8):
                 width, height = height, width
