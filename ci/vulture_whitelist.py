@@ -142,3 +142,6 @@ accepted_terms  # EditJobRequest
 
 # Public display helper on the codec bridge, kept by decision.
 _.describe  # core/media_bridge.py MediaBridge
+
+# ctypes structure field written for Windows to read (core/gpu_guard.py job object).
+LimitFlags  # JOBOBJECT_BASIC_LIMIT_INFORMATION

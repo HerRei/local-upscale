@@ -202,15 +202,84 @@ def settle() -> None:
         logger.warning("Could not read the GPU crash notes", exc_info=True)
 
 
+def _bind_to_this_process(process: subprocess.Popen):
+    """Windows: put the child in a job object that ends it when the last handle to the job
+    closes. Only this engine holds that handle, so an engine that is killed takes its
+    preflight child along at once, even while the child blocks in a driver. Returns the
+    job handle to close afterwards, or None."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class Basic(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class Extended(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", Basic),
+            ("IoInfo", ctypes.c_uint64 * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = Extended()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    extended_limit_information = 9
+    if not (
+        kernel32.SetInformationJobObject(
+            job, extended_limit_information, ctypes.byref(info), ctypes.sizeof(info)
+        )
+        and kernel32.AssignProcessToJobObject(job, int(process._handle))
+    ):
+        logger.warning("Could not tie the preflight to the engine: %s", ctypes.get_last_error())
+        kernel32.CloseHandle(job)
+        return None
+    return job
+
+
+def _release_binding(job) -> None:
+    if job is not None:
+        import ctypes
+
+        ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(job))
+
+
 def child_main(argv: list[str]) -> int:
     """Run a one-convolution model on the device ``argv[0]`` through the engine's ONNX
     route, including its comparison with the CPU. Exit 0 when the GPU ran, UNTESTED when
     the test could not run."""
-    import faulthandler
-
-    # A hard limit that holds even while a driver call blocks the interpreter, so an
-    # orphaned child cannot hang on.
-    faulthandler.dump_traceback_later(TIMEOUT_SECONDS + 30, exit=True)
+    if os.name != "nt":
+        # A hard limit for a child whose engine is gone, which holds even while a driver
+        # call blocks the interpreter: SIGALRM's default action ends the process, and
+        # Python installs no handler for it. On Windows the engine's job object does this.
+        signal.alarm(int(TIMEOUT_SECONDS) + 30)
     try:
         from types import SimpleNamespace
 
@@ -283,18 +352,22 @@ def run(device: str, cancel_event: threading.Event | None = None) -> str:
             except OSError:
                 logger.warning("Could not start the GPU preflight", exc_info=True)
                 return "unknown"
-            deadline = time.monotonic() + TIMEOUT_SECONDS
-            while process.poll() is None:
-                if cancel_event is not None and cancel_event.is_set():
-                    process.kill()
-                    process.wait()
-                    raise InterruptedError("Cancelled")
-                if time.monotonic() > deadline:
-                    process.kill()
-                    process.wait()
-                    logger.warning("The GPU preflight on %s did not finish in time", device)
-                    return "unknown"
-                time.sleep(0.1)
+            job = _bind_to_this_process(process)
+            try:
+                deadline = time.monotonic() + TIMEOUT_SECONDS
+                while process.poll() is None:
+                    if cancel_event is not None and cancel_event.is_set():
+                        process.kill()
+                        process.wait()
+                        raise InterruptedError("Cancelled")
+                    if time.monotonic() > deadline:
+                        process.kill()
+                        process.wait()
+                        logger.warning("The GPU preflight on %s did not finish in time", device)
+                        return "unknown"
+                    time.sleep(0.1)
+            finally:
+                _release_binding(job)
         check_cancelled()
         code = process.returncode
         if code == 0:
