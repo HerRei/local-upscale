@@ -320,6 +320,25 @@ pub(crate) fn sync_dir(directory: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Make the content of a file that was just written durable.
+pub(crate) fn sync_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    fault::note_sync(path);
+    match fs::OpenOptions::new().write(true).open(path) {
+        Ok(file) => file.sync_all(),
+        // Written read-only (a mode of the archive): on Windows such a handle cannot
+        // flush, elsewhere it can.
+        Err(_) => {
+            let flushed = fs::File::open(path)?.sync_all();
+            if cfg!(windows) {
+                Ok(())
+            } else {
+                flushed
+            }
+        }
+    }
+}
+
 /// One swap per folder at a time, across processes and sessions: an advisory lock on
 /// the folder itself, released when the returned handle drops.
 fn lock_folder(directory: &Path) -> AppResult<fs::File> {
