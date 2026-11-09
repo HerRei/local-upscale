@@ -409,3 +409,39 @@ def test_a_colour_source_keeps_the_model_colour(tmp_path):
     manager.save_from_writer(_tinted(12, 16), str(output), "png", 98, False, None, {}, 4)
     with Image.open(output) as saved:
         assert saved.getpixel((0, 0)) == (129, 120, 113)
+
+
+def test_twelve_bit_tiff_uses_declared_sample_depth(tmp_path):
+    # Two packed 12-bit samples, 2048 and 4095, in a baseline grayscale TIFF.
+    entries = [
+        (256, 4, 1, 2),
+        (257, 4, 1, 1),
+        (258, 3, 1, 12),
+        (259, 3, 1, 1),
+        (262, 3, 1, 1),
+        (273, 4, 1, 122),
+        (277, 3, 1, 1),
+        (278, 4, 1, 1),
+        (279, 4, 1, 3),
+    ]
+    path = tmp_path / "12bit.tif"
+    path.write_bytes(
+        b"II"
+        + struct.pack("<HIH", 42, 8, len(entries))
+        + b"".join(struct.pack("<HHII", *entry) for entry in entries)
+        + struct.pack("<I", 0)
+        + bytes([0x80, 0x0F, 0xFF])
+    )
+    pixels = ImageManager().load(str(path))["tensor"][0, 0].mul(255).round().tolist()
+    assert pixels == [128, 255]
+
+
+def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
+    path = tmp_path / "linear16.png"
+    Image.fromarray(np.array([[0, 128, 256]], dtype=np.uint16)).save(
+        path, icc_profile=_grey_profile(1.0)
+    )
+    data = ImageManager().load(str(path))
+    assert not data["has_invalid_icc"]
+    pixels = data["tensor"][0, 0].mul(255).round().tolist()
+    assert pixels[0] == 0 and pixels[1] >= 2 and pixels[2] > pixels[1]

@@ -70,6 +70,7 @@ SIDE_ALIGNMENT = 16
 LOAD_TIMEOUT_SECONDS = 180.0
 # Bump when the conversion recipe changes so stale programs are not reused.
 RECIPE_VERSION = 1
+GATE_VERSION = 1
 CACHE_ENV = "LOCALSR_COREML_CACHE"
 DISABLE_ENV = "LOCALSR_DISABLE_COREML"
 
@@ -286,7 +287,9 @@ class _Program:
         except (OSError, ValueError):
             return None
         value = verdicts.get(self._verdict_key(unit))
-        return value if isinstance(value, dict) else None
+        return (
+            value if isinstance(value, dict) and value.get("gate_version") == GATE_VERSION else None
+        )
 
     def store_verdict(self, unit: str, verdict: dict) -> None:
         try:
@@ -297,6 +300,7 @@ class _Program:
             verdicts = {}
         verdicts[self._verdict_key(unit)] = {
             **verdict,
+            "gate_version": GATE_VERSION,
             "unit": unit,
             "shape": list(self.shape),
             "chip": self.chip,
@@ -563,7 +567,10 @@ class _CoreMLImage(torch.nn.Module):
         """
         unit, runner, program = state["unit"], state["runner"], state["program"]
         reference = self._run_fallback(padded)
-        if float(padded.detach().float().std()) < MINIMUM_GATE_DETAIL:
+        if (
+            float(padded.detach().float().std(dim=(-2, -1), unbiased=False).max())
+            < MINIMUM_GATE_DETAIL
+        ):
             return reference
         reference_cpu = reference.detach().to("cpu", torch.float32)
         if not torch.isfinite(reference_cpu).all() or (
