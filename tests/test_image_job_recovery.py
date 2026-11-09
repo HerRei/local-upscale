@@ -166,7 +166,7 @@ def test_progress_accounts_for_fused_stages_and_excludes_initial_model_loading(m
     progress = ImageJobProgress(
         "job", pipeline, "cpu", emitted.append, Mock(), clock=lambda: now[0]
     )
-    progress.start(0, pipeline.preprocess)
+    progress.start(0, pipeline.preprocess_stages[0])
     progress.update(0, 2, 64)
     now[0] = 200.0  # Expensive model loading has not started inference.
     progress.tile("started", None, None, 0, 2, 16, 16, 64)
