@@ -17,6 +17,8 @@ SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
 # converts those to 8 bits by clipping, not scaling.
 WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
+# Pillow modes without colour.
+GREY_MODES = frozenset({"1", "L", "LA", "La"}) | WIDE_GREY_MODES
 
 
 def _narrow_wide_grey(image: Image.Image) -> Image.Image:
@@ -129,6 +131,8 @@ class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
         self.alpha_channel = None
+        # A grey source has no colour, so save() keeps only the luma a model returns.
+        self.grayscale = False
 
     def load(self, path: str) -> dict:
         """
@@ -139,6 +143,7 @@ class ImageManager:
         - Returns a dict containing the tensor and metadata.
         """
         self.alpha_channel = None
+        self.grayscale = False
         is_raw = is_raw_input(path)
 
         # Pillow can read metadata from many DNG containers even though it cannot
@@ -193,6 +198,7 @@ class ImageManager:
             converted_icc = None
 
         self.original_mode = img.mode
+        grey_source = img.mode in GREY_MODES
         if img.mode in WIDE_GREY_MODES:
             img = _narrow_wide_grey(img)
 
@@ -221,7 +227,12 @@ class ImageManager:
         elif img.mode != "RGB":
             img = img.convert("RGB")
 
-        arr = np.array(img).astype(np.float32) / 255.0
+        pixels = np.array(img)
+        # Grey modes, grey palettes and RGB files whose channels are all equal.
+        self.grayscale = grey_source or bool(
+            (pixels[..., 0] == pixels[..., 1]).all() and (pixels[..., 1] == pixels[..., 2]).all()
+        )
+        arr = pixels.astype(np.float32) / 255.0
         tensor = torch.from_numpy(arr).permute(2, 0, 1)
 
         return {
@@ -231,6 +242,7 @@ class ImageManager:
             "has_invalid_icc": has_invalid_icc,
             "original_mode": self.original_mode,
             "alpha_image": self.alpha_channel,
+            "grayscale": self.grayscale,
         }
 
     def save(
@@ -300,6 +312,12 @@ class ImageManager:
                 round(out_img.height * final_scale / scale),
             )
             out_img = out_img.resize(target_size, Image.Resampling.LANCZOS)
+
+        if self.grayscale:
+            # Colour-trained models add chroma to grey pages (issue #97); a grey source
+            # has none, so keep the model's luma only.
+            luma = out_img.convert("L")
+            out_img = Image.merge("RGB", (luma, luma, luma))
 
         if self.alpha_channel is not None and format.lower() in ["png", "tif", "tiff", "webp"]:
             new_size = (
