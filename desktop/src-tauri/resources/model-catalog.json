@@ -730,7 +730,7 @@
       "content": [
         "photo"
       ],
-      "description": "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on lettering, masonry and clean photos; foliage and fur can come out soft. About ten times slower than Best, so it is never picked by a preset.",
+      "description": "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on lettering, masonry and clean photos; foliage and fur can come out soft. Up to ten times slower than Best, so no preset picks it on its own.",
       "display_name": "DAT2 \u00d74 BHI Real",
       "download_url": "https://github.com/Phhofm/models/releases/download/4xBHI_dat2_real/4xBHI_dat2_real.pth",
       "engine_id": "localsr.pytorch-spandrel",
@@ -773,7 +773,7 @@
       "content": [
         "photo"
       ],
-      "description": "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed and noisy before upscaling. About ten times slower than Best, so it is never picked by a preset.",
+      "description": "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed and noisy before upscaling. Up to ten times slower than Best, so no preset picks it on its own.",
       "display_name": "DAT2 \u00d74 RealWebPhoto v4",
       "download_url": "https://github.com/Phhofm/models/releases/download/4xRealWebPhoto_v4_dat2/4xRealWebPhoto_v4_dat2.pth",
       "engine_id": "localsr.pytorch-spandrel",

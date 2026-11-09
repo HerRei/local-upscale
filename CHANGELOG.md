@@ -6,10 +6,11 @@
 
 - Two DAT2 models in the model library, both by Philip Hofmann under CC BY 4.0:
   **DAT2 ×4 BHI Real** for lettering and buildings, and **DAT2 ×4 RealWebPhoto v4** for
-  noisy photos. They take about ten times as long as Best (around 73 seconds per input
-  megapixel on an M1 Pro), so no preset picks them on its own; choose one in the library,
-  or pin it to Best. Their licences and training data are listed in
-  [docs/model-licenses.md](../model-licenses.md).
+  noisy photos. On an M1 Pro they take about ten times as long as Best (around 73 seconds
+  per input megapixel); on a CPU the gap is smaller. No preset picks them on its own;
+  choose one in the library, or pin it to Best. For them, keep the tile size at 256 where
+  memory allows: with smaller tiles their tile borders differ more from a whole-image run. Their licences and training
+  data are listed in [docs/model-licenses.md](docs/model-licenses.md).
 
 ### Fixed
 
