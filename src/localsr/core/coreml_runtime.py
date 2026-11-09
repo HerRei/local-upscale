@@ -54,6 +54,10 @@ COMPUTE_UNITS = {
 # PyTorch path is clearly faster on this Mac (newer GPUs can be).
 NEURAL_ENGINE_SPEED_MARGIN = 1.3
 MINIMUM_PSNR = 45.0
+# A gate tile needs this much detail (standard deviation of its input). On a blank tile
+# even an FP16 program that overflows on real content matches PyTorch: RealPLKSR HFA2k
+# in FP16 matched FP32 at 64-76 dB on flat tiles and failed on manga pages (#97).
+MINIMUM_GATE_DETAIL = 4 / 255
 # Converting large shapes exhausted 16 GB of memory for RRDBNet (768 px failed,
 # 512 px was measured), so larger user tiles keep PyTorch. SPAN is small enough
 # to convert whole video frames.
@@ -66,6 +70,7 @@ SIDE_ALIGNMENT = 16
 LOAD_TIMEOUT_SECONDS = 180.0
 # Bump when the conversion recipe changes so stale programs are not reused.
 RECIPE_VERSION = 1
+GATE_VERSION = 1
 CACHE_ENV = "LOCALSR_COREML_CACHE"
 DISABLE_ENV = "LOCALSR_DISABLE_COREML"
 
@@ -283,7 +288,9 @@ class _Program:
         except (OSError, ValueError):
             return None
         value = verdicts.get(self._verdict_key(unit))
-        return value if isinstance(value, dict) else None
+        return (
+            value if isinstance(value, dict) and value.get("gate_version") == GATE_VERSION else None
+        )
 
     def store_verdict(self, unit: str, verdict: dict) -> None:
         try:
@@ -294,6 +301,7 @@ class _Program:
             verdicts = {}
         verdicts[self._verdict_key(unit)] = {
             **verdict,
+            "gate_version": GATE_VERSION,
             "unit": unit,
             "shape": list(self.shape),
             "chip": self.chip,
@@ -621,10 +629,16 @@ class _CoreMLImage(torch.nn.Module):
         """Compare Core ML with PyTorch on a real tile and decide.
 
         Returns the PyTorch output when the tile is inconclusive (the reference
-        itself is unstable), so the next tile repeats the gate.
+        itself is unstable, or the tile has no detail to compare), so the next tile
+        repeats the gate.
         """
         unit, runner, program = state["unit"], state["runner"], state["program"]
         reference = self._run_fallback(padded)
+        if (
+            float(padded.detach().float().std(dim=(-2, -1), unbiased=False).max())
+            < MINIMUM_GATE_DETAIL
+        ):
+            return reference
         reference_cpu = reference.detach().to("cpu", torch.float32)
         if not torch.isfinite(reference_cpu).all() or (
             reference_cpu.amin() < -4 or reference_cpu.amax() > 5
