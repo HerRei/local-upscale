@@ -2,8 +2,10 @@
 """Check the complete target matrix and exact set of bounded public downloads.
 
 With --feed, check the update feed instead: one entry per release target, each
-with its edition's backend, kind, engine identity and an engine package, signed
-files below GitHub's size limit, and AppImage parts that add up to the package.
+with its edition's backend, kind, engine identity and an engine package, files below
+GitHub's size limit, and AppImage parts that add up to the package. Every signature is
+verified against the updater public key, over the local copies of the files (--files)
+and over each entry's signed release statement.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import binascii
 import hashlib
 import json
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path, PurePath
 
 from release_targets import (
@@ -29,6 +32,109 @@ MAX_PUBLIC_ASSET_BYTES = 2 * 1024**3
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 PROTOCOL_RE = re.compile(r"pub const PROTOCOL_VERSION: u32 = (\d+);")
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_KEY = ROOT / "packaging/updates/production.pub"
+
+# Minisign verification as the app does it (minisign-verify, prehashed signatures only):
+# Ed25519 after RFC 8032 over the BLAKE2b-512 digest that tauri signer signs.
+_P = 2**255 - 19
+_Q = 2**252 + 27742317777372353535851937790883648493
+_D = -121665 * pow(121666, _P - 2, _P) % _P
+_SQRT_M1 = pow(2, (_P - 1) // 4, _P)
+_Point = tuple[int, int, int, int]
+
+
+def _add(a: _Point, b: _Point) -> _Point:
+    p1 = (a[1] - a[0]) * (b[1] - b[0]) % _P
+    p2 = (a[1] + a[0]) * (b[1] + b[0]) % _P
+    c = 2 * a[3] * b[3] * _D % _P
+    d = 2 * a[2] * b[2] % _P
+    e, f, g, h = p2 - p1, d - c, d + c, p2 + p1
+    return (e * f % _P, g * h % _P, f * g % _P, e * h % _P)
+
+
+def _mul(scalar: int, point: _Point) -> _Point:
+    result: _Point = (0, 1, 1, 0)
+    while scalar:
+        if scalar & 1:
+            result = _add(result, point)
+        point = _add(point, point)
+        scalar >>= 1
+    return result
+
+
+def _recover_x(y: int, sign: int) -> int | None:
+    if y >= _P:
+        return None
+    x2 = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P) % _P
+    if x2 == 0:
+        return None if sign else 0
+    x = pow(x2, (_P + 3) // 8, _P)
+    if (x * x - x2) % _P:
+        x = x * _SQRT_M1 % _P
+    if (x * x - x2) % _P:
+        return None
+    return _P - x if (x & 1) != sign else x
+
+
+def _decompress(data: bytes) -> _Point | None:
+    y = int.from_bytes(data, "little")
+    sign, y = y >> 255, y & ((1 << 255) - 1)
+    x = _recover_x(y, sign)
+    return None if x is None else (x, y, 1, x * y % _P)
+
+
+_GY = 4 * pow(5, _P - 2, _P) % _P
+_GX = _recover_x(_GY, 0) or 0
+_G: _Point = (_GX, _GY, 1, _GX * _GY % _P)
+
+
+def _ed25519(public: bytes, message: bytes, signature: bytes) -> bool:
+    a, r = _decompress(public), _decompress(signature[:32])
+    s = int.from_bytes(signature[32:], "little")
+    if a is None or r is None or s >= _Q:
+        return False
+    h = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little")
+    left, right = _mul(s, _G), _add(r, _mul(h % _Q, a))
+    return (left[0] * right[2] - right[0] * left[2]) % _P == 0 and (
+        left[1] * right[2] - right[1] * left[2]
+    ) % _P == 0
+
+
+def minisign_verify(public_key: str, signature: str, chunks: Iterable[bytes]) -> bool:
+    """Whether ``signature`` (tauri signer's base64 text) signs the bytes of ``chunks``."""
+    try:
+        key = base64.b64decode(base64.b64decode(public_key).decode().splitlines()[-1])
+        lines = base64.b64decode(signature, validate=True).decode().splitlines()
+        blob, trusted, global_signature = (
+            base64.b64decode(lines[1]),
+            lines[2],
+            base64.b64decode(lines[3]),
+        )
+    except (binascii.Error, ValueError, IndexError, UnicodeDecodeError):
+        return False
+    if (
+        len(key) != 42
+        or key[:2] != b"Ed"
+        or len(blob) != 74
+        or blob[:2] != b"ED"
+        or blob[2:10] != key[2:10]
+        or not trusted.startswith("trusted comment: ")
+        or len(global_signature) != 64
+    ):
+        return False
+    digest = hashlib.blake2b(digest_size=64)
+    for chunk in chunks:
+        digest.update(chunk)
+    comment = trusted.removeprefix("trusted comment: ").encode()
+    return _ed25519(key[10:], digest.digest(), blob[10:]) and _ed25519(
+        key[10:], blob[10:] + comment, global_signature
+    )
+
+
+def _read(paths: list[Path]) -> Iterator[bytes]:
+    for path in paths:
+        with path.open("rb") as stream:
+            yield from iter(lambda: stream.read(4 * 1024 * 1024), b"")
 
 
 def sha256(path: Path) -> str:
@@ -123,9 +229,77 @@ def _download(item: object, base: str, name: str, label: str) -> int:
     return size
 
 
-def verify_feed(feed_path: Path, commit: str, *, release_version: str | None = None) -> None:
+class _LocalFiles:
+    """The release files on this computer, found by name below the given folders."""
+
+    def __init__(self, folders: list[Path]):
+        self.paths: dict[str, set[Path]] = {}
+        for folder in folders:
+            for path in folder.rglob("*"):
+                if path.is_file():
+                    self.paths.setdefault(path.name, set()).add(path.resolve())
+
+    def __call__(self, name: str) -> Path:
+        found = self.paths.get(name, set())
+        if len(found) != 1:
+            raise ValueError(f"expected exactly one local copy of {name}, found {len(found)}")
+        return next(iter(found))
+
+
+def _signed_file(item: dict, paths: list[Path], public_key: str, label: str) -> None:
+    """The local bytes have the entry's size and digest, and its signature signs them."""
+    digest = hashlib.sha256()
+    size = 0
+    for chunk in _read(paths):
+        digest.update(chunk)
+        size += len(chunk)
+    if (digest.hexdigest(), size) != (item.get("sha256"), item.get("size")):
+        raise ValueError(f"{label}: the local file does not match its feed entry")
+    if not minisign_verify(public_key, str(item.get("signature", "")), _read(paths)):
+        raise ValueError(f"{label} has no valid signature from the updater key")
+
+
+def _statement(
+    key: str, contract: dict, release_version: str, channel: str, public_key: str
+) -> None:
+    """The entry's release statement is signed and states exactly what the entry says."""
+    try:
+        data = base64.b64decode(str(contract.get("statement", "")), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError(f"{key} has no signed release statement") from error
+    if not data or not minisign_verify(
+        public_key, str(contract.get("statement_signature", "")), [data]
+    ):
+        raise ValueError(f"{key} has no signed release statement from the updater key")
+    engine = contract.get("engine") or {}
+    expected = {
+        "schema_version": 1,
+        "version": release_version,
+        "channel": channel,
+        "target": key,
+        "backend": contract.get("backend"),
+        "kind": contract.get("kind"),
+        "protocol": contract.get("protocol"),
+        "engine_id": contract.get("engine_id"),
+        "sha256": contract.get("sha256"),
+        "engine_manifest_sha256": (engine.get("manifest") or {}).get("sha256"),
+    }
+    if json.loads(data) != expected:
+        raise ValueError(f"{key}: the signed release statement does not match the entry")
+
+
+def verify_feed(
+    feed_path: Path,
+    commit: str,
+    *,
+    files: list[Path],
+    release_version: str | None = None,
+    public_key: str | None = None,
+) -> None:
     """Check that the feed serves every edition its own complete, signed update."""
     release_version = release_version or version()
+    public_key = public_key or PUBLIC_KEY.read_text(encoding="utf-8").strip()
+    local = _LocalFiles(files)
     feed = json.loads(feed_path.read_text(encoding="utf-8"))
     if feed.get("version") != release_version:
         raise ValueError(f"the feed is for {feed.get('version')!r}, not {release_version!r}")
@@ -201,6 +375,17 @@ def verify_feed(feed_path: Path, commit: str, *, release_version: str | None = N
             _download(
                 part, base, f"{files['engine_prefix']}.part-{index:04d}", f"{key} engine {index}"
             )
+        # The shape is right; now the signatures, over the bytes that will be published.
+        _statement(key, contract, release_version, channel, public_key)
+        package = [local(part["name"]) for part in parts] if parts else [local(name)]
+        _signed_file(
+            {"size": size, "sha256": contract["sha256"], "signature": entry.get("signature")},
+            package,
+            public_key,
+            key,
+        )
+        for item in [*(parts or []), engine["manifest"], *engine_parts]:
+            _signed_file(item, [local(item["name"])], public_key, f"{key}: {item['name']}")
 
 
 def main() -> int:
@@ -209,11 +394,27 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--feed", type=Path, help="Check this update feed (beta.json)")
+    parser.add_argument(
+        "--files",
+        type=Path,
+        action="append",
+        default=[],
+        help="Folder holding local copies of the feed's files (repeatable)",
+    )
     parser.add_argument("--version", help="Release version of the feed (default: pyproject)")
+    parser.add_argument("--public-key", type=Path, help="Updater public key (default: production)")
     args = parser.parse_args()
     if args.feed:
-        verify_feed(args.feed, args.commit, release_version=args.version)
-        print(f"Verified {len(targets())} update targets in {args.feed}")
+        if not args.files:
+            parser.error("--feed needs --files: the signatures are checked over the files")
+        verify_feed(
+            args.feed,
+            args.commit,
+            files=args.files,
+            release_version=args.version,
+            public_key=args.public_key.read_text().strip() if args.public_key else None,
+        )
+        print(f"Verified {len(targets())} update targets and their signatures in {args.feed}")
     if args.output or args.manifest:
         if not (args.output and args.manifest):
             parser.error("checking a prepared release needs the output folder and --manifest")

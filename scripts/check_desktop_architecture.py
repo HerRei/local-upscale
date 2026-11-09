@@ -49,6 +49,7 @@ MACOS_RELEASE_GATES = {
     "worker smoke": "packaging/smoke_worker.py",
     "host smoke": "--headless-smoke-test",
     "signed update archive": "beta_update_signing.py sign",
+    "signed release statement": "beta_update_signing.py statement",
     "corresponding source bundle": "build_source_bundle.py",
 }
 
