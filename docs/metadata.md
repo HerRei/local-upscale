@@ -15,7 +15,9 @@ to 8 bits, the precision LocalSR works in.
 
 A grey source (a grey, black-and-white or grey-palette file, or an RGB file whose channels are
 all equal) has no colour, so LocalSR saves only the luma of the model's result: models trained
-on colour images otherwise tint grey manga pages and scans. The file stays RGB.
+on colour images otherwise tint grey manga pages and scans. The file stays RGB. RGB images with
+unequal channels, including some compressed grey JPEGs, are treated as colour. The live preview
+shows the model output before this save-time adjustment.
 Other camera RAW formats are developed the same way; their EXIF is not read, so nothing from
 them is preserved. HEIC/HEIF and JPEG XL are decoded by macOS, which applies the orientation and
 keeps the colour profile and the allow-listed tags. GIF, HEIC and other multi-image files use
