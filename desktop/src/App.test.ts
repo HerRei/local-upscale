@@ -7,7 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings, WorkerEnvelope } from './lib/types';
+import type {
+  AppSnapshot,
+  DeviceInfo,
+  JobRecord,
+  LaunchIntent,
+  MediaItem,
+  UiSettings,
+  WorkerEnvelope,
+} from './lib/types';
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -41,6 +49,7 @@ const api = vi.hoisted(() => ({
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
   chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
   openFfmpegDownloadPage: vi.fn(async () => undefined),
+  openDownloadPage: vi.fn(async () => undefined),
   ffmpegInstallHint: vi.fn(async () => null),
   openTerminalWithInstallCommand: vi.fn(async () => undefined),
   downloadModel: vi.fn(async () => undefined),
@@ -1196,21 +1205,59 @@ describe('LocalSR desktop interface', () => {
   it.each([
     [
       { name: 'Intel(R) UHD Graphics 620', download: 'DirectML' },
-      /This computer has Intel\(R\) UHD Graphics 620\. The DirectML download of LocalSR can use it/,
+      /Runs on the CPU\. This computer has Intel UHD Graphics 620, which the DirectML download of LocalSR can use\./,
+      true,
     ],
-    [{ name: 'Intel graphics', download: 'intel-driver' }, /once Intel's compute driver/],
+    [
+      { name: 'Intel graphics', download: 'intel-driver' },
+      /Runs on the CPU\. Intel graphics can run models once Intel's compute driver, the intel-opencl-icd package, is installed\./,
+      false,
+    ],
   ] as const)(
-    'names the download or driver for a GPU this edition cannot use',
-    async (suggestion, text) => {
-      const snapshot = readySnapshot();
+    'names the download or driver for a GPU this edition cannot use in the idle status line',
+    async (suggestion, text, downloads) => {
+      const snapshot = readySnapshot([image('photo', true)]);
       snapshot.settings.device_id = 'cpu';
       snapshot.capabilities.gpu_suggestion = suggestion;
       const user = await mountWith(snapshot);
+      const status = document.querySelector('.status-copy') as HTMLElement;
+      expect(within(status).getByText(text)).toBeTruthy();
+      // Another download of LocalSR gets a link; Intel's driver is a system package, named instead.
+      const link = within(status).queryByRole('button', { name: 'Download page' });
+      expect(Boolean(link)).toBe(downloads);
+      if (link) {
+        await user.click(link);
+        expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
+      }
+      // The hint moved: Advanced does not repeat it.
       await chooseTask(user, /^Upscale$/);
       await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-      expect(screen.getByText(text)).toBeTruthy();
+      expect(screen.getAllByText(text)).toHaveLength(1);
     },
   );
+
+  it('keeps the CPU hint out of the status line while a job runs or after a failure', async () => {
+    const running = readySnapshot([image('photo', true)]);
+    running.settings.device_id = 'cpu';
+    running.capabilities.gpu_suggestion = { name: 'an NVIDIA GPU', download: 'CUDA' };
+    await mountWith(running);
+    expect(screen.getByText(/the CUDA download of LocalSR can use/)).toBeTruthy();
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    await waitFor(() =>
+      expect(screen.queryByText(/the CUDA download of LocalSR can use/)).toBeNull(),
+    );
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: 'The output folder is not writable.' },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('alert', { name: 'Last error' }).textContent).toContain(
+        'The output folder is not writable.',
+      ),
+    );
+    expect(screen.queryByText(/the CUDA download of LocalSR can use/)).toBeNull();
+  });
 
   it('preserves every executable backend id from worker discovery to job settings', async () => {
     const snapshot = readySnapshot();
@@ -1278,8 +1325,9 @@ describe('LocalSR desktop interface', () => {
       'NVIDIA GPU (CUDA)',
       'AMD GPU (ROCm)',
       'Intel GPU (XPU)',
-      'Intel(R) Iris(R) Xe Graphics (DirectML)',
-      'Intel(R) Graphics (iGPU) (OpenVINO)',
+      // Adapter names lose the trademark marks, OpenVINO's (iGPU) and a single route's tag.
+      'Intel Iris Xe Graphics',
+      'Intel Graphics',
     ]) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
@@ -1290,7 +1338,8 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'directml:0' }),
       ),
     );
-    expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
+    expect(screen.getByText(/DirectML has not been tested on real hardware yet/)).toBeTruthy();
+    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
     // The saved scale is a number; the menu must still show the matching option.
     expect((screen.getByLabelText('Interface text') as HTMLSelectElement).selectedIndex).toBe(0);
     // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
@@ -1299,10 +1348,340 @@ describe('LocalSR desktop interface', () => {
     expect(precision.value).toBe('fp32');
 
     await user.selectOptions(hardware, 'openvino:8680677d060000000002000000000000');
-    expect(
-      await screen.findByText(/OpenVINO runs the model on the selected Intel GPU/),
-    ).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
+    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  function gpu(id: string, type: string, name: string): DeviceInfo {
+    return {
+      id,
+      type,
+      name,
+      total_memory: 8 * 1024 ** 3,
+      free_memory: 6 * 1024 ** 3,
+      supports_fp16: false,
+      is_integrated: true,
+      recommended_tile_sizes: [64, 128],
+    };
+  }
+
+  it('groups a GPU reached through DirectML and OpenVINO under its name, with its routes as options', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+      // OpenVINO names the same GPU with its own (iGPU) tag.
+      gpu('openvino:8680', 'openvino', 'Intel(R) UHD Graphics 620 (iGPU) (OpenVINO)'),
+      gpu('openvino:80d1', 'npu', 'Intel(R) AI Boost (NPU)'),
+      gpu('directml:1', 'directml', 'NVIDIA GeForce RTX 3060 (DirectML)'),
+    ];
+    snapshot.settings.device_id = 'directml:0';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+
+    const groups = [...hardware.querySelectorAll('optgroup')];
+    expect(groups.map((group) => group.label)).toEqual(['Intel UHD Graphics 620']);
+    expect([...groups[0].querySelectorAll('option')].map((option) => option.textContent)).toEqual([
+      'Intel UHD Graphics 620 · DirectML',
+      'Intel UHD Graphics 620 · OpenVINO',
+    ]);
+    // A device reached one way is one entry; the NPU keeps its tag.
+    for (const name of ['CPU', 'NVIDIA GeForce RTX 3060', 'Intel AI Boost (NPU)']) {
+      expect(within(hardware).getByRole('option', { name })).toBeTruthy();
+    }
+    // The closed menu shows the whole name and route: the menu gets the row's full width,
+    // and its tooltip repeats the entry.
+    expect(hardware.selectedOptions[0].textContent).toBe('Intel UHD Graphics 620 · DirectML');
+    expect(hardware.title).toBe('Intel UHD Graphics 620 · DirectML');
+    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(true);
+    // The status line names the GPU as the menu and the engine do.
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(
+      /· Intel UHD Graphics 620 \(DirectML\)$/,
+    );
+
+    await user.selectOptions(hardware, 'openvino:8680');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'openvino:8680' }),
+      ),
+    );
+    expect(hardware.title).toBe('Intel UHD Graphics 620 · OpenVINO');
+    await user.selectOptions(hardware, 'openvino:80d1');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'openvino:80d1' }),
+      ),
+    );
+    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+  });
+
+  it('keeps short Hardware entries beside their label', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(hardware.querySelector('optgroup')).toBeNull();
+    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(false);
+  });
+
+  it('keeps the engine route note for the whole job, through a snapshot refresh', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const note =
+      'RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here (412 ms against 288 ms per tile).';
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({ type: 'engine_status', data: { job_id: 'job-1', message: note } });
+    expect(await screen.findByText(note)).toBeTruthy();
+    callback({
+      type: 'progress',
+      data: { job_id: 'job-1', percentage: 12, completed_tiles: 3, total_tiles: 25 },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toContain('3 of 25 tiles'),
+    );
+    expect(document.querySelector('.status-note')?.textContent).toBe(note);
+
+    // The host keeps the note in its snapshot (worker.rs), so a refresh does not drop it.
+    const running = structuredClone(snapshot);
+    Object.assign(running.runtime, {
+      active_job_id: 'job-1',
+      status_title: 'Enhancing',
+      status_detail: '4 of 25 tiles',
+      progress: 16,
+      hardware_note: note,
+    });
+    api.refreshSnapshot.mockResolvedValue(running);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toContain('4 of 25 tiles'),
+    );
+    expect(document.querySelector('.status-note')?.textContent).toBe(note);
+
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    callback({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out.png' } });
+    await waitFor(() => expect(document.querySelector('.status-note')).toBeNull());
+  });
+
+  it('shows the last failure above Advanced and offers the CPU when a GPU caused it', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices.push(
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+    );
+    snapshot.settings.device_id = 'directml:0';
+    const user = await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: 'The output folder is not writable.' },
+    });
+    let failure = await screen.findByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('The output folder is not writable.');
+    // Not a GPU's fault: the CPU would not help.
+    expect(within(failure).queryByRole('button', { name: 'Use the CPU' })).toBeNull();
+
+    const rejection =
+      'RealESRGAN gives different results on Intel UHD Graphics 620 (DirectML) than on the CPU, so LocalSR does not use that GPU for this model. Select the CPU for it.';
+    callback({ type: 'job_started', data: { job_id: 'job-2' } });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
+    callback({ type: 'job_failed', data: { job_id: 'job-2', error_message: rejection } });
+    failure = await screen.findByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('Select the CPU for it.');
+    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'cpu' }),
+      ),
+    );
+    expect(
+      within(screen.getByRole('alert', { name: 'Last error' })).queryByRole('button', {
+        name: 'Use the CPU',
+      }),
+    ).toBeNull();
+  });
+
+  const driverReset =
+    'The graphics driver stopped Intel UHD Graphics 620 (DirectML) while it ran RealESRGAN (device removed or reset). The engine restarts with a fresh device; if this repeats, choose a smaller tile or the CPU.';
+
+  async function failOnTheGpu(): Promise<(message: WorkerEnvelope) => void> {
+    // The newest mount's listener.
+    const callback = api.listenForWorker.mock.lastCall![0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: driverReset, restart_required: true },
+    });
+    await screen.findByRole('alert', { name: 'Last error' });
+    return callback;
+  }
+
+  function onTheGpu(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices.push(
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+    );
+    snapshot.settings.device_id = 'directml:0';
+    snapshot.settings.task = 'upscale';
+    return snapshot;
+  }
+
+  it('keeps a GPU failure and its CPU shortcut while the engine restarts after it', async () => {
+    const snapshot = onTheGpu();
+    await mountWith(snapshot);
+    const callback = await failOnTheGpu();
+    // The host restarts the engine for a driver reset: its snapshot says so, then Ready.
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    for (const [worker, title, detail] of [
+      ['starting', 'Starting engine', 'The inference process is loading.'],
+      ['ready', 'Ready', 'The isolated inference engine is ready.'],
+    ]) {
+      const restarted = structuredClone(snapshot);
+      Object.assign(restarted.runtime, { worker, status_title: title, status_detail: detail });
+      api.refreshSnapshot.mockResolvedValue(restarted);
+      refresh();
+      await waitFor(() =>
+        expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(
+          new RegExp(`^${title}`),
+        ),
+      );
+    }
+    const failure = screen.getByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('device removed or reset');
+    expect(within(failure).getByRole('button', { name: 'Use the CPU' })).toBeTruthy();
+    // The next job starts without it.
+    callback({ type: 'job_started', data: { job_id: 'job-2' } });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
+  });
+
+  it('keeps keyboard focus on a control after Use the CPU', async () => {
+    const user = await mountWith(onTheGpu());
+    await failOnTheGpu();
+    let failure = screen.getByRole('alert', { name: 'Last error' });
+    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    // Advanced is closed: the error stays and takes the focus.
+    await waitFor(() => expect(document.activeElement).toBe(failure));
+    cleanup();
+
+    const open = await mountWith(onTheGpu());
+    await chooseTask(open, /^Upscale$/);
+    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await failOnTheGpu();
+    failure = screen.getByRole('alert', { name: 'Last error' });
+    await open.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    // Advanced is open: the Hardware menu that now says CPU takes it.
+    await waitFor(() => expect(document.activeElement?.id).toBe('device'));
+    expect((document.activeElement as HTMLSelectElement).value).toBe('cpu');
+  });
+
+  it('shows the CPU hint only for a task the CPU runs, with the engine ready', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'cpu';
+    snapshot.settings.task = 'upscale';
+    snapshot.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
+    await mountWith(snapshot);
+    expect(screen.getByText(/Runs on the CPU\. The NPU \(Intel AI Boost\)/)).toBeTruthy();
+    // The engine stopped: no hint beside its status.
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    const stopped = structuredClone(snapshot);
+    Object.assign(stopped.runtime, {
+      worker: 'unavailable',
+      status_title: 'Engine unavailable',
+      status_detail: 'The inference engine could not start.',
+    });
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    refresh();
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Engine unavailable'),
+    );
+    expect(screen.queryByText(/Runs on the CPU/)).toBeNull();
+    cleanup();
+
+    // Editing needs a GPU: neither the CPU nor this NPU runs it.
+    const editing = structuredClone(snapshot);
+    editing.settings.task = 'edit';
+    await mountWith(editing);
+    expect(screen.queryByText(/Runs on the CPU/)).toBeNull();
+  });
+
+  it("drops an ended job's route note before a benchmark, even after a forced stop", async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const note =
+      'RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here.';
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({ type: 'engine_status', data: { job_id: 'job-1', message: note } });
+    expect(await screen.findByText(note)).toBeTruthy();
+    // A forced cancellation kills the engine: the host's snapshot no longer has the job.
+    const stopped = structuredClone(snapshot);
+    // It still carried the old job's note (worker.rs did not clear it on that path).
+    Object.assign(stopped.runtime, {
+      status_title: 'Cancelled',
+      status_detail: 'Work stopped; temporary output removed. Restarting engine…',
+      hardware_note: note,
+    });
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.queryByText(note)).toBeNull());
+    callback({
+      type: 'benchmark_started',
+      data: {
+        job_id: 'bench-1',
+        workload_version: 'localsr-benchmark-v2',
+        measured_frame_count: 3,
+      },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Benchmark/),
+    );
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
+  it('says in its row that a queue item could not finish, until a later run finishes', async () => {
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    const failed: JobRecord = {
+      id: 'job-1',
+      media_id: 'photo',
+      media_name: 'photo.png',
+      media_kind: 'image',
+      status: 'failed',
+      progress: 0,
+      output_path: '',
+      error: 'The graphics driver stopped Intel UHD Graphics 620 (DirectML).',
+      created_at: 100,
+    };
+    snapshot.jobs = [failed];
+    await mountWith(snapshot);
+    const label = screen.getByText('Could not finish');
+    expect(label.getAttribute('title')).toBe(failed.error);
+    // Sentence case: the row's state style capitalises single words, not this.
+    expect(label.classList.contains('failed')).toBe(true);
+    expect(screen.getAllByText('Could not finish')).toHaveLength(1);
+
+    const later = structuredClone(snapshot);
+    later.jobs = [
+      {
+        ...failed,
+        id: 'job-2',
+        status: 'completed',
+        error: '',
+        output_path: '/out.png',
+        created_at: 200,
+      },
+      failed,
+    ];
+    api.refreshSnapshot.mockResolvedValue(later);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.queryByText('Could not finish')).toBeNull());
   });
 
   it.each(['mps', 'directml:1', 'xpu:0'])(
@@ -2198,7 +2577,7 @@ describe('LocalSR desktop interface', () => {
     expect(within(library).getByRole('button', { name: /SPAN ×4.*NPU/ })).toBeTruthy();
   });
 
-  it('explains the NPU in Advanced and what a machine without its compiler is missing', async () => {
+  it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices = [
       {
@@ -2226,8 +2605,19 @@ describe('LocalSR desktop interface', () => {
     missing.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
     missing.settings.device_id = 'cpu';
     const user2 = await mountWith(missing);
+    // Like a GPU this edition cannot use, the missing compiler is named in the idle status line;
+    // it is a system package, so there is no link to LocalSR's downloads.
+    const status = document.querySelector('.status-copy') as HTMLElement;
+    expect(
+      within(status).getByText(
+        /Runs on the CPU\. The NPU \(Intel AI Boost\) can run models once the (intel-driver-compiler-npu package|current Intel NPU driver)/,
+      ),
+    ).toBeTruthy();
+    expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
     await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    expect(screen.getByText(/Intel\(R\) AI Boost.*NPU compiler/)).toBeTruthy();
+    expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
+      /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
+    );
   });
 
   it('picks a model for this job from the library and marks the recipe as custom', async () => {

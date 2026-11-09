@@ -4,6 +4,7 @@
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
   import HelpTip from './HelpTip.svelte';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
+  import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
     CapabilityInfo,
     CatalogModel,
@@ -32,10 +33,24 @@
   $: npuRunning =
     npuSelected &&
     selectedHardware(settings, capabilities, selectedModel?.architecture) === settings.device_id;
-  $: gpuSuggestion =
-    settings.device_id === 'cpu' && capabilities.gpu_suggestion
-      ? capabilities.gpu_suggestion
-      : null;
+  $: hardwareGroups = groupedHardware(
+    settings.task === 'edit'
+      ? editingDevices(capabilities)
+      : usingTemporalVideo
+        ? capabilities.devices
+        : hardwareChoices(capabilities, selectedModel?.architecture),
+  );
+  $: hardwareValue =
+    settings.task === 'edit'
+      ? (editDevice(capabilities, settings)?.id ?? '')
+      : usingTemporalVideo
+        ? settings.device_id
+        : selectedHardware(settings, capabilities, selectedModel?.architecture);
+  // A long entry (a GPU with its route) takes the row's full width, so the closed menu shows
+  // the whole name and route instead of cutting them.
+  $: hardwareStacked = hardwareGroups.some((group) =>
+    group.options.some((option) => option.label.length > 22),
+  );
   let advanced = false;
   let ffmpegNote = '';
 
@@ -311,7 +326,7 @@
         ><span><small>Save to</small>{settings.output_directory || 'Choose an output folder'}</span
         ><b>Choose…</b></button
       >
-      <div class="field-row">
+      <div class="field-row" class:stacked={hardwareStacked}>
         <span class="label-with-tip"
           ><label for="device">Hardware</label><HelpTip
             label="Hardware"
@@ -319,55 +334,34 @@
           /></span
         ><select
           id="device"
-          value={settings.task === 'edit'
-            ? (editDevice(capabilities, settings)?.id ?? '')
-            : usingTemporalVideo
-              ? settings.device_id
-              : selectedHardware(settings, capabilities, selectedModel?.architecture)}
+          title={optionLabel(hardwareGroups, hardwareValue) || undefined}
+          value={hardwareValue}
           on:change={(event) =>
             updateSettings(
               settings.task === 'edit' || usingTemporalVideo
                 ? { device_id: event.currentTarget.value }
                 : hardwarePatch(event.currentTarget.value, selectedModel?.architecture),
             )}
-          >{#each settings.task === 'edit' ? editingDevices(capabilities) : usingTemporalVideo ? capabilities.devices : hardwareChoices(capabilities, selectedModel?.architecture) as device}<option
-              value={device.id}>{device.name}</option
-            >{/each}</select
+          >{#each hardwareGroups as group}{#if group.options.length > 1}<optgroup label={group.name}
+                >{#each group.options as option}<option value={option.id}>{option.label}</option
+                  >{/each}</optgroup
+              >{:else}<option value={group.options[0].id}>{group.name}</option>{/if}{/each}</select
         >
       </div>
-      {#if !usingTemporalVideo && settings.device_id.startsWith('directml:')}
+      {#if !usingTemporalVideo && settings.task !== 'edit' && onnxGpu && !npuSelected}
         <p class="model-description">
-          DirectML uses the selected Windows GPU, including integrated graphics. It has not been
-          tested on real hardware yet, so the first time a model runs on it, LocalSR checks once
-          that the GPU gives the same result as the CPU. Start with smaller tiles if shared memory
-          is tight.
-        </p>
-      {:else if gpuSuggestion?.download === 'intel-driver'}
-        <p class="model-description">
-          {gpuSuggestion.name} can run models through OpenVINO once Intel's compute driver (the intel-opencl-icd
-          package) is installed.
-        </p>
-      {:else if gpuSuggestion}
-        <p class="model-description">
-          This computer has {gpuSuggestion.name}. The {gpuSuggestion.download} download of LocalSR can
-          use it; this one runs on the CPU.
+          {#if settings.device_id.startsWith('directml:')}DirectML has not been tested on real
+            hardware yet.{/if}
+          The first time a model runs on this GPU, LocalSR checks once that it gives the same result as
+          the CPU.
+          {#if settings.device_id.startsWith('directml:')}Choose a smaller tile if shared memory is
+            tight.{/if}
         </p>
       {:else if !usingTemporalVideo && npuSelected}
         <p class="model-description">
           The NPU runs SPAN, Real-ESRGAN, FBCNN and NAFNet models; others run on the CPU. LocalSR
           compiles a model once for the NPU, which can take a minute, and checks once that its
           result matches the CPU's.
-        </p>
-      {:else if capabilities.npu_hint}
-        <p class="model-description">
-          This computer has {capabilities.npu_hint.name}, an NPU. LocalSR can use it once Intel's
-          NPU compiler is installed: on Linux the intel-driver-compiler-npu package from Intel's NPU
-          driver, on Windows the current Intel NPU driver.
-        </p>
-      {:else if !usingTemporalVideo && settings.device_id.startsWith('openvino:')}
-        <p class="model-description">
-          OpenVINO runs the model on the selected Intel GPU. The first time a model runs on it,
-          LocalSR checks once that the GPU gives the same result as the CPU.
         </p>
       {/if}
       <div class="field-row">
