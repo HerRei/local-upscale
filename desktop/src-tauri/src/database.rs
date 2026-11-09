@@ -1,14 +1,25 @@
 use std::{
-    path::Path,
+    collections::HashSet,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
-    error::AppResult,
+    error::{AppError, AppResult},
+    results::{summary_from_row, MediaResults},
     types::{JobRecord, MediaItem},
 };
+
+/// A job that `admit_jobs` inserts. `ui_json` is host-only metadata.
+#[derive(Clone, Debug)]
+pub struct NewJob {
+    pub id: String,
+    pub media_id: String,
+    pub request_json: String,
+    pub ui_json: String,
+}
 
 #[derive(Clone, Debug)]
 pub struct PendingJob {
@@ -86,6 +97,22 @@ impl Database {
                 [],
             )?;
         }
+        let has_ui: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='ui_json')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_ui {
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN ui_json TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        // Result history of one media, newest first (see list_media_results).
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS jobs_media_results_idx ON jobs(media_id, updated_at)",
+            [],
+        )?;
         let database = Self { connection };
         database.interrupt_stale_jobs()?;
         Ok(database)
@@ -271,7 +298,13 @@ impl Database {
                 u64::try_from(row.get::<_, i64>(12)?).unwrap_or_default(),
                 &row.get::<_, String>(13)?,
             );
+            let (model_id, model_label) = crate::results::request_model(
+                &serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(9)?)
+                    .unwrap_or_default(),
+            );
             Ok(JobRecord {
+                model_id,
+                model_label,
                 id: row.get(0)?,
                 media_id: row.get(1)?,
                 media_name: row.get(2)?,
@@ -287,6 +320,180 @@ impl Database {
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Queue jobs in one transaction, with the check that none of their media
+    /// already has unfinished work and the output-name reservation inside it.
+    /// `build` receives every output path that unfinished jobs reserve and
+    /// returns the jobs to insert; nothing is written if it fails.
+    pub fn admit_jobs<F>(&self, media_ids: &[&str], build: F) -> AppResult<()>
+    where
+        F: FnOnce(&mut HashSet<PathBuf>) -> AppResult<Vec<NewJob>>,
+    {
+        let transaction = self.connection.unchecked_transaction()?;
+        for media_id in media_ids {
+            let busy: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM jobs WHERE media_id=?1 AND status IN ('queued','starting','running','cancelling'))",
+                [media_id],
+                |row| row.get(0),
+            )?;
+            if busy {
+                return Err(AppError::Validation(
+                    "one or more selected items are already running or queued".into(),
+                ));
+            }
+        }
+        let mut reserved: HashSet<PathBuf> = self.unfinished_output_paths()?.into_iter().collect();
+        let jobs = build(&mut reserved)?;
+        let now = now_millis();
+        for job in &jobs {
+            transaction.execute(
+                "INSERT INTO jobs (id, media_id, status, request_json, ui_json, created_at, updated_at) VALUES (?1, ?2, 'queued', ?3, ?4, ?5, ?5)",
+                params![job.id, job.media_id, job.request_json, job.ui_json, now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The finished attempts of one media, newest first, independently of the
+    /// bounded job snapshot. Ties in completion time break by insertion order.
+    pub fn list_media_results(
+        &self,
+        media_id: &str,
+        limit: u32,
+        before: Option<&str>,
+    ) -> AppResult<MediaResults> {
+        let limit = limit.clamp(1, 50);
+        let total_count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE media_id=?1 AND status IN ('completed','failed','cancelled','interrupted')",
+            [media_id],
+            |row| row.get(0),
+        )?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {} FROM jobs WHERE media_id=?1 AND status IN ('completed','failed','cancelled','interrupted')
+               AND (?2 IS NULL OR (updated_at, rowid) < (SELECT updated_at, rowid FROM jobs WHERE id=?2 AND media_id=?1))
+             ORDER BY updated_at DESC, rowid DESC LIMIT ?3",
+            crate::results::SUMMARY_COLUMNS
+        ))?;
+        let mut results = statement
+            .query_map(params![media_id, before, limit + 1], summary_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_before = if results.len() > limit as usize {
+            results.pop();
+            results.last().map(|result| result.job_id.clone())
+        } else {
+            None
+        };
+        // Whether a file exists is checked now, over the whole history, so the
+        // chooser and the default do not depend on which page was loaded.
+        let mut completed = self.connection.prepare(
+            "SELECT id, output_path FROM jobs WHERE media_id=?1 AND status='completed' ORDER BY updated_at DESC, rowid DESC",
+        )?;
+        let completed = completed
+            .query_map([media_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let available: Vec<&String> = completed
+            .iter()
+            .filter(|(_, path)| !path.is_empty() && Path::new(path).is_file())
+            .map(|(id, _)| id)
+            .collect();
+        Ok(MediaResults {
+            media_id: media_id.to_owned(),
+            results,
+            total_count: u64::try_from(total_count).unwrap_or_default(),
+            completed_count: completed.len() as u64,
+            available_count: available.len() as u64,
+            default_result_id: available.first().map(|id| (*id).clone()),
+            next_before,
+        })
+    }
+
+    /// The saved file of one completed result of this media, for a preview.
+    pub fn media_result_output(&self, media_id: &str, job_id: &str) -> AppResult<String> {
+        let path: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT output_path FROM jobs WHERE id=?1 AND media_id=?2 AND status='completed' AND output_path != ''",
+                params![job_id, media_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let path = path.ok_or_else(|| {
+            AppError::Validation("choose a completed result of this image".into())
+        })?;
+        if !Path::new(&path).is_file() {
+            return Err(AppError::Validation(
+                "this result's file is no longer available".into(),
+            ));
+        }
+        Ok(path)
+    }
+
+    /// Cancel the queued jobs of one media and mark its active job as
+    /// cancelling. Returns that active job, which the caller signals.
+    pub fn cancel_jobs_for_media(&self, media_id: &str) -> AppResult<Option<String>> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let now = now_millis();
+        transaction.execute(
+            "UPDATE jobs SET status='cancelled', error='Cancelled before starting.', updated_at=?2 WHERE media_id=?1 AND status='queued'",
+            params![media_id, now],
+        )?;
+        let active: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM jobs WHERE media_id=?1 AND status IN ('starting','running','cancelling') ORDER BY rowid LIMIT 1",
+                [media_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        transaction.execute(
+            "UPDATE jobs SET status='cancelling', updated_at=?2 WHERE media_id=?1 AND status IN ('starting','running')",
+            params![media_id, now],
+        )?;
+        transaction.commit()?;
+        Ok(active)
+    }
+
+    /// A measured run time for a request that is not queued yet: the latest
+    /// completed job with the same work profile, scaled to this media.
+    pub fn estimate_request_seconds(
+        &self,
+        request: &str,
+        media: &MediaItem,
+    ) -> AppResult<Option<f64>> {
+        let (key, units) = crate::queue_timing::work_profile(
+            request,
+            media.width,
+            media.height,
+            media.frame_count,
+            &media.hdr_format,
+        );
+        if key.is_empty() || units <= 0.0 {
+            return Ok(None);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT jobs.request_json, media.width, media.height, media.frame_count, media.hdr_format, jobs.elapsed_seconds
+               FROM jobs JOIN media ON media.id = jobs.media_id
+              WHERE jobs.status='completed' AND jobs.elapsed_seconds > 0
+              ORDER BY jobs.updated_at DESC, jobs.rowid DESC",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let (candidate, measured_units) = crate::queue_timing::work_profile(
+                &row.get::<_, String>(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                u64::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
+                &row.get::<_, String>(4)?,
+            );
+            if candidate == key && measured_units > 0.0 {
+                let seconds: f64 = row.get(5)?;
+                return Ok(Some(seconds / measured_units * units));
+            }
+        }
+        Ok(None)
     }
 
     pub fn latest_completed_output_for_media(&self, media_id: &str) -> AppResult<Option<String>> {
@@ -447,6 +654,303 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn job(id: &str, media: &str, request: &str, ui: &str) -> NewJob {
+        NewJob {
+            id: id.into(),
+            media_id: media.into(),
+            request_json: request.into(),
+            ui_json: ui.into(),
+        }
+    }
+
+    #[test]
+    fn result_outputs_are_authorized_for_their_own_media_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        let path = directory.path().join("output.png");
+        std::fs::write(&path, "preview").unwrap();
+        let path = path.to_str().unwrap();
+        for media in ["m", "other"] {
+            db.insert_media(media, &format!("/tmp/{media}.png"), media, "image")
+                .unwrap();
+        }
+        db.insert_job("done", "m", r#"{"type":"job_request"}"#)
+            .unwrap();
+        db.finish_job("done", "completed", path, "").unwrap();
+        db.insert_job(
+            "edit",
+            "m",
+            r#"{"type":"edit_job_request","data":{"model_id":"qwen"}}"#,
+        )
+        .unwrap();
+        db.finish_job("edit", "completed", path, "").unwrap();
+        db.insert_job("failed", "m", "{}").unwrap();
+        db.finish_job("failed", "failed", "", "broken").unwrap();
+        db.insert_job("queued", "m", "{}").unwrap();
+        assert_eq!(db.media_result_output("m", "done").unwrap(), path);
+        // An Edit result can be shown on its own; the UI decides about a split.
+        assert_eq!(db.media_result_output("m", "edit").unwrap(), path);
+        for (media, job) in [
+            ("other", "done"),
+            ("m", "failed"),
+            ("m", "queued"),
+            ("m", "nope"),
+        ] {
+            assert!(db.media_result_output(media, job).is_err(), "{media}/{job}");
+        }
+        std::fs::remove_file(path).unwrap();
+        assert!(db.media_result_output("m", "done").is_err());
+    }
+
+    #[test]
+    fn history_is_paginated_independently_of_the_bounded_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/history.png", "history.png", "image")
+            .unwrap();
+        let kept = directory.path().join("kept.png");
+        std::fs::write(&kept, "pixels").unwrap();
+        for index in 0..250 {
+            let id = format!("result-{index:03}");
+            db.insert_job(&id, "m", r#"{"type":"job_request","data":{"output_scale":2,"model_path":"/models/swinir.pth","stages":[{"kind":"upscale","model_id":"swinir","model_path":"/models/swinir.pth"}]}}"#).unwrap();
+            let output = if index == 3 {
+                kept.to_str().unwrap()
+            } else {
+                "/tmp/no-such-output.png"
+            };
+            db.finish_job(&id, "completed", output, "Blur fix skipped")
+                .unwrap();
+        }
+        // Every job finished in the same millisecond: insertion order decides,
+        // not the job id (result-249 sorts after result-25 as text).
+        db.connection
+            .execute("UPDATE jobs SET updated_at=100", [])
+            .unwrap();
+        let first = db.list_media_results("m", 50, None).unwrap();
+        assert_eq!(first.total_count, 250);
+        assert_eq!(first.completed_count, 250);
+        assert_eq!(first.available_count, 1);
+        assert_eq!(first.results.len(), 50);
+        assert_eq!(first.results[0].job_id, "result-249");
+        assert_eq!(first.results[0].notes, "Blur fix skipped");
+        assert_eq!(first.results[0].kind, "upscale");
+        assert_eq!(first.results[0].scale, 2);
+        assert!(first.results[0].ui.is_none());
+        assert!(!first.results[0].available);
+        // The default is the newest result whose file exists, beyond this page.
+        assert_eq!(first.default_result_id.as_deref(), Some("result-003"));
+        let second = db
+            .list_media_results("m", 50, first.next_before.as_deref())
+            .unwrap();
+        assert_eq!(second.results[0].job_id, "result-199");
+        let mut before = second.next_before;
+        let mut pages = 2;
+        while let Some(cursor) = before {
+            let page = db.list_media_results("m", 50, Some(&cursor)).unwrap();
+            before = page.next_before;
+            pages += 1;
+        }
+        assert_eq!(pages, 5);
+        assert_eq!(db.list_jobs().unwrap().len(), 200);
+    }
+
+    #[test]
+    fn history_lists_failed_attempts_with_their_reason_but_never_as_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/a.png", "a.png", "image")
+            .unwrap();
+        let output = directory.path().join("a_upscaled_4x.png");
+        std::fs::write(&output, "pixels").unwrap();
+        db.insert_job("done", "m", "{}").unwrap();
+        db.finish_job("done", "completed", output.to_str().unwrap(), "")
+            .unwrap();
+        db.insert_job("broken", "m", "{}").unwrap();
+        db.finish_job("broken", "failed", "", "Out of memory")
+            .unwrap();
+        db.insert_job("running", "m", "{}").unwrap();
+        db.set_job_status("running", "running").unwrap();
+        let history = db.list_media_results("m", 50, None).unwrap();
+        assert_eq!(
+            history
+                .results
+                .iter()
+                .map(|r| (r.job_id.as_str(), r.status.as_str(), r.notes.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("broken", "failed", "Out of memory"),
+                ("done", "completed", "")
+            ]
+        );
+        assert_eq!(history.default_result_id.as_deref(), Some("done"));
+        assert_eq!((history.total_count, history.completed_count), (2, 1));
+    }
+
+    #[test]
+    fn admission_keeps_ui_metadata_out_of_worker_requests_and_rolls_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/a.png", "a.png", "image")
+            .unwrap();
+        let request = r#"{"type":"job_request","data":{"model_path":"swinir.pth","output_path":"/out/a.png"}}"#;
+        let ui =
+            r#"{"quality":"custom","content":"photo","recipe_name":"My recipe","fixes":["blur"]}"#;
+        // A failing insert (a duplicate id) leaves nothing behind.
+        assert!(db
+            .admit_jobs(&["m"], |_| Ok(vec![
+                job("one", "m", request, ui),
+                job("one", "m", request, ui)
+            ]))
+            .is_err());
+        assert!(db.list_jobs().unwrap().is_empty());
+        // A failing build leaves nothing behind either.
+        assert!(db
+            .admit_jobs(&["m"], |_| Err(AppError::Validation("no".into())))
+            .is_err());
+        db.admit_jobs(&["m"], |reserved| {
+            assert!(reserved.is_empty());
+            Ok(vec![job("one", "m", request, ui)])
+        })
+        .unwrap();
+        assert_eq!(db.next_queued_job().unwrap().unwrap().request_json, request);
+        assert_eq!(db.list_jobs().unwrap()[0].model_label, "swinir");
+        // The in-flight check is part of the same admission.
+        assert!(db
+            .admit_jobs(&["m"], |_| Ok(vec![job("two", "m", request, ui)]))
+            .is_err());
+        db.insert_media("n", "/tmp/n.png", "n.png", "image")
+            .unwrap();
+        db.admit_jobs(&["n"], |reserved| {
+            assert!(reserved.contains(Path::new("/out/a.png")));
+            Ok(vec![])
+        })
+        .unwrap();
+        db.finish_job("one", "failed", "", "broken").unwrap();
+        let row = db
+            .list_media_results("m", 50, None)
+            .unwrap()
+            .results
+            .remove(0);
+        assert_eq!(row.ui.unwrap().recipe_name, "My recipe");
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.notes, "broken");
+    }
+
+    #[test]
+    fn ui_metadata_leaves_the_timing_profile_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        for media in ["a", "b"] {
+            db.insert_media(media, &format!("/tmp/{media}.png"), media, "image")
+                .unwrap();
+            db.update_media_probe(
+                &format!("/tmp/{media}.png"),
+                "image",
+                512,
+                512,
+                1,
+                0.0,
+                0.0,
+                "",
+                "",
+                "",
+            )
+            .unwrap();
+        }
+        let request = |media: &str| {
+            format!(
+                r#"{{"type":"job_request","data":{{"job_id":"{media}","image_path":"/tmp/{media}.png","output_path":"/out/{media}.png","model_path":"m.pth","device":"cpu","tile_size":256}}}}"#
+            )
+        };
+        db.admit_jobs(&["a"], |_| {
+            Ok(vec![job("a", "a", &request("a"), r#"{"quality":"best"}"#)])
+        })
+        .unwrap();
+        db.admit_jobs(&["b"], |_| {
+            Ok(vec![job(
+                "b",
+                "b",
+                &request("b"),
+                r#"{"quality":"quick","recipe_name":"Mine"}"#,
+            )])
+        })
+        .unwrap();
+        let jobs = db.list_jobs().unwrap();
+        assert!(!jobs[0].work_key.is_empty());
+        assert_eq!(jobs[0].work_key, jobs[1].work_key);
+        assert_eq!(jobs[0].work_units, jobs[1].work_units);
+    }
+
+    #[test]
+    fn trials_estimate_only_measured_matching_requests() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/a.png", "a.png", "image")
+            .unwrap();
+        db.update_media_probe("/tmp/a.png", "image", 512, 512, 1, 0.0, 0.0, "", "", "")
+            .unwrap();
+        let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
+        let media = db.get_media("m").unwrap().unwrap();
+        assert!(db
+            .estimate_request_seconds(request, &media)
+            .unwrap()
+            .is_none());
+        db.insert_job("j", "m", request).unwrap();
+        db.finish_job("j", "completed", "out.png", "").unwrap();
+        db.record_job_duration("j", 12.0).unwrap();
+        assert_eq!(
+            db.estimate_request_seconds(request, &media).unwrap(),
+            Some(12.0)
+        );
+        assert!(db
+            .estimate_request_seconds(&request.replace("cpu", "mps"), &media)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn cancel_media_preserves_other_media_and_completed_outputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        for media in ["m", "other"] {
+            db.insert_media(media, &format!("/tmp/{media}.png"), media, "image")
+                .unwrap();
+        }
+        for (id, media) in [
+            ("done", "m"),
+            ("active", "m"),
+            ("pending", "m"),
+            ("unrelated", "other"),
+        ] {
+            db.insert_job(id, media, "{}").unwrap();
+        }
+        db.finish_job("done", "completed", "/tmp/done.png", "")
+            .unwrap();
+        db.set_job_status("active", "running").unwrap();
+        assert_eq!(
+            db.cancel_jobs_for_media("m").unwrap().as_deref(),
+            Some("active")
+        );
+        let jobs = db.list_jobs().unwrap();
+        for (id, status) in [
+            ("done", "completed"),
+            ("active", "cancelling"),
+            ("pending", "cancelled"),
+            ("unrelated", "queued"),
+        ] {
+            assert_eq!(jobs.iter().find(|job| job.id == id).unwrap().status, status);
+        }
+        assert_eq!(db.next_queued_job().unwrap().unwrap().id, "unrelated");
+        // A media without an active job has nothing to signal; asking twice
+        // still names the job that is cancelling.
+        assert_eq!(db.cancel_jobs_for_media("other").unwrap(), None);
+        assert!(db.next_queued_job().unwrap().is_none());
+        assert_eq!(
+            db.cancel_jobs_for_media("m").unwrap().as_deref(),
+            Some("active")
+        );
+    }
 
     #[test]
     fn unfinished_jobs_protect_all_model_paths() {
