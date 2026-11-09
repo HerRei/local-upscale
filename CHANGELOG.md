@@ -5,9 +5,10 @@
 ### Added
 
 - Intel NPUs ("Intel AI Boost" in Core Ultra processors) as a device under Advanced >
-  Hardware, on Linux and Windows. The NPU runs SPAN (Quick), the Real-ESRGAN models and
-  FBCNN (the JPEG fix); with the NPU selected, other models run on the CPU, and the app says
-  so. The first time a model runs on the NPU at a tile size, LocalSR compiles it, which can
+  Hardware, on Linux and Windows. The NPU runs SPAN (Quick), the Real-ESRGAN models, FBCNN
+  (the JPEG fix) and NAFNet (the noise and blur fixes), 2-9 times as fast as the CPU and
+  about twice as fast as the same processor's graphics on a Core Ultra 200; with the NPU
+  selected, other models run on the CPU, and the app says so. The first time a model runs on the NPU at a tile size, LocalSR compiles it, which can
   take a minute, and keeps the result (up to 2 GB). The NPU computes in FP16, so LocalSR
   checks once that its result stays close to the CPU's.
   - Linux needs Intel's NPU driver with its compiler (the `intel-driver-compiler-npu`

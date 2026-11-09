@@ -12,7 +12,7 @@ const NEURAL_ENGINE_ARCHITECTURES = new Set(['SPAN', 'RealESRGAN', 'FBCNN']);
 const CORE_ML_GPU_ARCHITECTURES = new Set(['RealPLKSR']);
 // Catalog architectures an Intel NPU runs, mirroring NPU_ARCHITECTURES in
 // src/localsr/core/onnx_runtime.py (tests/test_onnx_runtime.py checks it).
-const NPU_ARCHITECTURES = new Set(['SPAN', 'RealESRGAN', 'FBCNN']);
+const NPU_ARCHITECTURES = new Set(['SPAN', 'RealESRGAN', 'FBCNN', 'NAFNet']);
 
 /** Whether a model runs on an Intel NPU; a custom model (no architecture) may. */
 function npuRuns(architecture?: string): boolean {
