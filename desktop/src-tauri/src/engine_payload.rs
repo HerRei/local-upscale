@@ -111,9 +111,23 @@ thread_local! {
     static AFTER_PART_VERIFICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Whether `name` is `<prefix><process id>`, a folder an installation names.
+fn installation_folder(name: &str, kind: &str) -> bool {
+    name.strip_prefix(&format!("engine.{kind}-"))
+        .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Whether `folder` holds the worker of a whole engine.
+fn has_worker(folder: &Path) -> bool {
+    folder.join("localsr-worker.exe").is_file() || folder.join("localsr-worker").is_file()
+}
+
 /// Undo what a killed installation left in the engine's folder: a half-unpacked
-/// `engine.installing-*` goes, and an engine that was moved aside but not replaced
-/// (`engine.previous-*` with no `engine`) takes its place again.
+/// `engine.installing-*` and a half-deleted `engine.deleting-*` go, and an engine that
+/// was moved aside but not replaced (`engine.previous-*` with no `engine`) takes its
+/// place again. Only folders of those names are touched, and the old engine is deleted
+/// under the name `deleting`, so a `previous` is always a whole engine; one without its
+/// worker (left by an earlier version's removal) is never put in place.
 pub fn recover_install(destination: &Path) -> io::Result<()> {
     let Some(parent) = destination.parent() else {
         return Ok(());
@@ -122,20 +136,43 @@ pub fn recover_install(destination: &Path) -> io::Result<()> {
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with("engine.installing-") {
-            fs::remove_dir_all(entry.path())?;
-        } else if name.starts_with("engine.previous-") {
-            previous.push(entry.path());
+        let kind = if installation_folder(&name, "previous") {
+            "previous"
+        } else if installation_folder(&name, "installing") || installation_folder(&name, "deleting")
+        {
+            "leftover"
+        } else {
+            continue;
+        };
+        let path = entry.path();
+        // A plain file or a link under such a name is removed itself, never followed.
+        if !fs::symlink_metadata(&path)?.file_type().is_dir() {
+            fs::remove_file(&path)?;
+        } else if kind == "previous" {
+            previous.push(path);
+        } else {
+            fs::remove_dir_all(&path)?;
         }
     }
+    let mut restored = destination.exists();
     for path in previous {
-        if destination.exists() {
-            fs::remove_dir_all(path)?;
-        } else {
+        if !restored && has_worker(&path) {
             fs::rename(path, destination)?;
+            restored = true;
+        } else {
+            fs::remove_dir_all(path)?;
         }
     }
     Ok(())
+}
+
+/// At start: put back the engine that a killed installation moved aside beside the
+/// executable (the Windows installer's `engine` folder), so the application never starts
+/// without one until the next installation.
+pub fn recover_beside(executable: &Path) {
+    if let Some(parent) = executable.parent() {
+        let _ = recover_install(&parent.join("engine"));
+    }
 }
 
 pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::Result<()> {
@@ -216,6 +253,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
     recover_install(destination)?;
     let staging = parent.join(format!("engine.installing-{}", std::process::id()));
     let backup = parent.join(format!("engine.previous-{}", std::process::id()));
+    let deleting = parent.join(format!("engine.deleting-{}", std::process::id()));
     update_storage::fault("staging-create")?;
     fs::create_dir(&staging)?;
     let result = (|| {
@@ -227,6 +265,8 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         let mut count = 0u64;
         let mut bytes = 0u64;
         let mut paths = HashSet::new();
+        // The folders that now hold unpacked files, to be made durable with them.
+        let mut folders = HashSet::from([staging.clone()]);
         for entry in archive.entries()? {
             let mut entry = entry?;
             let relative = entry.path()?.into_owned();
@@ -249,6 +289,15 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             if !entry.unpack_in(&staging)? {
                 return Err(invalid("engine archive escaped its destination"));
             }
+            let unpacked = staging.join(&relative);
+            update_storage::sync_file(&unpacked)?;
+            let mut folder = unpacked.parent();
+            while let Some(path) = folder.filter(|path| path.starts_with(&staging)) {
+                if !folders.insert(path.to_path_buf()) {
+                    break;
+                }
+                folder = path.parent();
+            }
         }
         // Finish decoding to verify the gzip checksum, with a bounded padding allowance.
         let mut decoded = archive.into_inner();
@@ -266,6 +315,11 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         {
             return Err(invalid("engine archive is incomplete"));
         }
+        // The new engine is on disk before it is renamed into place and the old one goes.
+        for folder in &folders {
+            update_storage::sync_dir(folder)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+        }
         if destination.exists() {
             update_storage::fault("backup-rename")?;
             fs::rename(destination, &backup)?;
@@ -278,9 +332,15 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             }
             return Err(error);
         }
+        // Both renames are durable before the old engine goes.
+        update_storage::sync_dir(parent).map_err(|error| io::Error::other(error.to_string()))?;
         update_storage::fault("backup-remove")?;
         if backup.exists() {
-            fs::remove_dir_all(&backup)?;
+            // Deleting is not atomic: under its own name a half-deleted engine is never
+            // mistaken for the engine that was moved aside.
+            fs::rename(&backup, &deleting)?;
+            update_storage::fault("backup-delete")?;
+            fs::remove_dir_all(&deleting)?;
         }
         Ok(())
     })();
@@ -370,6 +430,47 @@ mod tests {
         manifest
     }
 
+    /// A payload of several files, one of them in a folder.
+    fn payload_files(root: &Path, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let mut archive = tar::Builder::new(Vec::new());
+        for (name, content) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(name).unwrap();
+            header.set_mode(0o755);
+            header.set_size(content.len() as u64);
+            header.set_cksum();
+            archive.append(&header, *content).unwrap();
+        }
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::fast());
+        gzip.write_all(&archive.into_inner().unwrap()).unwrap();
+        let compressed = gzip.finish().unwrap();
+        let mut parts = Vec::new();
+        for (index, bytes) in compressed.chunks(29).enumerate() {
+            let filename = format!("cuda.part-{index:04}");
+            fs::write(root.join(&filename), bytes).unwrap();
+            let digest: String = Sha256::digest(bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            parts.push(
+                serde_json::json!({"filename": filename, "size": bytes.len(), "sha256": digest}),
+            );
+        }
+        let manifest = root.join("engine-payload.json");
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1, "format": "tar.gz.parts", "backend": "CUDA",
+                "file_count": files.len(),
+                "unpacked_bytes": files.iter().map(|(_, c)| c.len()).sum::<usize>(),
+                "parts": parts,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        manifest
+    }
+
     #[test]
     fn mutated_engine_parts_are_checked_as_they_are_extracted() {
         let root = tempfile::tempdir().unwrap();
@@ -443,7 +544,14 @@ mod tests {
         if !folder.exists() {
             return None;
         }
-        Some(fs::read(folder.join("localsr-worker.exe")).expect("engine without its worker"))
+        let worker =
+            fs::read(folder.join("localsr-worker.exe")).expect("engine without its worker");
+        // A whole new engine has all its files; the old one has only its worker.
+        if worker == b"exe" {
+            assert_eq!(fs::read(folder.join("lib/data.bin")).unwrap(), b"data");
+            assert_eq!(fs::read(folder.join("z.dll")).unwrap(), b"z");
+        }
+        Some(worker)
     }
 
     fn engine_leftovers(root: &Path) -> Vec<String> {
@@ -456,6 +564,18 @@ mod tests {
         names
     }
 
+    /// A payload of three files, the worker among them.
+    fn engine_payload(root: &Path) -> std::path::PathBuf {
+        payload_files(
+            root,
+            &[
+                ("lib/data.bin", b"data"),
+                ("localsr-worker.exe", b"exe"),
+                ("z.dll", b"z"),
+            ],
+        )
+    }
+
     // A failure or a crash at any step of the engine install never leaves a partial
     // engine, and the next install attempt restores or replaces the engine and clears
     // every staging and backup folder.
@@ -464,7 +584,7 @@ mod tests {
         use update_storage::fault::{self, Mode};
         for had_engine in [true, false] {
             let fresh = |root: &Path| {
-                let manifest = payload(root, false, false);
+                let manifest = engine_payload(root);
                 let destination = root.join("engine");
                 if had_engine {
                     fs::create_dir(&destination).unwrap();
@@ -485,22 +605,39 @@ mod tests {
             ] {
                 assert!(steps.contains(&expected), "{steps:?} lacks {expected}");
             }
+            // One extraction per archive entry: a crash after some files were unpacked.
+            assert_eq!(
+                steps.iter().filter(|s| **s == "extract-entry").count(),
+                3,
+                "{steps:?}"
+            );
             let installed_at = steps.iter().position(|s| *s == "install-rename").unwrap();
             for (index, step) in steps.iter().enumerate() {
                 for mode in [Mode::Fail, Mode::Crash] {
                     let why = format!("{step} #{index} {mode:?} had_engine={had_engine}");
                     let root = tempfile::tempdir().unwrap();
                     let (manifest, destination) = fresh(root.path());
-                    fault::arm(Some((step, mode)));
+                    fault::arm(Some((index, mode)));
                     let _ = fault::crashed(|| install(&manifest, root.path(), &destination));
                     fault::arm(None);
                     let new_in_place = index > installed_at;
-                    // Before any recovery: the engine is missing only while the old one
-                    // is moved aside, and is never partial.
+                    // Before any recovery: the engine is missing only for a first install
+                    // (nothing was there yet), or while the old one is moved aside, which
+                    // a crash can leave and a failure restores. It is never partial.
+                    let moved_aside = had_engine && mode == Mode::Crash && index == installed_at;
                     match engine_content(&destination) {
                         Some(content) if new_in_place => assert_eq!(content, b"exe", "{why}"),
                         Some(content) => assert_eq!(content, b"old", "{why}"),
-                        None => assert!(!new_in_place, "{why}"),
+                        None => assert!(moved_aside || (!had_engine && !new_in_place), "{why}"),
+                    }
+                    // Once the old engine is being deleted it no longer has the name that
+                    // recovery would restore.
+                    if step == &"backup-delete" {
+                        assert_eq!(
+                            engine_leftovers(root.path()),
+                            [format!("engine.deleting-{}", std::process::id())],
+                            "{why}"
+                        );
                     }
                     recover_install(&destination).unwrap();
                     let expected = if new_in_place {
@@ -517,6 +654,130 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A folder with the engine's worker in it, and optionally more.
+    fn engine_folder(path: &Path, worker: Option<&[u8]>, other: &[&str]) {
+        fs::create_dir(path).unwrap();
+        if let Some(content) = worker {
+            fs::write(path.join("localsr-worker.exe"), content).unwrap();
+        }
+        for name in other {
+            fs::write(path.join(name), b"x").unwrap();
+        }
+    }
+
+    // A backup that a killed removal left half deleted is never put in place of the
+    // engine, whichever of the leftovers the folder lists first.
+    #[test]
+    fn a_half_removed_backup_is_never_restored_over_a_whole_one() {
+        for (partial, whole) in [
+            ("engine.previous-1", "engine.previous-2"),
+            ("engine.previous-2", "engine.previous-1"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            engine_folder(&root.path().join(partial), None, &["data.bin"]);
+            engine_folder(&root.path().join(whole), Some(b"old"), &[]);
+            let destination = root.path().join("engine");
+            recover_install(&destination).unwrap();
+            assert_eq!(engine_content(&destination), Some(b"old".to_vec()));
+            assert_eq!(engine_leftovers(root.path()), Vec::<String>::new());
+        }
+    }
+
+    // Recovery clears only the folders an installation names (`engine.<kind>-<pid>`),
+    // never another entry that starts with the same words, and does not stop at a plain
+    // file or a link under one of those names.
+    #[cfg(unix)]
+    #[test]
+    fn recovery_removes_only_what_an_installation_leaves() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path();
+        let destination = parent.join("engine");
+        engine_folder(&destination, Some(b"old"), &[]);
+        // The user's.
+        engine_folder(&parent.join("engine.previous-backup"), Some(b"mine"), &[]);
+        fs::write(parent.join("engine.installing-notes.txt"), b"mine").unwrap();
+        fs::write(parent.join("engine.previous-7.zip"), b"mine").unwrap();
+        // Left by installations: a plain file, a link to a folder elsewhere, a folder.
+        fs::write(parent.join("engine.previous-7"), b"stale").unwrap();
+        let outside = parent.join("outside");
+        engine_folder(&outside, Some(b"outside"), &[]);
+        std::os::unix::fs::symlink(&outside, parent.join("engine.installing-9")).unwrap();
+        engine_folder(&parent.join("engine.installing-10"), None, &["half"]);
+        engine_folder(&parent.join("engine.deleting-11"), None, &["half"]);
+        recover_install(&destination).unwrap();
+        assert_eq!(
+            engine_leftovers(parent),
+            [
+                "engine.installing-notes.txt",
+                "engine.previous-7.zip",
+                "engine.previous-backup"
+            ]
+        );
+        assert_eq!(
+            fs::read(outside.join("localsr-worker.exe")).unwrap(),
+            b"outside"
+        );
+        assert_eq!(engine_content(&destination), Some(b"old".to_vec()));
+    }
+
+    // A killed installation between the two renames leaves no engine at its name. The
+    // next start of the application, not only the next installation, puts it back.
+    #[test]
+    fn the_next_start_restores_an_engine_that_a_killed_install_moved_aside() {
+        let root = tempfile::tempdir().unwrap();
+        engine_folder(&root.path().join("engine.previous-5"), Some(b"old"), &[]);
+        engine_folder(&root.path().join("engine.installing-5"), Some(b"exe"), &[]);
+        recover_beside(&root.path().join("localsr-next.exe"));
+        assert_eq!(
+            engine_content(&root.path().join("engine")),
+            Some(b"old".to_vec())
+        );
+        assert_eq!(engine_leftovers(root.path()), Vec::<String>::new());
+    }
+
+    // The unpacked files and the folders that hold them are durable before the swap
+    // renames them into place, and the renames are durable before the old engine is
+    // deleted: otherwise power loss could keep the renames and the deletion, but not the
+    // new files' content.
+    #[test]
+    fn the_new_engine_is_durable_before_the_old_one_is_deleted() {
+        use update_storage::fault;
+        let root = tempfile::tempdir().unwrap();
+        let manifest = engine_payload(root.path());
+        let destination = root.path().join("engine");
+        engine_folder(&destination, Some(b"old"), &[]);
+        fault::arm(None);
+        install(&manifest, root.path(), &destination).unwrap();
+        let steps = fault::seen();
+        let synced = fault::synced();
+        let renamed = steps.iter().position(|s| *s == "install-rename").unwrap();
+        let deleting = steps.iter().position(|s| *s == "backup-remove").unwrap();
+        let before_rename = |name: &str| {
+            synced
+                .iter()
+                .any(|(passed, path)| *passed <= renamed && path.ends_with(name))
+        };
+        for name in ["localsr-worker.exe", "lib/data.bin", "z.dll", "lib"] {
+            assert!(
+                before_rename(name),
+                "{name} not synced before the rename: {synced:?}"
+            );
+        }
+        assert!(
+            synced.iter().any(|(passed, path)| *passed <= renamed
+                && path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("engine.installing-"))),
+            "the staging folder was not synced: {synced:?}"
+        );
+        assert!(
+            synced.iter().any(|(passed, path)| *passed > renamed
+                && *passed <= deleting
+                && path == root.path()),
+            "the renames were not synced before the old engine was deleted: {synced:?}"
+        );
     }
 
     #[test]

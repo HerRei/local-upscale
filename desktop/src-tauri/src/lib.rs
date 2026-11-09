@@ -83,6 +83,10 @@ pub fn run() {
     if updates::recover_interrupted_update() {
         return;
     }
+    // And an engine installation that a crash killed between its two renames, beside it.
+    if let Ok(executable) = env::current_exe() {
+        engine_payload::recover_beside(&executable);
+    }
 
     let initial_intent = parsed.intent;
     let smoke_test = parsed.smoke_test;
