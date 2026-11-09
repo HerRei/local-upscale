@@ -68,6 +68,8 @@
     formatBytes,
     formatDuration,
     frameRateChange,
+    libraryModelsForTask,
+    modelsAvailableBeyondSelection,
     modelsForTask,
     moveFixStage,
     pendingDownloads,
@@ -3245,7 +3247,28 @@
                                 ? 'Change the restore model'
                                 : 'Change the upscaler'}
                           on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
-                        >{/if}
+                        >
+                        {@const compatibleModels =
+                          settings.task === 'edit'
+                            ? []
+                            : libraryModelsForTask(
+                                snapshot.catalog.models,
+                                settings.task,
+                                settings.content,
+                                stage.fix,
+                              )}
+                        {@const moreModelCount = modelsAvailableBeyondSelection(
+                          compatibleModels,
+                          stage.model?.model_id ?? '',
+                        )}
+                        {#if moreModelCount}<button
+                            class="link-button model-library-hint"
+                            type="button"
+                            on:click={() => openLibrary(changeSlot, stage.fix)}
+                            >{moreModelCount} more {moreModelCount === 1 ? 'model' : 'models'} in the
+                            library</button
+                          >{/if}
+                      {/if}
                       {#if stage.fix && imageFixes.length > 1}
                         {@const index = imageFixes.findIndex(
                           (selection) => selection.fix === stage.fix,

@@ -157,12 +157,18 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
         f"Current release: **v{current}**; release candidate: **v{new}**",
     )
     set_readme_notice(root, candidate_notice(current, new))
-    sub(
-        root,
-        "CHANGELOG.md",
-        r"\A# Changelog\n\n",
-        f"# Changelog\n\n## [{new}] - Unreleased\n\n{notes.strip()}\n\n",
-    )
+    changelog = root / "CHANGELOG.md"
+    heading = f"## [{new}] - Unreleased"
+    changelog_text = changelog.read_text(encoding="utf-8")
+    if heading in changelog_text:
+        replace(root, "CHANGELOG.md", f"{heading}\n\n", f"{heading}\n\n{notes.strip()}\n\n")
+    else:
+        sub(
+            root,
+            "CHANGELOG.md",
+            r"\A# Changelog\n\n",
+            f"# Changelog\n\n{heading}\n\n{notes.strip()}\n\n",
+        )
     (root / f"docs/releases/v{new}.md").write_text(
         f"# LocalSR v{new}\n\n"
         f"Release candidate, not published yet (prepared {today.isoformat()}).\n\n"

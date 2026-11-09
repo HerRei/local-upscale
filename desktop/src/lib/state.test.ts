@@ -11,6 +11,8 @@ import {
   formatDuration,
   frameRateChange,
   interpolationLabel,
+  libraryModelsForTask,
+  modelsAvailableBeyondSelection,
   modelsForTask,
   moveFixStage,
   pendingDownloads,
@@ -20,6 +22,36 @@ import {
 } from './state';
 
 describe('desktop state', () => {
+  it('filters library choices to the current task, content and fix', () => {
+    const snapshot = demoSnapshot();
+    const candidates = libraryModelsForTask(snapshot.catalog.models, 'upscale', 'illustration');
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(
+      candidates.every((model) => model.native_scale > 1 && !model.purposes.includes('face')),
+    ).toBe(true);
+    expect(
+      candidates.some(
+        (model) => model.purposes.includes('illustration') || model.purposes.includes('anime'),
+      ),
+    ).toBe(true);
+    expect(
+      libraryModelsForTask(snapshot.catalog.models, 'denoise', 'photo', 'blur').every(
+        (model) => model.native_scale === 1 && model.fixes?.includes('blur'),
+      ),
+    ).toBe(true);
+  });
+
+  it('counts compatible models that are not installed or are not the current selection', () => {
+    const models = demoSnapshot()
+      .catalog.models.slice(0, 3)
+      .map((model, index) => ({
+        ...model,
+        installed: index !== 0,
+      }));
+    expect(modelsAvailableBeyondSelection(models, models[1].model_id)).toBe(2);
+    expect(modelsAvailableBeyondSelection([], '')).toBe(0);
+  });
+
   it('compares the selected completed image while another batch item is running', () => {
     const snapshot = demoSnapshot();
     snapshot.media = ['first', 'second'].map((id, index) => ({
