@@ -404,7 +404,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         // The frontend reconstructs recipes without stages from their top-level fields.
         return Ok(());
     }
-    if recipe.stages.len() > 3
+    if recipe.stages.len() > 5
         || recipe.stages.iter().any(|stage| {
             stage.model_id.trim().is_empty()
                 || !matches!(
@@ -421,6 +421,19 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         ));
     }
 
+    // Recipes saved before 0.3.7 name no fix; newer ones name it on each restoration.
+    let mut fixes = HashSet::new();
+    if recipe.stages.iter().any(|stage| {
+        stage.fix.as_deref().is_some_and(|fix| {
+            !matches!(fix, "blur" | "jpeg" | "noise")
+                || !matches!(stage.kind.as_str(), "deblock" | "restore")
+                || !fixes.insert(fix)
+        })
+    }) {
+        return Err(AppError::Validation(
+            "recipe fix kinds must be known, unique and on restoration stages".into(),
+        ));
+    }
     let kinds: Vec<&str> = recipe
         .stages
         .iter()
@@ -431,15 +444,24 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
             let upscale = kinds.iter().position(|kind| *kind == "upscale");
             upscale.is_some_and(|index| {
                 kinds.iter().filter(|kind| **kind == "upscale").count() == 1
-                    && index <= 1
-                    && (index == 0 || matches!(kinds[0], "deblock" | "restore"))
+                    && index <= 3
+                    && kinds[..index]
+                        .iter()
+                        .all(|kind| matches!(*kind, "deblock" | "restore"))
                     && kinds[index + 1..]
                         .iter()
                         .all(|kind| *kind == "face_restore")
                     && kinds[index + 1..].len() <= 1
             })
         }
-        "denoise" => kinds.as_slice() == ["restore"],
+        // Up to three fixes, then the Restore model itself, which is always a restore stage.
+        "denoise" => kinds.split_last().is_some_and(|(last, before)| {
+            *last == "restore"
+                && before.len() <= 3
+                && before
+                    .iter()
+                    .all(|kind| matches!(*kind, "restore" | "deblock"))
+        }),
         "video" => {
             matches!(kinds.as_slice(), ["video"] | ["video", "face_restore"])
         }
@@ -492,6 +514,7 @@ pub fn start_jobs(
         return Err(AppError::Validation("An update is being installed".into()));
     }
     validate_start_input(&input, external_codecs_available(&state))?;
+    validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
 
     // Do not hash the complete model library on the UI command path. A
     // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
@@ -1503,6 +1526,7 @@ fn clear_completed_result(state: &AppState) -> AppResult<()> {
 }
 
 fn validate_settings(settings: &UiSettings) -> AppResult<()> {
+    validate_fix_selections(&settings.fix_stages)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
         return Err(AppError::Validation(
             "interface scale must be 100, 110, or 125 percent".into(),
@@ -1587,6 +1611,43 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     Ok(())
 }
 
+/// Engines before 0.3.7 run at most one fix; a longer plan would only fail in the worker
+/// after it was queued.
+fn validate_fix_engine(
+    input: &StartBatchInput,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if input.fix_stages.len() > 1
+        && !engine.is_some_and(|engine| {
+            engine
+                .features
+                .iter()
+                .any(|feature| feature == "image_multi_fix")
+        })
+    {
+        return Err(AppError::Validation(
+            "This engine runs one fix at a time. Update LocalSR to run several.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppResult<()> {
+    let mut fixes = HashSet::new();
+    if stages.len() > 3
+        || stages.iter().any(|stage| {
+            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise")
+                || !fixes.insert(&stage.fix)
+                || stage.model_id.len() > 64
+        })
+    {
+        return Err(AppError::Validation(
+            "choose up to three different fixes: blur, JPEG or noise".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppResult<()> {
     let settings = UiSettings {
         interface_scale: 100,
@@ -1594,7 +1655,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         task: input.task.clone(),
         selected_model_id: input.model_id.clone(),
         selected_video_model_id: input.video_model_id.clone(),
-        preprocess_model_id: input.preprocess_model_id.clone(),
+        fix_stages: input.fix_stages.clone(),
         custom_model_path: input.custom_model_path.clone(),
         output_scale: input.output_scale,
         output_directory: input.output_directory.clone(),
@@ -1643,7 +1704,7 @@ enum ModelSelection {
     Image {
         model_id: String,
         path: String,
-        preprocess: Option<ResolvedImageStage>,
+        preprocess: Vec<ResolvedImageStage>,
         face_path: Option<String>,
         face_model_id: String,
         native_scale: u32,
@@ -1660,11 +1721,18 @@ enum ModelSelection {
 #[derive(Clone)]
 struct ResolvedImageStage {
     kind: &'static str,
+    fix: String,
     model_id: String,
     path: String,
 }
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
+    validate_fix_selections(&input.fix_stages)?;
+    if !input.fix_stages.is_empty() && !matches!(input.task.as_str(), "upscale" | "denoise") {
+        return Err(AppError::Validation(
+            "fixes run only before an image upscale or restore".into(),
+        ));
+    }
     let catalog = lock(&state.catalog)?;
     if input.task == "video" && input.video_model_id != "frame_by_frame" {
         let model = catalog
@@ -1758,39 +1826,53 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
     } else {
         None
     };
-    let preprocess = if input.preprocess_model_id.is_empty() {
-        None
-    } else {
-        if input.task != "upscale" {
-            return Err(AppError::Validation(
-                "pre-processing can only be chained before an image upscale".into(),
-            ));
-        }
+    let mut preprocess = Vec::with_capacity(input.fix_stages.len());
+    for selection in &input.fix_stages {
         let model = catalog
             .models
             .iter()
-            .find(|model| model.model_id == input.preprocess_model_id)
-            .ok_or_else(|| AppError::Validation("unknown pre-processing model".into()))?;
-        if model.native_scale != 1 || model.purposes.iter().any(|purpose| purpose == "face") {
+            .find(|model| model.model_id == selection.model_id)
+            .ok_or_else(|| {
+                AppError::Validation(format!("choose a model for the {} fix", selection.fix))
+            })?;
+        if model.native_scale != 1
+            || model.purposes.iter().any(|purpose| purpose == "face")
+            || !model.fixes.contains(&selection.fix)
+        {
+            return Err(AppError::Validation(format!(
+                "the {} fix must use a 1× restoration model that fixes it",
+                selection.fix
+            )));
+        }
+        if !model.installed || model.installed_path.as_deref().is_none_or(str::is_empty) {
             return Err(AppError::Validation(
-                "the pre-processing stage must use a 1× restoration model".into(),
+                "download and verify every selected fix model first".into(),
             ));
         }
-        if !model.installed {
-            return Err(AppError::Validation(
-                "download and verify the selected pre-processing model first".into(),
-            ));
-        }
-        Some(ResolvedImageStage {
-            kind: if model.model_id == "fbcnn_color" {
+        preprocess.push(ResolvedImageStage {
+            // As the plan card names it (state.ts resolvePlan).
+            kind: if model.stage == "deblock" || selection.fix == "jpeg" {
                 "deblock"
             } else {
                 "restore"
             },
+            fix: selection.fix.clone(),
             model_id: model.model_id.clone(),
             path: model.installed_path.clone().unwrap_or_default(),
-        })
-    };
+        });
+    }
+    if input.task == "denoise" && !preprocess.is_empty() {
+        if preprocess
+            .last()
+            .is_none_or(|stage| stage.model_id != input.model_id)
+        {
+            // Restore's model is its last fix; the fixes before it run first.
+            return Err(AppError::Validation(
+                "Restore must use the last fix as its model.".into(),
+            ));
+        }
+        preprocess.pop();
+    }
     Ok(ModelSelection::Image {
         model_id: input.model_id.clone(),
         path,
@@ -1863,13 +1945,12 @@ fn build_job_message(
                 "face_model_path": face_path,
                 "face_fidelity": f64::from(input.face_fidelity) / 100.0,
                 "stages": image_pipeline_stages(
-                    preprocess.as_ref(),
+                    preprocess,
                     model_id,
                     path,
                     face_path.as_deref(),
                     face_model_id,
-                    input.face_fidelity,
-                    &input.task,
+                    input,
                 ),
                 "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
             }
@@ -1973,24 +2054,27 @@ fn build_job_message(
 }
 
 fn image_pipeline_stages(
-    preprocess: Option<&ResolvedImageStage>,
+    preprocess: &[ResolvedImageStage],
     model_id: &str,
     model_path: &str,
     face_path: Option<&str>,
     face_model_id: &str,
-    face_fidelity: u32,
-    task: &str,
+    input: &StartBatchInput,
 ) -> Vec<Value> {
-    let mut stages = Vec::with_capacity(3);
-    if let Some(stage) = preprocess {
+    let mut stages = Vec::with_capacity(5);
+    for stage in preprocess {
         stages.push(json!({
             "kind": stage.kind,
+            "role": "fix",
+            "fix": stage.fix,
             "model_id": stage.model_id,
             "model_path": stage.path,
         }));
     }
     stages.push(json!({
-        "kind": if task == "denoise" { "restore" } else { "upscale" },
+        "kind": if input.task == "denoise" { "restore" } else { "upscale" },
+        "role": "primary",
+        "fix": if input.task == "denoise" { input.fix_stages.last().map(|stage| stage.fix.as_str()) } else { None },
         "model_id": model_id,
         "model_path": model_path,
     }));
@@ -1999,7 +2083,7 @@ fn image_pipeline_stages(
             "kind": "face_restore",
             "model_id": face_model_id,
             "model_path": path,
-            "fidelity": f64::from(face_fidelity) / 100.0,
+            "fidelity": f64::from(input.face_fidelity) / 100.0,
             "execution": "fused-with-upscale",
         }));
     }
@@ -2198,6 +2282,215 @@ mod tests {
     use crate::types::RecipeStage;
 
     #[test]
+    fn multi_fix_requires_a_capable_engine_before_queueing() {
+        let mut options = input("upscale");
+        options.fix_stages = serde_json::from_value(json!([
+            {"fix":"blur","model_id":"blur"}, {"fix":"noise","model_id":"noise"}
+        ]))
+        .unwrap();
+        let mut engine: crate::types::EngineInfo = serde_json::from_value(json!({
+            "protocol_version":1,"minimum_protocol_version":1,"engine_id":"test","engine_version":"test",
+            "features":["image"],"model_formats":[],"video_engines":[]
+        })).unwrap();
+        assert!(validate_fix_engine(&options, Some(&engine)).is_err());
+        engine.features.push("image_multi_fix".into());
+        assert!(validate_fix_engine(&options, Some(&engine)).is_ok());
+    }
+
+    #[test]
+    fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
+        let prefix: Vec<_> = [
+            ("blur", "restore"),
+            ("jpeg", "deblock"),
+            ("noise", "restore"),
+        ]
+        .iter()
+        .map(|(fix, kind)| ResolvedImageStage {
+            kind,
+            fix: (*fix).into(),
+            model_id: (*fix).into(),
+            path: format!("/models/{fix}"),
+        })
+        .collect();
+        let mut options = input("upscale");
+        let stages = image_pipeline_stages(
+            &prefix,
+            "main",
+            "/models/main",
+            Some("/models/face"),
+            "face",
+            &options,
+        );
+        assert_eq!(stages.len(), 5);
+        assert_eq!(
+            stages
+                .iter()
+                .map(|stage| stage["model_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["blur", "jpeg", "noise", "main", "face"]
+        );
+        assert_eq!(stages[3]["role"], "primary");
+        options.task = "denoise".into();
+        options.fix_stages =
+            serde_json::from_value(json!([{"fix":"noise","model_id":"noise"}])).unwrap();
+        let stages =
+            image_pipeline_stages(&prefix[..2], "noise", "/models/noise", None, "", &options);
+        assert_eq!(stages.len(), 3);
+        assert_eq!(stages[2]["role"], "primary");
+        assert_eq!(stages[2]["fix"], "noise");
+    }
+
+    #[test]
+    fn multi_fix_host_resolves_every_catalog_stage_and_rejects_invalid_choices() {
+        use crate::types::FixStageSelection;
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::create_dir_all(&paths.model_root).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        {
+            let mut catalog = lock(&state.catalog).unwrap();
+            for model in &mut catalog.models {
+                model.installed = true;
+                model.installed_path = Some(format!("/models/{}", model.filename));
+            }
+        }
+        let mut options = input("upscale");
+        options.model_id = "hat_s_x4".into();
+        options.fix_stages = [
+            ("blur", "nafnet_gopro_deblur"),
+            ("jpeg", "fbcnn_color"),
+            ("noise", "scunet_color_real_psnr"),
+        ]
+        .iter()
+        .map(|(fix, id)| FixStageSelection {
+            fix: (*fix).into(),
+            model_id: (*id).into(),
+        })
+        .collect();
+        match resolve_model_selection(&state, &options).unwrap() {
+            ModelSelection::Image { preprocess, .. } => {
+                assert_eq!(
+                    preprocess
+                        .iter()
+                        .map(|stage| stage.model_id.as_str())
+                        .collect::<Vec<_>>(),
+                    [
+                        "nafnet_gopro_deblur",
+                        "fbcnn_color",
+                        "scunet_color_real_psnr"
+                    ]
+                );
+                assert_eq!(preprocess[1].kind, "deblock");
+                assert!(preprocess
+                    .iter()
+                    .all(|stage| stage.path.starts_with("/models/")));
+            }
+            _ => panic!("expected image plan"),
+        }
+        let valid = options.fix_stages.clone();
+        for id in ["unknown", "hat_s_x4", "hat_s_x4_face", "fbcnn_color"] {
+            options.fix_stages[0].model_id = id.into();
+            assert!(
+                resolve_model_selection(&state, &options).is_err(),
+                "accepted {id} as blur"
+            );
+        }
+        options.fix_stages = valid.clone();
+        options.fix_stages[1].fix = "blur".into();
+        assert!(resolve_model_selection(&state, &options).is_err());
+        options.fix_stages = valid.clone();
+        lock(&state.catalog)
+            .unwrap()
+            .models
+            .iter_mut()
+            .find(|m| m.model_id == "fbcnn_color")
+            .unwrap()
+            .installed = false;
+        assert!(resolve_model_selection(&state, &options).is_err());
+        lock(&state.catalog)
+            .unwrap()
+            .models
+            .iter_mut()
+            .find(|m| m.model_id == "fbcnn_color")
+            .unwrap()
+            .installed = true;
+        options.task = "denoise".into();
+        options.model_id = "scunet_color_real_psnr".into();
+        match resolve_model_selection(&state, &options).unwrap() {
+            ModelSelection::Image { preprocess, .. } => assert_eq!(preprocess.len(), 2),
+            _ => panic!("expected restore plan"),
+        }
+        options.model_id = "fbcnn_color".into();
+        assert!(
+            resolve_model_selection(&state, &options).is_err(),
+            "Restore primary must be the final fix"
+        );
+        options.task = "video".into();
+        for engine in ["frame_by_frame", "seedvr2_3b"] {
+            options.video_model_id = engine.into();
+            assert!(resolve_model_selection(&state, &options).is_err());
+        }
+    }
+
+    #[test]
+    fn multi_fix_recipe_validation_accepts_bounded_orders_for_both_image_tasks() {
+        let base = serde_json::json!({"id":"r", "name":"r", "task":"upscale", "model_id":"main", "output_scale":4, "tile_size":128, "halo":16, "precision":"fp32", "safe_memory":true});
+        let mut recipe: Recipe = serde_json::from_value(base).unwrap();
+        for task in ["upscale", "denoise"] {
+            recipe.task = task.into();
+            recipe.stages = serde_json::from_value(serde_json::json!([
+                {"kind":"restore","model_id":"blur","fix":"blur"},
+                {"kind":"deblock","model_id":"jpeg","fix":"jpeg"},
+                {"kind":"restore","model_id":"noise","fix":"noise"}
+            ]))
+            .unwrap();
+            if task == "upscale" {
+                recipe.stages.extend(serde_json::from_value::<Vec<RecipeStage>>(serde_json::json!([
+                    {"kind":"upscale","model_id":"main"}, {"kind":"face_restore","model_id":"face"}
+                ])).unwrap());
+            }
+            assert!(validate_recipe_stages(&recipe).is_ok());
+            let good = recipe.stages.clone();
+            recipe.stages.insert(0, good[0].clone());
+            assert!(validate_recipe_stages(&recipe).is_err());
+            recipe.stages = good;
+            recipe.stages.swap(0, 2);
+            assert!(validate_recipe_stages(&recipe).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_restore_recipe_ends_with_its_restore_model_and_only_restorations_name_a_fix() {
+        let base = serde_json::json!({"id":"r", "name":"r", "task":"denoise", "model_id":"main", "output_scale":1, "tile_size":128, "halo":16, "precision":"fp32", "safe_memory":true});
+        let mut recipe: Recipe = serde_json::from_value(base).unwrap();
+        let stages = |value: Value| serde_json::from_value::<Vec<RecipeStage>>(value).unwrap();
+        // A 0.3.5 Restore recipe: one restore stage, no fix named.
+        recipe.stages = stages(json!([{"kind":"restore","model_id":"main"}]));
+        assert!(validate_recipe_stages(&recipe).is_ok());
+        // The host sends Restore's model as a restore stage, never as a deblock.
+        recipe.stages = stages(json!([{"kind":"deblock","model_id":"jpeg","fix":"jpeg"}]));
+        assert!(validate_recipe_stages(&recipe).is_err());
+        recipe.stages = stages(json!([
+            {"kind":"restore","model_id":"a"}, {"kind":"restore","model_id":"b"},
+            {"kind":"restore","model_id":"c"}, {"kind":"restore","model_id":"d"},
+            {"kind":"restore","model_id":"e"}
+        ]));
+        assert!(validate_recipe_stages(&recipe).is_err());
+        recipe.task = "upscale".into();
+        for invalid in [
+            json!([{"kind":"upscale","model_id":"main","fix":"noise"}]),
+            json!([
+                {"kind":"upscale","model_id":"main"},
+                {"kind":"face_restore","model_id":"face","fix":"blur"}
+            ]),
+        ] {
+            recipe.stages = stages(invalid);
+            assert!(validate_recipe_stages(&recipe).is_err());
+        }
+    }
+
+    #[test]
     fn an_update_switch_is_written_at_once_and_rolled_back_when_writing_fails() {
         let directory = tempfile::tempdir().unwrap();
         let paths = crate::paths::AppPaths::under(directory.path());
@@ -2354,7 +2647,7 @@ mod tests {
             task: task.into(),
             model_id: "model".into(),
             video_model_id: "frame_by_frame".into(),
-            preprocess_model_id: String::new(),
+            fix_stages: Vec::new(),
             custom_model_path: String::new(),
             output_directory: String::new(),
             output_format: "png".into(),
@@ -2535,7 +2828,7 @@ mod tests {
         let selection = ModelSelection::Image {
             model_id: "model".into(),
             path: "/models/upscaler.safetensors".into(),
-            preprocess: None,
+            preprocess: Vec::new(),
             face_path: None,
             face_model_id: String::new(),
             native_scale: 4,
@@ -2690,11 +2983,12 @@ mod tests {
         let selection = ModelSelection::Image {
             model_id: "upscale".into(),
             path: "/models/upscale.pth".into(),
-            preprocess: Some(ResolvedImageStage {
+            preprocess: vec![ResolvedImageStage {
                 kind: "deblock",
+                fix: "jpeg".into(),
                 model_id: "fbcnn_color".into(),
                 path: "/models/fbcnn.pth".into(),
-            }),
+            }],
             face_path: Some("/models/face.pth".into()),
             face_model_id: "hat_l_x4_face".into(),
             native_scale: 4,
@@ -2824,11 +3118,13 @@ mod tests {
                 kind: "upscale".into(),
                 model_id: "first".into(),
                 fidelity: None,
+                fix: None,
             },
             RecipeStage {
                 kind: "upscale".into(),
                 model_id: "second".into(),
                 fidelity: None,
+                fix: None,
             },
         ];
         assert!(validate_recipe_stages(&invalid).is_err());
