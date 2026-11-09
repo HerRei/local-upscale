@@ -12,7 +12,7 @@ loading. Restoration weights are not included in installers.
 | HAT-S | 4× | General photo upscaling | 81.1 MB | Apache-2.0 |
 | HAT-L ImageNet | 4× | Larger general photo model | 165.8 MB | Apache-2.0 |
 | RealPLKSR NomosWebPhoto | 4× | Degraded web photos | 29.7 MB | CC BY 4.0 |
-| RealPLKSR HFA2k | 4× | Anime and line art · Labs | 29.7 MB | CC BY 4.0 |
+| RealPLKSR HFA2k | 4× | Anime video frames · Labs | 29.7 MB | CC BY 4.0 |
 | Real-ESRGAN x2plus | 2× | Native 2× upscaling | 67.1 MB | BSD-3-Clause |
 | RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC BY 4.0 |
 | NAFNet SIDD | 1× | Camera-noise removal | 464.2 MB | MIT |
@@ -31,7 +31,11 @@ The native scale is the model's trained output scale. A smaller requested output
 can be resampled after inference. A 1× restoration model cleans an image without
 enlarging it and can run before an upscaler.
 
-**Quick** selects SPAN NomosUni; **Best** selects RealPLKSR NomosWebPhoto. HAT-S is
+For photos and illustrations, **Quick** selects SPAN NomosUni; **Best** selects
+RealPLKSR NomosWebPhoto. On tested manga and colour illustrations these general
+models retained fine tones better than the anime-specific models tested. HFA2k
+remains available in Labs, but can soften fine lines and screentones, darken
+white paper, and reduce colour saturation. HAT-S is
 the smaller stock HAT option. No preset picks the two DAT2 models on its own: on an M1
 Pro they take about ten times as long as Best (around 73 seconds per input megapixel;
 on a CPU the gap is smaller), so choose them in the library, or pin one to Best, for

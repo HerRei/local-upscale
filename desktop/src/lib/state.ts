@@ -408,8 +408,7 @@ export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): Catal
  * The checkpoint Quick or Best resolves to for a task and content type.
  *
  * A pin for the slot wins when it names a compatible model. Otherwise models
- * that match the content exactly rank above general ones, rights must allow a
- * preset, and the Quick/Best ordering mirrors `presets.py`. For the Restore
+ * must allow a preset, and the Quick/Best ordering mirrors `presets.py`. For the Restore
  * task the fix chip decides the model instead (see `chooseFixModel`); here it
  * falls back to the first eligible 1× model so a plan always exists.
  */
@@ -429,6 +428,11 @@ export function choosePresetModel(
     (model) => presetMayPick(model) && (task === 'denoise' || contentMatch(model, content) > 0),
   );
   if (task === 'denoise') return rankForQuality(eligible, quality)[0];
+  if (content === 'illustration') {
+    const preferred = quality === 'quick' ? 'span_photo_x4' : 'realplksr_nomoswebphoto_x4';
+    const measured = eligible.find((model) => model.model_id === preferred);
+    if (measured) return measured;
+  }
   const ranked = rankForQuality(eligible, quality);
   return ranked.sort(
     (left, right) => contentMatch(right, content) - contentMatch(left, content),

@@ -1,4 +1,6 @@
+import io
 import os
+import struct
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -281,3 +283,165 @@ def test_open_photo_develops_camera_raw_for_editing(tmp_path, monkeypatch):
     )
     with open_photo(path) as image:
         assert image.size == (6, 4) and image.mode == "RGB"
+
+
+def _grey_profile(gamma: float) -> bytes:
+    """A minimal ICC v2 grey display profile with a gamma tone curve."""
+
+    def s15(value):
+        return struct.pack(">i", round(value * 65536))
+
+    white = s15(0.9642) + s15(1.0) + s15(0.8249)
+    name = b"Test grey\0"
+    tags = [
+        (b"desc", b"desc\0\0\0\0" + struct.pack(">I", len(name)) + name + b"\0" * 78),
+        (b"wtpt", b"XYZ \0\0\0\0" + white),
+        (b"kTRC", b"curv\0\0\0\0" + struct.pack(">IH", 1, round(gamma * 256)) + b"\0\0"),
+        (b"cprt", b"text\0\0\0\0none\0\0\0\0"),
+    ]
+    offset = 128 + 4 + 12 * len(tags)
+    table, body = struct.pack(">I", len(tags)), b""
+    for signature, data in tags:
+        data += b"\0" * (-len(data) % 4)
+        table += signature + struct.pack(">II", offset + len(body), len(data))
+        body += data
+    header = struct.pack(">I", offset + len(body)) + b"lcms" + bytes([2, 0x10, 0, 0])
+    header += b"mntrGRAYXYZ " + struct.pack(">6H", 2026, 11, 9, 0, 0, 0) + b"acspAPPL"
+    header += b"\0" * 24 + white + b"lcms" + b"\0" * 44
+    return header + table + body
+
+
+def test_sixteen_bit_grey_scans_keep_their_grey_levels(tmp_path):
+    # Scanners write 16-bit grey PNG and TIFF. Pillow clips those to 8 bits instead of
+    # scaling them, which turned every grey above 0.4 % into white (issue #97).
+    levels = np.tile(np.arange(256, dtype=np.uint16), (4, 1))
+    for name, array in (
+        ("scan.png", levels * 257),
+        ("scan.tif", levels * 257),
+        ("scan-int32.tif", (levels * 257).astype(np.int32)),
+    ):
+        path = tmp_path / name
+        Image.fromarray(array).save(path)
+        data = ImageManager().load(str(path))
+        pixels = data["tensor"].mul(255).round().numpy()
+        assert np.abs(pixels - levels).max() <= 1, name
+        assert (pixels[0] == pixels[1]).all() and (pixels[1] == pixels[2]).all(), name
+
+
+def test_a_grey_colour_profile_is_applied_and_the_output_tagged(tmp_path):
+    # A grey ICC profile (Photoshop's Gray Gamma and Dot Gain profiles are common on manga
+    # scans) used to fail the conversion, so its tone curve was ignored and the output
+    # carried no profile: mid-tones shifted against the source in colour-managed apps.
+    path = tmp_path / "linear-grey.png"
+    Image.new("L", (8, 8), 128).save(path, icc_profile=_grey_profile(1.0))
+    data = ImageManager().load(str(path))
+
+    assert data["has_invalid_icc"] is False
+    output_profile = ImageCms.ImageCmsProfile(io.BytesIO(data["icc_profile"]))
+    assert "sRGB" in ImageCms.getProfileDescription(output_profile)
+    # Linear 50 % grey is about 188 in sRGB.
+    assert abs(float(data["tensor"].mean()) * 255 - 188) < 3
+
+
+def test_a_grey_profile_keeps_transparency(tmp_path):
+    path = tmp_path / "grey-alpha.png"
+    image = Image.merge("LA", (Image.new("L", (8, 8), 128), Image.new("L", (8, 8), 77)))
+    image.save(path, icc_profile=_grey_profile(1.0))
+    data = ImageManager().load(str(path))
+
+    assert data["has_invalid_icc"] is False
+    assert data["alpha_image"].getextrema() == (77, 77)
+    assert abs(float(data["tensor"].mean()) * 255 - 188) < 3
+
+
+def _tinted(height, width):
+    """A model output whose colour channels drift apart around a grey level."""
+    output = np.full((3, height, width), 120, dtype=np.uint8)
+    output[0] += 9
+    output[2] -= 7
+    return output
+
+
+def _grey_palette_image():
+    image = Image.new("P", (4, 3), 90)
+    image.putpalette([value for level in range(256) for value in (level, level, level)])
+    return image
+
+
+@pytest.mark.parametrize(
+    "make_source",
+    [
+        lambda: Image.new("L", (4, 3), 90),
+        lambda: Image.new("RGB", (4, 3), (90, 90, 90)),
+        lambda: Image.new("1", (4, 3), 1),
+        _grey_palette_image,
+        lambda: Image.merge("LA", (Image.new("L", (4, 3), 90), Image.new("L", (4, 3), 200))),
+    ],
+    ids=["L", "grey-RGB", "1-bit", "grey-palette", "LA"],
+)
+def test_a_grey_source_is_saved_without_the_colour_a_model_adds(tmp_path, make_source):
+    # Grey pages carry no colour, so any chroma in the output is the model's invention
+    # (HFA2k tints manga pages, issue #97). The saved file keeps the luma only.
+    source = make_source()
+    path = tmp_path / "page.png"
+    source.save(path)
+    manager = ImageManager()
+    data = manager.load(str(path))
+    assert data["grayscale"] is True
+
+    output = tmp_path / "out.png"
+    manager.save_from_writer(_tinted(12, 16), str(output), "png", 98, False, None, {}, 4)
+    with Image.open(output) as saved:
+        red, green, blue = (np.asarray(band) for band in saved.convert("RGB").split())
+        assert (red == green).all() and (green == blue).all()
+        # Rec. 601 luma of (129, 120, 113), as Pillow's convert("L") rounds it.
+        assert int(green[0, 0]) == 122
+        assert saved.mode == ("RGBA" if source.mode == "LA" else "RGB")
+
+
+def test_a_colour_source_keeps_the_model_colour(tmp_path):
+    path = tmp_path / "photo.png"
+    Image.new("RGB", (4, 3), (90, 91, 90)).save(path)
+    manager = ImageManager()
+    assert manager.load(str(path))["grayscale"] is False
+
+    output = tmp_path / "out.png"
+    manager.save_from_writer(_tinted(12, 16), str(output), "png", 98, False, None, {}, 4)
+    with Image.open(output) as saved:
+        assert saved.getpixel((0, 0)) == (129, 120, 113)
+
+
+def test_twelve_bit_tiff_uses_declared_sample_depth(tmp_path):
+    # Two packed 12-bit samples, 2048 and 4095, in a baseline grayscale TIFF.
+    entries = [
+        (256, 4, 1, 2),
+        (257, 4, 1, 1),
+        (258, 3, 1, 12),
+        (259, 3, 1, 1),
+        (262, 3, 1, 1),
+        (273, 4, 1, 122),
+        (277, 3, 1, 1),
+        (278, 4, 1, 1),
+        (279, 4, 1, 3),
+    ]
+    path = tmp_path / "12bit.tif"
+    path.write_bytes(
+        b"II"
+        + struct.pack("<HIH", 42, 8, len(entries))
+        + b"".join(struct.pack("<HHII", *entry) for entry in entries)
+        + struct.pack("<I", 0)
+        + bytes([0x80, 0x0F, 0xFF])
+    )
+    pixels = ImageManager().load(str(path))["tensor"][0, 0].mul(255).round().tolist()
+    assert pixels == [128, 255]
+
+
+def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
+    path = tmp_path / "linear16.png"
+    Image.fromarray(np.array([[0, 128, 256]], dtype=np.uint16)).save(
+        path, icc_profile=_grey_profile(1.0)
+    )
+    data = ImageManager().load(str(path))
+    assert not data["has_invalid_icc"]
+    pixels = data["tensor"][0, 0].mul(255).round().tolist()
+    assert pixels[0] == 0 and pixels[1] >= 2 and pixels[2] > pixels[1]
