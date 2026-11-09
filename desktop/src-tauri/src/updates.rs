@@ -138,17 +138,40 @@ pub struct ReleaseContract {
     /// signed parts that join to the signed package; empty for a single file.
     #[serde(default)]
     pub parts: Vec<DownloadFile>,
-    /// The release statement (base64 JSON) and its signature. Only these, not the feed,
-    /// vouch for the version, channel, edition, protocol, engine id and digests.
+    /// The release statement, format 2 (base64 JSON), and its signature. Only these, not
+    /// the feed, vouch for the version, channel, edition, protocol, engine id, sizes,
+    /// digests and the names of every file. A feed also carries `statement` (format 1)
+    /// for clients before 0.3.8; this client ignores it and refuses an entry without
+    /// format 2 (docs/updates.md).
     #[serde(default)]
-    pub statement: String,
+    pub statement_v2: String,
     #[serde(default)]
-    pub statement_signature: String,
+    pub statement_v2_signature: String,
     #[serde(default)]
     pub engine: Option<EngineUpdate>,
 }
 
-/// What the Mac signs for each feed entry (scripts/beta_update_signing.py).
+/// Name, size and digest of a file, as the signed statement lists it.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct StatedFile {
+    name: String,
+    size: u64,
+    sha256: String,
+}
+impl From<&DownloadFile> for StatedFile {
+    fn from(file: &DownloadFile) -> Self {
+        Self {
+            name: file.name.clone(),
+            size: file.size,
+            sha256: file.sha256.clone(),
+        }
+    }
+}
+
+/// What the Mac signs for each feed entry, format 2 (scripts/beta_update_signing.py,
+/// release_statement_v2). Every field is required: a statement that lacks one is not
+/// format 2, and the client refuses the release.
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct ReleaseStatement {
@@ -160,9 +183,12 @@ struct ReleaseStatement {
     kind: String,
     protocol: u32,
     engine_id: String,
-    sha256: String,
-    engine_manifest_sha256: Option<String>,
+    size: u64,
     unpacked_size: u64,
+    sha256: String,
+    parts: Vec<StatedFile>,
+    engine_manifest: Option<StatedFile>,
+    engine_parts: Vec<StatedFile>,
 }
 #[derive(Clone, Default, Serialize)]
 pub struct UpdateStatus {
@@ -321,14 +347,14 @@ fn verify_statement(
 ) -> AppResult<()> {
     let unsigned = || invalid("This release has no valid signed release statement");
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&contract.statement)
+        .decode(&contract.statement_v2)
         .map_err(|_| unsigned())?;
     key(&config.public_key)?
-        .verify(&bytes, &signature(&contract.statement_signature)?, false)
+        .verify(&bytes, &signature(&contract.statement_v2_signature)?, false)
         .map_err(|_| unsigned())?;
     let statement: ReleaseStatement = serde_json::from_slice(&bytes).map_err(|_| unsigned())?;
     let expected = ReleaseStatement {
-        schema_version: 1,
+        schema_version: 2,
         version: version.into(),
         channel: channel.into(),
         target: target.into(),
@@ -336,9 +362,15 @@ fn verify_statement(
         kind: config.kind.clone(),
         protocol: PROTOCOL_VERSION,
         engine_id: contract.engine_id.clone(),
+        size: contract.size,
         unpacked_size: contract.unpacked_size,
         sha256: contract.sha256.clone(),
-        engine_manifest_sha256: contract.engine.as_ref().map(|e| e.manifest.sha256.clone()),
+        parts: contract.parts.iter().map(StatedFile::from).collect(),
+        engine_manifest: contract.engine.as_ref().map(|e| (&e.manifest).into()),
+        engine_parts: contract
+            .engine
+            .as_ref()
+            .map_or_else(Vec::new, |e| e.parts.iter().map(StatedFile::from).collect()),
     };
     if statement != expected {
         return Err(invalid(
@@ -1788,8 +1820,8 @@ mod tests {
             unpacked_size: 1024,
             sha256: file.sha256,
             parts: Vec::new(),
-            statement: String::new(),
-            statement_signature: String::new(),
+            statement_v2: String::new(),
+            statement_v2_signature: String::new(),
             engine: None,
         };
         validate_contract(&config, "beta", "0.0.13-beta.1", &contract).unwrap();
@@ -1952,8 +1984,8 @@ mod tests {
                 part("a.AppImage.part-0001", 2 * gib - 1),
                 part("a.AppImage.part-0002", gib + 1),
             ],
-            statement: String::new(),
-            statement_signature: String::new(),
+            statement_v2: String::new(),
+            statement_v2_signature: String::new(),
             engine: None,
         };
         validate_contract(&config, "beta", "0.3.7-beta", &contract).unwrap();
@@ -2644,8 +2676,8 @@ mod tests {
             unpacked_size: 1024,
             sha256: value["package"]["sha256"].as_str().unwrap().into(),
             parts: Vec::new(),
-            statement: value["statement"].as_str().unwrap().into(),
-            statement_signature: value["statement_signature"].as_str().unwrap().into(),
+            statement_v2: value["statement_v2"].as_str().unwrap().into(),
+            statement_v2_signature: value["statement_v2_signature"].as_str().unwrap().into(),
             engine: Some(engine),
         };
         (config, contract)
@@ -2757,16 +2789,16 @@ mod tests {
         let mut forged = contract.clone();
         let text = String::from_utf8(
             base64::engine::general_purpose::STANDARD
-                .decode(&contract.statement)
+                .decode(&contract.statement_v2)
                 .unwrap(),
         )
         .unwrap()
         .replace("0.3.7-beta", "0.3.9-beta");
-        forged.statement = base64::engine::general_purpose::STANDARD.encode(text);
+        forged.statement_v2 = base64::engine::general_purpose::STANDARD.encode(text);
         assert!(check(&config, target, "beta", "0.3.9-beta", "0.3.6-beta", &forged).is_err());
         let mut unsigned = contract.clone();
-        unsigned.statement.clear();
-        unsigned.statement_signature.clear();
+        unsigned.statement_v2.clear();
+        unsigned.statement_v2_signature.clear();
         assert!(check(
             &config,
             target,
@@ -2776,6 +2808,127 @@ mod tests {
             &unsigned
         )
         .is_err());
+    }
+
+    /// The fixture's package split into two parts, with the matching signed statement.
+    fn split_statement_contract() -> (UpdateConfig, ReleaseContract) {
+        let (config, mut contract) = statement_contract();
+        let split = &release_fixture()["split"];
+        contract.parts = split["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|part| DownloadFile {
+                name: part["name"].as_str().unwrap().into(),
+                url: format!("https://example.test/{}", part["name"].as_str().unwrap()),
+                size: part["size"].as_u64().unwrap(),
+                sha256: part["sha256"].as_str().unwrap().into(),
+                signature: String::new(),
+            })
+            .collect();
+        contract.statement_v2 = split["statement_v2"].as_str().unwrap().into();
+        contract.statement_v2_signature = split["statement_v2_signature"].as_str().unwrap().into();
+        (config, contract)
+    }
+
+    // The signed statement also covers the package size and every part's name, size and
+    // digest, so a feed that inflates them is refused when it is read, before any download.
+    #[test]
+    fn a_changed_signed_size_or_part_list_is_refused_before_any_download() {
+        let check = |config: &UpdateConfig, contract: &ReleaseContract| {
+            verify_statement(
+                config,
+                "linux-x86_64-rocm-native",
+                "beta",
+                "0.3.7-beta",
+                "0.3.6-beta",
+                contract,
+            )
+        };
+        let (config, contract) = statement_contract();
+        check(&config, &contract).unwrap();
+        let (_, split) = split_statement_contract();
+        check(&config, &split).unwrap();
+        for case in 0..20 {
+            let mut changed = if case < 9 {
+                contract.clone()
+            } else {
+                split.clone()
+            };
+            match case {
+                0 => changed.size += 1,
+                1 => changed.engine.as_mut().unwrap().manifest.name.push('x'),
+                2 => changed.engine.as_mut().unwrap().manifest.size += 1,
+                3 => changed.engine.as_mut().unwrap().parts[0].name.push('x'),
+                4 => changed.engine.as_mut().unwrap().parts[0].size += 1,
+                5 => changed.engine.as_mut().unwrap().parts[0].sha256 = "0".repeat(64),
+                6 => {
+                    let engine = changed.engine.as_mut().unwrap();
+                    engine.parts.push(engine.parts[0].clone());
+                }
+                7 => changed.engine.as_mut().unwrap().parts.clear(),
+                // The unsplit package gains a part it was not signed with.
+                8 => changed.parts = split.parts.clone(),
+                9 => changed.parts[0].name.push('x'),
+                10 => changed.parts[0].size += 1,
+                11 => changed.parts[1].size -= 1,
+                12 => changed.parts[1].sha256 = "0".repeat(64),
+                13 => changed.parts.swap(0, 1),
+                14 => changed.parts.push(changed.parts[1].clone()),
+                15 => {
+                    changed.parts.pop();
+                }
+                16 => changed.parts.clear(),
+                17 => changed.size += 1,
+                18 => changed.sha256 = "f".repeat(64),
+                _ => changed.engine = None,
+            }
+            assert!(
+                check(&config, &changed).is_err(),
+                "case {case} was accepted"
+            );
+        }
+    }
+
+    // Statements of the old format, or none, are no longer enough: the entry must carry
+    // the format 2 statement.
+    #[test]
+    fn a_release_without_the_format_2_statement_is_refused() {
+        let (config, contract) = statement_contract();
+        let check = |contract: &ReleaseContract| {
+            verify_statement(
+                &config,
+                "linux-x86_64-rocm-native",
+                "beta",
+                "0.3.7-beta",
+                "0.3.6-beta",
+                contract,
+            )
+        };
+        let mut missing = contract.clone();
+        missing.statement_v2.clear();
+        assert!(check(&missing).is_err());
+        let mut unsigned = contract.clone();
+        unsigned.statement_v2_signature.clear();
+        assert!(check(&unsigned).is_err());
+        // The format 1 statement of an old feed, whatever its signature.
+        let old = base64::engine::general_purpose::STANDARD.encode(
+            br#"{"backend":"rocm","channel":"beta","engine_id":"linux-x86_64-rocm-0123456789ab","engine_manifest_sha256":"x","kind":"native","protocol":1,"schema_version":1,"sha256":"x","target":"linux-x86_64-rocm-native","unpacked_size":1024,"version":"0.3.7-beta"}"#,
+        );
+        let mut old_format = contract.clone();
+        old_format.statement_v2 = old;
+        assert!(check(&old_format).is_err());
+        // A statement with a field this client does not know is not format 2.
+        let mut extra = contract.clone();
+        let mut text = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(&contract.statement_v2)
+                .unwrap(),
+        )
+        .unwrap();
+        text.insert_str(1, "\"extra\":1,");
+        extra.statement_v2 = base64::engine::general_purpose::STANDARD.encode(text);
+        assert!(check(&extra).is_err());
     }
 
     /// Run explicitly against the retained, production-signed CPU AppImage.
@@ -2952,8 +3105,8 @@ mod tests {
             unpacked_size: 1024,
             sha256: file.sha256.clone(),
             parts: Vec::new(),
-            statement: String::new(),
-            statement_signature: String::new(),
+            statement_v2: String::new(),
+            statement_v2_signature: String::new(),
             engine: Some(EngineUpdate {
                 id: "abc".into(),
                 manifest: part(manifest, 100),

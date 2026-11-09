@@ -11,8 +11,10 @@ installed smoke report and its engine payload, and signs nothing unless all pass
 then it signs private copies that match what it checked, and adds the feed entries,
 each with a signed release statement, next to the macOS entry.
 
-`statement FEED` signs the release statement of every entry that has none; the macOS
-release script runs it on the feed entry it writes.
+`statement FEED` signs the release statements of every entry that lacks either; the macOS
+release script runs it on the feed entry it writes. Each entry carries two: `statement`
+(format 1, for clients before 0.3.8) and `statement_v2` (format 2, which also covers the
+package size and the part lists; see docs/updates.md).
 """
 
 from __future__ import annotations
@@ -323,10 +325,19 @@ def _snapshot(sources: list[Path], destination: Path, expected: tuple[str, int])
         raise ValueError(f"{sources[0].name} changed after it was checked; nothing was published")
 
 
+def _stated(file: dict) -> dict:
+    return {"name": file["name"], "size": file["size"], "sha256": file["sha256"]}
+
+
+def _statement_bytes(statement: dict) -> bytes:
+    return json.dumps(statement, sort_keys=True, separators=(",", ":")).encode()
+
+
 def release_statement(release_version: str, key: str, contract: dict) -> bytes:
-    """What the app verifies before it trusts the entry (desktop/src-tauri/src/updates.rs)."""
+    """Format 1, kept unchanged for clients before 0.3.8, which accept only these exact
+    fields. What the app verifies is release_statement_v2 (desktop/src-tauri/src/updates.rs)."""
     engine = contract.get("engine")
-    return json.dumps(
+    return _statement_bytes(
         {
             "schema_version": 1,
             "version": release_version,
@@ -339,22 +350,48 @@ def release_statement(release_version: str, key: str, contract: dict) -> bytes:
             "unpacked_size": contract["unpacked_size"],
             "sha256": contract["sha256"],
             "engine_manifest_sha256": engine["manifest"]["sha256"] if engine else None,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
+        }
+    )
+
+
+def release_statement_v2(release_version: str, key: str, contract: dict) -> bytes:
+    """Format 2: format 1 plus everything the app would otherwise learn only from the
+    unsigned feed before it downloads: the package size, and name, size and digest of every
+    application part and of the engine manifest and parts."""
+    engine = contract.get("engine")
+    return _statement_bytes(
+        {
+            "schema_version": 2,
+            "version": release_version,
+            "channel": contract["channel"],
+            "target": key,
+            "backend": contract["backend"],
+            "kind": contract["kind"],
+            "protocol": contract["protocol"],
+            "engine_id": contract["engine_id"],
+            "size": contract["size"],
+            "unpacked_size": contract["unpacked_size"],
+            "sha256": contract["sha256"],
+            "parts": [_stated(part) for part in contract.get("parts") or []],
+            "engine_manifest": _stated(engine["manifest"]) if engine else None,
+            "engine_parts": [_stated(part) for part in (engine or {}).get("parts", [])],
+        }
+    )
 
 
 def _sign_statement(
     contract: dict, release_version: str, key: str, workspace: Path, sign: Callable[[Path], None]
 ) -> None:
-    data = release_statement(release_version, key, contract)
-    path = workspace / f"{key}.statement.json"
-    path.write_bytes(data)
-    contract["statement"] = base64.b64encode(data).decode()
-    contract["statement_signature"] = _signed(path, sign)
-    path.with_name(path.name + ".sig").unlink()
-    path.unlink()
+    for data, name, field in (
+        (release_statement(release_version, key, contract), "statement", "statement"),
+        (release_statement_v2(release_version, key, contract), "statement-v2", "statement_v2"),
+    ):
+        path = workspace / f"{key}.{name}.json"
+        path.write_bytes(data)
+        contract[field] = base64.b64encode(data).decode()
+        contract[f"{field}_signature"] = _signed(path, sign)
+        path.with_name(path.name + ".sig").unlink()
+        path.unlink()
 
 
 def platform_entries(
@@ -496,13 +533,13 @@ def add_platforms(
 
 
 def add_statements(feed: Path, sign: Callable[[Path], None] = sign_artifact) -> list[str]:
-    """Sign the release statement of every feed entry that has none; returns their keys."""
+    """Sign both release statements of every feed entry that lacks either; returns their keys."""
     data = json.loads(feed.read_text(encoding="utf-8"))
     added = []
     with tempfile.TemporaryDirectory(prefix="localsr-signing-") as temporary:
         for key, entry in data["platforms"].items():
             contract = entry["localsr"]
-            if not contract.get("statement"):
+            if not (contract.get("statement") and contract.get("statement_v2")):
                 digest = ((contract.get("engine") or {}).get("manifest") or {}).get("sha256")
                 if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
                     raise ValueError(f"{key} has no engine package to sign a statement for")

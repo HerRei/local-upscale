@@ -5,7 +5,7 @@ With --feed, check the update feed instead: one entry per release target, each
 with its edition's backend, kind, engine identity and an engine package, files below
 GitHub's size limit, and AppImage parts that add up to the package. Every signature is
 verified against the updater public key, over the local copies of the files (--files)
-and over each entry's signed release statement.
+and over each entry's two signed release statements (format 1 and format 2).
 """
 
 from __future__ import annotations
@@ -273,21 +273,31 @@ def _signed_file(item: dict, paths: list[Path], public_key: str, label: str) -> 
         raise ValueError(f"{label} has no valid signature from the updater key")
 
 
+def _stated(file: object) -> dict:
+    file = file if isinstance(file, dict) else {}
+    return {"name": file.get("name"), "size": file.get("size"), "sha256": file.get("sha256")}
+
+
+def _signed_statement(key: str, contract: dict, field: str, public_key: str) -> dict:
+    try:
+        data = base64.b64decode(str(contract.get(field, "")), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError(f"{key} has no signed release statement ({field})") from error
+    if not data or not minisign_verify(
+        public_key, str(contract.get(f"{field}_signature", "")), [data]
+    ):
+        raise ValueError(f"{key} has no signed release statement from the updater key ({field})")
+    return json.loads(data)
+
+
 def _statement(
     key: str, contract: dict, release_version: str, channel: str, public_key: str
 ) -> None:
-    """The entry's release statement is signed and states exactly what the entry says."""
-    try:
-        data = base64.b64decode(str(contract.get("statement", "")), validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise ValueError(f"{key} has no signed release statement") from error
-    if not data or not minisign_verify(
-        public_key, str(contract.get("statement_signature", "")), [data]
-    ):
-        raise ValueError(f"{key} has no signed release statement from the updater key")
+    """The entry carries both signed release statements, and each states exactly what the
+    entry says: format 1 for clients before 0.3.8, format 2 (which also covers the package
+    size and the part lists) for the current app."""
     engine = contract.get("engine") or {}
-    expected = {
-        "schema_version": 1,
+    common = {
         "version": release_version,
         "channel": channel,
         "target": key,
@@ -297,10 +307,25 @@ def _statement(
         "engine_id": contract.get("engine_id"),
         "unpacked_size": contract.get("unpacked_size"),
         "sha256": contract.get("sha256"),
-        "engine_manifest_sha256": (engine.get("manifest") or {}).get("sha256"),
     }
-    if json.loads(data) != expected:
-        raise ValueError(f"{key}: the signed release statement does not match the entry")
+    expected = {
+        "statement": {
+            **common,
+            "schema_version": 1,
+            "engine_manifest_sha256": (engine.get("manifest") or {}).get("sha256"),
+        },
+        "statement_v2": {
+            **common,
+            "schema_version": 2,
+            "size": contract.get("size"),
+            "parts": [_stated(part) for part in contract.get("parts") or []],
+            "engine_manifest": _stated(engine["manifest"]) if engine.get("manifest") else None,
+            "engine_parts": [_stated(part) for part in engine.get("parts") or []],
+        },
+    }
+    for field, wanted in expected.items():
+        if _signed_statement(key, contract, field, public_key) != wanted:
+            raise ValueError(f"{key}: the signed release statement does not match the entry")
 
 
 def _engine_manifest(key: str, contract: dict, engine_parts: list, path: Path) -> None:

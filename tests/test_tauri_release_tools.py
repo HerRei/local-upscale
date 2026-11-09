@@ -1199,6 +1199,209 @@ def test_round2_statement_authenticates_install_space() -> None:
     assert statement["unpacked_size"] == 1234
 
 
+def _statement_v2(entry: dict) -> dict:
+    return json.loads(base64.b64decode(entry["localsr"]["statement_v2"]))
+
+
+def test_statement_v2_signs_the_sizes_and_the_part_lists_and_v1_stays_for_old_clients(
+    tmp_path: Path,
+) -> None:
+    feed_path, _ = feed_with_every_target(tmp_path)
+    feed = json.loads(feed_path.read_text())
+    rocm = feed["platforms"]["linux-x86_64-rocm-native"]
+    contract = rocm["localsr"]
+    listed = lambda files: [  # noqa: E731
+        {"name": f["name"], "size": f["size"], "sha256": f["sha256"]} for f in files
+    ]
+    statement = _statement_v2(rocm)
+    assert statement == {
+        "schema_version": 2,
+        "version": "1.2.3-beta",
+        "channel": "beta",
+        "target": "linux-x86_64-rocm-native",
+        "backend": "rocm",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": contract["engine_id"],
+        "size": contract["size"],
+        "unpacked_size": contract["unpacked_size"],
+        "sha256": contract["sha256"],
+        "parts": listed(contract["parts"]),
+        "engine_manifest": listed([contract["engine"]["manifest"]])[0],
+        "engine_parts": listed(contract["engine"]["parts"]),
+    }
+    assert len(statement["parts"]) > 1 and statement["engine_parts"]
+    assert verify_prepared.minisign_verify(
+        TEST_KEY.public_key,
+        contract["statement_v2_signature"],
+        [base64.b64decode(contract["statement_v2"])],
+    )
+    # Clients before the format change read the version 1 statement, which is unchanged.
+    old = json.loads(base64.b64decode(contract["statement"]))
+    assert old["schema_version"] == 1 and set(old) == {
+        "schema_version",
+        "version",
+        "channel",
+        "target",
+        "backend",
+        "kind",
+        "protocol",
+        "engine_id",
+        "unpacked_size",
+        "sha256",
+        "engine_manifest_sha256",
+    }
+    # An entry without an application part list signs an empty one.
+    cpu = feed["platforms"]["windows-x86_64-cpu-native"]
+    assert _statement_v2(cpu)["parts"] == []
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "size",
+        "part-name",
+        "part-size",
+        "part-digest",
+        "part-added",
+        "part-removed",
+        "engine-manifest-name",
+        "engine-manifest-size",
+        "engine-part-name",
+        "engine-part-size",
+        "engine-part-digest",
+        "engine-part-added",
+        "engine-part-removed",
+    ],
+)
+def test_the_feed_check_refuses_any_change_to_a_signed_size_or_part(
+    tmp_path: Path, tamper: str
+) -> None:
+    feed_path, _ = feed_with_every_target(tmp_path)
+    contract = json.loads(feed_path.read_text())["platforms"]["linux-x86_64-rocm-native"]["localsr"]
+    verify_prepared._statement(
+        "linux-x86_64-rocm-native", contract, "1.2.3-beta", "beta", TEST_KEY.public_key
+    )
+    engine = contract["engine"]
+    if tamper == "size":
+        contract["size"] += 1
+    elif tamper == "part-name":
+        contract["parts"][0]["name"] += "x"
+    elif tamper == "part-size":
+        contract["parts"][0]["size"] += 1
+    elif tamper == "part-digest":
+        contract["parts"][0]["sha256"] = "0" * 64
+    elif tamper == "part-added":
+        contract["parts"].append(dict(contract["parts"][-1]))
+    elif tamper == "part-removed":
+        contract["parts"].pop()
+    elif tamper == "engine-manifest-name":
+        engine["manifest"]["name"] += "x"
+    elif tamper == "engine-manifest-size":
+        engine["manifest"]["size"] += 1
+    elif tamper == "engine-part-name":
+        engine["parts"][0]["name"] += "x"
+    elif tamper == "engine-part-size":
+        engine["parts"][0]["size"] += 1
+    elif tamper == "engine-part-digest":
+        engine["parts"][0]["sha256"] = "0" * 64
+    elif tamper == "engine-part-added":
+        engine["parts"].append(dict(engine["parts"][-1]))
+    else:
+        engine["parts"].pop()
+    with pytest.raises(ValueError, match="statement does not match"):
+        verify_prepared._statement(
+            "linux-x86_64-rocm-native", contract, "1.2.3-beta", "beta", TEST_KEY.public_key
+        )
+
+
+@pytest.mark.parametrize("field", ["statement_v2", "statement_v2_signature"])
+def test_a_feed_without_the_version_2_statement_is_refused(tmp_path: Path, field: str) -> None:
+    feed_path, folders = feed_with_every_target(tmp_path)
+    feed = json.loads(feed_path.read_text())
+    del feed["platforms"]["windows-x86_64-cpu-native"]["localsr"][field]
+    feed_path.write_text(json.dumps(feed))
+    with pytest.raises(ValueError, match="signed release statement"):
+        verify_feed(feed_path, folders)
+
+
+def test_add_statements_signs_both_formats_and_fills_in_what_an_older_feed_lacks(
+    tmp_path: Path,
+) -> None:
+    _, feed = mac_feed(tmp_path)
+    path = tmp_path / "old.json"
+    contract = feed["platforms"]["darwin-aarch64-mps-native"]["localsr"]
+    version_1 = (contract["statement"], contract["statement_signature"])
+    contract.pop("statement_v2")
+    contract.pop("statement_v2_signature")
+    path.write_text(json.dumps(feed))
+    assert update_signing.add_statements(path, sign=fake_sign) == ["darwin-aarch64-mps-native"]
+    again = json.loads(path.read_text())["platforms"]["darwin-aarch64-mps-native"]["localsr"]
+    assert (again["statement"], again["statement_signature"]) == version_1
+    assert _statement_v2({"localsr": again})["schema_version"] == 2
+
+
+# The updater's own tests (desktop/src-tauri/src/updates.rs) verify statements signed here,
+# with the disposable key, so both implementations must agree on every byte.
+RUST_FIXTURE = ROOT / "desktop/src-tauri/tests/fixtures/update-release.json"
+
+
+def rust_fixture_statements(fixture: dict) -> dict:
+    def file(name: str, size: int, digest: str) -> dict:
+        return {"name": name, "url": f"https://example.test/{name}", "size": size, "sha256": digest}
+
+    manifest = fixture["engine"]["manifest"].encode()
+    engine = {
+        "id": "linux-x86_64-rocm-0123456789ab",
+        "manifest": file(
+            "engine-payload.json", len(manifest), hashlib.sha256(manifest).hexdigest()
+        ),
+        "parts": [
+            file(
+                part["name"],
+                len(base64.b64decode(part["data"])),
+                part["sha256"],
+            )
+            for part in fixture["engine"]["parts"]
+        ],
+    }
+    contract = {
+        "channel": "beta",
+        "backend": "rocm",
+        "kind": "native",
+        "protocol": 1,
+        "engine_id": engine["id"],
+        "size": len(fixture["package"]["data"].encode()),
+        "unpacked_size": 1024,
+        "sha256": fixture["package"]["sha256"],
+        "engine": engine,
+    }
+    split = {**contract, "parts": [dict(part) for part in fixture["split"]["parts"]]}
+    out = {}
+    for name, entry in (("single", contract), ("split", split)):
+        data = update_signing.release_statement_v2("0.3.7-beta", "linux-x86_64-rocm-native", entry)
+        out[name] = (
+            base64.b64encode(data).decode(),
+            TEST_KEY.signature(data, "linux-x86_64-rocm-native.statement-v2.json"),
+        )
+    return out
+
+
+def test_the_updater_fixture_holds_the_statements_this_signer_writes() -> None:
+    fixture = json.loads(RUST_FIXTURE.read_text())
+    assert fixture["public_key"] == TEST_KEY.public_key
+    signed = rust_fixture_statements(fixture)
+    assert (fixture["statement_v2"], fixture["statement_v2_signature"]) == signed["single"]
+    assert (fixture["split"]["statement_v2"], fixture["split"]["statement_v2_signature"]) == signed[
+        "split"
+    ]
+    assert verify_prepared.minisign_verify(
+        fixture["public_key"],
+        fixture["statement_v2_signature"],
+        [base64.b64decode(fixture["statement_v2"])],
+    )
+
+
 @pytest.mark.parametrize("target_id", ["linux-x86_64-cpu", "macos-arm64-mps"])
 def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
     tmp_path: Path, target_id: str
