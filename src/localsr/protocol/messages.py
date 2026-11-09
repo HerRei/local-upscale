@@ -281,6 +281,11 @@ class PreviewReady:
     width: int
     height: int
     jpeg_base64: str
+    preview_width: int = 0
+    preview_height: int = 0
+    slot: str = ""
+    generation: int = 0
+    target_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_ready", "data": asdict(self)})
@@ -290,6 +295,9 @@ class PreviewReady:
 class PreviewFailed:
     image_path: str
     error_message: str
+    slot: str = ""
+    generation: int = 0
+    target_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_failed", "data": asdict(self)})
