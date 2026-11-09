@@ -88,6 +88,16 @@ def test_bump_produces_a_candidate_the_release_checks_accept(tree: Path):
     assert (tree / "docs/platforms.md").read_text() == (ROOT / "docs/platforms.md").read_text()
 
 
+def test_bump_appends_notes_to_an_existing_unreleased_section(tree: Path):
+    new = bump_version.next_patch(VERSION)
+    bump_version.bump(tree, new, "- Dependency updates.", dt.date(2026, 11, 16))
+    changelog = (tree / "CHANGELOG.md").read_text()
+
+    assert changelog.count(f"## [{new}] - Unreleased") == 1
+    assert "- Add fixed-seed property tests" in changelog
+    assert "- Dependency updates." in changelog
+
+
 def test_bump_refuses_older_versions_and_existing_notes(tree: Path):
     with pytest.raises(ValueError, match="not newer"):
         bump_version.bump(tree, VERSION, "- x", dt.date.today())

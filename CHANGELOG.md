@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8-beta] - Unreleased
+
+### Added
+
+- Add fixed-seed property tests for video timing, image colour handling, tiling,
+  Compare geometry and signed update validation.
+
 ## [0.3.7-beta] - Unreleased
 
 ### Added

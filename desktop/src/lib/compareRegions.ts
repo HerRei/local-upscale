@@ -9,6 +9,23 @@ export interface Region {
   target_height: number;
 }
 
+/** Map a source crop between output images while preserving its pixel edges. */
+export function mapRegion(region: Region, from: Size, to: Size): Region {
+  const xScale = to.width / from.width;
+  const yScale = to.height / from.height;
+  const x = Math.round(region.x * xScale);
+  const y = Math.round(region.y * yScale);
+  const right = Math.round((region.x + region.width) * xScale);
+  const bottom = Math.round((region.y + region.height) * yScale);
+  return {
+    ...region,
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y),
+  };
+}
+
 export function visibleRegion(input: {
   image: Size;
   preview: Size;
