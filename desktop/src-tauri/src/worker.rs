@@ -1691,10 +1691,26 @@ mod tests {
             message_type: "job_completed".into(),
             data: json!({"job_id": "job", "output_path": "/out.png", "notes": notes}),
         };
+        {
+            let database = lock(&state.database).unwrap();
+            database
+                .insert_media("media", "/in.png", "in.png", "image")
+                .unwrap();
+            database
+                .insert_job("job", "media", r#"{"type":"job_request","data":{}}"#)
+                .unwrap();
+        }
         apply_worker_envelope(&state, &completed(json!("The fix was skipped."))).unwrap();
         assert_eq!(
             lock(&state.runtime).unwrap().status_detail,
             "The fix was skipped."
+        );
+        // Kept with the job too, where the next refresh and the history read it.
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        let job = jobs.iter().find(|job| job.id == "job").unwrap();
+        assert_eq!(
+            (job.status.as_str(), job.error.as_str()),
+            ("completed", "The fix was skipped.")
         );
         apply_worker_envelope(&state, &completed(Value::Null)).unwrap();
         assert_eq!(
