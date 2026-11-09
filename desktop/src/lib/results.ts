@@ -30,11 +30,6 @@ export function selectableResults(results: ResultSummary[]): ResultSummary[] {
   return results.filter((result) => result.status === 'completed' && result.available);
 }
 
-/** The choosers appear once an image has two saved results to hold side by side. */
-export function choosersVisible(history: MediaResults | undefined): boolean {
-  return (history?.available_count ?? 0) >= 2;
-}
-
 /** Unpinned, Showing follows the newest saved result against the Original. */
 export function defaultChoice(history: MediaResults | undefined): PairChoice {
   return { showing: history?.default_result_id ?? ORIGINAL, against: ORIGINAL, pinned: false };

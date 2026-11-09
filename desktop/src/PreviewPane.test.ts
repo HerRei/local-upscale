@@ -755,39 +755,13 @@ it('hides the live tiles once a saved result was chosen while the image runs', a
   expect(container.querySelector('.progressive-image.visible')).toBeNull();
 });
 
-it('puts the result choosers in the header only when asked to', async () => {
-  const selectedMedia: MediaItem = {
-    id: 'photo',
-    path: '/photo.png',
-    name: 'photo.png',
-    kind: 'image',
-    width: 640,
-    height: 480,
-    frame_count: 1,
-    fps: 0,
-    duration_seconds: 0,
-    preview_data_url: 'data:image/jpeg;base64,source',
-    probe_status: 'ready',
-    error: '',
-    selected: true,
-  };
-  const { container, rerender } = render(PreviewPane, {
-    selectedMedia,
+it('keeps the preview header free of result choosers', () => {
+  const { container } = render(PreviewPane, {
+    selectedMedia: undefined,
     resultPreview: '',
     completedVideoOutput: '',
-    resultCount: 3,
   });
   expect(container.querySelector('.result-selectors')).toBeNull();
-  expect(screen.getByText('640 × 480 · 3 results')).toBeTruthy();
-  await rerender({
-    selectedMedia,
-    resultPreview: '',
-    completedVideoOutput: '',
-    showChoosers: true,
-  });
-  // Without slot content there is still nothing to show.
-  expect(container.querySelector('.result-selectors')).toBeNull();
-  // The header stays a window drag region; the choosers row is not one.
   expect(container.querySelector('.preview-header')?.hasAttribute('data-tauri-drag-region')).toBe(
     true,
   );
