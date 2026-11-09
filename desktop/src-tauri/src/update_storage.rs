@@ -318,8 +318,12 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
     let journal_parent = journal
         .parent()
         .ok_or_else(|| AppError::Validation("The journal has no folder".into()))?;
-    if !journal_parent.exists() {
-        return Ok(None);
+    // Without a journal there is nothing to roll back, and the lock is not needed: where
+    // locking is unsupported (Windows) no journal can exist, so every start ends here.
+    match fs::symlink_metadata(journal) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
     }
     let _journal_lock = lock_folder(journal_parent)?;
     let metadata = match fs::symlink_metadata(journal) {
@@ -460,6 +464,19 @@ mod tests {
         )
         .is_err());
         assert_eq!(fs::read(current).unwrap(), b"old");
+    }
+
+    #[test]
+    fn round4_starting_without_a_journal_needs_no_lock_and_no_error() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            recover_swap(&root.path().join("missing/journal")).unwrap(),
+            None
+        );
+        // Another process may hold the folder lock (a swap about to write its journal).
+        #[cfg(unix)]
+        let _held = lock_folder(root.path()).unwrap();
+        assert_eq!(recover_swap(&root.path().join("journal")).unwrap(), None);
     }
 
     #[cfg(unix)]
