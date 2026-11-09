@@ -447,7 +447,7 @@ def test_runtime_errors_and_compile_timeouts_fall_back(fake_coreml):
     output = run(converted)
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
     verdicts = FakeProgram.stores[("no", (32, 32))]
-    assert "compile timeout" in verdicts[NEURAL_ENGINE]["reason"]
+    assert NEURAL_ENGINE not in verdicts  # a timed-out compile is not a rejection
     assert "ANE error" in verdicts[CORE_ML_GPU]["reason"]
 
 
@@ -767,3 +767,47 @@ def test_automatic_video_format_never_picks_a_codec_the_mov_container_refuses():
     for bridge in (None, SimpleNamespace(system=None)):
         for hdr_mode in ("reject", "tone_map", "preserve"):
             assert automatic_video_codec(bridge, "mov", hdr_mode) in MOV_CODECS
+
+
+MPS_OUT_OF_MEMORY = (
+    "MPS backend out of memory (MPS allocated 7.02 GiB, other allocations 1.00 GiB, "
+    "max allowed 7.34 GiB). Tried to allocate 1.00 GiB on private pool."
+)
+
+
+def test_a_reference_out_of_memory_stores_no_rejection_and_falls_back(fake_coreml, monkeypatch):
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="oom"
+    )
+    real = coreml_runtime._CoreMLImage._run_fallback
+    calls = []
+
+    def fallback(self, padded):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError(MPS_OUT_OF_MEMORY)
+        return real(self, padded)
+
+    monkeypatch.setattr(coreml_runtime._CoreMLImage, "_run_fallback", fallback)
+    output = run(converted)
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    assert not FakeProgram.stores.get(("oom", (32, 32)))
+    assert converted.model.active_unit is None
+
+
+def test_an_accuracy_failure_is_still_stored(fake_coreml):
+    fake_coreml.behaviours.update({NEURAL_ENGINE: "garbage"})
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="acc")
+    run(converted)
+    assert not FakeProgram.stores[("acc", (32, 32))][NEURAL_ENGINE]["accepted"]
+
+
+def test_a_stored_out_of_memory_rejection_is_ignored_when_read(tmp_path, monkeypatch):
+    monkeypatch.setitem(
+        __import__("sys").modules, "coremltools", SimpleNamespace(__version__="test")
+    )
+    program = coreml_runtime._Program(tmp_path, "SPAN", "abc", (32, 32))
+    program.store_verdict(NEURAL_ENGINE, {"accepted": False, "reason": MPS_OUT_OF_MEMORY})
+    program.store_verdict(CORE_ML_GPU, {"accepted": False, "reason": "did not match PyTorch"})
+    assert program.verdict(NEURAL_ENGINE) is None
+    assert program.verdict(CORE_ML_GPU)["accepted"] is False
