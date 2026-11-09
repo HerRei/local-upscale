@@ -4,6 +4,7 @@
   import { queueTiming } from './lib/queue-timing';
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
+  import HelpTip from './HelpTip.svelte';
   import FFmpegNotice from './FFmpegNotice.svelte';
   import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
@@ -2189,7 +2190,12 @@
                   >{settings.task === 'denoise' ? 'What to fix' : 'Your image'}</span
                 >
                 {#if settings.task !== 'denoise'}
-                  <span class="field-label" id="content-label">Content</span>
+                  <div class="field-heading">
+                    <span class="field-label" id="content-label">Content</span><HelpTip
+                      label="Content"
+                      text="Photo picks models trained on camera pictures: skin, foliage, fabric, buildings. Illustration picks models for drawings, anime and comics, which keep lines clean and colours flat. Choose what the picture is, not the look you want."
+                    />
+                  </div>
                   <div class="seg-inline" role="radiogroup" aria-labelledby="content-label">
                     <button
                       role="radio"
