@@ -3021,10 +3021,10 @@ mod tests {
             let rife = catalog
                 .interpolation_models
                 .iter_mut()
-                .find(|model| model.model_id == "rife_4_25")
+                .find(|model| model.model_id == "rife_4_26")
                 .unwrap();
             rife.installed = true;
-            rife.installed_path = Some("/models/rife_4_25".into());
+            rife.installed_path = Some("/models/rife_4_26".into());
         }
         let selection = resolve_model_selection(&state, &options).unwrap();
         let work = Path::new("/app-owned/work");
@@ -3033,10 +3033,10 @@ mod tests {
             build_job_message("job", &video_media(), output, work, &options, &selection).unwrap();
         assert_eq!(message["data"]["interpolation"], "x2");
         assert_eq!(message["data"]["interpolation_order"], "before_upscale");
-        assert_eq!(message["data"]["interpolation_model_id"], "rife_4_25");
+        assert_eq!(message["data"]["interpolation_model_id"], "rife_4_26");
         assert_eq!(
             message["data"]["interpolation_bundle_dir"],
-            "/models/rife_4_25"
+            "/models/rife_4_26"
         );
 
         options.video_interpolation = "off".into();
@@ -3141,8 +3141,8 @@ mod tests {
             face_model_id: String::new(),
             native_scale: 4,
             interpolation: Some(ResolvedInterpolation {
-                model_id: "rife_4_25".into(),
-                bundle_dir: "/models/rife_4_25".into(),
+                model_id: "rife_4_26".into(),
+                bundle_dir: "/models/rife_4_26".into(),
             }),
         };
         let mut options = input("video");

@@ -12,9 +12,9 @@ Interpolation", ECCV 2022.
 - Modifications by LocalSR are listed at the top of `ifnet.py`: inference only, a
   per-module warp grid sampled in FP32 (as HolyWu/vs-rife, MIT, does), and encoder
   features that several timesteps can share.
-- The weights are not bundled. The catalog downloads `flownet_v4.25.pkl` from
+- The weights are not bundled. The catalog downloads `flownet_v4.26.pkl` from
   HolyWu/vs-rife's `model` release, whose bytes are identical to `train_log/flownet.pkl`
-  in the official v4.25 Google Drive archive; see `docs/model-licenses.md`.
+  in the official v4.26 Google Drive archive; see `docs/model-licenses.md`.
 
 ```
 MIT License

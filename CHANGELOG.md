@@ -6,7 +6,7 @@
 
 - Optional frame interpolation for frame-by-frame video jobs
   ([#98](https://github.com/HerRei/local-upscale/issues/98)). Under Advanced > Video,
-  choose 2×, 4×, 60 fps or 120 fps; Original remains the default. RIFE 4.25
+  choose 2×, 4×, 60 fps or 120 fps; Original remains the default. RIFE 4.26
   downloads on first use (about 25 MB). Interpolation after upscaling avoids
   upscaling the extra frames; before upscaling works at the smaller source size
   but upscales more frames. The clip keeps its duration and compatible audio.

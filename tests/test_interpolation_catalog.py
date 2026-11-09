@@ -25,17 +25,17 @@ exporter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(exporter)
 
 
-def test_rife_425_is_the_default_pinned_mit_checkpoint():
+def test_rife_426_is_the_default_pinned_mit_checkpoint():
     model = INTERPOLATION_CATALOG_BY_ID[DEFAULT_INTERPOLATION_MODEL_ID]
-    assert model.model_id == "rife_4_25"
+    assert model.model_id == "rife_4_26"
     assert model.engine_kind == "rife"
     assert model.license_name == "MIT"
     assert model.source_url == "https://github.com/hzwer/Practical-RIFE"
     (checkpoint,) = model.files
-    assert checkpoint.filename == "flownet_v4.25.pkl"
+    assert checkpoint.filename == "flownet_v4.26.pkl"
     assert checkpoint.size_bytes == 24_636_301
-    # The bytes of train_log/flownet.pkl in the official v4.25 Google Drive archive.
-    assert checkpoint.sha256 == "6615790efd627772917205db291f51cd392528a157ecbb2ecaeec3bff8eb6de2"
+    # The bytes of train_log/flownet.pkl in the official v4.26 Google Drive archive.
+    assert checkpoint.sha256 == "45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f"
     assert urlparse(checkpoint.download_url).scheme == "https"
 
 
@@ -47,7 +47,7 @@ def test_interpolation_models_never_appear_as_video_engines():
 def test_the_bundle_is_installed_only_with_the_exact_bytes(tmp_path):
     model = INTERPOLATION_CATALOG_BY_ID[DEFAULT_INTERPOLATION_MODEL_ID]
     store = ModelStore(tmp_path)
-    assert store.bundle_dir_for(model) == tmp_path / "rife_4_25"
+    assert store.bundle_dir_for(model) == tmp_path / "rife_4_26"
     assert not store.is_bundle_installed(model)
     (checkpoint,) = model.files
     path = store.bundle_file_path(model, checkpoint)
@@ -61,13 +61,13 @@ def test_the_desktop_catalog_lists_interpolation_models_separately():
     manifest = exporter.build_manifest()
     assert manifest["schema_version"] == 3
     (entry,) = manifest["interpolation_models"]
-    assert entry["model_id"] == "rife_4_25"
+    assert entry["model_id"] == "rife_4_26"
     assert entry["engine_id"] == "localsr.video.rife"
     assert entry["support_tier"] == "labs"
     assert entry["automated_download_allowed"] is True
     assert entry["commercial_use_allowed"] is True
     assert entry["license_url"] == "https://opensource.org/license/mit"
-    assert "rife_4_25" not in {model["model_id"] for model in manifest["video_models"]}
+    assert "rife_4_26" not in {model["model_id"] for model in manifest["video_models"]}
     shipped = json.loads(
         (ROOT / "desktop" / "src-tauri" / "resources" / "model-catalog.json").read_text()
     )

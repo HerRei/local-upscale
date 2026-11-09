@@ -221,7 +221,7 @@ class BundleStore:
         self.bundle, self.installed, self.hashed = bundle, installed, False
 
     def bundle_dir_for(self, model):
-        assert model.model_id == "rife_4_25"
+        assert model.model_id == "rife_4_26"
         return self.bundle
 
     def bundle_file_path(self, model, file):
@@ -270,7 +270,7 @@ def patched_worker(monkeypatch, tmp_path, *, installed=True):
     monkeypatch.setattr(server_module, "send_message", lambda _message: None)
     server = server_module.WorkerServer()
     server.model_adapter = DummyModelAdapter()
-    bundle = tmp_path / "rife_4_25"
+    bundle = tmp_path / "rife_4_26"
     bundle.mkdir()
     server.model_store = BundleStore(bundle, installed)
     return server, bundle, loaded, captured
@@ -284,12 +284,12 @@ def test_worker_runs_interpolation_with_the_verified_rife_bundle(monkeypatch, tm
             tmp_path,
             interpolation="fps60",
             interpolation_order="before_upscale",
-            interpolation_model_id="rife_4_25",
+            interpolation_model_id="rife_4_26",
             interpolation_bundle_dir=str(bundle),
         ),
     )
     assert server.model_store.hashed
-    assert loaded == [(bundle / "flownet_v4.25.pkl", "mps")]
+    assert loaded == [(bundle / "flownet_v4.26.pkl", "mps")]
     config = captured["config"]
     assert (config.interpolation, config.interpolation_order) == ("fps60", "before_upscale")
     assert captured["synthesizer"] is not None
@@ -313,7 +313,7 @@ def test_worker_refuses_an_interpolation_bundle_outside_the_catalog_path(monkeyp
             worker_request(
                 tmp_path,
                 interpolation="x2",
-                interpolation_model_id="rife_4_25",
+                interpolation_model_id="rife_4_26",
                 interpolation_bundle_dir=str(elsewhere),
             ),
         )
@@ -329,7 +329,7 @@ def test_worker_refuses_an_interpolation_model_that_fails_its_checksum(monkeypat
             worker_request(
                 tmp_path,
                 interpolation="x2",
-                interpolation_model_id="rife_4_25",
+                interpolation_model_id="rife_4_26",
                 interpolation_bundle_dir=str(bundle),
             ),
         )
