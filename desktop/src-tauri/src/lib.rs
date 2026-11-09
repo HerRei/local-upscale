@@ -84,6 +84,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| native_menu::dispatch(app, event.id().as_ref()))
+        .on_window_event(hide_instead_of_close)
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
             if !initial_intent.is_empty() {
@@ -275,7 +276,22 @@ fn fit_main_window(app: &tauri::AppHandle) {
     let _ = window.set_position(tauri::PhysicalPosition::new(left, top));
 }
 
-fn focus_main_window(app: &tauri::AppHandle) {
+/// On macOS, closing the window (Command-W or the close button) only hides it, as in other
+/// single-window Mac apps: the queue keeps running, and the Dock icon, Window > LocalSR or
+/// opening a file brings it back. Quit ends the app.
+fn hide_instead_of_close(window: &tauri::Window, event: &tauri::WindowEvent) {
+    #[cfg(target_os = "macos")]
+    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        if window.label() == "main" {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, event);
+}
+
+pub(crate) fn focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
