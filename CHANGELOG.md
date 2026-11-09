@@ -37,6 +37,13 @@
   longer leaves a staged or backup file (or a stale journal temporary), a killed
   engine package install restores the previous engine and removes its half-unpacked
   folder, and the Windows install marker leaves no temporary file.
+- Updater crash safety, second round: a crash while the swap journal was rewritten no
+  longer leaves a temporary file; removed backups and staged files are made durable
+  before the journal that names them goes; a backup that is a link is never renamed
+  over the application; clean-up removes only the files an installation itself
+  creates. A new engine's files are synced before the old engine is deleted, a
+  half-removed old engine is never restored, and an engine moved aside by a killed
+  installation is put back at the next start.
 
 ## [0.3.7-beta] - Unreleased
 

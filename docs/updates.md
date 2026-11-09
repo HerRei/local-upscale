@@ -60,7 +60,11 @@ How the verified package is installed depends on the edition:
   in between keeps the new image and leaves no stray file. Under the same lock, `--headless-update-version`
   reads the version at the destination before staging, so a surviving older process
   cannot overwrite a newer installation with an intermediate signed release.
-  A failure after replacement restores the backup.
+  A failure after replacement restores the backup. Every removal in the application's
+  folder (backup, staged file) is synced before the journal that names it is removed,
+  and a start that finds the journal removes only `<journal>.new-<uuid>` leftovers of
+  its own, under the profile lock. A backup that is no longer a plain file is never
+  renamed over the application.
   Malformed journals are quarantined once. A start after a crash rolls the swap
   back before it opens anything and starts the restored image, using the same
   systemd user-service restart path as a normal update. A copy that does not
@@ -372,3 +376,20 @@ tests fail, or "crash" without any cleanup, at every step of the AppImage swap a
 recovery, of the engine package install (`engine_payload::recover_install` finishes or
 undoes a killed install at the next one) and of the Windows pending-install marker.
 Each run asserts one working executable or engine, no journal and no stray files.
+A stop is named by its position in the run, not by its name, so a step that runs more
+than once (the journal is written twice, the engine archive has one extraction per
+entry) is stopped at each occurrence. The swap runs with the journal beside the
+application and in another folder, with a hard-linked and a copied backup, and
+recovery is itself killed at every step after a crash at every step of the swap. The
+tests also record which files and folders were synced, to pin the order "durable, then
+renamed, then the old one deleted".
+
+On the engine side, the old engine is deleted under the name `engine.deleting-<pid>`,
+so an `engine.previous-<pid>` is always a whole engine and recovery restores only one
+that holds the worker. Recovery touches only folders named
+`engine.installing-|previous-|deleting-<pid>`. At every start the application also
+runs it for the `engine` folder beside the executable (the Windows installer's
+layout), so a crash between the two renames of an installation does not leave the
+application without an engine until the next installation. Two installations of the
+same engine folder at once are not supported (the application runs once, and the
+Windows installer is one wizard); recovery assumes none runs.

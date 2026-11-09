@@ -145,8 +145,10 @@ pub fn copy_new(source: &Path, destination: &Path) -> AppResult<()> {
 
 /// Test-only fault injection for the swap, the engine install and the install marker.
 /// `fault(step)` runs just before each durable step: a test can record the steps a run
-/// passes, make one fail, or "crash" there (unwind past all cleanup code, as a killed
-/// process would skip it). Outside tests it does nothing.
+/// passes, make the one at a given position fail, or "crash" there (unwind past all
+/// cleanup code, as a killed process would skip it). A step that runs twice (the two
+/// journal writes, one extraction per archive entry) is told apart by its position in
+/// the run. Outside tests it does nothing.
 #[cfg(test)]
 pub(crate) mod fault {
     use std::cell::RefCell;
@@ -163,19 +165,24 @@ pub(crate) mod fault {
     #[derive(Default)]
     struct Plan {
         seen: Vec<&'static str>,
-        at: Option<(&'static str, Mode)>,
+        /// The position in `seen` to stop at, and how.
+        at: Option<(usize, Mode)>,
+        /// Directories and files made durable, with the number of steps passed before.
+        synced: Vec<(usize, std::path::PathBuf)>,
     }
 
     thread_local! {
         static PLAN: RefCell<Plan> = RefCell::new(Plan::default());
     }
 
-    /// Forget the previous run; with `at`, stop there the next time that step is reached.
-    pub fn arm(at: Option<(&'static str, Mode)>) {
+    /// Forget the previous run; with `at`, stop at the step with that position in the run
+    /// (an index into what `seen` returned for an unarmed run).
+    pub fn arm(at: Option<(usize, Mode)>) {
         PLAN.with(|plan| {
             *plan.borrow_mut() = Plan {
                 seen: Vec::new(),
                 at,
+                synced: Vec::new(),
             }
         });
     }
@@ -185,11 +192,34 @@ pub(crate) mod fault {
         PLAN.with(|plan| plan.borrow().seen.clone())
     }
 
+    /// Record that `path` was made durable now.
+    pub fn note_sync(path: &std::path::Path) {
+        PLAN.with(|plan| {
+            let mut plan = plan.borrow_mut();
+            let passed = plan.seen.len();
+            plan.synced.push((passed, path.to_path_buf()));
+        });
+    }
+
+    /// What was made durable since `arm`: each path with the number of steps passed
+    /// before it, so a sync after step `i` and before step `i + 1` is recorded as `i + 1`.
+    pub fn synced() -> Vec<(usize, std::path::PathBuf)> {
+        PLAN.with(|plan| plan.borrow().synced.clone())
+    }
+
     pub fn point(step: &'static str) -> std::io::Result<()> {
         let mode = PLAN.with(|plan| {
             let mut plan = plan.borrow_mut();
+            let index = plan.seen.len();
             plan.seen.push(step);
-            plan.at.filter(|(name, _)| *name == step).map(|(_, m)| m)
+            // One stop per run: a failure is not repeated by a later step.
+            match plan.at {
+                Some((at, mode)) if at == index => {
+                    plan.at = None;
+                    Some(mode)
+                }
+                _ => None,
+            }
         });
         match mode {
             Some(Mode::Fail) => Err(std::io::Error::other(format!("injected failure at {step}"))),
@@ -250,10 +280,27 @@ struct SwapJournal {
 
 #[cfg(test)]
 thread_local! {
+    /// Make `fs::hard_link` fail, as on a filesystem without hard links: the backup is a copy.
+    static NO_HARD_LINKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A second name for the working executable: the backup, until it is accepted.
+fn link_backup(current: &Path, backup: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if NO_HARD_LINKS.with(|flag| flag.get()) {
+        return Err(std::io::Error::other("hard links are off in this test"));
+    }
+    fs::hard_link(current, backup)
+}
+
+#[cfg(test)]
+thread_local! {
     static FAIL_SYNC_AFTER_RENAME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
-fn sync_dir(directory: &Path) -> AppResult<()> {
+pub(crate) fn sync_dir(directory: &Path) -> AppResult<()> {
+    #[cfg(test)]
+    fault::note_sync(directory);
     #[cfg(test)]
     FAIL_SYNC_AFTER_RENAME.with(|fail| {
         let mut fail = fail.borrow_mut();
@@ -271,6 +318,25 @@ fn sync_dir(directory: &Path) -> AppResult<()> {
     #[cfg(not(unix))]
     let _ = directory;
     Ok(())
+}
+
+/// Make the content of a file that was just written durable.
+pub(crate) fn sync_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    fault::note_sync(path);
+    match fs::OpenOptions::new().write(true).open(path) {
+        Ok(file) => file.sync_all(),
+        // Written read-only (a mode of the archive): on Windows such a handle cannot
+        // flush, elsewhere it can.
+        Err(_) => {
+            let flushed = fs::File::open(path)?.sync_all();
+            if cfg!(windows) {
+                Ok(())
+            } else {
+                flushed
+            }
+        }
+    }
 }
 
 /// One swap per folder at a time, across processes and sessions: an advisory lock on
@@ -335,7 +401,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     result
 }
 
-/// Remove the half-written files a crash left from `write_atomic(path, ..)`.
+/// Remove the half-written files a crash left from `write_atomic(path, ..)`: only names
+/// it made (`<stem>.new-<uuid>`), never another file that starts the same way. Callers
+/// hold the folder lock, or know that no writer for `path` runs.
 pub fn remove_stale_temporaries(path: &Path) {
     let (Some(parent), Some(stem)) = (
         path.parent(),
@@ -345,7 +413,12 @@ pub fn remove_stale_temporaries(path: &Path) {
     };
     let prefix = format!("{stem}.new-");
     for entry in fs::read_dir(parent).into_iter().flatten().flatten() {
-        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+        let name = entry.file_name();
+        let ours = name
+            .to_string_lossy()
+            .strip_prefix(&prefix)
+            .is_some_and(|rest| uuid::Uuid::try_parse(rest).is_ok());
+        if ours {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -411,7 +484,7 @@ pub fn replace_executable(
         fs::set_permissions(&record.staged, fs::metadata(current)?.permissions())?;
         fs::File::open(&record.staged)?.sync_all()?;
         fault("backup")?;
-        if fs::hard_link(current, &record.backup).is_err() {
+        if link_backup(current, &record.backup).is_err() {
             copy_new(current, &record.backup)?;
         }
         fault("backup-sync")?;
@@ -434,6 +507,9 @@ pub fn replace_executable(
         let _ = fs::remove_file(&record.staged);
         let _ = fs::remove_file(&record.backup);
         if journal.exists() {
+            // The journal goes only once those removals are durable: a journal that is
+            // gone beside files that came back would leave them for good.
+            sync_dir(parent)?;
             fs::remove_file(journal)?;
             sync_dir(journal_parent)?;
         }
@@ -454,6 +530,11 @@ pub fn replace_executable(
     // neither a stray backup nor a rollback of an accepted update.
     fault("backup-remove")?;
     fs::remove_file(&record.backup)?;
+    // The removal must be durable before the journal goes (they may be in two folders):
+    // otherwise power loss could keep the backup and drop the journal, or keep both and
+    // roll back an accepted update.
+    fault("backup-remove-sync")?;
+    sync_dir(parent)?;
     fault("journal-remove")?;
     fs::remove_file(journal)?;
     fault("journal-remove-sync")?;
@@ -484,6 +565,9 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
         Ok(_) => {}
     }
     let _journal_lock = lock_folder(journal_parent)?;
+    // A crash while the journal was rewritten (the second write) leaves its temporary
+    // file beside the old journal; no writer runs while this lock is held.
+    remove_stale_temporaries(journal);
     let metadata = match fs::symlink_metadata(journal) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -536,11 +620,30 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
         fault("recover-prepared-remove")?;
         let _ = fs::remove_file(&record.backup);
         let _ = fs::remove_file(&record.staged);
+        sync_dir(parent)?;
         fs::remove_file(journal)?;
         sync_dir(journal_parent)?;
         return Ok(None);
     }
-    let restored = if record.backup.is_file() {
+    // The backup was made by `link_backup` or `copy_new`: a plain file. A link, or
+    // anything else, put there since is never renamed over the executable; one that
+    // cannot be inspected keeps the journal for the next start.
+    let backup_is_file = match fs::symlink_metadata(&record.backup) {
+        Ok(metadata) if metadata.file_type().is_file() => true,
+        Ok(_) => {
+            let _ = fs::remove_file(&record.backup);
+            let _ = fs::remove_file(&record.staged);
+            sync_dir(parent)?;
+            fs::remove_file(journal)?;
+            sync_dir(journal_parent)?;
+            return Err(AppError::Validation(
+                "The backup of an interrupted update is not a plain file; it was removed".into(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    let restored = if backup_is_file {
         fault("recover-rename")?;
         fs::rename(&record.backup, &record.current)?;
         // Renaming a hard link onto the file it links to does nothing: the original was
@@ -555,6 +658,7 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
     };
     fault("recover-staged-remove")?;
     let _ = fs::remove_file(&record.staged);
+    sync_dir(parent)?;
     fault("recover-journal-remove")?;
     fs::remove_file(journal)?;
     sync_dir(journal_parent)?;
@@ -564,25 +668,68 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// Everything in the folder besides the executable itself.
-    fn leftovers(folder: &Path, executable: &str) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(folder)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .filter(|name| name != executable)
-            .collect();
-        names.sort();
-        names
+    /// The folders of one swap: the executable's, and the profile's with the journal; the
+    /// same folder, or two (a swap then takes two locks).
+    #[cfg(unix)]
+    struct Swap {
+        _root: tempfile::TempDir,
+        folders: Vec<PathBuf>,
+        current: PathBuf,
+        journal: PathBuf,
     }
 
-    fn swap_folder() -> (tempfile::TempDir, PathBuf, PathBuf) {
-        let root = tempfile::tempdir().unwrap();
-        let current = root.path().join("app");
-        fs::write(&current, b"old").unwrap();
-        let journal = root.path().join("journal");
-        (root, current, journal)
+    #[cfg(unix)]
+    impl Swap {
+        fn new(separate: bool) -> Swap {
+            let root = tempfile::tempdir().unwrap();
+            let (app, profile) = if separate {
+                (root.path().join("app-folder"), root.path().join("profile"))
+            } else {
+                (root.path().to_path_buf(), root.path().to_path_buf())
+            };
+            fs::create_dir_all(&app).unwrap();
+            fs::create_dir_all(&profile).unwrap();
+            let current = app.join("app");
+            fs::write(&current, b"old").unwrap();
+            let journal = profile.join("journal");
+            let folders = if separate {
+                vec![app, profile]
+            } else {
+                vec![app]
+            };
+            Swap {
+                _root: root,
+                folders,
+                current,
+                journal,
+            }
+        }
+
+        /// The executable's folder and the journal's.
+        fn app_and_profile(&self) -> (PathBuf, PathBuf) {
+            (
+                self.current.parent().unwrap().to_path_buf(),
+                self.journal.parent().unwrap().to_path_buf(),
+            )
+        }
+
+        /// Everything in the folders besides the executable itself.
+        fn leftovers(&self) -> Vec<String> {
+            let mut names = Vec::new();
+            for folder in &self.folders {
+                for entry in fs::read_dir(folder).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path != self.current && path.is_file() {
+                        names.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                    }
+                }
+            }
+            names.sort();
+            names
+        }
     }
 
+    #[cfg(unix)]
     fn swap(current: &Path, journal: &Path, accept: bool) -> AppResult<()> {
         replace_executable(
             current,
@@ -603,27 +750,60 @@ mod tests {
 
     /// After a failure or a crash: the next start's recovery leaves exactly one working
     /// executable at the original path, no journal and no staging or backup file.
-    fn assert_recovered(folder: &Path, current: &Path, journal: &Path, expected: &[u8], why: &str) {
-        fault::recover_swap(journal).unwrap_or_else(|e| panic!("{why}: recovery failed: {e}"));
-        assert_eq!(&fs::read(current).unwrap(), expected, "{why}");
-        assert!(!journal.exists(), "{why}: journal left");
-        assert_eq!(leftovers(folder, "app"), Vec::<String>::new(), "{why}");
+    #[cfg(unix)]
+    fn assert_recovered(swap: &Swap, expected: &[u8], why: &str) {
+        fault::recover_swap(&swap.journal)
+            .unwrap_or_else(|e| panic!("{why}: recovery failed: {e}"));
+        assert_eq!(&fs::read(&swap.current).unwrap(), expected, "{why}");
+        assert!(!swap.journal.exists(), "{why}: journal left");
+        assert_eq!(swap.leftovers(), Vec::<String>::new(), "{why}");
         // A second recovery changes nothing.
-        assert_eq!(fault::recover_swap(journal).unwrap(), None, "{why}");
+        assert_eq!(fault::recover_swap(&swap.journal).unwrap(), None, "{why}");
+    }
+
+    /// Every combination the swap runs in: the journal beside the executable or in
+    /// another folder, a hard-linked or a copied backup, an accepted or a refused update.
+    #[cfg(unix)]
+    fn layouts() -> Vec<(bool, bool, bool)> {
+        let mut all = Vec::new();
+        for separate in [false, true] {
+            for copy_backup in [false, true] {
+                for accept in [true, false] {
+                    all.push((separate, copy_backup, accept));
+                }
+            }
+        }
+        all
+    }
+
+    /// A crashed swap, left as a killed process leaves it: crashed at step `index`.
+    #[cfg(unix)]
+    fn crashed_swap(separate: bool, accept: bool, index: usize) -> Swap {
+        let folder = Swap::new(separate);
+        fault::arm(Some((index, fault::Mode::Crash)));
+        let outcome = fault::crashed(|| swap(&folder.current, &folder.journal, accept));
+        fault::arm(None);
+        assert!(outcome.is_err(), "no crash at step {index}");
+        folder
     }
 
     #[cfg(unix)]
     #[test]
     fn the_swap_survives_a_failure_or_a_crash_at_every_step() {
-        for accept in [true, false] {
-            let (root, current, journal) = swap_folder();
+        for (separate, copy_backup, accept) in layouts() {
+            NO_HARD_LINKS.with(|flag| flag.set(copy_backup));
+            let folder = Swap::new(separate);
             fault::arm(None);
-            assert_eq!(swap(&current, &journal, accept).is_ok(), accept);
+            assert_eq!(
+                swap(&folder.current, &folder.journal, accept).is_ok(),
+                accept
+            );
             let steps = fault::seen();
             for expected in [
                 "stage",
                 "backup",
                 "backup-sync",
+                "journal-prepare",
                 "journal",
                 "atomic-rename",
                 "atomic-sync",
@@ -633,48 +813,206 @@ mod tests {
             ] {
                 assert!(steps.contains(&expected), "{steps:?} lacks {expected}");
             }
+            // The journal is written twice: the steps of the second write are in the run.
+            assert_eq!(
+                steps.iter().filter(|s| **s == "atomic-rename").count(),
+                2,
+                "{steps:?}"
+            );
             let accepted_at = steps.iter().position(|s| *s == "backup-remove");
             assert_eq!(accepted_at.is_some(), accept);
             for (index, step) in steps.iter().enumerate() {
                 for mode in [fault::Mode::Fail, fault::Mode::Crash] {
-                    let why = format!("{step} #{index} {mode:?} accept={accept}");
-                    let (root, current, journal) = swap_folder();
-                    fault::arm(Some((step, mode)));
-                    let outcome = fault::crashed(|| swap(&current, &journal, accept));
+                    let why = format!(
+                        "{step} #{index} {mode:?} separate={separate} copy={copy_backup} accept={accept}"
+                    );
+                    let folder = Swap::new(separate);
+                    fault::arm(Some((index, mode)));
+                    let outcome = fault::crashed(|| swap(&folder.current, &folder.journal, accept));
                     fault::arm(None);
-                    assert!(outcome.is_err() || mode == fault::Mode::Fail, "{why}");
+                    match (mode, &outcome) {
+                        (fault::Mode::Crash, Err(())) => {}
+                        (fault::Mode::Fail, Ok(Err(_))) => {}
+                        _ => panic!("{why}: the injected stop did not stop the swap"),
+                    }
+                    // Before any recovery there is always a working executable: the old
+                    // one, or the new one once it is in place.
+                    let content = fs::read(&folder.current)
+                        .unwrap_or_else(|e| panic!("{why}: no executable before recovery: {e}"));
+                    assert!(content == b"old" || content == b"new", "{why}");
                     // The new file stays once it was accepted and its backup is gone;
                     // until then a failure or a crash returns the old one.
                     let kept = accepted_at.is_some_and(|at| index > at);
                     let expected: &[u8] = if kept { b"new" } else { b"old" };
-                    assert_recovered(root.path(), &current, &journal, expected, &why);
+                    assert_recovered(&folder, expected, &why);
                 }
             }
-            drop(root);
         }
+        NO_HARD_LINKS.with(|flag| flag.set(false));
     }
 
     #[cfg(unix)]
     #[test]
     fn a_crash_during_recovery_is_recovered_by_the_next_start() {
-        let (_root, current, journal) = swap_folder();
-        fault::arm(Some(("check", fault::Mode::Crash)));
-        assert!(fault::crashed(|| swap(&current, &journal, true)).is_err());
-        fault::arm(None);
-        fault::recover_swap(&journal).unwrap();
-        let steps = fault::seen();
-        assert!(steps.contains(&"recover-rename"), "{steps:?}");
-        for (index, step) in steps.iter().enumerate() {
-            for mode in [fault::Mode::Fail, fault::Mode::Crash] {
-                let why = format!("recovery {step} #{index} {mode:?}");
-                let (root, current, journal) = swap_folder();
-                fault::arm(Some(("check", fault::Mode::Crash)));
-                assert!(fault::crashed(|| swap(&current, &journal, true)).is_err());
-                fault::arm(Some((step, mode)));
-                let _ = fault::crashed(|| fault::recover_swap(&journal));
+        for (separate, copy_backup, accept) in layouts() {
+            NO_HARD_LINKS.with(|flag| flag.set(copy_backup));
+            let folder = Swap::new(separate);
+            fault::arm(None);
+            swap(&folder.current, &folder.journal, accept).ok();
+            let swap_steps = fault::seen();
+            let accepted_at = swap_steps.iter().position(|s| *s == "backup-remove");
+            // The swap is killed at every step in turn; each of those states is recovered
+            // by a start that is itself killed at every step of its recovery.
+            for (base, base_step) in swap_steps.iter().enumerate() {
+                let kept = accepted_at.is_some_and(|at| base > at);
+                let expected: &[u8] = if kept { b"new" } else { b"old" };
+                let probe = crashed_swap(separate, accept, base);
                 fault::arm(None);
-                assert_recovered(root.path(), &current, &journal, b"old", &why);
+                fault::recover_swap(&probe.journal).unwrap();
+                let steps = fault::seen();
+                for (index, step) in steps.iter().enumerate() {
+                    for mode in [fault::Mode::Fail, fault::Mode::Crash] {
+                        let why = format!(
+                            "swap {} #{base}, recovery {step} #{index} {mode:?} \
+                             separate={separate} copy={copy_backup} accept={accept}",
+                            base_step
+                        );
+                        let folder = crashed_swap(separate, accept, base);
+                        fault::arm(Some((index, mode)));
+                        let _ = fault::crashed(|| fault::recover_swap(&folder.journal));
+                        fault::arm(None);
+                        assert_recovered(&folder, expected, &why);
+                    }
+                }
             }
+        }
+        NO_HARD_LINKS.with(|flag| flag.set(false));
+    }
+
+    /// Which of the synced paths came after `after` steps, in order.
+    #[cfg(unix)]
+    fn synced_after(after: usize) -> Vec<PathBuf> {
+        fault::synced()
+            .into_iter()
+            .filter(|(passed, _)| *passed > after)
+            .map(|(_, path)| path)
+            .collect()
+    }
+
+    /// A removal in the executable's folder is made durable before the journal that
+    /// describes it goes: the journal usually lives in another folder, and a journal
+    /// removed for good beside a backup that came back would restore the old executable
+    /// over an accepted update (or leave a stray backup of hundreds of megabytes).
+    #[cfg(unix)]
+    #[test]
+    fn removals_are_durable_before_the_journal_is_removed() {
+        // An accepted swap: the backup goes, then the journal.
+        let folder = Swap::new(true);
+        let (app, _) = folder.app_and_profile();
+        fault::arm(None);
+        swap(&folder.current, &folder.journal, true).unwrap();
+        let steps = fault::seen();
+        let removed = steps.iter().position(|s| *s == "backup-remove").unwrap();
+        let journal_removed = steps.iter().position(|s| *s == "journal-remove").unwrap();
+        assert!(
+            fault::synced().iter().any(|(passed, dir)| *dir == app
+                && *passed > removed
+                && *passed <= journal_removed),
+            "the backup's removal was not synced before the journal's: {:?}",
+            fault::synced()
+        );
+
+        // A swap that fails while staging: its staged file and backup go, then the journal.
+        let failed_at = steps.iter().position(|s| *s == "backup-sync").unwrap();
+        let folder = Swap::new(true);
+        let (app, profile) = folder.app_and_profile();
+        fault::arm(Some((failed_at, fault::Mode::Fail)));
+        assert!(swap(&folder.current, &folder.journal, true).is_err());
+        let order = synced_after(failed_at);
+        let app_at = order.iter().position(|dir| *dir == app);
+        let profile_at = order.iter().position(|dir| *dir == profile);
+        assert!(
+            app_at.is_some() && app_at < profile_at,
+            "the cleanup was not synced before the journal's removal: {order:?}"
+        );
+
+        // Recovery: after a crash while staging (the journal only drops files), and after
+        // one with a complete backup (rolled back; or kept, the backup being gone).
+        for (crash_at, removal) in [
+            ("backup-sync", "recover-prepared-remove"),
+            ("swap-rename", "recover-staged-remove"),
+            ("journal-remove", "recover-staged-remove"),
+        ] {
+            let index = steps.iter().position(|s| *s == crash_at).unwrap();
+            let folder = crashed_swap(true, true, index);
+            let (app, profile) = folder.app_and_profile();
+            fault::arm(None);
+            fault::recover_swap(&folder.journal).unwrap();
+            let removal = fault::seen().iter().position(|s| *s == removal).unwrap();
+            let order = synced_after(removal);
+            let app_at = order.iter().position(|dir| *dir == app);
+            let profile_at = order.iter().rposition(|dir| *dir == profile);
+            assert!(
+                app_at.is_some() && app_at < profile_at,
+                "recovery after {crash_at}: not synced before the journal's removal: {order:?}"
+            );
+        }
+    }
+
+    /// The backup is renamed over the executable only when it is the plain file the
+    /// swap made; a link put there, or one that cannot be inspected, is not followed.
+    #[cfg(unix)]
+    #[test]
+    fn recovery_does_not_follow_a_linked_backup() {
+        let folder = Swap::new(false);
+        fault::arm(None);
+        swap(&folder.current, &folder.journal, true).unwrap();
+        let steps = fault::seen();
+        let at = steps.iter().position(|s| *s == "check").unwrap();
+        let folder = crashed_swap(false, true, at);
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&folder.journal).unwrap()).unwrap();
+        let backup = PathBuf::from(record["backup"].as_str().unwrap());
+        let victim = folder.current.with_file_name("victim");
+        fs::write(&victim, b"precious").unwrap();
+        fs::remove_file(&backup).unwrap();
+        std::os::unix::fs::symlink(&victim, &backup).unwrap();
+        assert!(recover_swap(&folder.journal).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"precious");
+        assert!(
+            !fs::symlink_metadata(&folder.current)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the executable became a link"
+        );
+        assert!(!folder.journal.exists());
+        assert!(fs::symlink_metadata(&backup).is_err(), "the link stays");
+    }
+
+    /// A temporary file of the journal's from a crash goes; a file that only starts with
+    /// the same words does not.
+    #[test]
+    fn only_temporary_files_of_write_atomic_are_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("swap-journal.json");
+        let own = root
+            .path()
+            .join(format!("swap-journal.new-{}", uuid::Uuid::new_v4()));
+        fs::write(&own, b"half").unwrap();
+        let others = [
+            "swap-journal.new-notes.txt",
+            "swap-journal.new-",
+            "swap-journal.new-backup",
+            "other.new-6a5a8b3e-0000-4000-8000-000000000000",
+        ];
+        for name in others {
+            fs::write(root.path().join(name), b"mine").unwrap();
+        }
+        remove_stale_temporaries(&path);
+        assert!(!own.exists());
+        for name in others {
+            assert_eq!(fs::read(root.path().join(name)).unwrap(), b"mine", "{name}");
         }
     }
 
