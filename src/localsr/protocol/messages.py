@@ -297,6 +297,11 @@ class PreviewReady:
     width: int
     height: int
     jpeg_base64: str
+    preview_width: int = 0
+    preview_height: int = 0
+    slot: str = ""
+    generation: int = 0
+    target_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_ready", "data": asdict(self)})
@@ -306,6 +311,9 @@ class PreviewReady:
 class PreviewFailed:
     image_path: str
     error_message: str
+    slot: str = ""
+    generation: int = 0
+    target_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_failed", "data": asdict(self)})
@@ -672,3 +680,47 @@ class VideoJobCompleted:
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
+
+
+@dataclass
+class RegionRequest:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    x: int
+    y: int
+    width: int
+    height: int
+    target_width: int
+    target_height: int
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_request", "data": asdict(self)})
+
+
+@dataclass
+class RegionReady:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    png_base64: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_ready", "data": asdict(self)})
+
+
+@dataclass
+class RegionFailed:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_failed", "data": asdict(self)})
