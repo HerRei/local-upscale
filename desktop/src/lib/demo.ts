@@ -30,7 +30,7 @@ export function demoSnapshot(): AppSnapshot {
       task: '',
       selected_model_id: '',
       selected_video_model_id: 'frame_by_frame',
-      preprocess_model_id: '',
+      fix_stages: [],
       custom_model_path: '',
       output_scale: 4,
       output_directory: '',
