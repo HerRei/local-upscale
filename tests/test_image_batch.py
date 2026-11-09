@@ -207,12 +207,20 @@ def test_large_outputs_save_one_at_a_time_within_the_memory_budget(tmp_path, mon
     lock = threading.Lock()
     counts = {"now": 0, "peak": 0}
     real_save = image_batch.save_output
+    # With room for several saves, each one waits (bounded) for a second save to start, so
+    # the overlap does not depend on how fast the next photo is inferred on a busy machine.
+    pair = {"wait": False, "started": threading.Event()}
 
     def counting_save(*args):
         with lock:
             counts["now"] += 1
             counts["peak"] = max(counts["peak"], counts["now"])
-        time.sleep(0.05)
+            if counts["now"] >= 2:
+                pair["started"].set()
+        if pair["wait"]:
+            pair["started"].wait(timeout=2)
+        else:
+            time.sleep(0.05)
         try:
             real_save(*args)
         finally:
@@ -228,6 +236,7 @@ def test_large_outputs_save_one_at_a_time_within_the_memory_budget(tmp_path, mon
     assert setup.terminal() == [(str(i), "job_completed") for i in range(5)]
     assert counts["peak"] == 1
     counts["peak"] = 0
+    pair["wait"] = True
     roomy = Setup(tmp_path / "roomy", memory_budget=100 * one)
     (tmp_path / "roomy").mkdir()
     assert roomy.run([job(tmp_path / "roomy", i) for i in range(5)]) == []
