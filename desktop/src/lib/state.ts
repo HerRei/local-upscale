@@ -465,7 +465,8 @@ export function libraryModelsForTask(
   content: ContentKind,
   fix?: Exclude<FixKind, 'faces'>,
 ): CatalogModel[] {
-  if (task === 'denoise')
+  // A fix stage always chooses among 1× restoration models, whatever the task around it.
+  if (task === 'denoise' || fix)
     return models.filter(
       (model) =>
         model.native_scale === 1 &&

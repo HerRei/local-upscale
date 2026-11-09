@@ -41,6 +41,14 @@ describe('desktop state', () => {
     ).toBe(true);
   });
 
+  it('lists fix models, not upscalers, for a fix stage inside an Upscale plan', () => {
+    const models = demoSnapshot().catalog.models;
+    const listed = libraryModelsForTask(models, 'upscale', 'photo', 'blur');
+    expect(listed.every((model) => model.native_scale === 1 && model.fixes?.includes('blur'))).toBe(
+      true,
+    );
+  });
+
   it('counts compatible models that are not installed or are not the current selection', () => {
     const models = demoSnapshot()
       .catalog.models.slice(0, 3)
