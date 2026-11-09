@@ -658,16 +658,24 @@
 
     discardRuntimePulse();
 
+    // A batch photo that ends off screen (it was saving) must not reset the one shown.
+    const messageJob = String(message.data.job_id ?? '');
+    const offScreen =
+      messageJob !== snapshot.runtime.active_job_id &&
+      (snapshot.runtime.active_batch_job_ids ?? []).includes(messageJob);
     snapshot = applyWorkerEnvelope(snapshot, message);
     if (message.type === 'job_started') {
       livePreviewWarning = '';
       resetView();
-      resetProgressivePreview(String(message.data.job_id ?? ''));
-    } else if (message.type === 'job_completed' || message.type === 'video_job_completed') {
+      resetProgressivePreview(messageJob);
+    } else if (
+      !offScreen &&
+      (message.type === 'job_completed' || message.type === 'video_job_completed')
+    ) {
       livePreviewWarning = '';
       resetProgressivePreview();
       resetView();
-    } else if (message.type === 'job_cancelled' || message.type === 'job_failed') {
+    } else if (!offScreen && (message.type === 'job_cancelled' || message.type === 'job_failed')) {
       livePreviewWarning = '';
       resetProgressivePreview();
     }
