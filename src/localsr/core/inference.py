@@ -191,6 +191,7 @@ def _onnx_route(device_str: str):
             raise RuntimeError(f"Invalid DirectML device identifier: {device_str}") from error
         if index < 0:
             raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
+        from .hardware import display_name
         from .windows_adapters import directml_adapters
 
         try:
@@ -226,11 +227,12 @@ def _onnx_route(device_str: str):
             "DmlExecutionProvider",
             index,
             identity=identity,
-            label=f"{adapter['name']} (DirectML)",
+            label=f"{display_name(adapter['name'])} (DirectML)",
             persist=adapter.get("driver_version") is not None and twins == 1,
             device=device_str,
         )
     if kind == "openvino":
+        from .hardware import display_name
         from .onnx_runtime import OnnxRoute
         from .openvino_devices import device_for
 
@@ -255,7 +257,7 @@ def _onnx_route(device_str: str):
             "OpenVINOExecutionProvider",
             ep_device=device["ep_device"],
             identity=identity,
-            label=f"{device['name']} ({'NPU' if kind == 'NPU' else 'OpenVINO'})",
+            label=f"{display_name(device['name'])} ({'NPU' if kind == 'NPU' else 'OpenVINO'})",
             persist=device.get("driver") is not None,
             device=device_str,
             kind=kind,

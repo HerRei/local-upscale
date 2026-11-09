@@ -12,6 +12,19 @@ from .coreml_runtime import coreml_available
 
 logger = logging.getLogger(__name__)
 
+# OpenVINO's name for a GPU ends in "(iGPU)" or "(dGPU)"; the DirectML adapter name of the
+# same GPU does not.
+_OPENVINO_KIND = re.compile(r"\s*\((?:iGPU|dGPU)\)\s*$")
+_TRADEMARKS = re.compile(r"\((?:R|TM|C)\)|[®™©]")
+
+
+def display_name(name: str) -> str:
+    """An adapter name as people know it, without trademark marks or OpenVINO's (iGPU) tag.
+
+    The engine's messages use it, so they name a GPU as the Hardware menu does
+    (cleanDeviceName in desktop/src/lib/hardwareRoutes.ts)."""
+    return " ".join(_TRADEMARKS.sub("", _OPENVINO_KIND.sub("", name)).split())
+
 
 def _system_memory() -> tuple[int, int]:
     if sys.platform == "win32":
