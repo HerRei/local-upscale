@@ -1216,6 +1216,10 @@ def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
     init = tmp_path / "src/localsr/__init__.py"
     init.write_text(init.read_text().replace("0.3.5-beta", "0.3.7-beta"))
     assert release_targets.engine_id(target, "f" * 40, root=tmp_path) == before
+    # Release tooling is not engine content: editing it must not force a new engine.
+    tooling = tmp_path / "scripts/release_targets.py"
+    tooling.write_text(tooling.read_text() + "\n# release tooling edit\n")
+    assert release_targets.engine_id(target, COMMIT, root=tmp_path) == before
     recipe = [
         "src/localsr/worker/server.py",
         "packaging/tauri_worker.spec",
