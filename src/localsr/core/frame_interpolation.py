@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import threading
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import Protocol
 
@@ -125,7 +125,9 @@ def frame_signature(rgb: np.ndarray) -> FrameSignature:
     scale = min(1.0, _FINE_EDGE / max(luma.shape))
     fine_size = (max(1, round(luma.shape[0] * scale)), max(1, round(luma.shape[1] * scale)))
     planes = luma[None, None]
-    fine = F.adaptive_avg_pool2d(planes, fine_size)[0, 0].numpy()
+    fine = F.adaptive_avg_pool2d(torch.from_numpy(sample).permute(2, 0, 1)[None], fine_size)[
+        0
+    ].numpy()
     coarse = F.adaptive_avg_pool2d(planes, (_COARSE, _COARSE))[0, 0].numpy()
     return FrameSignature(fine, coarse)
 
@@ -229,22 +231,28 @@ class _Schedule:
                     slots.append((stamp, frame.rgb))
                 else:
                     slots.append((stamp, None))
-        steps = [float((stamp - anchor.timestamp) / span) for stamp, rgb in slots if rgb is None]
-        made: Iterator[np.ndarray] = iter(())
-        if steps:
-            assert synthesizer is not None
-            _check(cancel_event)
-            frames = synthesizer.synthesize(anchor.rgb, following.rgb, steps, cancel_event)
-            if len(frames) != len(steps):
-                raise ValueError(
-                    f"Frame interpolation returned {len(frames)} frames for {len(steps)} times."
-                )
-            made = iter(frames)
-        pixels = [rgb if rgb is not None else next(made) for _stamp, rgb in slots]
-        yield from self.emit([stamp for stamp, _rgb in slots], pixels, following.timestamp, False)
+        # Bound retained model outputs even when a VFR interval spans many seconds.
+        for offset in range(0, len(slots), 16):
+            batch = slots[offset : offset + 16]
+            steps = [
+                float((stamp - anchor.timestamp) / span) for stamp, rgb in batch if rgb is None
+            ]
+            made: Iterator[np.ndarray] = iter(())
+            if steps:
+                assert synthesizer is not None
+                _check(cancel_event)
+                frames = synthesizer.synthesize(anchor.rgb, following.rgb, steps, cancel_event)
+                if len(frames) != len(steps):
+                    raise ValueError(
+                        f"Frame interpolation returned {len(frames)} frames for {len(steps)} times."
+                    )
+                made = iter(frames)
+            pixels = [rgb if rgb is not None else next(made) for _stamp, rgb in batch]
+            batch_end = slots[offset + 16][0] if offset + 16 < len(slots) else following.timestamp
+            yield from self.emit([stamp for stamp, _rgb in batch], pixels, batch_end, False)
 
 
-def interpolate_frames(
+def _interpolate_frames(
     frames: Iterable[TimedVideoFrame],
     target: InterpolationTarget,
     synthesizer: FrameSynthesizer,
@@ -283,6 +291,35 @@ def interpolate_frames(
     while run:
         held = run.pop(0)
         yield from schedule.hold(held, run[0].timestamp if run else None)
+
+
+def interpolate_frames(
+    frames: Iterable[TimedVideoFrame],
+    target: InterpolationTarget,
+    synthesizer: FrameSynthesizer,
+    cancel_event: threading.Event | None,
+    *,
+    max_duplicate_run: int = MAX_DUPLICATE_RUN,
+) -> Iterator[TimedVideoFrame]:
+    # Delay one output until the true source end is known, including short VFR tails.
+    source_end = None
+
+    def track_source():
+        nonlocal source_end
+        for frame in frames:
+            source_end = frame.timestamp + frame.duration
+            yield frame
+
+    previous = None
+    for frame in _interpolate_frames(
+        track_source(), target, synthesizer, cancel_event, max_duplicate_run=max_duplicate_run
+    ):
+        if previous is not None:
+            yield previous
+        previous = frame
+    if previous is not None:
+        assert source_end is not None
+        yield replace(previous, duration=source_end - previous.timestamp)
 
 
 __all__ = [

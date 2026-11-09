@@ -285,5 +285,35 @@ def test_scene_cut_detection_separates_cuts_from_motion():
 
 def test_signatures_are_small_for_large_frames():
     signature = frame_signature(np.zeros((2160, 3840, 3), dtype=np.uint8))
-    assert signature.fine.size <= 160 * 90
+    assert signature.fine.size <= 3 * 160 * 90
     assert signature.coarse.shape == (32, 32)
+
+
+def test_large_gap_synthesizes_in_bounded_batches():
+    frames = timed(flat([100, 140]), [0, 10000], last_duration=1)
+    # Even the first output should not require synthesizing the whole gap.
+    synth = RecordingSynthesizer()
+    stream = interpolate_frames(iter(frames), InterpolationTarget.parse("fps120"), synth, None)
+    next(stream)
+    assert not synth.calls or len(synth.calls[0][2]) <= 16
+
+
+def test_equal_luma_colours_are_not_duplicates():
+    red = np.full((HEIGHT, WIDTH, 3), (255, 0, 0), dtype=np.uint8)
+    green = np.full((HEIGHT, WIDTH, 3), (0, 130, 0), dtype=np.uint8)
+    blue = np.full((HEIGHT, WIDTH, 3), (0, 0, 255), dtype=np.uint8)
+    output, _ = run(timed([red, green, blue], [0, 100, 200]), "x2")
+    np.testing.assert_array_equal(output[2].rgb, green)
+
+
+def test_short_vfr_tail_ends_at_source_end():
+    frames = timed(flat([100, 140]), [0, 20], last_duration=1)
+    output, _ = run(frames, "fps60")
+    assert output[-1].timestamp + output[-1].duration == Fraction(21, 1000)
+
+
+def test_large_duplicate_run_has_contiguous_batch_durations():
+    a, b = moving(2)
+    frames = timed([a] * 6 + [b], list(range(0, 700, 100)))
+    output, _ = run(frames, "x4", max_duplicate_run=6)
+    assert all(a.timestamp + a.duration == b.timestamp for a, b in itertools.pairwise(output))

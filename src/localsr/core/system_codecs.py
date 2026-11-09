@@ -644,7 +644,9 @@ class SystemCodecs:
                     pts = int(round((frame.timestamp - origin) * timescale))
                     picture = av.VideoFrame.from_ndarray(frame.rgb, format="rgb24")
                     payload = payload_from_frame(picture, "nv12")
-                    stdin.write(FRAME_HEADER.pack(pts, 0, len(payload)))
+                    stdin.write(
+                        FRAME_HEADER.pack(pts, int(round(frame.duration * timescale)), len(payload))
+                    )
                     stdin.write(payload)
                     count += 1
                 stdin.close()

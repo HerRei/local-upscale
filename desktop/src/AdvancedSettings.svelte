@@ -19,6 +19,8 @@
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
   export let usingTemporalVideo: boolean;
+  export let preservingHdr = false;
+  export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseOutput: () => Promise<void>;
   export let refreshCapabilities: () => Promise<void>;
@@ -301,7 +303,7 @@
           <div class="field-row">
             <label for="frame-rate">Frame rate</label><select
               id="frame-rate"
-              disabled={settings.video_hdr_mode === 'preserve'}
+              disabled={preservingHdr || !interpolationSupported}
               value={settings.video_interpolation ?? 'off'}
               on:change={(event) =>
                 updateSettings({
