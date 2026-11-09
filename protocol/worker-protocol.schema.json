@@ -279,7 +279,7 @@
                   ],
                   "properties": {
                     "video_path": { "type": "string", "minLength": 1 },
-                    "hdr_mode": { "enum": ["reject", "tone_map"], "default": "reject" },
+                    "hdr_mode": { "enum": ["reject", "tone_map", "preserve"], "default": "reject" },
                     "output_video_path": { "type": "string", "minLength": 1 },
                     "container": { "enum": ["mp4", "mkv", "mov"] },
                     "video_codec": { "enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc", "prores"], "default": "av1" },
