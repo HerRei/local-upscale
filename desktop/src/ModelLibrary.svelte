@@ -1,12 +1,16 @@
 <script lang="ts">
   import {
     FIT_LABELS,
+    FIX_LABELS,
+    chooseFixModel,
     choosePresetModel,
     displayName,
     fitFor,
+    fixQuality,
     fixesOf,
     formatBytes,
     modelsForTask,
+    rememberedFixModel,
     rightsAllowPreset,
   } from './lib/state';
   import {
@@ -48,6 +52,9 @@
   export let busy = false;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
+  /** Remember a model for one problem (Fix first, or Restore with a chip on). */
+  export let rememberFix: (model: CatalogModel, fix: Exclude<FixKind, 'faces'>) => void;
+  export let forgetFix: (fix: Exclude<FixKind, 'faces'>) => void;
   export let useEditModel: (model: EditModel) => void;
   export let pin: (model: CatalogModel, quality: 'quick' | 'best') => void;
   export let download: (
@@ -65,7 +72,21 @@
 
   let group: GroupId =
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
-  let selectedId = '';
+  // Choosing the model for one problem: Fix first, or Restore with a chip on.
+  $: fixing =
+    context.fix !== undefined &&
+    (context.slot === 'fix' || (context.slot === 'primary' && context.task === 'denoise'))
+      ? context.fix
+      : undefined;
+  // A fix picker opens on the model the job uses now.
+  let selectedId =
+    context.fix === undefined
+      ? ''
+      : context.slot === 'fix'
+        ? settings.preprocess_model_id
+        : context.slot === 'primary' && context.task === 'denoise'
+          ? settings.selected_model_id
+          : '';
   let termsAccepted = false;
   let showHeavyEdit = false;
 
@@ -102,7 +123,10 @@
       );
     }
     const candidates = modelsForTask(snapshot, context.task);
-    if (context.task === 'denoise') return candidates;
+    if (context.task === 'denoise') {
+      const fix = context.fix;
+      return fix ? candidates.filter((model) => fixesOf(model).includes(fix)) : candidates;
+    }
     const matches = (model: CatalogModel): number =>
       context.content === 'illustration'
         ? model.purposes.includes('illustration') || model.purposes.includes('anime')
@@ -167,7 +191,8 @@
       label: 'Installed',
       count: models.filter((model) => model.installed).length + installedEditModels.length,
     },
-    { id: 'own' as GroupId, label: 'Your own file', count: 0 },
+    // A fix runs a catalog model only; a file of your own replaces the upscaler.
+    ...(context.slot === 'fix' ? [] : [{ id: 'own' as GroupId, label: 'Your own file', count: 0 }]),
   ];
   $: rows = ((): CatalogModel[] => {
     switch (group) {
@@ -215,14 +240,21 @@
     ? undefined
     : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
   $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
-  $: quickId = context.task
-    ? choosePresetModel(snapshot, context.task, 'quick', context.content, settings.preset_pins)
-        ?.model_id
-    : '';
-  $: bestId = context.task
-    ? choosePresetModel(snapshot, context.task, 'best', context.content, settings.preset_pins)
-        ?.model_id
-    : '';
+  $: quickId = fixing
+    ? chooseFixModel(snapshot, fixing, 'quick', settings.preset_pins)?.model_id
+    : context.task
+      ? choosePresetModel(snapshot, context.task, 'quick', context.content, settings.preset_pins)
+          ?.model_id
+      : '';
+  $: bestId = fixing
+    ? chooseFixModel(snapshot, fixing, 'best', settings.preset_pins)?.model_id
+    : context.task
+      ? choosePresetModel(snapshot, context.task, 'best', context.content, settings.preset_pins)
+          ?.model_id
+      : '';
+  $: rememberedFix = fixing
+    ? rememberedFixModel(snapshot, fixing, fixQuality(context.quality), settings.preset_pins)
+    : undefined;
   $: canUseForJob = (model: CatalogModel): boolean =>
     context.slot !== 'browse' &&
     jobModels.some((candidate) => candidate.model_id === model.model_id);
@@ -287,11 +319,13 @@
             ? 'Video'
             : context.task === 'denoise'
               ? 'Restore'
-              : 'Upscale'}{context.slot === 'fix'
-            ? ' · fix'
-            : context.slot === 'face'
-              ? ' · faces'
-              : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'} · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}</span
+              : 'Upscale'}{fixing
+            ? ` · ${FIX_LABELS[fixing]}`
+            : context.slot === 'fix'
+              ? ' · fix'
+              : context.slot === 'face'
+                ? ' · faces'
+                : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'} · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}</span
         >
       {/if}
       <div class="sheet-right">
@@ -825,7 +859,32 @@
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
             {/if}
-            {#if canUseForJob(selected)}
+            {#if fixing}
+              {@const problem = fixing}
+              <div class="pair">
+                {#if canUseForJob(selected) && rightsAllowPreset(selected)}
+                  <button
+                    class="button"
+                    type="button"
+                    disabled={busy}
+                    on:click={() => rememberFix(selected, problem)}
+                    >Use for {FIX_LABELS[problem]}{context.quality === 'quick'
+                      ? ' · Quick'
+                      : context.quality === 'best'
+                        ? ' · Best'
+                        : ''}</button
+                  >
+                {/if}
+                {#if rememberedFix}
+                  <button
+                    class="link-button"
+                    type="button"
+                    disabled={busy}
+                    on:click={() => forgetFix(problem)}>Back to the default</button
+                  >
+                {/if}
+              </div>
+            {:else if canUseForJob(selected)}
               <div class="pair">
                 <button
                   class="button"

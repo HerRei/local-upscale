@@ -2239,6 +2239,15 @@ input[type='text'],
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.4;
 }
+.plan-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.plan-row .state:empty {
+  display: none;
+}
 .plan-row .state {
   white-space: nowrap;
   color: var(--secondary);

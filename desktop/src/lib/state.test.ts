@@ -452,6 +452,113 @@ describe('model library resolution', () => {
     expect(chooseFixModel(snapshot, 'noise', 'best')?.model_id).toBe('nafnet_sidd_width64');
   });
 
+  it('reads a remembered fix model first, but only one that fits that problem', () => {
+    const snapshot = demoSnapshot();
+    const pins = { 'fix/noise/best': 'scunet_color_real_psnr' };
+    expect(chooseFixModel(snapshot, 'noise', 'best', pins)?.model_id).toBe(
+      'scunet_color_real_psnr',
+    );
+    // Quick keeps its own default; the choice was made for Best.
+    expect(chooseFixModel(snapshot, 'noise', 'quick', pins)?.model_id).toBe('denoise_realplksr_1x');
+    // A pin naming no model, a model for another problem, or an upscaler falls back.
+    for (const id of ['gone', 'fbcnn_color', 'span_photo_x4']) {
+      expect(chooseFixModel(snapshot, 'noise', 'best', { 'fix/noise/best': id })?.model_id).toBe(
+        'nafnet_sidd_width64',
+      );
+    }
+    const scunet = snapshot.catalog.models.find(
+      (model) => model.model_id === 'scunet_color_real_psnr',
+    )!;
+    scunet.commercial_use_allowed = false;
+    expect(chooseFixModel(snapshot, 'noise', 'best', pins)?.model_id).toBe('nafnet_sidd_width64');
+    // Kept out of the automatic choice, but the user chose it.
+    scunet.commercial_use_allowed = true;
+    scunet.preset_eligible = false;
+    expect(chooseFixModel(snapshot, 'noise', 'best', pins)?.model_id).toBe(
+      'scunet_color_real_psnr',
+    );
+  });
+
+  it('every fix chip has a model in the bundled catalog for Quick and Best', () => {
+    // The plan has no row for a fix without a model, so the catalog must never lose one.
+    const snapshot = demoSnapshot();
+    for (const fix of ['noise', 'jpeg', 'blur'] as const) {
+      for (const quality of ['quick', 'best'] as const) {
+        expect(chooseFixModel(snapshot, fix, quality)).toBeTruthy();
+      }
+    }
+  });
+
+  it('no fix model needs a licence acceptance or the library would offer no way to accept it', () => {
+    const snapshot = demoSnapshot();
+    const gated = snapshot.catalog.models.filter(
+      (model) =>
+        model.terms_acceptance_required &&
+        (model.native_scale === 1 || model.automated_download_allowed),
+    );
+    expect(gated.map((model) => model.model_id)).toEqual([]);
+  });
+
+  it('names the fix row after the problem and marks a remembered choice', () => {
+    const snapshot = demoSnapshot();
+    const settings = {
+      ...snapshot.settings,
+      task: 'upscale' as const,
+      quality: 'best' as const,
+      fixes: ['noise' as const],
+      selected_model_id: 'span_photo_x4',
+      preprocess_model_id: 'scunet_color_real_psnr',
+      preset_pins: {},
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    let [fix, upscale] = resolvePlan(snapshot, settings, options);
+    expect([fix.role, fix.fix, fix.label, fix.remembered]).toEqual([
+      'fix',
+      'noise',
+      'Fix noise',
+      false,
+    ]);
+    expect(upscale.role).toBe('primary');
+    [fix] = resolvePlan(
+      snapshot,
+      { ...settings, preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' } },
+      options,
+    );
+    expect(fix.remembered).toBe(true);
+    // The pin is for Quick, this job is Best: not this job's remembered choice.
+    [fix] = resolvePlan(
+      snapshot,
+      { ...settings, preset_pins: { 'fix/noise/quick': 'scunet_color_real_psnr' } },
+      options,
+    );
+    expect(fix.remembered).toBe(false);
+    // A recipe saved before chips existed: the model fixes one problem, so that is the label.
+    [fix] = resolvePlan(
+      snapshot,
+      { ...settings, fixes: [], preprocess_model_id: 'fbcnn_color' },
+      options,
+    );
+    expect([fix.fix, fix.label]).toEqual(['jpeg', 'Fix JPEG']);
+    // In Restore the model is the primary; the active chip still names its problem.
+    const [restore] = resolvePlan(
+      snapshot,
+      {
+        ...settings,
+        task: 'denoise',
+        selected_model_id: 'scunet_color_real_psnr',
+        preprocess_model_id: '',
+        preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+      },
+      options,
+    );
+    expect([restore.role, restore.fix, restore.label, restore.remembered]).toEqual([
+      'primary',
+      'noise',
+      'Restore',
+      true,
+    ]);
+  });
+
   it("keeps a finished job's note, such as a skipped fix, on the status line", () => {
     let snapshot = demoSnapshot();
     snapshot = applyWorkerEnvelope(snapshot, {

@@ -31,11 +31,15 @@
   import {
     FIT_LABELS,
     FIX_LABELS,
+    UNSTABLE_FIX_MODELS,
     applyWorkerEnvelope,
     chooseFixModel,
     choosePresetModel,
     displayName,
     fitFor,
+    fixQuality,
+    fixSlot,
+    fixesOf,
     formatBytes,
     formatDuration,
     modelsForTask,
@@ -747,12 +751,14 @@
     const models =
       task === 'denoise'
         ? [
-            (fix ? chooseFixModel(current, fix, quality) : undefined) ??
+            (fix ? chooseFixModel(current, fix, quality, ui.preset_pins) : undefined) ??
               choosePresetModel(current, task, quality),
           ]
         : [
             choosePresetModel(current, task, quality, ui.content, ui.preset_pins),
-            task === 'upscale' && fix ? chooseFixModel(current, fix, quality) : undefined,
+            task === 'upscale' && fix
+              ? chooseFixModel(current, fix, quality, ui.preset_pins)
+              : undefined,
           ];
     const bytes = models.reduce(
       (total, model) => total + (model && !model.installed ? model.size_bytes : 0),
@@ -785,11 +791,17 @@
     };
     if (task === 'denoise') {
       const model =
-        (fix ? chooseFixModel(snapshot, fix, quality) : undefined) ??
+        (fix ? chooseFixModel(snapshot, fix, quality, current.preset_pins) : undefined) ??
         choosePresetModel(snapshot, task, quality);
-      if (model && !keepPrimary) {
+      // A hand-picked model stays only while it fixes the chosen problem.
+      const picked = snapshot.catalog.models.find(
+        (entry) => entry.model_id === current.selected_model_id,
+      );
+      const keepPicked = keepPrimary && (!fix || Boolean(picked && fixesOf(picked).includes(fix)));
+      if (model && !keepPicked) {
         patchSettings.selected_model_id = model.model_id;
         patchSettings.halo = model.recommended_halo;
+        patchSettings.quality = quality;
       }
       patchSettings.preprocess_model_id = '';
       patchSettings.output_scale = 1;
@@ -808,7 +820,9 @@
         patchSettings.safe_memory = quality === 'best' ? current.safe_memory : false;
       }
       patchSettings.preprocess_model_id =
-        task === 'upscale' && fix ? (chooseFixModel(snapshot, fix, quality)?.model_id ?? '') : '';
+        task === 'upscale' && fix
+          ? (chooseFixModel(snapshot, fix, quality, current.preset_pins)?.model_id ?? '')
+          : '';
       const primaryId = patchSettings.selected_model_id ?? current.selected_model_id;
       const primaryModel = snapshot.catalog.models.find((model) => model.model_id === primaryId);
       const companion = snapshot.catalog.models.find(
@@ -860,10 +874,49 @@
     libraryOpen = false;
   }
 
-  function openLibrary(slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit'): void {
-    const fix = settings.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces');
-    libraryContext = slot === 'fix' ? { slot, fix } : { slot };
+  function openLibrary(
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit',
+    fix = settings.fixes.find((item): item is Exclude<FixKind, 'faces'> => item !== 'faces'),
+  ): void {
+    // Restore's model is the fix itself, so with a chip on it is chosen like one.
+    libraryContext =
+      slot === 'fix' || (slot === 'primary' && settings.task === 'denoise' && fix)
+        ? { slot, fix }
+        : { slot };
     libraryOpen = true;
+  }
+
+  /**
+   * The user's own model for a problem, remembered for the quality whose fixes this job
+   * uses, so a chip click, the content switch or Quick and back keeps it.
+   */
+  function rememberFixModel(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): void {
+    const preset_pins = {
+      ...settings.preset_pins,
+      [fixSlot(fix, fixQuality(activeQuality))]: model.model_id,
+    };
+    updateSettings(
+      settings.task === 'denoise'
+        ? {
+            preset_pins,
+            selected_model_id: model.model_id,
+            output_scale: 1,
+            halo: model.recommended_halo,
+          }
+        : { preset_pins, preprocess_model_id: model.model_id },
+    );
+    libraryOpen = false;
+  }
+
+  function forgetFixModel(fix: Exclude<FixKind, 'faces'>): void {
+    const slot = fixSlot(fix, fixQuality(activeQuality));
+    updateSettings({
+      preset_pins: Object.fromEntries(
+        Object.entries(settings.preset_pins).filter(([key]) => key !== slot),
+      ),
+    });
+    resolveRecipe({ quality: activeQuality });
+    libraryOpen = false;
   }
 
   async function removeModel(model: CatalogModel | EditModel): Promise<void> {
@@ -1125,7 +1178,13 @@
       // As the presets do: some models need a wider overlap between tiles.
       halo: model ? model.recommended_halo : settings.halo,
       allow_unsafe_pickle_model: false,
-      enable_face_model: false,
+      enable_face_model:
+        settings.task !== 'denoise' &&
+        settings.fixes.includes('faces') &&
+        faceEngineAvailable &&
+        snapshot.catalog.models.some(
+          (entry) => entry.purposes.includes('face') && entry.model_id === model?.pair_with,
+        ),
       quality: 'custom',
     });
     termsAccepted = false;
@@ -1435,6 +1494,12 @@
         : undefined;
     const recipeFace = recipe.stages?.find((stage) => stage.kind === 'face_restore');
     const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
+    // Recipes saved before the chips existed: the fix model names its problem when it
+    // fixes only one, so the chips match what will run.
+    const recipeFixModel = snapshot.catalog.models.find(
+      (model) => model.model_id === recipePreprocess?.model_id,
+    );
+    const recipeFixes = recipeFixModel ? fixesOf(recipeFixModel) : [];
     updateSettings({
       task: recipe.task,
       selected_model_id: recipe.model_id,
@@ -1469,7 +1534,10 @@
       allow_unsafe_pickle_model: false,
       quality: recipe.quality || 'custom',
       content: recipe.content || settings.content,
-      fixes: recipe.fixes ?? [],
+      fixes: recipe.fixes ?? [
+        ...(recipeFixes.length === 1 ? recipeFixes : []),
+        ...(recipeFace ? (['faces'] as FixKind[]) : []),
+      ],
     });
     termsAccepted = false;
     faceTermsAccepted = false;
@@ -2212,7 +2280,12 @@
                       on:click={() => setContent('illustration')}>Illustration</button
                     >
                   </div>
-                  <span class="field-label" id="fix-label">Fix first</span>
+                  <div class="field-heading">
+                    <span class="field-label" id="fix-label">Fix first</span><HelpTip
+                      label="Fix first"
+                      text="One fix runs before the upscaler: pick the main problem. Its model is listed under Model, where Change… picks another; LocalSR remembers that choice for this problem."
+                    />
+                  </div>
                 {/if}
                 <div
                   class="chips"
@@ -2272,12 +2345,12 @@
                       type="button"
                       on:click={() => applyPreset('best')}>Back to Best</button
                     >{/if}
-                  <button
-                    class="link-button"
-                    type="button"
-                    on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
-                    >Change…</button
-                  >
+                  {#if plan.length === 0}<button
+                      class="link-button"
+                      type="button"
+                      on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
+                      >Change…</button
+                    >{/if}
                 </span>
               </div>
               {#if settings.task === 'video'}
@@ -2309,8 +2382,16 @@
               {/if}
 
               <div class="plan" role="list" aria-label="Stages">
-                {#each plan as stage (stage.kind)}
+                {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
                   {@const target = stage.model ?? stage.videoModel ?? stage.editModel}
+                  {@const changeSlot =
+                    stage.role === 'fix'
+                      ? stage.fix && 'fix'
+                      : stage.role === 'primary' && !stage.videoModel
+                        ? stage.editModel
+                          ? 'edit'
+                          : 'primary'
+                        : undefined}
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
                     <div class="plan-copy">
@@ -2332,6 +2413,7 @@
                             : ''}
                         {:else if stage.model}
                           {[
+                            stage.remembered ? 'Your pick' : '',
                             stage.model.support_tier === 'labs' ? 'Labs' : '',
                             stage.model.commercial_use_allowed === false ? 'Non-commercial' : '',
                             ['heavy', 'too_heavy'].includes(fitFor(stage.model, activeDevice))
@@ -2349,6 +2431,13 @@
                           >
                         {/if}
                       </div>
+                      {#if stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)}
+                        <div class="meta">
+                          {stage.role === 'fix'
+                            ? 'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.'
+                            : 'Can add artifacts to sharp pictures and line art.'}
+                        </div>
+                      {/if}
                       {#if stage.custom !== undefined}
                         <button class="button full" on:click={chooseCustomModel}
                           >{settings.custom_model_path
@@ -2427,13 +2516,27 @@
                           </div>{/if}
                       {/if}
                     </div>
-                    <span class="state" class:warn={stage.needsFile}
-                      >{activeDownload === target?.model_id
-                        ? `${Math.round(snapshot.runtime.download_progress)}%`
-                        : stage.needsFile && !stage.installed
-                          ? 'Needs your file'
-                          : ''}</span
-                    >
+                    <div class="plan-end">
+                      <span class="state" class:warn={stage.needsFile}
+                        >{activeDownload === target?.model_id
+                          ? `${Math.round(snapshot.runtime.download_progress)}%`
+                          : stage.needsFile && !stage.installed
+                            ? 'Needs your file'
+                            : ''}</span
+                      >
+                      {#if changeSlot}<button
+                          class="link-button"
+                          type="button"
+                          aria-label={changeSlot === 'fix'
+                            ? 'Change the fix model'
+                            : changeSlot === 'edit'
+                              ? 'Change the edit model'
+                              : settings.task === 'denoise'
+                                ? 'Change the restore model'
+                                : 'Change the upscaler'}
+                          on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
+                        >{/if}
+                    </div>
                   </div>
                 {/each}
               </div>
@@ -2645,6 +2748,8 @@
     busy={settingsLocked || preparing}
     close={() => (libraryOpen = false)}
     useForJob={useModelForJob}
+    rememberFix={rememberFixModel}
+    forgetFix={forgetFixModel}
     {useEditModel}
     pin={pinPreset}
     download={(model, accepted) => runDownload(model, accepted ?? false)}
