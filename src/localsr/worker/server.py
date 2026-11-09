@@ -111,6 +111,7 @@ def _video_engines() -> list[str]:
 def _engine_features() -> list[str]:
     features = [
         "image",
+        "image_multi_fix",
         "video_frame",
         "camera_raw",
         "cancellation",

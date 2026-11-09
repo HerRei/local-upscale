@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from localsr.core.model_adapter import NormalizedModelInfo
+from localsr.core.model_catalog import CATALOG_BY_ID
 from localsr.core.pipeline import parse_pipeline_stages
 from localsr.worker.server import WorkerServer
 
@@ -441,3 +442,328 @@ def test_the_engine_releases_every_cached_model_but_the_ones_to_keep():
     assert list(engine._loaded_models) == ["upscale.pth"]
     assert list(engine._loaded_backend_ids) == ["upscale.pth"]
     assert engine._active_path == "upscale.pth"
+
+
+@pytest.mark.parametrize("count", range(4))
+@pytest.mark.parametrize("restoring", [False, True])
+def test_ordered_fix_topology(count, restoring):
+    from localsr.core.pipeline import resolve_image_pipeline
+
+    prefix = [
+        _stage(kind, fix, f"{fix}.pth", fix=fix, role="fix")
+        for kind, fix in [("restore", "blur"), ("deblock", "jpeg"), ("restore", "noise")][:count]
+    ]
+    stages = prefix + [
+        _stage("restore" if restoring else "upscale", "main", "main.pth", role="primary")
+    ]
+    if not restoring:
+        stages.append(_stage("face_restore", "face", "face.pth", execution="fused-with-upscale"))
+    pipeline = resolve_image_pipeline(
+        raw_stages=stages,
+        model_path="main.pth",
+        output_scale=1 if restoring else 2,
+        face_model_path=None if restoring else "face.pth",
+    )
+    assert pipeline.primary_index == count
+    assert [stage.model_id for stage in pipeline.preprocess_stages] == [
+        s["model_id"] for s in prefix
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        [_stage("restore", "tail", "tail")],
+        [_stage("upscale", "other", "other")],
+        [_stage("face_restore", "face", "face", execution="fused-with-upscale")] * 2,
+    ],
+)
+def test_multi_fix_rejects_invalid_tail(extra):
+    with pytest.raises(ValueError):
+        parse_pipeline_stages(
+            [_stage("restore", "a", "a"), _stage("upscale", "main", "main"), *extra]
+        )
+
+
+def test_multi_fix_rejects_duplicate_semantics_and_primary_roles():
+    for stages in (
+        [
+            _stage("restore", "a", "a", fix="noise"),
+            _stage("restore", "b", "b", fix="noise"),
+            _stage("upscale", "main", "main"),
+        ],
+        [
+            _stage("restore", "a", "a", role="primary"),
+            _stage("upscale", "main", "main", role="primary"),
+        ],
+        [_stage("restore", "a", "a", fix="unknown"), _stage("upscale", "main", "main")],
+        [_stage("restore", str(i), str(i)) for i in range(4)] + [_stage("upscale", "main", "main")],
+        [_stage("restore", str(i), str(i)) for i in range(5)] + [_stage("upscale", "main", "main")],
+    ):
+        with pytest.raises(ValueError):
+            parse_pipeline_stages(stages)
+
+
+@pytest.mark.parametrize("skipped", [(), (0,), (1,), (2,), (0, 1, 2)])
+@pytest.mark.parametrize("restoring", [False, True])
+def test_multi_fix_feeds_outputs_skips_only_unstable_and_releases_each_stage(
+    tmp_path, monkeypatch, capsys, skipped, restoring
+):
+    from localsr.core.image_io import ImageManager
+    from localsr.core.inference import UnstableRestorationError
+
+    log = []
+    server = WorkerServer()
+    server.model_adapter = _Adapter(log)
+    engine = _PipelineEngine(log=log)
+    server.engine = engine
+    data = _job_data(tmp_path)
+    fixes = [
+        ("restore", "nafnet_gopro_deblur", "blur"),
+        ("deblock", "fbcnn_color", "jpeg"),
+        ("restore", "nafnet_sidd_width64", "noise"),
+    ]
+    paths = [str(tmp_path / f"{i}-restore.pth") for i in range(3)]
+    data["stages"] = [
+        _stage(kind, model, path, role="fix", fix=fix)
+        for (kind, model, fix), path in zip(fixes, paths, strict=True)
+    ] + data["stages"][1:]
+    if restoring:
+        data["model_path"] = str(tmp_path / "main-restore.pth")
+        data["output_scale"] = 1
+        data["stages"][-1] = _stage("restore", "main", data["model_path"], role="primary")
+    process = engine.process_image
+
+    def run_stage(**kwargs):
+        if kwargs["model_path"] in [paths[i] for i in skipped]:
+            engine.calls.append(kwargs["model_path"])
+            engine.inputs.append(kwargs["img_data"]["tensor"].clone())
+            log.append(("process", kwargs["model_path"]))
+            kwargs["progress_callback"](1, 2, 64)
+            raise UnstableRestorationError("unstable values")
+        return process(**kwargs)
+
+    engine.process_image = run_stage
+    source = torch.zeros((3, 5, 7))
+    metadata = {
+        "safe_exif": {"artist": "author"},
+        "icc_profile": b"profile",
+        "alpha": torch.ones(5, 7),
+    }
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": source, **metadata})
+    saves = []
+    monkeypatch.setattr(ImageManager, "save", lambda *_args, **kwargs: saves.append(kwargs))
+    server._run_job("pipeline-job", data)
+    assert engine.calls == paths + [data["model_path"]]
+    previous = source
+    for index, input_tensor in enumerate(engine.inputs):
+        assert torch.equal(input_tensor, previous)
+        if index not in skipped:
+            previous = torch.full_like(source, (index + 1) * 20 / 255)
+    assert len(saves) == 1
+    assert saves[0]["safe_exif"] == metadata["safe_exif"]
+    assert saves[0]["icc_profile"] == b"profile"
+    assert all(writer.cleaned for writer in engine.writers)
+    for path in paths:
+        assert _fix_released_before_upscale(log, path)
+    expected_halos = [max(8, CATALOG_BY_ID[model].recommended_halo) for _, model, _ in fixes]
+    assert engine.halos == [halo for i, halo in enumerate(expected_halos) if i not in skipped] + [8]
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [m["data"]["stage_index"] for m in messages if m["type"] == "stage_started"] == list(
+        range(4)
+    )
+    percentages = [m["data"]["percentage"] for m in messages if m["type"] == "progress"]
+    assert percentages == sorted(percentages)
+    notes = next(m["data"]["notes"] for m in messages if m["type"] == "job_completed")
+    assert notes.count("was skipped") == len(skipped)
+    # Each note names the problem and the model a person chose, not an internal ID.
+    names = {"blur": "blur", "jpeg": "JPEG", "noise": "noise"}
+    for index in skipped:
+        _, model, fix = fixes[index]
+        display = CATALOG_BY_ID[model].display_name
+        assert f"The {names[fix]} fix ({display}) was skipped for this image" in notes
+        assert model not in notes
+
+
+@pytest.mark.parametrize("boundary", range(4))
+def test_multi_fix_cancellation_at_each_boundary(tmp_path, monkeypatch, capsys, boundary):
+    from localsr.core.image_io import ImageManager
+
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+    data = _job_data(tmp_path)
+    data["stages"] = [
+        _stage("restore", str(i), str(tmp_path / f"{i}-restore.pth")) for i in range(3)
+    ] + data["stages"][1:]
+    process = engine.process_image
+
+    def run_stage(**kwargs):
+        result = process(**kwargs)
+        if len(engine.calls) == boundary:
+            server.cancel_event.set()
+        return result
+
+    engine.process_image = run_stage
+    if boundary == 0:
+        server.cancel_event.set()
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(
+        ImageManager, "save", lambda *_a, **_kw: pytest.fail("Cancelled job saved output")
+    )
+    server._run_job("pipeline-job", data)
+    assert len(engine.calls) == boundary
+    assert all(writer.cleaned for writer in engine.writers)
+    assert '"type": "job_cancelled"' in capsys.readouterr().out
+
+
+def test_engine_advertises_ordered_image_fixes():
+    from localsr.worker.server import _engine_features
+
+    assert "image_multi_fix" in _engine_features()
+
+
+@pytest.mark.parametrize("invalid", ["scale", "channels", "dimensions"])
+def test_every_fix_checks_native_shape_and_channels(tmp_path, monkeypatch, invalid):
+    from localsr.core.image_io import ImageManager
+
+    server = WorkerServer()
+    adapter = _Adapter()
+    inspect = adapter.inspect
+
+    def inspect_stage(path):
+        if "1-restore" not in path:
+            return inspect(path)
+        return NormalizedModelInfo(
+            "Test",
+            2 if invalid == "scale" else 1,
+            1 if invalid == "channels" else 3,
+            3,
+            True,
+            False,
+            1,
+            1,
+            path,
+            [],
+        )
+
+    adapter.inspect = inspect_stage
+    server.model_adapter = adapter
+    engine = _PipelineEngine()
+    server.engine = engine
+    process = engine.process_image
+
+    def process_stage(**kwargs):
+        writer = process(**kwargs)
+        if invalid == "dimensions" and "1-restore" in kwargs["model_path"]:
+            writer.array = np.zeros((3, 1, 1), dtype=np.uint8)
+        return writer
+
+    engine.process_image = process_stage
+    data = _job_data(tmp_path)
+    data["stages"] = [
+        _stage("restore", str(i), str(tmp_path / f"{i}-restore.pth")) for i in range(3)
+    ] + data["stages"][1:]
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    with pytest.raises(RuntimeError, match=r"restore stage \(1\) failed"):
+        server._run_job("pipeline-job", data)
+    assert all(writer.cleaned for writer in engine.writers)
+
+
+@pytest.mark.parametrize(
+    "stages",
+    [
+        [_stage("restore", "a", "a", fix=["noise"]), _stage("upscale", "b", "b")],
+        [_stage("restore", "a", "a", fix=3), _stage("upscale", "b", "b")],
+        [_stage("restore", "a", "a"), _stage("upscale", "b", "b", fix="noise")],
+        [
+            _stage("upscale", "b", "b"),
+            _stage("face_restore", "f", "f", execution="fused-with-upscale", fix="blur"),
+        ],
+    ],
+)
+def test_a_fix_kind_is_text_and_belongs_to_a_restoration_stage(stages):
+    with pytest.raises(ValueError, match="fix"):
+        parse_pipeline_stages(stages)
+
+
+def test_explicit_roles_require_exactly_one_primary():
+    with pytest.raises(ValueError, match="primary"):
+        parse_pipeline_stages(
+            [_stage("restore", "a", "a", role="fix"), _stage("upscale", "b", "b", role="fix")]
+        )
+
+
+def test_restore_primary_keeps_the_job_halo_while_its_fixes_use_their_own(tmp_path, monkeypatch):
+    # The halo setting belongs to the main model (Restore sets it when the model is
+    # chosen); only the optional fixes before it raise their overlap.
+    from localsr.core.image_io import ImageManager
+
+    data = _job_data(tmp_path)
+    data["model_path"] = str(tmp_path / "main-restore.pth")
+    data["output_scale"] = 1
+    data["stages"] = [
+        _stage(
+            "restore", "nafnet_gopro_deblur", str(tmp_path / "restore.pth"), role="fix", fix="blur"
+        ),
+        _stage("restore", "nafnet_sidd_width64", data["model_path"], role="primary", fix="noise"),
+    ]
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    server.engine = _PipelineEngine()
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(ImageManager, "save", lambda *_a, **_kw: None)
+    server._run_job("pipeline-job", data)
+    assert server.engine.halos == [32, 8]
+
+
+@pytest.mark.parametrize("restoring", [False, True])
+def test_multi_fix_final_write_preserves_alpha_and_cleans_real_scratch(
+    tmp_path, monkeypatch, restoring
+):
+    from PIL import Image
+
+    from localsr.core.output_writer import OutputWriter
+
+    source = Image.new("RGBA", (7, 5), (32, 64, 96, 120))
+    source.putpixel((0, 0), (32, 64, 96, 0))
+    source.save(tmp_path / "input.png")
+    data = _job_data(tmp_path)
+    data["stages"] = [
+        _stage("restore", str(i), str(tmp_path / f"{i}-restore.pth")) for i in range(3)
+    ] + data["stages"][1:]
+    if restoring:
+        data["model_path"] = str(tmp_path / "main-restore.pth")
+        data["output_scale"] = 1
+        data["stages"][-1] = _stage("restore", "main", data["model_path"], role="primary")
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    server.engine = _PipelineEngine()
+    writers = []
+
+    def process(**kwargs):
+        tensor = kwargs["img_data"]["tensor"]
+        scale = kwargs["model_info"].scale
+        writer = OutputWriter(
+            (3, tensor.shape[1] * scale, tensor.shape[2] * scale),
+            temporary_directory=data["scratch_directory"],
+        )
+        writer.mmap[:] = (len(writers) + 1) * 20
+        writers.append(writer)
+        return writer
+
+    monkeypatch.setattr(server.engine, "process_image", process)
+    server._run_job("pipeline-job", data)
+    scale = 1 if restoring else 2
+    with Image.open(data["output_path"]) as output:
+        assert output.size == (7 * scale, 5 * scale)
+        np.testing.assert_array_equal(
+            np.asarray(output.getchannel("A")),
+            np.asarray(source.getchannel("A").resize(output.size, Image.Resampling.LANCZOS)),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(output)[:, :, :3], np.full((5 * scale, 7 * scale, 3), 80, dtype=np.uint8)
+        )
+    assert all(writer.mmap is None for writer in writers)
+    assert not list((tmp_path / "scratch").glob("localsr-output-*.dat"))
