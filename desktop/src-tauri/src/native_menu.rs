@@ -21,6 +21,38 @@ pub fn switches(settings: &UiSettings) -> Switches {
 
 pub const EVENT_NAME: &str = "native-menu-action";
 
+const PREVIOUS_RESULT_ACCELERATOR: &str = "CmdOrCtrl+Alt+Left";
+const NEXT_RESULT_ACCELERATOR: &str = "CmdOrCtrl+Alt+Right";
+
+/// The View menu names the two single-side views after what they show: the
+/// Original and the result, or the reference and Showing when both are results.
+fn comparison_labels(reference_is_result: bool) -> (&'static str, &'static str) {
+    if reference_is_result {
+        ("Show Reference", "Show Showing Result")
+    } else {
+        ("Show Original", "Show Enhanced")
+    }
+}
+
+/// Rename the two comparison items in place. Menu lookups by id only search
+/// one level, so each submenu is asked; a rebuilt menu starts with the
+/// Original names until the next comparison request.
+pub fn set_comparison_labels(app: &AppHandle, reference_is_result: bool) {
+    let Some(menu) = app.menu() else { return };
+    let Ok(items) = menu.items() else { return };
+    let (reference, showing) = comparison_labels(reference_is_result);
+    for (id, label) in [
+        ("view.compare-original", reference),
+        ("view.compare-enhanced", showing),
+    ] {
+        for submenu in items.iter().filter_map(|item| item.as_submenu()) {
+            if let Some(item) = submenu.get(id).and_then(|item| item.as_menuitem().cloned()) {
+                let _ = item.set_text(label);
+            }
+        }
+    }
+}
+
 pub fn install<R: Runtime>(
     app: &App<R>,
     recipes: &[Recipe],
@@ -55,7 +87,9 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let start = MenuItemBuilder::with_id("file.start", "Start Processing")
         .accelerator("CmdOrCtrl+R")
         .build(manager)?;
-    let cancel = MenuItemBuilder::with_id("file.cancel", "Cancel Job")
+    // Queue-wide, as the footer's Cancel queue; "Cancel runs for this image"
+    // is the per-image action in the window.
+    let cancel = MenuItemBuilder::with_id("file.cancel", "Cancel Queue")
         .accelerator("CmdOrCtrl+.")
         .build(manager)?;
     let integrations =
@@ -107,6 +141,14 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         MenuItemBuilder::with_id("view.compare-split", "Show Split Comparison").build(manager)?;
     let show_enhanced =
         MenuItemBuilder::with_id("view.compare-enhanced", "Show Enhanced").build(manager)?;
+    // Older and newer saved result on the Showing side. Arrows, not brackets:
+    // on Swiss German and German Mac keyboards brackets need Option already.
+    let previous = MenuItemBuilder::with_id("view.previous-result", "Previous Result")
+        .accelerator(PREVIOUS_RESULT_ACCELERATOR)
+        .build(manager)?;
+    let next = MenuItemBuilder::with_id("view.next-result", "Next Result")
+        .accelerator(NEXT_RESULT_ACCELERATOR)
+        .build(manager)?;
     let refresh = MenuItemBuilder::with_id("view.refresh-hardware", "Refresh Hardware Status")
         .build(manager)?;
     // A single ampersand is interpreted as a Windows mnemonic by the native
@@ -124,6 +166,8 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .item(&show_original)
         .item(&show_split)
         .item(&show_enhanced)
+        .item(&previous)
+        .item(&next)
         .separator()
         .item(&models)
         .separator()
@@ -272,4 +316,26 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         return;
     }
     let _ = app.emit(EVENT_NAME, id.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn comparison_menu_names_the_selected_reference_truthfully() {
+        assert_eq!(
+            super::comparison_labels(false),
+            ("Show Original", "Show Enhanced")
+        );
+        assert_eq!(
+            super::comparison_labels(true),
+            ("Show Reference", "Show Showing Result")
+        );
+    }
+
+    #[test]
+    fn result_navigation_uses_arrows_that_every_keyboard_layout_can_type() {
+        // muda 0.20 reads "Left"/"Right" as the arrow keys (accelerator/mod.rs).
+        assert_eq!(super::PREVIOUS_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Left");
+        assert_eq!(super::NEXT_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Right");
+    }
 }
