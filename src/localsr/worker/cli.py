@@ -18,13 +18,18 @@ def main():
 
         raise SystemExit(edit_guard_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--gpu-preflight"]:
-        from localsr.core.gpu_preflight import child_main
+        from localsr.core.gpu_guard import child_main
 
         raise SystemExit(child_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--video-playback-preview"]:
         from localsr.core.video_playback import main as playback_main
 
         raise SystemExit(playback_main(sys.argv[2:]))
+    # Before the server's imports, which may fail: the crashed engine's notes are then
+    # already settled.
+    from localsr.core import gpu_guard
+
+    gpu_guard.settle()
     from localsr.worker.server import main as server_main
 
     server_main()
