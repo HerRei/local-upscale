@@ -152,8 +152,8 @@ def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
 def _primary_index(stages: list[PipelineStage] | tuple[PipelineStage, ...]) -> int:
     """The main model's stage: the one named primary, else the upscaler.
 
-    Requests from hosts before 0.3.7 name no roles; their restore-only job has one
-    restore stage, which is the primary.
+    Requests from hosts without several fixes name no roles; their restore-only job has
+    one restore stage, which is the primary.
     """
     explicit = [i for i, stage in enumerate(stages) if stage.role == "primary"]
     upscales = [i for i, stage in enumerate(stages) if stage.kind == "upscale"]
