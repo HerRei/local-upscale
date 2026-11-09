@@ -124,6 +124,13 @@ input:focus-visible {
 .app-shell.booting {
   cursor: progress;
 }
+/* A route note or a hardware hint adds a status line; the bar grows to hold it. */
+.app-shell.status-extra {
+  grid-template-rows: 1fr minmax(54px, auto);
+}
+.app-shell.status-extra .status-bar {
+  padding-block: 7px;
+}
 .app-shell.queue-timing-visible {
   grid-template-rows: 1fr minmax(90px, auto);
 }
@@ -441,6 +448,9 @@ input:focus-visible {
   font-size: calc(10px * var(--ui-scale));
   line-height: 1;
   text-transform: capitalize;
+}
+.media-copy .queue-state.failed {
+  text-transform: none;
 }
 .remove {
   appearance: none;
@@ -991,6 +1001,11 @@ input[type='text'],
   height: 100%;
   background: var(--accent-hi);
 }
+/* Memory pressure is information, not an action: grey, so terracotta stays on Start and
+   progress. */
+.hardware-card > i {
+  background: var(--tertiary);
+}
 .inline-warning {
   margin: 8px 0;
   color: #e7bc72;
@@ -1278,12 +1293,11 @@ input[type='text'],
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #6db07f;
-  box-shadow: 0 0 8px rgba(109, 176, 127, 0.2);
+  /* Grey, not green: the dot cannot tell "ready" from a lost device or a failure. */
+  background: var(--tertiary);
 }
 .status-copy > i.working {
   background: var(--accent);
-  animation: pulse 1.2s infinite;
 }
 .status-copy > div {
   min-width: 0;
@@ -1304,12 +1318,24 @@ input[type='text'],
 }
 /* A failure or a GPU note can run long; two lines keep its instruction readable, and the
    tooltip holds the rest. */
-.status-copy span.status-detail {
+.status-copy span.status-detail,
+.status-copy span.status-note {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   white-space: normal;
+  line-height: 1.35;
+}
+/* The engine's route note and the hint for a faster unit, on a line of their own. */
+.status-copy span.status-note {
+  color: var(--text);
+}
+.status-note .link-button {
+  color: var(--text);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .status-actions {
   display: flex;
@@ -1359,12 +1385,6 @@ input[type='text'],
 @media (prefers-reduced-motion: reduce) {
   .progress i::after {
     animation: none;
-  }
-}
-@keyframes pulse {
-  50% {
-    opacity: 0.45;
-    transform: scale(0.8);
   }
 }
 
@@ -2063,6 +2083,9 @@ input[type='text'],
 @media (max-width: 1279px) {
   .app-shell {
     grid-template-rows: 52px 1fr 54px;
+  }
+  .app-shell.status-extra {
+    grid-template-rows: 52px 1fr minmax(54px, auto);
   }
   .app-shell.queue-timing-visible {
     grid-template-rows: 52px 1fr minmax(90px, auto);
@@ -2780,6 +2803,18 @@ input[type='text'],
 .label-with-tip {
   display: inline-flex;
   align-items: center;
+}
+/* A long Hardware entry (a GPU and its route) gets the full width under its label. */
+.field-row.stacked {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+.failure-note p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .field-row {
   position: relative;

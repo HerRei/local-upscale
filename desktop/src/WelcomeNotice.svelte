@@ -40,8 +40,8 @@
     <div class="text">
       <b id="welcome-title"><BrandMark size={16} />Welcome to LocalSR</b>
       <span
-        >Drop photos or videos in the middle, pick Upscale, Restore or Edit on the right, then press
-        the button at the bottom right. The model a task needs downloads the first time you use it.</span
+        >Photos and videos stay on this computer. Models download once, when a task first needs
+        them.</span
       >
       {#if counts}
         <span class="count"
@@ -96,6 +96,8 @@
     color: var(--secondary);
     font-size: calc(12px * var(--ui-scale));
     line-height: 1.45;
+    /* The short notice would otherwise leave "them." alone on its second line. */
+    text-wrap: pretty;
   }
   .text .count {
     font-size: calc(12px * var(--ui-scale));

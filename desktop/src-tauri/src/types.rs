@@ -462,6 +462,11 @@ pub struct RuntimeStatus {
     pub live_system_ram_available: u64,
     pub live_memory_pressure_percent: f64,
     pub thermal_status: String,
+    /// What the engine said about the hardware route during the running job (a check, a
+    /// GPU slower than the CPU, a model the NPU does not run). Progress replaces
+    /// `status_detail`; this stays until the job ends.
+    #[serde(default)]
+    pub hardware_note: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -576,6 +581,21 @@ impl BenchmarkResult {
     }
 }
 
+impl RuntimeStatus {
+    /// Makes `id` the running job or benchmark; the route note belonged to the one before.
+    pub fn begin_active_job(&mut self, id: String) {
+        self.active_job_id = id;
+        self.hardware_note.clear();
+    }
+
+    /// Ends or abandons the running job, whatever ended it (its own message, a failed
+    /// send, a killed or crashed engine), and returns its id. Its route note goes with it.
+    pub fn take_active_job(&mut self) -> String {
+        self.hardware_note.clear();
+        std::mem::take(&mut self.active_job_id)
+    }
+}
+
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
@@ -603,6 +623,7 @@ impl Default for RuntimeStatus {
             live_system_ram_available: 0,
             live_memory_pressure_percent: 0.0,
             thermal_status: "Not exposed by this backend".into(),
+            hardware_note: String::new(),
         }
     }
 }

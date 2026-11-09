@@ -6,7 +6,12 @@
   import AdvancedSettings from './AdvancedSettings.svelte';
   import HelpTip from './HelpTip.svelte';
   import FFmpegNotice from './FFmpegNotice.svelte';
-  import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
+  import {
+    detectPlatform,
+    exportNeedsExternalFFmpeg,
+    probeNeedsExternalFFmpeg,
+    systemCodecs,
+  } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
@@ -49,7 +54,8 @@
     resultPreviewForSelectedMedia,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
-  import { engineLabel } from './lib/neuralEngine';
+  import { engineLabel, hardwarePatch } from './lib/neuralEngine';
+  import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
     BenchmarkDeviceResult,
@@ -412,17 +418,59 @@
     (canStart || canPrepare)
       ? `${selectedMedia.width} × ${selectedMedia.height} → ${outputDimensions} · ${
           settings.task === 'edit'
-            ? (editingDevice?.name ?? 'no supported GPU')
+            ? editingDevice
+              ? deviceLabel(editingDevice)
+              : 'no supported GPU'
             : usingTemporalVideo
-              ? (activeDevice?.name ?? 'detecting hardware')
+              ? activeDevice
+                ? deviceLabel(activeDevice)
+                : 'detecting hardware'
               : engineLabel(
                   settings,
                   snapshot.capabilities,
                   selectedModel?.architecture,
-                  activeDevice?.name ?? 'detecting hardware',
+                  activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
                 )
         }`
       : '';
+  // The last failure also stands above Advanced, next to the setting that can fix it. It stays
+  // until the next job starts, also while the engine restarts after it (a driver reset) and
+  // the status line moves on to "Starting engine" and "Ready".
+  let lastFailure = '';
+  $: if (snapshot.runtime.active_job_id) lastFailure = '';
+  else if (snapshot.runtime.status_title === 'Could not finish')
+    lastFailure = snapshot.runtime.status_detail;
+  let failureNote: HTMLElement | undefined;
+  // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
+  // needs a GPU, so it gets no such button.
+  $: acceleratorFailure =
+    settings.task !== 'edit' &&
+    settings.device_id !== 'cpu' &&
+    /\b[GN]PU\b|graphics driver/.test(lastFailure);
+  // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
+  // ticks replace the detail line, so the note keeps its own line until the job ends.
+  $: hardwareNote =
+    snapshot.runtime.active_job_id &&
+    snapshot.runtime.hardware_note &&
+    snapshot.runtime.hardware_note !== snapshot.runtime.status_detail
+      ? snapshot.runtime.hardware_note
+      : '';
+  // A CPU-only run on a computer with a GPU or NPU it could use says so in the idle status
+  // line, where people look, instead of under Advanced.
+  // Only for a task the CPU runs (editing needs a GPU) and with an engine that is ready.
+  $: hardwareHint =
+    settings.device_id === 'cpu' &&
+    Boolean(settings.task) &&
+    settings.task !== 'edit' &&
+    snapshot.runtime.worker === 'ready' &&
+    !snapshot.runtime.active_job_id &&
+    !activeDownload &&
+    !preparing &&
+    !booting &&
+    !lastFailure &&
+    snapshot.runtime.status_title !== 'Warning'
+      ? cpuHint(snapshot.capabilities, detectPlatform())
+      : null;
   $: taskCaption = !settings.task
     ? ''
     : settings.task === 'denoise'
@@ -990,6 +1038,14 @@
           (model) => model.model_id === candidate.selected_model_id && model.architecture === 'HAT',
         ))
     );
+  }
+
+  /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
+   *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
+  async function useTheCpu(): Promise<void> {
+    updateSettings(hardwarePatch('cpu'));
+    await tick();
+    (document.getElementById('device') ?? failureNote)?.focus();
   }
 
   function updateSettings(patch: Partial<UiSettings>): void {
@@ -1961,6 +2017,7 @@
   class:booting
   class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
+  class:status-extra={Boolean(hardwareNote || hardwareHint)}
   style={`--ui-scale:${settings.interface_scale / 100}`}
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
@@ -2640,6 +2697,22 @@
               {/if}
             </section>
 
+            {#if lastFailure}
+              <section
+                class="control-section failure-note"
+                role="alert"
+                aria-label="Last error"
+                tabindex="-1"
+                bind:this={failureNote}
+              >
+                <p>{lastFailure}</p>
+                {#if acceleratorFailure}
+                  <button class="button" type="button" on:click={() => void useTheCpu()}
+                    >Use the CPU</button
+                  >
+                {/if}
+              </section>
+            {/if}
             <AdvancedSettings
               {settings}
               {selectedModel}
@@ -2672,6 +2745,15 @@
             ? 'Opening the trusted desktop control plane.'
             : idleSummary || snapshot.runtime.status_detail}</span
         >
+        {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
+        {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
+            >{hardwareHint.text}
+            {#if hardwareHint.downloads}<button
+                class="link-button"
+                type="button"
+                on:click={() => void api.openDownloadPage()}>Download page</button
+              >{/if}</span
+          >{/if}
         {#if queueEta}<span
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."

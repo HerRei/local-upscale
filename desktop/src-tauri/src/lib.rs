@@ -150,6 +150,7 @@ pub fn run() {
             commands::import_catalog_model,
             commands::open_result,
             commands::open_user_guide,
+            commands::open_download_page,
             commands::reveal_result,
             commands::open_output_directory,
             commands::detect_external_ffmpeg,
