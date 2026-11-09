@@ -695,6 +695,30 @@ def test_explicit_roles_require_exactly_one_primary():
         )
 
 
+def test_restore_still_fails_when_its_own_model_is_unstable_after_a_fix(tmp_path, monkeypatch):
+    # Only the fixes before the Restore model are optional; the model is the job.
+    from localsr.core.image_io import ImageManager
+    from localsr.core.inference import UnstableRestorationError
+
+    data = _job_data(tmp_path)
+    data["model_path"] = str(tmp_path / "main-restore.pth")
+    data["output_scale"] = 1
+    data["stages"] = [
+        _stage("restore", "blur", str(tmp_path / "restore.pth"), role="fix", fix="blur"),
+        _stage("restore", "noise", data["model_path"], role="primary", fix="noise"),
+    ]
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    server.engine = _PipelineEngine(
+        fail_path=data["model_path"], failure=UnstableRestorationError("unstable values")
+    )
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    monkeypatch.setattr(ImageManager, "save", lambda *_a, **_kw: pytest.fail("saved output"))
+    with pytest.raises(RuntimeError, match=r"restore stage \(noise\) failed"):
+        server._run_job("pipeline-job", data)
+    assert server.engine.calls == [str(tmp_path / "restore.pth"), data["model_path"]]
+
+
 def test_restore_primary_keeps_the_job_halo_while_its_fixes_use_their_own(tmp_path, monkeypatch):
     # The halo setting belongs to the main model (Restore sets it when the model is
     # chosen); only the optional fixes before it raise their overlap.
