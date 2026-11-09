@@ -32,10 +32,13 @@ can be resampled after inference. A 1× restoration model cleans an image withou
 enlarging it and can run before an upscaler.
 
 **Quick** selects SPAN NomosUni; **Best** selects RealPLKSR NomosWebPhoto. HAT-S is
-the smaller stock HAT option. No preset picks the two DAT2 models on its own: they
-take about ten times as long as Best (around 73 seconds per input megapixel on an M1
-Pro), so choose them in the library, or pin one to Best, for the photos they suit. Model choice changes speed, memory use and visual
-results; compare a representative crop before processing a large folder.
+the smaller stock HAT option. No preset picks the two DAT2 models on its own: on an M1
+Pro they take about ten times as long as Best (around 73 seconds per input megapixel;
+on a CPU the gap is smaller), so choose them in the library, or pin one to Best, for
+the photos they suit. Keep the tile size at 256 for them where memory allows: at 64 their
+tile borders differ more from a whole-image run than Best's. Model choice
+changes speed, memory use and visual results; compare a representative crop before
+processing a large folder.
 
 ## Author credit and checkpoint terms
 
