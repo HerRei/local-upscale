@@ -1691,6 +1691,127 @@ fn restart_application(app: &AppHandle) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {
+        let leaf = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::from),
+            any::<i64>().prop_map(serde_json::Value::from),
+            ".*".prop_map(serde_json::Value::from),
+        ];
+        leaf.prop_recursive(3, 32, 5, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..5).prop_map(serde_json::Value::Array),
+                prop::collection::btree_map(".*", inner, 0..5)
+                    .prop_map(|fields| { serde_json::Value::Object(fields.into_iter().collect()) }),
+            ]
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, rng_seed: proptest::test_runner::RngSeed::Fixed(0x038), .. ProptestConfig::default() })]
+
+        #[test]
+        fn arbitrary_json_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = serde_json::from_slice::<ReleaseContract>(&bytes);
+                let _ = serde_json::from_slice::<ReleaseStatement>(&bytes);
+            }));
+            prop_assert!(result.is_ok());
+        }
+
+        #[test]
+        fn generated_json_values_never_panic(value in arbitrary_json()) {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = serde_json::from_slice::<ReleaseContract>(&bytes);
+                let _ = serde_json::from_slice::<ReleaseStatement>(&bytes);
+            }));
+            prop_assert!(result.is_ok());
+        }
+
+        #[test]
+        fn changing_any_signed_release_field_is_rejected(field in 0u8..10) {
+            let (mut config, mut contract) = statement_contract();
+            let mut target = "linux-x86_64-rocm-native".to_owned();
+            let mut channel = "beta".to_owned();
+            let mut version = "0.3.7-beta".to_owned();
+            match field {
+                0 => version = "0.3.8-beta".into(),
+                1 => channel = "stable".into(),
+                2 => target = "linux-x86_64-cuda-native".into(),
+                3 => config.backend = "cuda".into(),
+                4 => config.kind = "portable".into(),
+                5 => contract.protocol += 1,
+                6 => contract.engine_id.push('x'),
+                7 => contract.sha256 = "f".repeat(64),
+                8 => contract.unpacked_size += 1,
+                _ => contract.engine.as_mut().unwrap().manifest.sha256 = "f".repeat(64),
+            }
+            prop_assert!(validate_contract(&config, &channel, &version, &contract).is_err()
+                || verify_statement(
+                    &config, &target, &channel, &version, "0.3.6-beta", &contract
+                ).is_err());
+        }
+
+        #[test]
+        fn mutating_any_signed_statement_field_is_rejected(field in 0u8..11) {
+            let (config, mut contract) = statement_contract();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&contract.statement)
+                .unwrap();
+            let mut statement: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let field = match field {
+                0 => "schema_version",
+                1 => "version",
+                2 => "channel",
+                3 => "target",
+                4 => "backend",
+                5 => "kind",
+                6 => "protocol",
+                7 => "engine_id",
+                8 => "sha256",
+                9 => "engine_manifest_sha256",
+                _ => "unpacked_size",
+            };
+            statement[field] = match field {
+                "schema_version" | "protocol" | "unpacked_size" => serde_json::json!(0),
+                "engine_manifest_sha256" => serde_json::Value::Null,
+                _ => serde_json::json!("mutated"),
+            };
+            contract.statement = base64::engine::general_purpose::STANDARD
+                .encode(serde_json::to_vec(&statement).unwrap());
+            prop_assert!(verify_statement(
+                &config,
+                "linux-x86_64-rocm-native",
+                "beta",
+                "0.3.7-beta",
+                "0.3.6-beta",
+                &contract,
+            ).is_err());
+        }
+
+        #[test]
+        fn release_versions_follow_semver_precedence(
+            major in 0u32..5,
+            minor in 0u32..20,
+            patch in 0u32..20,
+            prerelease in prop::sample::select(vec!["", "-alpha", "-beta", "-beta.1", "-rc.1"]),
+        ) {
+            let (config, contract) = statement_contract();
+            let installed = format!("{major}.{minor}.{patch}{prerelease}");
+            let expected = semver::Version::parse("0.3.7-beta").unwrap()
+                > semver::Version::parse(&installed).unwrap();
+            prop_assert_eq!(
+                verify_statement(
+                    &config, "linux-x86_64-rocm-native", "beta", "0.3.7-beta", &installed, &contract
+                ).is_ok(),
+                expected,
+            );
+        }
+    }
+
     #[test]
     fn store_install_ignores_a_previous_direct_install_engine() {
         let root = tempfile::tempdir().unwrap();
