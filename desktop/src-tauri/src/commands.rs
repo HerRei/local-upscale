@@ -542,7 +542,10 @@ pub fn start_jobs(
         ));
     }
 
-    let mut reserved = HashSet::new();
+    let mut reserved: HashSet<_> = lock(&state.database)?
+        .unfinished_output_paths()?
+        .into_iter()
+        .collect();
     let mut jobs = Vec::with_capacity(media.len());
     for item in &media {
         if item.probe_status == "failed" {
@@ -1055,6 +1058,11 @@ pub fn remove_model(
     };
     match path {
         Some(path) => {
+            if lock(&state.database)?.unfinished_job_needs_model(&path)? {
+                return Err(AppError::Validation(
+                    "a queued job still needs this model; finish or cancel it first".into(),
+                ));
+            }
             if path.is_file() {
                 fs::remove_file(&path)?;
             }
@@ -2373,6 +2381,35 @@ mod tests {
             enable_live_preview: true,
             allow_unsafe_pickle_model: false,
         }
+    }
+
+    #[test]
+    fn pending_output_is_reserved_across_submissions() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/first/photo.png", "photo.png", "image")
+            .unwrap();
+        let options = input("upscale");
+        let first = unique_output_path(
+            directory.path(),
+            "/first/photo.png",
+            &options,
+            &mut HashSet::new(),
+        );
+        db.insert_job(
+            "j",
+            "m",
+            &serde_json::json!({"data":{"output_path":first}}).to_string(),
+        )
+        .unwrap();
+        let mut reserved = db.unfinished_output_paths().unwrap().into_iter().collect();
+        let second = unique_output_path(
+            directory.path(),
+            "/second/photo.png",
+            &options,
+            &mut reserved,
+        );
+        assert_ne!(first, second, "pending output must be reserved");
     }
 
     #[test]

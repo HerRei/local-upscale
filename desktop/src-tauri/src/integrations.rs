@@ -442,7 +442,7 @@ fn macos_info_plist() -> String {
 #[cfg(any(target_os = "macos", test))]
 fn macos_workflow(app: &Path) -> String {
     let script = format!(
-        "choice=$(osascript -e 'choose from list {{\"Active App Settings\", \"Quick Preset (Fast)\", \"Best Quality Preset\"}} with title \"LocalSR\" with prompt \"Choose settings for the selected media:\"' 2>/dev/null) || exit 0\ncase \"$choice\" in\n  \"Quick Preset (Fast)\") preset='--preset quick' ;;\n  \"Best Quality Preset\") preset='--preset best' ;;\n  *) preset='' ;;\nesac\nopen -n -a {} --args $preset --auto-start \"$@\"",
+        "choice=$(osascript -e 'choose from list {{\"Active App Settings\", \"Quick Preset (Fast)\", \"Best Quality Preset\"}} with title \"LocalSR\" with prompt \"Choose settings for the selected media:\"' 2>/dev/null) || exit 0\ncase \"$choice\" in\n  false|'') exit 0 ;;\n  \"Quick Preset (Fast)\") preset=(--preset quick) ;;\n  \"Best Quality Preset\") preset=(--preset best) ;;\n  *) preset=() ;;\nesac\nopen -n -a {} --args \"${{preset[@]}}\" --auto-start \"$@\"",
         shell_quote(app)
     );
     format!(
@@ -666,6 +666,38 @@ Start-Process -FilePath '{}' -ArgumentList $nativeArguments
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_workflow_respects_cancel_and_preset_arguments() {
+        let workflow = macos_workflow(Path::new("/Applications/LocalSR.app"));
+        let script = workflow
+            .split("<key>COMMAND_STRING</key><string>")
+            .nth(1)
+            .unwrap()
+            .split("</string>")
+            .next()
+            .unwrap()
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+        let run = |choice: &str| {
+            let output = std::process::Command::new("/bin/zsh")
+                .arg("-c").arg(format!("osascript() {{ print -r -- \"$CHOICE\"; }}\nopen() {{ printf '%s\\n' \"$@\"; }}\n{script}"))
+                .arg("test").arg("/tmp/photo.png").env("CHOICE", choice).output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        };
+        assert_eq!(run("Quick Preset (Fast)"), "-n\n-a\n/Applications/LocalSR.app\n--args\n--preset\nquick\n--auto-start\n/tmp/photo.png\n");
+        assert_eq!(run("false"), "");
+        assert_eq!(run(""), "");
+        assert_eq!(
+            run("Active App Settings"),
+            "-n\n-a\n/Applications/LocalSR.app\n--args\n--auto-start\n/tmp/photo.png\n"
+        );
+    }
 
     #[test]
     fn generated_integrations_use_the_additive_binary_and_identity() {
