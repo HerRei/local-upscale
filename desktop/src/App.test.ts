@@ -1730,6 +1730,24 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
   });
 
+  it('keeps the progress of the photo on screen when a photo saving off screen reports too', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'b';
+    snapshot.runtime.active_batch_job_ids = ['a', 'b'];
+    await mountWith(snapshot);
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    listener({
+      type: 'progress',
+      data: { job_id: 'b', completed_tiles: 4, total_tiles: 10, percentage: 40 },
+    });
+    // The earlier photo's last progress lands in the same display frame.
+    listener({
+      type: 'progress',
+      data: { job_id: 'a', completed_tiles: 10, total_tiles: 10, percentage: 100 },
+    });
+    expect(await screen.findByText('4 of 10 tiles')).toBeTruthy();
+  });
+
   it('composites progressive tiles without exposing comparison and keeps 1:1 controls responsive', async () => {
     class DecodedImage {
       onload: (() => void) | null = null;

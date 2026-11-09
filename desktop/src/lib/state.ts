@@ -415,17 +415,20 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
   if (id !== snapshot.runtime.active_job_id && envelope.type !== 'job_started') {
     if (!terminal) return snapshot;
     next = { ...snapshot, runtime: { ...snapshot.runtime } };
-    if (envelope.type === 'job_completed')
+    if (envelope.type === 'job_completed') {
+      // The result shown after the batch belongs to last_output_path.
       next.runtime.last_output_path = String(envelope.data.output_path ?? '');
+      next.runtime.result_preview_data_url = '';
+    }
   } else {
     next = applyJobEnvelope(snapshot, envelope);
   }
-  if (terminal) leaveBatch(next.runtime, id);
+  if (terminal) leaveBatch(next.runtime, id, envelope.type === 'job_failed');
   return next;
 }
 
 /** While other photos remain the batch stays busy, showing the next one. */
-function leaveBatch(runtime: AppSnapshot['runtime'], id: string): void {
+function leaveBatch(runtime: AppSnapshot['runtime'], id: string, failed: boolean): void {
   const remaining = (runtime.active_batch_job_ids ?? []).filter((member) => member !== id);
   runtime.active_batch_job_ids = remaining;
   if (!remaining.length || (runtime.active_job_id && runtime.active_job_id !== id)) return;
@@ -433,6 +436,8 @@ function leaveBatch(runtime: AppSnapshot['runtime'], id: string): void {
   runtime.progress = 0;
   runtime.estimated_remaining_seconds = 0;
   runtime.result_preview_data_url = '';
+  // A failure stays on the status line until the next photo starts.
+  if (failed) return;
   runtime.status_title = 'Processing';
   runtime.status_detail = 'Finishing the other photos of this batch.';
 }

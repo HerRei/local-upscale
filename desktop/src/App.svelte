@@ -652,6 +652,14 @@
       message.type === 'video_frame_completed' ||
       message.type === 'benchmark_progress'
     ) {
+      // Only the newest pulse is kept: one from a batch photo saving off screen
+      // must not push out the shown photo's.
+      const jobId = String(message.data.job_id ?? '');
+      if (
+        jobId !== snapshot.runtime.active_job_id &&
+        (snapshot.runtime.active_batch_job_ids ?? []).includes(jobId)
+      )
+        return;
       queueRuntimePulse(message);
       return;
     }
