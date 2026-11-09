@@ -630,6 +630,40 @@ def test_identical_directml_cards_keep_verdicts_only_for_this_process(monkeypatc
     assert inference._onnx_route("directml:0").persist is True
 
 
+def test_route_labels_name_the_gpu_as_the_hardware_menu_does(monkeypatch):
+    from localsr.core import inference, onnx_runtime, openvino_devices, windows_adapters
+
+    monkeypatch.setattr(onnx_runtime, "directml_available", lambda: True)
+    adapter = {
+        "index": 0,
+        "name": "Intel(R) UHD Graphics 620",
+        "vendor_id": 0x8086,
+        "device_id": 0x5917,
+        "subsystem_id": 0,
+        "driver_version": "31.0.101.2125",
+    }
+    monkeypatch.setattr(windows_adapters, "directml_adapters", lambda **_: [adapter])
+    route = inference._onnx_route("directml:0")
+    assert route.label == "Intel UHD Graphics 620 (DirectML)"
+    # Stored verdicts and crash notes keep the driver's own name.
+    assert route.identity.startswith("Intel(R) UHD Graphics 620|")
+
+    entry = {
+        "key": "8680677d060000000002000000000000",
+        "kind": "GPU",
+        "name": "Intel(R) UHD Graphics 620 (iGPU)",
+        "device_id": "0x5917",
+        "architecture": "GPU: vendor=0x8086 arch=v9.0.9",
+        "plugin_version": "1.8.1",
+        "driver": "31.0.101.2125",
+        "ep_device": object(),
+    }
+    monkeypatch.setattr(openvino_devices, "device_for", lambda key: entry)
+    route = inference._onnx_route("openvino:8680677d060000000002000000000000")
+    assert route.label == "Intel UHD Graphics 620 (OpenVINO)"
+    assert "Intel(R) UHD Graphics 620 (iGPU)" in route.identity
+
+
 def test_a_model_unstable_on_both_test_patterns_runs_on_the_cpu(monkeypatch, tmp_path):
     from localsr.core import onnx_runtime
 
@@ -1251,7 +1285,7 @@ def test_an_npu_device_id_becomes_an_openvino_route_that_knows_it_is_an_npu(monk
     monkeypatch.setattr(openvino_devices, "device_for", lambda key: entry)
     route = inference._onnx_route("openvino:80d1d11eb73811eab3de0242ac130004")
     assert route.provider == "OpenVINOExecutionProvider" and route.kind == "NPU"
-    assert route.label == "Intel(R) AI Boost (NPU)"
+    assert route.label == "Intel AI Boost (NPU)"
     assert "npu-compiler:458781" in route.identity and route.persist
     entry["driver"] = None
     assert not inference._onnx_route("openvino:80d1d11eb73811eab3de0242ac130004").persist
