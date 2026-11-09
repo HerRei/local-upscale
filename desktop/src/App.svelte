@@ -910,8 +910,21 @@
   async function moveFix(fix: Exclude<FixKind, 'faces'>, offset: -1 | 1): Promise<void> {
     const fix_stages = moveFixStage(settings.fix_stages, fix, offset);
     if (fix_stages === settings.fix_stages) return;
-    // In Restore the last fix is the model, so moving one can change it.
-    resolveRecipe({ fix_stages, quality: activeQuality });
+    // Moving changes the order and nothing else: every model, the scale and the overlap
+    // stay. In Restore the last fix is the model, so a new last fix brings its model
+    // and the overlap that model needs.
+    const final = fix_stages[fix_stages.length - 1];
+    const model = snapshot.catalog.models.find((entry) => entry.model_id === final.model_id);
+    updateSettings({
+      fix_stages,
+      fixes: [
+        ...fix_stages.map((selection) => selection.fix),
+        ...(settings.fixes.includes('faces') ? (['faces'] as FixKind[]) : []),
+      ],
+      ...(settings.task === 'denoise' && final.fix !== settings.fix_stages.at(-1)?.fix
+        ? { selected_model_id: final.model_id, ...(model ? { halo: model.recommended_halo } : {}) }
+        : {}),
+    });
     // Keep the keyboard on the fix that moved: the same way if it can go on, else back.
     await tick();
     const ways = offset < 0 ? ['earlier', 'later'] : ['later', 'earlier'];

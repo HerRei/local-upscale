@@ -2428,6 +2428,70 @@ describe('Several fixes in one pass', () => {
     expect(document.activeElement).toBe(move('Move the JPEG fix later'));
   });
 
+  it('moves a fix without choosing anything again', async () => {
+    // A recipe's models and a scale and overlap set by hand, none of them Best's own.
+    const snapshot = readySnapshot([image('photo', true)]);
+    const noise = { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' };
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'hat_s_x4',
+      output_scale: 2,
+      halo: 64,
+      safe_memory: true,
+      fixes: ['noise', 'blur'],
+      fix_stages: [noise, blur],
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix later' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        quality: 'best',
+        selected_model_id: 'hat_s_x4',
+        output_scale: 2,
+        halo: 64,
+        safe_memory: true,
+        fixes: ['blur', 'noise'],
+        fix_stages: [blur, noise],
+      }),
+    );
+  });
+
+  it('moves a fix in Restore and only a new last fix brings its model and overlap', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const noise = { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' };
+    Object.assign(snapshot.settings, {
+      task: 'denoise',
+      quality: 'best',
+      selected_model_id: 'scunet_color_real_psnr',
+      output_scale: 1,
+      halo: 64,
+      fixes: ['blur', 'jpeg', 'noise'],
+      fix_stages: [blur, jpeg, noise],
+    });
+    const user = await mountWith(snapshot);
+    // The last fix stays: the Restore model and its overlap stay as they are.
+    await user.click(screen.getByRole('button', { name: 'Move the blur fix later' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'scunet_color_real_psnr',
+        halo: 64,
+        fix_stages: [jpeg, blur, noise],
+      }),
+    );
+    // Blur becomes last: its model is the Restore model now, with the overlap it needs.
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        quality: 'best',
+        selected_model_id: 'nafnet_gopro_deblur',
+        halo: 32,
+        fixes: ['jpeg', 'noise', 'blur'],
+        fix_stages: [jpeg, noise, blur],
+      }),
+    );
+  });
+
   it('runs the fixes before the last one first in Restore, whose last fix is its model', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
