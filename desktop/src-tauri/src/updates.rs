@@ -2578,7 +2578,7 @@ mod tests {
                 for mode in [Mode::Fail, Mode::Crash] {
                     let why = format!("{step} #{index} {mode:?} accept={accept}");
                     let swap = SwapFixture::new();
-                    fault::arm(Some((step, mode)));
+                    fault::arm(Some((index, mode)));
                     let _ = fault::crashed(|| {
                         swap.replace(|_| {
                             if accept {
@@ -2822,7 +2822,7 @@ mod tests {
             for mode in [Mode::Fail, Mode::Crash] {
                 let why = format!("{step} #{index} {mode:?}");
                 let f = folders();
-                fault::arm(Some((step, mode)));
+                fault::arm(Some((index, mode)));
                 let _ = fault::crashed(|| {
                     let recorded = record(&f);
                     if recorded.is_ok() {
