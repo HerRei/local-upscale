@@ -35,11 +35,11 @@ at the moment), and the app shows you each licence before it downloads anything.
 
 ## What it does
 
-- Enlarge photos and artwork by 2×, 3× or 4×. Quick uses a small, fast model,
-  and Best a larger one made for real photos.
+- Enlarge photos and artwork by 2×, 3× or 4×. Quick is a good start, and Best
+  spends more time on photo detail.
 - Clean up noise, blur and JPEG artifacts first, then enlarge.
 - Compare the original and the result with a slider, or hold M to see the
-  original. Results are saved as new files, so your originals stay untouched.
+  original.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
 - Process a whole folder or a queue, and save a setup as a recipe.
 - Edit with a prompt, with FLUX.2 klein or Qwen Image Edit. This is
@@ -75,13 +75,12 @@ for each platform:
 - **macOS v0.3.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
 - **Windows v0.3.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
-  NVIDIA CUDA editions. DirectML and CUDA are untested. The installers are
-  unsigned, so SmartScreen warns first: choose **More info**, then **Run anyway**.
-  With AMD or Intel graphics, built-in ones included, take DirectML; the upcoming
-  release also uses built-in graphics and runs Intel graphics through OpenVINO.
+  NVIDIA CUDA editions. DirectML also runs on AMD and Intel graphics, built-in ones
+  included, and Intel NPUs work on Windows and Linux. The installers are unsigned, so SmartScreen warns first: choose **More info**,
+  then **Run anyway**.
 - **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
-  CUDA is untested. In the upcoming release the CPU AppImage also runs Intel graphics
-  through OpenVINO once Intel's compute driver (`intel-opencl-icd`) is installed.
+  The CPU AppImage runs Intel graphics through OpenVINO once Intel's compute
+  driver (`intel-opencl-icd`) is installed.
 
 On a Mac you can also install it with [Homebrew](https://brew.sh/):
 
@@ -104,10 +103,11 @@ The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`
 ## Limits
 
 - Upscaling reconstructs detail. Faces, text and fine patterns can look sharp
-  and still differ from the real scene, especially at 4×.
+  and still differ from the real scene, especially at 4×. Results are saved as
+  new files, so your originals stay untouched.
 - Video is upscaled one frame at a time, so fine detail can flicker.
 - Large images and long videos can take hours. Try a small one first.
-- I test the Mac build the most.
+- I test the Mac build the most; DirectML and CUDA less.
 - On Windows and Linux, phone videos (H.264, HEVC, AAC) need an FFmpeg you
   install yourself. On the Mac they open through the system.
 
@@ -116,15 +116,15 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-There is no account, and your images and videos are never uploaded. The app
-reads its update feed on GitHub Pages at launch (for the beta,
-`herrei.github.io/localsr/updates/beta.json`). After a check it
+There is no account, and your images and videos are never uploaded. At launch the
+app reads its update feed on GitHub Pages (for the beta,
+`herrei.github.io/localsr/updates/beta.json`) and can update itself, on the Mac,
+on Windows and as a Linux AppImage. After a check it
 sends one anonymous count with the app version, platform and channel to my Mac
-mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both are
-on by default, and you can turn off either one in the LocalSR menu on the Mac or
-the Help menu on Windows and Linux (**Check for Updates at Launch**, **Send
-Anonymous Update Count**) or in the Software Update dialog; **Check for Updates…**
-still works when you ask. The Microsoft Store edition does neither.
+mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both
+are on by default. Turn either off in the LocalSR menu on the Mac, the Help menu
+on Windows and Linux, or the Software Update dialog; **Check for Updates…** still
+works when you ask. The Microsoft Store edition does neither.
 
 Updates come from GitHub Releases, and the app checks their signature before it
 replaces anything. Models download from their authors on GitHub or Hugging Face
