@@ -421,7 +421,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         ));
     }
 
-    // Recipes saved before 0.3.7 name no fix; newer ones name it on each restoration.
+    // Recipes saved before several fixes name no fix; newer ones name it on each restoration.
     let mut fixes = HashSet::new();
     if recipe.stages.iter().any(|stage| {
         stage.fix.as_deref().is_some_and(|fix| {
@@ -1611,8 +1611,8 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     Ok(())
 }
 
-/// Engines before 0.3.7 run at most one fix; a longer plan would only fail in the worker
-/// after it was queued.
+/// Engines without image_multi_fix run at most one fix; a longer plan would only fail in the
+/// worker after it was queued.
 fn validate_fix_engine(
     input: &StartBatchInput,
     engine: Option<&crate::types::EngineInfo>,
