@@ -427,6 +427,8 @@ class JobCompleted:
     elapsed_seconds: float = 0.0
     inference_seconds: float = 0.0
     output_path: str = ""
+    # What the user should know about a job that finished, such as a skipped fix.
+    notes: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_completed", "data": asdict(self)})
