@@ -195,6 +195,8 @@ class CapabilitiesInfo:
     system_swap_used: int = 0
     # Which programs can open and write the formats LocalSR's runtime omits.
     media: dict = field(default_factory=dict)
+    # A GPU this edition cannot use and the download (or driver) that would use it.
+    gpu_suggestion: dict | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "capabilities_info", "data": asdict(self)})
