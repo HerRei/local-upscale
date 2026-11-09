@@ -493,7 +493,7 @@ pub async fn check_update(
                 + contract
                     .engine
                     .as_ref()
-                    .filter(|e| e.id != config.engine_id)
+                    .filter(|e| engine_needs_package(&state.paths.next_root, &config, &e.id))
                     .map_or(0, |e| {
                         e.manifest.size + e.parts.iter().map(|p| p.size).sum::<u64>()
                     });
@@ -864,7 +864,7 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
     let engine_files = contract
         .engine
         .iter()
-        .filter(|engine| engine.id != config.engine_id)
+        .filter(|engine| engine_needs_package(&state.paths.next_root, &config, &engine.id))
         .flat_map(|engine| std::iter::once(&engine.manifest).chain(&engine.parts));
     let present = already_downloaded(&directory, std::iter::once(&file).chain(engine_files));
     let needed = status
@@ -892,7 +892,10 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
             &mut progress,
         )
         .await?;
-        if let Some(engine) = contract.engine.filter(|e| e.id != config.engine_id) {
+        if let Some(engine) = contract
+            .engine
+            .filter(|e| engine_needs_package(&state.paths.next_root, &config, &e.id))
+        {
             download_file(
                 &engine.manifest,
                 &directory,
@@ -1067,6 +1070,29 @@ pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
     .await
     .map_err(|e| invalid(e.to_string()))?
 }
+/// Whether the update must bring the engine package. A different engine id always does.
+/// The same id does not, unless an earlier update delivered this engine as a versioned
+/// engine (`active-engine.txt` names it) and that engine is gone: the bundle may then
+/// still hold the older engine, which the handshake cannot tell apart.
+fn engine_needs_package(next_root: &Path, config: &UpdateConfig, engine_id: &str) -> bool {
+    if engine_id != config.engine_id {
+        return true;
+    }
+    let delivered = fs::read_to_string(next_root.join("active-engine.txt"))
+        .is_ok_and(|active| active.trim() == engine_id);
+    delivered
+        && !next_root
+            .join("engines")
+            .join(engine_id)
+            .join("engine")
+            .join(if cfg!(windows) {
+                "localsr-worker.exe"
+            } else {
+                "localsr-worker"
+            })
+            .is_file()
+}
+
 fn prepare_update_engine(
     config: &UpdateConfig,
     contract: &ReleaseContract,
@@ -1074,8 +1100,8 @@ fn prepare_update_engine(
     next_root: &Path,
     installed_worker: impl FnOnce() -> AppResult<PathBuf>,
 ) -> AppResult<PathBuf> {
-    if contract.engine_id == config.engine_id {
-        // The new application carries the same engine. Keep an existing versioned
+    if !engine_needs_package(next_root, config, &contract.engine_id) {
+        // The new application carries the same engine. Keep the existing versioned
         // engine, or use the bundle; no payload, adoption or activation is needed.
         return installed_worker();
     }
@@ -2539,6 +2565,39 @@ mod tests {
             &contract
         )
         .is_err());
+    }
+
+    #[test]
+    fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle() {
+        let (mut config, contract) = statement_contract();
+        config.engine_id.clone_from(&contract.engine_id);
+        let id = contract.engine_id.clone();
+        let root = tempfile::tempdir().unwrap();
+        let downloads = root.path().join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let (engine, _) = engine_fixture(&downloads);
+        let contract = ReleaseContract {
+            engine: Some(EngineUpdate {
+                id: id.clone(),
+                ..engine
+            }),
+            ..contract
+        };
+        // An earlier update delivered this engine; its folder is gone and only an older
+        // bundled engine is left, which would pass the handshake.
+        fs::write(root.path().join("active-engine.txt"), &id).unwrap();
+        assert!(engine_needs_package(root.path(), &config, &id));
+        let worker = prepare_update_engine(&config, &contract, &downloads, root.path(), || {
+            panic!("the bundled engine must not stand in for the delivered one")
+        })
+        .unwrap();
+        assert_eq!(fs::read(&worker).unwrap(), b"worker");
+        assert!(worker.starts_with(root.path().join("engines").join(&id)));
+        // Present again, or never delivered: the host's own engine is reused.
+        assert!(!engine_needs_package(root.path(), &config, &id));
+        fs::remove_file(&worker).unwrap();
+        fs::remove_file(root.path().join("active-engine.txt")).unwrap();
+        assert!(!engine_needs_package(root.path(), &config, &id));
     }
 
     #[test]
