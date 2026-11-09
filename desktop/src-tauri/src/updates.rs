@@ -138,8 +138,30 @@ pub struct ReleaseContract {
     /// signed parts that join to the signed package; empty for a single file.
     #[serde(default)]
     pub parts: Vec<DownloadFile>,
+    /// The release statement (base64 JSON) and its signature. Only these, not the feed,
+    /// vouch for the version, channel, edition, protocol, engine id and digests.
+    #[serde(default)]
+    pub statement: String,
+    #[serde(default)]
+    pub statement_signature: String,
     #[serde(default)]
     pub engine: Option<EngineUpdate>,
+}
+
+/// What the Mac signs for each feed entry (scripts/beta_update_signing.py).
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ReleaseStatement {
+    schema_version: u32,
+    version: String,
+    channel: String,
+    target: String,
+    backend: String,
+    kind: String,
+    protocol: u32,
+    engine_id: String,
+    sha256: String,
+    engine_manifest_sha256: Option<String>,
 }
 #[derive(Clone, Default, Serialize)]
 pub struct UpdateStatus {
@@ -270,6 +292,50 @@ pub fn validate_contract(
     }
     Ok(())
 }
+/// Trust the entry only as far as its signed release statement agrees with it and with
+/// this build, and only for a version newer than the installed one.
+fn verify_statement(
+    config: &UpdateConfig,
+    target: &str,
+    channel: &str,
+    version: &str,
+    installed: &str,
+    contract: &ReleaseContract,
+) -> AppResult<()> {
+    let unsigned = || invalid("This release has no valid signed release statement");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&contract.statement)
+        .map_err(|_| unsigned())?;
+    key(&config.public_key)?
+        .verify(&bytes, &signature(&contract.statement_signature)?, false)
+        .map_err(|_| unsigned())?;
+    let statement: ReleaseStatement = serde_json::from_slice(&bytes).map_err(|_| unsigned())?;
+    let expected = ReleaseStatement {
+        schema_version: 1,
+        version: version.into(),
+        channel: channel.into(),
+        target: target.into(),
+        backend: config.backend.clone(),
+        kind: config.kind.clone(),
+        protocol: PROTOCOL_VERSION,
+        engine_id: contract.engine_id.clone(),
+        sha256: contract.sha256.clone(),
+        engine_manifest_sha256: contract.engine.as_ref().map(|e| e.manifest.sha256.clone()),
+    };
+    if statement != expected {
+        return Err(invalid(
+            "The signed release statement does not match this update or this build",
+        ));
+    }
+    let newer = semver::Version::parse(version).map_err(|e| invalid(e.to_string()))?
+        > semver::Version::parse(installed).map_err(|e| invalid(e.to_string()))?;
+    if !newer {
+        return Err(invalid(
+            "This release is not newer than the installed version",
+        ));
+    }
+    Ok(())
+}
 fn channel(state: &AppState) -> String {
     fs::read_to_string(state.paths.next_root.join("update-channel.json"))
         .ok()
@@ -395,6 +461,14 @@ pub async fn check_update(
                 update.raw_json["platforms"][config.target()]["localsr"].clone(),
             )?;
             validate_contract(&config, &channel, &update.version, &contract)?;
+            verify_statement(
+                &config,
+                &config.target(),
+                &channel,
+                &update.version,
+                &app.package_info().version.to_string(),
+                &contract,
+            )?;
             status.version = update.version.clone();
             status.notes = update.body.clone().unwrap_or_default();
             status.size = contract.size
@@ -523,6 +597,73 @@ fn safe_file_name(name: &str) -> bool {
         && name != ".."
         && name != "."
 }
+fn verify_bytes(bytes: &[u8], file: &DownloadFile, public_key: &str) -> AppResult<()> {
+    let digest: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if bytes.len() as u64 != file.size || digest != file.sha256 {
+        return Err(invalid("Update size or checksum verification failed"));
+    }
+    key(public_key)?
+        .verify(bytes, &signature(&file.signature)?, false)
+        .map_err(|e| invalid(format!("Update signature verification failed: {e}")))
+}
+
+/// Read a downloaded file and verify those bytes: they are what gets installed.
+fn read_verified(path: &Path, file: &DownloadFile, public_key: &str) -> AppResult<Vec<u8>> {
+    if fs::metadata(path)?.len() != file.size {
+        return Err(invalid("Update size or checksum verification failed"));
+    }
+    let bytes = fs::read(path)?;
+    verify_bytes(&bytes, file, public_key)?;
+    Ok(bytes)
+}
+
+/// Copy a downloaded file into a new file only this process created, then verify the
+/// copy: it is what gets installed, so a download replaced after its check never is.
+fn stage_verified(
+    source: &Path,
+    staged: &Path,
+    file: &DownloadFile,
+    public_key: &str,
+) -> AppResult<()> {
+    update_storage::copy_new(source, staged)?;
+    if let Err(error) = verify_file(staged, file, public_key) {
+        let _ = fs::remove_file(staged);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Install an engine package from the manifest bytes that were verified; the engine
+/// installer hashes every part against that manifest on the handles it unpacks from.
+fn install_engine_package(
+    directory: &Path,
+    engine: &EngineUpdate,
+    public_key: &str,
+    engine_dir: &Path,
+) -> AppResult<()> {
+    let manifest = read_verified(
+        &directory.join(&engine.manifest.name),
+        &engine.manifest,
+        public_key,
+    )?;
+    for part in &engine.parts {
+        verify_file(&directory.join(&part.name), part, public_key)?;
+    }
+    crate::engine_payload::install_manifest(&manifest, directory, engine_dir)?;
+    Ok(())
+}
+
+/// A temporary file of our own: a leftover (or a planted link) is removed, never followed.
+fn create_temporary(path: &Path) -> AppResult<fs::File> {
+    let _ = fs::remove_file(path);
+    Ok(fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?)
+}
 async fn download_file(
     file: &DownloadFile,
     directory: &Path,
@@ -567,7 +708,7 @@ async fn download_file(
             }
         };
         let mut stream = response.bytes_stream();
-        let mut output = fs::File::create(&temporary)?;
+        let mut output = create_temporary(&temporary)?;
         let mut size = 0;
         loop {
             if cancel.load(Ordering::SeqCst) {
@@ -612,7 +753,7 @@ fn join_parts(
     let path = directory.join(&whole.name);
     let temporary = directory.join(format!("{}.partial", whole.name));
     let result = (|| -> AppResult<()> {
-        let mut output = fs::File::create(&temporary)?;
+        let mut output = create_temporary(&temporary)?;
         for part in parts {
             let source = directory.join(&part.name);
             std::io::copy(&mut fs::File::open(&source)?, &mut output)?;
@@ -909,6 +1050,14 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     let config = &checked.config;
     let contract = &checked.contract;
     validate_contract(config, &channel(state), &checked.update.version, contract)?;
+    verify_statement(
+        config,
+        &config.target(),
+        &channel(state),
+        &checked.update.version,
+        &app.package_info().version.to_string(),
+        contract,
+    )?;
     let file = DownloadFile {
         name: APPLICATION_FILE.into(),
         url: checked.update.download_url.to_string(),
@@ -943,19 +1092,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
             .as_ref()
             .filter(|e| e.id != config.engine_id)
         {
-            verify_file(
-                &directory.join(&engine.manifest.name),
-                &engine.manifest,
-                &config.public_key,
-            )?;
-            for part in &engine.parts {
-                verify_file(&directory.join(&part.name), part, &config.public_key)?;
-            }
-            crate::engine_payload::install(
-                &directory.join(&engine.manifest.name),
-                &directory,
-                &engine_dir,
-            )?;
+            install_engine_package(&directory, engine, &config.public_key, &engine_dir)?;
         } else {
             let old_worker = worker::installed_worker_path(state, app)?;
             let source = old_worker
@@ -995,41 +1132,28 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         lock(&state.database)?.close_for_update()?;
         fs::write(&active_file, &contract.engine_id)?;
         if config.kind == "portable" && cfg!(target_os = "linux") {
+            // Unpack only a copy of our own that was verified after it was made.
+            let verified = directory.join("application.verified");
+            let _ = fs::remove_file(&verified);
+            stage_verified(
+                &directory.join(&file.name),
+                &verified,
+                &file,
+                &config.public_key,
+            )?;
             let unpacked = directory.join("unpacked");
             if unpacked.exists() {
                 fs::remove_dir_all(&unpacked)?;
             }
-            update_storage::extract_portable(
-                &directory.join(&file.name),
-                &unpacked,
-                contract.unpacked_size,
+            update_storage::extract_portable(&verified, &unpacked, contract.unpacked_size)?;
+            update_storage::replace_executable(
+                &std::env::current_exe()?,
+                &state.paths.next_root.join(SWAP_JOURNAL),
+                |staged| update_storage::copy_new(&unpacked.join("localsr-next"), staged),
+                |path| update_storage::smoke(path, Duration::from_secs(60)),
             )
-            .and_then(|_| {
-                let current = std::env::current_exe()?;
-                let parent = current
-                    .parent()
-                    .ok_or_else(|| invalid("No application directory"))?;
-                let staged = parent.join(format!(".localsr-update-{}", uuid::Uuid::new_v4()));
-                fs::copy(unpacked.join("localsr-next"), &staged)?;
-                let plan = update_storage::PortablePlan {
-                    previous: parent.join(".localsr-before-update"),
-                    current,
-                    staged,
-                    report: backup.join("install-report.json"),
-                };
-                update_storage::install_portable(&plan, |path| {
-                    update_storage::smoke(path, Duration::from_secs(60))
-                })
-            })
         } else {
-            install_package(
-                state,
-                app,
-                &checked.update,
-                &directory,
-                &backup,
-                &directory.join(&file.name),
-            )
+            install_package(state, app, checked, &file, &directory, &backup)
         }
     })();
     if let Err(error) = result {
@@ -1066,17 +1190,19 @@ fn finish_install(backup: &Path, version: &str, downloads: &Path) {
 /// Hand the verified package to the platform. macOS replaces the app bundle through the
 /// Tauri updater; Windows runs the NSIS installer, which ends this process; LocalSR swaps
 /// an AppImage itself, streaming from disk and checking the new image before it keeps it.
+/// Only bytes verified where they are installed from are handed over.
 fn install_package(
     state: &AppState,
     app: &AppHandle,
-    update: &tauri_plugin_updater::Update,
+    checked: &CheckedUpdate,
+    file: &DownloadFile,
     downloads: &Path,
     backup: &Path,
-    package: &Path,
 ) -> AppResult<()> {
+    let package = downloads.join(&file.name);
     #[cfg(target_os = "linux")]
     {
-        let _ = (state, update, downloads);
+        let _ = backup;
         let env = tauri::Manager::env(app);
         let appimage = running_appimage(
             env.appimage.map(PathBuf::from),
@@ -1091,24 +1217,127 @@ fn install_package(
         })?;
         replace_appimage(
             &appimage,
-            package,
-            backup.join("install-report.json"),
+            &package,
+            file,
+            &checked.config.public_key,
+            &state.paths.next_root.join(SWAP_JOURNAL),
             |path| update_storage::smoke(path, Duration::from_secs(120)),
         )
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = app;
-        let bytes = fs::read(package)?;
+        let bytes = read_verified(&package, file, &checked.config.public_key)?;
         if cfg!(windows) {
-            // The Windows updater starts the installer and exits this process, so
-            // nothing after install() runs: finish first; the installer is in memory.
-            finish_install(backup, &update.version, downloads);
-            *lock(&state.updates.staged)? = None;
-        } else {
-            let _ = (state, backup, downloads);
+            // NSIS writes the new files in place, on the install folder's own volume.
+            let folder = std::env::current_exe()?
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| invalid("The installation has no folder"))?;
+            require_space(
+                fs2::available_space(&folder)?,
+                checked.contract.unpacked_size + 256 * 1024 * 1024,
+            )?;
+            // The installer runs after this process exits: the next start confirms the
+            // new version before the downloads go, or keeps them for another try.
+            record_pending_install(
+                &state.paths.next_root,
+                &checked.update.version,
+                downloads,
+                backup,
+            )?;
+            let handed_over = checked
+                .update
+                .install(bytes)
+                .map_err(|e| invalid(e.to_string()));
+            // Reached only when the installer could not be started.
+            let _ = fs::remove_file(state.paths.next_root.join(PENDING_INSTALL));
+            return handed_over;
         }
-        update.install(bytes).map_err(|e| invalid(e.to_string()))
+        let _ = (state, backup, downloads);
+        checked
+            .update
+            .install(bytes)
+            .map_err(|e| invalid(e.to_string()))
+    }
+}
+
+const SWAP_JOURNAL: &str = "swap-journal.json";
+const PENDING_INSTALL: &str = "update-pending.json";
+
+#[derive(Deserialize, Serialize)]
+struct PendingInstall {
+    version: String,
+    downloads: PathBuf,
+    backup: PathBuf,
+}
+
+/// Remember a Windows installation that the installer finishes after LocalSR exits.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn record_pending_install(
+    next_root: &Path,
+    version: &str,
+    downloads: &Path,
+    backup: &Path,
+) -> AppResult<()> {
+    let pending = PendingInstall {
+        version: version.into(),
+        downloads: downloads.into(),
+        backup: backup.into(),
+    };
+    fs::write(
+        next_root.join(PENDING_INSTALL),
+        serde_json::to_vec(&pending)?,
+    )?;
+    Ok(())
+}
+
+/// At start: when the version the installer was given is the one running, finish its
+/// bookkeeping; otherwise the installer failed or was cancelled, and the verified
+/// downloads stay for another try. Returns whether an installation was confirmed.
+pub fn confirm_pending_install(next_root: &Path, running_version: &str) -> bool {
+    let marker = next_root.join(PENDING_INSTALL);
+    let Ok(bytes) = fs::read(&marker) else {
+        return false;
+    };
+    let _ = fs::remove_file(&marker);
+    let Ok(pending) = serde_json::from_slice::<PendingInstall>(&bytes) else {
+        return false;
+    };
+    // Only LocalSR's own folders are ever removed.
+    if pending.version != running_version
+        || pending.downloads != next_root.join("updates")
+        || pending.backup.parent() != Some(next_root.join("backups").as_path())
+    {
+        return false;
+    }
+    finish_install(&pending.backup, &pending.version, &pending.downloads);
+    true
+}
+
+/// Before anything else at start: roll back an executable swap that a crash interrupted,
+/// and start the restored executable when it is the one this process runs. Returns
+/// whether this process should exit for it.
+pub fn recover_interrupted_update() -> bool {
+    let Ok(paths) = crate::paths::AppPaths::discover() else {
+        return false;
+    };
+    match update_storage::recover_swap(&paths.next_root.join(SWAP_JOURNAL)) {
+        Ok(Some(restored)) => {
+            let running = std::env::var_os("APPIMAGE")
+                .map(PathBuf::from)
+                .or_else(|| std::env::current_exe().ok());
+            running.as_deref() == Some(restored.as_path())
+                && std::process::Command::new(&restored)
+                    .args(std::env::args_os().skip(1))
+                    .spawn()
+                    .is_ok()
+        }
+        Ok(None) => false,
+        Err(error) => {
+            eprintln!("LocalSR: could not roll back an interrupted update: {error}");
+            false
+        }
     }
 }
 
@@ -1129,42 +1358,28 @@ fn running_appimage(
         .then_some(appimage)
 }
 
-/// Swap the AppImage for the verified update next to it, run the new image's startup
-/// check, and restore the previous image if that fails. The running image stays
-/// mounted, so replacing its file does not disturb this process.
+/// Swap the AppImage for a verified copy of the update made next to it, run the new
+/// image's startup check, and restore the previous image if that fails. The running image
+/// stays mounted, so replacing its file does not disturb this process.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 fn replace_appimage(
     appimage: &Path,
     update: &Path,
-    report: PathBuf,
+    file: &DownloadFile,
+    public_key: &str,
+    journal: &Path,
     smoke: impl Fn(&Path) -> AppResult<()>,
 ) -> AppResult<()> {
     let parent = appimage
         .parent()
         .ok_or_else(|| invalid("The AppImage has no folder"))?;
-    let name = appimage
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| invalid("The AppImage has no usable name"))?;
-    // A hidden sibling, so the final rename stays on one filesystem.
-    let staged = parent.join(format!(".{name}.update-{}", uuid::Uuid::new_v4()));
-    let plan = update_storage::PortablePlan {
-        previous: parent.join(format!(".{name}.before-update")),
-        current: appimage.to_path_buf(),
-        staged,
-        report,
-    };
-    let result = (|| -> AppResult<()> {
-        if fs::hard_link(update, &plan.staged).is_err() {
-            fs::copy(update, &plan.staged)?;
-        }
-        fs::set_permissions(&plan.staged, fs::metadata(appimage)?.permissions())?;
-        update_storage::install_portable(&plan, smoke)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&plan.staged);
-    }
-    result
+    require_space(fs2::available_space(parent)?, file.size + 256 * 1024 * 1024)?;
+    update_storage::replace_executable(
+        appimage,
+        journal,
+        |staged| stage_verified(update, staged, file, public_key),
+        smoke,
+    )
 }
 
 fn restart_application(app: &AppHandle) -> AppResult<()> {
@@ -1337,6 +1552,8 @@ mod tests {
             unpacked_size: 1024,
             sha256: file.sha256,
             parts: Vec::new(),
+            statement: String::new(),
+            statement_signature: String::new(),
             engine: None,
         };
         validate_contract(&config, "beta", "0.0.13-beta.1", &contract).unwrap();
@@ -1499,6 +1716,8 @@ mod tests {
                 part("a.AppImage.part-0001", 2 * gib - 1),
                 part("a.AppImage.part-0002", gib + 1),
             ],
+            statement: String::new(),
+            statement_signature: String::new(),
             engine: None,
         };
         validate_contract(&config, "beta", "0.3.7-beta", &contract).unwrap();
@@ -1661,39 +1880,103 @@ mod tests {
         assert_eq!(downloaded, whole.size);
     }
 
+    /// A package, an engine package and the signed release statement that binds them,
+    /// signed with a disposable key.
+    fn release_fixture() -> serde_json::Value {
+        serde_json::from_str(include_str!("../tests/fixtures/update-release.json")).unwrap()
+    }
+
+    fn signed_package() -> (Vec<u8>, DownloadFile, String) {
+        let value = release_fixture();
+        let data = value["package"]["data"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        let file = DownloadFile {
+            name: APPLICATION_FILE.into(),
+            url: "https://example.test/package".into(),
+            size: data.len() as u64,
+            sha256: value["package"]["sha256"].as_str().unwrap().into(),
+            signature: value["package"]["signature"].as_str().unwrap().into(),
+        };
+        (data, file, value["public_key"].as_str().unwrap().into())
+    }
+
+    #[cfg(unix)]
+    struct SwapFixture {
+        root: tempfile::TempDir,
+        applications: PathBuf,
+        appimage: PathBuf,
+        update: PathBuf,
+        journal: PathBuf,
+        file: DownloadFile,
+        public_key: String,
+        data: Vec<u8>,
+    }
+
+    #[cfg(unix)]
+    impl SwapFixture {
+        fn new() -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let (data, file, public_key) = signed_package();
+            let root = tempfile::tempdir().unwrap();
+            let applications = root.path().join("Applications");
+            let updates = root.path().join("updates");
+            fs::create_dir_all(&applications).unwrap();
+            fs::create_dir_all(&updates).unwrap();
+            let appimage = applications.join("LocalSR.AppImage");
+            fs::write(&appimage, b"old image").unwrap();
+            fs::set_permissions(&appimage, fs::Permissions::from_mode(0o755)).unwrap();
+            let update = updates.join(APPLICATION_FILE);
+            fs::write(&update, &data).unwrap();
+            fs::set_permissions(&update, fs::Permissions::from_mode(0o600)).unwrap();
+            let journal = root.path().join("swap-journal.json");
+            Self {
+                root,
+                applications,
+                appimage,
+                update,
+                journal,
+                file,
+                public_key,
+                data,
+            }
+        }
+        fn replace(&self, smoke: impl Fn(&Path) -> AppResult<()>) -> AppResult<()> {
+            replace_appimage(
+                &self.appimage,
+                &self.update,
+                &self.file,
+                &self.public_key,
+                &self.journal,
+                smoke,
+            )
+        }
+        fn leftovers(&self) -> Vec<String> {
+            fs::read_dir(&self.applications)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name != "LocalSR.AppImage")
+                .collect()
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_appimage_update_swaps_the_image_and_restores_it_when_the_new_one_fails() {
         use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let applications = root.path().join("Applications");
-        let updates = root.path().join("updates");
-        fs::create_dir_all(&applications).unwrap();
-        fs::create_dir_all(&updates).unwrap();
-        let appimage = applications.join("LocalSR.AppImage");
-        fs::write(&appimage, b"old image").unwrap();
-        fs::set_permissions(&appimage, fs::Permissions::from_mode(0o755)).unwrap();
-        let update = updates.join("application.update");
-        fs::write(&update, b"new image").unwrap();
-        fs::set_permissions(&update, fs::Permissions::from_mode(0o600)).unwrap();
-        let report = root.path().join("install-report.json");
-        let leftovers = || {
-            fs::read_dir(&applications)
-                .unwrap()
-                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-                .filter(|name| name != "LocalSR.AppImage")
-                .collect::<Vec<_>>()
-        };
-
-        let failed = replace_appimage(&appimage, &update, report.clone(), |path| {
-            assert_eq!(fs::read(path).unwrap(), b"new image");
+        let swap = SwapFixture::new();
+        let failed = swap.replace(|path| {
+            assert_eq!(fs::read(path).unwrap(), swap.data);
             Err(AppError::Worker("startup failed".into()))
         });
         assert!(failed.is_err());
-        assert_eq!(fs::read(&appimage).unwrap(), b"old image");
-        assert!(leftovers().is_empty(), "{:?}", leftovers());
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
+        assert!(!swap.journal.exists());
 
-        replace_appimage(&appimage, &update, report, |path| {
+        swap.replace(|path| {
             // The new image runs its startup check with the old image's permissions.
             assert_eq!(
                 fs::metadata(path).unwrap().permissions().mode() & 0o777,
@@ -1702,8 +1985,215 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(fs::read(&appimage).unwrap(), b"new image");
-        assert!(leftovers().is_empty(), "{:?}", leftovers());
+        assert_eq!(fs::read(&swap.appimage).unwrap(), swap.data);
+        assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
+        assert!(!swap.journal.exists());
+    }
+
+    // Review finding 1: the bytes installed are the bytes verified, also when the download
+    // is replaced after the first verification.
+    #[cfg(unix)]
+    #[test]
+    fn an_appimage_update_verifies_the_copy_it_installs() {
+        let swap = SwapFixture::new();
+        fs::write(&swap.update, b"unsigned bytes swapped in after the check").unwrap();
+        let result = swap.replace(|_| panic!("an unverified image must never run"));
+        assert!(result.unwrap_err().to_string().contains("verification"));
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
+    }
+
+    #[test]
+    fn windows_and_macos_install_the_bytes_they_verified() {
+        let (data, file, public_key) = signed_package();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(APPLICATION_FILE);
+        fs::write(&path, &data).unwrap();
+        assert_eq!(read_verified(&path, &file, &public_key).unwrap(), data);
+        fs::write(&path, b"swapped after the download was verified").unwrap();
+        assert!(read_verified(&path, &file, &public_key).is_err());
+    }
+
+    fn engine_fixture(directory: &Path) -> (EngineUpdate, String) {
+        let value = release_fixture();
+        let engine = &value["engine"];
+        let manifest = engine["manifest"].as_str().unwrap();
+        fs::write(directory.join("engine-payload.json"), manifest).unwrap();
+        let mut parts = Vec::new();
+        for part in engine["parts"].as_array().unwrap() {
+            let name = part["name"].as_str().unwrap();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(part["data"].as_str().unwrap())
+                .unwrap();
+            fs::write(directory.join(name), &bytes).unwrap();
+            parts.push(DownloadFile {
+                name: name.into(),
+                url: format!("https://example.test/{name}"),
+                size: bytes.len() as u64,
+                sha256: part["sha256"].as_str().unwrap().into(),
+                signature: part["signature"].as_str().unwrap().into(),
+            });
+        }
+        let update = EngineUpdate {
+            id: "linux-x86_64-rocm-0123456789ab".into(),
+            manifest: DownloadFile {
+                name: "engine-payload.json".into(),
+                url: "https://example.test/engine-payload.json".into(),
+                size: manifest.len() as u64,
+                sha256: engine["manifest_sha256"].as_str().unwrap().into(),
+                signature: engine["manifest_signature"].as_str().unwrap().into(),
+            },
+            parts,
+        };
+        (update, value["public_key"].as_str().unwrap().into())
+    }
+
+    #[test]
+    fn an_engine_package_is_installed_from_the_manifest_bytes_that_were_verified() {
+        let root = tempfile::tempdir().unwrap();
+        let (engine, public_key) = engine_fixture(root.path());
+        let destination = root.path().join("engines/new/engine");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        install_engine_package(root.path(), &engine, &public_key, &destination).unwrap();
+        assert_eq!(
+            fs::read(destination.join("localsr-worker")).unwrap(),
+            b"worker"
+        );
+
+        // A manifest swapped in after the download is never parsed.
+        let root = tempfile::tempdir().unwrap();
+        let (engine, public_key) = engine_fixture(root.path());
+        let manifest = root.path().join("engine-payload.json");
+        let swapped = fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("\"file_count\": 2", "\"file_count\": 1");
+        fs::write(&manifest, swapped).unwrap();
+        let destination = root.path().join("engines/new/engine");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        assert!(install_engine_package(root.path(), &engine, &public_key, &destination).is_err());
+        assert!(!destination.exists());
+    }
+
+    // Review finding 3: a planted link at a temporary name never redirects a write.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_partial_link_never_redirects_a_download_or_a_join() {
+        let (config, whole, mut parts, data) = split_fixture();
+        let (base, server) = serve(
+            parts
+                .iter()
+                .zip(&data)
+                .map(|(part, bytes)| (part.name.clone(), bytes.clone()))
+                .collect(),
+        );
+        for part in &mut parts {
+            part.url = format!("{base}/{}", part.name);
+        }
+        let root = tempfile::tempdir().unwrap();
+        let victim = root.path().join("LocalSR.AppImage");
+        fs::write(&victim, b"working image").unwrap();
+        for part in &parts {
+            std::os::unix::fs::symlink(&victim, root.path().join(format!("{}.partial", part.name)))
+                .unwrap();
+        }
+        std::os::unix::fs::symlink(&victim, root.path().join(format!("{}.partial", whole.name)))
+            .unwrap();
+        let cancel = AtomicBool::new(false);
+        tauri::async_runtime::block_on(download_application(
+            &whole,
+            &parts,
+            root.path(),
+            &config,
+            &cancel,
+            &mut |_| {},
+        ))
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"working image");
+        verify_file(&root.path().join(&whole.name), &whole, &config.public_key).unwrap();
+    }
+
+    // Review finding 2: a second installation never interleaves with the first.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_appimage_install_waits_for_the_first() {
+        use fs2::FileExt;
+        let swap = SwapFixture::new();
+        let held = fs::File::open(&swap.applications).unwrap();
+        held.lock_exclusive().unwrap();
+        let result = swap.replace(|_| panic!("the swap must not start while another runs"));
+        assert!(result.unwrap_err().to_string().contains("Another"));
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
+        assert!(!swap.journal.exists());
+        held.unlock().unwrap();
+        // A backup an older version left under the fixed name neither blocks nor is touched.
+        let stale = swap.applications.join(".LocalSR.AppImage.before-update");
+        fs::write(&stale, b"stale").unwrap();
+        swap.replace(|_| Ok(())).unwrap();
+        assert_eq!(fs::read(&stale).unwrap(), b"stale");
+    }
+
+    // Review finding 4: the working image keeps its name, and an interrupted swap is rolled
+    // back at the next start.
+    #[cfg(unix)]
+    #[test]
+    fn the_working_image_keeps_its_name_while_the_new_one_is_checked() {
+        let swap = SwapFixture::new();
+        swap.replace(|path| {
+            assert_eq!(path, swap.appimage.as_path());
+            // The journal names a backup that still holds the old image.
+            let journal: serde_json::Value =
+                serde_json::from_slice(&fs::read(&swap.journal).unwrap()).unwrap();
+            let backup = PathBuf::from(journal["backup"].as_str().unwrap());
+            assert_eq!(fs::read(backup).unwrap(), b"old image");
+            Err(AppError::Worker("startup failed".into()))
+        })
+        .unwrap_err();
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_interrupted_appimage_swap_is_rolled_back_at_the_next_start() {
+        let swap = SwapFixture::new();
+        let backup = swap
+            .applications
+            .join(".LocalSR.AppImage.before-update-test");
+        let staged = swap.applications.join(".LocalSR.AppImage.update-test");
+        let journal = serde_json::json!({
+            "current": swap.appimage, "backup": backup, "staged": staged,
+        });
+        fs::write(&swap.journal, journal.to_string()).unwrap();
+        // Killed after the new image took the name, before it was accepted.
+        fs::hard_link(&swap.appimage, &backup).unwrap();
+        fs::write(&staged, &swap.data).unwrap();
+        fs::rename(&staged, &swap.appimage).unwrap();
+        assert_eq!(
+            update_storage::recover_swap(&swap.journal).unwrap(),
+            Some(swap.appimage.clone())
+        );
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
+        assert!(!swap.journal.exists());
+
+        // Killed while staging: only the staged copy is removed.
+        fs::write(&swap.journal, journal.to_string()).unwrap();
+        fs::write(&staged, b"half").unwrap();
+        assert_eq!(update_storage::recover_swap(&swap.journal).unwrap(), None);
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
+
+        // A journal naming files outside the image's folder is refused untouched.
+        let outside = swap.root.path().join("other");
+        fs::write(&outside, b"other").unwrap();
+        let foreign = serde_json::json!({
+            "current": swap.appimage, "backup": outside, "staged": staged,
+        });
+        fs::write(&swap.journal, foreign.to_string()).unwrap();
+        assert!(update_storage::recover_swap(&swap.journal).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"other");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
     }
 
     #[test]
@@ -1761,6 +2251,192 @@ mod tests {
         );
         assert!(backup.join("settings.json").is_file());
         assert!(!downloads.exists());
+    }
+
+    // Review finding 5: Windows records success only once the new version runs.
+    #[test]
+    fn a_windows_install_is_confirmed_by_the_version_that_starts_next() {
+        let root = tempfile::tempdir().unwrap();
+        let next = root.path().join("next");
+        let backup = next.join("backups/before-install");
+        let downloads = next.join("updates");
+        fs::create_dir_all(&backup).unwrap();
+        fs::create_dir_all(&downloads).unwrap();
+        fs::write(downloads.join(APPLICATION_FILE), b"installer").unwrap();
+        record_pending_install(&next, "0.3.7-beta", &downloads, &backup).unwrap();
+        // The installer has not run yet: nothing is recorded or removed.
+        assert!(downloads.join(APPLICATION_FILE).is_file());
+        assert!(!backup.join("installed-version.txt").exists());
+
+        // The old version starts again: the installer failed or was cancelled.
+        assert!(!confirm_pending_install(&next, "0.3.6-beta"));
+        assert!(downloads.join(APPLICATION_FILE).is_file());
+        assert!(!backup.join("installed-version.txt").exists());
+        assert!(!confirm_pending_install(&next, "0.3.7-beta"));
+
+        record_pending_install(&next, "0.3.7-beta", &downloads, &backup).unwrap();
+        assert!(confirm_pending_install(&next, "0.3.7-beta"));
+        assert_eq!(
+            fs::read_to_string(backup.join("installed-version.txt")).unwrap(),
+            "0.3.7-beta"
+        );
+        assert!(!downloads.exists());
+        assert!(!confirm_pending_install(&next, "0.3.7-beta"));
+    }
+
+    fn statement_contract() -> (UpdateConfig, ReleaseContract) {
+        let value = release_fixture();
+        let config = UpdateConfig {
+            public_key: value["public_key"].as_str().unwrap().into(),
+            feed: "https://herrei.github.io/localsr/updates".into(),
+            backend: "rocm".into(),
+            engine_id: "linux-x86_64-rocm-old".into(),
+            kind: "native".into(),
+        };
+        let root = tempfile::tempdir().unwrap();
+        let (engine, _) = engine_fixture(root.path());
+        let contract = ReleaseContract {
+            channel: "beta".into(),
+            backend: "rocm".into(),
+            kind: "native".into(),
+            protocol: PROTOCOL_VERSION,
+            engine_id: "linux-x86_64-rocm-0123456789ab".into(),
+            size: 21,
+            unpacked_size: 1024,
+            sha256: value["package"]["sha256"].as_str().unwrap().into(),
+            parts: Vec::new(),
+            statement: value["statement"].as_str().unwrap().into(),
+            statement_signature: value["statement_signature"].as_str().unwrap().into(),
+            engine: Some(engine),
+        };
+        (config, contract)
+    }
+
+    // Review finding 6: the feed's own fields count only when the signed statement says so.
+    #[test]
+    fn a_signed_release_statement_binds_what_the_feed_says() {
+        let target = "linux-x86_64-rocm-native";
+        let check = |config: &UpdateConfig,
+                     target: &str,
+                     channel: &str,
+                     version: &str,
+                     installed: &str,
+                     contract: &ReleaseContract| {
+            verify_statement(config, target, channel, version, installed, contract)
+        };
+        let (config, contract) = statement_contract();
+        check(
+            &config,
+            target,
+            "beta",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &contract,
+        )
+        .unwrap();
+        // A relabelled version, channel or edition.
+        assert!(check(
+            &config,
+            target,
+            "beta",
+            "0.3.8-beta",
+            "0.3.6-beta",
+            &contract
+        )
+        .is_err());
+        assert!(check(
+            &config,
+            target,
+            "stable",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &contract
+        )
+        .is_err());
+        assert!(check(
+            &config,
+            "linux-x86_64-cuda-native",
+            "beta",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &contract
+        )
+        .is_err());
+        let mut other = config.clone();
+        other.backend = "cuda".into();
+        assert!(check(
+            &other,
+            target,
+            "beta",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &contract
+        )
+        .is_err());
+        let mut other = config.clone();
+        other.kind = "portable".into();
+        assert!(check(
+            &other,
+            target,
+            "beta",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &contract
+        )
+        .is_err());
+        // An older or other package or engine.
+        for change in 0..4 {
+            let mut changed = contract.clone();
+            match change {
+                0 => changed.engine_id = "linux-x86_64-rocm-ffffffffffff".into(),
+                1 => changed.sha256 = "f".repeat(64),
+                2 => changed.engine.as_mut().unwrap().manifest.sha256 = "f".repeat(64),
+                _ => changed.engine = None,
+            }
+            assert!(check(
+                &config,
+                target,
+                "beta",
+                "0.3.7-beta",
+                "0.3.6-beta",
+                &changed
+            )
+            .is_err());
+        }
+        // Not newer than what is installed.
+        assert!(check(
+            &config,
+            target,
+            "beta",
+            "0.3.7-beta",
+            "0.3.7-beta",
+            &contract
+        )
+        .is_err());
+        assert!(check(&config, target, "beta", "0.3.7-beta", "0.4.0", &contract).is_err());
+        // A rewritten statement under the old signature, or none at all.
+        let mut forged = contract.clone();
+        let text = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(&contract.statement)
+                .unwrap(),
+        )
+        .unwrap()
+        .replace("0.3.7-beta", "0.3.9-beta");
+        forged.statement = base64::engine::general_purpose::STANDARD.encode(text);
+        assert!(check(&config, target, "beta", "0.3.9-beta", "0.3.6-beta", &forged).is_err());
+        let mut unsigned = contract.clone();
+        unsigned.statement.clear();
+        unsigned.statement_signature.clear();
+        assert!(check(
+            &config,
+            target,
+            "beta",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &unsigned
+        )
+        .is_err());
     }
 
     /// Run explicitly against the retained, production-signed CPU AppImage.
