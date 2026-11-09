@@ -260,7 +260,12 @@ class FakeRunner:
         if self.behaviour == "raise":
             raise RuntimeError("ANE error")
         output = self.reference(torch.from_numpy(inputs["image"])).numpy()
-        return {"restored": output if self.behaviour == "match" else np.zeros_like(output)}
+        # "flat-only": right on a tile without detail, wrong on real content, like an
+        # FP16 program that overflows only where the picture has structure.
+        matches = self.behaviour == "match" or (
+            self.behaviour == "flat-only" and float(np.std(inputs["image"])) < 0.01
+        )
+        return {"restored": output if matches else np.zeros_like(output)}
 
 
 def tiny_descriptor(name="SPAN"):
@@ -369,6 +374,22 @@ def test_mismatch_falls_through_to_the_next_unit_then_pytorch(fake_coreml):
     assert converted.model.active_unit is None
     # Once ruled out, tiles go back to LocalSR's regular grid and the GPU.
     assert converted.fixed_input_shape is None and converted.input_device is None
+
+
+def test_a_tile_without_detail_does_not_decide_the_gate(fake_coreml):
+    # RealPLKSR HFA2k in FP16 matches FP32 at 64-76 dB on blank tiles but returns
+    # non-finite or 6-15 dB output on manga pages (#97). The verdict is kept for later
+    # jobs, so a blank first tile (page margin, sky) must not accept the program.
+    fake_coreml.behaviours[CORE_ML_GPU] = "flat-only"
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(CORE_ML_GPU,), identity="flat")
+    converted.prepare_tiles(16, 4)
+    blank = torch.full((1, 3, 20, 20), 0.97)
+    torch.testing.assert_close(converted(blank), padded_reference(fake_coreml.original, blank, 32))
+    assert not FakeProgram.stores.get(("flat", (32, 32)))
+    detailed = image(20, 20)[None]
+    torch.testing.assert_close(converted(detailed), fake_coreml.original(detailed))
+    assert not FakeProgram.stores[("flat", (32, 32))][CORE_ML_GPU]["accepted"]
+    assert converted.model.active_unit is None
 
 
 def test_gpu_unit_is_used_when_the_neural_engine_does_not_match(fake_coreml):
