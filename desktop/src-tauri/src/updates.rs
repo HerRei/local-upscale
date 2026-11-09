@@ -273,8 +273,24 @@ pub fn validate_contract(
         }
     }
     if let Some(engine) = &contract.engine {
+        // Every downloaded file lands in one folder: the names must not collide with the
+        // application package, its parts or a partial download.
+        let mut names: std::collections::HashSet<&str> = contract
+            .parts
+            .iter()
+            .map(|part| part.name.as_str())
+            .chain([APPLICATION_FILE])
+            .collect();
         if engine.parts.len() > 64
+            || engine.manifest.size == 0
             || engine.manifest.size > 1024 * 1024
+            || std::iter::once(&engine.manifest)
+                .chain(&engine.parts)
+                .any(|file| {
+                    !safe_file_name(&file.name)
+                        || file.name.ends_with(".partial")
+                        || !names.insert(file.name.as_str())
+                })
             || engine
                 .parts
                 .iter()
@@ -977,8 +993,14 @@ fn active_engine_for_distribution(
     if managed_by_store {
         return None;
     }
-    let id = fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?;
-    if !safe_id(&id) || (!bundled_engine_id.is_empty() && id != bundled_engine_id) {
+    // A host compiled for an engine id runs exactly that id's engine: the shared
+    // active-engine.txt may already name the engine of an installer that was cancelled.
+    let id = if bundled_engine_id.is_empty() {
+        fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?
+    } else {
+        bundled_engine_id.to_string()
+    };
+    if !safe_id(&id) {
         return None;
     }
     let executable = paths
@@ -1355,7 +1377,11 @@ fn running_appimage(
     appdir: Option<PathBuf>,
     executable: &Path,
 ) -> Option<PathBuf> {
-    let appimage = appimage.filter(|path| path.is_absolute() && path.is_file())?;
+    // The file itself, not a link to it: the swap renames over this path.
+    let appimage = appimage
+        .filter(|path| path.is_absolute() && path.is_file())?
+        .canonicalize()
+        .ok()?;
     let appdir = appdir?.canonicalize().ok()?;
     executable
         .canonicalize()
@@ -2682,5 +2708,113 @@ mod tests {
                     .contains("signature"));
             }
         }
+    }
+
+    // Round 3, finding 1: a cancelled installer leaves the next engine's id in the shared
+    // file; the host still runs the engine it was built for.
+    #[test]
+    fn round3_a_cancelled_update_does_not_hide_the_engine_this_host_was_built_for() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let worker = |id: &str| {
+            let path = paths
+                .next_root
+                .join("engines")
+                .join(id)
+                .join("engine")
+                .join(if cfg!(windows) {
+                    "localsr-worker.exe"
+                } else {
+                    "localsr-worker"
+                });
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"engine").unwrap();
+            path
+        };
+        let current = worker("windows-x86_64-cuda-e2");
+        fs::write(
+            paths.next_root.join("active-engine.txt"),
+            b"windows-x86_64-cuda-e3",
+        )
+        .unwrap();
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "windows-x86_64-cuda-e2"),
+            Some(current)
+        );
+        // The engine of a release that never started is not this host's engine.
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "windows-x86_64-cuda-e4"),
+            None
+        );
+        // The identity is a file name, never a path.
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, "../escape"),
+            None
+        );
+    }
+
+    // Round 3, finding 5: every engine file the feed names is a plain, distinct name that
+    // cannot replace the application package or a partial download.
+    #[test]
+    fn round3_engine_file_names_are_safe_distinct_and_never_the_application_file() {
+        let (_, file, config) = fixture();
+        let contract = |manifest: &str, parts: &[&str]| ReleaseContract {
+            channel: "beta".into(),
+            backend: "rocm".into(),
+            kind: "portable".into(),
+            protocol: PROTOCOL_VERSION,
+            engine_id: "abc".into(),
+            size: file.size,
+            unpacked_size: 1024,
+            sha256: file.sha256.clone(),
+            parts: Vec::new(),
+            statement: String::new(),
+            statement_signature: String::new(),
+            engine: Some(EngineUpdate {
+                id: "abc".into(),
+                manifest: part(manifest, 100),
+                parts: parts.iter().map(|name| part(name, 10)).collect(),
+            }),
+        };
+        let valid = |manifest: &str, parts: &[&str]| {
+            validate_contract(&config, "beta", "0.0.13-beta.1", &contract(manifest, parts))
+                .is_ok()
+        };
+        assert!(valid("m.engine-payload.json", &["m.part-0001", "m.part-0002"]));
+        assert!(!valid("m.engine-payload.json", &[APPLICATION_FILE]));
+        assert!(!valid(APPLICATION_FILE, &["m.part-0001"]));
+        assert!(!valid("m.engine-payload.json", &["m.part-0001", "m.part-0001"]));
+        assert!(!valid("m.part-0001", &["m.part-0001"]));
+        assert!(!valid("m.engine-payload.json", &["../m.part-0001"]));
+        assert!(!valid("m.engine-payload.json", &["m.part-0001.partial"]));
+        let mut empty_manifest = contract("m.engine-payload.json", &["m.part-0001"]);
+        empty_manifest.engine.as_mut().unwrap().manifest.size = 0;
+        assert!(validate_contract(&config, "beta", "0.0.13-beta.1", &empty_manifest).is_err());
+        // Application parts and engine files share one folder and so one namespace.
+        let mut clash = contract("m.engine-payload.json", &["app.part-0001"]);
+        clash.parts = vec![part("app.part-0001", file.size / 2 + 1), part("app.part-0002", file.size / 2)];
+        clash.size = file.size / 2 + 1 + file.size / 2;
+        assert!(validate_contract(&config, "beta", "0.0.13-beta.1", &clash).is_err());
+    }
+
+    // Round 3, finding 9: a link in $APPIMAGE is followed, so the swap replaces the image
+    // and not the link.
+    #[cfg(unix)]
+    #[test]
+    fn round3_a_symlinked_appimage_variable_names_the_file_it_points_to() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let image = root_path.join("LocalSR.AppImage");
+        let link = root_path.join("localsr");
+        let mount = root_path.join(".mount_LocalSR");
+        let executable = mount.join("usr/bin/localsr-next");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&image, b"image").unwrap();
+        fs::write(&executable, b"host").unwrap();
+        std::os::unix::fs::symlink(&image, &link).unwrap();
+        assert_eq!(
+            running_appimage(Some(link), Some(mount), &executable),
+            Some(image)
+        );
     }
 }
