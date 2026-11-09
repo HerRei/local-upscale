@@ -37,6 +37,30 @@ from localsr.worker.job_progress import ImageJobProgress
 _FIX_NAMES = {"blur": "blur", "jpeg": "JPEG", "noise": "noise"}
 
 
+def save_output(
+    manager: ImageManager,
+    writer: OutputWriter,
+    image: Mapping[str, Any],
+    info: NormalizedModelInfo,
+    data: Mapping[str, Any],
+    cancel_event: threading.Event,
+) -> None:
+    """Write a finished image atomically in the job's format, as every image job does."""
+    manager.save(
+        writer,
+        data["output_path"],
+        format=data["output_format"],
+        quality=data["jpeg_quality"],
+        preserve_metadata=data["preserve_metadata"],
+        icc_profile=image.get("icc_profile"),
+        safe_exif=image.get("safe_exif", {}),
+        scale=info.scale,
+        output_scale=int(data.get("output_scale") or info.scale),
+        temporary_directory=data.get("output_temporary_directory"),
+        cancel_event=cancel_event,
+    )
+
+
 class ImageJobRunner:
     def __init__(
         self,
@@ -330,19 +354,7 @@ class ImageJobRunner:
         info: NormalizedModelInfo,
         data: Mapping[str, Any],
     ) -> None:
-        manager.save(
-            writer,
-            data["output_path"],
-            format=data["output_format"],
-            quality=data["jpeg_quality"],
-            preserve_metadata=data["preserve_metadata"],
-            icc_profile=image.get("icc_profile"),
-            safe_exif=image.get("safe_exif", {}),
-            scale=info.scale,
-            output_scale=int(data.get("output_scale") or info.scale),
-            temporary_directory=data.get("output_temporary_directory"),
-            cancel_event=self.cancel_event,
-        )
+        save_output(manager, writer, image, info, data, self.cancel_event)
 
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():

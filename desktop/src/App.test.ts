@@ -2078,6 +2078,81 @@ describe('LocalSR desktop interface', () => {
     expect(Number(divider.getAttribute('aria-valuenow'))).toBe(77);
   });
 
+  it('shows the photo of a batch that started last and keeps it while an earlier one saves', async () => {
+    class DecodedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private value = '';
+
+      set src(value: string) {
+        this.value = value;
+        queueMicrotask(() => this.onload?.());
+      }
+
+      get src(): string {
+        return this.value;
+      }
+    }
+    vi.stubGlobal('Image', DecodedImage);
+    const source = image('large-batch', true);
+    source.width = 3024;
+    source.height = 1964;
+    const snapshot = readySnapshot([source]);
+    snapshot.runtime.active_job_id = 'a';
+    snapshot.runtime.active_batch_job_ids = ['a', 'b'];
+    await mountWith(snapshot);
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    const tile = (jobId: string, jpeg: string): WorkerEnvelope => ({
+      type: 'tile_update',
+      data: {
+        job_id: jobId,
+        phase: 'completed',
+        output_x: 0,
+        output_y: 0,
+        output_width: 256,
+        output_height: 256,
+        image_width: 12096,
+        image_height: 7856,
+        jpeg_base64: jpeg,
+      },
+    });
+    listener({ type: 'job_started', data: { job_id: 'a' } });
+    listener({ type: 'job_started', data: { job_id: 'b' } });
+    listener(tile('b', 'tile-of-b'));
+    const canvas = screen.getByLabelText('Progressive tiled preview') as HTMLCanvasElement;
+    const drawImage = vi.mocked(canvas.getContext('2d')!.drawImage);
+    await waitFor(() => expect(drawImage).toHaveBeenCalled());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '1:1' }));
+    const zoom = screen.getByTitle(/Dynamic maximum/).textContent;
+    const draws = drawImage.mock.calls.length;
+    // A late tile and the save of the earlier photo leave the shown photo alone.
+    listener(tile('a', 'late-tile-of-a'));
+    listener({ type: 'job_completed', data: { job_id: 'a', output_path: '/output/a.png' } });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(drawImage.mock.calls.length).toBe(draws);
+    expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe(zoom);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('keeps the progress of the photo on screen when a photo saving off screen reports too', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'b';
+    snapshot.runtime.active_batch_job_ids = ['a', 'b'];
+    await mountWith(snapshot);
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    listener({
+      type: 'progress',
+      data: { job_id: 'b', completed_tiles: 4, total_tiles: 10, percentage: 40 },
+    });
+    // The earlier photo's last progress lands in the same display frame.
+    listener({
+      type: 'progress',
+      data: { job_id: 'a', completed_tiles: 10, total_tiles: 10, percentage: 100 },
+    });
+    expect(await screen.findByText('4 of 10 tiles')).toBeTruthy();
+  });
+
   it('composites progressive tiles without exposing comparison and keeps 1:1 controls responsive', async () => {
     class DecodedImage {
       onload: (() => void) | null = null;

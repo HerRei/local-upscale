@@ -82,6 +82,16 @@ class JobRequest:
 
 
 @dataclass
+class ImageBatchRequest:
+    """Photos of one recipe for the Mac lanes (engine feature image_batch_v1)."""
+
+    jobs: list[dict[str, object]]
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "image_batch_request", "data": asdict(self)})
+
+
+@dataclass
 class EditJobRequest:
     job_id: str
     image_path: str
