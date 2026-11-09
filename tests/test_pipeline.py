@@ -404,8 +404,28 @@ def test_an_image_job_caps_memory_with_the_users_safe_memory_choice(monkeypatch)
     info = NormalizedModelInfo("Test", 2, 3, 3, True, False, 1, 1, "a.pth", [])
     engine.load_model("a.pth", "cpu", "fp32", info, safe_memory=False)
     engine.load_model("b.pth", "cpu", "fp32", info, safe_memory=False)
-    engine.load_model("c.pth", "cpu", "fp32", info, safe_memory=True)
+    # The same, already cached model with the other choice must still move the cap.
+    engine.load_model("a.pth", "cpu", "fp32", info, safe_memory=True)
     assert applied == [False, True]
+
+
+def test_the_gpu_cap_counts_memory_localsr_already_holds(monkeypatch):
+    # After the cache is emptied between images, PyTorch still holds its reserved blocks,
+    # which the driver reports as used. The cap must not shrink because of LocalSR itself.
+    from localsr.core import inference
+
+    gib = 1024**3
+    fractions = []
+    monkeypatch.setattr(inference, "_integrated_gpu", lambda *_args: False)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda *_args: (int(1.8 * gib), 8 * gib))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda *_args: 6 * gib)
+    monkeypatch.setattr(
+        torch.cuda,
+        "set_per_process_memory_fraction",
+        lambda fraction, *_args: fractions.append(fraction),
+    )
+    inference._apply_gpu_memory_limit(torch.device("cuda", 0), False)
+    assert fractions == [pytest.approx(0.9 * 7.8 / 8)]
 
 
 def test_the_engine_releases_every_cached_model_but_the_ones_to_keep():

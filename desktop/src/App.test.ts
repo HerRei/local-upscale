@@ -2047,6 +2047,32 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
   });
 
+  it('Back to the default in Restore also replaces a model picked by hand', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'nafnet_sidd_width64',
+          quality: 'best',
+          preset_pins: {},
+        }),
+      ),
+    );
+  });
+
   it('warns before the blur fix that it can fail on sharp pictures', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
@@ -2071,6 +2097,8 @@ describe('LocalSR desktop interface', () => {
         halo: 8,
         precision: 'fp32',
         safe_memory: true,
+        // The host fills a missing list with [], so an old recipe arrives like this.
+        fixes: [],
         stages: [
           { kind: 'deblock', model_id: 'fbcnn_color' },
           { kind: 'upscale', model_id: 'span_photo_x4' },
