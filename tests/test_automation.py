@@ -318,3 +318,48 @@ def test_watch_rejects_non_finite_polling_without_starting(monkeypatch, tmp_path
     )
     assert result == 2
     assert closed == [True]
+
+
+def test_watch_tries_a_failing_file_again_only_after_it_changes(tmp_path):
+    incoming = tmp_path / "incoming"
+    output = tmp_path / "output"
+    incoming.mkdir()
+    source = incoming / "photo.png"
+    source.write_bytes(b"broken fixture")
+    args = build_automation_parser().parse_args(
+        [
+            "watch",
+            str(incoming),
+            "--output",
+            str(output),
+            "--stable-seconds",
+            "1",
+            "--poll-seconds",
+            "1",
+        ]
+    )
+
+    class FailingRunner:
+        def __init__(self):
+            self.reporter = Reporter(json_lines=True)
+            self.cancel_event = threading.Event()
+            self.attempts = 0
+
+        def process(self, path, destination, **_options):
+            self.attempts += 1
+            raise RuntimeError("cannot decode")
+
+    runner = FailingRunner()
+    now = [0.0]
+    polls = [0]
+
+    def sleeper(seconds):
+        now[0] += seconds
+        polls[0] += 1
+        if polls[0] == 10:
+            source.write_bytes(b"replaced fixture, longer")  # the user replaces the file
+        if polls[0] >= 20:
+            runner.cancel_event.set()
+
+    _watch(args, runner, "cpu", clock=lambda: now[0], sleeper=sleeper)
+    assert runner.attempts == 2  # once as found, once after the change
