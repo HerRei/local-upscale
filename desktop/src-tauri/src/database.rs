@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -411,6 +411,58 @@ impl Database {
         })
     }
 
+    /// All image histories in media order, without the per-image page limit.
+    pub fn list_all_media_results(&self) -> AppResult<Vec<MediaResults>> {
+        let mut media = self
+            .connection
+            .prepare("SELECT id FROM media WHERE kind='image' ORDER BY created_at, rowid")?;
+        let ids = media
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let indices: HashMap<String, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.clone(), index))
+            .collect();
+        let mut groups: Vec<MediaResults> = ids
+            .into_iter()
+            .map(|media_id| MediaResults {
+                media_id,
+                results: Vec::new(),
+                total_count: 0,
+                completed_count: 0,
+                available_count: 0,
+                default_result_id: None,
+                next_before: None,
+            })
+            .collect();
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {}, media_id FROM jobs WHERE status IN ('completed','failed','cancelled','interrupted') ORDER BY updated_at DESC, rowid DESC",
+            crate::results::SUMMARY_COLUMNS
+        ))?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(8)?, summary_from_row(row)?))
+        })?;
+        for row in rows {
+            let (id, result) = row?;
+            if let Some(index) = indices.get(&id) {
+                let group = &mut groups[*index];
+                group.total_count += 1;
+                if result.status == "completed" {
+                    group.completed_count += 1;
+                }
+                if result.available {
+                    group.available_count += 1;
+                    if group.default_result_id.is_none() {
+                        group.default_result_id = Some(result.job_id.clone());
+                    }
+                }
+                group.results.push(result);
+            }
+        }
+        Ok(groups)
+    }
+
     /// The saved file of one completed result of this media, for a preview.
     pub fn media_result_output(&self, media_id: &str, job_id: &str) -> AppResult<String> {
         let path: Option<String> = self
@@ -701,6 +753,51 @@ mod tests {
         }
         std::fs::remove_file(path).unwrap();
         assert!(db.media_result_output("m", "done").is_err());
+    }
+
+    #[test]
+    fn all_media_results_include_unavailable_and_older_outputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        for media in ["m", "other"] {
+            db.insert_media(media, &format!("/tmp/{media}.png"), media, "image")
+                .unwrap();
+        }
+        let path = directory.path().join("kept.png");
+        std::fs::write(&path, "pixels").unwrap();
+        for index in 0..55 {
+            let id = format!("job-{index}");
+            db.insert_job(&id, "m", "{}").unwrap();
+            db.finish_job(
+                &id,
+                "completed",
+                if index == 0 {
+                    path.to_str().unwrap()
+                } else {
+                    "/missing.png"
+                },
+                "",
+            )
+            .unwrap();
+        }
+        let groups = db.list_all_media_results().unwrap();
+        let group = groups.iter().find(|g| g.media_id == "m").unwrap();
+        assert_eq!(group.results.len(), 55);
+        assert_eq!(group.available_count, 1);
+        assert_eq!(group.default_result_id.as_deref(), Some("job-0"));
+        assert!(groups
+            .iter()
+            .any(|g| g.media_id == "other" && g.results.is_empty()));
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            db.list_all_media_results()
+                .unwrap()
+                .iter()
+                .find(|g| g.media_id == "m")
+                .unwrap()
+                .available_count,
+            0
+        );
     }
 
     #[test]

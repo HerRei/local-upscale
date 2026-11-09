@@ -104,7 +104,7 @@
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
                 "comparison": { "type": "boolean" },
-                "slot": { "enum": ["showing", "against"] },
+                "slot": { "enum": ["showing", "against", "slot1", "slot2", "slot3", "slot4"] },
                 "generation": { "type": "integer", "minimum": 0 },
                 "target_id": { "type": "string" },
                 "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 },

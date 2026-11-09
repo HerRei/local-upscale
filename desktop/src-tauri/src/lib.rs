@@ -147,6 +147,7 @@ pub fn run() {
             commands::start_model_trials,
             commands::estimate_model_trials,
             commands::list_media_results,
+            commands::list_all_media_results,
             commands::refresh_capabilities,
             commands::probe_path,
             commands::download_model,

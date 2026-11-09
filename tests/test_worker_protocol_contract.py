@@ -35,7 +35,7 @@ def test_protocol_schema_and_python_version_stay_synchronized():
 def test_preview_request_schema_supports_identified_pair_slots():
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     fields = schema["$defs"]["pathRequest"]["allOf"][1]["properties"]["data"]["properties"]
-    assert fields["slot"]["enum"] == ["showing", "against"]
+    assert fields["slot"]["enum"] == ["showing", "against", "slot1", "slot2", "slot3", "slot4"]
     assert fields["generation"]["minimum"] == 0
     assert fields["target_id"]["type"] == "string"
 

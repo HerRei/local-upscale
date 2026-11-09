@@ -934,6 +934,19 @@ pub fn list_media_results(
     Ok(history)
 }
 
+/// All image histories in one IPC call for the Outputs pane.
+#[tauri::command]
+pub fn list_all_media_results(state: State<'_, Arc<AppState>>) -> AppResult<Vec<MediaResults>> {
+    let mut histories = lock(&state.database)?.list_all_media_results()?;
+    let catalog = lock(&state.catalog)?;
+    for history in &mut histories {
+        for result in &mut history.results {
+            crate::results::label_summary(&catalog, result);
+        }
+    }
+    Ok(histories)
+}
+
 #[tauri::command]
 pub fn start_benchmark(
     state: State<'_, Arc<AppState>>,

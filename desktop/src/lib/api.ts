@@ -255,6 +255,7 @@ export const requestImageComparison = (
   pair
     ? invoke('request_image_comparison', { mediaId, showing: pair.showing, against: pair.against })
     : invoke('request_image_comparison', { mediaId });
+export const listAllMediaResults = (): Promise<MediaResults[]> => invoke('list_all_media_results');
 export const listMediaResults = (
   mediaId: string,
   limit = 50,
