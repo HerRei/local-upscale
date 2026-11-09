@@ -53,6 +53,19 @@ describe('Neural Engine hardware entry', () => {
     expect(hardwarePatch('cpu')).toEqual({ device_id: 'cpu' });
   });
 
+  it('is not offered for a model it cannot run, and that keeps the preference', () => {
+    const on = { device_id: 'mps', neural_engine: true };
+    expect(hardwareChoices(capabilities(true), 'HAT').map((entry) => entry.id)).toEqual([
+      'mps',
+      'cpu',
+    ]);
+    expect(selectedHardware(on, capabilities(true), 'HAT')).toBe('mps');
+    // Choosing the Apple GPU there must not switch the Neural Engine off for Quick.
+    expect(hardwarePatch('mps', 'HAT')).toEqual({ device_id: 'mps' });
+    expect(selectedHardware(on, capabilities(true), 'SPAN')).toBe(NEURAL_ENGINE_ID);
+    expect(hardwareChoices(capabilities(true), 'SPAN')[0].id).toBe(NEURAL_ENGINE_ID);
+  });
+
   it('names the unit the selected model will run on', () => {
     const on = { device_id: 'mps', neural_engine: true };
     const caps = capabilities(true);

@@ -304,20 +304,25 @@
         ><b>Choose…</b></button
       >
       <div class="field-row">
-        <label for="device">Hardware</label><select
+        <span class="label-with-tip"
+          ><label for="device">Hardware</label><HelpTip
+            label="Hardware"
+            text="Which processor runs the model. A GPU is much faster than the CPU. On a Mac, Neural Engine runs the models it supports, such as Quick, on Apple's AI chip; for other models only the Apple GPU and the CPU are listed, and your choice is kept for the next model that supports it."
+          /></span
+        ><select
           id="device"
           value={settings.task === 'edit'
             ? (editDevice(capabilities, settings)?.id ?? '')
             : usingTemporalVideo
               ? settings.device_id
-              : selectedHardware(settings, capabilities)}
+              : selectedHardware(settings, capabilities, selectedModel?.architecture)}
           on:change={(event) =>
             updateSettings(
               settings.task === 'edit' || usingTemporalVideo
                 ? { device_id: event.currentTarget.value }
-                : hardwarePatch(event.currentTarget.value),
+                : hardwarePatch(event.currentTarget.value, selectedModel?.architecture),
             )}
-          >{#each settings.task === 'edit' ? editingDevices(capabilities) : usingTemporalVideo ? capabilities.devices : hardwareChoices(capabilities) as device}<option
+          >{#each settings.task === 'edit' ? editingDevices(capabilities) : usingTemporalVideo ? capabilities.devices : hardwareChoices(capabilities, selectedModel?.architecture) as device}<option
               value={device.id}>{device.name}</option
             >{/each}</select
         >
@@ -399,13 +404,18 @@
           </div>
         </div>
       {/if}
-      {#if !usingTemporalVideo && settings.task !== 'edit'}<label class="check-row"
-          ><input
-            type="checkbox"
-            checked={settings.safe_memory}
-            on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })}
-          /> Safe memory mode</label
-        >{/if}
+      {#if !usingTemporalVideo && settings.task !== 'edit'}<div class="check-line">
+          <label class="check-row"
+            ><input
+              type="checkbox"
+              checked={settings.safe_memory}
+              on:change={(event) => updateSettings({ safe_memory: event.currentTarget.checked })}
+            /> Safe memory mode</label
+          ><HelpTip
+            label="Safe memory mode"
+            text="Leaves more memory to the rest of the computer: LocalSR takes a smaller share of the GPU's memory and clears its cache after every tile. A little slower. Turn it on if the computer gets sluggish or a job runs out of memory."
+          />
+        </div>{/if}
       {#if settings.task !== 'edit'}<label class="check-row"
           ><input
             type="checkbox"
