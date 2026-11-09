@@ -1087,6 +1087,7 @@ input[type='text'],
   font-size: calc(11px * var(--ui-scale));
 }
 .field-grid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
@@ -2705,4 +2706,63 @@ input[type='text'],
 }
 .ffmpeg-notice .modal-actions {
   flex-wrap: wrap;
+}
+
+/* A visible "?" next to a setting; its text spans the nearest positioned container. */
+.field-heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 12px 0 6px;
+}
+.field-heading .field-label {
+  margin: 0;
+}
+.help-tip {
+  display: inline-grid;
+  place-items: center;
+  width: calc(14px * var(--ui-scale));
+  min-width: 0;
+  height: calc(14px * var(--ui-scale));
+  min-height: 0;
+  margin: 0 0 0 5px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--tertiary);
+  font-size: calc(9px * var(--ui-scale));
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: 1px;
+  cursor: help;
+}
+.help-tip:hover,
+.help-tip:focus-visible {
+  border-color: var(--accent-line);
+  background: transparent;
+  color: var(--text);
+}
+.help-tip:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 1px;
+}
+.help-tip-text {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: var(--raised);
+  color: var(--text);
+  font-size: calc(11.5px * var(--ui-scale));
+  font-weight: 400;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.help-tip-text[hidden] {
+  display: none;
 }

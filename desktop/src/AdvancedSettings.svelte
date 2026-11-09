@@ -2,6 +2,7 @@
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
   import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
+  import HelpTip from './HelpTip.svelte';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import type {
     CapabilityInfo,
@@ -359,32 +360,43 @@
       </div>
       {#if !usingTemporalVideo && settings.task !== 'edit'}
         <div class="field-grid">
-          <label
-            title="How large a piece of the image is processed at once, in pixels. Larger tiles are a little faster but need more memory; the result barely changes. Choose a smaller tile if you run out of memory."
-            >Tile<select
+          <div>
+            <label for="tile-size">Tile</label><HelpTip
+              label="Tile"
+              text="How large a piece of the image is processed at once, in pixels. Larger tiles are a little faster but need more memory; the result barely changes. Choose a smaller tile if you run out of memory."
+            /><select
+              id="tile-size"
               value={settings.tile_size}
               on:change={(event) =>
                 updateSettings({ tile_size: Number(event.currentTarget.value) })}
               >{#each [64, 128, 192, 256, 384, 512] as size}<option value={size}>{size}</option
                 >{/each}</select
-            ></label
-          ><label
-            title="How many pixels around each tile the model also sees, so the seams between tiles do not show. A larger halo is slower and rarely needed."
-            >Halo<select
+            >
+          </div>
+          <div>
+            <label for="halo-size">Halo</label><HelpTip
+              label="Halo"
+              text="How many pixels around each tile the model also sees, so the seams between tiles do not show. A larger halo is slower and rarely needed."
+            /><select
+              id="halo-size"
               value={settings.halo}
               on:change={(event) => updateSettings({ halo: Number(event.currentTarget.value) })}
               >{#each [8, 16, 32, 64] as halo}<option value={halo}>{halo}</option>{/each}</select
-            ></label
-          ><label
-            title="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32."
-            >Precision<select
+            >
+          </div>
+          <div>
+            <label for="precision">Precision</label><HelpTip
+              label="Precision"
+              text="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32."
+            /><select
+              id="precision"
               disabled={onnxGpu ||
                 (settings.task === 'video' && settings.video_hdr_mode === 'preserve')}
               value={onnxGpu ? 'fp32' : settings.precision}
               on:change={(event) => updateSettings({ precision: event.currentTarget.value })}
               ><option value="fp32">FP32</option><option value="fp16">FP16</option></select
-            ></label
-          >
+            >
+          </div>
         </div>
       {/if}
       {#if !usingTemporalVideo && settings.task !== 'edit'}<label class="check-row"
