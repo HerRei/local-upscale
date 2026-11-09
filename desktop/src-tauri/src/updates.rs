@@ -1756,10 +1756,10 @@ mod tests {
         }
 
         #[test]
-        fn mutating_any_signed_statement_field_is_rejected(field in 0u8..11) {
+        fn mutating_any_signed_statement_field_is_rejected(field in 0u8..12) {
             let (config, mut contract) = statement_contract();
             let bytes = base64::engine::general_purpose::STANDARD
-                .decode(&contract.statement)
+                .decode(&contract.statement_v2)
                 .unwrap();
             let mut statement: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let field = match field {
@@ -1772,15 +1772,16 @@ mod tests {
                 6 => "protocol",
                 7 => "engine_id",
                 8 => "sha256",
-                9 => "engine_manifest_sha256",
+                9 => "engine_manifest",
+                10 => "size",
                 _ => "unpacked_size",
             };
             statement[field] = match field {
-                "schema_version" | "protocol" | "unpacked_size" => serde_json::json!(0),
-                "engine_manifest_sha256" => serde_json::Value::Null,
+                "schema_version" | "protocol" | "size" | "unpacked_size" => serde_json::json!(0),
+                "engine_manifest" => serde_json::Value::Null,
                 _ => serde_json::json!("mutated"),
             };
-            contract.statement = base64::engine::general_purpose::STANDARD
+            contract.statement_v2 = base64::engine::general_purpose::STANDARD
                 .encode(serde_json::to_vec(&statement).unwrap());
             prop_assert!(verify_statement(
                 &config,
