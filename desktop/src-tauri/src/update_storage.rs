@@ -857,7 +857,7 @@ mod tests {
             let accepted_at = swap_steps.iter().position(|s| *s == "backup-remove");
             // The swap is killed at every step in turn; each of those states is recovered
             // by a start that is itself killed at every step of its recovery.
-            for base in 0..swap_steps.len() {
+            for (base, base_step) in swap_steps.iter().enumerate() {
                 let kept = accepted_at.is_some_and(|at| base > at);
                 let expected: &[u8] = if kept { b"new" } else { b"old" };
                 let probe = crashed_swap(separate, accept, base);
@@ -869,7 +869,7 @@ mod tests {
                         let why = format!(
                             "swap {} #{base}, recovery {step} #{index} {mode:?} \
                              separate={separate} copy={copy_backup} accept={accept}",
-                            swap_steps[base]
+                            base_step
                         );
                         let folder = crashed_swap(separate, accept, base);
                         fault::arm(Some((index, mode)));
