@@ -365,6 +365,9 @@ export interface RuntimeStatus {
   live_system_ram_available: number;
   live_memory_pressure_percent: number;
   thermal_status: string;
+  /** What the engine said about the hardware route during this job; outlives progress ticks
+   *  (worker.rs keeps it in the host's snapshot until the job ends). */
+  hardware_note: string;
 }
 
 export interface BenchmarkRender {

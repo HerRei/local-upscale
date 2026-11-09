@@ -34,6 +34,16 @@ it('welcomes a first launch, discloses the update count and opens the guide', as
   expect(api.openUserGuide).toHaveBeenCalledTimes(1);
 });
 
+it('keeps the welcome short: privacy and downloads, no tour of the window', () => {
+  render(WelcomeNotice, { anonymousUpdateCount: true });
+  expect(
+    screen.getByText(
+      'Photos and videos stay on this computer. Models download once, when a task first needs them.',
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Drop photos or videos in the middle/)).toBeNull();
+});
+
 it('says where the launch check and the count can be turned off without a button for it', () => {
   render(WelcomeNotice, { anonymousUpdateCount: true, checkAtLaunch: true });
   expect(screen.getByText(/You can turn either off in the .* menu/)).toBeTruthy();
