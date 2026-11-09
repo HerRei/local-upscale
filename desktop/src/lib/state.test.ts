@@ -452,6 +452,25 @@ describe('model library resolution', () => {
     expect(chooseFixModel(snapshot, 'noise', 'best')?.model_id).toBe('nafnet_sidd_width64');
   });
 
+  it("keeps a finished job's note, such as a skipped fix, on the status line", () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: {
+        job_id: 'job',
+        output_path: '/out.png',
+        notes: 'The fix before upscaling was skipped.',
+      },
+    });
+    expect(snapshot.runtime.status_title).toBe('Complete');
+    expect(snapshot.runtime.status_detail).toBe('The fix before upscaling was skipped.');
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'job', output_path: '/out.png' },
+    });
+    expect(snapshot.runtime.status_detail).toBe('The output was written successfully.');
+  });
+
   it('never picks a fix model that is kept out of the presets', () => {
     const snapshot = demoSnapshot();
     snapshot.catalog.models.find((model) => model.model_id === 'fbcnn_color')!.preset_eligible =

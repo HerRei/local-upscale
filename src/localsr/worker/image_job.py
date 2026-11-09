@@ -11,9 +11,10 @@ from typing import Any
 import numpy as np
 
 from localsr.core.image_io import ImageManager
-from localsr.core.inference import InferenceEngine
+from localsr.core.inference import InferenceEngine, UnstableRestorationError
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter, NormalizedModelInfo
+from localsr.core.model_catalog import CATALOG_BY_ID
 from localsr.core.output_writer import OutputWriter, cleanup_stale_work_files
 from localsr.core.pipeline import (
     ImagePipeline,
@@ -27,6 +28,7 @@ from localsr.protocol.messages import (
     JobCompleted,
     LivePreviewWarning,
     LogMessage,
+    WarningMessage,
     WorkerMessage,
 )
 from localsr.worker.job_progress import ImageJobProgress
@@ -87,8 +89,11 @@ class ImageJobRunner:
                 self._log("Starting inference pipeline...")
                 processing_started_at = time.monotonic()
                 working_image = image
+                notes: list[str] = []
                 if pipeline.preprocess is not None:
-                    working_image = self._preprocess(image, pipeline.preprocess, data, progress)
+                    working_image = self._preprocess(
+                        image, pipeline.preprocess, data, progress, notes
+                    )
                 self._check_cancelled()
                 writer, info = self._primary(working_image, pipeline, data, progress, resources)
                 self._check_cancelled()
@@ -106,6 +111,7 @@ class ImageJobRunner:
                         else processing_started_at
                     ),
                     output_path=data["output_path"],
+                    notes=" ".join(notes),
                 )
             )
         except InterruptedError:
@@ -117,6 +123,7 @@ class ImageJobRunner:
         stage: PipelineStage,
         data: Mapping[str, Any],
         progress: ImageJobProgress,
+        notes: list[str],
     ) -> dict[str, Any]:
         self._check_cancelled()
         progress.start(0, stage)
@@ -144,6 +151,23 @@ class ImageJobRunner:
                 return working_image
         except InterruptedError:
             raise
+        except UnstableRestorationError as error:
+            # The fix before the main model is optional. A model that cannot handle this
+            # image (NAFNet's deblur runs away on line art, screentone and already sharp
+            # pictures) must not stop the job: the image goes on without this fix, the job
+            # says so, and nothing damaged is kept.
+            model = CATALOG_BY_ID.get(stage.model_id)
+            note = (
+                f"The fix before upscaling ({model.name if model else stage.model_id}) was "
+                "skipped for this image: the model could not process it without damaging it, "
+                "which happens with line art, screentone and already sharp pictures. The rest "
+                "of the job ran as usual."
+            )
+            self._log(f"{note} ({error})")
+            self.emit(WarningMessage(message=note))
+            notes.append(note)
+            progress.complete(0, stage)
+            return image
         except Exception as error:  # noqa: BLE001
             raise PipelineStageError(stage, str(error)) from error
         finally:
