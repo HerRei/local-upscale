@@ -643,8 +643,8 @@ MODEL_CATALOG = (
         filename="4xBHI_dat2_real.pth",
         description=(
             "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on "
-            "lettering, masonry and clean photos; foliage and fur can come out soft. About ten "
-            "times slower than Best, so it is never picked by a preset."
+            "lettering, masonry and clean photos; foliage and fur can come out soft. Up to ten "
+            "times slower than Best, so no preset picks it on its own."
         ),
         size_bytes=140_196_334,
         sha256="14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0",
@@ -676,8 +676,8 @@ MODEL_CATALOG = (
         filename="4xRealWebPhoto_v4_dat2.pth",
         description=(
             "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed "
-            "and noisy before upscaling. About ten times slower than Best, so it is never picked "
-            "by a preset."
+            "and noisy before upscaling. Up to ten times slower than Best, so no preset picks it "
+            "on its own."
         ),
         size_bytes=140_299_118,
         sha256="9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9",
