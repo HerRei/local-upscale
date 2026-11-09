@@ -487,3 +487,15 @@ def test_engine_library_copies_need_exactly_one_engine(tmp_path) -> None:
     (tmp_path / "usr" / "lib").mkdir(parents=True)
     with pytest.raises(RuntimeError, match="expected one engine directory"):
         build.remove_engine_library_copies(tmp_path)
+
+
+def test_a_managed_cuda_update_removes_the_engine_the_previous_installer_left() -> None:
+    # Tauri's NSIS /UPDATE install skips the previous uninstaller, so its hook does not
+    # remove $INSTDIR\engine; with the managed flag the updater's versioned engine is used
+    # instead, and the stale copy must go.
+    hook = (ROOT / "packaging/windows/engine-payload.nsh").read_text(encoding="utf-8")
+    managed = hook.split('${If} $LocalSREngineManaged == "1"', 1)[1].split("${Else}", 1)[0]
+    assert 'RMDir /r "$INSTDIR\\engine"' in managed
+    # Without the flag (a download from the website) the parts beside it are installed.
+    unmanaged = hook.split("${Else}", 1)[1]
+    assert "--install-engine" in unmanaged
