@@ -399,7 +399,45 @@ export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {
   return owner?.media_id === selected.id ? snapshot.runtime.result_preview_data_url : '';
 }
 
+const TERMINAL_JOB_EVENTS = ['job_completed', 'job_failed', 'job_cancelled'];
+
+/**
+ * A photo batch is one queue item for the engine but several jobs here. The window
+ * shows the photo that started last; the others (saving, or not started yet) only
+ * change their own job row, which the next refresh brings. Mirrors the native host.
+ */
 export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppSnapshot {
+  const id = String(envelope.data.job_id ?? '');
+  const batch = snapshot.runtime.active_batch_job_ids ?? [];
+  if (!id || !batch.includes(id)) return applyJobEnvelope(snapshot, envelope);
+  const terminal = TERMINAL_JOB_EVENTS.includes(envelope.type);
+  let next: AppSnapshot;
+  if (id !== snapshot.runtime.active_job_id && envelope.type !== 'job_started') {
+    if (!terminal) return snapshot;
+    next = { ...snapshot, runtime: { ...snapshot.runtime } };
+    if (envelope.type === 'job_completed')
+      next.runtime.last_output_path = String(envelope.data.output_path ?? '');
+  } else {
+    next = applyJobEnvelope(snapshot, envelope);
+  }
+  if (terminal) leaveBatch(next.runtime, id);
+  return next;
+}
+
+/** While other photos remain the batch stays busy, showing the next one. */
+function leaveBatch(runtime: AppSnapshot['runtime'], id: string): void {
+  const remaining = (runtime.active_batch_job_ids ?? []).filter((member) => member !== id);
+  runtime.active_batch_job_ids = remaining;
+  if (!remaining.length || (runtime.active_job_id && runtime.active_job_id !== id)) return;
+  runtime.active_job_id = remaining[0];
+  runtime.progress = 0;
+  runtime.estimated_remaining_seconds = 0;
+  runtime.result_preview_data_url = '';
+  runtime.status_title = 'Processing';
+  runtime.status_detail = 'Finishing the other photos of this batch.';
+}
+
+function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppSnapshot {
   // Tiles carry display-only pixels and coordinates. Returning the existing
   // snapshot avoids cloning media thumbnails, model metadata and job history
   // twice per tile; App.svelte composites the pixels on its bounded canvas.

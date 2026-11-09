@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
+import type { AppSnapshot } from './types';
 import {
   applyWorkerEnvelope,
   chooseFixModel,
@@ -632,5 +633,72 @@ describe('model library resolution', () => {
     );
     expect(displayName({ name: 'HAT-L ×4 ImageNet — Large' })).toBe('HAT-L ×4 ImageNet');
     expect(displayName({ name: 'x', display_name: 'Given' })).toBe('Given');
+  });
+});
+
+describe('photo batches', () => {
+  function batch(): AppSnapshot {
+    const snapshot = demoSnapshot();
+    snapshot.runtime = {
+      ...snapshot.runtime,
+      active_job_id: 'a',
+      active_batch_job_ids: ['a', 'b', 'c'],
+    };
+    return snapshot;
+  }
+
+  it('shows the photo that started last while earlier ones finish off screen', () => {
+    let snapshot = applyWorkerEnvelope(batch(), { type: 'job_started', data: { job_id: 'a' } });
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'b' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: { job_id: 'b', percentage: 30, completed_tiles: 3, total_tiles: 10 },
+    });
+    expect(snapshot.runtime.active_job_id).toBe('b');
+    const shown = snapshot;
+    expect(
+      applyWorkerEnvelope(shown, { type: 'progress', data: { job_id: 'a', percentage: 100 } }),
+    ).toBe(shown);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'a', output_path: '/out/a.png' },
+    });
+    expect(snapshot.runtime).toMatchObject({
+      active_job_id: 'b',
+      active_batch_job_ids: ['b', 'c'],
+      progress: 30,
+      status_title: 'Enhancing',
+      last_output_path: '/out/a.png',
+    });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_failed',
+      data: { job_id: 'c', error_message: 'cannot identify image file' },
+    });
+    expect(snapshot.runtime.active_job_id).toBe('b');
+    expect(snapshot.runtime.active_batch_job_ids).toEqual(['b']);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'b', output_path: '/out/b.png' },
+    });
+    expect(snapshot.runtime).toMatchObject({
+      active_job_id: '',
+      active_batch_job_ids: [],
+      status_title: 'Complete',
+      last_output_path: '/out/b.png',
+    });
+  });
+
+  it('stays busy when the shown photo ends before the next one starts', () => {
+    let snapshot = applyWorkerEnvelope(batch(), { type: 'job_started', data: { job_id: 'a' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_failed',
+      data: { job_id: 'a', error_message: 'disk full' },
+    });
+    expect(snapshot.runtime).toMatchObject({
+      active_job_id: 'b',
+      active_batch_job_ids: ['b', 'c'],
+      status_title: 'Processing',
+      result_preview_data_url: '',
+    });
   });
 });
