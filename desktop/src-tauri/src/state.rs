@@ -117,10 +117,16 @@ impl AppState {
         // temporary guards to the end of the statement and a non-reentrant
         // mutex would deadlock the first frontend bootstrap.
         let catalog = lock(&self.catalog)?.clone();
-        let (media, jobs) = {
+        let (media, mut jobs) = {
             let database = lock(&self.database)?;
             (database.list_media()?, database.list_jobs()?)
         };
+        // The queue row says which model runs ("Running SwinIR · 2 queued").
+        for job in &mut jobs {
+            if let Some(label) = crate::results::catalog_label(&catalog, &job.model_id) {
+                job.model_label = label;
+            }
+        }
         let settings = lock(&self.settings)?.clone();
         let recipes = lock(&self.recipes)?.clone();
         let capabilities = lock(&self.capabilities)?.clone();
