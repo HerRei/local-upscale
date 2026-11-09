@@ -947,6 +947,32 @@ pub fn list_all_media_results(state: State<'_, Arc<AppState>>) -> AppResult<Vec<
     Ok(histories)
 }
 
+/// Replace the Compare tab's picks in slot order, using only host-owned files.
+#[tauri::command]
+pub fn request_compare(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    picks: Vec<crate::compare::ComparePick>,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::plan(&database, &mut runtime.compare, &picks)?
+    };
+    for request in requests {
+        if let Err(error) = worker::send(&state, &request) {
+            let mut failure = request["data"].clone();
+            failure["error_message"] = json!(error.to_string());
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply(&database, &mut runtime.compare, &failure, true)?;
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn start_benchmark(
     state: State<'_, Arc<AppState>>,

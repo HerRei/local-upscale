@@ -16,6 +16,7 @@ import type {
   StartEditInput,
   MediaResults,
   TrialEstimate,
+  ComparePick,
 } from './types';
 
 export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window;
@@ -256,6 +257,8 @@ export const requestImageComparison = (
     ? invoke('request_image_comparison', { mediaId, showing: pair.showing, against: pair.against })
     : invoke('request_image_comparison', { mediaId });
 export const listAllMediaResults = (): Promise<MediaResults[]> => invoke('list_all_media_results');
+export const requestCompare = (picks: ComparePick[]): Promise<void> =>
+  invoke('request_compare', { picks });
 export const listMediaResults = (
   mediaId: string,
   limit = 50,

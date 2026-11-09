@@ -1,6 +1,7 @@
 mod cancellation;
 mod catalog;
 mod commands;
+mod compare;
 mod database;
 mod distribution;
 mod downloads;
@@ -142,6 +143,7 @@ pub fn run() {
             commands::prepare_video_comparison,
             commands::cancel_video_comparison,
             commands::request_image_comparison,
+            commands::request_compare,
             commands::cancel_jobs,
             commands::cancel_jobs_for_media,
             commands::start_model_trials,
