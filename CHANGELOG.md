@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.6-beta] - Unreleased
+
+### Added
+
+- Intel NPUs ("Intel AI Boost" in Core Ultra processors) as a device under Advanced >
+  Hardware, on Linux and Windows. The NPU runs SPAN (Quick), the Real-ESRGAN models and
+  FBCNN (the JPEG fix); with the NPU selected, other models run on the CPU, and the app says
+  so. The first time a model runs on the NPU at a tile size, LocalSR compiles it, which can
+  take a minute, and keeps the result (up to 2 GB). The NPU computes in FP16, so LocalSR
+  checks once that its result stays close to the CPU's.
+  - Linux needs Intel's NPU driver with its compiler (the `intel-driver-compiler-npu`
+    package from Intel's NPU driver releases; Fedora's driver package has no compiler).
+    Where the compiler is missing, Advanced says so instead of offering the NPU.
+  - Windows: Intel's NPU driver brings the compiler. Not yet tested on a Windows computer
+    with an NPU.
+  - AMD NPUs (Ryzen AI) are not supported yet.
+- The model library names the accelerator a model can use on this computer: the Neural
+  Engine on a Mac, or an Intel NPU.
+
+### Changed
+
+- The Linux CPU download uses ONNX Runtime 1.31.1, the first line that finds NPUs on Linux.
+
+### Fixed
+
+- A graphics or NPU driver that crashed LocalSR while it listed OpenVINO devices crashed it
+  again on every start. The next start now goes on without OpenVINO devices.
+
 ## [0.3.5-beta] - Unreleased
 
 ### Added
