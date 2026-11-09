@@ -60,6 +60,10 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 - Memory use depends on the model, the output size and the clip. 16 GB of GPU
   memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
   but the working memory is not. Try a short clip at a modest output size first.
+- Frame interpolation adds processing and memory costs. Interpolating before the
+  upscale requires upscaling more frames; after the upscale runs interpolation at
+  the larger output size. 1080p and 4K Mac performance and memory use have not
+  yet been validated.
 - Estimates are measured from completed tiles and frames, so they appear only
   after the first results and change with the scene.
 
@@ -67,6 +71,9 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 
 - AI restoration invents detail. Inspect text, faces and fine structure, and keep
   your originals; LocalSR never overwrites a source file.
+- Interpolated motion can contain artifacts, especially around occlusions, fine
+  detail and cuts. Cut and repeated-frame detection are heuristics and can miss.
+  Interpolation is unavailable with SeedVR2 and HDR preservation.
 - HAT HDR preservation is experimental: the models were trained on SDR, so HDR
   perceptual quality and temporal stability are unverified. SeedVR2 exports SDR.
 - NAFNet can produce unstable results on some scanned documents, and SPAN on
