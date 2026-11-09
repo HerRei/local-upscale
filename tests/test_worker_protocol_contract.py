@@ -258,3 +258,11 @@ def test_compare_region_protocol_has_identity_and_bounds():
         RegionFailed("image.png", "slot1", 2, "job", 3, "error"),
     ):
         assert _message(result)["data"]["request_id"] == 3
+
+
+def test_job_schemas_carry_heic_images_and_mov_prores_videos():
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    text = json.dumps(schema)
+    assert '"output_format": {"enum": ["png", "jpg", "tif", "webp", "heic"]}' in text
+    assert '"container": {"enum": ["mp4", "mkv", "mov"]}' in text
+    assert '"enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc", "prores"]' in text

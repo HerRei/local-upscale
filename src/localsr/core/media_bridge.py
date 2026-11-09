@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import external_ffmpeg as user_ffmpeg
 from .external_ffmpeg import ExternalFFmpeg, ExternalFFmpegError, ensure_free_space, plan_source
+from .image_formats import system_image_output_formats
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     EXTERNAL_OUTPUT_CODECS,
@@ -166,6 +167,7 @@ def media_capabilities() -> dict:
             if system is not None
             else None
         ),
+        "image_output": system_image_output_formats(),
         "external_ffmpeg": {
             "detected": [found.path] if found is not None else [],
             "candidates": user_ffmpeg.discover_candidates(),
