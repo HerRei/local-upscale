@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import re
 import shutil
 import sys
 import tomllib
@@ -90,7 +91,11 @@ def test_bump_produces_a_candidate_the_release_checks_accept(tree: Path):
     plan = json.loads((tree / "ci/public-beta-release.json").read_text())
     assert {target["package"] for target in plan["targets"]} == {"candidate"}
     readme = (tree / "README.md").read_text()
-    assert f"the downloads below are still v{VERSION}" in readme
+    # The previous version may never have been published: the notice names the version
+    # the README download labels still show.
+    published = bump_version.published_version(tree)
+    assert f"the downloads below are still v{published}" in readme
+    assert f"v{published}:**" in readme
     assert f"## [{new}] - Unreleased" in (tree / "CHANGELOG.md").read_text()
     # Prose about published packages is left alone: it still describes the old release.
     assert (tree / "docs/platforms.md").read_text() == (ROOT / "docs/platforms.md").read_text()
@@ -164,3 +169,39 @@ def test_notes_with_backslashes_are_inserted_literally(tree: Path):
     new = bump_version.next_patch(VERSION)
     bump_version.bump(tree, new, r"- Fix C:\Users\hermes paths and \1 groups", dt.date.today())
     assert r"C:\Users\hermes paths and \1 groups" in (tree / "CHANGELOG.md").read_text()
+
+
+def test_notice_names_the_last_published_version_not_the_previous_one(tree: Path):
+    readme = tree / "README.md"
+    readme.write_text(
+        re.sub(
+            r"\*\*(macOS|Windows|Linux) v[^:*]+:\*\*", r"**\1 v0.2.5-beta:**", readme.read_text()
+        )
+    )
+    assert bump_version.published_version(tree) == "0.2.5-beta"
+
+    new = bump_version.next_patch(VERSION)
+    assert VERSION != "0.2.5-beta"
+    bump_version.bump(tree, new, "- x", dt.date(2026, 11, 16))
+    text = readme.read_text()
+    assert f"v{new} is in preparation; the downloads below are still v0.2.5-beta." in text
+    assert f"still v{VERSION}" not in text
+
+
+def test_bump_moves_an_unreleased_section_under_the_new_version(tree: Path):
+    new = bump_version.next_patch(VERSION)
+    changelog = tree / "CHANGELOG.md"
+    changelog.write_text(
+        changelog.read_text().replace(
+            "# Changelog\n\n", "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- Real fix.\n\n", 1
+        ),
+        encoding="utf-8",
+    )
+    bump_version.bump(tree, new, "- Dependency updates.", dt.date(2026, 11, 16))
+
+    updated = changelog.read_text()
+    assert "[Unreleased]" not in updated
+    assert updated.count(f"## [{new}] - Unreleased") == 1
+    section = updated.split(f"## [{new}] - Unreleased")[1].split("\n## [")[0]
+    assert "- Real fix." in section
+    assert "- Dependency updates." in section
