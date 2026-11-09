@@ -8,6 +8,7 @@
     { "$ref": "#/$defs/handshakeRequest" },
     { "$ref": "#/$defs/emptyRequest" },
     { "$ref": "#/$defs/pathRequest" },
+    { "$ref": "#/$defs/regionRequest" },
     { "$ref": "#/$defs/jobRequest" },
     { "$ref": "#/$defs/editJobRequest" },
     { "$ref": "#/$defs/videoJobRequest" },
@@ -81,10 +82,36 @@
         { "$ref": "#/$defs/envelope" },
         {
           "properties": {
-            "type": { "enum": ["capabilities_request", "shutdown_request"] },
+            "type": { "enum": ["capabilities_request", "shutdown_request", "region_clear"] },
             "data": { "type": "object", "maxProperties": 0 }
           }
         }
+      ]
+    },
+    "regionRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "region_request" },
+          "data": {
+            "type": "object",
+            "required": ["image_path", "slot", "generation", "target_id", "request_id", "x", "y", "width", "height", "target_width", "target_height"],
+            "properties": {
+              "image_path": { "type": "string", "minLength": 1 },
+              "slot": { "enum": ["slot1", "slot2", "slot3", "slot4"] },
+              "generation": { "type": "integer", "minimum": 1 },
+              "target_id": { "type": "string", "minLength": 1 },
+              "request_id": { "type": "integer", "minimum": 1 },
+              "x": { "type": "integer", "minimum": 0 },
+              "y": { "type": "integer", "minimum": 0 },
+              "width": { "type": "integer", "minimum": 1 },
+              "height": { "type": "integer", "minimum": 1 },
+              "target_width": { "type": "integer", "minimum": 1, "maximum": 2048 },
+              "target_height": { "type": "integer", "minimum": 1, "maximum": 2048 }
+            },
+            "additionalProperties": false
+          }
+        } }
       ]
     },
     "pathRequest": {
@@ -337,6 +364,8 @@
                 "capabilities_info",
                 "preview_ready",
                 "preview_failed",
+                "region_ready",
+                "region_failed",
                 "media_info",
                 "media_probe_failed",
                 "media_probe_progress",

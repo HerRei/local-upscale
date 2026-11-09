@@ -66,6 +66,9 @@ export interface CompareItem {
   label: string;
   meta: string;
   preview_data_url: string;
+  preview_width?: number;
+  preview_height?: number;
+  region?: { bounds: import('./compareRegions').Region; data_url: string } | null;
   width: number;
   height: number;
   status: 'loading' | 'ready' | 'error' | 'missing';

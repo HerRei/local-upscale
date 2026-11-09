@@ -69,6 +69,22 @@ fn file_identity(path: &str) -> Option<FileIdentity> {
     })
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub target_width: u32,
+    pub target_height: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RegionResult {
+    pub bounds: Region,
+    pub data_url: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CompareSlot {
     pub pick: ComparePick,
@@ -79,6 +95,9 @@ pub struct CompareSlot {
     pub height: u32,
     pub preview_width: u32,
     pub preview_height: u32,
+    pub region: Option<RegionResult>,
+    #[serde(skip)]
+    requested_region: Option<Region>,
     #[serde(skip)]
     path: String,
     #[serde(skip)]
@@ -89,6 +108,8 @@ pub struct CompareSlot {
 pub struct CompareState {
     pub generation: u64,
     pub slots: Vec<CompareSlot>,
+    #[serde(skip)]
+    region_request_id: u64,
 }
 
 // Resolve only paths owned by an image in the database. Validation errors
@@ -161,6 +182,8 @@ pub fn plan(
             height: 0,
             preview_width: 0,
             preview_height: 0,
+            region: None,
+            requested_region: None,
         });
     }
     let generation = compare
@@ -168,7 +191,11 @@ pub fn plan(
         .checked_add(1)
         .ok_or_else(|| AppError::Validation("Compare generation exhausted".into()))?;
     let requests = slots.iter().enumerate().filter(|(_, slot)| slot.status == CompareStatus::Loading).map(|(index, slot)| json!({"type":"preview_request", "data": {"image_path":slot.path, "max_dimension":RESULT_PREVIEW_MAX_DIMENSION, "comparison":true, "slot":format!("slot{}", index + 1), "generation":generation, "target_id":slot.pick.target_id()}})).collect();
-    *compare = CompareState { generation, slots };
+    *compare = CompareState {
+        generation,
+        slots,
+        region_request_id: 0,
+    };
     Ok(requests)
 }
 
@@ -181,6 +208,8 @@ pub fn refresh(db: &Database, compare: &mut CompareState) -> AppResult<()> {
         {
             slot.status = CompareStatus::Missing;
             slot.preview_data_url.clear();
+            slot.region = None;
+            slot.requested_region = None;
             slot.error.clear();
             slot.width = 0;
             slot.height = 0;
@@ -237,6 +266,92 @@ pub fn apply(
         slot.height = dimension("height");
         slot.preview_width = dimension("preview_width");
         slot.preview_height = dimension("preview_height");
+    }
+    Ok(())
+}
+
+/// Replace the desired regions atomically. Only selected, unchanged files can be read.
+pub fn plan_regions(
+    db: &Database,
+    compare: &mut CompareState,
+    regions: &[Option<Region>],
+) -> AppResult<Vec<Value>> {
+    if regions.len() > compare.slots.len() {
+        return Err(AppError::Validation("Invalid Compare regions".into()));
+    }
+    refresh(db, compare)?;
+    for (index, region) in regions.iter().enumerate() {
+        if let Some(r) = region {
+            let slot = &compare.slots[index];
+            if r.width == 0
+                || r.height == 0
+                || r.target_width == 0
+                || r.target_height == 0
+                || r.target_width > 2048
+                || r.target_height > 2048
+                || r.x.checked_add(r.width).is_none_or(|v| v > slot.width)
+                || r.y.checked_add(r.height).is_none_or(|v| v > slot.height)
+            {
+                return Err(AppError::Validation("Invalid Compare region".into()));
+            }
+        }
+    }
+    compare.region_request_id = compare
+        .region_request_id
+        .checked_add(1)
+        .ok_or_else(|| AppError::Validation("Compare request exhausted".into()))?;
+    let mut requests = Vec::new();
+    for (index, slot) in compare.slots.iter_mut().enumerate() {
+        slot.region = None;
+        slot.requested_region = regions
+            .get(index)
+            .copied()
+            .flatten()
+            .filter(|_| slot.status == CompareStatus::Ready);
+        if let Some(r) = slot.requested_region {
+            requests.push(json!({"type":"region_request", "data": {"image_path":slot.path, "slot":format!("slot{}", index + 1), "generation":compare.generation, "target_id":slot.pick.target_id(), "request_id":compare.region_request_id, "x":r.x, "y":r.y, "width":r.width, "height":r.height, "target_width":r.target_width, "target_height":r.target_height}}));
+        }
+    }
+    Ok(requests)
+}
+
+pub fn apply_region(
+    db: &Database,
+    compare: &mut CompareState,
+    data: &Value,
+    failed: bool,
+) -> AppResult<()> {
+    let index = match data["slot"].as_str() {
+        Some("slot1") => 0,
+        Some("slot2") => 1,
+        Some("slot3") => 2,
+        Some("slot4") => 3,
+        _ => return Ok(()),
+    };
+    if data["generation"].as_u64() != Some(compare.generation)
+        || data["request_id"].as_u64() != Some(compare.region_request_id)
+    {
+        return Ok(());
+    }
+    refresh(db, compare)?;
+    let Some(slot) = compare.slots.get_mut(index) else {
+        return Ok(());
+    };
+    if slot.status != CompareStatus::Ready
+        || data["target_id"].as_str() != Some(slot.pick.target_id())
+        || data["image_path"].as_str() != Some(slot.path.as_str())
+    {
+        return Ok(());
+    }
+    if let Some(bounds) = slot.requested_region.take() {
+        if !failed {
+            if let Some(encoded) = data["png_base64"].as_str().filter(|s| !s.is_empty()) {
+                slot.region = Some(RegionResult {
+                    bounds,
+                    data_url: format!("data:image/png;base64,{encoded}"),
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -421,5 +536,57 @@ mod tests {
         .unwrap()
         .is_empty());
         assert_eq!(compare.slots[0].status, CompareStatus::Missing);
+    }
+    #[test]
+    fn regions_reject_stale_identity_and_fall_back_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("queue.db")).unwrap();
+        let path = dir.path().join("image.png");
+        std::fs::write(&path, "image").unwrap();
+        db.insert_media("a", path.to_str().unwrap(), "a", "image")
+            .unwrap();
+        let mut compare = CompareState::default();
+        let preview = plan(
+            &db,
+            &mut compare,
+            &[ComparePick::Original {
+                media_id: "a".into(),
+            }],
+        )
+        .unwrap();
+        let mut answer = preview[0]["data"].clone();
+        answer["jpeg_base64"] = json!("preview");
+        answer["width"] = json!(100);
+        answer["height"] = json!(100);
+        apply(&db, &mut compare, &answer, false).unwrap();
+        let region = Region {
+            x: 1,
+            y: 2,
+            width: 10,
+            height: 20,
+            target_width: 20,
+            target_height: 40,
+        };
+        let requests = plan_regions(&db, &mut compare, &[Some(region)]).unwrap();
+        let mut response = requests[0]["data"].clone();
+        response["png_base64"] = json!("crop");
+        let mut stale = response.clone();
+        stale["request_id"] = json!(999);
+        apply_region(&db, &mut compare, &stale, false).unwrap();
+        assert!(compare.slots[0].region.is_none());
+        apply_region(&db, &mut compare, &response, false).unwrap();
+        assert_eq!(
+            compare.slots[0].region.as_ref().unwrap().data_url,
+            "data:image/png;base64,crop"
+        );
+        let newer = plan_regions(&db, &mut compare, &[Some(region)]).unwrap();
+        apply_region(&db, &mut compare, &response, false).unwrap();
+        assert!(compare.slots[0].region.is_none());
+        apply_region(&db, &mut compare, &newer[0]["data"], true).unwrap();
+        assert!(compare.slots[0].region.is_none());
+        assert_eq!(
+            compare.slots[0].preview_data_url,
+            "data:image/jpeg;base64,preview"
+        );
     }
 }
