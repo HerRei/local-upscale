@@ -14,6 +14,50 @@ from PIL import Image, ImageCms, ImageOps
 from localsr.core.image_formats import is_raw_input, is_system_decoded
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
+# 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
+# converts those to 8 bits by clipping, not scaling.
+WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
+
+
+def _narrow_wide_grey(image: Image.Image) -> Image.Image:
+    """Scale 16- and 32-bit grey to 8 bits.
+
+    Pillow's own conversion clips every value above 255, so a 16-bit scan turned
+    white apart from its blackest pixels. A 32-bit I image holding only 8-bit
+    values is taken as it is.
+    """
+    values = np.asarray(image).astype(np.float64)
+    if image.mode != "I" or values.max() > 255:
+        values = values / 257.0
+    narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
+    narrowed.info.update(image.info)
+    return narrowed
+
+
+def _to_srgb(
+    image: Image.Image, source: ImageCms.ImageCmsProfile, srgb: ImageCms.ImageCmsProfile
+) -> Image.Image:
+    """Convert pixels through their embedded profile to sRGB.
+
+    profileToProfile keeps the input mode unless told otherwise, and a grey,
+    palette or CMYK image cannot hold sRGB: those transforms failed, and their
+    profile was ignored. Such images now convert to RGB, keeping any alpha.
+    """
+    if image.mode in ("RGB", "RGBA"):
+        return ImageCms.profileToProfile(image, source, srgb)
+    alpha = None
+    if image.mode in ("LA", "PA") or (image.mode == "P" and "transparency" in image.info):
+        with_alpha = image.convert("LA" if image.mode == "LA" else "RGBA")
+        alpha = with_alpha.getchannel("A")
+        image = with_alpha.convert("L" if image.mode == "LA" else "RGB")
+    elif image.mode == "P":
+        image = image.convert("RGB")
+    elif image.mode == "1":
+        image = image.convert("L")
+    converted = ImageCms.profileToProfile(image, source, srgb, outputMode="RGB")
+    if alpha is not None:
+        converted.putalpha(alpha)
+    return converted
 
 
 def _decode_with_macos(path: str) -> Image.Image:
@@ -148,6 +192,10 @@ class ImageManager:
             img = ImageOps.exif_transpose(metadata_img)
             converted_icc = None
 
+        self.original_mode = img.mode
+        if img.mode in WIDE_GREY_MODES:
+            img = _narrow_wide_grey(img)
+
         icc_profile_bytes = None if is_raw else img.info.get("icc_profile")
         has_invalid_icc = False
 
@@ -156,15 +204,13 @@ class ImageManager:
                 f = io.BytesIO(icc_profile_bytes)
                 src_profile = ImageCms.ImageCmsProfile(f)
                 srgb_profile = ImageCms.createProfile("sRGB")
-                img = ImageCms.profileToProfile(img, src_profile, srgb_profile)
+                img = _to_srgb(img, src_profile, srgb_profile)
 
                 # Embed the output sRGB profile when saving.
                 converted_icc = ImageCms.ImageCmsProfile(srgb_profile).tobytes()
             except (ImageCms.PyCMSError, OSError, ValueError) as e:
                 has_invalid_icc = True
                 warnings.warn(f"Invalid ICC profile: {e}", RuntimeWarning, stacklevel=2)
-
-        self.original_mode = img.mode
 
         # Handle Alpha. Palette and grey images (GIF, PNG) keep their transparency.
         if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
