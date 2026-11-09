@@ -2916,6 +2916,9 @@ describe('LocalSR desktop interface', () => {
     expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     expect(within(library).getByText('Apache-2.0 ↗')).toBeTruthy();
+    expect(
+      within(library).getByRole('button', { name: /XPixel Group · model source/ }),
+    ).toBeTruthy();
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
     expect(screen.getByText('Model · chosen by you')).toBeTruthy();
@@ -2933,6 +2936,17 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
+  });
+
+  it('shows compatible models left and opens the library filtered to the current job', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await user.click(screen.getByRole('button', { name: /more models in the library/i }));
+
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · Quick · Photo')).toBeTruthy();
+    expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
+    expect(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ })).toBeTruthy();
+    expect(within(library).queryByRole('button', { name: /HAT-L ×4 Face/ })).toBeNull();
   });
 
   it('uses the tile overlap a library model needs', async () => {

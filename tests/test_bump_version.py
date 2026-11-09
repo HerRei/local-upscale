@@ -115,6 +115,23 @@ def test_mark_published_removes_candidate_notices(tree: Path):
         release_version.check(f"v{new}", tree)
 
 
+def test_bump_keeps_existing_unreleased_notes_for_the_new_version(tree: Path):
+    new = bump_version.next_patch(VERSION)
+    changelog = tree / "CHANGELOG.md"
+    previous_notes = changelog.read_text().split("## [0.3.7-beta]", 1)[1]
+    changelog.write_text(
+        f"# Changelog\n\n## [{new}] - Unreleased\n\n### Added\n\n- Existing notes.\n\n"
+        + f"## [0.3.7-beta]{previous_notes}",
+        encoding="utf-8",
+    )
+
+    bump_version.bump(tree, new, "- New notes.", dt.date(2026, 11, 16))
+
+    updated = changelog.read_text()
+    assert updated.count(f"## [{new}] - Unreleased") == 1
+    assert "- Existing notes." in updated
+
+
 def test_a_second_bump_replaces_the_previous_candidate_notice(tree: Path):
     first = bump_version.next_patch(VERSION)
     bump_version.bump(tree, first, "- one", dt.date(2026, 11, 16))
