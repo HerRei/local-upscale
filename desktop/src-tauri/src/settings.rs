@@ -66,7 +66,8 @@ const SCHEMA_VERSION: u64 = 2;
 
 /// Version 1 ran at most one fix: the resolved `preprocess_model_id` before an upscale, or
 /// in Restore the selected model when a chip was on. Only that becomes a fix stage; the old
-/// chip list is not an execution list, so nothing else is made up from it.
+/// chip list is not an execution list, so nothing else is made up from it. Edit left the
+/// image task's setup in place, so it migrates as the task it came from.
 fn migrate_v1(value: &mut Value) -> Option<()> {
     let ui = value.get_mut("ui")?.as_object_mut()?;
     if !ui.contains_key("fix_stages") {
@@ -92,29 +93,35 @@ fn migrate_v1(value: &mut Value) -> Option<()> {
                 .map(|model| model.fixes.clone())
                 .unwrap_or_default()
         };
+        // Restore's model was the fix itself when a chip it fixes was on.
+        let restore = || {
+            let id = text("selected_model_id");
+            let fixes = model_fixes(&id);
+            chips
+                .iter()
+                .find(|chip| fixes.contains(chip))
+                .map(|fix| (fix.clone(), id))
+        };
+        let upscale = || {
+            let id = text("preprocess_model_id");
+            let fixes = model_fixes(&id);
+            // The chip names the problem; a model that fixes it, or a model the catalog
+            // no longer lists, keeps that name. Otherwise the model's own problem does.
+            let fix = chips
+                .iter()
+                .find(|chip| fixes.is_empty() || fixes.contains(chip))
+                .or_else(|| fixes.first())
+                .cloned();
+            fix.filter(|_| !id.is_empty()).map(|fix| (fix, id))
+        };
         let stage = match text("task").as_str() {
             "video" => None,
-            "denoise" => {
-                // Restore's model was the fix itself when a chip it fixes was on.
-                let id = text("selected_model_id");
-                let fixes = model_fixes(&id);
-                chips
-                    .iter()
-                    .find(|chip| fixes.contains(chip))
-                    .map(|fix| (fix.clone(), id))
-            }
-            _ => {
-                let id = text("preprocess_model_id");
-                let fixes = model_fixes(&id);
-                // The chip names the problem; a model that fixes it, or a model the catalog
-                // no longer lists, keeps that name. Otherwise the model's own problem does.
-                let fix = chips
-                    .iter()
-                    .find(|chip| fixes.is_empty() || fixes.contains(chip))
-                    .or_else(|| fixes.first())
-                    .cloned();
-                fix.filter(|_| !id.is_empty()).map(|fix| (fix, id))
-            }
+            "denoise" => restore(),
+            "upscale" => upscale(),
+            // Edit kept the image task's model and chips for the way back. Only Restore
+            // selects a 1x model, so that model says which task Edit came from.
+            _ if !model_fixes(&text("selected_model_id")).is_empty() => restore(),
+            _ => upscale(),
         };
         let stages = stage
             .map(|(fix, model_id)| serde_json::json!([{"fix": fix, "model_id": model_id}]))
@@ -353,6 +360,17 @@ mod tests {
             serde_json::json!([{"fix": "jpeg", "model_id": "fbcnn_color"}])
         );
         assert_eq!(edit["fixes"], serde_json::json!(["jpeg", "faces"]));
+        // Edit after Restore: 0.3.5 kept Restore's model and chip for the way back. Only
+        // Restore selects a 1x model, so that is where Edit came from.
+        let restore_then_edit = migrated_ui(serde_json::json!({
+            "task": "edit", "selected_model_id": "fbcnn_color",
+            "fixes": ["jpeg"], "preprocess_model_id": ""
+        }));
+        assert_eq!(
+            restore_then_edit["fix_stages"],
+            serde_json::json!([{"fix": "jpeg", "model_id": "fbcnn_color"}])
+        );
+        assert_eq!(restore_then_edit["fixes"], serde_json::json!(["jpeg"]));
         // A model the catalog no longer lists cannot say what it fixed; the chip still can.
         let unknown = migrated_ui(serde_json::json!({
             "task": "upscale", "fixes": ["blur"], "preprocess_model_id": "retired_model"
