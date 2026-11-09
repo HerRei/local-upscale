@@ -174,3 +174,47 @@ def test_every_python_protocol_message_type_is_declared_in_the_schema():
     emitted = set(re.findall(r'json\.dumps\(\{"type": "([a-z_]+)"', messages))
     assert emitted
     assert emitted - _schema_message_types(schema) == set()
+
+
+def test_the_engine_answers_a_capabilities_request_with_its_hardware():
+    # Through the real engine process: a report key the message did not know made the
+    # engine drop the whole answer, and the app showed no hardware at all (0.3.2).
+    import os
+    import subprocess
+    import sys
+    import threading
+
+    env = dict(os.environ, PYTHONPATH=str(ROOT / "src"), PYTHONUNBUFFERED="1")
+    engine = subprocess.Popen(
+        [sys.executable, "-m", "localsr.worker"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env=env,
+    )
+    answers = []
+    done = threading.Event()
+
+    def read():
+        for line in engine.stdout:
+            answers.append(json.loads(line))
+            if answers[-1]["type"] in ("capabilities_info", "log") and (
+                answers[-1]["type"] == "capabilities_info"
+                or answers[-1]["data"].get("level") == "error"
+            ):
+                done.set()
+                return
+
+    threading.Thread(target=read, daemon=True).start()
+    try:
+        engine.stdin.write(json.dumps({"type": "capabilities_request", "data": {}}) + "\n")
+        engine.stdin.flush()
+        assert done.wait(120), "the engine did not answer"
+    finally:
+        engine.kill()
+        engine.wait()
+    answer = answers[-1]
+    assert answer["type"] == "capabilities_info", answer
+    assert any(device["id"] == "cpu" for device in answer["data"]["devices"])
+    assert "gpu_suggestion" in answer["data"]
