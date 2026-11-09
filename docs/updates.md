@@ -26,19 +26,32 @@ How the verified package is installed depends on the edition:
 
 - **macOS:** the Tauri updater replaces the app bundle from the signed
   `.app.tar.gz`, then LocalSR restarts.
-- **Windows:** the signed NSIS installer is the update. LocalSR records the
-  installed version in the profile backup and removes its downloads, then the Tauri
-  updater starts the installer in passive mode with `/UPDATE` and
-  `/LOCALSR_ENGINE_MANAGED=1` and LocalSR exits; the installer starts LocalSR again.
-  The CUDA installer's NSIS hook sees the flag and skips its own engine installation
-  from adjacent parts, because the update has already installed the engine package.
+- **Windows:** the signed NSIS installer is the update. LocalSR checks that the
+  install folder's volume has room, records the pending installation
+  (`update-pending.json`), and the Tauri updater starts the installer in passive mode
+  with `/UPDATE` and `/LOCALSR_ENGINE_MANAGED=1`; LocalSR exits and the installer
+  starts it again. The next start confirms the installation when it runs the new
+  version: only then are the version recorded in the profile backup and the downloads
+  removed. If the old version starts instead, the installer failed or was cancelled,
+  and the verified downloads stay for another try. With the managed flag the CUDA
+  installer's NSIS hook skips its own engine installation from adjacent parts, since
+  the update has already installed the engine package, and removes the engine the
+  previous installer left in the install folder: an `/UPDATE` install does not run the
+  previous uninstaller. NSIS cannot roll back: an installer that fails halfway leaves a
+  partly updated install folder. Settings, the queue and models are kept, and running
+  the full installer from the website repairs it.
 - **Linux AppImage:** the signed AppImage is the update. LocalSR replaces the file
   named by `APPIMAGE` itself, streaming from disk (the Tauri updater would read the
-  whole AppImage into memory): it puts the verified download next to the AppImage,
-  swaps it in, runs the new image's `--headless-smoke-test`, and restores the
-  previous image if that check fails. The running image stays mounted until the
-  restart. A copy that does not run from its AppImage (no `APPIMAGE`, or the host
-  outside `APPDIR`) refuses the update, and the AppImage's folder must be writable.
+  whole AppImage into memory). Under a lock on the AppImage's folder it copies the
+  download into a new file next to the AppImage and verifies that copy, keeps a hard
+  link to the working image as the backup, renames the copy over the AppImage, runs
+  the new image's `--headless-smoke-test`, and renames the backup back if that check
+  fails. The working image never leaves its name, and the running image stays mounted
+  until the restart. A journal (`swap-journal.json` in the profile) names the backup
+  and the copy until the new image is accepted; a start after a crash rolls the swap
+  back before it opens anything and starts the restored image. A copy that does not
+  run from its AppImage (no `APPIMAGE`, or the host outside `APPDIR`) refuses the
+  update, and the AppImage's folder must be writable.
 - **Portable Linux host** (`portable` kind): see [Feed format](#feed-format).
 
 ### Anonymous update-check count
@@ -118,6 +131,14 @@ entry:
 }
 ```
 
+Each entry's `localsr.statement` is a small JSON document, base64-encoded, signed with
+the updater key (`statement_signature`): the release version, channel, platform key,
+backend, kind, worker protocol, engine id, and the SHA-256 of the package and of the
+engine manifest. The feed itself is not signed, so the app trusts those fields only
+when they equal the verified statement, and refuses a version that is not newer than
+the installed one. A feed that relabels an older or another edition's signed package
+is rejected before anything is downloaded.
+
 The updater file is the `.app.tar.gz` on macOS, the NSIS installer on Windows and
 the AppImage on Linux. A package above GitHub's 2 GiB file limit (the Linux CUDA
 and ROCm AppImages) is published as 1,900 MiB parts. Its entry's `url` names the
@@ -132,15 +153,23 @@ obtains the private key through the Keychain helper and never writes it to disk.
 The Windows and Linux updater files are signed on the Mac as well:
 `python scripts/beta_update_signing.py platforms <downloads> --feed
 build/release-<version>/beta.json --commit <sha>` reads the build artifacts as
-`gh run download` leaves them (one folder per release target), checks each package
-against its checksum file, its installed smoke report (version and update identity)
-and its engine package, signs the package, its parts and its engine package, and
-adds the entries next to the macOS entry. To sign a split AppImage it joins the
-parts in a temporary folder and deletes the joined copy afterwards.
-`python scripts/verify_prepared_release.py --feed build/release-<version>/beta.json
---commit <sha>` then checks that the feed has exactly one entry per release target
-with the right backend, kind, protocol and engine id, an engine package, signed
-files below the size limit and parts that add up. Serve immutable files over HTTPS
+`gh run download` leaves them (one folder per release target). It first checks every
+edition: the package against its checksum file and its installed smoke report
+(version and update identity), and the engine package as the app's installer would
+(part names inside the folder, no links, sizes, digests, a gzip tar of exactly
+`file_count` safe regular files with the worker); for Windows CUDA the engine
+manifest must be the one the smoke test installed. If anything fails it signs nothing.
+Then it copies each file into a private temporary folder, checks the copy against
+what it checked before, and signs only the copy, so a file that changes meanwhile is
+never signed; a split AppImage is joined there and its parts are cut from that copy.
+It adds the entries, each with its signed statement, next to the macOS entry;
+`release_macos_beta.sh` signs the macOS statement with
+`beta_update_signing.py statement`. `python scripts/verify_prepared_release.py --feed
+build/release-<version>/beta.json --commit <sha> --files build/release-<version>
+--files <downloads>` then checks that the feed has exactly one entry per release
+target with the right backend, kind, protocol and engine id, an engine package and
+files below the size limit, and verifies every statement and every signature against
+the updater public key over the local copies of the files. Serve immutable files over HTTPS
 and publish an entry only after installing it from the feed on a test machine.
 
 A portable Linux update is a signed `.tar.gz` containing only `localsr-next`,
@@ -184,6 +213,16 @@ CUDA or ROCm AppImage about twice the AppImage's size.
 
 ## Verification and recovery
 
+What the updater guards against is installing bytes it has not verified: a feed it
+cannot trust, a download changed in transit, or a file swapped in its own folders
+after the check. It installs and runs only bytes it verified where they are installed
+from: Windows and macOS verify the package in memory and hand over those bytes, an
+AppImage or portable update verifies the copy it then renames into place, and an
+engine package is installed from the manifest bytes that were verified. Temporary
+files are created exclusively, never through an existing file or link. A process
+running as the same user can still replace the installed app directly; the updater
+does not defend against that.
+
 Downloads stream to partial files and must pass size, SHA-256 and minisign
 checks. An interrupted or cancelled transfer can never be installed; complete
 verified files are reused after another check. Installation verifies the files
@@ -199,9 +238,11 @@ overwritten by a routine save. The app offers to keep the original as a recovery
 copy and start with defaults; recipes in that file can be recovered by hand.
 
 An AppImage or portable Linux update runs a startup smoke check of the new host
-before removing the previous one and restores it if the check fails. On macOS and
-Windows the platform installers handle replacement; their failure paths are covered
-by the installed-package checks in [Testing](testing.md).
+before removing the previous one, restores it if the check fails, and rolls back at
+the next start when a crash interrupted it. On macOS and Windows the platform
+installers handle replacement; their failure paths are covered by the
+installed-package checks in [Testing](testing.md), and a Windows installer that fails
+halfway is repaired by running the full installer.
 
 ## Testing the updater locally
 
@@ -221,14 +262,16 @@ without touching the public feed:
    --engine build/tauri-preview/worker-dist/engine`, copy the package there and
    sign every file with `tauri signer sign`.
 3. Write `beta.json` with the newer version and an entry for the edition's
-   platform key whose `engine_id` differs from the config's, serve the folder with
+   platform key whose `engine_id` differs from the config's, with a release statement
+   signed by the test key (see [Feed format](#feed-format)), serve the folder with
    `python3 -m http.server --bind 127.0.0.1`, and start the older build with
    `LOCALSR_TEST_UPDATE_CONFIG` pointing at a config with the test public key.
 
 Release builds ignore the override and require HTTPS. The regression suite covers
 channel, backend and protocol matching, missing engine payloads, invalid
 signatures with a recomputed checksum, interrupted transfers, split packages,
-insufficient disk space, settings preservation, the AppImage swap and startup
-rollback. The production candidate test downloads a real signed archive through
+release statements, files swapped after their check, planted links at temporary
+names, insufficient disk space, settings preservation, the AppImage swap with its
+lock, startup rollback after a crash, and the Windows confirmation at the next start. The production candidate test downloads a real signed archive through
 the app's own downloader and checks that truncation and substituted content are
 rejected.
