@@ -21,8 +21,10 @@ function renderStartupFailure(reason: unknown): void {
   target.append(card);
 }
 
-window.addEventListener('error', (event) => renderStartupFailure(event.error ?? event.message));
-window.addEventListener('unhandledrejection', (event) => renderStartupFailure(event.reason));
+const onError = (event: ErrorEvent) => renderStartupFailure(event.error ?? event.message);
+const onRejection = (event: PromiseRejectionEvent) => renderStartupFailure(event.reason);
+window.addEventListener('error', onError);
+window.addEventListener('unhandledrejection', onRejection);
 
 if (!target) {
   throw new Error('LocalSR frontend mount point is missing');
@@ -31,6 +33,10 @@ if (!target) {
 try {
   target.replaceChildren();
   mount(App, { target });
+  // From here the app reports its own failures in a dialog. A later stray error must not
+  // replace a working interface, and possibly a running job's progress, with this screen.
+  window.removeEventListener('error', onError);
+  window.removeEventListener('unhandledrejection', onRejection);
 } catch (error) {
   renderStartupFailure(error);
 }

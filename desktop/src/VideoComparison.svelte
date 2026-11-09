@@ -386,7 +386,15 @@
             playing = false;
             original?.pause();
           }}
-          on:pause={() => (playing = false)}
+          on:pause={() => {
+            // Also when paused from outside, such as the keyboard's media keys.
+            playing = false;
+            original?.pause();
+          }}
+          on:waiting={() => original?.pause()}
+          on:playing={() => {
+            if (original?.paused) void original.play().catch(() => undefined);
+          }}
           on:play={() => (playing = true)}
           on:error={(event) => mediaError('Enhanced', event)}
         ></video>

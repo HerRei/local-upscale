@@ -131,6 +131,23 @@ describe('video comparison player', () => {
     expect(videos[1].getAttribute('src')).toBeNull();
   });
 
+  it('keeps the original in step when the enhanced video pauses or stalls on its own', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/generated-original.mp4',
+      enhancedSrc: 'asset://localhost/generated-enhanced.mp4',
+    });
+    const [original, enhanced] = rendered.container.querySelectorAll('video');
+    const pause = vi.spyOn(original, 'pause');
+    const play = vi.spyOn(original, 'play').mockResolvedValue(undefined);
+    await fireEvent(enhanced, new Event('pause'));
+    expect(pause).toHaveBeenCalledTimes(1);
+    await fireEvent(enhanced, new Event('waiting'));
+    expect(pause).toHaveBeenCalledTimes(2);
+    Object.defineProperty(original, 'paused', { configurable: true, value: true });
+    await fireEvent(enhanced, new Event('playing'));
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
   it('zooms like a photo: wheel, zoom HUD, Fit and 1:1, and pans when zoomed', async () => {
     canvasRect(800, 450);
     const { container } = render(VideoComparison, {
