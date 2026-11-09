@@ -756,6 +756,11 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
                 .fail_media_probe(&string(data, "media_path"), &string(data, "error_message"))?;
         }
         "preview_ready" => {
+            {
+                let database = lock(&state.database)?;
+                let mut runtime = lock(&state.runtime)?;
+                crate::compare::apply(&database, &mut runtime.compare, data, false)?;
+            }
             apply_pair_preview(&mut *lock(&state.runtime)?, data, false);
             let path = string(data, "image_path");
             let encoded = string(data, "jpeg_base64");
@@ -774,6 +779,11 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
             }
         }
         "preview_failed" => {
+            {
+                let database = lock(&state.database)?;
+                let mut runtime = lock(&state.runtime)?;
+                crate::compare::apply(&database, &mut runtime.compare, data, true)?;
+            }
             let mut runtime = lock(&state.runtime)?;
             apply_pair_preview(&mut runtime, data, true);
             if string(data, "slot").is_empty()
@@ -1729,6 +1739,81 @@ mod tests {
         assert_eq!(runtime.comparison_media_id, "second");
         assert!(runtime.result_preview_data_url.is_empty());
         assert_eq!(runtime.active_job_id, "running-third");
+    }
+
+    #[test]
+    fn compare_answers_and_snapshots_revalidate_the_selected_job() {
+        use crate::compare::{ComparePick, CompareStatus};
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(directory.path());
+        let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        std::fs::write(&input, "input").unwrap();
+        std::fs::write(&output, "output").unwrap();
+        let request = {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("a", input.to_str().unwrap(), "a", "image")
+                .unwrap();
+            db.insert_job("job", "a", "{}").unwrap();
+            db.finish_job("job", "completed", output.to_str().unwrap(), "")
+                .unwrap();
+            let mut runtime = lock(&state.runtime).unwrap();
+            crate::compare::plan(
+                &db,
+                &mut runtime.compare,
+                &[ComparePick::Output {
+                    media_id: "a".into(),
+                    job_id: "job".into(),
+                }],
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let mut data = request["data"].clone();
+        data["jpeg_base64"] = json!("decoded");
+        apply_worker_envelope(
+            &state,
+            &WorkerEnvelope {
+                message_type: "preview_ready".into(),
+                data: data.clone(),
+            },
+        )
+        .unwrap();
+        let snapshot = state.snapshot().unwrap();
+        assert_eq!(
+            snapshot.runtime.compare.slots[0].status,
+            CompareStatus::Ready
+        );
+        assert!(
+            serde_json::to_value(&snapshot.runtime.compare).unwrap()["slots"][0]
+                .get("path")
+                .is_none()
+        );
+        rusqlite::Connection::open(&paths.database)
+            .unwrap()
+            .execute("DELETE FROM jobs WHERE id='job'", [])
+            .unwrap();
+        assert_eq!(
+            state.snapshot().unwrap().runtime.compare.slots[0].status,
+            CompareStatus::Missing
+        );
+        apply_worker_envelope(
+            &state,
+            &WorkerEnvelope {
+                message_type: "preview_ready".into(),
+                data,
+            },
+        )
+        .unwrap();
+        let snapshot = state.snapshot().unwrap();
+        assert_eq!(
+            snapshot.runtime.compare.slots[0].status,
+            CompareStatus::Missing
+        );
+        assert!(snapshot.runtime.compare.slots[0]
+            .preview_data_url
+            .is_empty());
     }
 
     #[test]

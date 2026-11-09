@@ -345,6 +345,7 @@ export interface VideoMemoryStatus {
 
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
+  compare?: CompareState;
   video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
   active_job_id: string;
@@ -555,6 +556,22 @@ export interface MediaResults {
   available_count: number;
   default_result_id: string | null;
   next_before: string | null;
+}
+export type ComparePick =
+  { kind: 'original'; media_id: string } | { kind: 'output'; media_id: string; job_id: string };
+export interface CompareSlot {
+  pick: ComparePick;
+  status: 'loading' | 'ready' | 'error' | 'missing';
+  preview_data_url: string;
+  error: string;
+  width: number;
+  height: number;
+  preview_width: number;
+  preview_height: number;
+}
+export interface CompareState {
+  generation: number;
+  slots: CompareSlot[];
 }
 /** "original" or the job id of a saved result. */
 export type ResultTarget = string;
