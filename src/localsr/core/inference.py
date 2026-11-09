@@ -154,8 +154,11 @@ def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | 
         if total_memory <= 0:
             return None
         # Cap against memory that was free immediately before model loading, while
-        # also ensuring LocalSR never owns more than 90% of total visible VRAM.
-        free_share = free_memory / total_memory
+        # also ensuring LocalSR never owns more than 90% of total visible VRAM. Blocks
+        # LocalSR's allocator still holds count as used for the driver, but they are
+        # LocalSR's own: without them the cap shrinks after every emptied model cache.
+        reserved = getattr(backend, "memory_reserved", lambda _device: 0)(device)
+        free_share = min(1.0, (free_memory + reserved) / total_memory)
         headroom = 0.80 if safe_memory else 0.90
         fraction = max(0.01, min(0.90, free_share * headroom))
         backend.set_per_process_memory_fraction(fraction, device)
@@ -318,6 +321,17 @@ class InferenceEngine:
             coreml_units = coreml_units_for(str(getattr(model_info, "architecture", "")))
         backend_id = f"{device_str}+coreml" if coreml_units else device_str
 
+        # Apply the memory cap once per device, shared by its cached models, and again
+        # when the safe-memory choice changes, also for a model that is already cached.
+        # Video passes the choice inside model_info.
+        safe = getattr(model_info, "safe_memory", True) if safe_memory is None else safe_memory
+        if (
+            not any(d == device for _, d, _ in self._loaded_models.values())
+            or self._memory_cap_safe.get(str(device)) != safe
+        ):
+            _apply_gpu_memory_limit(device, safe)
+            self._memory_cap_safe[str(device)] = safe
+
         if model_path in self._loaded_models:
             cached_model, cached_device, cached_precision = self._loaded_models[model_path]
             if (
@@ -331,16 +345,6 @@ class InferenceEngine:
                 return device, precision
             del self._loaded_models[model_path]
             gc.collect()
-
-        # Apply the memory cap once per device, shared by its cached models, and again
-        # when the safe-memory choice changes. Video passes it inside model_info.
-        safe = getattr(model_info, "safe_memory", True) if safe_memory is None else safe_memory
-        if (
-            not any(d == device for _, d, _ in self._loaded_models.values())
-            or self._memory_cap_safe.get(str(device)) != safe
-        ):
-            _apply_gpu_memory_limit(device, safe)
-            self._memory_cap_safe[str(device)] = safe
 
         if onnx_route is not None:
             model, _ = self.model_adapter.load(model_path, device, precision, onnx_route=onnx_route)

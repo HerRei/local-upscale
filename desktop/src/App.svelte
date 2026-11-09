@@ -915,7 +915,10 @@
         Object.entries(settings.preset_pins).filter(([key]) => key !== slot),
       ),
     });
-    resolveRecipe({ quality: activeQuality });
+    // In Restore the model is the fix itself, so the default replaces a hand-picked one too.
+    resolveRecipe({
+      quality: settings.task === 'denoise' ? fixQuality(activeQuality) : activeQuality,
+    });
     libraryOpen = false;
   }
 
@@ -1534,10 +1537,13 @@
       allow_unsafe_pickle_model: false,
       quality: recipe.quality || 'custom',
       content: recipe.content || settings.content,
-      fixes: recipe.fixes ?? [
-        ...(recipeFixes.length === 1 ? recipeFixes : []),
-        ...(recipeFace ? (['faces'] as FixKind[]) : []),
-      ],
+      // The host stores a missing list as [], so an empty one means "saved before chips".
+      fixes: recipe.fixes?.length
+        ? recipe.fixes
+        : [
+            ...(recipeFixes.length === 1 ? recipeFixes : []),
+            ...(recipeFace ? (['faces'] as FixKind[]) : []),
+          ],
     });
     termsAccepted = false;
     faceTermsAccepted = false;
