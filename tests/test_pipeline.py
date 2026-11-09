@@ -82,17 +82,25 @@ class _IncompatibleFaceAdapter(_Adapter):
 
 
 class _PipelineEngine:
-    def __init__(self, cancel_event: threading.Event | None = None, fail_path: str = ""):
+    def __init__(
+        self,
+        cancel_event: threading.Event | None = None,
+        fail_path: str = "",
+        failure: Exception | None = None,
+    ):
         self.calls = []
         self.writers = []
         self.cancel_event = cancel_event
         self.fail_path = fail_path
+        self.failure = failure or RuntimeError("checkpoint exploded")
+        self.inputs = []
 
     def process_image(self, **kwargs):
         path = kwargs["model_path"]
         self.calls.append(path)
+        self.inputs.append(kwargs["img_data"]["tensor"].clone())
         if path == self.fail_path:
-            raise RuntimeError("checkpoint exploded")
+            raise self.failure
         tensor = kwargs["img_data"]["tensor"]
         scale = kwargs["model_info"].scale
         output = np.full(
@@ -224,3 +232,58 @@ def test_worker_rejects_incompatible_face_companion_before_primary_inference(tmp
     ):
         server._run_job("pipeline-job", data)
     assert engine.calls == [str(tmp_path / "restore.pth")]
+
+
+def test_a_fix_the_model_cannot_process_is_skipped_and_the_job_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    # Issue #95: NAFNet's deblur runs away on line art; the job still upscales the image.
+    from localsr.core.image_io import ImageManager
+    from localsr.core.inference import UnstableRestorationError
+
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine(
+        fail_path=str(tmp_path / "restore.pth"),
+        failure=UnstableRestorationError("NAFNet produced unstable values"),
+    )
+    server.engine = engine
+    source = torch.rand((3, 5, 7))
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": source.clone()})
+    saved = {}
+    monkeypatch.setattr(
+        ImageManager,
+        "save",
+        lambda _self, writer, _path, **_kw: saved.update(shape=writer.get_array().shape),
+    )
+    server._run_job("pipeline-job", _job_data(tmp_path))
+
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert engine.calls == [str(tmp_path / "restore.pth"), str(tmp_path / "upscale.pth")]
+    assert torch.equal(engine.inputs[1], source)  # the upscale got the unchanged image
+    assert saved["shape"] == (3, 10, 14)
+    (completed,) = [m["data"] for m in messages if m["type"] == "job_completed"]
+    assert "was skipped for this image" in completed["notes"]
+    assert any(m["type"] == "warning" and "skipped" in m["data"]["message"] for m in messages)
+    assert not any(m["type"] == "job_failed" for m in messages)
+
+
+def test_a_restore_only_job_still_fails_when_its_model_cannot_process_the_image(
+    tmp_path, monkeypatch
+):
+    from localsr.core.image_io import ImageManager
+    from localsr.core.inference import UnstableRestorationError
+
+    data = _job_data(tmp_path)
+    data["output_scale"] = 1
+    data["model_path"] = str(tmp_path / "restore.pth")
+    data["stages"] = [_stage("restore", "restore", str(tmp_path / "restore.pth"))]
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    server.engine = _PipelineEngine(
+        fail_path=str(tmp_path / "restore.pth"),
+        failure=UnstableRestorationError("NAFNet produced unstable values"),
+    )
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    with pytest.raises(RuntimeError, match=r"restore stage \(restore\) failed"):
+        server._run_job("pipeline-job", data)

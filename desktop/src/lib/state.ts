@@ -634,7 +634,7 @@ export function applyWorkerEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvel
       next.runtime.result_preview_data_url = '';
       next.runtime.progress = 100;
       next.runtime.status_title = 'Complete';
-      next.runtime.status_detail = 'The output was written successfully.';
+      next.runtime.status_detail = String(data.notes || 'The output was written successfully.');
       next.runtime.last_output_path = String(data.output_path ?? '');
       next.runtime.elapsed_seconds = Math.max(
         Number(data.inference_seconds ?? 0),
