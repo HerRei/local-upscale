@@ -171,3 +171,22 @@ def test_measured_estimate_uses_a_narrower_calibrated_range():
     assert calibrated.calibrated
     assert calibrated.seconds_high / calibrated.seconds_low < 2
     assert first_run.seconds_high / first_run.seconds_low > 4
+
+
+@pytest.mark.parametrize("free", [0, 1])
+def test_insufficient_disk_including_zero_blocks(free):
+    estimate = estimate_resources(
+        image_width=100,
+        image_height=100,
+        scale=2,
+        tile_size=32,
+        halo=0,
+        precision="fp32",
+        device_type="cpu",
+        available_device_memory=None,
+        available_system_memory=None,
+        available_disk=free,
+        model_file_size=100,
+    )
+    assert estimate.blocking
+    assert any("disk space" in warning for warning in estimate.warnings)

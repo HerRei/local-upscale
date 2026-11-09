@@ -580,3 +580,21 @@ def test_real_conversion_runs_and_matches_pytorch(tmp_path, monkeypatch):
         state = next(iter(converted.model.states.values()))
         assert isinstance(state["runner"], coreml_runtime._NativeRunner)
     assert converted.model.active_unit in {NEURAL_ENGINE, CORE_ML_GPU}
+
+
+def test_gate_times_fallback_on_fallback_device(fake_coreml, monkeypatch):
+    devices = []
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="sync")
+    converted.model.fallback_device = torch.device("mps")
+    monkeypatch.setattr(
+        converted.model, "_run_fallback", lambda tensor: fake_coreml.original(tensor)
+    )
+    monkeypatch.setattr(
+        coreml_runtime._CoreMLImage,
+        "_time",
+        staticmethod(
+            lambda function, synchronize=None, repeats=2: devices.append(synchronize) or 1.0
+        ),
+    )
+    run(converted)
+    assert devices == [None, torch.device("mps")]

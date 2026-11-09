@@ -352,3 +352,32 @@ def test_nan_inf_detection():
             lambda c, t, s: None,
             False,
         )
+
+
+@pytest.mark.parametrize("frame", [False, True])
+def test_safe_memory_accepts_small_tiles(frame, tmp_path):
+    adapter = DummyAdapter(2)
+    engine = InferenceEngine(adapter)
+    tensor = torch.rand((3, 16, 16))
+    cancel = threading.Event()
+    if frame:
+        engine.load_model("dummy", "cpu", "fp32", adapter.model_info)
+        result = engine.process_frame(tensor, adapter.model_info, 32, 0, cancel, lambda *_: None)
+        assert result.shape == (3, 32, 32)
+    else:
+        writer = engine.process_image(
+            {"tensor": tensor},
+            adapter.model_info,
+            "dummy",
+            "cpu",
+            "fp32",
+            32,
+            0,
+            cancel,
+            lambda *_: None,
+            temporary_directory=str(tmp_path),
+        )
+        try:
+            assert writer.get_array().shape == (3, 32, 32)
+        finally:
+            writer.cleanup()
