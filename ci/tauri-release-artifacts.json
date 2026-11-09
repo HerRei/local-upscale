@@ -8,7 +8,8 @@
       "platform": "macos",
       "architecture": "arm64",
       "backend": "MPS",
-      "signing": "developer-id-notarized"
+      "signing": "developer-id-notarized",
+      "update_target": "darwin-aarch64-mps-native"
     },
     {
       "id": "windows-x86_64-cuda",
@@ -17,6 +18,7 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "signing": "authenticode-valid",
+      "update_target": "windows-x86_64-cuda-native",
       "external_engine": true
     },
     {
@@ -25,7 +27,8 @@
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "CPU",
-      "signing": "authenticode-valid"
+      "signing": "authenticode-valid",
+      "update_target": "windows-x86_64-cpu-native"
     },
     {
       "id": "windows-x86_64-directml",
@@ -33,7 +36,8 @@
       "platform": "windows",
       "architecture": "x86_64",
       "backend": "DirectML",
-      "signing": "authenticode-valid"
+      "signing": "authenticode-valid",
+      "update_target": "windows-x86_64-directml-native"
     },
     {
       "id": "linux-x86_64-cpu",
@@ -41,7 +45,8 @@
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "CPU",
-      "signing": "sha256"
+      "signing": "sha256",
+      "update_target": "linux-x86_64-cpu-native"
     },
     {
       "id": "linux-x86_64-cuda",
@@ -49,7 +54,8 @@
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "CUDA",
-      "signing": "sha256"
+      "signing": "sha256",
+      "update_target": "linux-x86_64-cuda-native"
     },
     {
       "id": "linux-x86_64-rocm",
@@ -57,7 +63,8 @@
       "platform": "linux",
       "architecture": "x86_64",
       "backend": "AMD-ROCm",
-      "signing": "sha256"
+      "signing": "sha256",
+      "update_target": "linux-x86_64-rocm-native"
     }
   ]
 }

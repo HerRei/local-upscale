@@ -25,12 +25,20 @@ RELEASE_PACKAGE_GATES = {
     "release environment consistency check": "python -m pip check",
     "corresponding source bundle": "build_source_bundle.py",
 }
+# Every direct edition updates itself: its host carries the updater key and feed target,
+# the installed smoke proves it, and its engine package goes with the updater files.
+UPDATE_GATES = {
+    "update build identity": "release_targets.py --update-env",
+    "installed update identity": "--update-target",
+    "updater engine payload": "prepare_engine_payload.py",
+}
 RELEASE_PACKAGE_WORKFLOWS = {
     "linux-appimages.yml": {
         "glibc ceiling": "verify_appimage_libc.py",
         "offline window check": "verify_appimage_window.py",
+        **UPDATE_GATES,
     },
-    "windows-installers.yml": {},
+    "windows-installers.yml": UPDATE_GATES,
 }
 MACOS_RELEASE_GATES = {
     "Developer ID signing": "sign_macos_keychain.py",

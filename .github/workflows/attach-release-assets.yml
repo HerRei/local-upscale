@@ -96,7 +96,7 @@ jobs:
             mapfile -t files < <(compgen -G "assets/$ONLY" || true)
           else
             files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.exe assets/*.sha256 \
-              assets/*.engine.tar.gz.part-* \
+              assets/*.engine.tar.gz.part-* assets/*.engine-payload.json \
               assets/*-source-and-notices.tar.gz)
           fi
           test "${#files[@]}" -gt 0

@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -371,3 +372,205 @@ def test_release_matrix_accepts_crlf_and_lf_wheelhouse_locks(tmp_path: Path) -> 
     path.write_text(json.dumps(data))
     index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
     assert index_path.is_file()
+
+
+# In-app updates on every edition: build identity, updater files and feed entries.
+
+engine_payload = load_script("prepare_engine_payload")
+release_targets = load_script("release_targets")
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+UPDATE_TARGETS = {
+    "macos-arm64-mps": "darwin-aarch64-mps-native",
+    "windows-x86_64-cuda": "windows-x86_64-cuda-native",
+    "windows-x86_64-cpu": "windows-x86_64-cpu-native",
+    "windows-x86_64-directml": "windows-x86_64-directml-native",
+    "linux-x86_64-cpu": "linux-x86_64-cpu-native",
+    "linux-x86_64-cuda": "linux-x86_64-cuda-native",
+    "linux-x86_64-rocm": "linux-x86_64-rocm-native",
+}
+
+
+def test_every_edition_has_its_own_update_platform_key() -> None:
+    # The key is what UpdateConfig::target() builds: <os>-<arch>-<backend>-<kind>.
+    assert {
+        target["id"]: release_targets.platform_key(target) for target in release_targets.targets()
+    } == UPDATE_TARGETS
+    assert [entry["update_target"] for entry in release_targets.artifact_entries("1-beta")] == list(
+        UPDATE_TARGETS.values()
+    )
+
+
+def test_registry_rejects_a_missing_or_duplicate_update_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    registry = json.loads(release_targets.REGISTRY.read_text())
+    path = tmp_path / "targets.json"
+    monkeypatch.setattr(release_targets, "REGISTRY", path)
+    for change, match in (
+        (lambda targets: targets[1].pop("update"), "update identity"),
+        (lambda targets: targets[1]["update"].update(kind="installer"), "update identity"),
+        (lambda targets: targets[1]["update"].update(backend="CUDA"), "update identity"),
+        (lambda targets: targets[2]["update"].update(backend="cuda"), "platform key"),
+    ):
+        broken = json.loads(json.dumps(registry))
+        change(broken["targets"])
+        path.write_text(json.dumps(broken))
+        with pytest.raises(ValueError, match=match):
+            release_targets.targets()
+
+
+def test_ci_build_identity_uses_the_production_key_and_a_commit_engine_id() -> None:
+    environment = release_targets.update_environment("windows-x86_64-cuda", COMMIT)
+    assert environment == {
+        "LOCALSR_UPDATE_PUBLIC_KEY": (ROOT / "packaging/updates/production.pub")
+        .read_text()
+        .strip(),
+        "LOCALSR_UPDATE_BACKEND": "cuda",
+        "LOCALSR_UPDATE_KIND": "native",
+        "LOCALSR_ENGINE_ID": "windows-x86_64-cuda-0123456789ab",
+    }
+    with pytest.raises(ValueError, match="commit"):
+        release_targets.update_environment("linux-x86_64-rocm", "HEAD")
+    with pytest.raises(ValueError, match="unknown release target"):
+        release_targets.update_environment("linux-x86_64-xpu", COMMIT)
+
+
+def test_update_env_cli_writes_github_env_lines() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/release_targets.py"),
+            "--update-env",
+            "linux-x86_64-rocm",
+            "--commit",
+            COMMIT,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+    assert lines[1:] == [
+        "LOCALSR_UPDATE_BACKEND=rocm",
+        "LOCALSR_UPDATE_KIND=native",
+        "LOCALSR_ENGINE_ID=linux-x86_64-rocm-0123456789ab",
+    ]
+    assert lines[0].startswith("LOCALSR_UPDATE_PUBLIC_KEY=") and "\n" not in lines[0]
+
+
+def test_mac_release_script_agrees_with_the_registry_identity() -> None:
+    script = (ROOT / "scripts/release_macos_beta.sh").read_text()
+    mac = release_targets.target("macos-arm64-mps")
+    assert f"LOCALSR_UPDATE_BACKEND={mac['update']['backend']}" in script
+    assert f"LOCALSR_UPDATE_KIND={mac['update']['kind']}" in script
+    assert 'LOCALSR_ENGINE_ID="macos-arm64-mps-${COMMIT:0:12}"' in script
+    assert f'"{release_targets.platform_key(mac)}"' in script
+    files = release_targets.update_files(mac, "1.2.3-beta")
+    assert files["update_package"] == "LocalSR-v1.2.3-beta-macOS-arm64.app.tar.gz"
+    assert files["engine_manifest"] == "LocalSR-v1.2.3-beta-macOS-arm64.engine-payload.json"
+
+
+def test_updater_file_names_follow_the_published_package_names() -> None:
+    cuda = release_targets.update_files(release_targets.target("windows-x86_64-cuda"), "1.2.3-beta")
+    # The NSIS hook's adjacent parts and the updater's engine package are the same files.
+    assert cuda == {
+        "package": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.exe",
+        "update_package": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.exe",
+        "engine_prefix": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz",
+        "engine_manifest": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-payload.json",
+        "payload_backend": "CUDA",
+        "worker": "localsr-worker.exe",
+    }
+    rocm = release_targets.update_files(release_targets.target("linux-x86_64-rocm"), "1.2.3-beta")
+    assert rocm["update_package"] == "LocalSR-v1.2.3-beta-Linux-ROCm-x86_64.AppImage"
+    assert rocm["payload_backend"] == "ROCM"
+    assert rocm["worker"] == "localsr-worker"
+    directml = release_targets.update_files(
+        release_targets.target("windows-x86_64-directml"), "1.2.3-beta"
+    )
+    assert directml["payload_backend"] == "DIRECTML"
+
+
+def fake_engine(root: Path, worker: str) -> Path:
+    engine = root / "engine"
+    (engine / "lib").mkdir(parents=True)
+    (engine / worker).write_bytes(b"worker")
+    (engine / "lib" / "model.bin").write_bytes(bytes(range(256)) * 8)
+    return engine
+
+
+def test_engine_payload_cli_names_the_payload_for_its_edition(tmp_path: Path) -> None:
+    engine = fake_engine(tmp_path, "localsr-worker.exe")
+    output = tmp_path / "out"
+    output.mkdir()
+    manifest = engine_payload.prepare_for_target(
+        "windows-x86_64-directml", output, engine=engine, release_version="1.2.3-beta"
+    )
+    assert manifest.name == "LocalSR-v1.2.3-beta-Windows-DirectML-x86_64.engine-payload.json"
+    data = json.loads(manifest.read_text())
+    assert data["backend"] == "DIRECTML"
+    assert [part["filename"] for part in data["parts"]] == [
+        "LocalSR-v1.2.3-beta-Windows-DirectML-x86_64.engine.tar.gz.part-0001"
+    ]
+    assert not (output / "engine-payload.json").exists()
+
+
+def test_engine_payload_cli_reuses_the_cuda_installer_payload_only_when_it_matches(
+    tmp_path: Path,
+) -> None:
+    built = tmp_path / "built"
+    prefix = "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz"
+    source = engine_payload.prepare(fake_engine(tmp_path, "localsr-worker.exe"), built, prefix)
+    output = tmp_path / "out"
+    output.mkdir()
+    for part in built.glob("*.part-*"):
+        (output / part.name).write_bytes(part.read_bytes())
+    manifest = engine_payload.prepare_for_target(
+        "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+    )
+    assert manifest.read_bytes() == source.read_bytes()
+    next(output.glob("*.part-0001")).write_bytes(b"truncated")
+    with pytest.raises(ValueError, match="does not match"):
+        engine_payload.prepare_for_target(
+            "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+        )
+
+
+def test_engine_payload_backends_cover_every_edition() -> None:
+    for target in release_targets.targets():
+        backend = release_targets.update_files(target, "1-beta")["payload_backend"]
+        assert backend in engine_payload.BACKENDS
+    rust = (ROOT / "desktop/src-tauri/src/engine_payload.rs").read_text()
+    for backend in engine_payload.BACKENDS:
+        assert f'"{backend}"' in rust
+
+
+def update_smoke(target_id: str, release_version: str) -> dict[str, object]:
+    target = release_targets.target(target_id)
+    return installed_smoke(release_version) | {
+        "update": release_targets.expected_update_identity(target, COMMIT)
+    }
+
+
+def test_installed_smoke_must_carry_the_build_update_identity() -> None:
+    report = update_smoke("linux-x86_64-cuda", "1-beta")
+    smoke_installer.check_update_identity(report, "linux-x86_64-cuda", COMMIT)
+    assert report["update"] == {
+        "enabled": True,
+        "target": "linux-x86_64-cuda-native",
+        "backend": "cuda",
+        "kind": "native",
+        "engine_id": "linux-x86_64-cuda-0123456789ab",
+    }
+    for change in (
+        {"enabled": False},
+        {"target": "linux-x86_64-cpu-native"},
+        {"engine_id": "linux-x86_64-cuda-ffffffffffff"},
+    ):
+        broken = report | {"update": report["update"] | change}
+        with pytest.raises(RuntimeError, match="update identity"):
+            smoke_installer.check_update_identity(broken, "linux-x86_64-cuda", COMMIT)
+    with pytest.raises(RuntimeError, match="update identity"):
+        smoke_installer.check_update_identity(
+            installed_smoke("1-beta"), "linux-x86_64-cuda", COMMIT
+        )
