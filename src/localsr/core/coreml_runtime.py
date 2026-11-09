@@ -10,6 +10,7 @@ and toolchain, so later jobs skip the gate. Anything that fails keeps PyTorch.
 """
 
 import copy
+import errno
 import functools
 import hashlib
 import importlib.util
@@ -18,6 +19,7 @@ import logging
 import math
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -240,6 +242,28 @@ class _NativeRunner:
         return {"restored": restored}
 
 
+_RESOURCE_FAILURE = re.compile(
+    r"out of memory|out of disk|not enough memory|no space left|cannot allocate memory"
+    r"|did not finish compiling|timed out|was killed|killed by signal|terminated by signal"
+    r"|signal 9|\bsigkill\b",
+    re.IGNORECASE,
+)
+
+
+def _is_resource_failure(error: BaseException | str) -> bool:
+    """True when a failure came from missing resources, not from a wrong result.
+
+    Out of memory (MPS, CUDA, Core ML), a full disk and a killed or timed-out
+    compile say nothing about the Core ML program, so they are never stored as
+    a rejection: a later run with more resources tries the program again.
+    """
+    if isinstance(error, MemoryError | TimeoutError):
+        return True
+    if isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.ENOMEM):
+        return True
+    return bool(_RESOURCE_FAILURE.search(str(error)))
+
+
 def _load_compiled(path: Path, unit: str, timeout: float):
     """Load a compiled program; the Neural Engine compiles it on first load.
 
@@ -299,9 +323,12 @@ class _Program:
         except (OSError, ValueError):
             return None
         value = verdicts.get(self._verdict_key(unit))
-        return (
-            value if isinstance(value, dict) and value.get("gate_version") == GATE_VERSION else None
-        )
+        if not isinstance(value, dict) or value.get("gate_version") != GATE_VERSION:
+            return None
+        # Rejections stored by older builds for a resource failure are not trusted.
+        if not value.get("accepted") and _is_resource_failure(str(value.get("reason", ""))):
+            return None
+        return value
 
     def store_verdict(self, unit: str, verdict: dict) -> None:
         try:
@@ -572,10 +599,12 @@ class _CoreMLImage(torch.nn.Module):
                 except Exception as error:  # noqa: BLE001
                     # Conversion does not depend on the compute unit.
                     logger.warning("Core ML conversion of %s failed: %s", self.architecture, error)
-                    for rejected in (unit, *state["remaining"]):
-                        program.store_verdict(
-                            rejected, {"accepted": False, "reason": f"conversion: {error}"[:500]}
-                        )
+                    if not _is_resource_failure(error):
+                        for rejected in (unit, *state["remaining"]):
+                            program.store_verdict(
+                                rejected,
+                                {"accepted": False, "reason": f"conversion: {error}"[:500]},
+                            )
                     state["remaining"].clear()
                     break
             try:
@@ -585,7 +614,8 @@ class _CoreMLImage(torch.nn.Module):
                 raise
             except Exception as error:  # noqa: BLE001
                 logger.warning("Core ML %s for %s failed: %s", unit, self.architecture, error)
-                program.store_verdict(unit, {"accepted": False, "reason": str(error)[:500]})
+                if not _is_resource_failure(error):
+                    program.store_verdict(unit, {"accepted": False, "reason": str(error)[:500]})
                 continue
             state["runner"], state["unit"] = runner, unit
             state["pending"] = verdict is None
@@ -763,6 +793,12 @@ class _CoreMLImage(torch.nn.Module):
                 raise
             except Exception as error:  # noqa: BLE001
                 logger.warning("Core ML %s failed during a tile: %s", state["unit"], error)
+                if _is_resource_failure(error):
+                    # Out of resources says nothing about the program: store nothing
+                    # and finish this run on PyTorch.
+                    state["remaining"].clear()
+                    state["runner"], state["unit"], state["pending"] = None, None, False
+                    break
                 state["program"].store_verdict(
                     state["unit"], {"accepted": False, "reason": str(error)[:500]}
                 )

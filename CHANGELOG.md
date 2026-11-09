@@ -33,6 +33,10 @@
 
 ### Fixed
 
+- The Core ML route no longer stores a rejection for a model and size after a
+  resource failure (out of memory on the GPU, a full disk, a killed or timed-out
+  compile); the next run tries the faster program again, and rejections already
+  stored for such a reason are ignored. Real accuracy failures stay stored.
 - The in-app updater cleans up after a crash at any step: a killed AppImage swap no
   longer leaves a staged or backup file (or a stale journal temporary), a killed
   engine package install restores the previous engine and removes its half-unpacked
