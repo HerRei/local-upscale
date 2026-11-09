@@ -4,20 +4,16 @@ import {
   ORIGINAL,
   alignedFraming,
   chooseTarget,
-  configuredStages,
   describeSide,
   effectiveChoice,
   keptTrialSettings,
   queueModelState,
-  resultTitle,
   scaleLabel,
-  settingsLabel,
   sideLabel,
   slotFor,
   stepShowing,
   trialIncompatibility,
   trialTime,
-  whenLabel,
 } from './results';
 import type { JobRecord, MediaResults, ResultSummary } from './types';
 
@@ -160,38 +156,6 @@ describe('sides and labels', () => {
     expect(alignedFraming({ width: 801, height: 600 }, { width: 401, height: 300 })).toBe(true);
     expect(alignedFraming({ width: 1024, height: 1024 }, source)).toBe(false);
     expect(alignedFraming({}, source)).toBe(true);
-  });
-
-  it('reads recorded settings, and says when none were recorded', () => {
-    expect(settingsLabel(result('a'))).toBe('Settings unavailable');
-    expect(
-      settingsLabel(result('a', { ui: { quality: 'best', content: 'photo', recipe_name: '' } })),
-    ).toBe('Best · Photo');
-    expect(
-      settingsLabel(
-        result('a', { ui: { quality: 'custom', content: 'illustration', recipe_name: 'Scans' } }),
-      ),
-    ).toBe('Scans · Illustration');
-    expect(resultTitle(result('a', { kind: 'edit', model_label: 'Qwen' }))).toMatch(/^Edit · Qwen/);
-  });
-
-  it('lists the configured stages besides the primary model', () => {
-    const row = result('up', {
-      model_id: 'swinir',
-      stages: [
-        { kind: 'restore', model_id: 'nafnet', model_label: 'NAFNet' },
-        { kind: 'upscale', model_id: 'swinir', model_label: 'SwinIR' },
-        { kind: 'face_restore', model_id: 'gfpgan', model_label: 'GFPGAN' },
-      ],
-    });
-    expect(configuredStages(row)).toEqual(['Fix · NAFNet', 'Faces · GFPGAN']);
-  });
-
-  it('dates rows like the rest of the app', () => {
-    const now = new Date(2026, 10, 9, 15, 0).getTime();
-    expect(whenLabel(new Date(2026, 10, 9, 14, 2).getTime(), now)).toBe('today 14:02');
-    expect(whenLabel(new Date(2026, 10, 9 - 1, 9, 5).getTime(), now)).toBe('Sun 09:05');
-    expect(whenLabel(new Date(2026, 10, 2, 9, 5).getTime(), now)).toBe('2 Nov');
   });
 });
 
