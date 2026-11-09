@@ -24,6 +24,7 @@ engine_kind
 engine_version
 error_message
 estimated_remaining_seconds
+gpu_suggestion
 image_path
 input_height
 input_width
