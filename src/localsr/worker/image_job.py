@@ -65,6 +65,15 @@ class ImageJobRunner:
             face_model_path=data.get("face_model_path"),
             face_fidelity=float(data.get("face_fidelity", 0.7)),
         )
+        # The engine cache otherwise keeps every upscaler used since the engine started. A
+        # fix runs alone: the upscaler is loaded after it, not kept beside it.
+        face_path = data.get("face_model_path")
+        self.engine.release_models_except(
+            {pipeline.preprocess.model_path}
+            if pipeline.preprocess is not None
+            else {stage.model_path for stage in pipeline.stages}
+            | ({face_path} if face_path else set())
+        )
         scratch = data.get("scratch_directory")
         if scratch:
             cleanup_stale_work_files(scratch)
@@ -135,7 +144,11 @@ class ImageJobRunner:
                     raise ValueError(
                         "A preprocessing restoration checkpoint must have native scale 1×."
                     )
-                writer = self._process_image(image, stage, info, data, progress)
+                # A fix keeps at least the overlap its own model needs, whatever the
+                # upscaler after it uses.
+                model = CATALOG_BY_ID.get(stage.model_id)
+                halo = max(int(data["halo"]), model.recommended_halo if model else 0)
+                writer = self._process_image(image, stage, info, data, progress, halo=halo)
                 resources.callback(writer.cleanup)
                 self._check_cancelled()
                 import torch
@@ -171,6 +184,7 @@ class ImageJobRunner:
             raise PipelineStageError(stage, str(error)) from error
         finally:
             self.engine.release_model(stage.model_path)
+            self.model_adapter.release()
 
     def _primary(
         self,
@@ -229,6 +243,7 @@ class ImageJobRunner:
         info: NormalizedModelInfo,
         data: Mapping[str, Any],
         progress: ImageJobProgress,
+        halo: int | None = None,
     ) -> OutputWriter:
         return self.engine.process_image(
             img_data=image,
@@ -237,7 +252,7 @@ class ImageJobRunner:
             device_str=data["device"],
             precision_str=data["precision"],
             tile_size=data["tile_size"],
-            halo=data["halo"],
+            halo=data["halo"] if halo is None else halo,
             cancel_event=self.cancel_event,
             progress_callback=progress.update,
             safe_memory=data["safe_memory"],
