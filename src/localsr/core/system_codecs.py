@@ -30,13 +30,17 @@ import av
 import numpy as np
 
 from .external_ffmpeg import ExternalFFmpegError
-from .media_codecs import encode_spec
+from .media_codecs import MOV_CODECS, encode_spec
 
 ENVIRONMENT_VARIABLE = "LOCALSR_MEDIA_HELPER"
 HELPER_NAME = "localsr-media"
 STREAM_TAG = "localsr-media/1"
 FRAME_HEADER = struct.Struct("<qiI")
-SYSTEM_ENCODERS = {"h264": "h264_videotoolbox", "hevc": "hevc_videotoolbox"}
+SYSTEM_ENCODERS = {
+    "h264": "h264_videotoolbox",
+    "hevc": "hevc_videotoolbox",
+    "prores": "prores_videotoolbox",
+}
 
 # FFmpeg's names for colour tags, as the helper reports them, to AVCOL_* values.
 _PRIMARIES = {
@@ -383,7 +387,12 @@ class SystemCodecs:
             raise SystemCodecsError(f"{self.name} do not encode {video_codec}.")
         if hdr and video_codec != "hevc":
             raise SystemCodecsError("HDR export needs HEVC.")
-        if container not in {"mp4", "mov"}:
+        if container == "mov":
+            if video_codec not in MOV_CODECS:
+                raise SystemCodecsError(f"MOV holds HEVC or Apple ProRes, not {video_codec}.")
+        elif video_codec == "prores":
+            raise SystemCodecsError("Apple ProRes is written into MOV. Choose the MOV container.")
+        elif container != "mp4":
             raise SystemCodecsError(
                 f"{self.name} write H.264/HEVC into MP4 or MOV. Choose MP4, or select an "
                 "FFmpeg you installed for MKV."
@@ -540,6 +549,8 @@ class SystemCodecs:
                 str(destination),
                 "--codec",
                 video_codec,
+                "--container",
+                container,
                 "--quality",
                 f"{_quality(crf):.3f}",
             ]
@@ -612,6 +623,8 @@ class SystemCodecs:
             str(destination),
             "--codec",
             video_codec,
+            "--container",
+            container,
             "--quality",
             f"{_quality(crf):.3f}",
         ]

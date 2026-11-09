@@ -498,3 +498,22 @@ def test_heic_export_keeps_transparency(tmp_path):
     manager.save_from_writer(pixels, str(path), "heic", 90, True, None, {}, 1)
     alpha = np.asarray(open_image(path).convert("RGBA"))[..., 3]
     assert alpha[:24].max() <= 8 and alpha[40:].min() >= 247
+
+
+def test_an_image_job_refuses_heic_before_any_inference_without_macos(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from localsr.worker.image_job import ImageJobRunner
+
+    monkeypatch.setattr("localsr.core.image_io.sys.platform", "win32")
+    engine = MagicMock()
+    runner = ImageJobRunner(
+        engine=engine,
+        model_adapter=MagicMock(),
+        cancel_event=MagicMock(),
+        emit=MagicMock(),
+        emit_preview=MagicMock(),
+    )
+    with pytest.raises(ValueError, match="needs macOS"):
+        runner.run("job", {"output_format": "heic"})
+    engine.release_models_except.assert_not_called()
