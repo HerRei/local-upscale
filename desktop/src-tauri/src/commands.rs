@@ -357,18 +357,10 @@ pub fn save_recipe(
             "recipe name or task is invalid".into(),
         ));
     }
-    if (!recipe.output_format.is_empty()
-        && !matches!(
-            recipe.output_format.as_str(),
-            "png" | "jpg" | "tif" | "webp"
-        ))
+    if (!recipe.output_format.is_empty() && !output_format_is_valid(&recipe.output_format))
         || (!recipe.video_container.is_empty()
-            && !matches!(recipe.video_container.as_str(), "mp4" | "mkv"))
-        || (!recipe.video_codec.is_empty()
-            && !matches!(
-                recipe.video_codec.as_str(),
-                "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
-            ))
+            && !video_container_is_valid(&recipe.video_container))
+        || (!recipe.video_codec.is_empty() && !video_codec_is_valid(&recipe.video_codec))
         || recipe
             .jpeg_quality
             .is_some_and(|value| !(1..=100).contains(&value))
@@ -526,7 +518,7 @@ pub fn start_jobs(
     {
         return Err(AppError::Validation("An update is being installed".into()));
     }
-    validate_start_input(&input, external_codecs_available(&state))?;
+    validate_start(&input, &state)?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     if input.task == "video"
         && input.video_interpolation != "off"
@@ -776,7 +768,7 @@ fn trial_candidates(
             "Try others needs one selected image in Upscale or Restore.".into(),
         ));
     }
-    validate_start_input(base, external_codecs_available(state))?;
+    validate_start(base, state)?;
     // The Restore model is the fix: each candidate must fix the active problem.
     // With several fixes it is the last one: the fixes before it keep their models.
     let active_fix = base.fix_stages.last().map(|stage| stage.fix.clone());
@@ -2092,6 +2084,57 @@ fn clear_completed_result(state: &AppState) -> AppResult<()> {
     Ok(())
 }
 
+/// HEIC, MOV and ProRes are written by macOS's own encoders, so only macOS accepts them.
+fn output_format_is_valid(format: &str) -> bool {
+    matches!(format, "png" | "jpg" | "tif" | "webp")
+        || (format == "heic" && cfg!(target_os = "macos"))
+}
+
+fn video_container_is_valid(container: &str) -> bool {
+    matches!(container, "mp4" | "mkv") || (container == "mov" && cfg!(target_os = "macos"))
+}
+
+fn video_codec_is_valid(codec: &str) -> bool {
+    matches!(codec, "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc")
+        || (codec == "prores" && cfg!(target_os = "macos"))
+}
+
+/// Whether the engine announced `name` in the list `media[key]` (or in `media[key][sub]`).
+fn announced(list: &Value, name: &str) -> bool {
+    list.as_array()
+        .is_some_and(|items| items.iter().any(|item| item == name))
+}
+
+/// HEIC images and MOV/ProRes videos need the macOS codecs the engine reports. The
+/// engine says so in the capabilities; a host that has not heard from it offers neither.
+fn validate_system_outputs(input: &StartBatchInput, media: &Value) -> AppResult<()> {
+    if input.task == "video" {
+        if (input.video_container == "mov" || input.video_codec == "prores")
+            && !announced(&media["system_codecs"]["encode"], "prores")
+        {
+            return Err(AppError::Validation(
+                "MOV and ProRes export use the codecs of macOS, which this computer does not have."
+                    .into(),
+            ));
+        }
+    } else if input.output_format == "heic" && !announced(&media["image_output"], "heic") {
+        return Err(AppError::Validation(
+            "HEIC output needs macOS, which provides the HEIC encoder.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
+    validate_start_input(input, external_codecs_available(state))?;
+    let media = state
+        .capabilities
+        .lock()
+        .map(|capabilities| capabilities.media.clone())
+        .unwrap_or(Value::Null);
+    validate_system_outputs(input, &media)
+}
+
 fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     validate_fix_selections(&settings.fix_stages)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
@@ -2134,14 +2177,9 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
             "unsupported quality, content, fix, or preset pin setting".into(),
         ));
     }
-    if !matches!(
-        settings.output_format.as_str(),
-        "png" | "jpg" | "tif" | "webp"
-    ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
-        || !matches!(
-            settings.video_codec.as_str(),
-            "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
-        )
+    if !output_format_is_valid(&settings.output_format)
+        || !video_container_is_valid(&settings.video_container)
+        || !video_codec_is_valid(&settings.video_codec)
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
         || !interpolation_choice_is_valid(
@@ -2156,6 +2194,18 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     if settings.video_codec == "ffv1" && settings.video_container != "mkv" {
         return Err(AppError::Validation(
             "Lossless FFV1 video requires the MKV container.".into(),
+        ));
+    }
+    if settings.video_container == "mov"
+        && !matches!(settings.video_codec.as_str(), "hevc" | "prores")
+    {
+        return Err(AppError::Validation(
+            "MOV holds only HEVC or Apple ProRes video.".into(),
+        ));
+    }
+    if settings.video_codec == "prores" && settings.video_container != "mov" {
+        return Err(AppError::Validation(
+            "Apple ProRes video requires the MOV container.".into(),
         ));
     }
     if settings.external_ffmpeg_path.len() > 4096 || settings.external_ffmpeg_path.contains('\0') {
@@ -4115,6 +4165,76 @@ mod tests {
         assert!(validate_start_input(&video, false).is_ok());
         video.video_codec = "x264".into();
         assert!(validate_start_input(&video, false).is_err());
+    }
+
+    #[test]
+    fn heic_mov_and_prores_are_accepted_on_macos_only() {
+        let mac = cfg!(target_os = "macos");
+        let mut photo = input("upscale");
+        photo.output_format = "heic".into();
+        assert_eq!(validate_start_input(&photo, false).is_ok(), mac);
+        photo.output_format = "webp".into();
+        assert!(validate_start_input(&photo, false).is_ok());
+
+        let mut video = input("video");
+        video.video_container = "mov".into();
+        video.video_codec = "hevc".into();
+        assert_eq!(validate_start_input(&video, true).is_ok(), mac);
+        video.video_codec = "prores".into();
+        assert_eq!(validate_start_input(&video, true).is_ok(), mac);
+        // MOV holds HEVC or ProRes; ProRes needs MOV, on every platform.
+        for (container, codec) in [("mov", "av1"), ("mov", "h264"), ("mp4", "prores")] {
+            video.video_container = container.into();
+            video.video_codec = codec.into();
+            assert!(
+                validate_start_input(&video, true).is_err(),
+                "{container} with {codec}"
+            );
+        }
+        let mut settings = UiSettings::default();
+        settings.output_format = "heic".into();
+        assert_eq!(validate_settings(&settings).is_ok(), mac);
+    }
+
+    #[test]
+    fn heic_and_mov_options_need_the_engines_announcement() {
+        let announced = json!({
+            "image_output": ["heic"],
+            "system_codecs": {"encode": ["h264", "hevc", "prores", "aac"]},
+        });
+        let silent = json!({"image_output": [], "system_codecs": null});
+        let mut photo = input("upscale");
+        photo.output_format = "heic".into();
+        assert!(validate_system_outputs(&photo, &announced).is_ok());
+        assert!(validate_system_outputs(&photo, &silent).is_err());
+        assert!(validate_system_outputs(&photo, &Value::Null).is_err());
+        photo.output_format = "png".into();
+        assert!(validate_system_outputs(&photo, &silent).is_ok());
+
+        let mut video = input("video");
+        video.video_container = "mov".into();
+        video.video_codec = "prores".into();
+        assert!(validate_system_outputs(&video, &announced).is_ok());
+        assert!(validate_system_outputs(&video, &silent).is_err());
+        // A leftover HEIC choice does not stop a video job.
+        video.output_format = "heic".into();
+        video.video_container = "mp4".into();
+        video.video_codec = "av1".into();
+        assert!(validate_system_outputs(&video, &silent).is_ok());
+    }
+
+    #[test]
+    fn exports_take_the_extension_of_the_chosen_format() {
+        let mut reserved = HashSet::new();
+        let directory = tempfile::tempdir().unwrap();
+        let mut photo = input("upscale");
+        photo.output_format = "heic".into();
+        let path = unique_output_path(directory.path(), "/in/photo.jpg", &photo, &mut reserved);
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("heic"));
+        let mut video = input("video");
+        video.video_container = "mov".into();
+        let path = unique_output_path(directory.path(), "/in/clip.mp4", &video, &mut reserved);
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("mov"));
     }
 
     #[test]

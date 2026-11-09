@@ -26,7 +26,7 @@ OUTPUT_CONTAINERS = ("mp4", "mkv", "mov")
 MOV_CODECS = ("hevc", "prores")
 
 # Container names as PyAV/FFmpeg muxers know them.
-MUXER_FORMATS = {"mp4": "mp4", "mkv": "matroska", "webm": "webm"}
+MUXER_FORMATS = {"mp4": "mp4", "mkv": "matroska", "webm": "webm", "mov": "mov"}
 
 # Audio that is carried unchanged (demux/mux only, never decoded or encoded).
 MP4_COPY_AUDIO = frozenset({"aac", "mp3", "mp3float", "opus", "flac", "alac", "ac3"})

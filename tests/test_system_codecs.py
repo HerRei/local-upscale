@@ -18,7 +18,7 @@ from test_video_timing import make_vfr, run_standard, timestamps
 from localsr.core import media_bridge, system_codecs
 from localsr.core.external_ffmpeg import ExternalFFmpegError
 from localsr.core.media_bridge import MediaBridge, decodable_source, load_media_bridge
-from localsr.core.media_codecs import validate_output
+from localsr.core.media_codecs import audio_copy_allowed, muxer_format, validate_output
 from localsr.core.system_codecs import (
     FRAME_HEADER,
     STREAM_TAG,
@@ -523,6 +523,8 @@ def test_mov_codec_validation():
     for codec, container in (("h264", "mov"), ("av1", "mov"), ("prores", "mp4")):
         with pytest.raises(ValueError):
             validate_output(codec, container)
+    # A source whose audio only the system decodes is planned against the output container.
+    assert muxer_format("mov") == "mov" and audio_copy_allowed("aac", "mov")
     helper = SystemCodecs("/nonexistent", 1)
     assert helper.encoder_for("prores", container="mov")
     with pytest.raises(SystemCodecsError):
