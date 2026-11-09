@@ -28,6 +28,8 @@ gpu_suggestion
 image_path
 input_height
 input_width
+interpolation_bundle_dir
+interpolation_model_id
 keyframe_interval
 measured_frame_count
 media_kind

@@ -37,7 +37,11 @@ pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
         model.installed = installed_file(&path, model.size_bytes);
         model.installed_path = model.installed.then(|| path.to_string_lossy().into_owned());
     }
-    for model in &mut catalog.video_models {
+    for model in catalog
+        .video_models
+        .iter_mut()
+        .chain(catalog.interpolation_models.iter_mut())
+    {
         model.total_size_bytes = model.files.iter().map(|file| file.size_bytes).sum();
         let bundle = paths.model_root.join(&model.family);
         model.installed = model
@@ -116,9 +120,49 @@ mod tests {
             .iter()
             .map(|model| &model.model_id)
             .chain(catalog.video_models.iter().map(|model| &model.model_id))
+            .chain(
+                catalog
+                    .interpolation_models
+                    .iter()
+                    .map(|model| &model.model_id),
+            )
         {
             assert!(ids.insert(id), "duplicate catalog id: {id}");
         }
+    }
+
+    #[test]
+    fn an_interpolation_bundle_counts_as_installed_only_with_its_exact_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let mut catalog: CatalogManifest = serde_json::from_str(CATALOG_JSON).unwrap();
+        let rife = catalog
+            .interpolation_models
+            .iter()
+            .find(|model| model.model_id == "rife_4_26")
+            .unwrap()
+            .clone();
+        let bundle = paths.model_root.join(&rife.family);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let checkpoint = bundle.join(&rife.files[0].filename);
+        File::create(&checkpoint)
+            .unwrap()
+            .write_all(b"short")
+            .unwrap();
+        refresh_install_state(&mut catalog, &paths);
+        assert!(!catalog.interpolation_models[0].installed);
+        File::create(&checkpoint)
+            .unwrap()
+            .set_len(rife.files[0].size_bytes)
+            .unwrap();
+        refresh_install_state(&mut catalog, &paths);
+        let refreshed = &catalog.interpolation_models[0];
+        assert!(refreshed.installed);
+        assert_eq!(refreshed.total_size_bytes, rife.files[0].size_bytes);
+        assert_eq!(
+            refreshed.installed_path.as_deref(),
+            Some(bundle.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
