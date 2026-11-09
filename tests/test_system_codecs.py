@@ -511,3 +511,48 @@ def test_encode_frames_sends_scheduled_durations(monkeypatch, tmp_path):
     assert (pts, duration) == (0, 1)
     pts, duration, _ = FRAME_HEADER.unpack_from(data, FRAME_HEADER.size + length)
     assert (pts, duration) == (1, 4)
+
+
+def test_mov_codec_validation():
+    from localsr.core.media_codecs import validate_output
+
+    for codec in ("hevc", "prores"):
+        validate_output(codec, "mov")
+    for codec, container in (("h264", "mov"), ("av1", "mov"), ("prores", "mp4")):
+        with pytest.raises(ValueError):
+            validate_output(codec, container)
+    helper = SystemCodecs("/nonexistent", 1)
+    assert helper.encoder_for("prores", container="mov")
+    with pytest.raises(SystemCodecsError):
+        helper.encoder_for("prores", container="mp4")
+
+
+@pytest.mark.parametrize("codec,fourcc", [("hevc", "hvc1"), ("prores", "apcn")])
+def test_mov_system_export_with_audio(tmp_path, bridge, codec, fourcc):
+    source = make_vfr(tmp_path / "source.mp4")
+    frames = source_frames(source)
+    tone = tmp_path / "tone.mkv"
+    make_tone(tone)
+    output = tmp_path / f"{codec}.mov"
+    encode_video(
+        iter(frames),
+        str(output),
+        fps=25,
+        width=48,
+        height=32,
+        video_codec=codec,
+        container_format="mov",
+        audio_source=str(tone),
+        external_ffmpeg=bridge,
+        stream_to_system=True,
+    )
+    info = bridge.system.probe(str(output))
+    assert info["video"]["codec"] == fourcc
+    assert info["audio"]["codec"] == "aac"
+    expected_duration = float(frames[-1].timestamp + frames[-1].duration - frames[0].timestamp)
+    assert info["video"]["duration"] == pytest.approx(expected_duration, abs=0.05)
+    with decodable_source(str(output), ffmpeg=bridge, temporary_directory=str(tmp_path)) as (
+        frame_path,
+        _,
+    ):
+        assert len(source_frames(Path(frame_path))) == len(frames)
