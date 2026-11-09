@@ -25,9 +25,11 @@ from pathlib import Path
 
 from . import external_ffmpeg as user_ffmpeg
 from .external_ffmpeg import ExternalFFmpeg, ExternalFFmpegError, ensure_free_space, plan_source
+from .image_formats import system_image_output_formats
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     EXTERNAL_OUTPUT_CODECS,
+    SYSTEM_OUTPUT_CODECS,
     UNDECODABLE_VIDEO_MESSAGE,
     UndecodableVideoError,
     normalize_container,
@@ -35,6 +37,10 @@ from .media_codecs import (
 from .system_codecs import SystemCodecs, SystemCodecsError, detect_system_codecs
 
 Provider = SystemCodecs | ExternalFFmpeg
+
+MACOS_ONLY_MESSAGE = (
+    "MOV and ProRes export use the codecs of macOS, which this computer does not have."
+)
 
 
 @dataclass(frozen=True)
@@ -67,9 +73,12 @@ class MediaBridge:
                 return self.system
             except SystemCodecsError as error:
                 reasons.append(str(error))
-        if self.user is not None:
+        # MOV and ProRes are written by the system codecs only.
+        if self.user is not None and container != "mov" and video_codec not in SYSTEM_OUTPUT_CODECS:
             self.user.encoder_for(video_codec, hdr=hdr)
             return self.user
+        if self.system is None and (container == "mov" or video_codec in SYSTEM_OUTPUT_CODECS):
+            raise ExternalFFmpegError(MACOS_ONLY_MESSAGE)
         raise ExternalFFmpegError(reasons[0] if reasons else EXTERNAL_FFMPEG_HINT)
 
     def encoder_for(self, video_codec: str, *, hdr: bool = False, container: str = "mp4") -> str:
@@ -152,12 +161,13 @@ def media_capabilities() -> dict:
             {
                 "label": system.label,
                 "decode": ["h264", "hevc", "aac"],
-                "encode": ["h264", "hevc", "aac"],
+                "encode": ["h264", "hevc", "prores", "aac"],
                 "containers": ["mp4", "mov"],
             }
             if system is not None
             else None
         ),
+        "image_output": system_image_output_formats(),
         "external_ffmpeg": {
             "detected": [found.path] if found is not None else [],
             "candidates": user_ffmpeg.discover_candidates(),
@@ -182,17 +192,21 @@ def system_codecs_available() -> bool:
 def validate_export(
     ffmpeg: MediaBridge | Provider | None, video_codec: str, container: str, *, hdr: bool = False
 ) -> None:
-    """Fail before inference when nothing can write an H.264/HEVC export."""
-    if video_codec not in EXTERNAL_OUTPUT_CODECS:
+    """Fail before inference when nothing can write an H.264/HEVC, MOV or ProRes export."""
+    container = normalize_container(container)
+    system_only = container == "mov" or video_codec in SYSTEM_OUTPUT_CODECS
+    if not system_only and video_codec not in EXTERNAL_OUTPUT_CODECS:
         return
     bridge = as_bridge(ffmpeg)
+    if system_only and (bridge is None or bridge.system is None):
+        raise ValueError(MACOS_ONLY_MESSAGE)
     if bridge is None:
         raise ValueError(
             f"{video_codec.upper()} export uses the FFmpeg installed on this computer, "
             "which is not selected. " + EXTERNAL_FFMPEG_HINT
         )
     try:
-        bridge.export_provider(video_codec, hdr=hdr, container=normalize_container(container))
+        bridge.export_provider(video_codec, hdr=hdr, container=container)
     except ExternalFFmpegError as error:
         raise ValueError(str(error)) from error
 

@@ -43,14 +43,16 @@ VideoToolbox). It decodes into the same lossless FFV1/FLAC intermediate the
 FFmpeg route uses and encodes exports with VideoToolbox, exchanging raw frames
 with the worker over pipes. LocalSR's binaries still contain no code for these
 formats, and the helper adds no third-party code to the package. It writes
-H.264/HEVC into MP4 or MOV; MKV output and formats macOS cannot read (WMV,
+H.264/HEVC into MP4 or MOV and Apple ProRes 422 into MOV; MKV output and formats macOS cannot read (WMV,
 DivX, FLV, H.263) still go through a user-installed FFmpeg. Windows has
 equivalent codecs in Media Foundation; a helper for them is planned.
 
 HEIC and HEIF photos carry HEVC too. On macOS the worker hands them, and JPEG
 XL, to ImageIO through `/usr/bin/sips`, which writes a temporary TIFF that
 Pillow reads; LocalSR ships no HEIF or HEVC decoder (no libheif, libde265 or
-x265), so these formats are offered on macOS only. The other still formats
+x265), so these formats are offered on macOS only. HEIC output works the same way
+in reverse: LocalSR writes a lossless TIFF and `/usr/bin/sips` encodes it with the system
+HEIC encoder, so LocalSR ships no HEVC encoder for photos either. The other still formats
 need no patent licence and use decoders already in the package: AVIF (AV1,
 royalty-free under the Alliance for Open Media patent licence) and JPEG 2000
 (Part 1, royalty-free) through the libavif and OpenJPEG libraries inside Pillow,
@@ -187,5 +189,5 @@ shipped on a guess. Updated on 18 September 2026 for the GPU packages.
    Settled: the cuDNN 9 DLLs ship in the Windows CUDA package.
 6. **Operating system codecs.** Apple and Microsoft license H.264, HEVC and AAC
    for use through their public APIs, which every video application on those
-   systems relies on. The same holds for HEIC/HEIF photos decoded by macOS
-   ImageIO. Settled.
+   systems relies on. The same holds for HEIC/HEIF photos decoded and written by
+   macOS ImageIO, and for ProRes written by AVFoundation. Settled.

@@ -9,9 +9,9 @@
 //   localsr-media version
 //   localsr-media probe <file>
 //   localsr-media decode <file> [--audio out.wav] [--max-frames N] [--no-video]
-//   localsr-media encode --output out.mp4 --codec h264|hevc [--quality 0..1]
-//                        [--bitrate N] [--hdr HLG|PQ] [--audio in.wav]
-//                        [--aac-bitrate N] [--rotation DEG] < frames
+//   localsr-media encode --output out.mp4 --codec h264|hevc|prores [--quality 0..1]
+//                        [--container mp4|mov] [--bitrate N] [--hdr HLG|PQ]
+//                        [--audio in.wav] [--aac-bitrate N] [--rotation DEG] < frames
 //
 // Frame stream (both directions): one JSON header line, then for each frame a
 // 16-byte little-endian record (pts int64, duration int32, payload uint32) and
@@ -850,9 +850,13 @@ final class AudioFeeder {
 
 func encode(_ arguments: Arguments) throws {
     guard let outputPath = arguments.options["output"] else { throw HelperError("encode needs --output") }
-    guard let codecName = arguments.options["codec"], ["h264", "hevc"].contains(codecName) else {
-        throw HelperError("encode needs --codec h264 or hevc")
+    guard let codecName = arguments.options["codec"], ["h264", "hevc", "prores"].contains(codecName) else {
+        throw HelperError("encode needs --codec h264, hevc or prores")
     }
+    // The container is named explicitly because LocalSR writes to a temporary file
+    // whose extension says nothing; without it the extension decides, as before.
+    let containerName = arguments.options["container"] ?? ""
+    guard ["", "mp4", "mov"].contains(containerName) else { throw HelperError("--container must be mp4 or mov") }
     let hdr = arguments.options["hdr"] ?? ""
     guard ["", "HLG", "PQ"].contains(hdr) else { throw HelperError("--hdr must be HLG or PQ") }
     if !hdr.isEmpty && codecName != "hevc" { throw HelperError("HDR export needs HEVC") }
@@ -870,17 +874,21 @@ func encode(_ arguments: Arguments) throws {
 
     let url = URL(fileURLWithPath: outputPath)
     try? FileManager.default.removeItem(at: url)
-    let fileType: AVFileType = url.pathExtension.lowercased() == "mov" ? .mov : .mp4
+    let fileType: AVFileType = (containerName.isEmpty ? url.pathExtension.lowercased() : containerName) == "mov" ? .mov : .mp4
+    if codecName == "prores" && fileType != .mov { throw HelperError("ProRes is written into MOV") }
     let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
     writer.shouldOptimizeForNetworkUse = true
 
-    let codec: AVVideoCodecType = codecName == "h264" ? .h264 : .hevc
+    let codec: AVVideoCodecType = ["h264": .h264, "hevc": .hevc, "prores": .proRes422][codecName]!
     let colors = colorProperties(header.color, hdr: hdr)
     var compression: [String: Any] = [:]
-    if bitrate > 0 {
-        compression[AVVideoAverageBitRateKey] = bitrate
-    } else {
-        compression[AVVideoQualityKey] = max(0.0, min(1.0, quality))
+    // ProRes sets its own data rate: it takes neither a quality nor a bitrate.
+    if codecName != "prores" {
+        if bitrate > 0 {
+            compression[AVVideoAverageBitRateKey] = bitrate
+        } else {
+            compression[AVVideoQualityKey] = max(0.0, min(1.0, quality))
+        }
     }
     if header.fps > 0 { compression[AVVideoExpectedSourceFrameRateKey] = header.fps }
     if !hdr.isEmpty { compression[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String }
@@ -889,7 +897,7 @@ func encode(_ arguments: Arguments) throws {
         AVVideoCompressionPropertiesKey: compression,
     ]
     if let colors { settings[AVVideoColorPropertiesKey] = colors }
-    if !writer.canApply(outputSettings: settings, forMediaType: .video) && bitrate == 0 {
+    if !writer.canApply(outputSettings: settings, forMediaType: .video) && bitrate == 0 && codecName != "prores" {
         // Constant-quality encoding is not available on every encoder; fall back to
         // a bitrate of about 0.12 bits per pixel per frame, like the FFmpeg route.
         compression.removeValue(forKey: AVVideoQualityKey)

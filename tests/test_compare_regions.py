@@ -1,7 +1,10 @@
 import base64
 import io
+import sys
 import threading
 
+import numpy as np
+import pytest
 from PIL import Image
 
 from localsr.worker.compare_regions import RegionCache, RegionService
@@ -186,3 +189,19 @@ def test_a_slot_resubmitted_while_others_wait_does_not_starve_them(tmp_path):
         assert order[1:3] == ["slot2", "slot3"]
     finally:
         service.close()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="HEIC is decoded by macOS")
+def test_regions_cut_from_a_heic_export(tmp_path):
+    from localsr.core.image_io import ImageManager
+
+    path = tmp_path / "finished.heic"
+    pixels = np.zeros((3, 32, 32), dtype=np.uint8)
+    pixels[0, :, 16:] = 255
+    ImageManager().save_from_writer(pixels, str(path), "heic", 95, True, None, {}, 1)
+    result = RegionCache(1 << 20).render(
+        {"image_path": str(path), "x": 16, "y": 0, "width": 16, "height": 16}
+        | {"target_width": 16, "target_height": 16, "slot": "slot1", "request_id": 1}
+    )
+    with Image.open(io.BytesIO(base64.b64decode(result.png_base64))) as crop:
+        assert crop.getpixel((8, 8))[0] > 200

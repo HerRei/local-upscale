@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from localsr.core.image_io import ImageManager
+from localsr.core.image_io import ImageManager, require_output_format
 from localsr.core.inference import InferenceEngine, UnstableRestorationError
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter, NormalizedModelInfo
@@ -80,6 +80,7 @@ class ImageJobRunner:
         self.preview_factory = preview_factory
 
     def run(self, job_id: str, data: Mapping[str, Any]) -> None:
+        require_output_format(str(data["output_format"]))
         started_at = time.monotonic()
         self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
         self.engine.status_callback = lambda message: self.emit(
