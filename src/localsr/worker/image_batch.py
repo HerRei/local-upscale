@@ -16,13 +16,13 @@ runs them through the normal per-photo runner.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+import psutil
 import torch
 
 from localsr.core.batch_scheduler import PhotoFallback, run_photo_batch
@@ -101,10 +101,12 @@ def save_bytes(width: int, height: int, scale: int, output_scale: int, alpha: bo
 
 def default_memory_budget() -> int:
     """What saves may hold at once: a quarter of the memory, 2 GiB when unknown."""
+    # psutil works on every platform; os.sysconf does not exist on Windows.
     try:
-        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // 4
-    except (OSError, ValueError):
+        total = int(psutil.virtual_memory().total)
+    except (OSError, RuntimeError, AttributeError):
         return 2 * 2**30
+    return total // 4 if total > 0 else 2 * 2**30
 
 
 def read_ac_power() -> bool:
