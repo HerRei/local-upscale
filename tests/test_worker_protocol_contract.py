@@ -269,3 +269,9 @@ def test_job_schemas_carry_heic_images_and_mov_prores_videos():
     assert '"output_format": {"enum": ["png", "jpg", "tif", "webp", "heic"]}' in text
     assert '"container": {"enum": ["mp4", "mkv", "mov"]}' in text
     assert '"enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc", "prores"]' in text
+
+
+def test_video_job_schema_declares_every_hdr_mode_the_engine_accepts():
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    data = schema["$defs"]["videoJobRequest"]["allOf"][1]["properties"]["data"]["allOf"][1]
+    assert set(data["properties"]["hdr_mode"]["enum"]) == {"reject", "tone_map", "preserve"}
