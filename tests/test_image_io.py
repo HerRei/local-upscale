@@ -352,3 +352,60 @@ def test_a_grey_profile_keeps_transparency(tmp_path):
     assert data["has_invalid_icc"] is False
     assert data["alpha_image"].getextrema() == (77, 77)
     assert abs(float(data["tensor"].mean()) * 255 - 188) < 3
+
+
+def _tinted(height, width):
+    """A model output whose colour channels drift apart around a grey level."""
+    output = np.full((3, height, width), 120, dtype=np.uint8)
+    output[0] += 9
+    output[2] -= 7
+    return output
+
+
+def _grey_palette_image():
+    image = Image.new("P", (4, 3), 90)
+    image.putpalette([value for level in range(256) for value in (level, level, level)])
+    return image
+
+
+@pytest.mark.parametrize(
+    "make_source",
+    [
+        lambda: Image.new("L", (4, 3), 90),
+        lambda: Image.new("RGB", (4, 3), (90, 90, 90)),
+        lambda: Image.new("1", (4, 3), 1),
+        _grey_palette_image,
+        lambda: Image.merge("LA", (Image.new("L", (4, 3), 90), Image.new("L", (4, 3), 200))),
+    ],
+    ids=["L", "grey-RGB", "1-bit", "grey-palette", "LA"],
+)
+def test_a_grey_source_is_saved_without_the_colour_a_model_adds(tmp_path, make_source):
+    # Grey pages carry no colour, so any chroma in the output is the model's invention
+    # (HFA2k tints manga pages, issue #97). The saved file keeps the luma only.
+    source = make_source()
+    path = tmp_path / "page.png"
+    source.save(path)
+    manager = ImageManager()
+    data = manager.load(str(path))
+    assert data["grayscale"] is True
+
+    output = tmp_path / "out.png"
+    manager.save_from_writer(_tinted(12, 16), str(output), "png", 98, False, None, {}, 4)
+    with Image.open(output) as saved:
+        red, green, blue = (np.asarray(band) for band in saved.convert("RGB").split())
+        assert (red == green).all() and (green == blue).all()
+        # Rec. 601 luma of (129, 120, 113), as Pillow's convert("L") rounds it.
+        assert int(green[0, 0]) == 122
+        assert saved.mode == ("RGBA" if source.mode == "LA" else "RGB")
+
+
+def test_a_colour_source_keeps_the_model_colour(tmp_path):
+    path = tmp_path / "photo.png"
+    Image.new("RGB", (4, 3), (90, 91, 90)).save(path)
+    manager = ImageManager()
+    assert manager.load(str(path))["grayscale"] is False
+
+    output = tmp_path / "out.png"
+    manager.save_from_writer(_tinted(12, 16), str(output), "png", 98, False, None, {}, 4)
+    with Image.open(output) as saved:
+        assert saved.getpixel((0, 0)) == (129, 120, 113)
