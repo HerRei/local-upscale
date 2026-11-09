@@ -127,6 +127,25 @@ pub fn run() {
                     runtime.status_detail = error.to_string();
                 }
             }
+            // E2E-TEST-SHIM (throwaway copy only): drive the real update commands without a UI.
+            if let Some(steps) = std::env::var_os("LOCALSR_E2E_STEPS").and_then(|p| std::fs::read_to_string(p).ok()) {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    let v = env!("CARGO_PKG_VERSION");
+                    for step in steps.split_whitespace() {
+                        let st = handle.state::<Arc<AppState>>();
+                        let r = match step {
+                            "check" => tauri::async_runtime::block_on(updates::check_update(st, handle.clone(), "beta".into())).map(|s| format!("{} {}", s.stage, s.message)),
+                            "download" => tauri::async_runtime::block_on(updates::download_update(st, handle.clone())).map(|_| "ok".into()),
+                            "install" => tauri::async_runtime::block_on(updates::install_update(st, handle.clone())).map(|_| "ok".into()),
+                            _ => Ok("?".into()),
+                        };
+                        eprintln!("E2E v{v} step {step}: {:?}", r.map_err(|e| e.to_string()));
+                    }
+                    eprintln!("E2E v{v} steps done");
+                });
+            }
             if smoke_test {
                 start_smoke_monitor(app.handle().clone(), state);
             }
