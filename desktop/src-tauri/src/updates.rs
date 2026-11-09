@@ -1366,7 +1366,8 @@ fn running_appimage(
 
 /// Read the version at the destination under the swap lock. A surviving old
 /// process must not replace a newer release another process already installed.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+// Compiled everywhere because the portable branch that calls it is; it only runs for the
+// Linux AppImage.
 fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()> {
     use std::io::{Seek, SeekFrom};
     use std::process::{Command, Stdio};
