@@ -1,5 +1,6 @@
 """Suite-wide test isolation checks."""
 
+import gc
 import threading
 import time
 
@@ -10,6 +11,9 @@ import pytest
 def no_leaked_threads():
     before = set(threading.enumerate())
     yield
+    # A generator abandoned by a failed call (kept alive by its traceback) stops its
+    # helper thread only once it is finalized.
+    gc.collect()
     deadline = time.monotonic() + 1
     while True:
         leaked = [
