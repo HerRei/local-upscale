@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import tomllib
@@ -67,11 +68,63 @@ def platform_key(entry: dict) -> str:
     )
 
 
-def engine_id(entry: dict, commit: str) -> str:
-    """The bundled engine's identity: one per edition and release commit, as on macOS."""
+def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
+    """Identity of the engine recipe, independent of the app version/release commit.
+
+    Hash sorted paths and content digests, with text line endings normalized. The
+    local package version is informational; the worker protocol governs compatibility.
+    Keep this input list in step with the worker spec and the locked build recipe.
+    """
     if not COMMIT_RE.fullmatch(commit):
         raise ValueError(f"release commit must be a full lowercase SHA, not {commit!r}")
-    return f"{entry['id']}-{commit[:12]}"
+    inputs = [
+        root / "src/localsr",
+        root / "packaging/tauri_worker.spec",
+        root / "packaging/worker_entrypoint.py",
+        root / "packaging/hooks",
+        root / "packaging/ffmpeg",
+        root / "packaging/nvidia",
+        root / "packaging/macos/worker-entitlements.plist",
+        root / "packaging/macos/media-helper",
+        root / "requirements/build-tools.txt",
+        root / "scripts/backend_wheelhouse.py",
+        root / "scripts/build_tauri_preview.py",
+        root / "scripts/collect_xpu_runtime.py",
+        root / "scripts/filter_macho_architecture.py",
+        root / "scripts/release_targets.py",
+    ]
+    lock = root / "requirements/locks" / f"{entry['id']}.txt"
+    inputs.append(lock if entry["platform"] != "macos" else root / "uv.lock")
+    if not lock.is_file() and entry["platform"] != "macos":
+        raise ValueError(f"missing engine dependency lock: {lock}")
+    paths = sorted(
+        {
+            file
+            for path in inputs
+            for file in (path.rglob("*") if path.is_dir() else [path])
+            if file.is_file() and "__pycache__" not in file.parts and file.suffix != ".pyc"
+        }
+    )
+    records = []
+    for path in paths:
+        name = path.relative_to(root).as_posix()
+        data = path.read_bytes()
+        if path.suffix in {".py", ".spec", ".json", ".txt", ".swift", ".plist", ".lock"}:
+            data = data.replace(b"\r\n", b"\n")
+        if name == "src/localsr/__init__.py":
+            data = b"\n".join(
+                line for line in data.splitlines() if not line.lstrip().startswith(b"#")
+            )
+            data = re.sub(rb'(?m)^__version__ = "[^"\n]*"$', b'__version__ = "<app-version>"', data)
+        elif name == "uv.lock":
+            document = tomllib.loads(data.decode())
+            for package in document.get("package", []):
+                if package["name"] == "localsr":
+                    package["version"] = "<app-version>"
+            data = json.dumps(document, sort_keys=True, default=str).encode()
+        records.append([name, hashlib.sha256(data).hexdigest()])
+    digest = hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest()
+    return f"{entry['id']}-{digest}"
 
 
 def expected_update_identity(entry: dict, commit: str) -> dict[str, object]:
@@ -95,7 +148,7 @@ def update_environment(target_id: str, commit: str, root: Path = ROOT) -> dict[s
         "LOCALSR_UPDATE_PUBLIC_KEY": key,
         "LOCALSR_UPDATE_BACKEND": entry["update"]["backend"],
         "LOCALSR_UPDATE_KIND": entry["update"]["kind"],
-        "LOCALSR_ENGINE_ID": engine_id(entry, commit),
+        "LOCALSR_ENGINE_ID": engine_id(entry, commit, root=root),
     }
 
 

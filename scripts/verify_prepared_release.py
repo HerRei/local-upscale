@@ -93,6 +93,10 @@ def _ed25519(public: bytes, message: bytes, signature: bytes) -> bool:
     s = int.from_bytes(signature[32:], "little")
     if a is None or r is None or s >= _Q:
         return False
+    # Reject small-order public keys (including identity) before the equation.
+    cofactored = _mul(8, a)
+    if cofactored[0] == 0 and (cofactored[1] - cofactored[2]) % _P == 0:
+        return False
     h = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little")
     left, right = _mul(s, _G), _add(r, _mul(h % _Q, a))
     return (left[0] * right[2] - right[0] * left[2]) % _P == 0 and (
@@ -281,6 +285,7 @@ def _statement(
         "kind": contract.get("kind"),
         "protocol": contract.get("protocol"),
         "engine_id": contract.get("engine_id"),
+        "unpacked_size": contract.get("unpacked_size"),
         "sha256": contract.get("sha256"),
         "engine_manifest_sha256": (engine.get("manifest") or {}).get("sha256"),
     }
@@ -363,7 +368,7 @@ def verify_feed(
             if total != size:
                 raise ValueError(f"{key}: the package parts do not add up to the package")
             _https_under(entry.get("url"), base, f"{name}.part-0001", key)
-        # Every release builds a new engine id, so every entry needs the engine package.
+        # Every entry carries an engine package for clients whose installed id differs.
         engine = contract.get("engine")
         if not isinstance(engine, dict) or engine.get("id") != identity:
             raise ValueError(f"{key} has no engine package for {identity}")

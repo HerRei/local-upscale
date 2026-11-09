@@ -162,6 +162,7 @@ struct ReleaseStatement {
     engine_id: String,
     sha256: String,
     engine_manifest_sha256: Option<String>,
+    unpacked_size: u64,
 }
 #[derive(Clone, Default, Serialize)]
 pub struct UpdateStatus {
@@ -319,6 +320,7 @@ fn verify_statement(
         kind: config.kind.clone(),
         protocol: PROTOCOL_VERSION,
         engine_id: contract.engine_id.clone(),
+        unpacked_size: contract.unpacked_size,
         sha256: contract.sha256.clone(),
         engine_manifest_sha256: contract.engine.as_ref().map(|e| e.manifest.sha256.clone()),
     };
@@ -991,19 +993,6 @@ fn active_engine_for_distribution(
         });
     executable.is_file().then_some(executable)
 }
-fn copy_tree(source: &Path, destination: &Path) -> AppResult<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let dest = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &dest)?;
-        } else if fs::hard_link(entry.path(), &dest).is_err() {
-            fs::copy(entry.path(), &dest)?;
-        }
-    }
-    Ok(())
-}
 #[tauri::command]
 pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::distribution::require_direct_updates()?;
@@ -1026,6 +1015,36 @@ pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
     .await
     .map_err(|e| invalid(e.to_string()))?
 }
+fn prepare_update_engine(
+    config: &UpdateConfig,
+    contract: &ReleaseContract,
+    directory: &Path,
+    next_root: &Path,
+    installed_worker: impl FnOnce() -> AppResult<PathBuf>,
+) -> AppResult<PathBuf> {
+    if contract.engine_id == config.engine_id {
+        // The new application carries the same engine. Keep an existing versioned
+        // engine, or use the bundle; no payload, adoption or activation is needed.
+        return installed_worker();
+    }
+    let engine = contract
+        .engine
+        .as_ref()
+        .ok_or_else(|| invalid("The changed engine has no package"))?;
+    let engine_root = next_root.join("engines").join(&contract.engine_id);
+    fs::create_dir_all(&engine_root)?;
+    let engine_dir = engine_root.join("engine");
+    if !engine_dir.exists() {
+        install_engine_package(directory, engine, &config.public_key, &engine_dir)?;
+    }
+    let engine_exe = engine_dir.join(if cfg!(windows) {
+        "localsr-worker.exe"
+    } else {
+        "localsr-worker"
+    });
+    Ok(engine_exe)
+}
+
 fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     let _busy = acquire(&state.updates.busy)?;
     let _installing = acquire(&state.updates.installing)?;
@@ -1076,44 +1095,10 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     status.stage = "installing".into();
     status.message = "Backing up data and preparing the verified update…".into();
     publish(state, app, status.clone());
-    let engine_root = state
-        .paths
-        .next_root
-        .join("engines")
-        .join(&contract.engine_id);
-    if !safe_id(&contract.engine_id) {
-        return Err(invalid("Invalid engine version"));
-    }
-    fs::create_dir_all(&engine_root)?;
-    let engine_dir = engine_root.join("engine");
-    if !engine_dir.exists() {
-        if let Some(engine) = contract
-            .engine
-            .as_ref()
-            .filter(|e| e.id != config.engine_id)
-        {
-            install_engine_package(&directory, engine, &config.public_key, &engine_dir)?;
-        } else {
-            let old_worker = worker::installed_worker_path(state, app)?;
-            let source = old_worker
-                .parent()
-                .ok_or_else(|| invalid("Installed engine path has no parent"))?;
-            let staging = engine_root.join("engine.adopting");
-            if staging.exists() {
-                fs::remove_dir_all(&staging)?;
-            }
-            if let Err(error) = copy_tree(source, &staging) {
-                let _ = fs::remove_dir_all(&staging);
-                return Err(error);
-            }
-            fs::rename(staging, &engine_dir)?;
-        }
-    }
-    let engine_exe = engine_dir.join(if cfg!(windows) {
-        "localsr-worker.exe"
-    } else {
-        "localsr-worker"
-    });
+    let engine_exe =
+        prepare_update_engine(config, contract, &directory, &state.paths.next_root, || {
+            worker::installed_worker_path(state, app)
+        })?;
     crate::headless_smoke::run_worker_handshake(&engine_exe, Duration::from_secs(60))
         .map_err(AppError::Worker)?;
     let active_file = state.paths.next_root.join("active-engine.txt");
@@ -1130,7 +1115,9 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
             std::thread::sleep(Duration::from_millis(100));
         }
         lock(&state.database)?.close_for_update()?;
-        fs::write(&active_file, &contract.engine_id)?;
+        if contract.engine_id != config.engine_id {
+            fs::write(&active_file, &contract.engine_id)?;
+        }
         if config.kind == "portable" && cfg!(target_os = "linux") {
             // Unpack only a copy of our own that was verified after it was made.
             let verified = directory.join("application.verified");
@@ -1149,7 +1136,10 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
             update_storage::replace_executable(
                 &std::env::current_exe()?,
                 &state.paths.next_root.join(SWAP_JOURNAL),
-                |staged| update_storage::copy_new(&unpacked.join("localsr-next"), staged),
+                |staged| {
+                    require_newer_executable(&std::env::current_exe()?, &checked.update.version)?;
+                    update_storage::copy_new(&unpacked.join("localsr-next"), staged)
+                },
                 |path| update_storage::smoke(path, Duration::from_secs(60)),
             )
         } else {
@@ -1177,14 +1167,18 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         publish(state, app, status);
         return Err(error);
     }
-    finish_install(&backup, &checked.update.version, &directory);
+    finish_install(&backup, &checked.update.version, &directory)?;
     restart_application(app)
 }
 
 /// Keep profile backups; discard only downloaded/staged update material.
-fn finish_install(backup: &Path, version: &str, downloads: &Path) {
-    let _ = fs::write(backup.join("installed-version.txt"), version);
-    let _ = fs::remove_dir_all(downloads);
+fn finish_install(backup: &Path, version: &str, downloads: &Path) -> AppResult<()> {
+    fs::write(backup.join("installed-version.txt"), version)?;
+    match fs::remove_dir_all(downloads) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Hand the verified package to the platform. macOS replaces the app bundle through the
@@ -1221,6 +1215,7 @@ fn install_package(
             file,
             &checked.config.public_key,
             &state.paths.next_root.join(SWAP_JOURNAL),
+            &checked.update.version,
             |path| update_storage::smoke(path, Duration::from_secs(120)),
         )
     }
@@ -1300,7 +1295,6 @@ pub fn confirm_pending_install(next_root: &Path, running_version: &str) -> bool 
     let Ok(bytes) = fs::read(&marker) else {
         return false;
     };
-    let _ = fs::remove_file(&marker);
     let Ok(pending) = serde_json::from_slice::<PendingInstall>(&bytes) else {
         return false;
     };
@@ -1311,8 +1305,10 @@ pub fn confirm_pending_install(next_root: &Path, running_version: &str) -> bool 
     {
         return false;
     }
-    finish_install(&pending.backup, &pending.version, &pending.downloads);
-    true
+    if finish_install(&pending.backup, &pending.version, &pending.downloads).is_err() {
+        return false;
+    }
+    fs::remove_file(marker).is_ok()
 }
 
 /// Before anything else at start: roll back an executable swap that a crash interrupted,
@@ -1327,11 +1323,21 @@ pub fn recover_interrupted_update() -> bool {
             let running = std::env::var_os("APPIMAGE")
                 .map(PathBuf::from)
                 .or_else(|| std::env::current_exe().ok());
-            running.as_deref() == Some(restored.as_path())
-                && std::process::Command::new(&restored)
+            if running.as_deref() != Some(restored.as_path()) {
+                return false;
+            }
+            match restart_service() {
+                Ok(true) => true,
+                Ok(false) => std::process::Command::new(&restored)
                     .args(std::env::args_os().skip(1))
                     .spawn()
-                    .is_ok()
+                    .is_ok(),
+                Err(error) => {
+                    eprintln!("LocalSR: restored the previous version; reopen LocalSR: {error}");
+                    // Exit the unaccepted process even when the service manager failed.
+                    true
+                }
+            }
         }
         Ok(None) => false,
         Err(error) => {
@@ -1358,6 +1364,47 @@ fn running_appimage(
         .then_some(appimage)
 }
 
+/// Read the version at the destination under the swap lock. A surviving old
+/// process must not replace a newer release another process already installed.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()> {
+    use std::io::{Seek, SeekFrom};
+    use std::process::{Command, Stdio};
+    let mut output = tempfile::tempfile()?;
+    let mut child = Command::new(executable)
+        .arg("--headless-update-version")
+        .stdin(Stdio::null())
+        .stdout(output.try_clone()?)
+        .stderr(Stdio::null())
+        .spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                return Err(invalid("Could not read the installed application version"));
+            }
+            break;
+        }
+        if start.elapsed() >= Duration::from_secs(10) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(invalid("The installed application version check timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    output.seek(SeekFrom::Start(0))?;
+    let mut installed = String::new();
+    output.take(256).read_to_string(&mut installed)?;
+    let installed = semver::Version::parse(installed.trim()).map_err(|e| invalid(e.to_string()))?;
+    let candidate = semver::Version::parse(candidate).map_err(|e| invalid(e.to_string()))?;
+    if candidate <= installed {
+        return Err(invalid(
+            "This release is not newer than the application installed at this path",
+        ));
+    }
+    Ok(())
+}
+
 /// Swap the AppImage for a verified copy of the update made next to it, run the new
 /// image's startup check, and restore the previous image if that fails. The running image
 /// stays mounted, so replacing its file does not disturb this process.
@@ -1368,6 +1415,7 @@ fn replace_appimage(
     file: &DownloadFile,
     public_key: &str,
     journal: &Path,
+    version: &str,
     smoke: impl Fn(&Path) -> AppResult<()>,
 ) -> AppResult<()> {
     let parent = appimage
@@ -1377,12 +1425,15 @@ fn replace_appimage(
     update_storage::replace_executable(
         appimage,
         journal,
-        |staged| stage_verified(update, staged, file, public_key),
+        |staged| {
+            require_newer_executable(appimage, version)?;
+            stage_verified(update, staged, file, public_key)
+        },
         smoke,
     )
 }
 
-fn restart_application(app: &AppHandle) -> AppResult<()> {
+fn restart_service() -> AppResult<bool> {
     #[cfg(target_os = "linux")]
     if let Ok(cgroup) = fs::read_to_string("/proc/self/cgroup") {
         if let Some(unit) = cgroup
@@ -1400,13 +1451,20 @@ fn restart_application(app: &AppHandle) -> AppResult<()> {
                 .args(["--user", "--no-block", "restart", unit])
                 .status()?;
             if status.success() {
-                app.exit(0);
-                return Ok(());
+                return Ok(true);
             }
             return Err(invalid(
                 "Update installed. The desktop service could not restart; open LocalSR again.",
             ));
         }
+    }
+    Ok(false)
+}
+
+fn restart_application(app: &AppHandle) -> AppResult<()> {
+    if restart_service()? {
+        app.exit(0);
+        return Ok(());
     }
     app.restart();
 }
@@ -1904,6 +1962,9 @@ mod tests {
     }
 
     #[cfg(unix)]
+    const OLD_IMAGE: &[u8] = b"#!/bin/sh\nprintf '0.3.6-beta\\n'\n";
+
+    #[cfg(unix)]
     struct SwapFixture {
         root: tempfile::TempDir,
         applications: PathBuf,
@@ -1926,7 +1987,7 @@ mod tests {
             fs::create_dir_all(&applications).unwrap();
             fs::create_dir_all(&updates).unwrap();
             let appimage = applications.join("LocalSR.AppImage");
-            fs::write(&appimage, b"old image").unwrap();
+            fs::write(&appimage, OLD_IMAGE).unwrap();
             fs::set_permissions(&appimage, fs::Permissions::from_mode(0o755)).unwrap();
             let update = updates.join(APPLICATION_FILE);
             fs::write(&update, &data).unwrap();
@@ -1950,6 +2011,7 @@ mod tests {
                 &self.file,
                 &self.public_key,
                 &self.journal,
+                "0.3.7-beta",
                 smoke,
             )
         }
@@ -1972,7 +2034,7 @@ mod tests {
             Err(AppError::Worker("startup failed".into()))
         });
         assert!(failed.is_err());
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
         assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
         assert!(!swap.journal.exists());
 
@@ -1990,6 +2052,18 @@ mod tests {
         assert!(!swap.journal.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_surviving_old_process_cannot_downgrade_the_installed_appimage() {
+        let swap = SwapFixture::new();
+        let newer = b"#!/bin/sh\nprintf '0.4.0\\n'\n";
+        fs::write(&swap.appimage, newer).unwrap();
+        assert!(swap.replace(|_| Ok(())).is_err());
+        assert_eq!(fs::read(&swap.appimage).unwrap(), newer);
+        assert!(swap.leftovers().is_empty());
+        assert!(!swap.journal.exists());
+    }
+
     // Review finding 1: the bytes installed are the bytes verified, also when the download
     // is replaced after the first verification.
     #[cfg(unix)]
@@ -1999,7 +2073,7 @@ mod tests {
         fs::write(&swap.update, b"unsigned bytes swapped in after the check").unwrap();
         let result = swap.replace(|_| panic!("an unverified image must never run"));
         assert!(result.unwrap_err().to_string().contains("verification"));
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
         assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
     }
 
@@ -2123,7 +2197,7 @@ mod tests {
         held.lock_exclusive().unwrap();
         let result = swap.replace(|_| panic!("the swap must not start while another runs"));
         assert!(result.unwrap_err().to_string().contains("Another"));
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
         assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
         assert!(!swap.journal.exists());
         held.unlock().unwrap();
@@ -2146,11 +2220,11 @@ mod tests {
             let journal: serde_json::Value =
                 serde_json::from_slice(&fs::read(&swap.journal).unwrap()).unwrap();
             let backup = PathBuf::from(journal["backup"].as_str().unwrap());
-            assert_eq!(fs::read(backup).unwrap(), b"old image");
+            assert_eq!(fs::read(backup).unwrap(), OLD_IMAGE);
             Err(AppError::Worker("startup failed".into()))
         })
         .unwrap_err();
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
     }
 
     #[cfg(unix)]
@@ -2173,7 +2247,7 @@ mod tests {
             update_storage::recover_swap(&swap.journal).unwrap(),
             Some(swap.appimage.clone())
         );
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
         assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
         assert!(!swap.journal.exists());
 
@@ -2181,7 +2255,7 @@ mod tests {
         fs::write(&swap.journal, journal.to_string()).unwrap();
         fs::write(&staged, b"half").unwrap();
         assert_eq!(update_storage::recover_swap(&swap.journal).unwrap(), None);
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
         assert!(swap.leftovers().is_empty(), "{:?}", swap.leftovers());
 
         // A journal naming files outside the image's folder is refused untouched.
@@ -2193,7 +2267,7 @@ mod tests {
         fs::write(&swap.journal, foreign.to_string()).unwrap();
         assert!(update_storage::recover_swap(&swap.journal).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"other");
-        assert_eq!(fs::read(&swap.appimage).unwrap(), b"old image");
+        assert_eq!(fs::read(&swap.appimage).unwrap(), OLD_IMAGE);
     }
 
     #[test]
@@ -2244,7 +2318,7 @@ mod tests {
         fs::create_dir_all(&downloads).unwrap();
         fs::write(downloads.join("application.update"), b"installer").unwrap();
         fs::write(backup.join("settings.json"), b"{}").unwrap();
-        finish_install(&backup, "0.3.7-beta", &downloads);
+        finish_install(&backup, "0.3.7-beta", &downloads).unwrap();
         assert_eq!(
             fs::read_to_string(backup.join("installed-version.txt")).unwrap(),
             "0.3.7-beta"
@@ -2272,7 +2346,7 @@ mod tests {
         assert!(!confirm_pending_install(&next, "0.3.6-beta"));
         assert!(downloads.join(APPLICATION_FILE).is_file());
         assert!(!backup.join("installed-version.txt").exists());
-        assert!(!confirm_pending_install(&next, "0.3.7-beta"));
+        assert!(next.join(PENDING_INSTALL).exists());
 
         record_pending_install(&next, "0.3.7-beta", &downloads, &backup).unwrap();
         assert!(confirm_pending_install(&next, "0.3.7-beta"));
@@ -2282,6 +2356,60 @@ mod tests {
         );
         assert!(!downloads.exists());
         assert!(!confirm_pending_install(&next, "0.3.7-beta"));
+    }
+
+    #[test]
+    fn round2_confirmation_retries_failed_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let next = root.path();
+        let backup = next.join("backups/before-install");
+        let downloads = next.join("updates");
+        fs::create_dir_all(&backup).unwrap();
+        fs::write(&downloads, b"blocks directory removal").unwrap();
+        record_pending_install(next, "0.3.7-beta", &downloads, &backup).unwrap();
+        assert!(!confirm_pending_install(next, "0.3.7-beta"));
+        assert!(next.join(PENDING_INSTALL).exists());
+        fs::remove_file(&downloads).unwrap();
+        fs::create_dir(&downloads).unwrap();
+        assert!(confirm_pending_install(next, "0.3.7-beta"));
+    }
+
+    #[test]
+    fn round2_install_space_is_authenticated() {
+        let (config, mut contract) = statement_contract();
+        contract.unpacked_size = 1;
+        assert!(verify_statement(
+            &config,
+            "linux-x86_64-rocm-native",
+            "beta",
+            "0.3.7-beta",
+            "0.3.6-beta",
+            &contract
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn unchanged_engine_does_not_install_or_copy_any_engine_files() {
+        let (mut config, contract) = statement_contract();
+        config.engine_id.clone_from(&contract.engine_id);
+        let root = tempfile::tempdir().unwrap();
+        let worker = root.path().join("bundled/localsr-worker");
+        assert_eq!(
+            prepare_update_engine(
+                &config,
+                &contract,
+                &root.path().join("missing-downloads"),
+                root.path(),
+                || Ok(worker.clone())
+            )
+            .unwrap(),
+            worker
+        );
+        assert!(!root.path().join("engines").exists());
+        let mut incompatible = contract.clone();
+        incompatible.protocol += 1;
+        assert!(validate_contract(&config, "beta", "0.3.7-beta", &incompatible).is_err());
     }
 
     fn statement_contract() -> (UpdateConfig, ReleaseContract) {
