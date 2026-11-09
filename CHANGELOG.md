@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.7-beta] - Unreleased
+
+### Added
+
+- Compare saved image results in a separate tab: pick up to four originals or outputs
+  from the Outputs list, use a slider for two versions of the same image or linked boxes
+  for several images, and zoom into full-resolution details. **Try others…** queues
+  multiple installed models for the same image so their results can be compared.
+
 ## [0.3.6-beta] - Unreleased
 
 ### Added

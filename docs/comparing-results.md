@@ -1,60 +1,46 @@
 # Comparing image results
 
-Every run of an image keeps its own file. Once an image has two saved results,
-the preview shows **Showing** and **against** under the file name. Choose a
-result, or the Original, on either side. Choosing for one side what the other
-side holds swaps the two.
+Every run of an image saves its own file. To compare finished results, open
+**Outputs** in the left pane and tick two to four items. Results are grouped by
+input image, with its **Original** first. The numbers show their slots in the
+order picked. Choose **Show in Compare** or open the **Compare** tab above the
+main area. Switch back to **Preview** to work there; the picks stay in Compare
+for the session.
 
-## What you see
+The list shows finished outputs, their model and, when recorded, quality,
+scale and run time. A result whose file was moved or deleted is marked **File
+missing** and cannot be newly selected. Failed, cancelled and interrupted runs
+are not shown in Outputs. Removing an image from the queue or clearing the
+queue removes its history, but leaves its result files in place; adding the
+image again does not restore that history.
 
-Both sides are drawn over the same part of the image, whatever their scale, so
-a 2× and a 4× result line up. Each side is a preview reduced to at most 2048
-pixels; **1:1** means one source pixel per screen pixel, not one output pixel.
-**Open** shows the full saved file. The label on each side of the divider names
-the model and the size of the saved file against the source, such as
-`SwinIR-M · 2× output`.
+## Slider and boxes
 
-With a saved result on the left the views are **Reference / Split / Showing**.
-Holding **M** always shows the real Original, labelled Original. A side that is
-still decoding says so, and a side whose preview failed shows the error; neither
-shows the Original in its place.
+With two versions of the same input, **Slider** puts slot 1 on the left and
+slot 2 on the right. Drag the divider to compare them. Use the swap button
+between the first two slots to exchange sides. With three or four picks,
+**Boxes** shows every slot, normally in a two-column grid; on a very wide
+canvas they can appear in one row. The layout switches to boxes when a third
+item is added. You can still select Slider to compare the first two, and use a
+slot's arrow to move slot 3 or 4 into slot 2. Items from different inputs can
+be compared in boxes; the slider requires its first two slots to belong to the
+same input.
 
-An Edit result can be Showing. If its framing differs from the source it is
-shown on its own, without a divider, because a split would stretch it over the
-source.
+Remove a pick with its **×** button or untick it in Outputs; **Clear** removes
+all picks. Zoom and pan are linked across boxes. Use the zoom controls or the
+mouse wheel, drag to pan, and choose **Fit** to reset zoom. At fit size Compare
+uses previews; when zoom exceeds a preview's available detail, LocalSR loads
+the visible region from the saved file at full resolution. Loading and file
+errors are shown on the affected item.
 
-Without a choice, Showing follows the newest saved result. While the image is
-being processed its live tiles stay in view until you choose a saved result;
-results that are already finished stay available the whole time. A choice holds
-for the session, through later runs and when you come back to the image.
-Starting a new run of the image (Start or Try others…) goes back to the newest
-result. Restarting LocalSR starts again from the newest result.
+## Preview and result history
 
-**View > Previous Result** and **Next Result** (Command-Option-Left and -Right
-on a Mac, Ctrl+Alt elsewhere) move Showing to an older or newer result. They
-skip results whose file is gone and the one on the other side, and stop at the
-oldest and newest.
-
-**Open** and **Reveal** in the footer act on Showing. In the list, the
-highlighted row has its own Open and Reveal, so the other side is reachable too.
-
-## The list
-
-Each row names the model, the quality or recipe it was queued with, the scale,
-the run time, the file and when it finished. **Run time** includes loading the
-model and saving the file. The configured stages are listed; a stage that was
-skipped says so in the row's note (for example `Blur fix skipped`). Jobs from
-before 0.3.7 did not record a quality or recipe and say **Settings unavailable**.
-
-A result whose file was moved or deleted stays in the list as **File missing**
-and cannot be chosen. Runs that failed, were cancelled or were interrupted are
-listed below the results with their reason. The list shows the newest 50
-results; older files stay in the output folder, and **Reveal** on the last line
-opens the folder of the oldest result listed.
-
-Removing an image from the queue, or clearing the queue, removes its history;
-the result files stay where they are. Adding the image again does not bring the
-history back.
+Preview continues to show the selected image and its current result, including
+live tiles while it runs. **View > Previous Result** and **Next Result**
+(Command-Option-Left and -Right on a Mac, Ctrl+Alt elsewhere) move through
+available saved results in Preview. A new run returns Preview to the newest
+result. **Open** and **Reveal** in the footer act on the result shown there.
+Compare picks are independent of Preview's selected result.
 
 ## Try others…
 
@@ -72,9 +58,9 @@ whole request is refused if one of them stops fitting before it is queued;
 LocalSR does not change those settings to make a model fit. In Restore the
 candidates are 1× models that fix the selected problem. The summary gives a
 total time only when every model has been measured on this computer with the
-same settings; otherwise it names the models that have not. The last result is
-not a winner: compare them under Showing, then use **Make my Best** or **Use
-for this job** in the library for the one you prefer.
+same settings; otherwise it names the models that have not. Compare the saved
+outputs, then use **Make my Best** or **Use for this job** in the library for
+the one you prefer.
 
 The queue row of the image reads like `Running SwinIR-M · 2 queued`.
 **Cancel runs for this image** stops this image's running model and cancels its
