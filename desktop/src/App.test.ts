@@ -1535,6 +1535,36 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
   });
 
+  it('shows the CPU hint only for a task the CPU runs, with the engine ready', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'cpu';
+    snapshot.settings.task = 'upscale';
+    snapshot.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
+    await mountWith(snapshot);
+    expect(screen.getByText(/Runs on the CPU\. The NPU \(Intel AI Boost\)/)).toBeTruthy();
+    // The engine stopped: no hint beside its status.
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    const stopped = structuredClone(snapshot);
+    Object.assign(stopped.runtime, {
+      worker: 'unavailable',
+      status_title: 'Engine unavailable',
+      status_detail: 'The inference engine could not start.',
+    });
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    refresh();
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Engine unavailable'),
+    );
+    expect(screen.queryByText(/Runs on the CPU/)).toBeNull();
+    cleanup();
+
+    // Editing needs a GPU: neither the CPU nor this NPU runs it.
+    const editing = structuredClone(snapshot);
+    editing.settings.task = 'edit';
+    await mountWith(editing);
+    expect(screen.queryByText(/Runs on the CPU/)).toBeNull();
+  });
+
   it("drops an ended job's route note before a benchmark, even after a forced stop", async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     await mountWith(snapshot);

@@ -456,8 +456,12 @@
       : '';
   // A CPU-only run on a computer with a GPU or NPU it could use says so in the idle status
   // line, where people look, instead of under Advanced.
+  // Only for a task the CPU runs (editing needs a GPU) and with an engine that is ready.
   $: hardwareHint =
     settings.device_id === 'cpu' &&
+    Boolean(settings.task) &&
+    settings.task !== 'edit' &&
+    snapshot.runtime.worker === 'ready' &&
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
     !preparing &&
