@@ -41,6 +41,8 @@ describe('setting hints', () => {
       refreshCapabilities: async () => undefined,
     });
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByRole('button', { name: 'About Hardware' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Safe memory mode' })).toBeTruthy();
     for (const name of ['Tile', 'Halo', 'Precision']) {
       expect(screen.getByLabelText(name).tagName).toBe('SELECT');
       expect(screen.getByRole('button', { name: `About ${name}` })).toBeTruthy();
