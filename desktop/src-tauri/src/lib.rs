@@ -68,6 +68,11 @@ pub fn run() {
         return;
     }
 
+    // A crash during an executable swap is rolled back before anything opens the profile.
+    if updates::recover_interrupted_update() {
+        return;
+    }
+
     let initial_intent = parsed.intent;
     let smoke_test = parsed.smoke_test;
     let application = tauri::Builder::default()
@@ -87,6 +92,11 @@ pub fn run() {
         .on_window_event(hide_instead_of_close)
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
+            // A Windows installer that finished while LocalSR was closed.
+            updates::confirm_pending_install(
+                &state.paths.next_root,
+                &app.package_info().version.to_string(),
+            );
             if !initial_intent.is_empty() {
                 lock(&state.launch_intents)?.push(initial_intent.clone());
             }

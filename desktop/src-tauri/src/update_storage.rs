@@ -1,4 +1,5 @@
-//! Backups and a transactional installer for the unpacked Linux preview.
+//! Profile backups, and the transactional swap of a Linux executable (an AppImage or
+//! the unpacked host) with crash recovery.
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
@@ -95,14 +96,6 @@ pub fn extract_portable(archive: &Path, destination: &Path, maximum: u64) -> App
     Ok(())
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct PortablePlan {
-    pub current: PathBuf,
-    pub staged: PathBuf,
-    pub previous: PathBuf,
-    pub report: PathBuf,
-}
-
 pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
     let mut child = Command::new(executable)
         .arg("--headless-smoke-test")
@@ -132,57 +125,207 @@ pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
     }
 }
 
-pub fn install_portable(
-    plan: &PortablePlan,
-    verify: impl Fn(&Path) -> AppResult<()>,
-) -> AppResult<()> {
-    // Replace only the host executable. The versioned engine is installed
-    // separately and model checkpoints/profile data live outside this directory.
-    if plan.previous.exists() {
-        return Err(AppError::Validation(
-            "An earlier update still needs recovery".into(),
-        ));
+/// Copy `source` into a new file that only this call created: an existing file or link at
+/// `destination` is refused, never followed or truncated.
+pub fn copy_new(source: &Path, destination: &Path) -> AppResult<()> {
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let result =
+        std::io::copy(&mut fs::File::open(source)?, &mut output).and_then(|_| output.sync_all());
+    if let Err(error) = result {
+        drop(output);
+        let _ = fs::remove_file(destination);
+        return Err(error.into());
     }
-    fs::rename(&plan.current, &plan.previous)?;
-    let install = fs::rename(&plan.staged, &plan.current)
-        .map_err(AppError::from)
-        .and_then(|_| verify(&plan.current));
-    if let Err(error) = install {
-        if plan.current.exists() {
-            fs::remove_file(&plan.current)?;
+    Ok(())
+}
+
+/// What an unfinished executable swap left behind; the next start rolls it back.
+#[derive(Deserialize, Serialize)]
+struct SwapJournal {
+    current: PathBuf,
+    backup: PathBuf,
+    staged: PathBuf,
+}
+
+fn sync_dir(directory: &Path) -> AppResult<()> {
+    #[cfg(unix)]
+    fs::File::open(directory)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = directory;
+    Ok(())
+}
+
+/// One swap per folder at a time, across processes and sessions: an advisory lock on
+/// the folder itself, released when the returned handle drops.
+fn lock_folder(directory: &Path) -> AppResult<fs::File> {
+    #[cfg(unix)]
+    {
+        use fs2::FileExt;
+        let folder = fs::File::open(directory)?;
+        folder.try_lock_exclusive().map_err(|_| {
+            AppError::Validation(
+                "Another LocalSR is installing an update; try again when it has finished".into(),
+            )
+        })?;
+        Ok(folder)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        Err(AppError::Validation(
+            "Replacing the running executable is supported only on Linux".into(),
+        ))
+    }
+}
+
+/// Replace the executable at `current` with the file `stage` writes, keep it only when
+/// `check` passes it, and otherwise put the previous one back.
+///
+/// The working file never leaves its name: a link to it is the backup, and the new file
+/// replaces it with one atomic rename. `journal` names the backup and the staged file
+/// until the new one is accepted, so a crash is rolled back at the next start
+/// (`recover_swap`).
+pub fn replace_executable(
+    current: &Path,
+    journal: &Path,
+    stage: impl FnOnce(&Path) -> AppResult<()>,
+    check: impl Fn(&Path) -> AppResult<()>,
+) -> AppResult<()> {
+    let parent = current
+        .parent()
+        .ok_or_else(|| AppError::Validation("The application has no folder".into()))?;
+    let name = current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Validation("The application has no usable name".into()))?;
+    let _lock = lock_folder(parent)?;
+    let id = uuid::Uuid::new_v4();
+    let record = SwapJournal {
+        current: current.to_path_buf(),
+        backup: parent.join(format!(".{name}.before-update-{id}")),
+        staged: parent.join(format!(".{name}.update-{id}")),
+    };
+    fs::write(journal, serde_json::to_vec(&record)?)?;
+    fs::File::open(journal)?.sync_all()?;
+    let prepared = (|| -> AppResult<()> {
+        stage(&record.staged)?;
+        fs::set_permissions(&record.staged, fs::metadata(current)?.permissions())?;
+        if fs::hard_link(current, &record.backup).is_err() {
+            copy_new(current, &record.backup)?;
         }
-        fs::rename(&plan.previous, &plan.current)?;
+        sync_dir(parent)?;
+        fs::rename(&record.staged, current)?;
+        sync_dir(parent)
+    })();
+    if let Err(error) = prepared {
+        let _ = fs::remove_file(&record.staged);
+        let _ = fs::remove_file(&record.backup);
+        let _ = fs::remove_file(journal);
         return Err(error);
     }
-    fs::remove_file(&plan.previous)?;
+    if let Err(error) = check(current) {
+        fs::rename(&record.backup, current)?;
+        sync_dir(parent)?;
+        let _ = fs::remove_file(journal);
+        return Err(error);
+    }
+    // Accepted: the journal goes first, so from here on a crash keeps the new file.
+    fs::remove_file(journal)?;
+    let _ = fs::remove_file(&record.backup);
     Ok(())
+}
+
+/// Roll back a swap that a crash interrupted: the previous executable takes its name
+/// back and the staged file goes. Returns the path it restored, if any.
+pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
+    let Ok(bytes) = fs::read(journal) else {
+        return Ok(None);
+    };
+    let record: SwapJournal = serde_json::from_slice(&bytes)?;
+    let foreign =
+        || AppError::Validation("The interrupted update names files outside its folder".into());
+    let parent = record.current.parent().ok_or_else(foreign)?;
+    let name = record
+        .current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(foreign)?;
+    let ours = |path: &Path, kind: &str| {
+        path.parent() == Some(parent)
+            && path
+                .file_name()
+                .and_then(|file| file.to_str())
+                .is_some_and(|file| file.starts_with(&format!(".{name}.{kind}-")))
+    };
+    if !ours(&record.backup, "before-update") || !ours(&record.staged, "update") {
+        return Err(foreign());
+    }
+    let _lock = lock_folder(parent)?;
+    let restored = if record.backup.is_file() {
+        fs::rename(&record.backup, &record.current)?;
+        sync_dir(parent)?;
+        Some(record.current.clone())
+    } else {
+        None
+    };
+    let _ = fs::remove_file(&record.staged);
+    fs::remove_file(journal)?;
+    Ok(restored)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     #[test]
     fn failed_startup_restores_old_host_and_leaves_models_and_profile_untouched() {
         let root = tempfile::tempdir().unwrap();
-        let plan = PortablePlan {
-            current: root.path().join("localsr-next"),
-            staged: root.path().join("new"),
-            previous: root.path().join("previous"),
-            report: root.path().join("report"),
-        };
-        fs::write(&plan.current, b"old app").unwrap();
-        fs::write(&plan.staged, b"bad app").unwrap();
+        let current = root.path().join("localsr-next");
+        let journal = root.path().join("swap-journal.json");
+        fs::write(&current, b"old app").unwrap();
         let model = root.path().join("model.pth");
         fs::write(&model, b"model").unwrap();
+        let write = |bytes: &'static [u8]| {
+            move |staged: &Path| -> AppResult<()> {
+                fs::write(staged, bytes)?;
+                Ok(())
+            }
+        };
         assert!(
-            install_portable(&plan, |_| Err(AppError::Worker("startup failed".into()))).is_err()
+            replace_executable(&current, &journal, write(b"bad app"), |_| Err(
+                AppError::Worker("startup failed".into())
+            ))
+            .is_err()
         );
-        assert_eq!(fs::read(&plan.current).unwrap(), b"old app");
-        assert_eq!(fs::read(model).unwrap(), b"model");
-        fs::write(&plan.staged, b"good app").unwrap();
-        install_portable(&plan, |_| Ok(())).unwrap();
-        assert_eq!(fs::read(&plan.current).unwrap(), b"good app");
-        assert!(!plan.previous.exists());
+        assert_eq!(fs::read(&current).unwrap(), b"old app");
+        assert_eq!(fs::read(&model).unwrap(), b"model");
+        replace_executable(&current, &journal, write(b"good app"), |_| Ok(())).unwrap();
+        assert_eq!(fs::read(&current).unwrap(), b"good app");
+        let mut left: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["localsr-next", "model.pth"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_new_refuses_an_existing_file_or_link() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let victim = root.path().join("victim");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&victim, b"keep").unwrap();
+        let link = root.path().join("staged");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert!(copy_new(&source, &link).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
+        copy_new(&source, &root.path().join("fresh")).unwrap();
+        assert_eq!(fs::read(root.path().join("fresh")).unwrap(), b"new");
     }
     #[test]
     fn new_version_backs_up_recipes_settings_and_wal_queue_once() {
