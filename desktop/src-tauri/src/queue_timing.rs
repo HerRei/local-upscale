@@ -107,6 +107,17 @@ mod tests {
     }
 
     #[test]
+    fn interpolated_video_does_not_borrow_plain_video_timing() {
+        let plain = json!({"type":"video_job_request","data":{"model_kind":"spandrel_image","tile_size":256,"interpolation":"off"}});
+        let mut doubled = plain.clone();
+        doubled["data"]["interpolation"] = json!("x2");
+        assert_ne!(
+            work_profile(&plain.to_string(), 640, 360, 48, "").0,
+            work_profile(&doubled.to_string(), 640, 360, 48, "").0
+        );
+    }
+
+    #[test]
     fn video_work_obeys_trim_and_temporal_resolution() {
         let request = json!({"type":"video_job_request","data":{"model_kind":"seedvr2","start_frame":5,"end_frame":20}}).to_string();
         let small = work_profile(&request, 640, 480, 30, "HLG");

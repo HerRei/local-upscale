@@ -1134,21 +1134,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "video_stage_progress" => {
             let mut runtime = lock(&state.runtime)?;
             if runtime.active_job_id == string(data, "job_id") {
-                runtime.status_title = match string(data, "stage").as_str() {
-                    "verifying_model" => "Checking model files",
-                    "external_decode" => "Converting the source with your FFmpeg",
-                    "external_encode" => "Encoding with your FFmpeg",
-                    "loading_model" => "Loading video model",
-                    "reading_frames" => "Reading video frames",
-                    "preparing_clip" => "Preparing clip",
-                    "encoding" => "Encoding clip",
-                    "enhancing" => "Enhancing clip",
-                    "decoding" => "Decoding enhanced clip",
-                    "finishing" => "Finishing clip",
-                    "saving" => "Saving video",
-                    _ => "Processing video",
-                }
-                .into();
+                runtime.status_title = video_stage_title(&string(data, "stage")).into();
                 let frames_done = number(data, "frames_processed");
                 let frames_total = number(data, "total_frames");
                 if frames_total > 0.0 {
@@ -1672,6 +1658,24 @@ fn worker_interruption_detail(exit_summary: &str, last_confirmed_stage: &str) ->
     }
 }
 
+fn video_stage_title(stage: &str) -> &'static str {
+    match stage {
+        "verifying_model" => "Checking model files",
+        "external_decode" => "Converting the source with your FFmpeg",
+        "external_encode" => "Encoding with your FFmpeg",
+        "loading_model" => "Loading video model",
+        "loading_interpolation" => "Loading frame interpolation",
+        "reading_frames" => "Reading video frames",
+        "preparing_clip" => "Preparing clip",
+        "encoding" => "Encoding clip",
+        "enhancing" => "Enhancing clip",
+        "decoding" => "Decoding enhanced clip",
+        "finishing" => "Finishing clip",
+        "saving" => "Saving video",
+        _ => "Processing video",
+    }
+}
+
 fn stage_label(kind: &str) -> &'static str {
     match kind {
         "deblock" => "Removing JPEG artifacts",
@@ -1805,6 +1809,16 @@ mod tests {
             first_run_device(&[device("cpu"), device("directml:0")]),
             None
         );
+    }
+
+    #[test]
+    fn video_stages_have_titles_including_frame_interpolation() {
+        assert_eq!(
+            video_stage_title("loading_interpolation"),
+            "Loading frame interpolation"
+        );
+        assert_eq!(video_stage_title("saving"), "Saving video");
+        assert_eq!(video_stage_title("something_new"), "Processing video");
     }
 
     #[test]

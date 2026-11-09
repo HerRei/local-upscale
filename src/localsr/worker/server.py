@@ -32,7 +32,13 @@ from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter
-from localsr.core.model_catalog import CATALOG_BY_ID, VIDEO_CATALOG_BY_ID, ModelStore
+from localsr.core.model_catalog import (
+    CATALOG_BY_ID,
+    DEFAULT_INTERPOLATION_MODEL_ID,
+    INTERPOLATION_CATALOG_BY_ID,
+    VIDEO_CATALOG_BY_ID,
+    ModelStore,
+)
 from localsr.core.output_writer import cleanup_stale_work_files
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
@@ -124,6 +130,7 @@ def _engine_features() -> list[str]:
         "progressive_preview",
         "benchmark_v1",
         "image_edit",
+        "video_interpolation",
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
@@ -1234,6 +1241,39 @@ class WorkerServer:
                 "LocalSR refused to load it; remove the bundle and download it again."
             )
 
+    def _interpolation_synthesizer(self, job_id, data):
+        """Verify the catalog RIFE bundle, then load it for this job's device."""
+        model_id = str(data.get("interpolation_model_id") or DEFAULT_INTERPOLATION_MODEL_ID)
+        model = INTERPOLATION_CATALOG_BY_ID.get(model_id)
+        if model is None:
+            raise ValueError("The frame interpolation model is not in the trusted catalog.")
+        supplied = Path(str(data.get("interpolation_bundle_dir") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.bundle_dir_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                f"{model.name} is not downloaded. Download it, or turn frame interpolation off."
+            ) from error
+        if supplied != expected:
+            raise ValueError("The frame interpolation model path does not match the catalog.")
+        send_message(VideoStageProgress(job_id=job_id, stage="loading_interpolation"))
+        if not self.model_store.is_bundle_installed(model):
+            raise ValueError(
+                f"{model.name} failed its catalog SHA-256 check. "
+                "LocalSR refused to load it; remove it and download it again."
+            )
+        from localsr.video_models.rife.engine import RifeSynthesizer
+
+        (checkpoint,) = model.files
+        return RifeSynthesizer(
+            self.model_store.bundle_file_path(model, checkpoint),
+            str(data["device"]),
+            status_callback=lambda message: send_message(
+                EngineStatus(job_id=job_id, message=message)
+            ),
+        )
+
     def _run_video_job(self, job_id, data):
         # Temporal engines route before the Spandrel inspect: their bundles
         # are not single-image checkpoints. An engine this build cannot
@@ -1252,6 +1292,12 @@ class WorkerServer:
             data = {**data, "video_codec": codec}
             send_message(LogMessage(level="info", message=f"Automatic video format: {codec}"))
         model_kind = str(data.get("model_kind", "spandrel_image"))
+        interpolating = str(data.get("interpolation") or "off") != "off"
+        if interpolating and model_kind != "spandrel_image":
+            raise ValueError(
+                "Frame interpolation works with the frame-by-frame engine in this version. "
+                "Choose Frame-by-frame or turn interpolation off."
+            )
         if model_kind == "seedvr2" and str(data.get("device", "")).split(":", 1)[0] in {
             "directml",
             "xpu",
@@ -1282,6 +1328,7 @@ class WorkerServer:
 
         from localsr.core.media_bridge import load_media_bridge
 
+        synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         info = self.model_adapter.inspect(data["model_path"])
         self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
@@ -1327,6 +1374,8 @@ class WorkerServer:
             output_scale=data.get("output_scale"),
             hdr_mode=str(data.get("hdr_mode", "reject")),
             external_ffmpeg=load_media_bridge(data.get("external_ffmpeg")),
+            interpolation=str(data.get("interpolation") or "off"),
+            interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
         )
 
         preview_encoder = LatestPreviewEncoder(
@@ -1475,6 +1524,7 @@ class WorkerServer:
                     LogMessage(level="warning", message=message)
                 ),
                 stage_cb=lambda stage: send_message(VideoStageProgress(job_id=job_id, stage=stage)),
+                synthesizer=synthesizer,
             )
         except InterruptedError:
             preview_encoder.close()

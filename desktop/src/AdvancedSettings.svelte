@@ -9,6 +9,8 @@
     CapabilityInfo,
     CatalogModel,
     EditModel,
+    InterpolationOrder,
+    InterpolationTarget,
     UiSettings,
     VideoCodec,
   } from './lib/types';
@@ -18,6 +20,8 @@
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
   export let usingTemporalVideo: boolean;
+  export let preservingHdr = false;
+  export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseOutput: () => Promise<void>;
   export let refreshCapabilities: () => Promise<void>;
@@ -311,6 +315,41 @@
           <p class="model-description">
             Gentle smoothing in static regions. Moving details and scene cuts bypass the filter.
           </p>
+          <div class="field-row">
+            <label for="frame-rate">Frame rate</label><select
+              id="frame-rate"
+              disabled={preservingHdr || !interpolationSupported}
+              value={settings.video_interpolation ?? 'off'}
+              on:change={(event) =>
+                updateSettings({
+                  video_interpolation: event.currentTarget.value as InterpolationTarget,
+                })}
+              ><option value="off">Original</option><option value="x2">2× · interpolated</option
+              ><option value="x4">4× · interpolated</option><option value="fps60"
+                >60 fps · interpolated</option
+              ><option value="fps120">120 fps · interpolated</option></select
+            >
+          </div>
+          {#if (settings.video_interpolation ?? 'off') !== 'off'}
+            <div class="field-row">
+              <label for="interpolation-order">Interpolate</label><select
+                id="interpolation-order"
+                value={settings.video_interpolation_order ?? 'after_upscale'}
+                on:change={(event) =>
+                  updateSettings({
+                    video_interpolation_order: event.currentTarget.value as InterpolationOrder,
+                  })}
+                ><option value="after_upscale">After upscaling · faster</option><option
+                  value="before_upscale">Before upscaling</option
+                ></select
+              >
+            </div>
+            <p class="model-description">
+              RIFE · Labs adds the in-between frames. Scene cuts stay cuts; very fast motion can
+              smear. Before upscaling, the added frames are upscaled too: at 2× that takes about
+              twice as long.
+            </p>
+          {/if}
         {:else}
           <p class="model-description">
             SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
@@ -319,7 +358,7 @@
         {/if}
         <p class="model-description">
           Original timing and orientation preserved. HLG/PQ output follows the HDR setting above;
-          HDR uses FP32 and disables de-flicker.
+          HDR uses FP32 and disables de-flicker and frame interpolation.
         </p>
       {/if}
       <button class="directory-field" on:click={chooseOutput}
