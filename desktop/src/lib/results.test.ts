@@ -22,6 +22,8 @@ function result(id: string, overrides: Partial<ResultSummary> = {}): ResultSumma
     output_path: `/${id}.png`,
     output_name: `${id}.png`,
     available: true,
+    prompt: '',
+    max_dimension: 0,
     model_id: id,
     model_label: id,
     scale: 4,

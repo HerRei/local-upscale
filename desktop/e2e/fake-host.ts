@@ -262,7 +262,9 @@ function hostScript(scenario: Scenario): void {
         stages: [],
         notes: '',
         elapsed_seconds: entry.seconds ?? 12,
-        ui: { quality: entry.quality ?? 'Quick', content: 'photo', recipe_name: '' },
+        ui: entry.edit
+          ? null
+          : { quality: entry.quality ?? 'Quick', content: 'photo', recipe_name: '' },
       })),
       total_count: list.length,
       completed_count: list.length,

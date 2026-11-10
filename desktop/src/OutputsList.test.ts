@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, expect, it, vi } from 'vitest';
 import OutputsList from './OutputsList.svelte';
 import { outputGroups } from './lib/compareOutputs';
@@ -58,7 +58,6 @@ function mount(results: ResultSummary[]) {
     clearPicks: vi.fn(),
     openCompare: vi.fn(),
     compareActive: false,
-    selectMedia: vi.fn(),
   });
 }
 
@@ -80,7 +79,65 @@ it('lists an upscale and two edits of one input as three rows with their own lab
   const tips = [...list.querySelectorAll<HTMLElement>('.media-select')].map((row) =>
     row.getAttribute('title'),
   );
-  expect(tips[1]).toBe('Remove the boat');
-  expect(tips[2]).toHaveLength(121);
+  expect(tips[0]).toBe('Pick for Compare');
+  expect(tips[1]).toBe('Pick for Compare\nRemove the boat');
+  expect(tips[2]).toHaveLength('Pick for Compare\n'.length + 121);
   expect(tips[2]?.endsWith('…')).toBe(true);
+});
+
+const histories = (...ids: string[]) =>
+  [{ media_id: 'a', results: ids.map((id) => result(id)) }] as MediaResults[];
+const props = (ids: string[]) => ({
+  groups: outputGroups([media], histories(...ids)),
+  picks: [],
+  togglePick: vi.fn(),
+  clearPicks: vi.fn(),
+  openCompare: vi.fn(),
+  compareActive: false,
+});
+
+it('opens every group, names the header as a control and tells what a row click does', () => {
+  render(OutputsList, props(['one']));
+  const header = screen.getByRole('button', { name: /Lake\.jpg/ });
+  expect(header.getAttribute('aria-expanded')).toBe('true');
+  expect(header.getAttribute('title')).toBe('Hide outputs');
+  expect(header.textContent).toContain('1 output');
+  expect(screen.getByRole('checkbox', { name: 'one, Lake.jpg' }).getAttribute('title')).toBe(
+    'Pick for Compare',
+  );
+});
+
+it('collapses by the header, keeps that choice while results change and opens for a new result', async () => {
+  const view = render(OutputsList, props(['one']));
+  const header = () => screen.getByRole('button', { name: /Lake\.jpg/ });
+  await fireEvent.click(header());
+  expect(header().getAttribute('aria-expanded')).toBe('false');
+  expect(header().getAttribute('title')).toBe('Show outputs');
+  expect(screen.queryByRole('checkbox', { name: 'one, Lake.jpg' })).toBeNull();
+  // The same results again: still collapsed.
+  await view.rerender(props(['one']));
+  expect(header().getAttribute('aria-expanded')).toBe('false');
+  // A result that has just arrived opens its group.
+  await view.rerender(props(['two', 'one']));
+  expect(header().getAttribute('aria-expanded')).toBe('true');
+  expect(screen.getByRole('checkbox', { name: 'two, Lake.jpg' })).toBeTruthy();
+});
+
+it('scrolls a new result into view unless the list was used in the last 10 seconds', async () => {
+  const scroll = vi.fn();
+  Element.prototype.scrollIntoView = scroll;
+  const view = render(OutputsList, props(['one']));
+  await view.rerender(props(['two', 'one']));
+  await Promise.resolve();
+  expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+  scroll.mockClear();
+  await fireEvent.pointerDown(screen.getByRole('group', { name: 'Outputs' }));
+  await view.rerender(props(['three', 'two', 'one']));
+  await Promise.resolve();
+  expect(scroll).not.toHaveBeenCalled();
+});
+
+it('says in one muted line that results appear as they finish', () => {
+  render(OutputsList, { ...props([]), groups: [] });
+  expect(screen.getByText('Results appear here as they finish.')).toBeTruthy();
 });

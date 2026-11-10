@@ -27,9 +27,9 @@ test.describe('Inputs and Outputs tabs', () => {
     await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Compare these/ })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Fold Alpine lake 1.jpg' }).click();
+    await page.getByRole('button', { name: /^Alpine lake 1\.jpg 3 outputs$/ }).click();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Unfold Alpine lake 1.jpg' }).click();
+    await page.getByRole('button', { name: /^Alpine lake 1\.jpg 3 outputs$/ }).click();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).toBeVisible();
 
     await mediaTabs(page).getByRole('tab', { name: 'Inputs' }).click();
@@ -48,7 +48,7 @@ test.describe('Inputs and Outputs tabs', () => {
     await expect(outputs.getByText('512 × 320 · 1:01')).toBeVisible();
     await expect(outputs.getByText('512 × 320 · 48s')).toBeVisible();
     await expect(outputs.getByText('Quick · 4× · 31s')).toBeVisible();
-    await expect(edits.first()).toHaveAttribute('title', 'Make it dusk');
+    await expect(edits.first()).toHaveAttribute('title', 'Pick for Compare\nMake it dusk');
     await tick(page, 'Original, Alpine lake 1.jpg').check();
     await edits.first().check();
     await page.getByRole('button', { name: 'Compare these 2' }).click();
@@ -58,19 +58,57 @@ test.describe('Inputs and Outputs tabs', () => {
     await expect(page.getByRole('alert')).toHaveCount(0);
   });
 
+  for (const width of [1380, 880])
+    test(`a group header is a control, its rows look pickable and fit at ${width} px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await openApp(page, withEdits);
+      const toMedia = page
+        .getByRole('navigation', { name: 'Workspace' })
+        .getByRole('button', { name: /^Media/ });
+      if (await toMedia.isVisible()) await toMedia.click();
+      await mediaTabs(page).getByRole('tab', { name: 'Outputs 3' }).click();
+      const header = page.getByRole('button', { name: /^Alpine lake 1\.jpg 3 outputs$/ });
+      await expect(header).toHaveAttribute('aria-expanded', 'true');
+      await expect(header).toHaveAttribute('title', 'Hide outputs');
+      await expect(header).toHaveCSS('cursor', 'pointer');
+      await header.hover();
+      await expect(header).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      const row = tick(page, 'SPAN ×4, Alpine lake 1.jpg');
+      await expect(row).toHaveAttribute('title', 'Pick for Compare');
+      await expect(row).toHaveCSS('cursor', 'pointer');
+      const list = await page.getByRole('group', { name: 'Outputs' }).boundingBox();
+      for (const part of [header, row]) {
+        const box = await part.boundingBox();
+        expect(box!.x).toBeGreaterThanOrEqual(list!.x);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(list!.x + list!.width);
+      }
+      expect(
+        await page
+          .getByRole('group', { name: 'Outputs' })
+          .evaluate((el) => el.scrollWidth <= el.clientWidth),
+      ).toBe(true);
+      await header.focus();
+      await page.keyboard.press('Enter');
+      await expect(header).toHaveAttribute('aria-expanded', 'false');
+      await page.keyboard.press('Space');
+      await expect(header).toHaveAttribute('aria-expanded', 'true');
+    });
+
   test('both tabs have an empty state', async ({ page }) => {
     await openApp(page, empty);
     await expect(page.getByText('Add media to begin')).toBeVisible();
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
-    await expect(page.getByText('No outputs yet')).toBeVisible();
+    await expect(page.getByText('Results appear here as they finish.')).toBeVisible();
 
     await openApp(page, upscale);
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
-    await expect(page.getByText('No outputs yet')).toBeVisible();
+    await expect(page.getByText('Results appear here as they finish.')).toBeVisible();
   });
 });
 

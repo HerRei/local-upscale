@@ -17,6 +17,8 @@
   export let compareActive: boolean;
   export let historyError = '';
   let tab: 'inputs' | 'outputs' = 'inputs';
+  /** Inputs whose outputs the user hid, for the session. */
+  let foldedOutputs = new Set<string>();
   $: outputCount = groups.reduce((n, group) => n + group.outputs.length, 0);
   function tabKey(event: KeyboardEvent): void {
     const next = tabFromKey(event.key, tab === 'inputs' ? 0 : 1, 2);
@@ -145,7 +147,7 @@
       {openCompare}
       {compareActive}
       error={historyError}
-      selectMedia={(id) => void selectQueueMedia(id)}
+      bind:folded={foldedOutputs}
     />
   {:else if items.length === 0}
     <div class="empty-card">
