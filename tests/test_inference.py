@@ -381,3 +381,22 @@ def test_safe_memory_accepts_small_tiles(frame, tmp_path):
             assert writer.get_array().shape == (3, 32, 32)
         finally:
             writer.cleanup()
+
+
+def test_a_tile_size_that_cannot_be_used_leaves_no_output_file_behind(tmp_path):
+    adapter = DummyAdapter(2)
+    engine = InferenceEngine(adapter)
+    with pytest.raises(TypeError):
+        engine.process_image(
+            {"tensor": torch.rand((3, 16, 16))},
+            adapter.model_info,
+            "dummy",
+            "cpu",
+            "fp32",
+            "64",
+            8,
+            threading.Event(),
+            lambda *_: None,
+            temporary_directory=str(tmp_path),
+        )
+    assert list(tmp_path.glob("localsr-output-*")) == []
