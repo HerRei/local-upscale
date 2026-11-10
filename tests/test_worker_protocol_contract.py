@@ -275,3 +275,165 @@ def test_video_job_schema_declares_every_hdr_mode_the_engine_accepts():
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     data = schema["$defs"]["videoJobRequest"]["allOf"][1]["properties"]["data"]["allOf"][1]
     assert set(data["properties"]["hdr_mode"]["enum"]) == {"reject", "tone_map", "preserve"}
+
+
+def _schema() -> dict:
+    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def _schema_properties(schema: dict, node: dict) -> dict:
+    """Every property a schema node declares, following `$ref` and `allOf`."""
+    found: dict = {}
+    if "$ref" in node:
+        ref = node["$ref"].removeprefix("#/$defs/")
+        if "/" not in ref:
+            found.update(_schema_properties(schema, schema["$defs"][ref]))
+    for part in node.get("allOf", []):
+        found.update(_schema_properties(schema, part))
+    found.update(node.get("properties", {}))
+    return found
+
+
+def _schema_data_fields(definition: str) -> set[str]:
+    schema = _schema()
+    envelope = _schema_properties(schema, schema["$defs"][definition])
+    return set(_schema_properties(schema, envelope["data"]))
+
+
+# Python request dataclass -> schema definition that describes its `data`.
+REQUEST_SCHEMAS = {
+    "HandshakeRequest": "handshakeRequest",
+    "JobRequest": "jobRequest",
+    "ImageBatchRequest": "imageBatchRequest",
+    "EditJobRequest": "editJobRequest",
+    "VideoJobRequest": "videoJobRequest",
+    "BenchmarkRequest": "benchmarkRequest",
+    "RegionRequest": "regionRequest",
+    # preview_request and media_probe_request share one property bag, so the
+    # dataclass may use a subset of it (see test below).
+    "MediaProbeRequest": "pathRequest",
+}
+# Dataclass fields that stay out of the schema on purpose: none today.
+DATACLASS_ONLY_FIELDS: dict[str, set[str]] = {}
+# Schema properties without a dataclass field: the pathRequest bag also serves
+# preview_request, and the host sends the external ffmpeg path with probes.
+SCHEMA_ONLY_FIELDS = {
+    "MediaProbeRequest": {
+        "image_path",
+        "comparison",
+        "slot",
+        "generation",
+        "target_id",
+        "external_ffmpeg",
+    },
+}
+
+
+def test_request_dataclass_fields_equal_the_schema_data_properties():
+    import dataclasses
+
+    from localsr.protocol import messages
+
+    for class_name, definition in REQUEST_SCHEMAS.items():
+        fields = {f.name for f in dataclasses.fields(getattr(messages, class_name))}
+        declared = _schema_data_fields(definition)
+        assert fields - DATACLASS_ONLY_FIELDS.get(class_name, set()) == declared - (
+            SCHEMA_ONLY_FIELDS.get(class_name, set())
+        ), class_name
+
+
+def test_every_python_response_type_is_in_the_schema_response_enum_and_back():
+    import re
+
+    schema = _schema()
+    response = _schema_properties(schema, schema["$defs"]["workerResponse"])["type"]["enum"]
+    messages = (ROOT / "src" / "localsr" / "protocol" / "messages.py").read_text(encoding="utf-8")
+    emitted = set(re.findall(r'json\.dumps\(\{"type": "([a-z_]+)"', messages))
+    # Types that have their own schema definitions are not in the response enum.
+    own_definitions = {
+        _schema_properties(schema, schema["$defs"][name])["type"]["const"]
+        for name in schema["$defs"]
+        if "type" in _schema_properties(schema, schema["$defs"][name])
+        and "const" in _schema_properties(schema, schema["$defs"][name])["type"]
+    }
+    request_enums = {
+        value
+        for name in ("emptyRequest", "pathRequest")
+        for value in _schema_properties(schema, schema["$defs"][name])["type"]["enum"]
+    }
+    assert set(response) == emitted - own_definitions - request_enums
+    assert len(response) == len(set(response))
+
+
+# Response types the worker sends that neither the Rust host (worker.rs) nor the
+# reducer (state.ts) acts on. `log` carries the worker's own diagnostics, such as
+# a malformed request or a lost GPU; the host drops them today.
+RESPONSES_NOBODY_HANDLES = {"log"}
+
+
+def test_every_response_type_has_a_host_or_ui_handler_except_the_listed_ones():
+    schema = _schema()
+    response = _schema_properties(schema, schema["$defs"]["workerResponse"])["type"]["enum"]
+    host = (ROOT / "desktop" / "src-tauri" / "src" / "worker.rs").read_text(encoding="utf-8")
+    reducer = (ROOT / "desktop" / "src" / "lib" / "state.ts").read_text(encoding="utf-8")
+    unhandled = {
+        name for name in response if f'"{name}"' not in host and f"'{name}'" not in reducer
+    }
+    assert unhandled == RESPONSES_NOBODY_HANDLES
+
+
+def _rust_struct_fields(source: str) -> dict[str, set[str]]:
+    import re
+
+    structs = {}
+    for match in re.finditer(
+        r"pub struct (\w+) \{\n(.*?)\n\}", source.split("#[cfg(test)]")[0], re.S
+    ):
+        names: set[str] = set()
+        skipped, renamed = False, None
+        for line in match.group(2).splitlines():
+            line = line.strip()
+            if line == "#[serde(skip)]":
+                skipped = True
+            elif rename := re.match(r'#\[serde\(rename = "(\w+)"\)\]', line):
+                renamed = rename.group(1)
+            elif field := re.match(r"pub (\w+):", line):
+                if not skipped:
+                    names.add(renamed or field.group(1))
+                skipped, renamed = False, None
+        structs[match.group(1)] = names
+    return structs
+
+
+def _ts_interface_fields(source: str) -> dict[str, set[str]]:
+    import re
+
+    return {
+        match.group(1): set(re.findall(r"^  (\w+)\??:", match.group(2), re.M))
+        for match in re.finditer(r"export interface (\w+) \{\n(.*?)\n\}", source, re.S)
+    }
+
+
+# Deliberate differences between types.rs and types.ts, as (rust-only, ts-only).
+# MediaItem: the two probe fields only the webview tracks while a probe runs.
+# VideoComparisonSources: the host sends file paths, api.ts turns them into URLs.
+RUST_TS_DIFFERENCES = {
+    "MediaItem": (set(), {"probe_stage", "probe_started_at"}),
+    "VideoComparisonSources": ({"original_path", "enhanced_path"}, set()),
+}
+
+
+def test_rust_and_typescript_contract_types_have_the_same_field_names():
+    rust = _rust_struct_fields(
+        (ROOT / "desktop" / "src-tauri" / "src" / "types.rs").read_text(encoding="utf-8")
+    )
+    typescript = _ts_interface_fields(
+        (ROOT / "desktop" / "src" / "lib" / "types.ts").read_text(encoding="utf-8")
+    )
+    shared = set(rust) & set(typescript)
+    # Guard against the parsers silently matching nothing.
+    assert {"AppSnapshot", "UiSettings", "CatalogModel", "WorkerEnvelope"} <= shared
+    for name in sorted(shared):
+        rust_only, ts_only = RUST_TS_DIFFERENCES.get(name, (set(), set()))
+        assert rust[name] - typescript[name] == rust_only, name
+        assert typescript[name] - rust[name] == ts_only, name

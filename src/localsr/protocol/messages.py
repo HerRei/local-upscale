@@ -150,6 +150,10 @@ class VideoJobRequest:
     # has no fixed scale factor). 0 lets the engine keep the input size.
     target_resolution: int = 0
     video_low_memory: bool = True
+    video_codec: str = "av1"
+    external_ffmpeg: str | None = None
+    scratch_directory: str | None = None
+    output_temporary_directory: str | None = None
     # Frame-by-frame engines run at the checkpoint's native scale, then
     # downsample each restored frame when a smaller 2×/3× output is requested.
     output_scale: int | None = None
