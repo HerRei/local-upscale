@@ -35,6 +35,8 @@ function row(id: string, overrides: Partial<ResultSummary> = {}): ResultSummary 
     model_id: id,
     model_label: id,
     scale: 4,
+    prompt: '',
+    max_dimension: 0,
     stages: [],
     notes: '',
     elapsed_seconds: 12,
@@ -71,6 +73,7 @@ const api = vi.hoisted(() => ({
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
+  clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
@@ -579,6 +582,27 @@ describe('Job activity', () => {
     expect(detail.getAttribute('title')).toBe(detail.textContent);
     expect(detail.getAttribute('role')).toBe('status');
     expect(screen.getAllByRole('status').filter((node) => bar.contains(node))).toHaveLength(1);
+  });
+
+  it('says Saving the result from 100 % on, with the model and no percentage or time left', async () => {
+    const snapshot = running();
+    snapshot.runtime.progress = 100;
+    snapshot.runtime.status_title = 'Editing';
+    snapshot.runtime.status_detail = 'Step 4 of 4 · ETA ≈ 3s';
+    snapshot.runtime.estimated_remaining_seconds = 3;
+    snapshot.jobs[0].progress = 100;
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel' });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Saving the result'),
+    );
+    const bar = document.querySelector('.status-bar')!;
+    expect(bar.querySelector('.status-detail')?.textContent).toMatch(/^FLUX\.2 klein 4B/);
+    expect(bar.textContent).not.toMatch(/ETA|≈|100%/);
+    expect(document.querySelector('.media-pane')!.textContent).toContain('Saving…');
+    expect(document.querySelector('.media-pane')!.textContent).not.toContain('100 %');
   });
 
   it('offers no Add to queue button while the running picture is the selected one', async () => {
@@ -2549,7 +2573,7 @@ describe('LocalSR desktop interface', () => {
     const user = userEvent.setup();
     const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
-    expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
@@ -2585,6 +2609,100 @@ describe('LocalSR desktop interface', () => {
       expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Complete/),
     );
     expect(screen.getByRole('button', { name: /^Best/ }).matches(':disabled')).toBe(true);
+  });
+
+  describe('after Cancel queue, while the engine still stops', () => {
+    const lane = (id: string, media: string, status: JobRecord['status'], created = 10) => ({
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status,
+      progress: 40,
+      output_path: '',
+      error: '',
+      created_at: created,
+      elapsed_seconds: status === 'completed' ? 31 : 0,
+    });
+    const stopping = () => {
+      const current = readySnapshot(['a', 'b', 'c', 'd', 'e'].map((id, i) => image(id, i === 0)));
+      current.settings.task = 'upscale';
+      current.settings.batch_mode = true;
+      current.runtime.active_job_id = 'j2';
+      current.runtime.active_batch_job_ids = ['j2', 'j3'];
+      current.runtime.status_title = 'Processing';
+      current.runtime.status_detail = 'Finishing the other photos of this batch. · ETA ≈ 9s';
+      current.runtime.progress = 40;
+      current.jobs = [
+        lane('j1', 'a', 'completed'),
+        lane('j2', 'b', 'cancelling'),
+        lane('j3', 'c', 'cancelling'),
+        lane('j4', 'd', 'cancelled'),
+        lane('j5', 'e', 'cancelled'),
+      ];
+      return current;
+    };
+    const strong = () => document.querySelector('.status-copy strong')?.textContent;
+    const mountNow = async (current: AppSnapshot) => {
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+    };
+    const rowTexts = () =>
+      [...document.querySelectorAll('.media-pane .media-row')].map((row) => row.textContent);
+
+    it('shows Stopping in the bar, the buttons and the rows of a 2-lane batch', async () => {
+      await mountNow(stopping());
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      const detail = document.querySelector('.status-detail')!.textContent;
+      expect(detail).toContain('Stopping 2 photos');
+      expect(detail).toContain('up to 8 s');
+      expect(document.querySelector('.status-bar')!.textContent).not.toMatch(/ETA|≈|40%/);
+      expect(screen.queryByRole('button', { name: 'Cancel queue' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+      expect(screen.queryByRole('button', { name: /^Add \d+ to queue/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Only this one|all \d+/i })).toBeNull();
+      const rows = rowTexts();
+      expect(rows[0]).toContain('Done · 31 s');
+      expect(rows[1]).toContain('Stopping…');
+      expect(rows[2]).toContain('Stopping…');
+      expect(rows[3]).not.toMatch(/Stopping|Queued|Running|Done/);
+      expect(rows[4]).not.toMatch(/Stopping|Queued|Running|Done/);
+    });
+
+    it('says what a single stopping job waits for', async () => {
+      const current = stopping();
+      current.runtime.active_batch_job_ids = [];
+      current.jobs = [lane('j2', 'b', 'cancelling')];
+      await mountNow(current);
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      expect(document.querySelector('.status-detail')!.textContent).toContain(
+        'Waiting for the engine to stop (up to 8 s).',
+      );
+      expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+    });
+
+    it('returns to idle with one Stopped line and the idle buttons', async () => {
+      const current = stopping();
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      current.runtime.active_job_id = '';
+      current.runtime.active_batch_job_ids = [];
+      current.runtime.status_title = 'Cancelled';
+      current.runtime.status_detail = 'Temporary output was cleaned up.';
+      current.jobs = current.jobs.map((entry) => ({
+        ...entry,
+        status: entry.status === 'completed' ? 'completed' : 'cancelled',
+      }));
+      (api.listenForStateChange.mock.calls[0][0] as () => void)();
+      await waitFor(() => expect(strong()).toBe('Cancelled'));
+      expect(document.querySelector('.status-detail')!.textContent).toBe(
+        'Stopped. 1 of 5 finished.',
+      );
+      expect(screen.queryByRole('button', { name: 'Stopping…' })).toBeNull();
+    });
   });
 
   it('asks before Clear: Cancel keeps the list, confirming clears it', async () => {
@@ -2942,7 +3060,7 @@ describe('LocalSR desktop interface', () => {
       });
       stateChanged();
       await user.click(screen.getByRole('tab', { name: /^Outputs/ }));
-      const row1 = await screen.findByRole('checkbox', { name: `SPAN x4, ${ended}.png` });
+      const row1 = await screen.findByRole('button', { name: `Show SPAN x4, ${ended}.png` });
       expect(row1.textContent).toContain('SPAN x4');
       expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('1');
       // A second one follows the same way.
@@ -3208,6 +3326,9 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     expect(screen.getByText('Quick · Illustration')).toBeTruthy();
+    // The photo model stands in without a note about it.
+    expect(screen.queryByText(/fully verified illustration/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -4529,6 +4650,60 @@ describe('Comparing saved results', () => {
     });
   });
 
+  describe('Clear in the Outputs tab', () => {
+    const open = async (rows: ResultSummary[]) => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = rows.map((entry) => completedJob(entry.job_id));
+      let history = historyOf('photo', rows);
+      api.listAllMediaResults.mockImplementation(async () => [history]);
+      api.clearResults.mockImplementation(async () => {
+        history = historyOf('photo', []);
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+      return user;
+    };
+
+    it('asks with the count, keeps the list on Cancel and empties it on Clear', async () => {
+      const user = await open([row('new'), row('old')]);
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.textContent).toContain('Clear all 2 outputs from the list?');
+      expect(dialog.textContent).toContain(
+        'The files stay in their folders; only the list is emptied.',
+      );
+      expect(document.activeElement?.textContent).toBe('Cancel');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(api.clearResults).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.clearResults).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+      await waitFor(() => expect(api.clearResults).toHaveBeenCalledTimes(1));
+      expect(api.clearMedia).not.toHaveBeenCalled();
+      await screen.findByText('Results appear here as they finish.');
+    });
+
+    it('Unpick all drops the picks only, and clearing the list drops them too', async () => {
+      const user = await open([row('new'), row('old')]);
+      await user.click(screen.getByRole('checkbox', { name: 'Original, photo.png' }));
+      await user.click(screen.getByRole('checkbox', { name: 'old, photo.png' }));
+      expect(screen.getByText(/^2 of 4 chosen/).textContent).toContain('Unpick all');
+      await user.click(screen.getByRole('button', { name: 'Unpick all' }));
+      expect(screen.queryByText(/of 4 chosen/)).toBeNull();
+      expect(api.clearResults).not.toHaveBeenCalled();
+      expect(screen.getByRole('checkbox', { name: 'old, photo.png' })).toBeTruthy();
+      await user.click(screen.getByRole('checkbox', { name: 'old, photo.png' }));
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+      await screen.findByText('Results appear here as they finish.');
+      expect(screen.queryByText(/of 4 chosen/)).toBeNull();
+    });
+  });
+
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
     const snapshot = pairHost(readySnapshot([image('photo', true)]));
     snapshot.jobs = [completedJob('new'), completedJob('old')];
@@ -4537,11 +4712,11 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
     const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
-    // No picks, no Compare bar; one pick offers only Clear.
-    expect(document.querySelector('.compare-bar')).toBeNull();
+    // No picks: Clear alone, no count and no Compare button.
+    expect(document.querySelector('.compare-bar')?.textContent?.trim()).toBe('Clear');
     await user.click(original);
     expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
-    expect(screen.getByText('1 of 4 chosen')).toBeTruthy();
+    expect(screen.getByText(/^1 of 4 chosen/)).toBeTruthy();
     await user.click(output);
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([
@@ -4560,7 +4735,7 @@ describe('Comparing saved results', () => {
     expect(screen.queryByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(screen.queryByRole('button', { name: /^Compare these|^Comparing/ })).toBeNull();
-    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
     expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
     expect(
       within(screen.getByRole('tablist', { name: 'Main pane' }))
@@ -4570,7 +4745,7 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
     // Back in the preview the tabs are gone, the picks stay and the button is offered again.
     expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
-    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
     await fireEvent.keyDown(screen.getByRole('tablist', { name: 'Main pane' }), {
@@ -4660,6 +4835,52 @@ describe('Comparing saved results', () => {
     expect(named('.preview-header')).toBe('26811.jpeg');
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     await waitFor(() => expect(named('.group-head')).toBe('26811.jpeg'));
+  });
+
+  it('a click on an Outputs row selects its input and shows that result in the Preview', async () => {
+    const current = pairHost(readySnapshot([image('first', true), image('second')]), {
+      a1: { width: 1600, height: 1067 },
+      b1: { width: 512, height: 320 },
+    });
+    current.jobs = [completedJob('a1', 'first'), completedJob('b1', 'second')];
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('first', [row('a1')]),
+      historyOf('second', [row('b1', { kind: 'edit', model_label: 'Qwen Edit', scale: 0 })]),
+    ]);
+    api.listMediaResults.mockImplementation(async (id: string) =>
+      id === 'first' ? historyOf('first', [row('a1')]) : historyOf('second', [row('b1')]),
+    );
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    render(App);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: /^Outputs/ }));
+    // Two picks, Compare open: a click on a row still goes to the Preview of that picture.
+    await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'a1, first.png' }));
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Show Qwen Edit, second.png' }));
+    expect(api.selectMedia).toHaveBeenCalledWith('second');
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('b1'),
+    );
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    // The shown row is marked, and no pick changed.
+    expect(
+      screen.getByRole('button', { name: 'Show Qwen Edit, second.png' }).closest('.media-row')
+        ?.classList,
+    ).toContain('selected');
+    expect(
+      screen.getByRole('checkbox', { name: 'a1, first.png' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('checkbox', { name: 'Qwen Edit, second.png' }).getAttribute('aria-checked'),
+    ).toBe('false');
   });
 
   it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {

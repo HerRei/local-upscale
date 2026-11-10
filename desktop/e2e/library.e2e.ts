@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { empty, upscale, withOutputs } from './fixtures';
+import { empty, upscale, withEdits, withOutputs } from './fixtures';
 import { hostCalls } from './fake-host';
 
 const mediaTabs = (page: Page) => page.getByRole('tablist', { name: 'Media' });
@@ -27,13 +27,97 @@ test.describe('Inputs and Outputs tabs', () => {
     await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Compare these/ })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Fold Alpine lake 1.jpg' }).click();
+    await page.getByRole('button', { name: /^Alpine lake 1\.jpg 3 outputs$/ }).click();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Unfold Alpine lake 1.jpg' }).click();
+    await page.getByRole('button', { name: /^Alpine lake 1\.jpg 3 outputs$/ }).click();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).toBeVisible();
 
     await mediaTabs(page).getByRole('tab', { name: 'Inputs' }).click();
     await expect(page.getByRole('button', { name: /^Alpine lake 1\.jpg/ })).toBeVisible();
+  });
+
+  test('Edit results are listed under their input like the upscales and can be compared', async ({
+    page,
+  }) => {
+    await openApp(page, withEdits);
+    await mediaTabs(page).getByRole('tab', { name: 'Outputs 3' }).click();
+    const outputs = page.getByRole('group', { name: 'Outputs' });
+    await expect(outputs.getByText('3 outputs')).toBeVisible();
+    const edits = tick(page, 'FLUX.2 klein 4B, Alpine lake 1.jpg');
+    await expect(edits).toHaveCount(2);
+    await expect(outputs.getByText('512 × 320 · 1:01')).toBeVisible();
+    await expect(outputs.getByText('512 × 320 · 48s')).toBeVisible();
+    await expect(outputs.getByText('Quick · 4× · 31s')).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Show FLUX.2 klein 4B, Alpine lake 1.jpg' }).first(),
+    ).toHaveAttribute('title', 'Show this result\nMake it dusk');
+    await tick(page, 'Original, Alpine lake 1.jpg').check();
+    await edits.first().check();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    await expect(
+      page.getByRole('list', { name: 'Compared items' }).getByRole('listitem'),
+    ).toHaveCount(2);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  for (const width of [1380, 880])
+    test(`a group header is a control, its rows look pickable and fit at ${width} px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await openApp(page, withEdits);
+      const toMedia = page
+        .getByRole('navigation', { name: 'Workspace' })
+        .getByRole('button', { name: /^Media/ });
+      if (await toMedia.isVisible()) await toMedia.click();
+      await mediaTabs(page).getByRole('tab', { name: 'Outputs 3' }).click();
+      const header = page.getByRole('button', { name: /^Alpine lake 1\.jpg 3 outputs$/ });
+      await expect(header).toHaveAttribute('aria-expanded', 'true');
+      await expect(header).toHaveAttribute('title', 'Hide outputs');
+      await expect(header).toHaveCSS('cursor', 'pointer');
+      await header.hover();
+      await expect(header).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      const row = tick(page, 'SPAN ×4, Alpine lake 1.jpg');
+      await expect(row).toHaveAttribute('title', 'Pick for Compare');
+      await expect(row).toHaveCSS('cursor', 'pointer');
+      const list = await page.getByRole('group', { name: 'Outputs' }).boundingBox();
+      for (const part of [header, row]) {
+        const box = await part.boundingBox();
+        expect(box!.x).toBeGreaterThanOrEqual(list!.x);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(list!.x + list!.width);
+      }
+      expect(
+        await page
+          .getByRole('group', { name: 'Outputs' })
+          .evaluate((el) => el.scrollWidth <= el.clientWidth),
+      ).toBe(true);
+      await header.focus();
+      await page.keyboard.press('Enter');
+      await expect(header).toHaveAttribute('aria-expanded', 'false');
+      await page.keyboard.press('Space');
+      await expect(header).toHaveAttribute('aria-expanded', 'true');
+    });
+
+  test('a click on an output row shows it in the centre, the box at its end only picks', async ({
+    page,
+  }) => {
+    await openApp(page, withEdits);
+    await mediaTabs(page).getByRole('tab', { name: 'Outputs 3' }).click();
+    const row = page.getByRole('button', { name: 'Show SPAN ×4, Alpine lake 1.jpg' });
+    await row.click();
+    await expect(row.locator('xpath=..')).toHaveClass(/selected/);
+    await expect(page.locator('.result-image')).toBeVisible();
+    await expect(page.locator('.divider-labels')).toContainText('SPAN ×4');
+    await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
+    const edit = page
+      .getByRole('button', { name: 'Show FLUX.2 klein 4B, Alpine lake 1.jpg' })
+      .first();
+    await tick(page, 'FLUX.2 klein 4B, Alpine lake 1.jpg').first().click();
+    await expect(page.getByText(/^1 of 4 chosen/)).toBeVisible();
+    await expect(row.locator('xpath=..')).toHaveClass(/selected/);
+    await edit.click();
+    await expect(page.locator('.divider-labels')).toContainText('FLUX.2 klein 4B');
+    await expect(edit.locator('xpath=..')).toHaveClass(/selected/);
   });
 
   test('both tabs have an empty state', async ({ page }) => {
@@ -42,13 +126,13 @@ test.describe('Inputs and Outputs tabs', () => {
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
-    await expect(page.getByText('No outputs yet')).toBeVisible();
+    await expect(page.getByText('Results appear here as they finish.')).toBeVisible();
 
     await openApp(page, upscale);
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
-    await expect(page.getByText('No outputs yet')).toBeVisible();
+    await expect(page.getByText('Results appear here as they finish.')).toBeVisible();
   });
 });
 
@@ -265,13 +349,26 @@ test.describe('Clear', () => {
     await expect(page.getByText('Add media to begin')).toBeVisible();
   });
 
-  test('the Compare bar Clear only drops the picks and does not ask', async ({ page }) => {
+  test('Unpick all drops the picks without asking, Clear empties the Outputs list after asking', async ({
+    page,
+  }) => {
     await openApp(page, withOutputs);
     await showPane(page, 'media');
     await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' }).check();
-    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(page.getByText(/^1 of 4 chosen · Unpick all/)).toBeVisible();
+    await page.getByRole('button', { name: 'Unpick all' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
+    expect(await hostCalls(page, 'clear_results')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Clear all 4 outputs from the list?');
+    await expect(dialog).toContainText('The files stay in their folders');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    expect(await hostCalls(page, 'clear_results')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect.poll(async () => (await hostCalls(page, 'clear_results')).length).toBe(1);
   });
 });

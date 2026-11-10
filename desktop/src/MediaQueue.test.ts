@@ -39,6 +39,8 @@ function props(jobs: JobRecord[], count = 4) {
     picks: [],
     togglePick: () => undefined,
     clearPicks: () => undefined,
+    clearOutputs: () => undefined,
+    showResult: () => undefined,
     openCompare: () => undefined,
     compareActive: false,
     items: Array.from({ length: count }, (_, i) => media(i + 1)),

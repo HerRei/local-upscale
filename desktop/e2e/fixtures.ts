@@ -54,3 +54,17 @@ export const withEdit: Scenario = {
     ],
   },
 };
+
+/** One photo with an upscale and two Edit results, the way the Outputs tab lists them. */
+export const withEdits: Scenario = {
+  ...ready,
+  pairs: true,
+  finished: true,
+  outputs: {
+    1: [
+      { id: 'edit2', label: 'FLUX.2 klein 4B', seconds: 61, edit: { width: 512, height: 320 } },
+      { id: 'edit1', label: 'FLUX.2 klein 4B', seconds: 48, edit: { width: 512, height: 320 } },
+      { id: 'span', label: 'SPAN ×4', quality: 'Quick', seconds: 31 },
+    ],
+  },
+};

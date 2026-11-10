@@ -185,10 +185,12 @@ function hostScript(scenario: Scenario): void {
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
       const rows = scenario.rows ?? {};
-      const running = Object.entries(rows).find(([, row]) => row.status === 'running');
+      const running = Object.entries(rows).find(
+        ([, row]) => row.status === 'running' || row.status === 'cancelling',
+      );
       s.runtime.active_job_id = `job-photo-${running ? running[0] : 1}`;
       s.runtime.status_title = 'Processing';
-      s.runtime.progress = 40;
+      s.runtime.progress = running ? (rows[Number(running[0])].progress ?? 40) : 40;
       s.jobs = Array.from({ length: scenario.jobPhotos ?? scenario.photos ?? 1 }, (_, index) => ({
         id: `job-photo-${index + 1}`,
         media_id: `photo-${index + 1}`,
@@ -257,10 +259,14 @@ function hostScript(scenario: Scenario): void {
         model_id: entry.id,
         model_label: entry.label,
         scale: entry.edit ? 0 : 4,
+        prompt: entry.edit ? 'Make it dusk' : '',
+        max_dimension: entry.edit ? Math.max(entry.edit.width, entry.edit.height) : 0,
         stages: [],
         notes: '',
         elapsed_seconds: entry.seconds ?? 12,
-        ui: { quality: entry.quality ?? 'Quick', content: 'photo', recipe_name: '' },
+        ui: entry.edit
+          ? null
+          : { quality: entry.quality ?? 'Quick', content: 'photo', recipe_name: '' },
       })),
       total_count: list.length,
       completed_count: list.length,
@@ -357,6 +363,8 @@ function hostScript(scenario: Scenario): void {
         return null;
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
+        return null;
+      case 'clear_results':
         return null;
       case 'clear_media':
         snapshot.media = [];

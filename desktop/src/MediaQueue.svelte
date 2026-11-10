@@ -13,10 +13,15 @@
   export let picks: ComparePick[];
   export let togglePick: (pick: ComparePick) => void;
   export let clearPicks: () => void;
+  export let clearOutputs: () => void;
+  export let shown: ComparePick | null = null;
+  export let showResult: (pick: ComparePick) => void;
   export let openCompare: () => void;
   export let compareActive: boolean;
   export let historyError = '';
   let tab: 'inputs' | 'outputs' = 'inputs';
+  /** Inputs whose outputs the user hid, for the session. */
+  let foldedOutputs = new Set<string>();
   $: outputCount = groups.reduce((n, group) => n + group.outputs.length, 0);
   function tabKey(event: KeyboardEvent): void {
     const next = tabFromKey(event.key, tab === 'inputs' ? 0 : 1, 2);
@@ -142,10 +147,13 @@
       {picks}
       {togglePick}
       {clearPicks}
+      {clearOutputs}
+      {shown}
+      {showResult}
       {openCompare}
       {compareActive}
       error={historyError}
-      selectMedia={(id) => void selectQueueMedia(id)}
+      bind:folded={foldedOutputs}
     />
   {:else if items.length === 0}
     <div class="empty-card">

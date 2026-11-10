@@ -902,9 +902,8 @@
         </p>{:else if comparisonNote}<p class="comparison-note" role="status">
           {comparisonNote}
         </p>{/if}
-      {#if processing}
-        {#if editing}<div class="edit-sweep" aria-hidden="true"></div>{/if}
-      {/if}
+      <!-- Always mounted: showing and hiding it must never restart its animation. -->
+      <div class="edit-sweep" class:on={processing && editing} aria-hidden="true"></div>
       {#if videoComparison}
         {#key videoComparisonKey}
           <VideoComparison
@@ -1114,40 +1113,39 @@
     background: #351918;
     color: #ffc6bd;
   }
+  /* The band is a layer as wide as the picture, moved by transform on the compositor. */
   .edit-sweep {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    overflow: hidden;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .edit-sweep.on {
+    opacity: 1;
+  }
+  .edit-sweep::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      100deg,
-      transparent 35%,
-      rgba(226, 226, 226, 0.55) 50%,
-      transparent 65%
-    );
-    background-size: 250% 100%;
-    animation: sweep 1.6s linear infinite;
-  }
-  .edit-sweep {
-    z-index: 7;
-    pointer-events: none;
     background: linear-gradient(
       100deg,
       transparent 40%,
       rgba(204, 204, 204, 0.07) 50%,
       transparent 60%
     );
-    background-size: 250% 100%;
-    animation-duration: 3.2s;
+    animation: sweep 3.2s linear infinite;
   }
   .active-tile {
     animation: tile-pulse 1.2s ease-in-out infinite;
   }
   @keyframes sweep {
     from {
-      background-position: 125% 0;
+      transform: translateX(-100%);
     }
     to {
-      background-position: -125% 0;
+      transform: translateX(100%);
     }
   }
   .source-image.waiting-frame,
@@ -1173,6 +1171,10 @@
     font-size: calc(11px * var(--ui-scale));
     pointer-events: none;
   }
+  /* Above the Original's label chip at the same corner. */
+  .canvas-well:has(:global(.divider-labels)) .comparison-note {
+    bottom: calc(max(12px, var(--notice-room, 0px)) + 11px * var(--ui-scale) * 1.3 + 10px + 8px);
+  }
   @keyframes tile-pulse {
     50% {
       border-color: #e0e0e0;
@@ -1181,7 +1183,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .active-tile,
-    .edit-sweep {
+    .edit-sweep::before {
       animation: none;
     }
   }

@@ -162,6 +162,17 @@ impl Database {
                 [],
             )?;
         }
+        let has_hidden: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='hidden')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_hidden {
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         let has_scratch: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='scratch_path')",
             [],
@@ -508,12 +519,12 @@ impl Database {
     ) -> AppResult<MediaResults> {
         let limit = limit.clamp(1, 50);
         let total_count: i64 = self.connection.query_row(
-            "SELECT COUNT(*) FROM jobs WHERE media_id=?1 AND status IN ('completed','failed','cancelled','interrupted')",
+            "SELECT COUNT(*) FROM jobs WHERE media_id=?1 AND hidden=0 AND status IN ('completed','failed','cancelled','interrupted')",
             [media_id],
             |row| row.get(0),
         )?;
         let mut statement = self.connection.prepare(&format!(
-            "SELECT {} FROM jobs WHERE media_id=?1 AND status IN ('completed','failed','cancelled','interrupted')
+            "SELECT {} FROM jobs WHERE media_id=?1 AND hidden=0 AND status IN ('completed','failed','cancelled','interrupted')
                AND (?2 IS NULL OR (updated_at, rowid) < (SELECT updated_at, rowid FROM jobs WHERE id=?2 AND media_id=?1))
              ORDER BY updated_at DESC, rowid DESC LIMIT ?3",
             crate::results::SUMMARY_COLUMNS
@@ -530,7 +541,7 @@ impl Database {
         // Whether a file exists is checked now, over the whole history, so the
         // chooser and the default do not depend on which page was loaded.
         let mut completed = self.connection.prepare(
-            "SELECT id, output_path FROM jobs WHERE media_id=?1 AND status='completed' ORDER BY updated_at DESC, rowid DESC",
+            "SELECT id, output_path FROM jobs WHERE media_id=?1 AND hidden=0 AND status='completed' ORDER BY updated_at DESC, rowid DESC",
         )?;
         let completed = completed
             .query_map([media_id], |row| {
@@ -579,7 +590,7 @@ impl Database {
             })
             .collect();
         let mut statement = self.connection.prepare(&format!(
-            "SELECT {}, media_id FROM jobs WHERE status IN ('completed','failed','cancelled','interrupted') ORDER BY updated_at DESC, rowid DESC",
+            "SELECT {}, media_id FROM jobs WHERE hidden=0 AND status IN ('completed','failed','cancelled','interrupted') ORDER BY updated_at DESC, rowid DESC",
             crate::results::SUMMARY_COLUMNS
         ))?;
         let rows = statement.query_map([], |row| {
@@ -605,12 +616,37 @@ impl Database {
         Ok(groups)
     }
 
+    /// Take every result out of the Outputs list for good. The job rows stay (the speed
+    /// history reads them) and no file is touched. Refused while any picture is being
+    /// worked on, like removing it from the list.
+    pub fn hide_all_results(&self, engine_job_ids: &[String]) -> AppResult<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let mut statement = transaction.prepare("SELECT id, status FROM jobs")?;
+        let working = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|(job, status)| {
+                matches!(status.as_str(), "starting" | "running" | "cancelling")
+                    || engine_job_ids.contains(job)
+            });
+        drop(statement);
+        if working {
+            return Err(AppError::Validation(CANNOT_REMOVE_RUNNING.into()));
+        }
+        transaction.execute("UPDATE jobs SET hidden=1 WHERE hidden=0", [])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// The saved file of one completed result of this media, for a preview.
     pub fn media_result_output(&self, media_id: &str, job_id: &str) -> AppResult<String> {
         let path: Option<String> = self
             .connection
             .query_row(
-                "SELECT output_path FROM jobs WHERE id=?1 AND media_id=?2 AND status='completed' AND output_path != ''",
+                "SELECT output_path FROM jobs WHERE id=?1 AND media_id=?2 AND hidden=0 AND status='completed' AND output_path != ''",
                 params![job_id, media_id],
                 |row| row.get(0),
             )

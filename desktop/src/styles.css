@@ -733,13 +733,18 @@ input:focus-visible {
   z-index: 5;
   left: 12px;
   right: 12px;
-  bottom: 12px;
+  /* Above the docked update notice while it shows (--notice-room). */
+  bottom: max(12px, var(--notice-room, 0px));
   display: flex;
   justify-content: space-between;
   gap: 16px;
   pointer-events: none;
 }
 .divider-labels span {
+  box-sizing: border-box;
+  /* One fixed height, so what sits above the labels can clear them exactly. */
+  height: calc(11px * var(--ui-scale) * 1.3 + 10px);
+  line-height: 1.3;
   max-width: 48%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -833,6 +838,10 @@ input:focus-visible {
   background: rgba(24, 24, 26, 0.82);
   opacity: 0;
   transition: opacity 160ms ease-out;
+}
+/* With label chips along the bottom, the zoom control sits one gap above them. */
+.canvas-well:has(.divider-labels) .zoom-hud {
+  bottom: calc(max(12px, var(--notice-room, 0px)) + 11px * var(--ui-scale) * 1.3 + 10px + 8px);
 }
 .zoom-hud.shown,
 .zoom-hud:focus-within {
@@ -1429,33 +1438,42 @@ input[type='number'],
   background: var(--accent-hi);
   transition: width 0.5s ease;
 }
-/* A moving shine shows that work continues between progress updates. */
+/* A moving shine shows that work continues between progress updates. It is a layer as wide as
+   the whole line, moved by transform on the compositor and clipped by the filled part, so a
+   change of the fill's width neither restarts it nor makes it jump. */
+.progress,
+.row-progress {
+  container-type: inline-size;
+}
 .progress i::after,
 .row-progress i::after {
   content: '';
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100cqw;
   background: linear-gradient(
     100deg,
-    transparent 30%,
+    transparent 40%,
     rgba(231, 231, 231, 0.8) 50%,
-    transparent 70%
+    transparent 60%
   );
-  background-size: 250% 100%;
   animation: progress-shine 1.6s linear infinite;
 }
 @keyframes progress-shine {
   from {
-    background-position: 125% 0;
+    transform: translateX(-100%);
   }
   to {
-    background-position: -125% 0;
+    transform: translateX(100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .progress i::after,
   .row-progress i::after {
     animation: none;
+    display: none;
   }
 }
 

@@ -32,6 +32,7 @@
   import { EtaDisplay, etaView, withEta } from './lib/eta-display';
   import MediaQueue from './MediaQueue.svelte';
   import { mediaInRun, queueRunSince } from './lib/queueRun';
+  import { isSaving } from './lib/rowRun';
   import AdvancedSettings from './AdvancedSettings.svelte';
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
@@ -207,6 +208,27 @@
     setComparePicks(
       comparePicks.filter((pick) => snapshot.media.some((media) => media.id === pick.media_id)),
     );
+  // A pick whose result has left the list has nothing to show either.
+  $: if (
+    bulkHistories.length &&
+    comparePicks.some(
+      (pick) =>
+        pick.kind === 'output' &&
+        bulkHistories.some((history) => history.media_id === pick.media_id) &&
+        !compareGroups.some((group) =>
+          group.outputs.some((output) => pickKey(output.pick) === pickKey(pick)),
+        ),
+    )
+  )
+    setComparePicks(
+      comparePicks.filter(
+        (pick) =>
+          pick.kind === 'original' ||
+          compareGroups.some((group) =>
+            group.outputs.some((output) => pickKey(output.pick) === pickKey(pick)),
+          ),
+      ),
+    );
   // Compare is open only while there is something to compare.
   $: if (mainTab === 'compare' && comparePicks.length < 2) mainTab = 'preview';
   function setComparePicks(picks: ComparePick[]): void {
@@ -258,10 +280,13 @@
     run: () => Promise<void>;
     /** Words the question for the list as it is now. */
     titleFor?: (count: number) => string;
+    /** What the question counts; the Inputs by default. */
+    countOf?: () => number;
   } | null = null;
   // The Clear question counts the list as it is when answered, not as it was when asked.
   $: if (modalConfirm?.titleFor) {
-    if (snapshot.media.length) modalTitle = modalConfirm.titleFor(snapshot.media.length);
+    const left = modalConfirm.countOf ? modalConfirm.countOf() : snapshot.media.length;
+    if (left) modalTitle = modalConfirm.titleFor(left);
     else closeModal();
   }
   // The FFmpeg notice: once per batch of videos LocalSR cannot decode, and
@@ -296,9 +321,32 @@
   $: cancelling =
     requestingCancel ||
     snapshot.runtime.status_title === 'Cancelling' ||
-    snapshot.jobs.some(
-      (job) => job.id === snapshot.runtime.active_job_id && job.status === 'cancelling',
-    );
+    snapshot.jobs.some((job) => job.status === 'cancelling');
+  // A cancel asked for, the engine not yet idle: what the window says until it is.
+  $: stoppingJobs = snapshot.jobs.filter((job) => job.status === 'cancelling').length;
+  $: stoppingDetail = `${
+    stoppingJobs > 1
+      ? `Stopping ${stoppingJobs} photos; waiting for the engine`
+      : 'Waiting for the engine to stop'
+  } (up to ${snapshot.runtime.cancel_grace_seconds || 8} s).`;
+  let stopWasOn = false;
+  let stopRunSince: number | null = null;
+  let stoppedNote = '';
+  $: trackStop(cancelling, runSince);
+  /** The count of finished pictures of the run, shown once when the engine is idle again. */
+  function trackStop(now: boolean, since: number | null): void {
+    if (now && !stopWasOn) {
+      stopRunSince = since;
+      stoppedNote = '';
+    } else if (!now && stopWasOn && !snapshot.runtime.active_job_id) {
+      const own = snapshot.jobs.filter(
+        (job) => stopRunSince !== null && job.created_at >= stopRunSince,
+      );
+      stoppedNote = `Stopped. ${own.filter((job) => job.status === 'completed').length} of ${own.length} finished.`;
+    }
+    stopWasOn = now;
+  }
+  $: if (snapshot.runtime.active_job_id && !cancelling) stoppedNote = '';
 
   $: settings = withListedDevice(snapshot.settings, snapshot.capabilities);
   // Editing bundle, device and capacity checks.
@@ -432,7 +480,7 @@
   // While a queue runs only new input can be added: a picture with any job in this run
   // (waiting, running, finished, failed or cancelled) is not offered again.
   let runSince: number | null = null;
-  $: runSince = queueRunSince(snapshot.jobs, runSince);
+  $: runSince = queueRunSince(snapshot.jobs, runSince, cancelling);
   $: runMedia = mediaInRun(snapshot.jobs, runSince);
   $: newMedia = runnableMedia.filter((media) => !runMedia.has(media.id));
   // What the status bar adds to the engine's phase text while a picture is processed: the model,
@@ -444,20 +492,24 @@
       : usingTemporalVideo
         ? (selectedVideoModel?.name ?? 'Video model')
         : (selectedModel?.name ?? 'Model');
-  $: activityDetail = activeJobMediaId
-    ? [
-        activityModel,
-        runningStatusDetail,
-        liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
-        selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
-          ? 'SDR display preview'
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : '';
-  $: queueSelection =
-    settings.batch_mode && settings.task !== 'edit'
+  $: activityDetail =
+    cancelling && snapshot.runtime.active_job_id
+      ? stoppingDetail
+      : activeJobMediaId
+        ? [
+            activityModel,
+            runningStatusDetail,
+            liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
+            selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
+              ? 'SDR display preview'
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+  $: queueSelection = cancelling
+    ? []
+    : settings.batch_mode && settings.task !== 'edit'
       ? snapshot.runtime.active_job_id
         ? newMedia
         : queueableMedia
@@ -489,6 +541,7 @@
       ? [selectedMedia]
       : [];
   $: scopeChoice =
+    !cancelling &&
     snapshot.media.length > 1 &&
     settings.task !== 'edit' &&
     queueableMedia.length > 1 &&
@@ -508,7 +561,9 @@
   const secondsNow = (_second: number) => performance.now() / 1000;
   $: shownEta = etaView(snapshot, etaDisplay, secondsNow(etaSecond));
   $: queueEta = shownEta.timing;
-  $: runningStatusDetail = withEta(snapshot.runtime.status_detail, shownEta.job);
+  // Past the last tile only the file is left to write: nothing remains to estimate.
+  $: saving = Boolean(snapshot.runtime.active_job_id) && isSaving(snapshot.runtime.progress);
+  $: runningStatusDetail = withEta(snapshot.runtime.status_detail, saving ? null : shownEta.job);
   $: if (snapshot.runtime.active_job_id && !etaTimer) {
     etaTimer = setInterval(() => (etaSecond += 1), 1000);
   } else if (!snapshot.runtime.active_job_id && etaTimer) {
@@ -736,20 +791,6 @@
         ? ['faces']
         : ['noise', 'jpeg', 'blur', 'faces']
   ) as FixKind[];
-  $: illustrationFallback =
-    settings.task !== 'denoise' &&
-    settings.content === 'illustration' &&
-    activeQuality !== 'custom' &&
-    selectedModel &&
-    !(selectedModel.purposes.includes('illustration') || selectedModel.purposes.includes('anime'))
-      ? {
-          model: snapshot.catalog.models.find(
-            (model) =>
-              model.native_scale > 1 &&
-              (model.purposes.includes('illustration') || model.purposes.includes('anime')),
-          ),
-        }
-      : undefined;
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
@@ -1724,6 +1765,29 @@
     }
   }
 
+  // The Outputs row that matches what the centre pane shows.
+  $: shownPick = ((): ComparePick | null => {
+    if (mainTab !== 'preview' || !selectedImage || !pairShown) return null;
+    return choice.showing === ORIGINAL
+      ? { kind: 'original', media_id: selectedImage.id }
+      : { kind: 'output', media_id: selectedImage.id, job_id: choice.showing };
+  })();
+
+  /** A click on an Outputs row: that input and that result in the centre pane's Preview. */
+  async function showResult(pick: ComparePick): Promise<void> {
+    const results = bulkHistories.find((entry) => entry.media_id === pick.media_id)?.results ?? [];
+    const showing = pick.kind === 'original' ? ORIGINAL : pick.job_id;
+    const newest = results.find((row) => row.status === 'completed' && row.available);
+    const against = pick.kind === 'original' ? (newest?.job_id ?? ORIGINAL) : ORIGINAL;
+    const remembered = { ...rememberedResults };
+    for (const row of results)
+      if ([showing, against].includes(row.job_id)) remembered[row.job_id] = row;
+    rememberedResults = remembered;
+    pairChoices = { ...pairChoices, [pick.media_id]: { showing, against, pinned: true } };
+    mainTab = 'preview';
+    await selectQueueMedia(pick.media_id);
+  }
+
   /** A manual choice pins the pair of this image until a new run starts. */
   function choosePair(side: 'showing' | 'against', target: string): void {
     if (!selectedImage) return;
@@ -2049,7 +2113,7 @@
       ).length
     : 0;
   $: canCancelSelectedImage =
-    selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
+    !cancelling && selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
   // One job is just cancelled; "queue" is for several running or waiting.
   $: inflightJobCount = Math.max(
     snapshot.jobs.filter((job) =>
@@ -2673,6 +2737,30 @@
     };
   }
 
+  const outputTotal = () => compareGroups.reduce((n, group) => n + group.outputs.length, 0);
+
+  /** Clear in Outputs empties the list of results only; the files stay where they are. */
+  function askClearOutputs(): void {
+    const count = outputTotal();
+    if (count === 0 || snapshot.runtime.active_job_id) return;
+    const titleFor = (n: number) =>
+      `Clear all ${n} ${n === 1 ? 'output' : 'outputs'} from the list?`;
+    showModal(titleFor(count), 'The files stay in their folders; only the list is emptied.');
+    modalConfirm = {
+      label: 'Clear',
+      titleFor,
+      countOf: outputTotal,
+      run: () =>
+        attempt('Could not clear the outputs', async () => {
+          await api.clearResults();
+          setComparePicks([]);
+          unpinResults(snapshot.media.map((media) => media.id));
+          await refresh();
+          await loadBulkHistories(bulkKey);
+        }),
+    };
+  }
+
   async function confirmModal(): Promise<void> {
     const confirm = modalConfirm;
     closeModal();
@@ -2738,6 +2826,9 @@
       picks={comparePicks}
       togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
       clearPicks={() => setComparePicks([])}
+      clearOutputs={askClearOutputs}
+      shown={shownPick}
+      {showResult}
       openCompare={() => {
         if (comparePicks.length < 2) return;
         mainTab = 'compare';
@@ -3125,17 +3216,6 @@
                     >
                   {/each}
                 </div>
-                {#if illustrationFallback}
-                  <p class="inline-warning" role="status">
-                    No fully verified illustration model yet, so the photo model is used.
-                    {#if illustrationFallback.model}<button
-                        class="link-button"
-                        type="button"
-                        on:click={() => useModelForJob(illustrationFallback.model)}
-                        >Use {displayName(illustrationFallback.model)} (Labs) for this job</button
-                      >{/if}
-                  </p>
-                {/if}
               </section>
             {/if}
 
@@ -3593,17 +3673,27 @@
       <i class:working={Boolean(snapshot.runtime.active_job_id)}></i>
       <div>
         <strong
-          >{booting ? 'Starting' : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
-          snapshot.runtime.progress > 0
+          >{booting
+            ? 'Starting'
+            : cancelling && snapshot.runtime.active_job_id
+              ? 'Stopping…'
+              : saving
+                ? 'Saving the result'
+                : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+          snapshot.runtime.progress > 0 &&
+          !saving &&
+          !cancelling
             ? ` · ${Math.round(snapshot.runtime.progress)}%`
             : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
           class="status-detail"
           role={activityDetail ? 'status' : undefined}
-          title={booting ? undefined : activityDetail || idleSummary || runningStatusDetail}
+          title={booting
+            ? undefined
+            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : activityDetail || idleSummary || runningStatusDetail}</span
+            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}</span
         >
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
@@ -3616,7 +3706,7 @@
                 >Download page</button
               >{/if}</span
           >{/if}
-        {#if queueEta}<span
+        {#if queueEta && !saving && !cancelling}<span
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."
           >
@@ -3683,7 +3773,7 @@
           >
         {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
-          >{cancelling ? 'Cancelling…' : inflightJobCount > 1 ? 'Cancel queue' : 'Cancel'}</button
+          >{cancelling ? 'Stopping…' : inflightJobCount > 1 ? 'Cancel queue' : 'Cancel'}</button
         >
       {:else if preparing}
         <button class="button danger start" on:click={() => void cancelPreparation()}

@@ -267,6 +267,16 @@ pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
     Ok(())
 }
 
+/// Clear in the Outputs list: every result leaves the list, no file is touched.
+#[tauri::command]
+pub fn clear_results(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
+    lock(&state.database)?.hide_all_results(&engine_jobs)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
@@ -721,7 +731,8 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
     let mut cancellation = lock(&state.worker.cancellation)?;
     lock(&state.database)?.cancel_queued_jobs()?;
     let active = lock(&state.runtime)?.active_job_id.clone();
-    if !active.is_empty() {
+    // A second request while the first is still being carried out changes nothing.
+    if !active.is_empty() && !cancellation.is_cancelling(&active) {
         cancellation.request(&active, std::time::Instant::now());
         // Photos of a batch that never started were cancelled with the queue above.
         for id in &cancellation.job_ids {
