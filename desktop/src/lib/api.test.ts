@@ -2,10 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/core', () => ({ invoke, convertFileSrc: vi.fn() }));
 const listen = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 
-import { listenForWorker } from './api';
+import { chooseExternalFFmpeg, listenForWorker } from './api';
 
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -31,4 +33,11 @@ describe('worker messages from the host', () => {
       { type: 'progress', data: { job_id: 'a' } },
     ]);
   });
+});
+
+it('asks the host to choose and grant the external FFmpeg path', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce('/chosen/ffmpeg');
+  expect(await chooseExternalFFmpeg('/old/ffmpeg')).toBe('/chosen/ffmpeg');
+  expect(invoke).toHaveBeenCalledWith('choose_external_ffmpeg', { current: '/old/ffmpeg' });
 });

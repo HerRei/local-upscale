@@ -1055,7 +1055,7 @@
               {/if}
             {/if}
           </div>
-        {:else}
+        {:else if group !== 'own'}
           <p class="model-description">
             Select a model to see what it is for and where it comes from.
           </p>

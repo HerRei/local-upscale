@@ -724,7 +724,10 @@
           videoPreparationProgress = data;
         }
       });
-      await playbackListener;
+      await playbackListener.catch((error) => {
+        playbackListener = undefined;
+        throw error;
+      });
       if (disposed || requestId !== videoRequestId) return;
       const sources = await api.prepareVideoComparison(mediaId, requestId, forceCompatible);
       if (disposed || requestId !== videoRequestId || mediaId !== selectedMedia?.id) return;

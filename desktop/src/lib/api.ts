@@ -216,13 +216,7 @@ export async function openTerminalWithInstallCommand(command: string): Promise<v
 
 export async function chooseExternalFFmpeg(current: string): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: false,
-    defaultPath: current || undefined,
-    title: 'Select the FFmpeg program installed on this computer',
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_external_ffmpeg', { current });
 }
 
 export const prepareVideoComparison = async (

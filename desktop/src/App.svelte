@@ -320,7 +320,6 @@
       Boolean(editModel?.installed) &&
       editPrompt.trim().length > 0 &&
       editPrompt.length <= 4000 &&
-      settings.edit_max_dimension <= editSizeAllowed &&
       (!editModel?.terms_acceptance_required || termsAccepted[editModel.model_id]));
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
   $: compatibleModels = modelsForTask(snapshot, settings.task);
@@ -803,12 +802,20 @@
   $: lockReason = cancelling
     ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
     : `${startingJob ? 'Starting your job…' : 'Settings locked.'} Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.`;
-  // Start from the menu with nothing to explain still answers with what Start would take.
-  $: scopeSummary = settings.batch_mode
-    ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
-    : selectedMedia
-      ? `Only “${selectedMedia.name}” is processed.`
-      : 'Only the selected item is processed.';
+  $: startBlockReason = snapshot.runtime.active_job_id
+    ? 'Wait for the current job to finish.'
+    : snapshot.runtime.worker !== 'ready'
+      ? 'The processing engine is not ready yet.'
+      : !settings.task
+        ? 'Choose a task before starting.'
+        : !queueSelection.length
+          ? 'Select a compatible item before starting.'
+          : unreadyMedia
+            ? scopeHint
+            : editBlockReason ||
+              (!modelReady || !faceReady || !fixesReady || !interpolationReady
+                ? 'Choose or download the required models before starting.'
+                : 'The current settings are not ready to start.');
 
   onMount(() => {
     const unlisteners: (() => void)[] = [];
@@ -1772,7 +1779,7 @@
 
   function applyPreset(kind: 'quick' | 'best'): void {
     if (!settings.task || settings.task === 'edit') {
-      showModal('Choose a task', 'Select Upscale or Restore before applying a preset.');
+      showModal('Choose a task', 'Select Upscale, Restore or Video before applying a preset.');
       return;
     }
     resolveRecipe({ quality: kind });
@@ -2251,8 +2258,11 @@
       await refresh();
     }
     const added = snapshot.media.filter((media) => !previousIds.has(media.id));
-    if (added.length) {
-      await api.selectMedia(added[0].id);
+    const requested = intent.files.length
+      ? snapshot.media.filter((media) => intent.files.includes(media.path))
+      : added;
+    if (requested.length) {
+      await api.selectMedia(requested[0].id);
       await refresh();
     }
 
@@ -2276,8 +2286,8 @@
     await api.saveSettings(snapshot.settings);
 
     if (!intent.auto_start) return;
-    const candidates = added.length
-      ? added
+    const candidates = intent.files.length
+      ? requested
       : settings.batch_mode
         ? runnableMedia
         : selectedMedia
@@ -2310,7 +2320,7 @@
     // Debouncing collects them into one native queue transaction.
     autoStartTimer = setTimeout(() => {
       autoStartTimer = undefined;
-      pendingAutoStartIds = [...stagedAutoStartIds];
+      pendingAutoStartIds = [...new Set([...pendingAutoStartIds, ...stagedAutoStartIds])];
       stagedAutoStartIds = [];
       void maybeAutoStart();
     }, 300);
@@ -2319,6 +2329,11 @@
   async function maybeAutoStart(): Promise<void> {
     await tick();
     if (!pendingAutoStartIds.length) return;
+    if (
+      snapshot.capabilities.system_ram_total === 0 &&
+      !snapshot.capabilities.devices.some((device) => device.id === snapshot.settings.device_id)
+    )
+      return;
     const media = snapshot.media.filter((item) => pendingAutoStartIds.includes(item.id));
     if (media.length !== pendingAutoStartIds.length) return;
     if (media.some((item) => item.probe_status === 'pending')) return;
@@ -2356,7 +2371,8 @@
       modelReady &&
       hdrModelCompatible &&
       faceReady &&
-      fixesReady;
+      fixesReady &&
+      interpolationReady;
     if (!ready) return;
     const mediaIds = [...pendingAutoStartIds];
     pendingAutoStartIds = [];
@@ -2399,7 +2415,7 @@
         case 'file.start':
           if (canStart) await start();
           else if (canPrepare) await prepareAndStart();
-          else showModal('Cannot start yet', scopeHint || scopeSummary);
+          else showModal('Cannot start yet', startBlockReason);
           break;
         case 'file.cancel':
           if (preparing) await cancelPreparation();
@@ -2824,7 +2840,7 @@
           referenceLabel={referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original'}
           referenceState={againstSide?.state ?? 'ready'}
           referenceError={againstSide?.error ?? ''}
-          showingLabel={''}
+          showingLabel={showingSide?.label ?? ''}
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
           {singleFrame}
