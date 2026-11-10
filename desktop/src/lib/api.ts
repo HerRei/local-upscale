@@ -161,6 +161,7 @@ export async function chooseEditRuntime(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_edit_runtime');
 }
+export const retryEngine = (): Promise<void> => invoke('retry_engine');
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });

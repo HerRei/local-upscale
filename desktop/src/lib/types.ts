@@ -372,6 +372,8 @@ export interface RuntimeStatus {
   compare?: CompareState;
   video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
+  /** The host gave up restarting the engine; `retryEngine` starts it again. */
+  engine_retry?: boolean;
   active_job_id: string;
   active_batch_job_ids?: string[];
   status_title: string;

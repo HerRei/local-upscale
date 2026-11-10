@@ -1859,3 +1859,62 @@ fn a_result_that_is_a_link_gets_no_automatic_preview() {
     );
     assert!(completion_preview_request(&idle_state(), &done).is_some());
 }
+
+fn given_up_state() -> (tempfile::TempDir, Arc<AppState>) {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.worker = "failed".into();
+        runtime.status_title = "Engine unavailable".into();
+        runtime.engine_retry = true;
+    }
+    state.worker.restart_count.store(4, Ordering::SeqCst);
+    (directory, state)
+}
+
+#[test]
+fn a_retry_is_accepted_once_after_the_host_gave_up_and_resets_the_count() {
+    let (_directory, state) = given_up_state();
+    begin_engine_retry(&state).unwrap();
+    assert_eq!(state.worker.restart_count.load(Ordering::SeqCst), 0);
+    assert!(!lock(&state.runtime).unwrap().engine_retry);
+    // A second call while the engine starts changes nothing.
+    state.worker.restart_count.store(2, Ordering::SeqCst);
+    assert!(begin_engine_retry(&state).is_err());
+    assert_eq!(state.worker.restart_count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_retry_is_refused_in_every_other_state_and_changes_nothing() {
+    let (_directory, state) = given_up_state();
+    for worker in [
+        "starting",
+        "negotiating",
+        "ready",
+        "unavailable",
+        "restarting",
+    ] {
+        lock(&state.runtime).unwrap().worker = worker.into();
+        assert!(begin_engine_retry(&state).is_err(), "{worker}");
+    }
+    // A failed engine that was not given up on: the protocol mismatch.
+    lock(&state.runtime).unwrap().engine_retry = false;
+    apply_worker_envelope(
+        &state,
+        &envelope("protocol_error", json!({"message": "too old"})),
+    )
+    .unwrap();
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.status_title, "Engine incompatible");
+        assert_eq!(runtime.worker, "failed");
+    }
+    assert!(begin_engine_retry(&state).is_err());
+    assert_eq!(state.worker.restart_count.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        lock(&state.runtime).unwrap().status_title,
+        "Engine incompatible"
+    );
+}

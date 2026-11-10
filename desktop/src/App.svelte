@@ -1928,6 +1928,7 @@
   $: canCancelSelectedImage =
     selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
   let cancellingImage = false;
+  let retryingEngine = false;
 
   async function cancelSelectedImage(): Promise<void> {
     if (!selectedImage) return;
@@ -2501,6 +2502,15 @@
       await run();
     } catch (error) {
       showModal(title, String(error));
+    }
+  }
+
+  async function retryEngine(): Promise<void> {
+    retryingEngine = true;
+    try {
+      await attempt('Could not restart the engine', () => api.retryEngine());
+    } finally {
+      retryingEngine = false;
     }
   }
 
@@ -3506,6 +3516,12 @@
         <i style={`width:${snapshot.runtime.progress}%`}></i>
       </div>{/if}
     <div class="status-actions">
+      {#if snapshot.runtime.engine_retry}<button
+          class="button"
+          disabled={retryingEngine}
+          title="Start the inference engine again"
+          on:click={() => void retryEngine()}>Try again</button
+        >{/if}
       {#if selectedOutputPath}<button
           class="button"
           title={`Show ${selectedOutputName} in its folder`}
