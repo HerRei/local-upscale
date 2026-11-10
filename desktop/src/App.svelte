@@ -25,6 +25,7 @@
     chooseTarget,
     describeSide,
     effectiveChoice,
+    framingRounding,
     slotFor,
     stepShowing,
   } from './lib/results';
@@ -531,13 +532,28 @@
           selectedImage,
         )
       : undefined;
-  // A result whose framing differs from the source (an Edit can) is shown on
-  // its own; stretching it over the source would fake an alignment.
+  // A result whose framing differs from the source (a crop, another shape) is
+  // shown on its own; stretching it over the source would fake an alignment.
+  // An Edit is sized in steps of 32, so it may differ by that rounding alone.
   $: showingFramed = Boolean(
-    pairShown && showingSide && selectedImage && !alignedFraming(showingSide, selectedImage),
+    pairShown &&
+    showingSide &&
+    selectedImage &&
+    !alignedFraming(
+      showingSide,
+      selectedImage,
+      framingRounding(resultRows.find((row) => row.job_id === choice.showing)),
+    ),
   );
   $: againstFramed = Boolean(
-    pairShown && againstSide && selectedImage && !alignedFraming(againstSide, selectedImage),
+    pairShown &&
+    againstSide &&
+    selectedImage &&
+    !alignedFraming(
+      againstSide,
+      selectedImage,
+      framingRounding(resultRows.find((row) => row.job_id === choice.against)),
+    ),
   );
   $: singleFrame =
     pairShown && showingSide && (showingFramed || againstFramed) && showingSide.width

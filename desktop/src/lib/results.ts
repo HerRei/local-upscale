@@ -79,12 +79,27 @@ export function slotFor(
   return pair?.media_id === mediaId && pair[side].target_id === target ? pair[side] : undefined;
 }
 
-/** Same framing as the source (within rounding of the saved size), so it can share a split. */
-export function alignedFraming(output: Size, source: Size): boolean {
+/**
+ * Rounding, in pixels of the saved file, that a result's size may differ from
+ * its source's shape by. An upscale is off by a pixel at most; an edit is sized
+ * by `edit_dimensions` (image_edit.py), which rounds each side down to a
+ * multiple of 32 after fitting the long edge to the chosen Edit size.
+ */
+export function framingRounding(result: ResultSummary | undefined): number {
+  return result?.kind === 'edit' ? 32 : 1;
+}
+
+/**
+ * Same framing as the source (within `rounding` pixels per side of the saved
+ * size), so it can share a split. A side that lost less than `rounding` pixels
+ * moves the cross product of the two shapes by less than `rounding` times the
+ * source's long edge.
+ */
+export function alignedFraming(output: Size, source: Size, rounding = 1): boolean {
   if (!output.width || !output.height || !source.width || !source.height) return true;
   return (
     Math.abs(output.width * source.height - output.height * source.width) <=
-    Math.max(source.width, source.height)
+    rounding * Math.max(source.width, source.height)
   );
 }
 
@@ -95,10 +110,12 @@ function times(value: number): string {
 /**
  * How large the saved file is against the source ("4× output"), from the
  * decoded output dimensions when they are known, else from the recorded
- * scale. Both sides are bounded previews, so neither is called enlarged.
+ * scale. Both sides are bounded previews, so neither is called enlarged. An
+ * Edit is not an enlargement, so it gives the size of its file.
  */
 export function scaleLabel(result: ResultSummary, output: Size = {}, source: Size = {}): string {
-  if (result.kind === 'edit') return 'Edit';
+  if (result.kind === 'edit')
+    return output.width && output.height ? `${output.width} × ${output.height}` : 'Edit';
   if (output.width && source.width) return `${times(output.width / source.width)} output`;
   return result.scale > 0 ? `${result.scale}× output` : '';
 }

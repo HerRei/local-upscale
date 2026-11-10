@@ -4169,7 +4169,10 @@ describe('Several fixes in one pass', () => {
 
 describe('Comparing saved results', () => {
   /** A host with pair slots, answering every pair request with decoded previews. */
-  function pairHost(snapshot: AppSnapshot): AppSnapshot {
+  function pairHost(
+    snapshot: AppSnapshot,
+    sizes: Record<string, { width: number; height: number }> = {},
+  ): AppSnapshot {
     let generation = 0;
     snapshot.runtime.comparison_pair = {
       media_id: '',
@@ -4183,10 +4186,10 @@ describe('Comparing saved results', () => {
         : {
             target_id: target,
             preview_data_url: `data:image/jpeg;base64,${target}`,
-            width: 2560,
-            height: 1920,
-            preview_width: 2048,
-            preview_height: 1536,
+            width: sizes[target]?.width ?? 2560,
+            height: sizes[target]?.height ?? 1920,
+            preview_width: Math.min(sizes[target]?.width ?? 2048, 2048),
+            preview_height: Math.min(sizes[target]?.height ?? 1536, 1536),
           };
     api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
       if (!pair) return;
@@ -4236,6 +4239,65 @@ describe('Comparing saved results', () => {
     );
     expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
     expect(document.querySelector('.divider-labels')?.textContent).toContain('saved');
+  });
+
+  describe('an Edit result of a 4896 × 3264 photo', () => {
+    const camera = { ...image('photo', true), width: 4896, height: 3264 };
+    const open = async (size: { width: number; height: number }) => {
+      const snapshot = pairHost(readySnapshot([camera]), { edited: size });
+      snapshot.jobs = [completedJob('edited')];
+      api.listMediaResults.mockResolvedValue(
+        historyOf('photo', [row('edited', { kind: 'edit', model_label: 'Qwen Edit', scale: 0 })]),
+      );
+      await mountWith(snapshot);
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('edited'),
+      );
+    };
+
+    it('opens in Split with the divider and the three views, as an upscale does', async () => {
+      // The engine's Edit size of 512 px gives 512 × 320 for this photo.
+      await open({ width: 512, height: 320 });
+      expect(screen.getByRole('slider', { name: 'Before and after comparison' })).toBeTruthy();
+      const views = screen.getByRole('radiogroup', { name: 'Comparison view' });
+      expect(
+        within(views)
+          .getAllByRole('radio')
+          .map((view) => view.textContent?.trim()),
+      ).toEqual(['Original', 'Split', 'Enhanced']);
+      expect(within(views).getByRole('radio', { name: 'Split' }).getAttribute('aria-checked')).toBe(
+        'true',
+      );
+      expect(document.querySelector('.comparison-note')).toBeNull();
+      expect(document.querySelector('.divider-labels')?.textContent).toContain(
+        'Qwen Edit · 512 × 320',
+      );
+      expect(document.querySelector('.source-image.contained')).toBeNull();
+    });
+
+    it('lets M peek at the original', async () => {
+      await open({ width: 1024, height: 672 });
+      expect(screen.getByRole('slider', { name: 'Before and after comparison' })).toBeTruthy();
+      const result = document.querySelector<HTMLElement>('.result-image')!;
+      const clipBefore = result.style.clipPath;
+      await fireEvent.keyDown(window, { key: 'm' });
+      expect(document.querySelector('.original-chip')?.textContent).toBe('Original');
+      expect(document.querySelector<HTMLElement>('.result-image')!.style.clipPath).toBe(
+        'inset(0 0 0 100%)',
+      );
+      await fireEvent.keyUp(window, { key: 'm' });
+      expect(document.querySelector('.original-chip')).toBeNull();
+      expect(document.querySelector<HTMLElement>('.result-image')!.style.clipPath).toBe(clipBefore);
+    });
+
+    it('stays alone, with the note, when it has another shape', async () => {
+      await open({ width: 512, height: 512 });
+      expect(screen.queryByRole('slider', { name: 'Before and after comparison' })).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.comparison-note')?.textContent).toContain(
+        'has a different framing from the original',
+      );
+    });
   });
 
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
