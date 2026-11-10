@@ -407,3 +407,18 @@ def test_watch_refuses_an_output_folder_that_would_hide_every_input(tmp_path, re
     with pytest.raises(AutomationError, match="output folder"):
         _watch(args, runner, "cpu")
     assert runner.processed == []
+
+
+def test_watch_stops_at_once_on_a_signal_instead_of_finishing_the_poll_sleep(tmp_path):
+    import time
+
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    args = build_automation_parser().parse_args(
+        ["watch", str(incoming), "--output", str(tmp_path / "out"), "--poll-seconds", "30"]
+    )
+    runner = _IdleRunner()
+    threading.Timer(0.3, runner.cancel_event.set).start()
+    started = time.monotonic()
+    assert _watch(args, runner, "cpu") == 130
+    assert time.monotonic() - started < 5

@@ -468,8 +468,11 @@ def _watch(
     device: str,
     *,
     clock: Callable[[], float] = time.monotonic,
-    sleeper: Callable[[float], None] = time.sleep,
+    sleeper: Callable[[float], None] | None = None,
 ) -> int:
+    # A signal sets the cancel event; waiting on it ends the poll pause at once, where
+    # time.sleep would resume and finish the whole pause.
+    sleeper = sleeper or runner.cancel_event.wait
     input_directory = args.folder.resolve(strict=True)
     if not input_directory.is_dir():
         raise AutomationError(f"Watch path is not a directory: {input_directory}")
