@@ -130,3 +130,27 @@ test('the Process choice is one line inside the Media pane', async ({ page }) =>
     .evaluate((pane) => pane.scrollWidth - pane.clientWidth);
   expect(overflow).toBe(0);
 });
+
+test('the welcome note sits above the docked update notice', async ({ page }) => {
+  await openApp(page, { ...withOutputs, welcome: true, update: '0.3.9' });
+  const notice = page.getByRole('status').filter({ hasText: 'LocalSR 0.3.9 is available' });
+  await expect(notice).toBeVisible();
+  const welcome = page.locator('.welcome-notice');
+  await expect(welcome).toBeVisible();
+  const card = await box(welcome);
+  expect(card.y + card.height).toBeLessThanOrEqual((await box(notice)).y);
+});
+
+test('the update notice docks at the bottom right of the centre pane', async ({ page }) => {
+  await openApp(page, { ...withOutputs, update: '0.3.9' });
+  const notice = page.getByRole('status').filter({ hasText: 'LocalSR 0.3.9 is available' });
+  await expect(notice).toBeVisible();
+  const card = await box(notice);
+  const bar = await box(page.locator('.status-bar'));
+  const centre = await box(page.locator('.main-area'));
+  expect(Math.round(bar.y - (card.y + card.height))).toBe(12);
+  expect(Math.round(centre.x + centre.width - (card.x + card.width))).toBe(12);
+  // Clear of the header row with its tabs and view options.
+  const header = await box(page.locator('.preview-header'));
+  expect(card.y).toBeGreaterThan(header.y + header.height);
+});

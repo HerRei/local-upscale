@@ -19,6 +19,8 @@ export interface Scenario {
   /** Finished outputs per photo number (1-based); each entry is one model result. */
   outputs?: Record<number, { id: string; label: string; quality?: string; seconds?: number }[]>;
   welcome?: boolean;
+  /** An update the feed offers; without it the feed is not configured. */
+  update?: string;
 }
 
 export interface HostCall {
@@ -259,14 +261,14 @@ function hostScript(scenario: Scenario): void {
       case 'update_status':
       case 'check_update':
         return {
-          configured: false,
+          configured: Boolean(scenario.update),
           managed_by_store: false,
           channel: 'beta',
           target: '',
-          stage: 'idle',
-          version: '',
+          stage: scenario.update ? 'available' : 'idle',
+          version: scenario.update ?? '',
           notes: '',
-          size: 0,
+          size: scenario.update ? 58 * 1024 ** 2 : 0,
           downloaded: 0,
           message: '',
           settings_recovery: false,

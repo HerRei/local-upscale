@@ -245,6 +245,7 @@ input:focus-visible {
 }
 
 .workspace {
+  position: relative;
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -800,7 +801,8 @@ input:focus-visible {
   position: absolute;
   z-index: 5;
   right: 14px;
-  bottom: 14px;
+  /* --notice-room: the update notice's height plus its margins while it shows. */
+  bottom: max(14px, var(--notice-room, 0px));
   display: flex;
   min-height: 34px;
   padding: 3px;
@@ -2059,7 +2061,7 @@ input[type='text'],
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px 14px;
+  padding: 0 14px max(14px, var(--notice-room, 0px));
 }
 /* In the video bar, zoom sits beside the always-visible transport: fading it
    on pointer-out left the bar cut short with an empty gap. */
@@ -2210,9 +2212,9 @@ input[type='text'],
   .enhance-pane {
     position: absolute;
     z-index: 20;
-    top: 52px;
+    top: 0;
     right: 0;
-    bottom: 54px;
+    bottom: 0;
     width: 360px;
     box-shadow: -22px 0 50px rgba(0, 0, 0, 0.38);
   }
@@ -2232,7 +2234,6 @@ input[type='text'],
   }
   .workspace {
     display: block;
-    position: relative;
   }
   .workspace > * {
     position: absolute;

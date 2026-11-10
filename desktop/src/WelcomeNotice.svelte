@@ -66,7 +66,8 @@
   .welcome-notice {
     position: fixed;
     z-index: 79;
-    bottom: 78px;
+    /* Above the update notice while that shows at the bottom of the stage (--notice-room). */
+    bottom: max(78px, calc(66px + var(--notice-room, 0px)));
     left: 50%;
     display: grid;
     gap: 10px;

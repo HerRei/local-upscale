@@ -170,6 +170,8 @@
     };
   });
   let mainTabs: HTMLElement | undefined;
+  // The update notice docks over the bottom of the stage; what sits there moves up by this.
+  let updateNoticeHeight = 0;
   async function mainTabKey(event: KeyboardEvent): Promise<void> {
     const next = tabFromKey(event.key, mainTab === 'preview' ? 0 : 1, 2);
     if (next === null) return;
@@ -2692,7 +2694,7 @@
   class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
   class:status-extra={Boolean(hardwareNote || hardwareHint)}
-  style={`--ui-scale:${settings.interface_scale / 100}`}
+  style={`--ui-scale:${settings.interface_scale / 100};--notice-room:${updateNoticeHeight ? updateNoticeHeight + 20 : 0}px`}
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
   <header class="toolbar" data-tauri-drag-region>
@@ -2705,9 +2707,6 @@
     </nav>
   </header>
 
-  <UpdateNotice
-    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-  />
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     anonymousUpdateCount={settings.anonymous_update_count ?? true}
@@ -3579,6 +3578,11 @@
         </fieldset>
       </div>
     </aside>
+
+    <UpdateNotice
+      bind:height={updateNoticeHeight}
+      processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+    />
   </main>
 
   <footer class="status-bar">

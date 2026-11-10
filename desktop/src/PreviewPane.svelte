@@ -1114,12 +1114,13 @@
     }
   }
 
+  /* The notes sit above the update notice while it shows (--notice-room). */
   .comparison-error {
     position: absolute;
     z-index: 5;
     left: 16px;
     right: 16px;
-    bottom: 16px;
+    bottom: max(16px, var(--notice-room, 0px));
     padding: 12px;
     border-radius: var(--radius);
     background: #351918;
@@ -1230,7 +1231,7 @@
     position: absolute;
     z-index: 5;
     left: 16px;
-    bottom: 16px;
+    bottom: max(16px, var(--notice-room, 0px));
     max-width: calc(100% - 32px);
     margin: 0;
     padding: 6px 10px;
