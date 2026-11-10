@@ -100,6 +100,9 @@ pub fn request_model(request: &Value) -> (String, String) {
     let id = primary
         .and_then(|stage| stage["model_id"].as_str())
         .or_else(|| data["model_id"].as_str())
+        // A video engine job names its engine here and carries no image model.
+        .or_else(|| data["video_model_id"].as_str())
+        .filter(|id| !id.is_empty())
         .unwrap_or_default()
         .to_owned();
     let label = if id.is_empty() || id == "__custom__" {
@@ -137,10 +140,19 @@ pub fn request_kind(request: &Value) -> &'static str {
 
 /// The name the library shows for a catalog model, without its role suffix.
 pub fn catalog_label(catalog: &CatalogManifest, model_id: &str) -> Option<String> {
-    let model = catalog
+    let Some(model) = catalog
         .models
         .iter()
-        .find(|model| model.model_id == model_id)?;
+        .find(|model| model.model_id == model_id)
+    else {
+        // Video engines and frame-interpolation models are bundles with a plain name.
+        return catalog
+            .video_models
+            .iter()
+            .chain(&catalog.interpolation_models)
+            .find(|model| model.model_id == model_id)
+            .map(|model| model.name.clone());
+    };
     if !model.display_name.is_empty() {
         return Some(model.display_name.clone());
     }
@@ -223,6 +235,28 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn video_engine_jobs_are_labelled_with_the_engine_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let catalog =
+            crate::catalog::load_catalog(&crate::paths::AppPaths::under(directory.path())).unwrap();
+        let engine = &catalog.video_models[0];
+        let request = json!({"type": "video_job_request", "data": {
+            "model_path": "", "video_model_id": engine.model_id}});
+        let (id, _) = super::request_model(&request);
+        assert_eq!(id, engine.model_id);
+        assert_eq!(
+            super::catalog_label(&catalog, &id).as_deref(),
+            Some(engine.name.as_str())
+        );
+        let interpolation = &catalog.interpolation_models[0];
+        assert_eq!(
+            super::catalog_label(&catalog, &interpolation.model_id).as_deref(),
+            Some(interpolation.name.as_str())
+        );
+        assert_eq!(super::catalog_label(&catalog, "no-such-model"), None);
+    }
 
     #[test]
     fn custom_labels_use_the_checkpoint_name_and_primary_stages_match_the_recorded_path() {

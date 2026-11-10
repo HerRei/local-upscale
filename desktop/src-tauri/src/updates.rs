@@ -1064,7 +1064,10 @@ fn active_engine_for_distribution(
     // A host compiled for an engine id runs exactly that id's engine: the shared
     // active-engine.txt may already name the engine of an installer that was cancelled.
     let id = if bundled_engine_id.is_empty() {
-        fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?
+        fs::read_to_string(paths.next_root.join("active-engine.txt"))
+            .ok()?
+            .trim()
+            .to_owned()
     } else {
         bundled_engine_id.to_string()
     };
@@ -1546,12 +1549,15 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
     use std::io::{Seek, SeekFrom};
     use std::process::{Command, Stdio};
     let mut output = tempfile::tempfile()?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg("--headless-update-version")
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    crate::process_tree::lead_own_group(&mut command);
+    let mut child = command.spawn()?;
+    let tree = crate::process_tree::ProcessTree::new(&child);
     let start = std::time::Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
@@ -1561,6 +1567,7 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
             break;
         }
         if start.elapsed() >= Duration::from_secs(10) {
+            tree.terminate();
             let _ = child.kill();
             let _ = child.wait();
             return Err(invalid("The installed application version check timed out"));
@@ -3509,6 +3516,27 @@ mod tests {
 
     // Round 3, finding 7: a failed install resumes the worker only when the old one ended,
     // and always clears the flag that blocks workers.
+    #[test]
+    fn the_active_engine_is_found_when_its_file_ends_with_a_line_break() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let engine = paths
+            .next_root
+            .join("engines/edited/engine")
+            .join(if cfg!(windows) {
+                "localsr-worker.exe"
+            } else {
+                "localsr-worker"
+            });
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        fs::write(&engine, b"engine").unwrap();
+        fs::write(paths.next_root.join("active-engine.txt"), b"edited\r\n").unwrap();
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, ""),
+            Some(engine)
+        );
+    }
+
     #[test]
     fn round3_resuming_after_a_failed_install_never_doubles_the_worker() {
         let root = tempfile::tempdir().unwrap();

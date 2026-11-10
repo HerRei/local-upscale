@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -30,9 +30,51 @@ pub struct PendingJob {
 
 pub struct Database {
     connection: Connection,
+    /// Where the jobs that were running when the host last stopped wrote their output.
+    interrupted_outputs: Vec<PathBuf>,
 }
 
+/// The final states of a job.
+const ENDED_STATES: [&str; 4] = ["completed", "failed", "cancelled", "interrupted"];
+
+/// How many set-aside copies of damaged queue files are kept; older ones are removed.
+const KEPT_DAMAGED_FILES: usize = 3;
+
 impl Database {
+    /// Open the queue. A file SQLite cannot use (not a database, corrupt, a table
+    /// that does not fit) is moved aside next to itself and a new queue is made, so
+    /// a damaged history never keeps the app from starting. The path of the moved
+    /// file comes back with it. Any other failure (a locked file, a read-only
+    /// folder) is returned as it is and nothing is moved.
+    pub fn open_or_set_aside(path: &Path) -> AppResult<(Self, Option<PathBuf>)> {
+        let opened = Self::open(path).and_then(|database| {
+            database.check_integrity()?;
+            Ok(database)
+        });
+        match opened {
+            Ok(database) => Ok((database, None)),
+            Err(error) if is_damage(&error) => {
+                let aside = set_aside(path)?;
+                Ok((Self::open(path)?, Some(aside)))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn check_integrity(&self) -> AppResult<()> {
+        let verdict: String = self
+            .connection
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if verdict == "ok" {
+            Ok(())
+        } else {
+            Err(AppError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                Some(verdict),
+            )))
+        }
+    }
+
     pub fn open(path: &Path) -> AppResult<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -114,8 +156,11 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS jobs_media_results_idx ON jobs(media_id, updated_at)",
             [],
         )?;
-        let database = Self { connection };
-        database.interrupt_stale_jobs()?;
+        let mut database = Self {
+            connection,
+            interrupted_outputs: Vec::new(),
+        };
+        database.interrupted_outputs = database.interrupt_stale_jobs()?;
         Ok(database)
     }
 
@@ -127,12 +172,29 @@ impl Database {
         Ok(())
     }
 
-    fn interrupt_stale_jobs(&self) -> AppResult<()> {
+    /// Mark the jobs a stopped host left running as interrupted; the output paths they
+    /// were asked to write come back.
+    fn interrupt_stale_jobs(&self) -> AppResult<Vec<PathBuf>> {
+        let mut statement = self.connection.prepare(
+            "SELECT request_json FROM jobs WHERE status IN ('starting', 'running', 'cancelling')",
+        )?;
+        let outputs = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .filter_map(|request| serde_json::from_str::<serde_json::Value>(&request).ok())
+            .filter_map(|request| request_output(&request).map(PathBuf::from))
+            .collect();
+        drop(statement);
         self.connection.execute(
             "UPDATE jobs SET status = 'interrupted', error = 'The desktop host stopped before the job finished.', updated_at = ?1 WHERE status IN ('starting', 'running', 'cancelling')",
             [now_millis()],
         )?;
-        Ok(())
+        Ok(outputs)
+    }
+
+    /// The outputs of the jobs the last stop interrupted, once.
+    pub fn take_interrupted_outputs(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.interrupted_outputs)
     }
 
     pub fn list_media(&self) -> AppResult<Vec<MediaItem>> {
@@ -582,7 +644,11 @@ impl Database {
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         let mut requests = Vec::new();
         for row in rows {
-            requests.push(serde_json::from_str(&row?)?);
+            // A request that is not JSON can never be sent to the engine, so it names no
+            // model and no output; one bad row must not block the rest of the queue.
+            if let Ok(request) = serde_json::from_str(&row?) {
+                requests.push(request);
+            }
         }
         Ok(requests)
     }
@@ -679,9 +745,24 @@ impl Database {
         Ok(())
     }
 
+    /// Whether the job has reached a final state, after which nothing may change it.
+    pub fn job_has_ended(&self, id: &str) -> AppResult<bool> {
+        let status: Option<String> = self
+            .connection
+            .query_row("SELECT status FROM jobs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(status.is_some_and(|status| ENDED_STATES.contains(&status.as_str())))
+    }
+
+    /// A job that ended stays as it ended, and one that is being cancelled stays so
+    /// when a late start message arrives.
     pub fn set_job_status(&self, id: &str, status: &str) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE jobs SET status=?2, updated_at=?3 WHERE id=?1",
+            "UPDATE jobs SET status=?2, updated_at=?3 WHERE id=?1
+             AND status NOT IN ('completed','failed','cancelled','interrupted')
+             AND NOT (status='cancelling' AND ?2 IN ('starting','running'))",
             params![id, status, now_millis()],
         )?;
         Ok(())
@@ -689,7 +770,9 @@ impl Database {
 
     pub fn update_job_progress(&self, id: &str, progress: f64) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE jobs SET status='running', progress=?2, updated_at=?3 WHERE id=?1",
+            "UPDATE jobs SET status=CASE WHEN status='cancelling' THEN status ELSE 'running' END,
+             progress=?2, updated_at=?3 WHERE id=?1
+             AND status NOT IN ('completed','failed','cancelled','interrupted')",
             params![id, progress.clamp(0.0, 100.0), now_millis()],
         )?;
         Ok(())
@@ -698,7 +781,8 @@ impl Database {
     pub fn finish_job(&self, id: &str, status: &str, output: &str, error: &str) -> AppResult<()> {
         let progress = if status == "completed" { 100.0 } else { 0.0 };
         self.connection.execute(
-            "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1",
+            "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1
+             AND status NOT IN ('completed','failed','cancelled','interrupted')",
             params![id, status, progress, output, error, now_millis()],
         )?;
         Ok(())
@@ -739,14 +823,20 @@ fn request_output(request: &serde_json::Value) -> Option<&str> {
         .filter(|path| !path.is_empty())
 }
 
+/// A stored image side as a `u32`; a value outside its range (a damaged row) is
+/// clamped, so one row cannot make the whole media list fail.
+fn side(stored: i64) -> u32 {
+    u32::try_from(stored.max(0)).unwrap_or(u32::MAX)
+}
+
 fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     Ok(MediaItem {
         id: row.get(0)?,
         path: row.get(1)?,
         name: row.get(2)?,
         kind: row.get(3)?,
-        width: row.get(4)?,
-        height: row.get(5)?,
+        width: side(row.get(4)?),
+        height: side(row.get(5)?),
         frame_count: u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
         fps: row.get(7)?,
         duration_seconds: row.get(8)?,
@@ -757,6 +847,74 @@ fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         hdr_format: row.get(13)?,
         audio_warning: row.get(14)?,
     })
+}
+
+/// A failure that says the file's content is unusable, as opposed to the file being
+/// busy, read-only or out of reach.
+fn is_damage(error: &AppError) -> bool {
+    let AppError::Database(
+        rusqlite::Error::SqliteFailure(failure, _)
+        | rusqlite::Error::SqlInputError { error: failure, .. },
+    ) = error
+    else {
+        return false;
+    };
+    matches!(
+        failure.code,
+        rusqlite::ErrorCode::NotADatabase
+            | rusqlite::ErrorCode::DatabaseCorrupt
+            | rusqlite::ErrorCode::Unknown
+    )
+}
+
+/// Rename the queue and its journal files to `<name>.damaged-<time>.<extension>`
+/// beside it, and drop the oldest such copies beyond `KEPT_DAMAGED_FILES`.
+fn set_aside(path: &Path) -> AppResult<PathBuf> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| AppError::Config("the queue file has no name".into()))?;
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) => (stem.to_owned(), format!(".{extension}")),
+        None => (name.clone(), String::new()),
+    };
+    let moved_name = |millis: i64| format!("{stem}.damaged-{millis}{extension}");
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let mut millis = now_millis();
+    while directory.join(moved_name(millis)).exists() {
+        millis += 1;
+    }
+    let moved = directory.join(moved_name(millis));
+    std::fs::rename(path, &moved)?;
+    for suffix in ["-wal", "-shm"] {
+        let journal = directory.join(format!("{name}{suffix}"));
+        if journal.exists() {
+            std::fs::rename(
+                journal,
+                directory.join(format!("{}{suffix}", moved_name(millis))),
+            )?;
+        }
+    }
+    let mut copies: Vec<(i64, PathBuf)> = std::fs::read_dir(directory)?
+        .filter_map(|entry| {
+            let file = entry.ok()?.file_name().to_string_lossy().into_owned();
+            let time = file
+                .strip_prefix(&format!("{stem}.damaged-"))?
+                .strip_suffix(extension.as_str())?
+                .parse::<i64>()
+                .ok()?;
+            Some((time, directory.join(file)))
+        })
+        .collect();
+    copies.sort();
+    let surplus = copies.len().saturating_sub(KEPT_DAMAGED_FILES);
+    for (_, old) in copies.into_iter().take(surplus) {
+        let _ = std::fs::remove_file(&old);
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", old.display()));
+        }
+    }
+    Ok(moved)
 }
 
 fn now_millis() -> i64 {
@@ -771,6 +929,164 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_that_is_not_json_does_not_block_the_rest_of_the_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        db.insert_job("bad", "m", "{ not json").unwrap();
+        db.insert_job(
+            "good",
+            "m",
+            r#"{"type":"job_request","data":{"output_path":"/out/a.png","model_path":"/models/x.pth"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            db.unfinished_output_paths().unwrap(),
+            [std::path::PathBuf::from("/out/a.png")]
+        );
+        assert!(db
+            .unfinished_job_needs_model(Path::new("/models/x.pth"))
+            .unwrap());
+    }
+
+    #[test]
+    fn a_stored_image_side_out_of_range_does_not_fail_the_media_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO media (id, path, name, kind, width, height, created_at) VALUES ('m','/p','n','image', 9999999999, -4, 1)",
+                [],
+            )
+            .unwrap();
+        let media = db.list_media().unwrap();
+        assert_eq!((media[0].width, media[0].height), (u32::MAX, 0));
+    }
+
+    #[test]
+    fn a_job_that_has_ended_cannot_be_changed_by_later_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        for (id, status) in [
+            ("done", "completed"),
+            ("broken", "failed"),
+            ("stopped", "cancelled"),
+        ] {
+            db.insert_job(id, "m", "{}").unwrap();
+            db.finish_job(id, status, "/out/first.png", "first")
+                .unwrap();
+            db.set_job_status(id, "running").unwrap();
+            db.update_job_progress(id, 40.0).unwrap();
+            db.finish_job(id, "failed", "/out/second.png", "second")
+                .unwrap();
+            let job = db
+                .list_jobs()
+                .unwrap()
+                .into_iter()
+                .find(|job| job.id == id)
+                .unwrap();
+            assert_eq!(job.status, status);
+            assert_eq!(job.output_path, "/out/first.png");
+            assert_eq!(job.error, "first");
+        }
+        assert!(db.job_has_ended("done").unwrap());
+        db.insert_job("open", "m", "{}").unwrap();
+        assert!(!db.job_has_ended("open").unwrap());
+        assert!(!db.job_has_ended("unknown").unwrap());
+    }
+
+    #[test]
+    fn a_job_that_is_being_cancelled_stays_so_when_a_late_start_or_progress_arrives() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        db.insert_job("j", "m", "{}").unwrap();
+        db.set_job_status("j", "running").unwrap();
+        db.mark_cancelling("j").unwrap();
+        db.set_job_status("j", "running").unwrap();
+        db.update_job_progress("j", 30.0).unwrap();
+        let job = db.list_jobs().unwrap().remove(0);
+        assert_eq!(job.status, "cancelling");
+        db.finish_job("j", "cancelled", "", "Cancelled by the user.")
+            .unwrap();
+        assert_eq!(db.list_jobs().unwrap().remove(0).status, "cancelled");
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_database_is_moved_aside_and_a_new_queue_made() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        std::fs::write(&path, b"cut off by a sync tool\n".repeat(50)).unwrap();
+        let (db, moved) = Database::open_or_set_aside(&path).unwrap();
+        let moved = moved.unwrap();
+        assert!(moved
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("queue.damaged-"));
+        assert!(moved.to_string_lossy().ends_with(".sqlite3"));
+        assert_eq!(
+            std::fs::read(&moved).unwrap(),
+            b"cut off by a sync tool\n".repeat(50)
+        );
+        assert!(db.list_media().unwrap().is_empty());
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+    }
+
+    #[test]
+    fn a_sound_queue_is_opened_as_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        drop(Database::open(&path).unwrap());
+        {
+            let db = Database::open(&path).unwrap();
+            db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        }
+        let (db, moved) = Database::open_or_set_aside(&path).unwrap();
+        assert!(moved.is_none());
+        assert_eq!(db.list_media().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_queue_whose_tables_do_not_fit_is_moved_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE jobs (id TEXT); CREATE TABLE media (id TEXT);")
+            .unwrap();
+        let (db, moved) = Database::open_or_set_aside(&path).unwrap();
+        assert!(moved.unwrap().is_file());
+        assert!(db.list_jobs().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_queue_that_cannot_be_opened_for_another_reason_is_left_where_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        std::fs::create_dir(&path).unwrap();
+        assert!(Database::open_or_set_aside(&path).is_err());
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn only_the_newest_damaged_copies_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        let mut moved = Vec::new();
+        for round in 0..5 {
+            std::fs::write(&path, format!("damaged {round}")).unwrap();
+            moved.push(Database::open_or_set_aside(&path).unwrap().1.unwrap());
+        }
+        let kept: Vec<_> = moved.iter().filter(|file| file.exists()).collect();
+        assert_eq!(kept.len(), KEPT_DAMAGED_FILES);
+        assert!(moved[4].exists() && !moved[0].exists());
+        assert_eq!(std::fs::read(&moved[4]).unwrap(), b"damaged 4");
+    }
 
     fn job(id: &str, media: &str, request: &str, ui: &str) -> NewJob {
         NewJob {

@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc, Arc,
     },
     thread,
@@ -216,6 +216,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         .ok_or_else(|| AppError::Worker("worker stderr was not available".into()))?;
 
     let generation = state.worker.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.worker.finished_job.store(false, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel::<String>();
     *lock(&state.worker.sender)? = Some(sender);
     {
@@ -311,6 +312,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         let mut forced_jobs: Vec<String> = Vec::new();
         let mut restart_requested: Option<Instant> = None;
         let engine_pid = child.id();
+        let engine_started = Instant::now();
         let mut stopped_by_app = false;
         let status = loop {
             match child.try_wait() {
@@ -445,13 +447,15 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         }
         emit_state_changed(&app);
 
-        let attempt = if forced_jobs.is_empty() && !requested_restart {
-            state.worker.restart_count.fetch_add(1, Ordering::SeqCst) + 1
-        } else {
-            1
-        };
-        if attempt <= 3 {
-            thread::sleep(Duration::from_secs(u64::from(attempt)));
+        let failed = forced_jobs.is_empty() && !requested_restart;
+        let finished_job = state.worker.finished_job.swap(false, Ordering::SeqCst);
+        if let Some(delay) = restart_delay(
+            &state.worker.restart_count,
+            engine_started.elapsed(),
+            finished_job,
+            failed,
+        ) {
+            thread::sleep(delay);
             if let Err(error) = start_worker(state.clone(), app.clone()) {
                 set_worker_failure(&state, &app, error.to_string());
             }
@@ -585,16 +589,34 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
 }
 
 /// Send the next job or photo batch (batches only where `batches` holds: on a Mac);
-/// true when something was sent.
+/// true when something was sent or a job was failed, so the window needs to know.
 fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
+    let mut changed = false;
+    loop {
+        match dispatch_once(state, batches)? {
+            Dispatch::Sent => return Ok(true),
+            Dispatch::Idle => return Ok(changed),
+            // The job at the head of the queue failed; the next one is looked at.
+            Dispatch::Failed => changed = true,
+        }
+    }
+}
+
+enum Dispatch {
+    Sent,
+    Idle,
+    Failed,
+}
+
+fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     }
     let Some(pending) = lock(&state.database)?.next_queued_job()? else {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     };
     if lock(&state.runtime)?.worker != "ready" {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     }
     let paths = batch_model_paths(state, batches)?;
     let mut window = Vec::new();
@@ -606,10 +628,16 @@ fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
     }
     let Some((ids, mut message)) = next_dispatch(&window, |path| paths.iter().any(|p| p == path))?
     else {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     };
     let first = ids[0].clone();
-    lock(&state.worker.cancellation)?.prepare(&first, &mut message)?;
+    let prepared = lock(&state.worker.cancellation)?.prepare(&first, &mut message);
+    if let Err(error) = prepared {
+        // The first job's output folder cannot be used (an ejected drive, a folder
+        // that is read-only): that job fails on its own and must not hold up the queue.
+        lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
+        return Ok(Dispatch::Failed);
+    }
     // Preparing can end a batch early, before a photo whose folder cannot be used.
     let ids: Vec<String> = match message["data"]["jobs"].as_array() {
         Some(jobs) if message["type"] == "image_batch_request" => {
@@ -620,7 +648,10 @@ fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
     {
         let mut runtime = lock(&state.runtime)?;
         if runtime.worker != "ready" {
-            return Ok(false);
+            // The engine stopped meanwhile. Nothing was sent, so the folders made for it go.
+            drop(runtime);
+            lock(&state.worker.cancellation)?.finish()?;
+            return Ok(Dispatch::Idle);
         }
         runtime.begin_active_job(first.clone());
         runtime.active_batch_job_ids = if ids.len() > 1 { ids } else { Vec::new() };
@@ -639,7 +670,7 @@ fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
         runtime.active_batch_job_ids.clear();
         return Err(error);
     }
-    Ok(true)
+    Ok(Dispatch::Sent)
 }
 
 /// The rows of the jobs a stopped engine was running. A cancellation that had to
@@ -726,11 +757,7 @@ fn handle_worker_envelope(
     );
     // Once cancelling, late progress must not restore "Enhancing" or enable
     // controls. Measurements may still update while the GPU drains.
-    if cancellation.requested_at.is_some()
-        && cancellation.job_ids.contains(&job_id)
-        && !terminal
-        && envelope.message_type != "video_memory"
-    {
+    if cancellation.is_cancelling(&job_id) && !terminal && envelope.message_type != "video_memory" {
         return;
     }
     // A photo saved off screen needs no full preview: nothing would show it.
@@ -767,7 +794,7 @@ fn handle_worker_envelope(
     // Generate the final full-image preview inside the native control plane.
     // The previous frontend request raced the Rust completion update and could
     // leave a successful job without a center preview until another refresh.
-    if let Some(request) = completion_preview_request(&envelope).filter(|_| !background) {
+    if let Some(request) = completion_preview_request(state, &envelope).filter(|_| !background) {
         if let Err(error) = send(state, &request) {
             if cfg!(debug_assertions) {
                 eprintln!("Could not request completed preview: {error}");
@@ -777,17 +804,14 @@ fn handle_worker_envelope(
 
     match envelope.message_type.as_str() {
         "job_completed" | "video_job_completed" => {
-            let body = if string(&envelope.data, "notes").is_empty() {
-                "Your enhanced media is ready."
-            } else {
-                "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
-            };
-            let _ = app
-                .notification()
-                .builder()
-                .title("LocalSR finished")
-                .body(body)
-                .show();
+            if let Some(body) = finished_notice(state, &envelope.data) {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("LocalSR finished")
+                    .body(body)
+                    .show();
+            }
         }
         "job_failed" => {
             let _ = app
@@ -877,6 +901,37 @@ fn engine_crashed(status: &std::io::Result<std::process::ExitStatus>) -> bool {
     }
 }
 
+/// An engine that stayed up this long, or finished a job, did work: its stopping
+/// starts the count of failed starts over.
+/// The title while frames of a video are enhanced; every message of that stage uses it, so
+/// the status line does not alternate between two wordings.
+const VIDEO_FRAMES_TITLE: &str = "Enhancing video";
+
+const STABLE_RUN: Duration = Duration::from_secs(60);
+/// Failed starts in a row after which the host gives up and shows the failure.
+const MAX_FAILED_STARTS: u32 = 3;
+
+/// How long to wait before starting the engine again after it stopped, or None when
+/// it has failed too often. A start counts as failed when the engine stopped on its
+/// own; its handshake does not clear the count, only a stable run or a finished job.
+/// A stop the host asked for restarts at once, after the first delay.
+fn restart_delay(
+    failed_starts: &AtomicU32,
+    ran: Duration,
+    finished_job: bool,
+    failed: bool,
+) -> Option<Duration> {
+    if ran >= STABLE_RUN || finished_job {
+        failed_starts.store(0, Ordering::SeqCst);
+    }
+    let attempt = if failed {
+        failed_starts.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        1
+    };
+    (attempt <= MAX_FAILED_STARTS).then(|| Duration::from_secs(u64::from(attempt)))
+}
+
 fn restart_overdue(restarting: bool, since: &mut Option<Instant>, now: Instant) -> bool {
     if !restarting {
         *since = None;
@@ -906,6 +961,12 @@ fn accept_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResul
         return Ok(false);
     }
     apply_worker_envelope(state, envelope)?;
+    if matches!(
+        envelope.message_type.as_str(),
+        "job_completed" | "video_job_completed"
+    ) {
+        state.worker.finished_job.store(true, Ordering::SeqCst);
+    }
     Ok(true)
 }
 
@@ -965,6 +1026,12 @@ fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<St
             "{kind} for job {shown:?}, which the host has not dispatched or has already ended"
         )));
     }
+    if lock(&state.database)?.job_has_ended(&id)? {
+        let shown: String = id.chars().take(64).collect();
+        return Ok(Some(format!(
+            "{kind} for job {shown:?}, which already ended"
+        )));
+    }
     if matches!(kind, "job_completed" | "video_job_completed") {
         let reported = string(&envelope.data, "output_path");
         let requested = lock(&state.database)?.requested_output(&id)?;
@@ -1014,13 +1081,13 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
     let id = string(data, "job_id");
     match envelope.message_type.as_str() {
         "progress" => {
-            lock(&state.database)?.update_job_progress(&id, number(data, "percentage"))?;
+            lock(&state.database)?.update_job_progress(&id, percentage(data, "percentage"))?;
         }
         "job_completed" => {
             let output = string(data, "output_path");
             let database = lock(&state.database)?;
             database.finish_job(&id, "completed", &output, &string(data, "notes"))?;
-            database.record_job_duration(&id, number(data, "elapsed_seconds"))?;
+            database.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
             drop(database);
             let mut runtime = lock(&state.runtime)?;
             // The result shown after the batch belongs to last_output_path.
@@ -1093,7 +1160,6 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 )));
             }
             *lock(&state.engine)? = Some(info);
-            state.worker.restart_count.store(0, Ordering::SeqCst);
             {
                 let mut runtime = lock(&state.runtime)?;
                 runtime.worker = "ready".into();
@@ -1119,6 +1185,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     }
                 }
             }
+            state.programs.grant_reported(&capabilities.media);
             *lock(&state.capabilities)? = capabilities;
         }
         "media_info" => {
@@ -1132,8 +1199,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             lock(&state.database)?.update_media_probe(
                 &path,
                 &string(data, "media_kind"),
-                integer(data, "width") as u32,
-                integer(data, "height") as u32,
+                count32(data, "width"),
+                count32(data, "height"),
                 integer(data, "frame_count"),
                 number(data, "fps"),
                 number(data, "duration_seconds"),
@@ -1227,7 +1294,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "stage_started" => {
             let stage = stage_label(&string(data, "stage_kind"));
-            let index = integer(data, "stage_index") + 1;
+            let index = integer(data, "stage_index").saturating_add(1);
             let count = integer(data, "stage_count");
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = format!("{stage} · stage {index}/{count}");
@@ -1241,7 +1308,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "stage_progress" => {}
         "progress" => {
             let id = string(data, "job_id");
-            let progress = number(data, "percentage");
+            let progress = percentage(data, "percentage");
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
@@ -1255,7 +1322,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             } else if !staged {
                 runtime.status_title = "Enhancing".into();
             }
-            let remaining = number(data, "estimated_remaining_seconds");
+            let remaining = seconds(data, "estimated_remaining_seconds");
             // Editing spends most of its time outside the sampling steps; the
             // worker then names the phase it is in.
             let detail = string(data, "detail");
@@ -1270,8 +1337,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             } else {
                 detail
             };
-            runtime.elapsed_seconds = number(data, "elapsed_seconds");
-            runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+            runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
+            runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
             let completed = integer(data, "completed_tiles") as f64;
             runtime.throughput = if runtime.elapsed_seconds > 0.0 {
                 completed / runtime.elapsed_seconds
@@ -1279,7 +1346,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 0.0
             };
             runtime.throughput_unit = if editing { "steps/s" } else { "tiles/s" }.into();
-            runtime.active_tile_size = integer(data, "active_tile_size") as u32;
+            runtime.active_tile_size = count32(data, "active_tile_size");
             runtime.device_free_memory = integer(data, "device_free_memory");
             runtime.device_allocated_memory = integer(data, "device_allocated_memory");
             runtime.live_system_ram_available = integer(data, "system_ram_available");
@@ -1310,9 +1377,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 let frames_done = number(data, "frames_processed");
                 let frames_total = number(data, "total_frames");
                 if frames_total > 0.0 {
-                    runtime.progress = frames_done / frames_total * 100.0;
+                    runtime.progress = (frames_done / frames_total * 100.0).clamp(0.0, 100.0);
                 }
-                runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+                runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
                 let steps = if integer(data, "total") > 0 {
                     format!(
                         "{} / {} · ",
@@ -1325,7 +1392,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 let frames = if integer(data, "total_frames") > 0 {
                     format!(
                         "From frame {} of {} · ",
-                        integer(data, "frame_index") + 1,
+                        integer(data, "frame_index").saturating_add(1),
                         integer(data, "total_frames")
                     )
                 } else {
@@ -1342,16 +1409,16 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 if string(data, "stage") == "saving" {
                     runtime.status_detail = "Finalizing video timing and audio…".into();
                 }
-                runtime.elapsed_seconds = number(data, "elapsed_seconds");
+                runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
                 runtime.throughput_unit = "frames/s".into();
             }
         }
         "video_frame_started" => {
             let mut runtime = lock(&state.runtime)?;
-            runtime.status_title = "Enhancing video · Labs".into();
+            runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
-                integer(data, "frame_index") + 1,
+                integer(data, "frame_index").saturating_add(1),
                 integer(data, "total_frames"),
                 if runtime.estimated_remaining_seconds > 0.0 {
                     eta_suffix(runtime.estimated_remaining_seconds)
@@ -1368,17 +1435,17 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let fraction = frame + if count > 0.0 { done / count } else { 0.0 };
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = if total > 0.0 {
-                fraction / total * 100.0
+                (fraction / total * 100.0).clamp(0.0, 100.0)
             } else {
                 0.0
             };
-            runtime.status_title = "Enhancing video".into();
-            runtime.elapsed_seconds = number(data, "elapsed_seconds");
-            runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
-            runtime.active_tile_size = integer(data, "active_tile_size") as u32;
+            runtime.status_title = VIDEO_FRAMES_TITLE.into();
+            runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
+            runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
+            runtime.active_tile_size = count32(data, "active_tile_size");
             runtime.status_detail = format!(
                 "Frame {} of {} · Tile {} / {}{}",
-                frame as u64 + 1,
+                (frame as u64).saturating_add(1),
                 total as u64,
                 done as u64,
                 count as u64,
@@ -1396,16 +1463,16 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let completed = integer(data, "frames_processed") as f64;
             let total = integer(data, "total_frames") as f64;
             let progress = if total > 0.0 {
-                completed / total * 100.0
+                (completed / total * 100.0).clamp(0.0, 100.0)
             } else {
                 0.0
             };
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
-            let elapsed = number(data, "elapsed_seconds");
-            let remaining = number(data, "estimated_remaining_seconds");
-            runtime.status_title = "Enhancing video · Labs".into();
+            let elapsed = seconds(data, "elapsed_seconds");
+            let remaining = seconds(data, "estimated_remaining_seconds");
+            runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
                 integer(data, "frames_processed"),
@@ -1460,7 +1527,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "benchmark_progress" => {
             let stage = string(data, "stage");
             let mut runtime = lock(&state.runtime)?;
-            runtime.progress = number(data, "percentage");
+            runtime.progress = percentage(data, "percentage");
             runtime.status_title = "Benchmark running".into();
             runtime.status_detail = if stage.is_empty() {
                 format!(
@@ -1482,7 +1549,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let completed_units = integer(data, "completed_units");
             let total_units = integer(data, "total_units");
             let mut runtime = lock(&state.runtime)?;
-            runtime.progress = number(data, "percentage");
+            runtime.progress = percentage(data, "percentage");
             runtime.status_title = "Benchmark running".into();
             runtime.status_detail = if event == "progress" && completed_units > 0 {
                 if total_units > 0 {
@@ -1495,7 +1562,17 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             };
         }
         "benchmark_completed" => {
-            let mut result: BenchmarkResult = serde_json::from_value(data["result"].clone())?;
+            let Ok(mut result) = serde_json::from_value::<BenchmarkResult>(data["result"].clone())
+            else {
+                // The engine is alive; only this answer is unusable.
+                let mut runtime = lock(&state.runtime)?;
+                runtime.take_active_job();
+                runtime.progress = 0.0;
+                runtime.status_title = "Benchmark failed".into();
+                runtime.status_detail =
+                    "The engine's benchmark result could not be read. Nothing was saved.".into();
+                return Ok(());
+            };
             result.retain_device_scores(
                 lock(&state.latest_benchmark)?.as_ref(),
                 std::time::SystemTime::now()
@@ -1571,7 +1648,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             // kept with the job and on the status line.
             let notes = string(data, "notes");
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
-            lock(&state.database)?.record_job_duration(&id, number(data, "elapsed_seconds"))?;
+            lock(&state.database)?.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
             runtime.take_active_job();
             // A video frame thumbnail is a live preview, not a completed
@@ -1587,7 +1664,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 notes
             };
             runtime.elapsed_seconds =
-                number(data, "inference_seconds").max(number(data, "elapsed_seconds"));
+                seconds(data, "inference_seconds").max(seconds(data, "elapsed_seconds"));
             runtime.estimated_remaining_seconds = 0.0;
         }
         "job_cancelled" => {
@@ -1845,6 +1922,22 @@ fn number(value: &Value, key: &str) -> f64 {
     value.get(key).and_then(Value::as_f64).unwrap_or_default()
 }
 
+/// A percentage the engine reported, kept within 0 to 100 for the progress bar.
+fn percentage(value: &Value, key: &str) -> f64 {
+    number(value, key).clamp(0.0, 100.0)
+}
+
+/// A time span the engine reported; a negative one counts as none.
+fn seconds(value: &Value, key: &str) -> f64 {
+    number(value, key).max(0.0)
+}
+
+/// A count that has to fit 32 bits, such as an image side; a larger one saturates
+/// instead of wrapping around to a small number.
+fn count32(value: &Value, key: &str) -> u32 {
+    u32::try_from(integer(value, key)).unwrap_or(u32::MAX)
+}
+
 fn eta_suffix(seconds: f64) -> String {
     if !seconds.is_finite() || seconds <= 0.0 {
         return String::new();
@@ -1930,10 +2023,29 @@ fn should_emit_state_changed(message_type: &str) -> bool {
 /// from the decoder's cache.
 pub const RESULT_PREVIEW_MAX_DIMENSION: u32 = 2048;
 
+/// The text of the "finished" notice, or None while more work is queued: the notice says
+/// LocalSR is done, which a photo of a long batch is not.
+fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
+    let more_work = state
+        .database
+        .lock()
+        .ok()
+        .and_then(|database| database.has_inflight_jobs().ok())
+        .unwrap_or(false);
+    if more_work {
+        return None;
+    }
+    Some(if string(data, "notes").is_empty() {
+        "Your enhanced media is ready."
+    } else {
+        "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
+    })
+}
+
 /// A completed comparison must come from the full output file, never from the
 /// last progressive tile or video frame. Keep this request in the native host
 /// so it cannot race the completion state applied above.
-fn completion_preview_request(envelope: &WorkerEnvelope) -> Option<Value> {
+fn completion_preview_request(state: &AppState, envelope: &WorkerEnvelope) -> Option<Value> {
     let output_path = string(&envelope.data, "output_path");
     if output_path.is_empty() {
         return None;
@@ -1943,10 +2055,8 @@ fn completion_preview_request(envelope: &WorkerEnvelope) -> Option<Value> {
             "type": "preview_request",
             "data": {"image_path": output_path, "max_dimension": RESULT_PREVIEW_MAX_DIMENSION}
         })),
-        "video_job_completed" => Some(json!({
-            "type": "media_probe_request",
-            "data": {"media_path": output_path, "max_dimension": 2048}
-        })),
+        // The probe carries the user's FFmpeg too: a video it encoded may need it to open.
+        "video_job_completed" => Some(media_probe_request(state, &output_path)),
         _ => None,
     }
 }
@@ -2395,7 +2505,7 @@ mod tests {
             data: json!({"job_id": "j", "output_path": "/output/enhanced.png"}),
         };
         assert_eq!(
-            completion_preview_request(&image).unwrap()["data"]["max_dimension"],
+            completion_preview_request(&idle_state(), &image).unwrap()["data"]["max_dimension"],
             RESULT_PREVIEW_MAX_DIMENSION
         );
     }
@@ -2547,7 +2657,7 @@ mod tests {
             data: json!({"output_path": "/output/enhanced.png"}),
         };
         assert_eq!(
-            completion_preview_request(&image),
+            completion_preview_request(&idle_state(), &image),
             Some(json!({
                 "type": "preview_request",
                 "data": {"image_path": "/output/enhanced.png", "max_dimension": 2048}
@@ -2558,19 +2668,26 @@ mod tests {
             message_type: "video_job_completed".into(),
             data: json!({"output_path": "/output/enhanced.mp4"}),
         };
+        let state = idle_state();
         assert_eq!(
-            completion_preview_request(&video),
+            completion_preview_request(&state, &video),
             Some(json!({
                 "type": "media_probe_request",
-                "data": {"media_path": "/output/enhanced.mp4", "max_dimension": 2048}
+                "data": {"media_path": "/output/enhanced.mp4", "max_dimension": 2048, "external_ffmpeg": ""}
             }))
+        );
+        // A user-chosen FFmpeg goes along: the video it encoded may need it to open.
+        lock(&state.settings).unwrap().external_ffmpeg_path = "/opt/tools/ffmpeg".into();
+        assert_eq!(
+            completion_preview_request(&state, &video).unwrap()["data"]["external_ffmpeg"],
+            "/opt/tools/ffmpeg"
         );
 
         let incomplete = WorkerEnvelope {
             message_type: "job_completed".into(),
             data: json!({}),
         };
-        assert_eq!(completion_preview_request(&incomplete), None);
+        assert_eq!(completion_preview_request(&idle_state(), &incomplete), None);
     }
 
     #[test]
@@ -2657,6 +2774,150 @@ mod tests {
             assert!(engine_crashed(&Ok(status)), "{status:?}");
         }
         assert!(!engine_crashed(&Err(std::io::Error::other("no status"))));
+    }
+
+    #[test]
+    fn counters_at_the_largest_value_do_not_overflow() {
+        for (kind, data) in [
+            (
+                "video_tile_progress",
+                json!({"frame_index": u64::MAX, "total_frames": u64::MAX, "total_tiles": 1}),
+            ),
+            (
+                "video_frame_started",
+                json!({"frame_index": u64::MAX, "total_frames": 1}),
+            ),
+            (
+                "video_stage_progress",
+                json!({"job_id": "", "stage": "x", "frame_index": u64::MAX, "total_frames": 5}),
+            ),
+            (
+                "stage_started",
+                json!({"stage_index": u64::MAX, "stage_count": 1}),
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = Arc::new(
+                AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+            );
+            apply_worker_envelope(&state, &envelope(kind, data)).unwrap();
+            assert!(
+                state.runtime.lock().is_ok(),
+                "{kind} poisoned the runtime lock"
+            );
+        }
+    }
+
+    #[test]
+    fn percentages_and_times_from_the_engine_stay_in_range() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            let mut runtime = lock(&state.runtime).unwrap();
+            runtime.active_job_id = "a".into();
+        }
+        for data in [
+            json!({"job_id": "a", "percentage": 1.0e9, "elapsed_seconds": -50.0,
+                   "estimated_remaining_seconds": -1.0e12}),
+            json!({"job_id": "a", "percentage": -5.0}),
+        ] {
+            apply_worker_envelope(&state, &envelope("progress", data)).unwrap();
+            let runtime = lock(&state.runtime).unwrap();
+            assert!(
+                (0.0..=100.0).contains(&runtime.progress),
+                "{}",
+                runtime.progress
+            );
+            assert!(runtime.elapsed_seconds >= 0.0);
+            assert!(runtime.estimated_remaining_seconds >= 0.0);
+        }
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "video_tile_progress",
+                json!({"job_id": "a", "frame_index": 90, "total_frames": 10,
+                       "estimated_remaining_seconds": -3.0}),
+            ),
+        )
+        .unwrap();
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.progress, 100.0);
+        assert_eq!(runtime.estimated_remaining_seconds, 0.0);
+    }
+
+    #[test]
+    fn an_image_side_larger_than_32_bits_saturates() {
+        assert_eq!(
+            count32(&json!({"width": 5_000_000_000_u64}), "width"),
+            u32::MAX
+        );
+        assert_eq!(count32(&json!({"width": 4096}), "width"), 4096);
+        assert_eq!(count32(&json!({}), "width"), 0);
+    }
+
+    #[test]
+    fn an_engine_that_starts_and_stops_again_and_again_is_given_up_on() {
+        let count = AtomicU32::new(0);
+        let quick = Duration::from_secs(3);
+        let delays: Vec<_> = (0..5)
+            .map(|_| restart_delay(&count, quick, false, true))
+            .collect();
+        assert_eq!(
+            delays,
+            [
+                Some(Duration::from_secs(1)),
+                Some(Duration::from_secs(2)),
+                Some(Duration::from_secs(3)),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn an_engine_that_ran_for_a_while_or_finished_a_job_starts_the_count_over() {
+        let count = AtomicU32::new(0);
+        let quick = Duration::from_secs(3);
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert_eq!(
+            restart_delay(&count, STABLE_RUN, false, true),
+            Some(Duration::from_secs(1))
+        );
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert_eq!(
+            restart_delay(&count, quick, true, true),
+            Some(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn a_stop_the_host_asked_for_never_counts_as_a_failed_start() {
+        let count = AtomicU32::new(0);
+        for _ in 0..10 {
+            assert_eq!(
+                restart_delay(&count, Duration::from_secs(1), false, false),
+                Some(Duration::from_secs(1))
+            );
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_engine_handshake_does_not_clear_the_failed_starts() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        state.worker.restart_count.store(2, Ordering::SeqCst);
+        let (sender, _receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        let info = json!({"protocol_version": PROTOCOL_VERSION, "minimum_protocol_version": 1,
+            "engine_id": "e", "engine_version": "1", "features": [], "model_formats": [],
+            "video_engines": []});
+        apply_worker_envelope(&state, &envelope("engine_info", info)).unwrap();
+        assert_eq!(state.worker.restart_count.load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -2857,6 +3118,11 @@ mod tests {
         jobs.into_iter().find(|job| job.id == id).unwrap().status
     }
 
+    fn idle_state() -> AppState {
+        let directory = tempfile::tempdir().unwrap();
+        AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap()
+    }
+
     fn envelope(kind: &str, data: Value) -> WorkerEnvelope {
         WorkerEnvelope {
             message_type: kind.into(),
@@ -2954,6 +3220,118 @@ mod tests {
         // The healthy photos run; the other waits for its own turn.
         assert_eq!(status(&state, "c2"), "queued");
         lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn a_job_whose_scratch_folder_cannot_be_made_fails_and_the_queue_goes_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            // The first job writes to a folder that no longer exists (an ejected drive).
+            let db = lock(&state.database).unwrap();
+            db.cancel_queued_jobs().unwrap();
+            for id in ["bad", "worse", "good"] {
+                db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                    .unwrap();
+                let mut job = photo_job(id);
+                let folder = if id == "good" { "out" } else { "gone" };
+                job["data"]["output_path"] =
+                    json!(directory.path().join(folder).join(format!("{id}.png")));
+                db.insert_job(id, id, &job.to_string()).unwrap();
+            }
+        }
+        ready_for_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["data"]["job_id"], "good");
+        for id in ["bad", "worse"] {
+            assert_eq!(status(&state, id), "failed");
+        }
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        assert!(jobs
+            .iter()
+            .find(|job| job.id == "bad")
+            .unwrap()
+            .error
+            .contains("No such file"));
+        assert_eq!(lock(&state.runtime).unwrap().active_job_id, "good");
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn a_benchmark_result_that_cannot_be_read_fails_the_benchmark_and_not_the_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        lock(&state.runtime)
+            .unwrap()
+            .begin_active_job("benchmark-1".into());
+        for result in [json!({"invalid": true}), json!(null)] {
+            let message = envelope(
+                "benchmark_completed",
+                json!({"job_id": "benchmark-1", "result": result}),
+            );
+            apply_worker_envelope(&state, &message).unwrap();
+            let runtime = lock(&state.runtime).unwrap();
+            assert!(runtime.active_job_id.is_empty());
+            assert_eq!(runtime.status_title, "Benchmark failed");
+            assert_ne!(runtime.worker, "failed");
+            assert!(lock(&state.latest_benchmark).unwrap().is_none());
+            drop(runtime);
+            lock(&state.runtime)
+                .unwrap()
+                .begin_active_job("benchmark-1".into());
+        }
+    }
+
+    #[test]
+    fn frame_messages_of_a_video_share_one_status_title() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        lock(&state.runtime).unwrap().active_job_id = "a".into();
+        let mut titles = Vec::new();
+        for (kind, data) in [
+            (
+                "video_frame_started",
+                json!({"frame_index": 0, "total_frames": 10}),
+            ),
+            (
+                "video_tile_progress",
+                json!({"frame_index": 0, "total_frames": 10, "completed_tiles": 1, "total_tiles": 4}),
+            ),
+            (
+                "video_frame_completed",
+                json!({"job_id": "a", "frames_processed": 1, "total_frames": 10}),
+            ),
+        ] {
+            apply_worker_envelope(&state, &envelope(kind, data)).unwrap();
+            titles.push(lock(&state.runtime).unwrap().status_title.clone());
+        }
+        assert!(
+            titles.windows(2).all(|pair| pair[0] == pair[1]),
+            "{titles:?}"
+        );
+    }
+
+    #[test]
+    fn the_finished_notice_waits_until_the_queue_is_done() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        let done = json!({"job_id": "a"});
+        assert_eq!(finished_notice(&state, &done), None);
+        lock(&state.database).unwrap().cancel_queued_jobs().unwrap();
+        assert_eq!(
+            finished_notice(&state, &done),
+            Some("Your enhanced media is ready.")
+        );
+        assert!(
+            finished_notice(&state, &json!({"notes": "Blur fix skipped"}))
+                .unwrap()
+                .contains("A fix was skipped")
+        );
     }
 
     fn ready_for_batches(state: &AppState) {
@@ -3059,6 +3437,69 @@ mod tests {
         let runtime = lock(&state.runtime).unwrap();
         assert!(runtime.last_output_path.is_empty());
         assert!(runtime.active_job_id.is_empty());
+    }
+
+    #[test]
+    fn a_finished_job_ignores_every_later_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        let own = directory.path().join("out").join("a.png");
+        let done = envelope(
+            "job_completed",
+            json!({"job_id": "a", "output_path": own.to_string_lossy()}),
+        );
+        assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+        assert!(accept_envelope(&state, &done).unwrap());
+        for (kind, data) in [
+            ("progress", json!({"job_id": "a", "percentage": 10.0})),
+            ("job_started", json!({"job_id": "a"})),
+            (
+                "job_failed",
+                json!({"job_id": "a", "error_message": "late"}),
+            ),
+            ("job_cancelled", json!({"job_id": "a"})),
+        ] {
+            assert!(
+                !accept_envelope(&state, &envelope(kind, data)).unwrap(),
+                "{kind}"
+            );
+        }
+        assert!(!accept_envelope(&state, &done).unwrap());
+        assert_eq!(status(&state, "a"), "completed");
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        let job = jobs.iter().find(|job| job.id == "a").unwrap();
+        assert_eq!(job.output_path, own.to_string_lossy());
+    }
+
+    #[test]
+    fn a_job_that_ended_in_the_queue_keeps_that_state_when_the_engine_reports_later() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        // The user cancelled the third photo before the engine reached it.
+        lock(&state.database)
+            .unwrap()
+            .finish_job("c", "cancelled", "", "Cancelled by the user.")
+            .unwrap();
+        let own = directory.path().join("out").join("c.png");
+        for (kind, data) in [
+            ("job_started", json!({"job_id": "c"})),
+            ("progress", json!({"job_id": "c", "percentage": 50.0})),
+            (
+                "job_completed",
+                json!({"job_id": "c", "output_path": own.to_string_lossy()}),
+            ),
+            (
+                "job_failed",
+                json!({"job_id": "c", "error_message": "late"}),
+            ),
+        ] {
+            assert!(
+                !accept_envelope(&state, &envelope(kind, data)).unwrap(),
+                "{kind}"
+            );
+        }
+        assert_eq!(status(&state, "c"), "cancelled");
+        assert!(lock(&state.runtime).unwrap().last_output_path.is_empty());
     }
 
     #[test]
@@ -3227,7 +3668,7 @@ mod tests {
             "job_completed",
             json!({"job_id": "b", "output_path": "/out/b.png"}),
         );
-        assert!(completion_preview_request(&done).is_some());
+        assert!(completion_preview_request(&state, &done).is_some());
         apply_worker_envelope(&state, &done).unwrap();
         apply(
             "preview_ready",

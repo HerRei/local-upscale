@@ -16,8 +16,20 @@ struct SettingsDocument {
     recipes: Vec<Recipe>,
 }
 
+/// The copy a Windows save keeps while it replaces the file (see `replace_settings_file`).
+fn previous_copy(paths: &AppPaths) -> std::path::PathBuf {
+    paths.settings.with_extension("json.previous")
+}
+
 pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
-    if let Some(mut document) = read_document(&paths.settings) {
+    // A save that stopped between its two renames leaves no settings file but the
+    // previous copy, which holds the last complete settings.
+    let document = read_document(&paths.settings).or_else(|| {
+        (!paths.settings.exists())
+            .then(|| read_document(&previous_copy(paths)))
+            .flatten()
+    });
+    if let Some(mut document) = document {
         adopt_automatic_video_format(&mut document.ui);
         return (document.ui, document.recipes);
     }
@@ -273,6 +285,23 @@ fn replace_settings_file(temporary: &Path, destination: &Path) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_are_read_from_the_previous_copy_when_a_save_stopped_between_its_renames() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let saved = UiSettings {
+            tile_size: 192,
+            ..UiSettings::default()
+        };
+        save(&paths, &saved, &[]).unwrap();
+        fs::rename(&paths.settings, previous_copy(&paths)).unwrap();
+        assert_eq!(load(&paths).0.tile_size, 192);
+        // A settings file that exists but cannot be read is never replaced by the old copy.
+        fs::write(&paths.settings, b"{ cut off").unwrap();
+        assert_ne!(load(&paths).0.tile_size, 192);
+        assert!(needs_recovery(&paths));
+    }
 
     #[test]
     fn v1_fix_migration_preserves_choices_and_explicit_empty_lists() {

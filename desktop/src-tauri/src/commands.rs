@@ -102,12 +102,7 @@ pub fn start_edit(
             "The selected editing GPU is unavailable.".into(),
         ));
     }
-    let runtime = fs::canonicalize(&input.runtime_path)?;
-    if !runtime.is_file() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
-    }
+    let runtime = edit_runtime(&state, &input.runtime_path)?;
     let media = lock(&state.database)?
         .get_media(&input.media_id)?
         .ok_or_else(|| AppError::Validation("Choose an image to edit.".into()))?;
@@ -137,6 +132,29 @@ pub fn start_edit(
     Ok(())
 }
 
+/// The editing program to run: the one the host found at start-up. The web view
+/// may repeat that path but cannot name another.
+fn edit_runtime(state: &AppState, requested: &str) -> AppResult<PathBuf> {
+    let found = lock(&state.edit_runtime)?.clone();
+    if found.is_empty() {
+        return Err(AppError::Validation(
+            "Choose the native editing runtime.".into(),
+        ));
+    }
+    let found = fs::canonicalize(found)?;
+    if !found.is_file() {
+        return Err(AppError::Validation(
+            "Choose the native editing runtime.".into(),
+        ));
+    }
+    if !requested.is_empty() && fs::canonicalize(requested).ok().as_ref() != Some(&found) {
+        return Err(AppError::Validation(
+            "Only the editing runtime LocalSR found itself can be used.".into(),
+        ));
+    }
+    Ok(found)
+}
+
 #[tauri::command]
 pub fn bootstrap(state: State<'_, Arc<AppState>>) -> AppResult<AppSnapshot> {
     state.snapshot()
@@ -159,8 +177,13 @@ pub fn scan_media_folder(path: String) -> AppResult<Vec<String>> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
+        // A name that is not valid text cannot be sent to the window and back: its
+        // lossy copy would name another file or none.
+        let Some(text) = path.to_str() else {
+            continue;
+        };
         if path.is_file() && media_kind(&path).is_some() {
-            paths.push(path.to_string_lossy().into_owned());
+            paths.push(text.to_owned());
             if paths.len() >= MAX_MEDIA_ITEMS {
                 break;
             }
@@ -261,14 +284,32 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
         ));
     }
     validate_settings(&settings)?;
-    let mut settings = settings;
-    {
+    state.programs.check(&settings.external_ffmpeg_path)?;
+    replace_settings(&state, settings)
+}
+
+/// Make `settings` the current ones and write them. When the write fails the
+/// previous settings stay, so the window never uses what the file does not hold.
+fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()> {
+    let previous = {
         // Read and replace under one guard, so a switch saved in between is kept.
         let mut current = lock(&state.settings)?;
         keep_update_switches(&current, &mut settings);
-        *current = settings;
+        std::mem::replace(&mut *current, settings)
+    };
+    persist_or_restore(state, |state| {
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
+/// Write the settings and recipes; on a failed write run `restore` to put the
+/// previous values back.
+fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppResult<()> {
+    let written = state.persist_settings();
+    if written.is_err() {
+        restore(state);
     }
-    state.persist_settings()
+    written
 }
 
 /// The update switches change only through set_update_switch. A full settings save
@@ -383,17 +424,7 @@ pub fn save_recipe(
         ));
     }
     validate_recipe_stages(&recipe)?;
-    let mut recipes = lock(&state.recipes)?;
-    if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
-        *existing = recipe;
-    } else {
-        if recipes.len() >= 100 {
-            return Err(AppError::Validation("recipe limit reached".into()));
-        }
-        recipes.push(recipe);
-    }
-    drop(recipes);
-    state.persist_settings()?;
+    store_recipe(&state, recipe)?;
     let switches = native_menu::switches(&*lock(&state.settings)?);
     native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
@@ -402,6 +433,39 @@ pub fn save_recipe(
     })?;
     emit_state_changed(&app);
     Ok(())
+}
+
+/// Add or replace a recipe and write it; a failed write leaves the recipes as they were.
+fn store_recipe(state: &AppState, recipe: Recipe) -> AppResult<()> {
+    let previous = {
+        let mut recipes = lock(&state.recipes)?;
+        let previous = recipes.clone();
+        if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
+            *existing = recipe;
+        } else {
+            if recipes.len() >= 100 {
+                return Err(AppError::Validation("recipe limit reached".into()));
+            }
+            recipes.push(recipe);
+        }
+        previous
+    };
+    persist_or_restore(state, |state| {
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
+/// Remove a recipe and write the change; a failed write leaves the recipes as they were.
+fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
+    let previous = {
+        let mut recipes = lock(&state.recipes)?;
+        let previous = recipes.clone();
+        recipes.retain(|recipe| recipe.id != id);
+        previous
+    };
+    persist_or_restore(state, |state| {
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
 }
 
 fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
@@ -485,8 +549,7 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
-    lock(&state.recipes)?.retain(|recipe| recipe.id != id);
-    state.persist_settings()?;
+    remove_recipe(&state, &id)?;
     let switches = native_menu::switches(&*lock(&state.settings)?);
     native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
@@ -518,6 +581,8 @@ pub fn start_jobs(
     {
         return Err(AppError::Validation("An update is being installed".into()));
     }
+    let mut input = input;
+    input.device = resolve_device(&state, &input.device)?;
     validate_start(&input, &state)?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     if input.task == "video"
@@ -752,7 +817,7 @@ fn trial_candidates(
     model_ids: &[String],
     base: &StartBatchInput,
 ) -> AppResult<Vec<TrialCandidate>> {
-    if model_ids.is_empty()
+    if model_ids.len() < 2
         || model_ids.len() > 4
         || model_ids.iter().collect::<HashSet<_>>().len() != model_ids.len()
     {
@@ -768,7 +833,11 @@ fn trial_candidates(
             "Try others needs one selected image in Upscale or Restore.".into(),
         ));
     }
+    let mut resolved = base.clone();
+    resolved.device = resolve_device(state, &base.device)?;
+    let base = &resolved;
     validate_start(base, state)?;
+    validate_fix_engine(base, lock(&state.engine)?.as_ref())?;
     // The Restore model is the fix: each candidate must fix the active problem.
     // With several fixes it is the last one: the fixes before it keep their models.
     let active_fix = base.fix_stages.last().map(|stage| stage.fix.clone());
@@ -1049,7 +1118,7 @@ pub fn request_compare_regions(
 }
 
 #[tauri::command]
-pub fn clear_compare_regions(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+pub fn clear_compare_regions(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     {
         let database = lock(&state.database)?;
@@ -1064,6 +1133,7 @@ pub fn clear_compare_regions(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     }) {
         let _ = worker::send(&state, &json!({"type":"region_clear", "data":{}}));
     }
+    emit_state_changed(&app);
     Ok(())
 }
 
@@ -1171,14 +1241,9 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
             "the chosen benchmark file already exists; choose a new name".into(),
         ));
     }
-    let file_name = destination
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| AppError::Validation("benchmark destination is invalid".into()))?;
-    let temporary = parent.join(format!(
-        ".{file_name}.localsr-benchmark-{}.tmp",
-        Uuid::new_v4()
-    ));
+    // A short fixed name: the destination's own name may already be at the file
+    // system's limit.
+    let temporary = parent.join(format!(".localsr-benchmark-{}.tmp", Uuid::new_v4()));
     let export_result = (|| -> AppResult<()> {
         let mut output = fs::OpenOptions::new()
             .write(true)
@@ -1187,19 +1252,7 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
         output.write_all(bytes)?;
         output.sync_all()?;
         drop(output);
-
-        // hard_link() creates the destination without replacing an existing
-        // file, then unlinking our same-directory temporary makes the publish
-        // atomic and no-clobber on supported desktop filesystems.
-        fs::hard_link(&temporary, destination).map_err(|error| {
-            if destination.exists() {
-                AppError::Validation(
-                    "the chosen benchmark file already exists; choose a new name".into(),
-                )
-            } else {
-                AppError::Io(error)
-            }
-        })?;
+        publish_without_replacing(&temporary, destination, |from, to| fs::hard_link(from, to))?;
         fs::remove_file(&temporary)?;
         Ok(())
     })();
@@ -1207,6 +1260,37 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
         let _ = fs::remove_file(&temporary);
     }
     export_result
+}
+
+/// Give `temporary` the name `destination` without replacing a file that is there.
+/// A hard link does it atomically; a volume that has none (FAT, exFAT, a network
+/// share) gets a copy into a file only this call created.
+fn publish_without_replacing(
+    temporary: &Path,
+    destination: &Path,
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> AppResult<()> {
+    let Err(error) = link(temporary, destination) else {
+        return Ok(());
+    };
+    if destination.exists() {
+        return Err(AppError::Validation(
+            "the chosen benchmark file already exists; choose a new name".into(),
+        ));
+    }
+    let copied = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .and_then(|mut output| {
+            std::io::copy(&mut fs::File::open(temporary)?, &mut output)?;
+            output.sync_all()
+        });
+    if copied.is_err() {
+        let _ = fs::remove_file(destination);
+        return Err(AppError::Io(error));
+    }
+    Ok(())
 }
 
 /// Decode saved results for the preview. With `showing` (and `against`, which
@@ -1404,6 +1488,17 @@ pub async fn prepare_video_comparison(
     .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
 }
 
+/// The real path of a video file, or the message that it is gone (a deleted or moved
+/// file) instead of the system's own error text.
+fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
+    match fs::canonicalize(path) {
+        Ok(real) if real.is_file() => Ok(real),
+        _ => Err(AppError::Validation(
+            "the original or enhanced video is no longer available".into(),
+        )),
+    }
+}
+
 fn video_comparison_sources(
     state: &AppState,
     app: &AppHandle,
@@ -1426,13 +1521,8 @@ fn video_comparison_sources(
         let output = database.latest_completed_output_for_media(media_id)?;
         (PathBuf::from(media.path), output.map(PathBuf::from))
     };
-    let original = fs::canonicalize(original)?;
-    let enhanced = enhanced.map(fs::canonicalize).transpose()?;
-    if !original.is_file() || enhanced.as_ref().is_some_and(|path| !path.is_file()) {
-        return Err(AppError::Validation(
-            "the original or enhanced video is no longer available".into(),
-        ));
-    }
+    let original = canonical_video(original)?;
+    let enhanced = enhanced.map(canonical_video).transpose()?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
@@ -1642,7 +1732,7 @@ pub fn remove_model(
         }
         // Editing bundles live beside the catalog; shared components survive.
         None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
-            return Err(AppError::Validation("unknown image model".into()));
+            return Err(AppError::Validation("unknown model".into()));
         }
         None => {}
     }
@@ -1784,7 +1874,7 @@ pub fn uninstall_integrations() -> AppResult<integrations::IntegrationStatus> {
 /// Suggest FFmpeg executables the user installed. LocalSR never runs one
 /// until the user selects it, and never downloads or bundles FFmpeg.
 #[tauri::command]
-pub fn detect_external_ffmpeg() -> Vec<String> {
+pub fn detect_external_ffmpeg(state: State<'_, Arc<AppState>>) -> Vec<String> {
     let name = if cfg!(windows) {
         "ffmpeg.exe"
     } else {
@@ -1813,7 +1903,45 @@ pub fn detect_external_ffmpeg() -> Vec<String> {
     ] {
         consider(PathBuf::from(directory).join(name));
     }
+    for path in &found {
+        state.programs.grant(path);
+    }
     found
+}
+
+/// Let the user pick the FFmpeg program in the host's own file dialog. The host
+/// remembers the choice: only programs it found or was shown this way are run.
+#[tauri::command]
+pub async fn choose_external_ffmpeg(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    current: String,
+) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Select the FFmpeg program installed on this computer");
+    if let Some(folder) = Path::new(&current)
+        .parent()
+        .filter(|folder| folder.is_dir())
+    {
+        dialog = dialog.set_directory(folder);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?
+        .to_string_lossy()
+        .into_owned();
+    state.programs.grant(&path);
+    Ok(Some(path))
 }
 
 pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";
@@ -2130,8 +2258,31 @@ fn validate_system_outputs(input: &StartBatchInput, media: &Value) -> AppResult<
     Ok(())
 }
 
+/// The device a run uses. A device this computer does not report is refused, except
+/// the one saved in the settings: it stays saved, since the device may come back,
+/// and the run uses the CPU, which is always there.
+fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
+    let capabilities = lock(&state.capabilities)?;
+    let reported = |id: &str| capabilities.devices.iter().any(|device| device.id == id);
+    if reported(requested) {
+        return Ok(requested.to_owned());
+    }
+    if capabilities.system_ram_total == 0 {
+        return Err(AppError::Validation(
+            "LocalSR is still detecting this computer's hardware. Try again in a moment.".into(),
+        ));
+    }
+    if requested == lock(&state.settings)?.device_id && reported("cpu") {
+        return Ok("cpu".into());
+    }
+    Err(AppError::Validation(
+        "The selected device is not available on this computer. Choose another one in Advanced settings.".into(),
+    ))
+}
+
 fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
     validate_start_input(input, external_codecs_available(state))?;
+    state.programs.check(&input.external_ffmpeg_path)?;
     let media = state
         .capabilities
         .lock()
@@ -2788,6 +2939,13 @@ fn prepare_output_directory(state: &AppState, requested: &str) -> AppResult<Path
     } else {
         PathBuf::from(requested)
     };
+    // A relative folder would be made below the working directory, which for a
+    // desktop app is wherever the system started it.
+    if !path.is_absolute() {
+        return Err(AppError::Validation(
+            "choose the full path of the output folder".into(),
+        ));
+    }
     fs::create_dir_all(&path)?;
     let canonical = fs::canonicalize(path)?;
     if !canonical.is_dir() {
@@ -2834,12 +2992,27 @@ fn unique_output_path(
         } else {
             format!("_{counter}")
         };
-        let candidate = directory.join(format!("{stem}{suffix}{numbered}.{extension}"));
+        let ending = format!("{suffix}{numbered}.{extension}");
+        let stem = fit_stem(stem, MAX_FILE_NAME_BYTES.saturating_sub(ending.len()));
+        let candidate = directory.join(format!("{stem}{ending}"));
         if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
         }
         counter = counter.saturating_add(1);
     }
+}
+
+/// The longest file name file systems accept (APFS, ext4, NTFS and exFAT all allow 255
+/// bytes or characters). A name in UTF-8 that fits is short enough for each.
+const MAX_FILE_NAME_BYTES: usize = 255;
+
+/// `stem` cut to at most `limit` bytes, on a character boundary.
+fn fit_stem(stem: &str, limit: usize) -> &str {
+    let mut end = limit.min(stem.len());
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    &stem[..end]
 }
 
 fn model_slug(id: &str) -> String {
@@ -2896,7 +3069,7 @@ fn normalize_media_paths(paths: Vec<String>) -> AppResult<Vec<(PathBuf, &'static
         let mut children = fs::read_dir(&canonical)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.is_file() && media_kind(path).is_some())
+            .filter(|path| path.to_str().is_some() && path.is_file() && media_kind(path).is_some())
             .collect::<Vec<_>>();
         children.sort_by_key(|path| path.to_string_lossy().to_lowercase());
         for child in children {
@@ -3012,6 +3185,7 @@ pub fn open_model_license(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::AppPaths;
     use crate::types::RecipeStage;
 
     #[test]
@@ -3679,6 +3853,74 @@ mod tests {
                 stages.len() == 1 && stages[0]["model_id"] == id.as_str()
             }));
         }
+    }
+
+    #[test]
+    fn a_run_names_only_a_device_the_computer_reports() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+        assert_eq!(resolve_device(&state, "cpu").unwrap(), "cpu");
+        let error = resolve_device(&state, "cuda:3").unwrap_err();
+        assert!(error.to_string().contains("not available"));
+    }
+
+    #[test]
+    fn a_saved_device_that_is_gone_runs_on_the_cpu_and_stays_saved() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+        lock(&state.settings).unwrap().device_id = "cuda:1".into();
+        assert_eq!(resolve_device(&state, "cuda:1").unwrap(), "cpu");
+        assert_eq!(lock(&state.settings).unwrap().device_id, "cuda:1");
+        assert!(resolve_device(&state, "cuda:2").is_err());
+    }
+
+    #[test]
+    fn no_device_is_judged_before_the_hardware_has_been_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        lock(&state.settings).unwrap().device_id = "mps".into();
+        let error = resolve_device(&state, "mps").unwrap_err();
+        assert!(error.to_string().contains("still detecting"));
+    }
+
+    #[test]
+    fn try_others_runs_a_gone_saved_device_on_the_cpu() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 2, upscaler);
+        lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+        lock(&state.settings).unwrap().device_id = "cuda:1".into();
+        let mut base = input("upscale");
+        base.device = "cuda:1".into();
+        let candidates = trial_candidates(&state, "media", &ids, &base).unwrap();
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.input.device == "cpu"));
+    }
+
+    #[test]
+    fn try_others_needs_two_to_four_models_and_an_engine_that_runs_the_fixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 2, upscaler);
+        let base = input("upscale");
+        let error = trial_candidates(&state, "media", &ids[..1], &base)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("2 to 4"));
+        // Two fixes need an engine that runs several; this one is not known to.
+        let mut several = base.clone();
+        several.fix_stages = ["blur", "jpeg"]
+            .iter()
+            .map(|fix| crate::types::FixStageSelection {
+                fix: (*fix).into(),
+                model_id: ids[0].clone(),
+            })
+            .collect();
+        let error = trial_candidates(&state, "media", &ids, &several)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("one fix at a time"));
     }
 
     #[test]
@@ -4670,6 +4912,221 @@ mod tests {
         assert!(error.to_string().contains("HDR"));
         options.video_hdr_mode = "tone_map".into();
         assert!(build_job_message("tone", &hdr, output, work, &options, &selection).is_ok());
+    }
+
+    #[test]
+    fn the_editing_runtime_is_the_one_the_host_found() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let found = directory.path().join("sd-cli");
+        let planted = directory.path().join("planted-tool");
+        fs::write(&found, b"found").unwrap();
+        fs::write(&planted, b"planted").unwrap();
+        // Nothing found at start-up: no program can be named.
+        assert!(edit_runtime(&state, planted.to_str().unwrap()).is_err());
+        *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+        assert_eq!(
+            edit_runtime(&state, "").unwrap(),
+            fs::canonicalize(&found).unwrap()
+        );
+        assert_eq!(
+            edit_runtime(&state, found.to_str().unwrap()).unwrap(),
+            fs::canonicalize(&found).unwrap()
+        );
+        assert!(edit_runtime(&state, planted.to_str().unwrap()).is_err());
+        assert!(edit_runtime(&state, "/nonexistent/sd-cli").is_err());
+    }
+
+    #[test]
+    fn a_batch_names_only_an_ffmpeg_the_host_obtained() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let mut input = input("upscale");
+        assert!(validate_start(&input, &state).is_ok());
+        input.external_ffmpeg_path = "/tmp/planted-tool".into();
+        assert!(validate_start(&input, &state).is_err());
+        state.programs.grant("/tmp/planted-tool");
+        assert!(validate_start(&input, &state).is_ok());
+    }
+
+    #[test]
+    fn a_long_source_name_is_shortened_so_the_result_name_fits_the_file_system() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut video = input("video");
+        video.video_container = "mkv".into();
+        let mut named = input("upscale");
+        named.name_by_model = true;
+        for (stem, task) in [
+            ("a".repeat(300), input("upscale")),
+            ("写".repeat(200), input("upscale")),
+            ("🎞".repeat(120), input("denoise")),
+            ("é".repeat(127) + "x", named),
+            ("v".repeat(255), video),
+        ] {
+            let source = format!("/in/{stem}.png");
+            let mut reserved = ReservedOutputs::default();
+            let mut names = Vec::new();
+            for _ in 0..3 {
+                let path = unique_output_path(directory.path(), &source, &task, &mut reserved);
+                names.push(path.file_name().unwrap().to_str().unwrap().to_owned());
+            }
+            let ending = match task.task.as_str() {
+                "denoise" => "_denoised",
+                "video" => "_video_4x",
+                _ => "_upscaled_4x",
+            };
+            for (index, name) in names.iter().enumerate() {
+                assert!(name.len() <= 255, "{} bytes: {name}", name.len());
+                assert!(name.contains(ending));
+                let extension = if task.task == "video" { ".mkv" } else { ".png" };
+                assert!(name.ends_with(extension), "{name}");
+                if index > 0 {
+                    assert!(name[..name.len() - extension.len()].ends_with(&format!("_{index}")));
+                }
+            }
+            assert_eq!(names.iter().collect::<HashSet<_>>().len(), 3);
+        }
+    }
+
+    #[test]
+    fn a_name_that_already_fits_is_left_as_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut reserved = ReservedOutputs::default();
+        let path = unique_output_path(
+            directory.path(),
+            "/in/holiday.png",
+            &input("upscale"),
+            &mut reserved,
+        );
+        assert_eq!(path.file_name().unwrap(), "holiday_upscaled_4x.png");
+    }
+
+    #[test]
+    fn a_benchmark_can_be_exported_under_the_longest_file_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join(format!("{}.json", "n".repeat(250)));
+        write_benchmark_export(&destination, b"{}").unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"{}");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_volume_without_hard_links_gets_a_copy_that_never_replaces_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let no_links = |_: &Path, _: &Path| -> std::io::Result<()> {
+            Err(std::io::ErrorKind::Unsupported.into())
+        };
+        let temporary = directory.path().join("temporary");
+        fs::write(&temporary, b"new").unwrap();
+        let destination = directory.path().join("export.json");
+        publish_without_replacing(&temporary, &destination, no_links).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        let error = publish_without_replacing(&temporary, &destination, no_links).unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_relative_output_folder_is_refused_and_not_created() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let name = format!("relative-output-{}", std::process::id());
+        let outcome = prepare_output_directory(&state, &format!("{name}/inner"));
+        let created = Path::new(&name).exists();
+        let _ = fs::remove_dir_all(&name);
+        assert!(outcome.is_err());
+        assert!(!created);
+        let absolute = directory.path().join("made/here");
+        assert!(prepare_output_directory(&state, absolute.to_str().unwrap()).is_ok());
+        assert!(absolute.is_dir());
+        assert_eq!(
+            prepare_output_directory(&state, "  ").unwrap(),
+            fs::canonicalize(&state.paths.default_output).unwrap()
+        );
+    }
+
+    /// A settings file that cannot be read makes every write fail, as a file the user
+    /// has to recover first does.
+    fn state_that_cannot_save(directory: &Path) -> AppState {
+        let paths = AppPaths::under(directory);
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(&paths.settings, b"{ cut off").unwrap();
+        AppState::from_paths(paths).unwrap()
+    }
+
+    fn recipe_named(id: &str) -> Recipe {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "task": "upscale", "model_id": "m", "output_scale": 2,
+            "tile_size": 256, "halo": 16, "precision": "fp32", "safe_memory": false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_settings_and_recipes_as_they_were() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state_that_cannot_save(directory.path());
+        let before = lock(&state.settings).unwrap().tile_size;
+        let mut changed = lock(&state.settings).unwrap().clone();
+        changed.tile_size = if before == 64 { 128 } else { 64 };
+        assert!(replace_settings(&state, changed).is_err());
+        assert_eq!(lock(&state.settings).unwrap().tile_size, before);
+        assert!(store_recipe(&state, recipe_named("r1")).is_err());
+        assert!(lock(&state.recipes).unwrap().is_empty());
+        lock(&state.recipes).unwrap().push(recipe_named("kept"));
+        assert!(remove_recipe(&state, "kept").is_err());
+        assert_eq!(lock(&state.recipes).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_written_recipe_is_kept_replaced_and_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        store_recipe(&state, recipe_named("r1")).unwrap();
+        let mut renamed = recipe_named("r1");
+        renamed.name = "renamed".into();
+        store_recipe(&state, renamed).unwrap();
+        assert_eq!(lock(&state.recipes).unwrap().len(), 1);
+        assert_eq!(lock(&state.recipes).unwrap()[0].name, "renamed");
+        remove_recipe(&state, "r1").unwrap();
+        assert!(lock(&state.recipes).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_whose_name_is_not_valid_text_is_left_out_of_a_folder() {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("good.png"), b"x").unwrap();
+        let odd = directory
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"holiday-\xff.png"));
+        fs::write(odd, b"x").unwrap();
+        let folder = directory.path().to_string_lossy().into_owned();
+        let scanned = scan_media_folder(folder.clone()).unwrap();
+        assert_eq!(scanned.len(), 1);
+        assert!(scanned[0].ends_with("good.png"));
+        let normalized = normalize_media_paths(vec![folder]).unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert!(Path::new(&scanned[0]).exists());
+    }
+
+    #[test]
+    fn a_video_that_is_gone_is_reported_as_no_longer_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let present = directory.path().join("clip.mp4");
+        fs::write(&present, b"x").unwrap();
+        assert_eq!(
+            canonical_video(present.clone()).unwrap(),
+            fs::canonicalize(&present).unwrap()
+        );
+        for gone in [
+            directory.path().join("missing.mp4"),
+            directory.path().to_path_buf(),
+        ] {
+            let error = canonical_video(gone).unwrap_err();
+            assert!(error.to_string().contains("no longer available"), "{error}");
+        }
     }
 
     #[test]
