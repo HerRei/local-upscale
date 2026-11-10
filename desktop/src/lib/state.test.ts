@@ -394,6 +394,11 @@ describe('desktop state', () => {
     expect(formatDuration(125)).toBe('2:05');
   });
 
+  it('writes a size below one byte in bytes, never with a missing unit', () => {
+    expect(formatBytes(0.5)).toBe('1 B');
+    expect(formatBytes(1e-9)).not.toMatch(/undefined|NaN/);
+  });
+
   it('finishes a slow benchmark with unmeasured consistency and unlocks the queue', () => {
     const before = demoSnapshot();
     before.runtime.active_job_id = 'benchmark-slow';
