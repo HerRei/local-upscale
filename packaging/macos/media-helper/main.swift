@@ -9,6 +9,7 @@
 //   localsr-media version
 //   localsr-media probe <file>
 //   localsr-media decode <file> [--audio out.wav] [--max-frames N] [--no-video]
+//   localsr-media canencode
 //   localsr-media encode --output out.mp4 --codec h264|hevc|prores [--quality 0..1]
 //                        [--container mp4|mov] [--bitrate N] [--hdr HLG|PQ]
 //                        [--audio in.wav] [--aac-bitrate N] [--rotation DEG] < frames
@@ -957,6 +958,18 @@ func encode(_ arguments: Arguments) throws {
     try printJSON(["frames": video.frames, "output": outputPath, "codec": codecName, "hdr": hdr])
 }
 
+// MARK: - canencode
+
+/// Whether this Mac can write ProRes: some Macs (virtual machines among them) have no
+/// ProRes encoder, and AVAssetWriter refuses the settings there.
+func canEncode() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("localsr-probe-\(UUID().uuidString).mov")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+    let settings: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.proRes422, AVVideoWidthKey: 1920, AVVideoHeightKey: 1080]
+    try printJSON(["prores": writer.canApply(outputSettings: settings, forMediaType: .video)])
+}
+
 // MARK: - main
 
 do {
@@ -974,6 +987,8 @@ do {
         try decode(parsed)
     case "encode":
         try encode(parsed)
+    case "canencode":
+        try canEncode()
     default:
         throw HelperError("unknown command \(command)")
     }
