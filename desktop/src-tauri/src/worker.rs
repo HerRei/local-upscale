@@ -175,6 +175,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     }
     if let Some(path) = specification.python_path {
         command.env("PYTHONPATH", path);
+        command.env("PYTHONUTF8", "1");
     }
     command.env("PYTHONUNBUFFERED", "1");
     let crashed_engine = state.worker.crashed_engine.swap(0, Ordering::SeqCst);
@@ -1541,6 +1542,7 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
     }
     if let Some(path) = specification.python_path {
         command.env("PYTHONPATH", path);
+        command.env("PYTHONUTF8", "1");
     }
     command.env("PYTHONUNBUFFERED", "1");
     #[cfg(windows)]

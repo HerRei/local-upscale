@@ -1571,7 +1571,9 @@ def main():
         parser.add_argument("--output", type=Path, required=True)
         args = parser.parse_args()
         result = probe(args.backend_probe)
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        args.output.write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         return
     server = WorkerServer()
     server.run()

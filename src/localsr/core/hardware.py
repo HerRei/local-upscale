@@ -362,7 +362,9 @@ def _gpu_suggestion(devices: list[dict]) -> dict | None:
         elif sys.platform == "linux":
             found: dict[str, Path] = {}
             for vendor_file in sorted(_DRM_ROOT.glob("card[0-9]*/device/vendor")):
-                download = _LINUX_VENDORS.get(vendor_file.read_text().strip().lower())
+                download = _LINUX_VENDORS.get(
+                    vendor_file.read_text(encoding="utf-8").strip().lower()
+                )
                 if download is not None:
                     found.setdefault(download, vendor_file.parent)
             for download in ("CUDA", "ROCm"):
@@ -384,7 +386,7 @@ def _gpu_suggestion(devices: list[dict]) -> dict | None:
 
 
 def _linux_gpu_name(device: Path) -> str:
-    vendor = device.joinpath("vendor").read_text().strip().lower()
+    vendor = device.joinpath("vendor").read_text(encoding="utf-8").strip().lower()
     return {"0x10de": "an NVIDIA GPU", "0x1002": "an AMD GPU", "0x8086": "Intel graphics"}[vendor]
 
 

@@ -653,7 +653,7 @@ class _OnnxImage(torch.nn.Module):
             return set()
         try:
             profile_path = Path(state["session"].end_profiling())
-            events = json.loads(profile_path.read_text())
+            events = json.loads(profile_path.read_text(encoding="utf-8"))
             return {
                 event.get("args", {}).get("provider")
                 for event in events

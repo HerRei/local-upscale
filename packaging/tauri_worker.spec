@@ -249,7 +249,7 @@ pyz = PYZ(analysis.pure)
 executable = EXE(
     pyz,
     analysis.scripts,
-    [],
+    [("X utf8", None, "OPTION")],
     exclude_binaries=True,
     name="localsr-worker",
     debug=False,

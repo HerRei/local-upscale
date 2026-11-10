@@ -33,6 +33,8 @@
 
 ### Fixed
 
+- The engine uses UTF-8 for text files on Windows regardless of the system code page.
+
 - Apple ProRes is offered only on Macs that can encode it. Virtual machines and some
   other Macs cannot, and the export used to fail there.
 - The Core ML route no longer stores a rejection for a model and size after a
