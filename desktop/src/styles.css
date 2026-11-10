@@ -1429,33 +1429,42 @@ input[type='number'],
   background: var(--accent-hi);
   transition: width 0.5s ease;
 }
-/* A moving shine shows that work continues between progress updates. */
+/* A moving shine shows that work continues between progress updates. It is a layer as wide as
+   the whole line, moved by transform on the compositor and clipped by the filled part, so a
+   change of the fill's width neither restarts it nor makes it jump. */
+.progress,
+.row-progress {
+  container-type: inline-size;
+}
 .progress i::after,
 .row-progress i::after {
   content: '';
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100cqw;
   background: linear-gradient(
     100deg,
-    transparent 30%,
+    transparent 40%,
     rgba(231, 231, 231, 0.8) 50%,
-    transparent 70%
+    transparent 60%
   );
-  background-size: 250% 100%;
   animation: progress-shine 1.6s linear infinite;
 }
 @keyframes progress-shine {
   from {
-    background-position: 125% 0;
+    transform: translateX(-100%);
   }
   to {
-    background-position: -125% 0;
+    transform: translateX(100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .progress i::after,
   .row-progress i::after {
     animation: none;
+    display: none;
   }
 }
 
