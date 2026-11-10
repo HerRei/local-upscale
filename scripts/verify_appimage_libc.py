@@ -112,7 +112,7 @@ def main() -> int:
         return 2
     if runtime:
         needs["(AppImage runtime)"] = runtime
-    newest = max(needs.values(), key=version_key) if needs else None
+    newest = max(needs.values(), key=version_key)
     ceiling = version_key(args.max)
     offenders = sorted(
         ((path, version) for path, version in needs.items() if version_key(version) > ceiling),

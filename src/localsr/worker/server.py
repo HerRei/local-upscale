@@ -189,6 +189,35 @@ def _device_lost(error: BaseException) -> bool:
 
 
 class WorkerServer:
+    def _verify_benchmark_model(self, model_id, data):
+        model = CATALOG_BY_ID[model_id]
+        supplied = Path(str(data.get("model_path") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.path_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                "Download and verify the Quick model before benchmarking."
+            ) from error
+        if supplied != expected or not self.model_store.is_installed(model):
+            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+        return model, expected
+
+    def _create_video_preview_encoders(self, job_id, data):
+        preview_encoder = LatestPreviewEncoder(
+            lambda packet: self._emit_live_preview(packet),
+            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
+            enabled=bool(data.get("preview_enabled", True)),
+            max_fps=float(data.get("preview_max_fps", 2.0)),
+            max_dimension=int(data.get("preview_max_dimension", 320)),
+        )
+        source_encoder = LatestPreviewEncoder(
+            self._emit_live_preview,
+            enabled=bool(data.get("preview_enabled", True)),
+            max_dimension=640,
+        )
+        return preview_encoder, source_encoder
+
     def __init__(self):
         cleanup_stale_work_files()
         self.message_queue = queue.Queue()
@@ -613,17 +642,7 @@ class WorkerServer:
             raise ValueError(
                 f"{WORKLOAD_VERSION} requires the trusted {WORKLOAD_MODEL_ID} checkpoint."
             )
-        model = CATALOG_BY_ID[WORKLOAD_MODEL_ID]
-        supplied = Path(str(data.get("model_path") or ""))
-        try:
-            supplied = supplied.resolve(strict=True)
-            expected = self.model_store.path_for(model).resolve(strict=True)
-        except OSError as error:
-            raise FileNotFoundError(
-                "Download and verify the Quick model before benchmarking."
-            ) from error
-        if supplied != expected or not self.model_store.is_installed(model):
-            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+        model, expected = WorkerServer._verify_benchmark_model(self, WORKLOAD_MODEL_ID, data)
 
         send_message(
             BenchmarkStarted(
@@ -679,17 +698,7 @@ class WorkerServer:
             raise ValueError(
                 f"{V2_WORKLOAD_VERSION} requires the trusted {V2_MODEL_ID} checkpoint."
             )
-        model = CATALOG_BY_ID[V2_MODEL_ID]
-        supplied = Path(str(data.get("model_path") or ""))
-        try:
-            supplied = supplied.resolve(strict=True)
-            expected = self.model_store.path_for(model).resolve(strict=True)
-        except OSError as error:
-            raise FileNotFoundError(
-                "Download and verify the Quick model before benchmarking."
-            ) from error
-        if supplied != expected or not self.model_store.is_installed(model):
-            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+        _, expected = WorkerServer._verify_benchmark_model(self, V2_MODEL_ID, data)
 
         devices = get_capability_report()["devices"]
         requested_device = str(data.get("device") or "cpu")
@@ -1079,17 +1088,8 @@ class WorkerServer:
             self.cancel_event,
             hdr_mode=str(data.get("hdr_mode", "reject")),
         )
-        preview_encoder = LatestPreviewEncoder(
-            lambda packet: self._emit_live_preview(packet),
-            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
-            enabled=bool(data.get("preview_enabled", True)),
-            max_fps=float(data.get("preview_max_fps", 2.0)),
-            max_dimension=int(data.get("preview_max_dimension", 320)),
-        )
-        source_encoder = LatestPreviewEncoder(
-            self._emit_live_preview,
-            enabled=bool(data.get("preview_enabled", True)),
-            max_dimension=640,
+        preview_encoder, source_encoder = WorkerServer._create_video_preview_encoders(
+            self, job_id, data
         )
 
         def read_chunk(count: int) -> list:
@@ -1470,17 +1470,8 @@ class WorkerServer:
             interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
         )
 
-        preview_encoder = LatestPreviewEncoder(
-            lambda packet: self._emit_live_preview(packet),
-            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
-            enabled=bool(data.get("preview_enabled", True)),
-            max_fps=float(data.get("preview_max_fps", 2.0)),
-            max_dimension=int(data.get("preview_max_dimension", 320)),
-        )
-        source_encoder = LatestPreviewEncoder(
-            self._emit_live_preview,
-            enabled=bool(data.get("preview_enabled", True)),
-            max_dimension=640,
+        preview_encoder, source_encoder = WorkerServer._create_video_preview_encoders(
+            self, job_id, data
         )
 
         from localsr.core.hdr import tone_map_to_sdr

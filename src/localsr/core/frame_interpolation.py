@@ -40,7 +40,7 @@ _TARGETS: dict[str, tuple[int, Fraction | None]] = {
 # Practical-RIFE's inference_video.py holds the previous frame instead of
 # interpolating when a 32×32 SSIM falls below 0.2; LocalSR uses the same test.
 SCENE_CUT_SSIM = 0.2
-# A frame repeats the previous picture when no luma sample of its small
+# A frame repeats the previous picture when no RGB sample of its small
 # thumbnail differs by more than this many 8-bit levels.
 DUPLICATE_LEVELS = 2.5
 # The longest run of repeats bridged as one held drawing (animation on threes).
@@ -110,7 +110,7 @@ class InterpolationTarget:
 
 @dataclass(frozen=True)
 class FrameSignature:
-    """Small luma thumbnails: ``fine`` for repeats, ``coarse`` (32×32) for cuts."""
+    """RGB ``fine`` thumbnail for repeats and 32×32 luma ``coarse`` for cuts."""
 
     fine: np.ndarray
     coarse: np.ndarray

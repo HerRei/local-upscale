@@ -28,9 +28,8 @@ class EditMemory:
     def free_ram(self) -> int:
         """Memory an edit can take now: the macOS free level when known, else available RAM.
 
-        psutil's figure on macOS is free plus inactive pages only. On a busy 16 GB
-        Mac it reads about 5.5 GiB while the kernel reports 70% free, and a 4.5 GiB
-        FLUX.2 klein edit then runs without pressure or swap.
+        The macOS kernel's free level includes reclaimable memory, while
+        psutil reports free and inactive pages.
         """
         return self.obtainable_ram or self.available_ram
 
@@ -177,9 +176,8 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
     return EditPlan(required, reserve, budget, limit, process_limit)
 
 
-# On unified memory macOS compresses and swaps to make room, and "warning"
-# pressure is routine while a model loads (measured: a FLUX.2 klein edit raised it
-# at 34% free with no swap). The edit stops only when the Mac is in trouble.
+# On unified memory macOS compresses and swaps to make room. A warning can
+# occur while a model loads, so sustained pressure and swap determine the stop.
 HEAVY_SWAP = 2 * GIB
 SUSTAINED_WARNING_SECONDS = 30.0
 WARNING_SWAP = 512 * 1024**2

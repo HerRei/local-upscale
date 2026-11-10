@@ -226,9 +226,7 @@ def _scene_tensor(scene: SceneSpec) -> torch.Tensor:
         plane[:, third : 2 * third] = np.broadcast_to(
             checker[:, third : 2 * third], (height, third)
         )
-        # Full-range independent RGB noise made the reference SPAN model
-        # diverge before its output clamp. Use bounded sensor noise; this
-        # content change is recorded in workload v2.1, not mixed with v2 scores.
+        # Bounded sensor noise avoids divergence before the model output clamp.
         noise_channel = (112 + ((noise + channel * 37) % 256) // 8).astype(np.float32)
         plane[:, 2 * third :] = np.clip(
             noise_channel[:, 2 * third :] * vignette[:, 2 * third :] / 255.0, 0, 255
@@ -819,8 +817,7 @@ def _reference_comparison(
 
     Prefer the *closest faster* reference (the smallest ratio >= 1.0), which
     reads as "you are N× as fast as X". If the score beats nothing, fall back
-    to the closest slower reference. GPU and CPU references are never mixed;
-    the caller picks the list matching the score being compared.
+    to the closest slower reference. The bundled table contains accelerator scores.
     """
     if score is None:
         return None, None

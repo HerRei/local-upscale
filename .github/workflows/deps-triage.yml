@@ -1,7 +1,7 @@
 name: Dependency triage
 
 # Fridays, after Dependabot's Monday-Thursday runs: rerun infrastructure failures once
-# per commit, label real breaks `claude-fix` for review, and update the
+# per commit, label real breaks for review, and update the
 # `deps-status` issue (scripts/deps_triage.py).
 on:
   schedule:

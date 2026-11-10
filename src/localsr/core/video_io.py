@@ -77,8 +77,7 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
     our standalone output is rebased to that image's bounds. Keep rejecting
     perspective, scaling and arbitrary rotations instead of changing geometry.
     """
-    # Look up by name: iterating side_data yields SideData before PyAV 19 and
-    # Type keys from 19 on, while .values() fails before 19.
+    # Look up by name for compatibility across supported PyAV versions.
     side_data = frame.side_data.get("DISPLAYMATRIX")
     if side_data is None:
         return 0, False
@@ -755,8 +754,6 @@ def encode_video(
             for packet in stream.encode(frame):
                 mux(packet)
             frame_count += 1
-        if frame_count == 0:
-            raise ValueError("the inference pipeline produced no frames")
         for packet in stream.encode():
             mux(packet)
         output_container.close()
@@ -984,8 +981,6 @@ def _remux_source_streams(
         raise
     except (av.FFmpegError, ValueError, OSError) as error:
         raise VideoStageError("audio/subtitle remux", str(error)) from error
-    except BaseException:
-        raise
     finally:
         for container in (output_container, source_container, video_container):
             if container is not None:

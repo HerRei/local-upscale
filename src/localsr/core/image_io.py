@@ -597,7 +597,7 @@ class ImageManager:
             out_img = out_img.resize(target_size, Image.Resampling.LANCZOS)
 
         if self.grayscale:
-            # Colour-trained models add chroma to grey pages (issue #97); a grey source
+            # Colour-trained models add chroma to grey pages; a grey source
             # has none, so keep the model's luma only.
             luma = out_img.convert("L")
             out_img = Image.merge("RGB", (luma, luma, luma))
@@ -643,8 +643,6 @@ class ImageManager:
         tmp_path = owned_temporary(temporary_directory or destination.parent, "image")
         try:
             if fmt in ["jpg", "jpeg"]:
-                if out_img.mode == "RGBA":
-                    out_img = out_img.convert("RGB")
                 out_img.save(tmp_path, format="JPEG", quality=quality, subsampling=0, **kwargs)
             elif fmt == "png":
                 out_img.save(tmp_path, format="PNG", **kwargs)

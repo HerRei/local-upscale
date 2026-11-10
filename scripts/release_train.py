@@ -23,11 +23,11 @@ import os
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bump_version import next_patch, parse  # noqa: E402
+from release_targets import version as project_version  # noqa: E402
 from required_checks import CONTEXT, WATCHED, GitHub  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -142,8 +142,7 @@ def main() -> int:
     gh = GitHub(args.repo, os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", ""))
     now = dt.datetime.now(dt.timezone.utc)
     main_sha = gh.request(f"/repos/{gh.repo}/commits/main")[0]["sha"]
-    with (ROOT / "pyproject.toml").open("rb") as stream:
-        version = tomllib.load(stream)["project"]["version"]
+    version = project_version(ROOT)
     release = last_published(gh.paged(f"/repos/{gh.repo}/releases"))
     statuses = gh.request(f"/repos/{gh.repo}/commits/{main_sha}/status")[0]["statuses"]
     status = next((s["state"] for s in statuses if s["context"] == CONTEXT), None)

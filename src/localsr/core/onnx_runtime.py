@@ -849,7 +849,7 @@ class _OnnxImage(torch.nn.Module):
         if first_run and self.provider not in providers:
             if not self._gated:
                 raise RuntimeError(
-                    f"The model did not execute on {self.provider}; select CPU explicitly."
+                    f"The model did not execute on {self.provider}, or execution was not profiled."
                 )
             self._reject(state, state["config"][0], "no node ran on the GPU")
             return "rejected", None

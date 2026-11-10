@@ -13,37 +13,15 @@ import threading
 import time
 from pathlib import Path
 
+from localsr.core.child_processes import native_environment, stop_process
 from localsr.core.edit_memory import EditPlan, check_edit_pressure, read_host_memory
-
-
-def native_environment() -> dict:
-    environment = os.environ.copy()
-    if getattr(sys, "frozen", False):
-        for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
-            original = environment.get(key + "_ORIG", "")
-            if original:
-                environment[key] = original
-            else:
-                environment.pop(key, None)
-    return environment
-
-
-def stop_process(process):
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
 
 
 def process_memory(process) -> int:
     """The editor's own memory: physical footprint on macOS, RSS elsewhere.
 
     On macOS RSS includes the memory-mapped weights, clean pages the system drops
-    under pressure at no cost; the footprint is what Activity Monitor shows. A
-    FLUX.2 klein 4B edit on a 16 GB Mac peaked at 6.4 GiB RSS and 2.6 GiB footprint.
+    under pressure at no cost; the footprint is what Activity Monitor shows.
     """
     if sys.platform == "darwin":
         import ctypes

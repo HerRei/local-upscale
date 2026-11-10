@@ -5,7 +5,7 @@ batch. On the Neural Engine route, for a model the Neural Engine runs (SPAN,
 Real-ESRGAN's RRDBNet, FBCNN), their tiles share one queue: two Neural Engine
 runners and, on AC power, two Core ML GPU runners pull from it at one fixed
 input shape, every photo is stitched on its own, and finished photos are saved
-by several encoder threads (2.0-3.4x on an M1 Pro in the 6 Nov 2026 study).
+by several encoder threads.
 
 Each photo stays its own job: it starts, reports progress and tiles, and
 completes, fails or is cancelled on its own. Anything the lanes do not cover
@@ -47,11 +47,9 @@ from localsr.protocol.messages import (
 from localsr.worker.image_job import save_output
 from localsr.worker.job_progress import ImageJobProgress
 
-# Fixed input side per architecture (tile core + 2x overlap): measured fastest
-# on the Neural Engine in the study; 320 was today's shape for 256-pixel tiles.
+# Fixed input side per architecture, including tile core and overlap.
 BATCH_SIDES = {"SPAN": 384, "ESRGAN": 384, "FBCNN": 576}
-# Encoder threads: SPAN infers faster than one thread saves (6 measured best);
-# the heavier models gain nothing beyond 4.
+# Encoder thread counts accommodate the throughput of each architecture.
 ENCODERS = {"SPAN": 6}
 DEFAULT_ENCODERS = 4
 # What differs between the photos of one batch; everything else must be equal.
@@ -84,8 +82,7 @@ def save_bytes(width: int, height: int, scale: int, output_scale: int, alpha: bo
     """Peak bytes one save holds for a ``width`` x ``height`` native-scale output.
 
     Pillow copies the transposed output (3 B/px) into an RGB image (4 B/px), and
-    the save reads the output's pages; on Linux with fake lanes each further save
-    of a 110 MP output added 862 MiB of RSS (8.2 B/px), so 8 B/px. A smaller
+    the save reads the output's pages; the estimate uses 8 B/px. A smaller
     output scale adds the resized RGB copy; alpha adds the RGBA image (4 B/px) and
     its scaled alpha plane (1 B/px).
     """
