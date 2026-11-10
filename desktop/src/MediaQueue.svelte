@@ -71,6 +71,14 @@
         .map((media) => media.id),
     ),
   );
+  /** Shows the Inputs tab with this input in view: a result that was just added as one. */
+  export async function showInput(id: string): Promise<void> {
+    tab = 'inputs';
+    await tick();
+    const rows = [...(listEl?.querySelectorAll<HTMLElement>('.media-row') ?? [])];
+    rows[items.findIndex((media) => media.id === id)]?.scrollIntoView?.({ block: 'nearest' });
+  }
+
   /** A picture that starts running scrolls into view; focus and selection stay where they are. */
   async function followWork(now: Set<string>): Promise<void> {
     const started = [...now].filter((id) => !runningIds.has(id));

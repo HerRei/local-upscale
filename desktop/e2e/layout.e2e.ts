@@ -224,6 +224,7 @@ test.describe('status bar start buttons', () => {
         const buttons = bar.locator('.status-actions button');
         await expect(buttons.getByText('Only this one')).toBeVisible();
         await expect(bar.getByRole('button', { name: 'Reveal' })).toBeVisible();
+        await expect(bar.getByRole('button', { name: 'Use as input' })).toBeVisible();
         const barBox = await box(bar);
         const text = await box(bar.locator('.status-copy'));
         const rects = [];
@@ -240,6 +241,10 @@ test.describe('status bar start buttons', () => {
           // The status text ends before the first button starts.
           expect(text.x + text.width).toBeLessThanOrEqual(rects[0].x + 0.5);
         }
+        // Use as input follows Open in the same group.
+        const open2 = await box(bar.getByRole('button', { name: 'Open', exact: true }));
+        const use = await box(bar.getByRole('button', { name: 'Use as input' }));
+        expect(use.x).toBeGreaterThanOrEqual(open2.x + open2.width);
         // One row of equal height; the primary is the rightmost.
         expect(new Set(rects.map((rect) => Math.round(rect.height))).size).toBe(1);
         const last = await buttons.last().textContent();
@@ -551,6 +556,39 @@ test.describe('overflow and alignment', () => {
     expect(Math.abs(task.x + task.width / 2 - 440)).toBeLessThan(2);
   });
 
+  for (const width of [880, 1380]) {
+    test(`at ${width} px library rows with a fit line do not overflow and the list scrolls`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 640 });
+      await openApp(page, ready);
+      await emit(page, 'native-menu-action', 'view.models');
+      const library = page.getByRole('dialog', { name: 'Model library' });
+      await library.getByRole('button', { name: /^Upscale photos/ }).click();
+      const list = library.locator('section.list');
+      const rows = list.locator('button.row');
+      expect(await rows.count()).toBeGreaterThan(3);
+      const widths = await rows.evaluateAll((all) =>
+        all.map((row) => {
+          const fit = row.querySelector<HTMLElement>('.row-fit span');
+          return {
+            row: row.scrollWidth - row.clientWidth,
+            fit: fit ? fit.getBoundingClientRect().right - row.getBoundingClientRect().right : 0,
+            line: !!fit,
+          };
+        }),
+      );
+      for (const entry of widths) {
+        expect(entry.row).toBeLessThanOrEqual(0);
+        expect(entry.fit).toBeLessThanOrEqual(0);
+        expect(entry.line).toBe(true);
+      }
+      expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      await list.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+      expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    });
+  }
+
   test('at 880 x 640 the library keeps its Download button in view', async ({ page }) => {
     await page.setViewportSize({ width: 880, height: 640 });
     await openApp(page, ready);
@@ -589,6 +627,19 @@ test.describe('contrast and targets', () => {
       const [hi, lo] = [lum(fore), lum(back)].sort((x, y) => y - x);
       return (hi + 0.05) / (lo + 0.05);
     });
+
+  test('library rows carry a fit line that stays readable', async ({ page }) => {
+    await openApp(page, ready);
+    await emit(page, 'native-menu-action', 'view.models');
+    const library = page.getByRole('dialog', { name: 'Model library' });
+    await library.getByRole('button', { name: /^Upscale photos/ }).click();
+    const row = library.getByRole('button', { name: /RealPLKSR ×4 NomosWebPhoto/ });
+    await row.click();
+    const fit = row.locator('.row-fit');
+    await expect(fit).toContainText('Runs well here');
+    expect(await fit.locator('i').getAttribute('aria-hidden')).toBe('true');
+    expect(await contrastOnPage(fit)).toBeGreaterThanOrEqual(4.5);
+  });
 
   test('library labels on a selected row stay readable', async ({ page }) => {
     await openApp(page, ready);

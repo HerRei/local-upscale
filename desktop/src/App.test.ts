@@ -139,6 +139,7 @@ const api = vi.hoisted(() => ({
   openModelSource: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
   openUserGuide: vi.fn(async () => undefined),
+  useResultAsInput: vi.fn(async (): Promise<string> => 'new-input'),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
   openOutputDirectory: vi.fn(async () => undefined),
@@ -3629,12 +3630,17 @@ describe('LocalSR desktop interface', () => {
     await chooseMenuItem('view.models');
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
-    expect(within(library).getByRole('button', { name: /SPAN ×4.*Neural Engine/ })).toBeTruthy();
     expect(
-      within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }).textContent,
-    ).not.toMatch(/Neural Engine/);
+      within(library).getByRole('button', { name: /SPAN ×4.*Runs well here · Neural Engine/ }),
+    ).toBeTruthy();
+    const hatRow = within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ });
+    expect(hatRow.textContent).not.toMatch(/Neural Engine/);
+    expect(hatRow.textContent).toMatch(/Runs well here · Apple GPU \(Metal\)/);
     await user.click(within(library).getByRole('button', { name: /SPAN ×4/ }));
     expect(within(library).getByText('Runs on')).toBeTruthy();
+    expect(library.querySelector('.detail .fit')?.textContent).toMatch(
+      /Runs well here · Neural Engine/,
+    );
     // The file and the author keep their ends when the details column is narrow.
     const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
     expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
@@ -3655,12 +3661,14 @@ describe('LocalSR desktop interface', () => {
       },
       ...pc.capabilities.devices.filter((device) => device.id === 'cpu'),
     ];
-    pc.settings.device_id = 'cpu';
+    pc.settings.device_id = 'openvino:80d1';
     const user2 = await mountWith(pc);
     await chooseMenuItem('view.models');
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user2.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
-    expect(within(library).getByRole('button', { name: /SPAN ×4.*NPU/ })).toBeTruthy();
+    expect(
+      within(library).getByRole('button', { name: /SPAN ×4.*Runs well here · NPU/ }),
+    ).toBeTruthy();
   });
 
   it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {
@@ -4647,6 +4655,142 @@ describe('Comparing saved results', () => {
       expect(document.querySelector('.comparison-note')?.textContent).toContain(
         'has a different framing from the original',
       );
+    });
+  });
+
+  describe('Use as input', () => {
+    const useButton = () => screen.queryByRole('button', { name: 'Use as input' });
+
+    it('is offered only while a finished result is on screen', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      await mountWith(snapshot);
+      expect(useButton()).toBeNull();
+      cleanup();
+      const finished = pairHost(readySnapshot([image('photo', true)]));
+      finished.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      await mountWith(finished);
+      expect(await screen.findByRole('button', { name: 'Use as input' })).toBeTruthy();
+      expect(useButton()?.getAttribute('title')).toBe(
+        'Add this result to Inputs so it can be processed again',
+      );
+    });
+
+    it('asks the host for the shown result, then shows the Inputs tab', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('a1')])]);
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await user.click(await screen.findByRole('button', { name: 'Use as input' }));
+      expect(api.useResultAsInput).toHaveBeenCalledWith('/out/a1.png');
+      expect(screen.getByRole('tab', { name: /^Inputs/ }).getAttribute('aria-selected')).toBe(
+        'true',
+      );
+    });
+
+    it('shows the host sentence when the result cannot be used', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      api.useResultAsInput.mockRejectedValueOnce('output path was not authorized');
+      const user = await mountWith(snapshot);
+      await user.click(await screen.findByRole('button', { name: 'Use as input' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Could not use the result as input')).toBeTruthy();
+      expect(within(dialog).getByText(/output path was not authorized/)).toBeTruthy();
+    });
+  });
+
+  describe('a click on an Outputs row', () => {
+    const open = async (answer?: (target: string) => Promise<void>) => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1'), completedJob('a2')];
+      const history = historyOf('photo', [row('a2'), row('a1')]);
+      api.listMediaResults.mockResolvedValue(history);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      const user = await mountWith(snapshot);
+      if (answer) {
+        const immediate = api.requestImageComparison.getMockImplementation()!;
+        api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+          if (pair) await answer(pair.showing);
+          await immediate(mediaId, pair);
+        });
+      }
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      return user;
+    };
+    const views = () =>
+      within(screen.getByRole('radiogroup', { name: 'Comparison view' }))
+        .getAllByRole('radio')
+        .map((view) => view.textContent?.trim());
+
+    it('on Original shows the original alone, without a divider or view options', async () => {
+      const user = await open();
+      await user.click(await screen.findByRole('button', { name: /^Show the original/ }));
+      await waitFor(() => expect(document.querySelector('.source-image')).toBeTruthy());
+      expect(screen.queryByRole('slider', { name: 'Before and after comparison' })).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.result-image')).toBeNull();
+    });
+
+    it('on a result shows the original left and that result right, then another result', async () => {
+      const user = await open();
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1'),
+      );
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2'),
+      );
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+    });
+
+    it('keeps the previous picture with a loading note until the pair is ready, then splits', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const user = await open(async (target) => {
+        if (target === 'a2') await gate;
+      });
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1'),
+      );
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      expect(await screen.findByText('Loading a2…')).toBeTruthy();
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1');
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.divider-labels')).toBeNull();
+      release();
+      await waitFor(() => expect(screen.queryByText('Loading a2…')).toBeNull());
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2');
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+    });
+
+    it('shows the indicator over the original when only that was shown, and ignores a late answer', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const user = await open(async (target) => {
+        if (target === 'a1') await gate;
+      });
+      await user.click(await screen.findByRole('button', { name: /^Show the original/ }));
+      await user.click(screen.getByRole('button', { name: /^Show a1/ }));
+      expect(await screen.findByText('Loading a1…')).toBeTruthy();
+      expect(document.querySelector('.source-image')).toBeTruthy();
+      expect(document.querySelector('.result-image')).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2'),
+      );
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2');
+      expect(screen.queryByText('Loading a1…')).toBeNull();
     });
   });
 

@@ -4,6 +4,8 @@
   import type { MediaItem } from './lib/types';
 
   export let media: MediaItem;
+  /** A result still being prepared: the note sits over the picture instead of filling the stage. */
+  export let loading = '';
   const mountedAt = Date.now();
   let now = mountedAt;
   const labels: Record<string, string> = {
@@ -14,7 +16,9 @@
     preparing_preview: 'Creating preview',
   };
   $: elapsed = Math.max(0, Math.floor((now - (media.probe_started_at ?? mountedAt)) / 1000));
-  $: stage = labels[media.probe_stage ?? ''] ?? 'Waiting for the preview engine';
+  $: stage = loading
+    ? 'Creating preview'
+    : (labels[media.probe_stage ?? ''] ?? 'Waiting for the preview engine');
   onMount(() => {
     const timer = setInterval(() => {
       now = Date.now();
@@ -23,15 +27,15 @@
   });
 </script>
 
-<div class="canvas-empty preview-activity" aria-busy="true">
-  <MediaIllustration active />
-  <h2>Preparing preview…</h2>
-  <p class="filename" title={media.name}>{media.name}</p>
+<div class="canvas-empty preview-activity" class:over-picture={loading} aria-busy="true">
+  {#if !loading}<MediaIllustration active />{/if}
+  <h2>{loading ? `Loading ${loading}…` : 'Preparing preview…'}</h2>
+  {#if !loading}<p class="filename" title={media.name}>{media.name}</p>{/if}
   <div class="phase">
     <span class="activity-dot" aria-hidden="true"></span><span role="status">{stage}</span>
   </div>
-  <p class="elapsed" aria-hidden="true">{elapsed}s elapsed</p>
-  {#if elapsed >= 15}<p class="slow-file">
+  {#if !loading}<p class="elapsed" aria-hidden="true">{elapsed}s elapsed</p>{/if}
+  {#if elapsed >= 15 && !loading}<p class="slow-file">
       Large files and files stored in iCloud can take longer to open.
     </p>{/if}
 </div>
@@ -40,6 +44,15 @@
   .preview-activity {
     max-width: 420px;
     padding: 24px;
+  }
+  .preview-activity.over-picture {
+    padding: 14px 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-surface);
+    background: var(--panel);
+  }
+  .over-picture h2 {
+    margin: 0 0 8px;
   }
   .filename {
     overflow: hidden;

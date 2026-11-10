@@ -32,6 +32,8 @@ export interface Scenario {
   >;
   /** The host reports pair slots, as the real one does: results are compared by job id. */
   pairs?: boolean;
+  /** The host takes this long to prepare the preview of a saved result for a pair. */
+  pairDelayMs?: number;
   welcome?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
@@ -333,6 +335,8 @@ function hostScript(scenario: Scenario): void {
         );
       case 'request_image_comparison': {
         if (!args.showing) return null;
+        if (scenario.pairDelayMs && args.showing !== 'original')
+          await new Promise((resolve) => setTimeout(resolve, scenario.pairDelayMs));
         snapshot.runtime.comparison_pair = {
           media_id: args.mediaId,
           generation: ++compareGeneration,
@@ -361,6 +365,17 @@ function hostScript(scenario: Scenario): void {
       case 'remove_media':
         snapshot.media = snapshot.media.filter((media: Json) => media.id !== args.id);
         return null;
+      case 'use_result_as_input': {
+        const path = String(args.path);
+        let media = snapshot.media.find((item: Json) => item.path === path);
+        if (!media) {
+          media = photo(snapshot.media.length + 1);
+          Object.assign(media, { path, name: path.split('/').pop() });
+          snapshot.media.push(media);
+        }
+        for (const item of snapshot.media) item.selected = item.id === media.id;
+        return media.id;
+      }
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;

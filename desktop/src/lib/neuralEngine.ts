@@ -1,3 +1,4 @@
+import { FIT_LABELS, fitFor, type Fit } from './plan';
 import type { CapabilityInfo, DeviceInfo, UiSettings } from './types';
 
 /**
@@ -120,4 +121,47 @@ export function engineLabel(
   if (NEURAL_ENGINE_ARCHITECTURES.has(architecture)) return 'Neural Engine';
   if (CORE_ML_GPU_ARCHITECTURES.has(architecture)) return 'Apple GPU (Core ML)';
   return 'Apple GPU (Metal) · this model is unsupported on the Neural Engine';
+}
+
+/**
+ * The accelerator the selected hardware will use for this model: the Neural Engine or an
+ * NPU only when the model can use it and the Hardware setting points at it. The library's
+ * "Runs on" cell and its fit lines both read this, so they cannot disagree.
+ */
+export function runsOnAccelerator(
+  settings: Pick<UiSettings, 'device_id' | 'neural_engine'>,
+  capabilities: CapabilityInfo,
+  architecture?: string,
+): 'Neural Engine' | 'NPU' | undefined {
+  const accelerator = acceleratorFor(capabilities, architecture);
+  if (accelerator === 'Neural Engine')
+    return selectedHardware(settings, capabilities, architecture) === NEURAL_ENGINE_ID
+      ? accelerator
+      : undefined;
+  if (accelerator === 'NPU')
+    return isNpu(capabilities, settings.device_id) ? accelerator : undefined;
+  return undefined;
+}
+
+export interface FitLine {
+  fit: Fit;
+  text: string;
+}
+
+/** How a model fits the selected hardware, worded for the details pane and the list rows. */
+export function fitLine(
+  model: { architecture?: string; vram_estimate_mb: number },
+  settings: Pick<UiSettings, 'device_id' | 'neural_engine'>,
+  capabilities: CapabilityInfo,
+  device: DeviceInfo | undefined,
+): FitLine | undefined {
+  // An NPU that does not run this model leaves it to the CPU.
+  const used =
+    device && isNpu(capabilities, device.id) && !npuRuns(model.architecture)
+      ? (capabilities.devices.find((entry) => entry.id === 'cpu') ?? device)
+      : device;
+  const fit = fitFor(model, used);
+  if (fit === 'unknown' || !used) return undefined;
+  const accelerator = runsOnAccelerator(settings, capabilities, model.architecture);
+  return { fit, text: `${FIT_LABELS[fit]} · ${accelerator ?? used.name}` };
 }

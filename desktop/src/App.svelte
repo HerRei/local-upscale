@@ -129,6 +129,7 @@
 
   let page: 'media' | 'preview' | 'enhance' = 'preview';
   let mainTab: 'preview' | 'compare' = 'preview';
+  let mediaQueue: MediaQueue | undefined;
   let compareLayout: 'slider' | 'boxes' = 'slider';
   let comparePicks: ComparePick[] = [];
   let bulkHistories: MediaResults[] = [];
@@ -674,6 +675,44 @@
         : choice.showing === ORIGINAL && !referenceIsResult
           ? ''
           : showingSide.src;
+  // A pair waits for both of its sides: until then the pane keeps the view it had (the held
+  // one, when it belongs to this picture) and says what is loading, instead of a half-empty split.
+  $: loadingTarget =
+    pairShown && !singleFrame
+      ? showingSide?.state === 'loading'
+        ? choice.showing
+        : referenceIsResult && againstSide?.state === 'loading'
+          ? choice.against
+          : ''
+      : '';
+  $: pairLoadingLabel = loadingTarget
+    ? (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
+    : '';
+  $: paneView = {
+    mediaId: selectedImage?.id ?? '',
+    resultPreview,
+    referenceIsResult,
+    referencePreview: referenceIsResult && againstSide?.state === 'ready' ? againstSide.src : '',
+    referenceLabel: referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original',
+    showingLabel: showingSide?.label ?? '',
+    singleFrame,
+  };
+  let heldView = paneView;
+  $: if (!loadingTarget) heldView = paneView;
+  $: shownView =
+    loadingTarget && heldView.mediaId !== paneView.mediaId
+      ? {
+          ...paneView,
+          resultPreview: '',
+          referenceIsResult: false,
+          referencePreview: '',
+          referenceLabel: 'Original',
+          showingLabel: '',
+          singleFrame: null,
+        }
+      : loadingTarget
+        ? heldView
+        : paneView;
   $: desiredPairKey =
     pairShown &&
     selectedImage &&
@@ -1777,8 +1816,9 @@
   async function showResult(pick: ComparePick): Promise<void> {
     const results = bulkHistories.find((entry) => entry.media_id === pick.media_id)?.results ?? [];
     const showing = pick.kind === 'original' ? ORIGINAL : pick.job_id;
-    const newest = results.find((row) => row.status === 'completed' && row.available);
-    const against = pick.kind === 'original' ? (newest?.job_id ?? ORIGINAL) : ORIGINAL;
+    // A row shows its own picture against the Original (or the Original alone): the
+    // result-against-result view is entered only from the pair menus.
+    const against = ORIGINAL;
     const remembered = { ...rememberedResults };
     for (const row of results)
       if ([showing, against].includes(row.job_id)) remembered[row.job_id] = row;
@@ -2699,6 +2739,21 @@
     }
   }
 
+  /** The result on screen becomes an input: it is added (or found) on the host and selected here. */
+  async function useResultAsInput(): Promise<void> {
+    let id: string;
+    try {
+      id = await api.useResultAsInput(selectedOutputPath);
+    } catch (error) {
+      showModal('Could not use the result as input', String(error));
+      return;
+    }
+    await refresh();
+    ensureTaskMatchesSelection();
+    mainTab = 'preview';
+    await mediaQueue?.showInput(id);
+  }
+
   async function retryEngine(): Promise<void> {
     retryingEngine = true;
     try {
@@ -2822,6 +2877,7 @@
 
   <main class="workspace">
     <MediaQueue
+      bind:this={mediaQueue}
       groups={compareGroups}
       picks={comparePicks}
       togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
@@ -2911,18 +2967,17 @@
           processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
           activeTileSize={snapshot.runtime.active_tile_size}
           {selectedMedia}
-          {resultPreview}
-          {referenceIsResult}
-          referencePreview={referenceIsResult && againstSide?.state === 'ready'
-            ? againstSide.src
-            : ''}
-          referenceLabel={referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original'}
+          resultPreview={shownView.resultPreview}
+          referenceIsResult={shownView.referenceIsResult}
+          referencePreview={shownView.referencePreview}
+          referenceLabel={shownView.referenceLabel}
           referenceState={againstSide?.state ?? 'ready'}
           referenceError={againstSide?.error ?? ''}
-          showingLabel={showingSide?.label ?? ''}
+          showingLabel={shownView.showingLabel}
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
-          {singleFrame}
+          singleFrame={shownView.singleFrame}
+          loadingLabel={pairLoadingLabel}
           {comparisonNote}
           showLiveTiles={!choice.pinned}
           comparisonError={selectedComparisonError}
@@ -3753,6 +3808,10 @@
           on:click={() =>
             attempt('Could not open the result', () => api.openResult(selectedOutputPath))}
           >Open</button
+        ><button
+          class="button"
+          title="Add this result to Inputs so it can be processed again"
+          on:click={() => void useResultAsInput()}>Use as input</button
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <!-- A count of 0 means there is nothing to add or start: no button, and no room kept. -->

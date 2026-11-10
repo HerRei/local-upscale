@@ -2144,3 +2144,89 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
     assert!(refuse_when_disk_is_short(&input("upscale"), &selection, &photo, folder).is_ok());
     crate::disk_room::set_test_volume(None);
 }
+
+fn state_with_result(directory: &Path, file: &str, contents: &[u8]) -> (AppState, PathBuf) {
+    let state =
+        AppState::from_paths(crate::paths::AppPaths::under(&directory.join("app"))).unwrap();
+    let output = directory.join(file);
+    fs::write(&output, contents).unwrap();
+    {
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media("m", "/in/photo.png", "photo.png", "image")
+            .unwrap();
+        database.insert_job("j", "m", "{}").unwrap();
+        database
+            .finish_job("j", "completed", &output.to_string_lossy(), "")
+            .unwrap();
+    }
+    (state, output)
+}
+
+#[test]
+fn a_result_becomes_one_new_input_and_the_original_stays() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, output) = state_with_result(directory.path(), "photo_upscaled_4x.png", b"png");
+    let requested = output.to_string_lossy().into_owned();
+    let (id, to_probe) = add_result_as_input(&state, &requested).unwrap();
+    let canonical = fs::canonicalize(&output)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(to_probe.as_deref(), Some(canonical.as_str()));
+    let (again, to_probe) = add_result_as_input(&state, &requested).unwrap();
+    assert_eq!(again, id);
+    assert!(to_probe.is_none());
+    let media = lock(&state.database).unwrap().list_media().unwrap();
+    assert_eq!(media.len(), 2);
+    let original = media.iter().find(|item| item.id == "m").unwrap();
+    assert_eq!(original.path, "/in/photo.png");
+    assert!(!original.selected);
+    let added = media.iter().find(|item| item.id == id).unwrap();
+    assert!(added.selected);
+    assert_eq!(added.name, "photo_upscaled_4x.png");
+}
+
+#[test]
+fn only_an_authorised_existing_result_becomes_an_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, output) = state_with_result(directory.path(), "result.png", b"png");
+    let stranger = directory.path().join("stranger.png");
+    fs::write(&stranger, b"png").unwrap();
+    assert!(add_result_as_input(&state, &stranger.to_string_lossy()).is_err());
+    assert!(add_result_as_input(&state, "unknown-id").is_err());
+    fs::remove_file(&output).unwrap();
+    assert!(add_result_as_input(&state, &output.to_string_lossy()).is_err());
+    assert_eq!(
+        lock(&state.database).unwrap().list_media().unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn a_result_that_cannot_be_a_source_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, output) = state_with_result(directory.path(), "notes.txt", b"text");
+    let error = add_result_as_input(&state, &output.to_string_lossy()).unwrap_err();
+    assert!(error.to_string().contains("cannot be used as an input"));
+    assert_eq!(
+        lock(&state.database).unwrap().list_media().unwrap().len(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_result_that_became_a_link_is_not_added() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, output) = state_with_result(directory.path(), "result.png", b"png");
+    let private = directory.path().join("private.png");
+    fs::write(&private, b"private").unwrap();
+    fs::remove_file(&output).unwrap();
+    std::os::unix::fs::symlink(&private, &output).unwrap();
+    assert!(add_result_as_input(&state, &output.to_string_lossy()).is_err());
+    assert_eq!(
+        lock(&state.database).unwrap().list_media().unwrap().len(),
+        1
+    );
+}
