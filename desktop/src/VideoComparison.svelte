@@ -409,7 +409,7 @@
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
-        aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
+        aria-valuetext={`${Math.round(100 - comparison.enhancedPercent)}% original, ${Math.round(comparison.enhancedPercent)}% enhanced`}
         style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
         on:keydown={compareKeyDown}
       >

@@ -156,7 +156,7 @@ const api = vi.hoisted(() => ({
   ),
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async (_handler: (action: string) => void) => () => undefined),
-  listenForLaunchIntent: vi.fn(async () => () => undefined),
+  listenForLaunchIntent: vi.fn(async (_handler: () => void) => () => undefined),
   listenForFileDrops: vi.fn(
     async (_handlers: { hover: (active: boolean) => void; drop: (paths: string[]) => void }) =>
       () =>
@@ -3970,12 +3970,12 @@ describe('Comparing saved results', () => {
         against: 'original',
       }),
     );
-    // One saved result keeps the compact view: no choosers, no side labels.
+    // One saved result keeps the compact view without choosers.
     await waitFor(() =>
       expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('saved'),
     );
     expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
-    expect(document.querySelector('.divider-labels')).toBeNull();
+    expect(document.querySelector('.divider-labels')?.textContent).toContain('saved');
   });
 
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
@@ -4386,4 +4386,248 @@ describe('Dialogs and refused host calls', () => {
       await shown('Could not delete the recipe');
     });
   });
+});
+
+describe('automatic starts and comparison labels', () => {
+  function pairHost(snapshot: AppSnapshot): AppSnapshot {
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    const slot = (target: string) =>
+      target === 'original'
+        ? { target_id: target, preview_data_url: '', width: 640, height: 480 }
+        : {
+            target_id: target,
+            preview_data_url: `data:image/jpeg;base64,${target}`,
+            width: 2560,
+            height: 1920,
+            preview_width: 2048,
+            preview_height: 1536,
+          };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing: slot(pair.showing),
+        against: slot(pair.against),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return snapshot;
+  }
+
+  function completedJob(id: string, media = 'photo') {
+    return {
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status: 'completed' as const,
+      progress: 100,
+      output_path: `/out/${id}.png`,
+      error: '',
+      created_at: 1,
+    };
+  }
+
+  it('relaunching an already loaded file with auto_start must run only that file', async () => {
+    const current = readySnapshot([image('photo1', true), image('photo2')]);
+    current.settings.task = 'upscale';
+    current.settings.batch_mode = true;
+    current.settings.selected_model_id = current.catalog.models.find(
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+    )!.model_id;
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async () => undefined);
+    api.saveSettings.mockImplementation(async (s: UiSettings) => {
+      current.settings = structuredClone(s);
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/photo1.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    render(App);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalled(), { timeout: 3_000 });
+    const input = api.startJobs.mock.calls[0] as unknown as [StartBatchInput];
+    expect(input[0].media_ids).toEqual(['photo1']);
+  });
+
+  it('a launch while the first file still probes keeps the first file queued', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'upscale';
+    current.settings.selected_model_id = current.catalog.models.find(
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+    )!.model_id;
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async (paths: string[]) => {
+      for (const path of paths) {
+        const id = path.split('/').at(-1)!.replace('.png', '');
+        const item = image(id, current.media.length === 0);
+        if (id === 'slow') item.probe_status = 'pending';
+        current.media.push(item);
+      }
+    });
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.saveSettings.mockImplementation(async (s: UiSettings) => {
+      current.settings = structuredClone(s);
+    });
+    let listener: () => void = () => {};
+    api.listenForLaunchIntent.mockImplementation(async (cb: () => void) => {
+      listener = cb;
+      return () => undefined;
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/slow.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    render(App);
+    await waitFor(() => expect(api.addMedia).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 700));
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/fast.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    listener();
+    await new Promise((r) => setTimeout(r, 700));
+    current.media.find((m) => m.id === 'slow')!.probe_status = 'ready';
+    nativeMenu?.('view.refresh-hardware');
+    api.refreshCapabilities.mockResolvedValue(undefined);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalled(), { timeout: 3_000 });
+    const ids = (api.startJobs.mock.calls[0] as unknown as [StartBatchInput])[0].media_ids;
+    expect(ids.sort()).toEqual(['fast', 'slow']);
+  });
+
+  it('with two saved results the split labels the showing side with its model', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listMediaResults.mockImplementation(async (id: string) =>
+      historyOf(id, [
+        row('new', { model_label: 'Model NEW' }),
+        row('old', { model_label: 'Model OLD' }),
+      ]),
+    );
+    await mountWith(snapshot);
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('new'),
+    );
+    const labels = document.querySelector('.divider-labels');
+    expect(labels?.textContent ?? '').toContain('Model NEW');
+  });
+
+  it('a saved edit size above the device limit leaves Edit usable (select shows the clamp)', async () => {
+    const snapshot = editSnapshot(16);
+    snapshot.settings.edit_max_dimension = 1024;
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+    await user.type(screen.getByLabelText('What to change'), 'Add snow');
+    const select = document.querySelector('#edit-size') as HTMLSelectElement | null;
+    if (select) expect(select.value).toBe('512');
+    expect(
+      (screen.getByRole('button', { name: 'Edit selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('a failed progress listener must not break the Retry comparison button', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    api.listenVideoComparisonProgress.mockRejectedValueOnce(new Error('ipc glitch'));
+    await mountWith(snapshot);
+    const retry = await screen.findByRole('button', { name: 'Retry comparison' });
+    api.prepareVideoComparison.mockClear();
+    retry.click();
+    await waitFor(() => expect(api.prepareVideoComparison).toHaveBeenCalled(), { timeout: 2_000 });
+  });
+
+  it('auto start must not start a video job whose interpolation model is missing', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'video';
+    current.settings.video_interpolation = 'x2' as never;
+    current.catalog.interpolation_models.forEach((m) => (m.installed = false));
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async (paths: string[]) => {
+      for (const path of paths) {
+        const id = path.split('/').at(-1)!.replace('.mp4', '');
+        current.media.push(video(id, current.media.length === 0));
+      }
+    });
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.saveSettings.mockImplementation(async (s: UiSettings) => {
+      current.settings = structuredClone(s);
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/clip.mp4'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    render(App);
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(api.startJobs).not.toHaveBeenCalled();
+  });
+});
+
+it('waits for hardware detection before automatically starting an unavailable saved device', async () => {
+  const current = readySnapshot([image('photo', true)]);
+  current.settings.task = 'upscale';
+  current.settings.selected_model_id = current.catalog.models.find(
+    (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+  )!.model_id;
+  current.capabilities.system_ram_total = 0;
+  current.capabilities.devices = current.capabilities.devices.filter(
+    (device) => device.id !== current.settings.device_id,
+  );
+  api.bootstrap.mockResolvedValue(structuredClone(current));
+  api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+  api.takeLaunchIntents
+    .mockResolvedValueOnce([
+      { files: ['/private/photo.png'], preset: null, recipe: null, auto_start: true },
+    ])
+    .mockResolvedValueOnce([]);
+  render(App);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  expect(api.startJobs).not.toHaveBeenCalled();
+  current.capabilities.system_ram_total = 16 * 1024 ** 3;
+  await chooseMenuItem('view.refresh-hardware');
+  await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
+});
+
+it('explains why the menu cannot start when the worker is unavailable', async () => {
+  const snapshot = readySnapshot([image('photo', true)]);
+  snapshot.runtime.worker = 'unavailable';
+  await mountWith(snapshot);
+  await chooseMenuItem('file.start');
+  expect(screen.getByRole('dialog', { name: 'Cannot start yet' }).textContent).toMatch(
+    /engine|worker/i,
+  );
+});
+
+it('mentions video when asking for a task before applying a preset', async () => {
+  await mountWith(readySnapshot());
+  await chooseMenuItem('preset.quick');
+  expect(screen.getByRole('dialog', { name: 'Choose a task' }).textContent).toContain('Video');
+});
+
+it('does not ask for a catalog model under Your own file', async () => {
+  const user = await mountWith(readySnapshot([image('photo', true)]));
+  await chooseTask(user, /^Restore/);
+  await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+  await user.click(screen.getByRole('button', { name: /Your own file/ }));
+  expect(
+    screen.queryByText('Select a model to see what it is for and where it comes from.'),
+  ).toBeNull();
 });

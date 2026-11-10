@@ -262,3 +262,28 @@ function canvasRect(width: number, height: number): void {
     toJSON: () => ({}),
   });
 }
+
+describe('video comparison slider', () => {
+  it('announces a value text that moves with aria-valuenow', async () => {
+    const { container } = render(VideoComparison, {
+      originalSrc: 'asset://o.mp4',
+      enhancedSrc: 'asset://e.mp4',
+      sourceWidth: 1280,
+      sourceHeight: 720,
+    });
+    const viewport = container.querySelector('.video-viewport') as HTMLDivElement;
+    const divider = screen.getByRole('slider', { name: 'Video before and after comparison' });
+    await fireEvent.keyDown(divider, { key: 'Home' });
+    const low = [
+      Number(divider.getAttribute('aria-valuenow')),
+      Number(/(\d+)%/.exec(divider.getAttribute('aria-valuetext') ?? '')?.[1]),
+    ];
+    await fireEvent.keyDown(divider, { key: 'End' });
+    const high = [
+      Number(divider.getAttribute('aria-valuenow')),
+      Number(/(\d+)%/.exec(divider.getAttribute('aria-valuetext') ?? '')?.[1]),
+    ];
+    expect(viewport).toBeTruthy();
+    expect(Math.sign(high[0] - low[0])).toBe(Math.sign(high[1] - low[1]));
+  });
+});

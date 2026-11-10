@@ -14,10 +14,7 @@ export function queueTiming(snapshot: AppSnapshot) {
     snapshot.runtime.status_title === 'Cancelling'
   )
     return null;
-  const queued = snapshot.jobs
-    .filter((job) => job.status === 'queued')
-    .slice()
-    .reverse();
+  const queued = snapshot.jobs.filter((job) => job.status === 'queued').reverse();
   if (!queued.length) return null;
   const rates = new Map<string, number>();
   // The host works out each workload's typical speed from its recent runs (never the latest
@@ -63,4 +60,20 @@ export function queueTiming(snapshot: AppSnapshot) {
     unknownItems,
     itemCount: queued.length + 1,
   };
+}
+
+/** "Running SwinIR · 2 queued": the active job first, then this image's queue. */
+export function queueModelState(jobs: JobRecord[], mediaId: string, activeJobId: string): string {
+  const inflight = jobs.filter(
+    (job) =>
+      job.media_id === mediaId &&
+      ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
+  );
+  const active =
+    inflight.find((job) => job.id === activeJobId) ??
+    inflight.find((job) => job.status !== 'queued');
+  const queued = inflight.filter((job) => job.status === 'queued').length;
+  if (active)
+    return `${active.status === 'cancelling' ? 'Cancelling' : 'Running'} ${active.model_label || 'model'}${queued ? ` · ${queued} queued` : ''}`;
+  return queued > 1 ? `${queued} queued` : 'queued';
 }

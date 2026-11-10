@@ -22,7 +22,7 @@ policy questions about presets could not be answered from the data.
   checkpoint each stage will run, its license, size, hardware fit and install state. The
   dropdowns are gone; "Change…" opens the library.
 - **One resolver.** `resolvePlan`, `choosePresetModel` and `chooseFixModel` in
-  `desktop/src/lib/state.ts` mirror `presets.py`: exact content matches rank above general
+  `desktop/src/lib/plan.ts` mirror `presets.py`: exact content matches rank above general
   models; Quick orders by speed then quality, Best by quality then speed; installed models win
   ties. Quick/Best never select a checkpoint whose rights are unresolved or non-commercial
   (`_rights_allow_preset` in `presets.py`, `rightsAllowPreset` in the frontend). Labs remains a

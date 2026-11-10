@@ -1,7 +1,7 @@
 <script lang="ts">
   import FileName from './FileName.svelte';
   import { MAX_SLOTS, pickKey, type OutputGroup } from './lib/compareOutputs';
-  import { formatDuration } from './lib/state';
+  import { formatDuration } from './lib/format';
   import type { ComparePick } from './lib/types';
   export let groups: OutputGroup[];
   export let picks: ComparePick[];

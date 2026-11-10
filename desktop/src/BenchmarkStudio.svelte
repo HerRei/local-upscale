@@ -154,7 +154,7 @@
         src={current.output_data_url}
         alt="Completed SPAN benchmark render"
       />
-    {:else if !visible}<div class="waiting">
+    {:else if !running || !visible}<div class="waiting">
         <span class:working={running}></span>{running
           ? 'Preparing model tiles…'
           : 'Run CPU or GPU to see the model render.'}

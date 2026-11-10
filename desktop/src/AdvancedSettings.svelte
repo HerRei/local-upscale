@@ -302,8 +302,7 @@
             type="text"
             placeholder={foundFfmpeg.length ? `Found automatically: ${foundFfmpeg[0]}` : 'Not used'}
             value={settings.external_ffmpeg_path ?? ''}
-            on:change={(event) =>
-              updateSettings({ external_ffmpeg_path: event.currentTarget.value.trim() })}
+            readonly
           />
         </div>
         <div class="field-row button-row">

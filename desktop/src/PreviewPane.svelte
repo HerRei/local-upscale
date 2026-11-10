@@ -50,7 +50,6 @@
   export let singleFrame: { width: number; height: number } | null = null;
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
-  /** Saved results of this image, for the header's "· 3 results". */
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
@@ -195,9 +194,6 @@
   let disposed = false;
 
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
-  // Keep the image mounted across transient WebKit decode errors so
-  // re-probing cannot turn into an endless loading loop.
-  $: renderableSourcePreview = sourcePreview;
   $: displayedSourcePreview = videoSourcePreview || sourcePreview;
   $: waitingForVideoFrame =
     processing &&
@@ -724,7 +720,10 @@
           videoPreparationProgress = data;
         }
       });
-      await playbackListener;
+      await playbackListener.catch((error) => {
+        playbackListener = undefined;
+        throw error;
+      });
       if (disposed || requestId !== videoRequestId) return;
       const sources = await api.prepareVideoComparison(mediaId, requestId, forceCompatible);
       if (disposed || requestId !== videoRequestId || mediaId !== selectedMedia?.id) return;
@@ -938,7 +937,7 @@
             on:compatibilityneeded={compatiblePlayback}
           />
         {/key}
-      {:else if renderableSourcePreview}
+      {:else if sourcePreview}
         <SplitComparison
           stageStyle={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
           split={splitActive}

@@ -1,4 +1,4 @@
-import type { Fit } from './state';
+import type { Fit } from './plan';
 import type { CapabilityInfo, DeviceInfo, EditModel, UiSettings } from './types';
 
 export const EDIT_GIB = 1024 ** 3;
