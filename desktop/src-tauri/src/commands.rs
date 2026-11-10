@@ -1585,6 +1585,7 @@ fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_video_comparison(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
