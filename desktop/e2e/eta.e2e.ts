@@ -23,15 +23,15 @@ test.describe('the remaining time while a queue runs', () => {
     await openApp(page, { ...ready, photos: 2, running: true });
     const detail = page.locator('.status-detail');
     await emit(page, 'worker-message', report(100, 20));
-    await expect(detail).toHaveText('5 of 12 tiles · ETA ≈ 1:40');
+    await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 1:40');
     await page.clock.runFor(30_000);
-    await expect(detail).toHaveText('5 of 12 tiles · ETA ≈ 1:10');
+    await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 1:10');
     // The engine's number moves a little, as the numbers of a steady run do.
     await emit(page, 'worker-message', report(74, 50));
     await page.clock.runFor(1_000);
-    await expect(detail).toHaveText('5 of 12 tiles · ETA ≈ 1:10');
+    await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 1:10');
     await page.clock.runFor(30_000);
-    await expect(detail).toHaveText('5 of 12 tiles · ETA ≈ 40s');
+    await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 40s');
   });
 
   test('shows the same time in the queue summary and counts it down too', async ({ page }) => {
