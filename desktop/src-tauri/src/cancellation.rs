@@ -13,6 +13,34 @@ use crate::error::AppResult;
 
 pub const CANCEL_GRACE: Duration = Duration::from_secs(8);
 
+/// Remove the scratch folders a killed host left beside the outputs of the jobs it was
+/// running: a host that ended without cleaning up (a crash, a power loss) leaves them
+/// with every partial frame. Only folders named like the host's own, and never a link.
+pub fn sweep_scratch(outputs: &[PathBuf]) {
+    let folders: std::collections::HashSet<&std::path::Path> = outputs
+        .iter()
+        .filter_map(|output| output.parent())
+        .collect();
+    for folder in folders {
+        let Ok(entries) = fs::read_dir(folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let ours = entry
+                .file_name()
+                .to_string_lossy()
+                .strip_prefix(".localsr-job-")
+                .is_some_and(|id| Uuid::parse_str(id).is_ok());
+            let plain_folder = entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
+            if ours && plain_folder {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Cancellation {
     pub job_id: String,
@@ -336,6 +364,34 @@ mod tests {
         control.prepare("next", &mut message).unwrap();
         assert!(message["data"]["scratch_directory"].is_string());
         control.finish().ok();
+    }
+
+    #[test]
+    fn leftover_scratch_folders_are_swept_and_nothing_else() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("clip.mp4");
+        let ours = directory
+            .path()
+            .join(format!(".localsr-job-{}", Uuid::new_v4()));
+        fs::create_dir(&ours).unwrap();
+        fs::write(ours.join("frame-000001.png"), b"partial frame").unwrap();
+        let keep = [
+            directory.path().join(".localsr-job-not-an-id"),
+            directory.path().join("holiday"),
+        ];
+        for folder in &keep {
+            fs::create_dir(folder).unwrap();
+            fs::write(folder.join("file"), b"x").unwrap();
+        }
+        let other = tempfile::tempdir().unwrap();
+        let elsewhere = other
+            .path()
+            .join(format!(".localsr-job-{}", Uuid::new_v4()));
+        fs::create_dir(&elsewhere).unwrap();
+        sweep_scratch(&[output, directory.path().join("missing/clip.mp4")]);
+        assert!(!ours.exists());
+        assert!(keep.iter().all(|folder| folder.join("file").is_file()));
+        assert!(elsewhere.is_dir());
     }
 
     #[test]

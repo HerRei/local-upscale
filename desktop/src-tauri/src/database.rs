@@ -30,6 +30,8 @@ pub struct PendingJob {
 
 pub struct Database {
     connection: Connection,
+    /// Where the jobs that were running when the host last stopped wrote their output.
+    interrupted_outputs: Vec<PathBuf>,
 }
 
 /// The final states of a job.
@@ -154,8 +156,11 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS jobs_media_results_idx ON jobs(media_id, updated_at)",
             [],
         )?;
-        let database = Self { connection };
-        database.interrupt_stale_jobs()?;
+        let mut database = Self {
+            connection,
+            interrupted_outputs: Vec::new(),
+        };
+        database.interrupted_outputs = database.interrupt_stale_jobs()?;
         Ok(database)
     }
 
@@ -167,12 +172,29 @@ impl Database {
         Ok(())
     }
 
-    fn interrupt_stale_jobs(&self) -> AppResult<()> {
+    /// Mark the jobs a stopped host left running as interrupted; the output paths they
+    /// were asked to write come back.
+    fn interrupt_stale_jobs(&self) -> AppResult<Vec<PathBuf>> {
+        let mut statement = self.connection.prepare(
+            "SELECT request_json FROM jobs WHERE status IN ('starting', 'running', 'cancelling')",
+        )?;
+        let outputs = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .filter_map(|request| serde_json::from_str::<serde_json::Value>(&request).ok())
+            .filter_map(|request| request_output(&request).map(PathBuf::from))
+            .collect();
+        drop(statement);
         self.connection.execute(
             "UPDATE jobs SET status = 'interrupted', error = 'The desktop host stopped before the job finished.', updated_at = ?1 WHERE status IN ('starting', 'running', 'cancelling')",
             [now_millis()],
         )?;
-        Ok(())
+        Ok(outputs)
+    }
+
+    /// The outputs of the jobs the last stop interrupted, once.
+    pub fn take_interrupted_outputs(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.interrupted_outputs)
     }
 
     pub fn list_media(&self) -> AppResult<Vec<MediaItem>> {

@@ -103,7 +103,8 @@ impl AppState {
                 "LocalSR could not make its safety copy of your settings and queue ({error})."
             ));
         }
-        let (database, set_aside) = Database::open_or_set_aside(&paths.database)?;
+        let (mut database, set_aside) = Database::open_or_set_aside(&paths.database)?;
+        crate::cancellation::sweep_scratch(&database.take_interrupted_outputs());
         if let Some(moved) = set_aside {
             notices.push(format!(
                 "The queue and history file was damaged. LocalSR moved it to {} and started a new, empty queue. Your settings and models were not touched.",
@@ -230,6 +231,36 @@ pub fn emit_state_changed(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scratch_of_a_job_a_stopped_host_left_running_is_removed_at_the_next_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let output = directory.path().join("out").join("clip.mp4");
+        let scratch = directory
+            .path()
+            .join("out")
+            .join(format!(".localsr-job-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("frame"), b"partial").unwrap();
+        {
+            let state = AppState::from_paths(paths.clone()).unwrap();
+            let database = state.database.lock().unwrap();
+            database
+                .insert_media("m", "/in/clip.mov", "clip", "video")
+                .unwrap();
+            let request = serde_json::json!({"type": "video_job_request",
+                "data": {"output_video_path": output}});
+            database.insert_job("j", "m", &request.to_string()).unwrap();
+            database.set_job_status("j", "running").unwrap();
+            // The host stops here without cleaning up.
+            assert!(scratch.is_dir());
+        }
+        let state = AppState::from_paths(paths).unwrap();
+        assert!(!scratch.exists());
+        let jobs = state.database.lock().unwrap().list_jobs().unwrap();
+        assert_eq!(jobs[0].status, "interrupted");
+    }
 
     #[test]
     fn the_program_saved_by_an_earlier_run_is_known_at_start() {
