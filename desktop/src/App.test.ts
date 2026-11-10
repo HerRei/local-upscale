@@ -361,6 +361,21 @@ describe('Edit task', () => {
     expect(api.startEdit).not.toHaveBeenCalled();
   });
 
+  it('starts an edit with the runtime the host dialog returned when the build has none', async () => {
+    const snapshot = editSnapshot(16);
+    snapshot.edit.runtime_path = '';
+    api.chooseEditRuntime.mockResolvedValueOnce('/chosen/sd-cli');
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+    await user.click(screen.getByRole('button', { name: 'Choose runtime…' }));
+    expect(api.chooseEditRuntime).toHaveBeenCalledTimes(1);
+    await user.type(screen.getByLabelText('What to change'), 'Add snow');
+    await user.click(screen.getByRole('button', { name: 'Edit selected' }));
+    expect(api.startEdit).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime_path: '/chosen/sd-cli' }),
+    );
+  });
+
   it('starts a 16 GB Mac on FLUX.2 klein Q4_0, with its own step count', async () => {
     const user = await mountWith(editSnapshot(16));
     await chooseTask(user, /^Edit$/);

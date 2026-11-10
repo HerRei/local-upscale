@@ -132,27 +132,31 @@ pub fn start_edit(
     Ok(())
 }
 
-/// The editing program to run: the one the host found at start-up. The web view
-/// may repeat that path but cannot name another.
+/// The editing program to run: the one the host found at start-up or one the user
+/// picked in the host's own file dialog. The web view may repeat such a path but
+/// cannot name another.
 fn edit_runtime(state: &AppState, requested: &str) -> AppResult<PathBuf> {
+    let missing = || AppError::Validation("Choose the native editing runtime.".into());
     let found = lock(&state.edit_runtime)?.clone();
-    if found.is_empty() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
+    let found = if found.is_empty() {
+        None
+    } else {
+        fs::canonicalize(found).ok().filter(|path| path.is_file())
+    };
+    if requested.is_empty() {
+        return found.ok_or_else(missing);
     }
-    let found = fs::canonicalize(found)?;
-    if !found.is_file() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
+    let requested_real = fs::canonicalize(requested)
+        .ok()
+        .filter(|path| path.is_file());
+    match requested_real {
+        Some(real) if found.as_ref() == Some(&real) || state.edit_programs.check(requested).is_ok() => {
+            Ok(real)
+        }
+        _ => Err(AppError::Validation(
+            "Only an editing runtime LocalSR found itself or that you chose in its file dialog can be used.".into(),
+        )),
     }
-    if !requested.is_empty() && fs::canonicalize(requested).ok().as_ref() != Some(&found) {
-        return Err(AppError::Validation(
-            "Only the editing runtime LocalSR found itself can be used.".into(),
-        ));
-    }
-    Ok(found)
 }
 
 #[tauri::command]
@@ -1917,16 +1921,35 @@ pub async fn choose_external_ffmpeg(
     state: State<'_, Arc<AppState>>,
     current: String,
 ) -> AppResult<Option<String>> {
+    let title = "Select the FFmpeg program installed on this computer";
+    let picked = pick_program(app, title, &current).await?;
+    if let Some(path) = &picked {
+        state.programs.grant(path);
+    }
+    Ok(picked)
+}
+
+/// Let the user pick the native editing runtime (sd-cli) in the host's own file
+/// dialog. Start Edit runs only the runtime the host found or one picked here.
+#[tauri::command]
+pub async fn choose_edit_runtime(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Option<String>> {
+    let picked = pick_program(app, "Choose the sd-cli image editing runtime", "").await?;
+    if let Some(path) = &picked {
+        state.edit_programs.grant(path);
+    }
+    Ok(picked)
+}
+
+/// The host's own file dialog for one program, opened beside `current` when that
+/// names a file in an existing folder.
+async fn pick_program(app: AppHandle, title: &str, current: &str) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
 
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_title("Select the FFmpeg program installed on this computer");
-    if let Some(folder) = Path::new(&current)
-        .parent()
-        .filter(|folder| folder.is_dir())
-    {
+    let mut dialog = app.dialog().file().set_title(title);
+    if let Some(folder) = Path::new(current).parent().filter(|folder| folder.is_dir()) {
         dialog = dialog.set_directory(folder);
     }
     let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
@@ -1940,7 +1963,6 @@ pub async fn choose_external_ffmpeg(
         .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?
         .to_string_lossy()
         .into_owned();
-    state.programs.grant(&path);
     Ok(Some(path))
 }
 

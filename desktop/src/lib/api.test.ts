@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke, convertFileSrc: vi.fn() }));
 const listen = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 
-import { chooseExternalFFmpeg, listenForWorker } from './api';
+import { chooseEditRuntime, chooseExternalFFmpeg, listenForWorker } from './api';
 
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -40,4 +40,13 @@ it('asks the host to choose and grant the external FFmpeg path', async () => {
   invoke.mockResolvedValueOnce('/chosen/ffmpeg');
   expect(await chooseExternalFFmpeg('/old/ffmpeg')).toBe('/chosen/ffmpeg');
   expect(invoke).toHaveBeenCalledWith('choose_external_ffmpeg', { current: '/old/ffmpeg' });
+});
+
+it('asks the host to choose and grant the editing runtime', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce('/chosen/sd-cli');
+  expect(await chooseEditRuntime()).toBe('/chosen/sd-cli');
+  expect(invoke).toHaveBeenCalledWith('choose_edit_runtime');
+  invoke.mockResolvedValueOnce(null);
+  expect(await chooseEditRuntime()).toBeNull();
 });

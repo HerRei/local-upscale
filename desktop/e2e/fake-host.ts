@@ -138,7 +138,7 @@ function hostScript(scenario: Scenario): void {
     }
     s.capabilities.system_ram_total = 16 * GIB;
     for (const id of scenario.installed ?? []) {
-      const model = s.catalog.models.find((m: Json) => m.model_id === id);
+      const model = [...s.catalog.models, ...s.edit.models].find((m: Json) => m.model_id === id);
       if (!model) throw new Error(`Fixture model ${id} is not in the catalog`);
       model.installed = true;
     }
@@ -262,6 +262,7 @@ function hostScript(scenario: Scenario): void {
         snapshot.media = [];
         return null;
       case 'choose_external_ffmpeg':
+      case 'choose_edit_runtime':
         return null;
       case 'take_launch_intents':
         return [];

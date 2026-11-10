@@ -1744,6 +1744,36 @@ fn the_editing_runtime_is_the_one_the_host_found() {
 }
 
 #[test]
+fn an_editing_runtime_chosen_in_the_host_dialog_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+    let chosen = directory.path().join("chosen-sd-cli");
+    let planted = directory.path().join("planted-tool");
+    fs::write(&chosen, b"chosen").unwrap();
+    fs::write(&planted, b"planted").unwrap();
+    // The build has no runtime: only the host's own picker can supply one.
+    assert!(edit_runtime(&state, chosen.to_str().unwrap()).is_err());
+    assert!(edit_runtime(&state, "").is_err());
+    state.edit_programs.grant(chosen.to_str().unwrap());
+    assert_eq!(
+        edit_runtime(&state, chosen.to_str().unwrap()).unwrap(),
+        fs::canonicalize(&chosen).unwrap()
+    );
+    assert!(edit_runtime(&state, planted.to_str().unwrap()).is_err());
+    // A program granted for FFmpeg is not an editing runtime.
+    state.programs.grant(planted.to_str().unwrap());
+    assert!(edit_runtime(&state, planted.to_str().unwrap()).is_err());
+    // Another valid runtime the user picked later is accepted next to the found one.
+    let found = directory.path().join("sd-cli");
+    fs::write(&found, b"found").unwrap();
+    *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+    assert_eq!(
+        edit_runtime(&state, chosen.to_str().unwrap()).unwrap(),
+        fs::canonicalize(&chosen).unwrap()
+    );
+}
+
+#[test]
 fn a_batch_names_only_an_ffmpeg_the_host_obtained() {
     let directory = tempfile::tempdir().unwrap();
     let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();

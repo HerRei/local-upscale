@@ -195,6 +195,7 @@ pub fn run() {
             commands::open_output_directory,
             commands::detect_external_ffmpeg,
             commands::choose_external_ffmpeg,
+            commands::choose_edit_runtime,
             commands::open_ffmpeg_download_page,
             commands::ffmpeg_install_hint,
             commands::open_terminal_with_install_command,

@@ -84,6 +84,8 @@ pub struct AppState {
     startup_notices: Mutex<Vec<String>>,
     /// The programs the user's choices and the host's own searches have named.
     pub programs: crate::programs::GrantedPrograms,
+    /// The editing runtimes the user picked in the host's own file dialog.
+    pub edit_programs: crate::programs::GrantedPrograms,
 }
 
 impl AppState {
@@ -140,6 +142,7 @@ impl AppState {
             choose_device: AtomicBool::new(first_run),
             startup_notices: Mutex::new(notices),
             programs,
+            edit_programs: crate::programs::GrantedPrograms::default(),
         })
     }
 
