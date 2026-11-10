@@ -2605,6 +2605,131 @@ describe('LocalSR desktop interface', () => {
     expect(await screen.findByText('4 of 10 tiles')).toBeTruthy();
   });
 
+  describe('Outputs while a queue runs', () => {
+    function runningQueue(ids: string[], batch: boolean) {
+      const snapshot = readySnapshot(ids.map((id, index) => image(id, index === 0)));
+      snapshot.runtime.active_job_id = ids[0];
+      snapshot.runtime.active_batch_job_ids = batch ? ids : [];
+      snapshot.jobs = ids.map((id, index) => ({
+        id: `job-${id}`,
+        media_id: id,
+        media_name: `${id}.png`,
+        media_kind: 'image' as const,
+        status: index === 0 ? ('running' as const) : ('queued' as const),
+        progress: 0,
+        output_path: '',
+        error: '',
+        created_at: 10 - index,
+      }));
+      snapshot.runtime.active_job_id = `job-${ids[0]}`;
+      snapshot.runtime.active_batch_job_ids = batch ? ids.map((id) => `job-${id}`) : [];
+      return snapshot;
+    }
+
+    /** The host's state after `finished` ended: its row is completed and its history has the result. */
+    function finish(snapshot: AppSnapshot, ids: string[], finished: string[]): void {
+      const next = structuredClone(snapshot);
+      for (const job of next.jobs) {
+        if (finished.includes(job.media_id)) {
+          job.status = 'completed';
+          job.progress = 100;
+          job.output_path = `/out/${job.id}.png`;
+        }
+      }
+      api.refreshSnapshot.mockResolvedValue(next);
+      api.listAllMediaResults.mockResolvedValue(
+        ids
+          .filter((id) => finished.includes(id))
+          .map((id) => historyOf(id, [row(`job-${id}`, { model_label: 'SPAN x4' })])),
+      );
+    }
+
+    it.each([
+      ['single queue', false],
+      ['batch lanes', true],
+    ])('lists a finished photo of a running %s at once, without a click', async (_name, batch) => {
+      const ids = ['a', 'b', 'c'];
+      const snapshot = runningQueue(ids, batch);
+      let stateChanged: () => void = () => {};
+      api.listenForStateChange.mockImplementation(async (handler) => {
+        stateChanged = handler;
+        return () => undefined;
+      });
+      const user = await mountWith(snapshot);
+      const listener = api.listenForWorker.mock.calls[0]?.[0] as (m: WorkerEnvelope) => void;
+      // The photo saving off screen in a batch, or the one running in a queue, ends while others go on.
+      const ended = batch ? 'b' : 'a';
+      finish(snapshot, ids, [ended]);
+      listener({
+        type: 'job_completed',
+        data: { job_id: `job-${ended}`, output_path: `/out/job-${ended}.png` },
+      });
+      stateChanged();
+      await user.click(screen.getByRole('tab', { name: /^Outputs/ }));
+      const row1 = await screen.findByRole('checkbox', { name: `SPAN x4, ${ended}.png` });
+      expect(row1.textContent).toContain('SPAN x4');
+      expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('1');
+      // A second one follows the same way.
+      const other = batch ? 'a' : 'b';
+      finish(snapshot, ids, [ended, other]);
+      listener({
+        type: 'job_completed',
+        data: { job_id: `job-${other}`, output_path: `/out/job-${other}.png` },
+      });
+      await waitFor(() =>
+        expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('2'),
+      );
+    });
+    it('keeps listing finished photos while the host reports a change every few milliseconds', async () => {
+      // A fast batch changes state faster than one refresh takes: the list must still move on.
+      const ids = ['a', 'b', 'c', 'd'];
+      const snapshot = runningQueue(ids, true);
+      let stateChanged: () => void = () => {};
+      api.listenForStateChange.mockImplementation(async (handler) => {
+        stateChanged = handler;
+        return () => undefined;
+      });
+      const user = await mountWith(snapshot);
+      const listener = api.listenForWorker.mock.calls[0]?.[0] as (m: WorkerEnvelope) => void;
+      await user.click(screen.getByRole('tab', { name: /^Outputs/ }));
+      api.listAllMediaResults.mockImplementation(async () => {
+        const answer = structuredClone(await historiesNow());
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return answer;
+      });
+      let moving = 0;
+      const historiesNow = async () =>
+        ['b']
+          .filter(() => moving > 0)
+          .map((id) => historyOf(id, [row(`job-${id}`, { model_label: 'SPAN x4' })]));
+      const stream = setInterval(() => {
+        // Every tick another photo starts or ends: the job rows keep changing.
+        moving += 1;
+        const next = structuredClone(snapshot);
+        next.jobs.forEach((job, index) => {
+          if (job.media_id === 'b') {
+            job.status = 'completed';
+            job.output_path = '/out/job-b.png';
+          } else if (index === moving % next.jobs.length) job.status = 'running';
+        });
+        api.refreshSnapshot.mockResolvedValue(next);
+        stateChanged();
+      }, 25);
+      try {
+        listener({
+          type: 'job_completed',
+          data: { job_id: 'job-b', output_path: '/out/job-b.png' },
+        });
+        await waitFor(
+          () => expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('1'),
+          { timeout: 1500 },
+        );
+      } finally {
+        clearInterval(stream);
+      }
+    });
+  });
+
   it('composites progressive tiles without exposing comparison and keeps 1:1 controls responsive', async () => {
     class DecodedImage {
       onload: (() => void) | null = null;
