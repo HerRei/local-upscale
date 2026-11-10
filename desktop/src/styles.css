@@ -200,6 +200,12 @@ input:focus-visible {
   align-items: center;
   gap: 4px;
 }
+/* The anchor is only as wide as the link, so the text needs a width of its own. */
+.try-others .help-tip-text {
+  right: 0;
+  left: auto;
+  width: min(280px, 80vw);
+}
 /* With work queued the footer may take a second line for its buttons. */
 .app-shell.queue-timing-visible .status-actions {
   flex-wrap: wrap;
@@ -321,7 +327,7 @@ input:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
-  margin: 0 12px 12px;
+  margin: 0 16px 12px;
   padding: 3px;
   border-radius: var(--radius);
   background: var(--recess);
@@ -348,14 +354,14 @@ input:focus-visible {
   min-height: 30px;
   margin: -5px 16px 8px;
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
   line-height: 1.35;
 }
 .mode-scope.warning {
   color: #e7bc72;
 }
 .empty-card {
-  margin: 0 12px;
+  margin: 0 16px;
   padding: 22px 16px;
   text-align: center;
   display: flex;
@@ -371,7 +377,7 @@ input:focus-visible {
 .empty-card p {
   margin: 4px 0 14px;
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
   line-height: 1.45;
 }
 .empty-actions {
@@ -394,7 +400,7 @@ input:focus-visible {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 8px;
+  padding: 0 6px;
 }
 .media-row {
   position: relative;
@@ -403,7 +409,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 8px 0 10px;
+  padding: 0 10px;
   border: 0;
   border-radius: var(--radius);
   text-align: left;
@@ -475,12 +481,12 @@ input:focus-visible {
 }
 .media-copy span {
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
 }
 .media-copy .queue-state {
   width: fit-content;
   color: var(--secondary);
-  font-size: calc(10px * var(--ui-scale));
+  font-size: calc(11px * var(--ui-scale));
   line-height: 1;
   text-transform: capitalize;
 }
@@ -521,8 +527,8 @@ input:focus-visible {
 .media-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 8px 16px;
 }
 
 .preview-pane {
@@ -2216,6 +2222,7 @@ input[type='text'],
   }
   .media-pane .pane-heading,
   .media-pane .segmented,
+  .media-pane .seg-inline,
   .media-pane .empty-card,
   .media-pane .media-list,
   .media-pane .media-actions {

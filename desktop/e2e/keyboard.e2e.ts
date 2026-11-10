@@ -23,7 +23,7 @@ test.describe('keyboard navigation', () => {
   });
 
   for (const [name, first, second] of [
-    ['Media', 'Inputs 2', 'Outputs 4'],
+    ['Media', 'Inputs', 'Outputs'],
     ['Main pane', 'Preview', 'Compare'],
   ]) {
     test(`${name} tabs follow the arrow keys, Home and End`, async ({ page }) => {
@@ -55,7 +55,7 @@ test.describe('keyboard navigation', () => {
   }
 
   test('the arrow keys switch the visible content with the tab', async ({ page }) => {
-    await tabsNamed(page, 'Media').getByRole('tab', { name: 'Inputs 2' }).focus();
+    await tabsNamed(page, 'Media').getByRole('tab', { name: 'Inputs' }).focus();
     await page.keyboard.press('ArrowRight');
     await expect(page.getByRole('group', { name: 'Outputs' })).toBeVisible();
     await tabsNamed(page, 'Main pane').getByRole('tab', { name: 'Preview' }).focus();
@@ -67,7 +67,7 @@ test.describe('keyboard navigation', () => {
     page,
     browserName,
   }) => {
-    await tabsNamed(page, 'Media').getByRole('tab', { name: 'Inputs 2' }).focus();
+    await tabsNamed(page, 'Media').getByRole('tab', { name: 'Inputs' }).focus();
     await page.keyboard.press('ArrowRight');
     const checkbox = page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' });
     for (

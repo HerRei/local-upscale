@@ -334,8 +334,10 @@
   <div class="preview-header compare-header" data-tauri-drag-region>
     <div data-tauri-drag-region>
       <strong data-tauri-drag-region>Compare</strong>
-      <span
-        >{inputs.length > 2 ? `${inputs.length} images` : inputs.join(' and ')}<HelpTip
+      <span class="compare-names"
+        ><span class="names"
+          >{inputs.length > 2 ? `${inputs.length} images` : inputs.join(' and ')}</span
+        ><HelpTip
           label="Compare"
           text="The slider holds slot 1 against slot 2; boxes show every slot with one zoom and pan. Zoom enlarges the preview."
         /></span
@@ -607,9 +609,27 @@
   .compare-header > div:first-child {
     position: relative;
     min-width: 0;
+  }
+  /* The help text is positioned inside this block, so it must not clip: only the
+     file names truncate. */
+  .compare-names {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .compare-names .names {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .compare-header :global(.help-tip) {
+    flex: none;
+  }
+  .compare-header :global(.help-tip-text) {
+    right: auto;
+    width: min(300px, 60vw);
+    white-space: normal;
   }
   .compare-tools {
     display: flex;

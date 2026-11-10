@@ -78,7 +78,7 @@
       >{compareActive ? 'Comparing' : 'Show in Compare'}{picks.length
         ? ` ${picks.length}`
         : ''}</button
-    ><button class="button ghost" disabled={!picks.length} on:click={clearPicks}>Clear</button><span
+    ><button class="button" disabled={!picks.length} on:click={clearPicks}>Clear</button><span
       >{picks.length} of 4 slots</span
     >
   </div>
@@ -92,22 +92,31 @@
     top: 0;
     background: var(--panel);
     z-index: 1;
+    padding: 6px 0 2px;
   }
   .fold {
     border: 0;
     background: transparent;
     color: var(--secondary);
     width: 24px;
+    font-size: calc(12px * var(--ui-scale));
   }
   .group-select {
     display: flex;
-    flex-direction: column;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
     text-align: left;
     min-width: 0;
     flex: 1;
     border: 0;
     background: transparent;
-    padding: 6px;
+    padding: 6px 4px;
+  }
+  /* Group headers read like the inspector's section labels. */
+  .group-select strong {
+    font-size: calc(12px * var(--ui-scale));
+    font-weight: 600;
   }
   .group-select strong,
   .copy strong {
@@ -118,7 +127,9 @@
   .group-select span,
   .copy small {
     color: var(--secondary);
-    font-size: 11px;
+    font-size: calc(12px * var(--ui-scale));
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   .output-row {
     display: flex;
@@ -139,7 +150,7 @@
   .slot {
     width: 16px;
     text-align: center;
-    font-size: 10px;
+    font-size: calc(11px * var(--ui-scale));
   }
   .picked .slot {
     color: var(--base);
@@ -149,15 +160,18 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    font-size: 12px;
+    gap: 3px;
+  }
+  .copy strong {
+    font-size: calc(13px * var(--ui-scale));
+    font-weight: 500;
   }
   .compare-bar {
     flex-wrap: wrap;
-    gap: 6px;
   }
   .compare-bar span {
     flex-basis: 100%;
-    color: var(--tertiary);
-    font-size: 11px;
+    color: var(--secondary);
+    font-size: calc(12px * var(--ui-scale));
   }
 </style>
