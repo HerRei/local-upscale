@@ -622,7 +622,11 @@ impl Database {
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         let mut requests = Vec::new();
         for row in rows {
-            requests.push(serde_json::from_str(&row?)?);
+            // A request that is not JSON can never be sent to the engine, so it names no
+            // model and no output; one bad row must not block the rest of the queue.
+            if let Ok(request) = serde_json::from_str(&row?) {
+                requests.push(request);
+            }
         }
         Ok(requests)
     }
@@ -797,14 +801,20 @@ fn request_output(request: &serde_json::Value) -> Option<&str> {
         .filter(|path| !path.is_empty())
 }
 
+/// A stored image side as a `u32`; a value outside its range (a damaged row) is
+/// clamped, so one row cannot make the whole media list fail.
+fn side(stored: i64) -> u32 {
+    u32::try_from(stored.max(0)).unwrap_or(u32::MAX)
+}
+
 fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     Ok(MediaItem {
         id: row.get(0)?,
         path: row.get(1)?,
         name: row.get(2)?,
         kind: row.get(3)?,
-        width: row.get(4)?,
-        height: row.get(5)?,
+        width: side(row.get(4)?),
+        height: side(row.get(5)?),
         frame_count: u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
         fps: row.get(7)?,
         duration_seconds: row.get(8)?,
@@ -897,6 +907,41 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_that_is_not_json_does_not_block_the_rest_of_the_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        db.insert_job("bad", "m", "{ not json").unwrap();
+        db.insert_job(
+            "good",
+            "m",
+            r#"{"type":"job_request","data":{"output_path":"/out/a.png","model_path":"/models/x.pth"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            db.unfinished_output_paths().unwrap(),
+            [std::path::PathBuf::from("/out/a.png")]
+        );
+        assert!(db
+            .unfinished_job_needs_model(Path::new("/models/x.pth"))
+            .unwrap());
+    }
+
+    #[test]
+    fn a_stored_image_side_out_of_range_does_not_fail_the_media_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO media (id, path, name, kind, width, height, created_at) VALUES ('m','/p','n','image', 9999999999, -4, 1)",
+                [],
+            )
+            .unwrap();
+        let media = db.list_media().unwrap();
+        assert_eq!((media[0].width, media[0].height), (u32::MAX, 0));
+    }
 
     #[test]
     fn a_job_that_has_ended_cannot_be_changed_by_later_updates() {
