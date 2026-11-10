@@ -153,12 +153,6 @@ def rank_models_for_preset(
                 model.model_id,
             )
         )
-    # Measured on grey manga and colour illustrations: these general models
-    # retain fine tones better than the anime-specific alternatives tested.
-    if str(purpose).lower() in ("illustration", "anime"):
-        preferred = {"fast": "span_photo_x4", "ultra": "realplksr_nomoswebphoto_x4"}.get(category)
-        if preferred:
-            eligible.sort(key=lambda model: model.model_id != preferred)
     return tuple(eligible)
 
 

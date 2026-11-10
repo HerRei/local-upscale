@@ -45,30 +45,32 @@
       "preset_eligible": true
     },
     {
-      "model_id": "anime_x4",
+      "model_id": "realesrgan_x4plus_anime_6b",
       "purposes": [
+        "illustration",
         "anime"
       ],
       "native_scale": 4,
-      "quality_tier": 3,
-      "speed_tier": 2,
+      "quality_tier": 2,
+      "speed_tier": 3,
       "speed_factor": 0.9,
-      "memory_factor": 1.2,
-      "size_bytes": 40000000,
+      "memory_factor": 0.6,
+      "size_bytes": 17938799,
       "commercial_use_allowed": true,
       "preset_eligible": true
     },
     {
-      "model_id": "illustration_fast_x4",
+      "model_id": "realplksr_hfa2k_anime_x4",
       "purposes": [
-        "illustration"
+        "illustration",
+        "anime"
       ],
       "native_scale": 4,
-      "quality_tier": 1,
+      "quality_tier": 2,
       "speed_tier": 3,
-      "speed_factor": 1.5,
-      "memory_factor": 0.4,
-      "size_bytes": 1000000,
+      "speed_factor": 0.85,
+      "memory_factor": 0.88,
+      "size_bytes": 29715988,
       "commercial_use_allowed": true,
       "preset_eligible": true
     },
@@ -146,29 +148,47 @@
       "content": "illustration",
       "quality": "quick",
       "without": [],
-      "expected": "span_photo_x4"
+      "expected": "realesrgan_x4plus_anime_6b"
     },
     {
       "content": "illustration",
       "quality": "best",
       "without": [],
+      "expected": "realplksr_hfa2k_anime_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "quick",
+      "without": [
+        "realesrgan_x4plus_anime_6b"
+      ],
+      "expected": "realplksr_hfa2k_anime_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "best",
+      "without": [
+        "realplksr_hfa2k_anime_x4"
+      ],
+      "expected": "realesrgan_x4plus_anime_6b"
+    },
+    {
+      "content": "illustration",
+      "quality": "best",
+      "without": [
+        "realesrgan_x4plus_anime_6b",
+        "realplksr_hfa2k_anime_x4"
+      ],
       "expected": "realplksr_nomoswebphoto_x4"
     },
     {
       "content": "illustration",
       "quality": "quick",
       "without": [
-        "span_photo_x4"
+        "realesrgan_x4plus_anime_6b",
+        "realplksr_hfa2k_anime_x4"
       ],
-      "expected": "illustration_fast_x4"
-    },
-    {
-      "content": "illustration",
-      "quality": "best",
-      "without": [
-        "realplksr_nomoswebphoto_x4"
-      ],
-      "expected": "anime_x4"
+      "expected": "span_photo_x4"
     },
     {
       "content": "photo",
