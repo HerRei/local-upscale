@@ -10,6 +10,7 @@
     openTerminalWithInstallCommand,
   } from './lib/api';
   import { INSTALL_COMMANDS, detectPlatform, type FfmpegPlatform } from './lib/ffmpeg';
+  import { modal } from './lib/modal';
 
   /** Why the notice opened: a video LocalSR cannot decode, or an H.264/HEVC export. */
   export let context: 'open' | 'export' = 'open';
@@ -103,13 +104,7 @@
   function closeFromBackdrop(event: MouseEvent): void {
     if (event.target === event.currentTarget) onClose();
   }
-
-  function onKey(event: KeyboardEvent): void {
-    if (event.key === 'Escape') onClose();
-  }
 </script>
-
-<svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
 <div class="modal-backdrop" role="presentation" on:click={closeFromBackdrop}>
@@ -119,6 +114,7 @@
     aria-modal="true"
     aria-labelledby="ffmpeg-notice-title"
     tabindex="-1"
+    use:modal={onClose}
   >
     <h2 id="ffmpeg-notice-title">{title}</h2>
     {#if mediaNames.length}<p class="ffmpeg-files">{mediaNames.join(', ')}</p>{/if}

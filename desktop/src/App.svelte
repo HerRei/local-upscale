@@ -79,6 +79,7 @@
     toggleFixStage,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
+  import { modal } from './lib/modal';
   import { engineLabel, hardwarePatch, withListedDevice } from './lib/neuralEngine';
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
@@ -237,6 +238,7 @@
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
   let modalTitle = '';
   let modalMessage = '';
+  let modalElement: HTMLElement | undefined;
   /** Set for a yes/no question: the modal then offers Cancel and the destructive action. */
   let modalConfirm: {
     label: string;
@@ -2597,6 +2599,11 @@
     modalKind = kind;
     // A new dialog replaces a question that was open, answers included.
     modalConfirm = null;
+    // The button that had the keyboard may go with the dialog it replaces.
+    void tick().then(() => {
+      if (modalElement && !modalElement.contains(document.activeElement))
+        (modalElement.querySelector<HTMLElement>('[data-autofocus]') ?? modalElement).focus();
+    });
   }
 
   /** Runs a host call the user asked for; a refusal opens the dialog the drop and menu paths use. */
@@ -2643,10 +2650,6 @@
     await confirm?.run();
   }
 
-  function modalKey(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && modalConfirm) closeModal();
-  }
-
   function closeFromBackdrop(event: MouseEvent): void {
     if (event.target === event.currentTarget) closeModal();
   }
@@ -2664,8 +2667,6 @@
     previewPane?.queueProgressiveTile(message, snapshot.runtime.active_job_id);
   }
 </script>
-
-<svelte:window on:keydown={modalKey} />
 
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
@@ -3702,6 +3703,8 @@
       aria-modal="true"
       aria-labelledby="modal-title"
       tabindex="-1"
+      bind:this={modalElement}
+      use:modal={closeModal}
     >
       <h2 id="modal-title">{modalTitle}</h2>
       <p class="modal-message">{modalMessage}</p>
@@ -4185,10 +4188,14 @@
             >{integration.installed ? 'Remove integrations' : 'Install integrations'}</button
           >{/if}
         {#if modalConfirm}
-          <button class="button" on:click={closeModal}>Cancel</button>
+          <button class="button" data-autofocus on:click={closeModal}>Cancel</button>
           <button class="button danger" on:click={confirmModal}>{modalConfirm.label}</button>
         {:else}
-          <button class="button primary" on:click={closeModal}>OK</button>
+          <button
+            class="button primary"
+            data-autofocus={modalKind === 'message' ? '' : undefined}
+            on:click={closeModal}>OK</button
+          >
         {/if}
       </div>
     </div>

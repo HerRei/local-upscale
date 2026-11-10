@@ -3988,6 +3988,51 @@ describe('Dialogs and refused host calls', () => {
     expect(api.clearMedia).not.toHaveBeenCalled();
   });
 
+  it('gives an error dialog the keyboard: Tab stays in, Escape closes, focus returns', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Upscale$/);
+    api.startJobs.mockRejectedValueOnce('No GPU.');
+    const start = screen.getByRole('button', { name: 'Upscale selected' });
+    start.focus();
+    await user.keyboard('{Enter}');
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    for (let step = 0; step < 4; step++) {
+      await user.tab();
+      expect(dialog.contains(document.activeElement), `Tab ${step + 1}`).toBe(true);
+    }
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(start);
+  });
+
+  it('answers the Clear question with Cancel on Escape, and puts Cancel first', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+  });
+
+  it('closes the model library on Escape and gives it the keyboard', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    const library = await screen.findByRole('dialog', { name: 'Model library' });
+    expect(library.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
+  });
+
+  it('closes the update panel on Escape', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('app.updates');
+    const panel = await screen.findByRole('dialog', { name: 'Software Update' });
+    expect(panel.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('keeps the count in the Clear question true while the list changes', async () => {
     const user = await mountWith(readySnapshot([image('first', true), image('second')]));
     await user.click(screen.getByRole('button', { name: 'Clear' }));

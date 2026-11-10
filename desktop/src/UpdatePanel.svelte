@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import * as api from './lib/api';
+  import { modal } from './lib/modal';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
   export let anonymousUpdateCount = true;
@@ -37,6 +38,10 @@
       unsubscribe?.();
     };
   });
+  // Close is off while an update installs, and so is Escape.
+  function closePanel(): void {
+    if (status.stage !== 'installing') updateDialogOpen.set(false);
+  }
   async function run(action: () => Promise<unknown>) {
     if (working) return;
     working = true;
@@ -69,6 +74,7 @@
       aria-modal="true"
       aria-labelledby="update-title"
       tabindex="-1"
+      use:modal={closePanel}
     >
       <h2 id="update-title">Software Update</h2>
       {#if status.managed_by_store}

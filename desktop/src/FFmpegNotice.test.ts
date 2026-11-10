@@ -51,4 +51,13 @@ describe('FFmpeg notice', () => {
     await user.click(screen.getByRole('button', { name: 'Install FFmpeg…' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('No browser'));
   });
+
+  it('takes the keyboard and closes on Escape', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(FFmpegNotice, { onSelected: vi.fn(), onClose });
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
