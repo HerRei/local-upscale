@@ -1,6 +1,7 @@
 import io
 import os
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -541,6 +542,102 @@ def test_an_image_in_the_range_pillow_only_warns_about_is_not_refused_for_its_si
     with pytest.raises(OSError, match="claims.png is damaged"):
         ImageManager().load(str(path))
     assert not [w for w in recwarn if issubclass(w.category, Image.DecompressionBombWarning)]
+
+
+def _damaged_files(tmp_path):
+    from PIL import ImageDraw
+
+    picture = Image.new("RGB", (96, 64), (10, 20, 30))
+    ImageDraw.Draw(picture).ellipse((10, 10, 80, 50), fill=(200, 90, 40))
+    files = {"zero.png": b"", "text.jpg": b"this is not a picture", "garbage.tif": os.urandom(300)}
+    for name, (fmt, options) in {
+        "cut.png": ("PNG", {}),
+        "cut.jpg": ("JPEG", {"quality": 95}),
+        "cut.tif": ("TIFF", {}),
+        "cut.webp": ("WEBP", {}),
+        "cut.bmp": ("BMP", {}),
+        "cut.gif": ("GIF", {}),
+    }.items():
+        buffer = io.BytesIO()
+        picture.save(buffer, format=fmt, **options)
+        files[name] = buffer.getvalue()[: len(buffer.getvalue()) * 6 // 10]
+    paths = []
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+        paths.append(tmp_path / name)
+    return paths
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_every_damaged_file_gives_one_plain_sentence_and_keeps_the_library_text_as_cause(
+    tmp_path,
+):
+    for path in _damaged_files(tmp_path):
+        with pytest.raises(OSError) as raised:
+            ImageManager().load(str(path))
+        assert str(raised.value) == (
+            f"{path.name} is damaged or is not a picture format LocalSR can read."
+        ), path.name
+        assert raised.value.__cause__ is not None, path.name
+
+
+def test_a_real_input_output_failure_keeps_its_own_message(tmp_path):
+    with pytest.raises(FileNotFoundError, match="missing.png"):
+        ImageManager().load(str(tmp_path / "missing.png"))
+    with pytest.raises(OSError, match="Is a directory"):
+        ImageManager().load(str(tmp_path))
+
+
+def test_a_camera_raw_file_libraw_cannot_read_gives_the_same_sentence(tmp_path, monkeypatch):
+    path = tmp_path / "broken.NEF"
+    path.write_bytes(b"not raw")
+
+    class LibRawFileUnsupportedError(Exception):
+        pass
+
+    def imread(_path):
+        raise LibRawFileUnsupportedError(b"Unsupported file format or not RAW file")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "rawpy",
+        SimpleNamespace(
+            imread=imread,
+            LibRawError=LibRawFileUnsupportedError,
+            ColorSpace=SimpleNamespace(sRGB=object()),
+        ),
+    )
+    with pytest.warns(RuntimeWarning), pytest.raises(OSError) as raised:
+        ImageManager().load(str(path))
+    assert str(raised.value) == "broken.NEF is damaged or is not a picture format LocalSR can read."
+    assert isinstance(raised.value.__cause__, LibRawFileUnsupportedError)
+
+
+@pytest.mark.filterwarnings("ignore:Corrupt EXIF data")
+def test_the_macos_decoder_drops_the_manual_pointer_and_a_broken_tiff_is_damage(
+    tmp_path, monkeypatch
+):
+    from localsr.core import image_io
+
+    source = tmp_path / "x.heic"
+    source.write_bytes(b"x")
+
+    def failing(_argv, **_kwargs):
+        return subprocess.CompletedProcess([], 1, "", "Error 4: no such image\nTry 'sips --help'")
+
+    monkeypatch.setattr(image_io.subprocess, "run", failing)
+    with pytest.raises(OSError) as raised:
+        image_io._decode_with_macos(str(source))
+    assert str(raised.value) == "macOS could not decode x.heic: Error 4: no such image"
+
+    def broken_tiff(argv, **_kwargs):
+        Path(argv[argv.index("--out") + 1]).write_bytes(b"II*\x00broken")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(image_io.subprocess, "run", broken_tiff)
+    with pytest.raises(OSError, match="the file looks damaged") as raised:
+        image_io._decode_with_macos(str(source))
+    assert "BytesIO" not in str(raised.value)
 
 
 def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):

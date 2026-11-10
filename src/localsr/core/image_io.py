@@ -1,10 +1,12 @@
 import io
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import warnings
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,28 @@ TOO_LARGE_MESSAGE = (
     f"This image has more than {round(MAX_INPUT_PIXELS / 1_000_000)} megapixels, which is more "
     "than LocalSR opens. Reduce its size first."
 )
+
+
+class UnreadableImageError(OSError):
+    """A source LocalSR cannot read; the message is a sentence for the person who added it."""
+
+
+def _unreadable(path: str | Path) -> UnreadableImageError:
+    return UnreadableImageError(
+        f"{Path(path).name} is damaged or is not a picture format LocalSR can read."
+    )
+
+
+def _is_decode_failure(error: BaseException) -> bool:
+    """Whether a library raised ``error`` for bytes it could not make sense of.
+
+    A real input/output failure (no permission, no such file, a full disk) carries an
+    errno and keeps its own message; the libraries' decode failures carry none.
+    """
+    if isinstance(error, OSError):
+        return error.errno is None and not isinstance(error, UnreadableImageError)
+    return isinstance(error, (SyntaxError, EOFError, zlib.error, struct.error))
+
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
@@ -132,15 +156,28 @@ def _decode_with_macos(path: str) -> Image.Image:
                 timeout=300,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise OSError(f"macOS could not decode {Path(path).name}: {error}") from error
+            raise UnreadableImageError(
+                f"macOS could not decode {Path(path).name}: {error}"
+            ) from error
         if result.returncode != 0 or not target.is_file():
-            detail = (result.stderr or result.stdout).strip().splitlines()
-            raise OSError(
+            # sips ends an error with a pointer to its manual, which says nothing.
+            detail = [
+                line
+                for line in (result.stderr or result.stdout).strip().splitlines()
+                if not line.startswith("Try '")
+            ]
+            raise UnreadableImageError(
                 f"macOS could not decode {Path(path).name}"
                 + (f": {detail[-1][:200]}" if detail else ".")
             )
-        image = Image.open(io.BytesIO(target.read_bytes()))
-        image.load()
+        try:
+            image = Image.open(io.BytesIO(target.read_bytes()))
+            image.load()
+        except (OSError, SyntaxError, EOFError, ValueError) as error:
+            # sips reports success for some truncated files and writes a broken TIFF.
+            raise UnreadableImageError(
+                f"macOS could not decode {Path(path).name}: the file looks damaged."
+            ) from error
     if image.mode == "RGBA" and image.getchannel("A").getextrema() == (255, 255):
         # sips always writes an alpha channel; an opaque one is not transparency.
         icc, exif = image.info.get("icc_profile"), image.getexif()
@@ -214,13 +251,19 @@ def _develop_raw(path: str) -> np.ndarray:
     # isolated worker for real jobs, and the import occurs only for RAW input.
     import rawpy
 
-    with rawpy.imread(path) as raw:
-        return raw.postprocess(
-            use_camera_wb=True,
-            use_auto_wb=False,
-            output_color=rawpy.ColorSpace.sRGB,
-            output_bps=8,
-        )
+    try:
+        with rawpy.imread(path) as raw:
+            return raw.postprocess(
+                use_camera_wb=True,
+                use_auto_wb=False,
+                output_color=rawpy.ColorSpace.sRGB,
+                output_bps=8,
+            )
+    except Exception as error:
+        # LibRaw's own errors are bytes such as b'Input/output error'.
+        if isinstance(error, getattr(rawpy, "LibRawError", ())):
+            raise _unreadable(path) from error
+        raise
 
 
 class ImageManager:
@@ -237,7 +280,17 @@ class ImageManager:
         - Checks ICC profile. If present, converts to sRGB.
         - If RGBA, extracts alpha channel.
         - Returns a dict containing the tensor and metadata.
+        A file that cannot be decoded raises UnreadableImageError, whatever library it came
+        from; the library's own message stays as the chained cause.
         """
+        try:
+            return self._load(path)
+        except Exception as error:
+            if _is_decode_failure(error):
+                raise _unreadable(path) from error
+            raise
+
+    def _load(self, path: str) -> dict:
         self.alpha_channel = None
         self.grayscale = False
         is_raw = is_raw_input(path)
@@ -258,7 +311,7 @@ class ImageManager:
         except (OSError, SyntaxError, ValueError) as error:
             if not is_raw:
                 if isinstance(error, UnidentifiedImageError) and _is_float_tiff(path):
-                    raise OSError(
+                    raise UnreadableImageError(
                         f"{Path(path).name} is a floating-point colour TIFF, which LocalSR cannot "
                         "read. Save an 8-bit or 16-bit copy and add that instead."
                     ) from error
