@@ -2076,3 +2076,48 @@ fn the_next_job_that_is_sent_ends_the_stop() {
     assert!(!state.worker.disk_stop.load(Ordering::SeqCst));
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
 }
+
+#[test]
+fn a_photo_that_finishes_in_the_background_is_listed_at_once_with_its_time() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    let saved = directory.path().join("out").join("b.png");
+    std::fs::write(&saved, b"result").unwrap();
+    apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+    // "b" is saving off screen while "a" is still the photo on screen.
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "b", "output_path": saved, "elapsed_seconds": 1.5}),
+        ),
+    )
+    .unwrap();
+    let histories = lock(&state.database)
+        .unwrap()
+        .list_all_media_results()
+        .unwrap();
+    let listed = |id: &str| histories.iter().find(|group| group.media_id == id).unwrap();
+    // Nothing waits for "a" or the end of the batch.
+    assert_eq!(listed("a").results.len(), 0);
+    let result = &listed("b").results[0];
+    assert_eq!(result.status, "completed");
+    assert!(result.available);
+    assert_eq!(result.elapsed_seconds, 1.5);
+    assert_eq!(result.model_label, "span");
+    assert_eq!(
+        listed("b").default_result_id.as_deref(),
+        Some(result.job_id.as_str())
+    );
+    // The next snapshot the window asks for carries the finished row too.
+    let snapshot = state.snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .jobs
+            .iter()
+            .find(|job| job.id == "b")
+            .unwrap()
+            .status,
+        "completed"
+    );
+}
