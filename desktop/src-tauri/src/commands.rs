@@ -611,6 +611,7 @@ pub fn start_jobs(
     // never in this latency-sensitive command.
 
     let output_directory = prepare_output_directory(&state, &input.output_directory)?;
+    check_output_room(&output_directory, &input, platform_path_limit())?;
     let selection = resolve_model_selection(&state, &input)?;
     let media = {
         let database = lock(&state.database)?;
@@ -927,6 +928,7 @@ fn admit_model_trials(
     }
     let candidates = trial_candidates(state, media_id, model_ids, base)?;
     let directory = prepare_output_directory(state, &base.output_directory)?;
+    check_output_room(&directory, base, platform_path_limit())?;
     let database = lock(&state.database)?;
     let media = database
         .get_media(media_id)?
@@ -2965,10 +2967,17 @@ fn unique_output_path(
     input: &StartBatchInput,
     reserved: &mut ReservedOutputs,
 ) -> PathBuf {
-    let stem = Path::new(input_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("output");
+    unique_output_path_within(
+        directory,
+        input_path,
+        input,
+        reserved,
+        platform_path_limit(),
+    )
+}
+
+/// The name and extension a result of `input` ends with, before any counter.
+fn output_ending(input: &StartBatchInput) -> (String, &str) {
     let mut suffix = match input.task.as_str() {
         "denoise" => "_denoised".to_owned(),
         "video"
@@ -2988,6 +2997,23 @@ fn unique_output_path(
     } else {
         input.output_format.as_str()
     };
+    (suffix, extension)
+}
+
+/// `unique_output_path` for a given limit on the whole path (see `path_room`).
+fn unique_output_path_within(
+    directory: &Path,
+    input_path: &str,
+    input: &StartBatchInput,
+    reserved: &mut ReservedOutputs,
+    path_limit: Option<usize>,
+) -> PathBuf {
+    let stem = Path::new(input_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let (suffix, extension) = output_ending(input);
+    let room = path_limit.map(|limit| path_room(directory, limit));
     let mut counter = 0_u32;
     loop {
         let numbered = if counter == 0 {
@@ -2997,6 +3023,10 @@ fn unique_output_path(
         };
         let ending = format!("{suffix}{numbered}.{extension}");
         let stem = fit_stem(stem, MAX_FILE_NAME_BYTES.saturating_sub(ending.len()));
+        let stem = match room {
+            Some(room) => fit_stem_units(stem, room.saturating_sub(ending.encode_utf16().count())),
+            None => stem,
+        };
         let candidate = directory.join(format!("{stem}{ending}"));
         if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
@@ -3016,6 +3046,78 @@ fn fit_stem(stem: &str, limit: usize) -> &str {
         end -= 1;
     }
     &stem[..end]
+}
+
+/// `stem` cut to at most `limit` UTF-16 units, on a character boundary.
+fn fit_stem_units(stem: &str, limit: usize) -> &str {
+    let mut units = 0;
+    for (index, character) in stem.char_indices() {
+        units += character.len_utf16();
+        if units > limit {
+            return &stem[..index];
+        }
+    }
+    stem
+}
+
+/// How long a full path may be where long paths are off: Windows' MAX_PATH, which counts
+/// the terminating NUL. The engine and the tools it starts do not all use the extended
+/// form that lifts it.
+const WINDOWS_PATH_LIMIT: usize = 260;
+
+fn platform_path_limit() -> Option<usize> {
+    cfg!(windows).then_some(WINDOWS_PATH_LIMIT)
+}
+
+/// What the engine makes below the output folder: its scratch folder
+/// (`.localsr-job-` and a 36-character id), a separator and its longest temporary name
+/// (`.localsr-external-` and 8 characters and `.tmp`).
+const ENGINE_PATH_BELOW_FOLDER: usize = 49 + 1 + 30;
+
+/// The fewest characters of the source's name worth keeping in the result's.
+const MIN_STEM_UNITS: usize = 16;
+
+/// The length of `directory` the way another tool sees it: the extended-length prefix
+/// (`\\?\`, `\\?\UNC\`) that `canonicalize` adds on Windows is not part of it.
+fn path_units_without_prefix(directory: &Path) -> usize {
+    let text = directory.to_string_lossy();
+    let units = text.encode_utf16().count();
+    if text.starts_with("\\\\?\\UNC\\") {
+        units - "\\\\?\\UNC\\".len() + 2
+    } else if text.starts_with("\\\\?\\") {
+        units - "\\\\?\\".len()
+    } else {
+        units
+    }
+}
+
+/// How many UTF-16 units a file name in `directory` may have so that the whole path
+/// stays under `limit`: the terminating NUL, the folder and a separator come off.
+fn path_room(directory: &Path, limit: usize) -> usize {
+    limit.saturating_sub(path_units_without_prefix(directory) + 2)
+}
+
+/// Refuse a folder whose path leaves no room for a sensible result name and for what the
+/// engine makes below it, instead of failing after the work is done.
+fn check_output_room(
+    directory: &Path,
+    input: &StartBatchInput,
+    path_limit: Option<usize>,
+) -> AppResult<()> {
+    let Some(limit) = path_limit else {
+        return Ok(());
+    };
+    let (suffix, extension) = output_ending(input);
+    // The ending, a counter such as `_12`, and a stem worth reading.
+    let name = MIN_STEM_UNITS + suffix.len() + 1 + extension.len() + 4;
+    if path_room(directory, limit) < name.max(ENGINE_PATH_BELOW_FOLDER) {
+        return Err(AppError::Validation(format!(
+            "The folder {} has too long a path for LocalSR to save results in it: Windows limits a full path to {} characters. Choose a shorter output folder.",
+            directory.display(),
+            limit - 1
+        )));
+    }
+    Ok(())
 }
 
 fn model_slug(id: &str) -> String {

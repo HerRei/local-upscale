@@ -1861,6 +1861,78 @@ fn a_long_source_name_is_shortened_so_the_result_name_fits_the_file_system() {
     }
 }
 
+/// What Windows counts: UTF-16 units of the whole path.
+fn path_units(path: &Path) -> usize {
+    path.to_string_lossy().encode_utf16().count()
+}
+
+#[test]
+fn the_whole_path_of_a_result_stays_within_the_windows_limit() {
+    let mut deep = String::from("C:\\Users\\hermes\\Pictures");
+    while deep.len() < 150 {
+        deep.push_str("\\Holiday");
+    }
+    let directory = PathBuf::from(deep);
+    for (stem, task) in [
+        ("a".repeat(250), input("upscale")),
+        ("\u{1f39e}".repeat(100), input("denoise")),
+        ("v".repeat(250), input("video")),
+    ] {
+        let source = format!("/in/{stem}.png");
+        let mut reserved = ReservedOutputs::default();
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            let path = unique_output_path_within(
+                &directory,
+                &source,
+                &task,
+                &mut reserved,
+                Some(WINDOWS_PATH_LIMIT),
+            );
+            // The terminating NUL counts against the limit.
+            assert!(path_units(&path) < WINDOWS_PATH_LIMIT, "{}", path.display());
+            names.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+        assert_eq!(names.iter().collect::<HashSet<_>>().len(), 3, "{names:?}");
+        assert!(names.iter().all(|name| name.contains("_upscaled_")
+            || name.contains("_denoised")
+            || name.contains("_video_")));
+    }
+    // Without a limit the name is only cut for the file system's own length.
+    let mut reserved = ReservedOutputs::default();
+    let long = format!("/in/{}.png", "a".repeat(100));
+    let path = unique_output_path_within(&directory, &long, &input("upscale"), &mut reserved, None);
+    assert!(path_units(&path) > WINDOWS_PATH_LIMIT - 60);
+}
+
+#[test]
+fn a_folder_too_deep_for_a_sensible_name_is_refused_with_its_name() {
+    let task = input("upscale");
+    let shallow = PathBuf::from("C:\\Users\\hermes\\Pictures");
+    assert!(check_output_room(&shallow, &task, Some(WINDOWS_PATH_LIMIT)).is_ok());
+    // No limit, no refusal, however deep.
+    let deep = PathBuf::from(format!("C:\\{}", "d".repeat(400)));
+    assert!(check_output_room(&deep, &task, None).is_ok());
+    // The scratch folder and temporary name the engine makes below the folder need room.
+    let cramped = PathBuf::from(format!("C:\\{}", "d".repeat(190)));
+    for folder in [&deep, &cramped] {
+        let error = check_output_room(folder, &task, Some(WINDOWS_PATH_LIMIT)).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(&*folder.to_string_lossy()), "{message}");
+        assert!(message.contains("shorter"), "{message}");
+    }
+    // Room for a name of 16 characters and the ending, and the engine's temporary.
+    let fits = PathBuf::from(format!("C:\\{}", "d".repeat(150)));
+    assert!(check_output_room(&fits, &task, Some(WINDOWS_PATH_LIMIT)).is_ok());
+    // The extended-length prefix is not part of the path other tools see.
+    let prefixed = PathBuf::from(format!("\\\\?\\C:\\{}", "d".repeat(150)));
+    assert!(check_output_room(&prefixed, &task, Some(WINDOWS_PATH_LIMIT)).is_ok());
+    assert_eq!(
+        path_units_without_prefix(&PathBuf::from("\\\\?\\UNC\\server\\share")),
+        "\\\\server\\share".len()
+    );
+}
+
 #[test]
 fn a_name_that_already_fits_is_left_as_it_is() {
     let directory = tempfile::tempdir().unwrap();
