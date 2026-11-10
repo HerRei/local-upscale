@@ -122,7 +122,7 @@ pub fn runtime_path(app: &AppHandle, paths: &AppPaths) -> String {
     if let Some(path) = std::env::var_os("LOCALSR_EDIT_RUNTIME") {
         candidates.push(path.into());
     }
-    if let Some(engine) = crate::updates::active_engine(paths) {
+    if let Some(engine) = crate::worker::engine_executable(app, paths) {
         if let Some(root) = engine.parent() {
             candidates.push(root.join("_internal/edit").join(name));
             candidates.push(root.join("edit").join(name));

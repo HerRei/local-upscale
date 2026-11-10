@@ -1777,6 +1777,34 @@ pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<Pat
     Ok(resolve_worker_command(state, app)?.program)
 }
 
+/// The engine program this host runs: the one it ships beside itself, or the one an
+/// update installed (`updates::choose_engine` says which wins).
+pub(crate) fn engine_executable(
+    app: &AppHandle,
+    paths: &crate::paths::AppPaths,
+) -> Option<PathBuf> {
+    let executable_name = if cfg!(windows) {
+        "localsr-worker.exe"
+    } else {
+        "localsr-worker"
+    };
+    let mut candidates = Vec::new();
+    if let Ok(resources) = app.path().resource_dir() {
+        candidates.push(resources.join("engine").join(executable_name));
+        candidates.push(resources.join("localsr-worker").join(executable_name));
+    }
+    if let Ok(executable) = env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join("engine").join(executable_name));
+            candidates.push(parent.join(executable_name));
+        }
+    }
+    crate::updates::choose_host_engine(
+        candidates.into_iter().find(|path| path.is_file()),
+        crate::updates::active_engine(paths),
+    )
+}
+
 fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
     #[cfg(debug_assertions)]
     {
@@ -1797,34 +1825,9 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
             ));
         }
     }
-    // Prefer an installed engine after any explicit development worker; otherwise
-    // fall back to bundled resources or Python sources.
-    if let Some(path) = crate::updates::active_engine(&state.paths) {
-        return Ok(WorkerCommand {
-            program: path,
-            arguments: Vec::new(),
-            working_directory: None,
-            python_path: None,
-        });
-    }
-
-    let executable_name = if cfg!(windows) {
-        "localsr-worker.exe"
-    } else {
-        "localsr-worker"
-    };
-    let mut candidates = Vec::new();
-    if let Ok(resources) = app.path().resource_dir() {
-        candidates.push(resources.join("engine").join(executable_name));
-        candidates.push(resources.join("localsr-worker").join(executable_name));
-    }
-    if let Ok(executable) = env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            candidates.push(parent.join("engine").join(executable_name));
-            candidates.push(parent.join(executable_name));
-        }
-    }
-    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+    // After any explicit development worker, the engine this host runs (see
+    // `engine_executable`); otherwise Python sources.
+    if let Some(path) = engine_executable(app, &state.paths) {
         return Ok(WorkerCommand {
             program: path,
             arguments: Vec::new(),

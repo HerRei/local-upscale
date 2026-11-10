@@ -1047,6 +1047,31 @@ pub fn active_engine(paths: &crate::paths::AppPaths) -> Option<PathBuf> {
         option_env!("LOCALSR_ENGINE_ID").unwrap_or(""),
     )
 }
+/// The engine this host runs, given the one it ships and the one an update installed.
+/// A host built for an engine id runs the installed engine of that id (`installed`
+/// already honours the id) and falls back to the one it ships. A host without an id,
+/// a development or preview build, runs the engine it ships: the installed one belongs
+/// to whatever release last updated this computer and can be older than the host.
+pub fn choose_engine(
+    compiled_engine_id: &str,
+    bundled: Option<PathBuf>,
+    installed: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if compiled_engine_id.is_empty() {
+        bundled.or(installed)
+    } else {
+        installed.or(bundled)
+    }
+}
+
+pub fn choose_host_engine(bundled: Option<PathBuf>, installed: Option<PathBuf>) -> Option<PathBuf> {
+    choose_engine(
+        option_env!("LOCALSR_ENGINE_ID").unwrap_or(""),
+        bundled,
+        installed,
+    )
+}
+
 /// The engine an in-app update installed, if this host was built for it.
 ///
 /// A host with a compiled engine id selects only the matching installed engine.
