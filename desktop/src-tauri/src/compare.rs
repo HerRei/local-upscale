@@ -225,6 +225,17 @@ pub fn refresh(db: &Database, compare: &mut CompareState) -> AppResult<()> {
     Ok(())
 }
 
+/// Why an engine cannot prepare Compare pictures, or None when it can. An engine from
+/// before Compare answers a picture request without the slot, generation and target
+/// the host matches it by, so every box would wait for an answer that is dropped.
+/// Region crops arrived together with the slots, so that feature marks an engine that
+/// knows them.
+pub fn engine_shortfall(features: &[String]) -> Option<&'static str> {
+    (!features.iter().any(|feature| feature == "compare_regions")).then_some(
+        "The inference engine is older than this app and cannot prepare Compare pictures. Update or reinstall LocalSR.",
+    )
+}
+
 fn parse_slot_index(data: &Value) -> Option<usize> {
     match data["slot"].as_str() {
         Some("slot1") => Some(0),
@@ -628,6 +639,16 @@ mod tests {
         answer["preview_width"] = json!(50);
         answer["preview_height"] = json!(50);
         apply(db, compare, &answer, false).unwrap();
+    }
+
+    #[test]
+    fn an_engine_that_does_not_know_compare_is_named_instead_of_waited_for() {
+        let old: Vec<String> = ["image", "progressive_preview", "face_aware"]
+            .map(String::from)
+            .to_vec();
+        let current: Vec<String> = ["image", "compare_regions"].map(String::from).to_vec();
+        assert!(engine_shortfall(&old).is_some_and(|reason| reason.contains("older")));
+        assert_eq!(engine_shortfall(&current), None);
     }
 
     #[test]
