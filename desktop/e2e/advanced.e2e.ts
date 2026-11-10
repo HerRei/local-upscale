@@ -106,7 +106,7 @@ test.describe('Advanced settings: frame interpolation', () => {
   });
 });
 
-test('chooses an external FFmpeg through the host and displays a read-only path', async ({
+test('chooses an external FFmpeg through the host and displays the chosen path', async ({
   page,
 }) => {
   await openApp(page, {
@@ -115,10 +115,13 @@ test('chooses an external FFmpeg through the host and displays a read-only path'
   });
   await openAdvanced(page);
   await answer(page, 'choose_external_ffmpeg', '/chosen/ffmpeg');
-  const field = page.getByLabel('External FFmpeg', { exact: true });
-  await expect(field).toHaveAttribute('readonly', '');
-  await page.getByRole('button', { name: 'Choose…', exact: true }).click();
-  await expect(field).toHaveValue('/chosen/ffmpeg');
+  // The path is text inside the field, as in Save to; it cannot be typed.
+  const choose = page.getByRole('button', { name: 'Choose FFmpeg', exact: true });
+  const field = choose.locator('xpath=..');
+  await expect(field).toContainText('/old/ffmpeg');
+  await expect(field.locator('input')).toHaveCount(0);
+  await choose.click();
+  await expect(field).toContainText('/chosen/ffmpeg');
   expect((await hostCalls(page, 'choose_external_ffmpeg')).at(-1)?.args).toEqual({
     current: '/old/ffmpeg',
   });

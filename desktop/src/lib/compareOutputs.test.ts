@@ -14,6 +14,7 @@ describe('Outputs list histories', () => {
       ({ job_id, status, available, model_label: job_id }) as ResultSummary;
     const histories = [
       { media_id: 'b', results: [result('b1', 'completed', true)] },
+      { media_id: 'v', results: [result('v1', 'completed', true)] },
       {
         media_id: 'a',
         results: [
@@ -24,12 +25,12 @@ describe('Outputs list histories', () => {
       },
     ] as MediaResults[];
     const groups = outputGroups(media, histories);
-    expect(groups.map((group) => group.media.id)).toEqual(['a', 'b']);
+    expect(groups.map((group) => group.media.id)).toEqual(['a', 'v', 'b']);
     expect(groups[0].original).toEqual({ kind: 'original', media_id: 'a' });
     expect(groups[0].outputs.map(({ result }) => result.job_id)).toEqual(['new', 'old']);
     expect(groups[0].outputs[1]).toEqual({
       pick: { kind: 'output', media_id: 'a', job_id: 'old' },
-      result: histories[1].results[2],
+      result: histories[2].results[2],
     });
   });
 });

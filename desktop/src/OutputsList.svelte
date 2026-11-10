@@ -4,7 +4,7 @@
   import { MAX_SLOTS, pickKey, type OutputGroup } from './lib/compareOutputs';
   import { editDimensions } from './lib/editing';
   import { followAllowed } from './lib/rowRun';
-  import { formatDuration } from './lib/format';
+  import { formatBytes, formatDuration } from './lib/format';
   import type { ComparePick, MediaItem, ResultSummary } from './lib/types';
   export let groups: OutputGroup[];
   export let picks: ComparePick[];
@@ -64,6 +64,7 @@
       capitalize(result.ui?.quality ?? ''),
       result.scale ? `${result.scale}×` : '',
       width ? `${width} × ${height}` : '',
+      result.kind === 'video' && result.size_bytes ? formatBytes(result.size_bytes) : '',
       result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
       result.available ? '' : 'File missing',
     ]
@@ -84,8 +85,8 @@
       .join('\n');
   const pickTip = (n: number) => (n > 0 ? `Picked for Compare, slot ${n}` : 'Pick for Compare');
   /** Space on a focused row picks it; Enter and a click show it. */
-  function rowKey(event: KeyboardEvent, pick: ComparePick): void {
-    if (event.key !== ' ') return;
+  function rowKey(event: KeyboardEvent, pick: ComparePick, isVideo: boolean): void {
+    if (event.key !== ' ' || isVideo) return;
     event.preventDefault();
     togglePick(pick);
   }
@@ -133,7 +134,7 @@
               title={rowTip(entry.result)}
               aria-label={`Show ${entry.result?.model_label ?? 'the original'}, ${group.media.name}`}
               on:click={() => showResult(entry.pick)}
-              on:keydown={(event) => rowKey(event, entry.pick)}
+              on:keydown={(event) => rowKey(event, entry.pick, group.media.kind === 'video')}
               on:keyup={(event) => event.key === ' ' && event.preventDefault()}
             >
               <div class="thumb">
@@ -158,8 +159,9 @@
               role="checkbox"
               aria-checked={n > 0}
               aria-label={`${entry.result?.model_label ?? 'Original'}, ${group.media.name}`}
-              title={pickTip(n)}
-              disabled={!n && (picks.length >= MAX_SLOTS || entry.result?.available === false)}
+              title={group.media.kind === 'video' ? 'Compare works with images' : pickTip(n)}
+              disabled={group.media.kind === 'video' ||
+                (!n && (picks.length >= MAX_SLOTS || entry.result?.available === false))}
               on:click={() => togglePick(entry.pick)}
               >{#if n}<b class="slot-number">{n}</b>{/if}</button
             >

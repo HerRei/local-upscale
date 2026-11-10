@@ -113,11 +113,7 @@ const variants: Variant[] = [
 ];
 
 /** A control that needs no tip, keyed by its label, with the reason. */
-const withoutTip: Record<string, string> = {
-  // Its two options name their effect ("After upscaling · faster") and the note under the
-  // row states what Before upscaling costs; the Frame rate row above carries the tip.
-  Interpolate: 'the options and the note under the row say it',
-};
+const withoutTip: Record<string, string> = {};
 
 async function open(variant: Variant): Promise<HTMLElement> {
   render(AdvancedSettings, {
@@ -151,8 +147,10 @@ function controls(root: HTMLElement): { label: string; row: Element }[] {
       field;
     found.push({ label: name, row });
   }
-  const folder = root.querySelector('.directory-field');
-  if (folder) found.push({ label: 'Save to', row: folder });
+  for (const field of root.querySelectorAll('.directory-field')) {
+    const label = field.querySelector('small')?.textContent?.trim();
+    if (label) found.push({ label, row: field });
+  }
   const memory = root.querySelector('.hardware-card');
   if (memory) found.push({ label: 'Memory pressure', row: memory });
   return found;

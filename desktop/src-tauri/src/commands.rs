@@ -1155,7 +1155,7 @@ pub fn list_media_results(
     Ok(history)
 }
 
-/// All image histories in one IPC call for the Outputs pane.
+/// All media histories in one IPC call for the Outputs pane.
 #[tauri::command]
 pub fn list_all_media_results(state: State<'_, Arc<AppState>>) -> AppResult<Vec<MediaResults>> {
     let mut histories = lock(&state.database)?.list_all_media_results()?;
@@ -1591,6 +1591,7 @@ pub async fn prepare_video_comparison(
     media_id: String,
     request_id: String,
     force_compatible: bool,
+    result_id: Option<String>,
 ) -> AppResult<VideoComparisonSources> {
     let cancel = state.video_preview.begin(&request_id)?;
     let state = Arc::clone(state.inner());
@@ -1601,6 +1602,7 @@ pub async fn prepare_video_comparison(
             &media_id,
             &request_id,
             force_compatible,
+            result_id.as_deref(),
             cancel,
         )
     })
@@ -1632,6 +1634,7 @@ fn video_comparison_sources(
     media_id: &str,
     request_id: &str,
     force_compatible: bool,
+    result_id: Option<&str>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
 ) -> AppResult<VideoComparisonSources> {
     let (original, enhanced) = {
@@ -1645,7 +1648,11 @@ fn video_comparison_sources(
             ));
         }
         // Before a job finishes there is no output: play the source alone.
-        let output = database.latest_completed_output_for_media(media_id)?;
+        let output = match result_id {
+            Some("") => None,
+            Some(id) => Some(database.media_result_output(media_id, id)?),
+            None => database.latest_completed_output_for_media(media_id)?,
+        };
         (PathBuf::from(media.path), output.map(PathBuf::from))
     };
     let original = canonical_video(original)?;

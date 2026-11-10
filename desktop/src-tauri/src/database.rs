@@ -564,11 +564,11 @@ impl Database {
         })
     }
 
-    /// All image histories in media order, without the per-image page limit.
+    /// All media histories in media order, without the per-media page limit.
     pub fn list_all_media_results(&self) -> AppResult<Vec<MediaResults>> {
         let mut media = self
             .connection
-            .prepare("SELECT id FROM media WHERE kind='image' ORDER BY created_at, rowid")?;
+            .prepare("SELECT id FROM media ORDER BY created_at, rowid")?;
         let ids = media
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;

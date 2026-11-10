@@ -1043,3 +1043,30 @@ fn results_are_not_cleared_while_a_picture_is_being_worked_on() {
     assert!(db.hide_all_results(&["now".to_owned()]).is_err());
     db.hide_all_results(&[]).unwrap();
 }
+
+#[test]
+fn finished_video_is_in_bulk_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    db.insert_media("v", "/tmp/v.mp4", "v", "video").unwrap();
+    let output = directory.path().join("out.mp4");
+    std::fs::write(&output, "video").unwrap();
+    db.insert_job("j", "v", r#"{"type":"video_job_request"}"#)
+        .unwrap();
+    db.finish_job("j", "completed", output.to_str().unwrap(), "")
+        .unwrap();
+    let groups = db.list_all_media_results().unwrap();
+    assert_eq!(groups[0].media_id, "v");
+    assert_eq!(groups[0].results[0].job_id, "j");
+    assert_eq!(groups[0].results[0].size_bytes, 5);
+    assert_eq!(groups[0].available_count, 1);
+    assert_eq!(
+        db.media_result_output("v", "j").unwrap(),
+        output.to_str().unwrap()
+    );
+    assert!(db.media_result_output("other", "j").is_err());
+    db.remove_media_guarded("v", &[]).unwrap();
+    assert!(db.list_all_media_results().unwrap().is_empty());
+    assert!(db.media_result_output("v", "j").is_err());
+    assert!(output.is_file());
+}

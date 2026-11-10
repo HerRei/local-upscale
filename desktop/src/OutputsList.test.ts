@@ -201,3 +201,30 @@ describe('showing a result and picking it for Compare', () => {
     expect(options.showResult).toHaveBeenCalledWith(output('two'));
   });
 });
+
+it('shows video rows but prevents picking them for image Compare', async () => {
+  const clip = { ...media, id: 'v', name: 'clip.mp4', kind: 'video' } as MediaItem;
+  const output = result('v1', {
+    kind: 'video',
+    model_label: 'Frame by frame',
+    size_bytes: 5,
+    ui: null,
+  });
+  const showResult = vi.fn();
+  const togglePick = vi.fn();
+  render(OutputsList, {
+    ...props([]),
+    groups: outputGroups([clip], [{ media_id: 'v', results: [output] }] as MediaResults[]),
+    showResult,
+    togglePick,
+  });
+  const row = screen.getByRole('button', { name: 'Show Frame by frame, clip.mp4' });
+  expect(row.textContent).toContain('4× · 5 B · 31s');
+  await fireEvent.click(row);
+  expect(showResult).toHaveBeenCalledWith({ kind: 'output', media_id: 'v', job_id: 'v1' });
+  await fireEvent.keyDown(row, { key: ' ' });
+  expect(togglePick).not.toHaveBeenCalled();
+  const box = screen.getByRole('checkbox', { name: 'Frame by frame, clip.mp4' });
+  expect(box.matches(':disabled')).toBe(true);
+  expect(box.title).toBe('Compare works with images');
+});

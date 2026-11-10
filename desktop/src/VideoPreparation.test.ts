@@ -156,3 +156,37 @@ it('converts an unsupported native codec once without a retry loop', async () =>
   expect(api.prepareVideoComparison).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('alert').textContent).toContain('could not be loaded in this player');
 });
+
+it('requests the chosen video result and the original by job id', async () => {
+  vi.mocked(api.prepareVideoComparison).mockResolvedValue({
+    original_url: 'source',
+    enhanced_url: 'result',
+  });
+  const view = render(PreviewPane, {
+    selectedMedia: video('a'),
+    resultPreview: '',
+    completedVideoOutput: '/first.mp4',
+    videoResultId: 'first',
+  });
+  await waitFor(() =>
+    expect(api.prepareVideoComparison).toHaveBeenCalledWith(
+      'a',
+      expect.any(String),
+      false,
+      'first',
+    ),
+  );
+  await view.rerender({ completedVideoOutput: '/second.mp4', videoResultId: 'second' });
+  await waitFor(() =>
+    expect(api.prepareVideoComparison).toHaveBeenCalledWith(
+      'a',
+      expect.any(String),
+      false,
+      'second',
+    ),
+  );
+  await view.rerender({ completedVideoOutput: '', videoResultId: '' });
+  await waitFor(() =>
+    expect(api.prepareVideoComparison).toHaveBeenCalledWith('a', expect.any(String), false, ''),
+  );
+});

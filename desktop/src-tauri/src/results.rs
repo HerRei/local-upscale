@@ -60,6 +60,8 @@ pub struct ResultSummary {
     pub kind: String,
     pub output_path: String,
     pub output_name: String,
+    /// Current file size in bytes, or 0 when unavailable.
+    pub size_bytes: u64,
     /// Completed and its file exists now.
     pub available: bool,
     pub model_id: String,
@@ -225,6 +227,9 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_owned(),
+        size_bytes: std::fs::metadata(&output_path)
+            .map(|m| m.len())
+            .unwrap_or(0),
         output_path,
         model_id,
         model_label,

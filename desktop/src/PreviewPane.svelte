@@ -55,6 +55,7 @@
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
+  export let videoResultId = '';
   export let compactHidden = false;
   // The status bar reports the job; the pane only says which live frame it shows.
   export let liveFrame = -1;
@@ -700,6 +701,7 @@
     videoRequestId = '';
     if (oldRequest && api.isTauri()) void api.cancelVideoComparison(oldRequest).catch(() => {});
     videoComparisonKey = key;
+    if (key) comparisonView = completedVideoOutput ? 'enhanced' : 'original';
     videoComparison = null;
     videoComparisonError = '';
     videoPreparationProgress = null;
@@ -728,7 +730,12 @@
         throw error;
       });
       if (disposed || requestId !== videoRequestId) return;
-      const sources = await api.prepareVideoComparison(mediaId, requestId, forceCompatible);
+      const sources = await api.prepareVideoComparison(
+        mediaId,
+        requestId,
+        forceCompatible,
+        videoResultId,
+      );
       if (disposed || requestId !== videoRequestId || mediaId !== selectedMedia?.id) return;
       videoComparison = sources;
     } catch (error) {

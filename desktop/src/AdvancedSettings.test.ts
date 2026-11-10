@@ -99,21 +99,29 @@ describe('FFmpeg buttons', () => {
   it('show the host message when looking for or choosing a program fails', async () => {
     await open({ task: 'video', video_container: 'mp4', video_codec: 'h264' }, mac);
     api.detectExternalFFmpeg.mockRejectedValueOnce('The search was refused.');
-    await fireEvent.click(screen.getByRole('button', { name: 'Find installed FFmpeg' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Find installed' }));
     expect(await screen.findByText(/The search was refused\./)).toBeTruthy();
     api.chooseExternalFFmpeg.mockRejectedValueOnce('The file picker failed.');
-    await fireEvent.click(screen.getByRole('button', { name: 'Choose…' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Choose FFmpeg/ }));
     expect(await screen.findByText(/The file picker failed\./)).toBeTruthy();
   });
 });
 
-it('shows the chosen FFmpeg path in a read-only field', async () => {
-  const update = await open({ task: 'video', external_ffmpeg_path: '/usr/bin/ffmpeg' }, mac);
-  const input = screen.getByLabelText('External FFmpeg') as HTMLInputElement;
-  expect(input.value).toBe('/usr/bin/ffmpeg');
-  expect(input.readOnly).toBe(true);
-  await fireEvent.change(input, { target: { value: '/other' } });
-  expect(update).not.toHaveBeenCalled();
+it('places the FFmpeg chooser beside the path and offers quiet actions', async () => {
+  await open({ task: 'video', external_ffmpeg_path: '/usr/bin/ffmpeg' }, mac);
+  const path = screen.getByTitle('/usr/bin/ffmpeg');
+  expect(path.closest('.directory-field')?.textContent).toContain('Choose…');
+  expect(
+    screen.getByRole('button', { name: 'Find installed' }).classList.contains('link-button'),
+  ).toBe(true);
+  expect(screen.getByRole('button', { name: 'Don’t use' }).classList.contains('link-button')).toBe(
+    true,
+  );
+});
+
+it('explains when interpolation happens', async () => {
+  await open({ task: 'video', video_interpolation: 'x2' }, mac);
+  expect(screen.getByRole('button', { name: 'About Interpolate' })).toBeTruthy();
 });
 
 describe('Refresh in the memory line', () => {

@@ -505,7 +505,7 @@ test.describe('overflow and alignment', () => {
     }
   });
 
-  test('Advanced: three selects share the select column; Find installed FFmpeg is one line', async ({
+  test('Advanced: three selects share the select column; the FFmpeg actions are one line', async ({
     page,
   }) => {
     await openApp(page, ready);
@@ -523,11 +523,17 @@ test.describe('overflow and alignment', () => {
     await openApp(page, video);
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
-    const find = page.getByRole('button', { name: 'Find installed FFmpeg' });
+    await openApp(page, {
+      ...video,
+      settings: { ...video.settings, external_ffmpeg_path: '/opt/homebrew/bin/ffmpeg' },
+    });
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    const find = page.getByRole('button', { name: 'Find installed', exact: true });
     await find.scrollIntoViewIfNeeded();
-    const choose = find.locator('xpath=following-sibling::button[1]');
-    await expect(choose).toHaveText('Choose…');
-    expect(Math.abs((await box(find)).height - (await box(choose)).height)).toBeLessThan(2);
+    const unset = page.getByRole('button', { name: 'Don’t use', exact: true });
+    expect(Math.abs((await box(find)).y - (await box(unset)).y)).toBeLessThan(2);
+    expect(Math.abs((await box(find)).height - (await box(unset)).height)).toBeLessThan(2);
   });
 
   test('Edit: Steps and Seed look like the other inputs', async ({ page }) => {
@@ -552,8 +558,12 @@ test.describe('overflow and alignment', () => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
     const task = await box(page.getByRole('group', { name: 'Task' }));
+    const contentCentre = await page.locator('.inspector-scroll').evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.left + el.clientLeft + el.clientWidth / 2;
+    });
     expect(task.width).toBeLessThanOrEqual(440);
-    expect(Math.abs(task.x + task.width / 2 - 440)).toBeLessThan(2);
+    expect(Math.abs(task.x + task.width / 2 - contentCentre)).toBeLessThan(2);
   });
 
   for (const width of [880, 1380]) {

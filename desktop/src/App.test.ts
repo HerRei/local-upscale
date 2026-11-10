@@ -1253,6 +1253,7 @@ describe('LocalSR desktop interface', () => {
       }),
     );
     await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+    expect(hdr.value).toBe('preserve');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
@@ -1264,7 +1265,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText(/The current adapter requires HAT/)).toBeTruthy();
   });
 
-  it('normalizes a saved incompatible HDR setting when reopening SeedVR2', async () => {
+  it('keeps a saved HDR preference when reopening SeedVR2', async () => {
     const snapshot = readySnapshot([{ ...video('hdr', true), hdr_format: 'HLG' }]);
     Object.assign(snapshot.settings, {
       task: 'video',
@@ -1275,7 +1276,7 @@ describe('LocalSR desktop interface', () => {
     expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('tone_map');
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ video_hdr_mode: 'tone_map' }),
+        expect.objectContaining({ video_hdr_mode: 'preserve' }),
       ),
     );
   });
@@ -1401,6 +1402,35 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
+  it.each([false, true])(
+    'preserves video options across engine switches with de-flicker %s',
+    async (deflicker) => {
+      const snapshot = readySnapshot([video('clip', true)]);
+      snapshot.engine!.features.push('face_aware');
+      Object.assign(snapshot.settings, {
+        task: 'video',
+        quality: 'custom',
+        selected_model_id: 'hat_l_x4_imagenet',
+        fixes: ['faces'],
+        deflicker,
+        video_interpolation: 'x2',
+        enable_face_model: true,
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      const engine = screen.getByLabelText('Video engine');
+      await user.selectOptions(engine, 'seedvr2_3b');
+      await user.selectOptions(engine, 'frame_by_frame');
+      expect(
+        (screen.getByRole('checkbox', { name: /De-flicker · Labs/i }) as HTMLInputElement).checked,
+      ).toBe(deflicker);
+      expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: true }),
+      );
+    },
+  );
+
   it('disables interpolation when the engine does not advertise it', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.settings.task = 'video';
@@ -1515,7 +1545,11 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ video_model_id: 'seedvr2_3b', video_interpolation: 'off' }),
+      expect.objectContaining({
+        video_model_id: 'seedvr2_3b',
+        video_interpolation: 'off',
+        deflicker: false,
+      }),
     );
   });
 

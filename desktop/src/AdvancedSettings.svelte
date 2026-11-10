@@ -12,6 +12,7 @@
   } from './lib/outputFormats';
   import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
+  import FileName from './FileName.svelte';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
@@ -364,24 +365,33 @@
             disk space.
           </p>
         {/if}
-        <div class="field-row">
-          <span class="label-with-tip"
-            ><label for="external-ffmpeg">External FFmpeg</label><HelpTip
-              label="External FFmpeg"
-              text="FFmpeg is a free video program that you install yourself. Leave this empty unless a video will not open or an export format asks for it; LocalSR uses the one it finds on this computer."
-            /></span
-          ><input
-            id="external-ffmpeg"
-            type="text"
-            placeholder={foundFfmpeg.length ? `Found automatically: ${foundFfmpeg[0]}` : 'Not used'}
-            value={settings.external_ffmpeg_path ?? ''}
-            readonly
-          />
+        <div class="directory-field">
+          <button
+            type="button"
+            class="directory-hit"
+            aria-label="Choose FFmpeg"
+            on:click={pickFFmpeg}
+          ></button>
+          <div class="directory-text">
+            <span class="label-with-tip"
+              ><small>External FFmpeg</small><HelpTip
+                label="External FFmpeg"
+                text="FFmpeg is a free video program that you install yourself. Leave this empty unless a video will not open or an export format asks for it; LocalSR uses the one it finds on this computer."
+              /></span
+            >
+            <span class="directory-path"
+              ><FileName
+                name={settings.external_ffmpeg_path ||
+                  (foundFfmpeg.length ? `Found automatically: ${foundFfmpeg[0]}` : 'Not used')}
+              /></span
+            >
+          </div>
+          <b>Choose…</b>
         </div>
-        <div class="field-row button-row">
-          <button on:click={findFFmpeg}>Find installed FFmpeg</button>
-          <button on:click={pickFFmpeg}>Choose…</button>
+        <div class="eyebrow-actions">
+          <button class="link-button" on:click={findFFmpeg}>Find installed</button>
           {#if settings.external_ffmpeg_path}<button
+              class="link-button"
               on:click={() => updateSettings({ external_ffmpeg_path: '' })}>Don’t use</button
             >{/if}
         </div>
@@ -454,7 +464,12 @@
           </div>
           {#if (settings.video_interpolation ?? 'off') !== 'off'}
             <div class="field-row">
-              <label for="interpolation-order">Interpolate</label><select
+              <span class="label-with-tip"
+                ><label for="interpolation-order">Interpolate</label><HelpTip
+                  label="Interpolate"
+                  text="When the extra frames are made. After upscaling is faster; before upscaling can look smoother but upscales more frames."
+                /></span
+              ><select
                 id="interpolation-order"
                 value={settings.video_interpolation_order ?? 'after_upscale'}
                 on:change={(event) =>

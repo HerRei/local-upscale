@@ -397,7 +397,10 @@
   $: fixPlanSupported =
     imageFixes.length <= 1 || snapshot.engine?.features.includes('image_multi_fix') === true;
   $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
-  $: faceEnabled = settings.enable_face_model && faceEngineAvailable;
+  $: faceEnabled =
+    settings.enable_face_model &&
+    faceEngineAvailable &&
+    !(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame');
   $: usingTemporalVideo =
     settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
   $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
@@ -413,6 +416,7 @@
   $: preservingHdr =
     settings.task === 'video' &&
     settings.video_hdr_mode === 'preserve' &&
+    !usingTemporalVideo &&
     Boolean(selectedMedia?.hdr_format);
   $: hdrPreservationAvailable = supportsHdrPreservation(settings);
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
@@ -723,14 +727,29 @@
   $: if (desiredPairKey !== pairKey) void requestPair(desiredPairKey);
   // Open and Reveal follow Showing. Without a history they follow the selected
   // item's latest result (jobs arrive newest first), not whichever job finished last.
-  $: selectedOutputPath = pairShown
-    ? (resultRows.find((row) => row.job_id === choice.showing && row.available)?.output_path ?? '')
-    : selectedMedia && selectedMedia.id !== activeJobMediaId
-      ? (snapshot.jobs.find(
-          (job) =>
-            job.media_id === selectedMedia?.id && job.status === 'completed' && job.output_path,
-        )?.output_path ?? '')
-      : '';
+  $: videoHistory =
+    selectedMedia?.kind === 'video'
+      ? bulkHistories.find((entry) => entry.media_id === selectedMedia?.id)
+      : undefined;
+  $: videoChoice = effectiveChoice(
+    videoHistory,
+    selectedMedia ? pairChoices[selectedMedia.id] : undefined,
+  );
+  $: videoResult = videoHistory?.results.find(
+    (row) => row.job_id === videoChoice.showing && row.available,
+  );
+  $: selectedOutputPath =
+    selectedMedia?.kind === 'video'
+      ? (videoResult?.output_path ?? '')
+      : pairShown
+        ? (resultRows.find((row) => row.job_id === choice.showing && row.available)?.output_path ??
+          '')
+        : selectedMedia && selectedMedia.id !== activeJobMediaId
+          ? (snapshot.jobs.find(
+              (job) =>
+                job.media_id === selectedMedia?.id && job.status === 'completed' && job.output_path,
+            )?.output_path ?? '')
+          : '';
   $: selectedOutputName = selectedOutputPath.split(/[\\/]/).pop() ?? '';
   // Try others…: one image in Upscale or Restore with a catalog model; the
   // runs queue behind other work but not beside this image's own.
@@ -773,13 +792,9 @@
         : '');
   $: completedVideoOutput =
     selectedMedia?.kind === 'video' && selectedMedia.id !== activeJobMediaId
-      ? (snapshot.jobs.find(
-          (job) =>
-            job.media_id === selectedMedia.id &&
-            job.status === 'completed' &&
-            Boolean(job.output_path),
-        )?.output_path ?? '')
+      ? (videoResult?.output_path ?? '')
       : '';
+  $: videoResultId = completedVideoOutput ? videoChoice.showing : '';
   $: outputDimensions = selectedMedia
     ? settings.task === 'edit'
       ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
@@ -1030,6 +1045,7 @@
         if (
           settings.task === 'video' &&
           settings.video_hdr_mode === 'preserve' &&
+          settings.selected_video_model_id === 'frame_by_frame' &&
           !supportsHdrPreservation(settings)
         ) {
           updateSettings({ video_hdr_mode: 'tone_map' });
@@ -1665,7 +1681,12 @@
     if (settingsLocked) return;
     const next = { ...snapshot.settings, ...patch };
     // Apply the model/output contract for selectors, saved recipes and launch presets.
-    if (next.task === 'video' && next.video_hdr_mode === 'preserve') {
+    if (
+      next.task === 'video' &&
+      next.video_hdr_mode === 'preserve' &&
+      next.selected_video_model_id === 'frame_by_frame' &&
+      patch.selected_video_model_id === undefined
+    ) {
       if (!supportsHdrPreservation(next)) next.video_hdr_mode = 'tone_map';
       else if (selectedMedia?.hdr_format) {
         next.precision = 'fp32';
@@ -1806,7 +1827,12 @@
 
   // The Outputs row that matches what the centre pane shows.
   $: shownPick = ((): ComparePick | null => {
-    if (mainTab !== 'preview' || !selectedImage || !pairShown) return null;
+    if (mainTab !== 'preview') return null;
+    if (selectedMedia?.kind === 'video' && videoHistory && selectedMedia.id !== activeJobMediaId)
+      return videoChoice.showing === ORIGINAL
+        ? { kind: 'original', media_id: selectedMedia.id }
+        : { kind: 'output', media_id: selectedMedia.id, job_id: videoChoice.showing };
+    if (!selectedImage || !pairShown) return null;
     return choice.showing === ORIGINAL
       ? { kind: 'original', media_id: selectedImage.id }
       : { kind: 'output', media_id: selectedImage.id, job_id: choice.showing };
@@ -1941,7 +1967,7 @@
   }
 
   function selectVideoEngine(modelId: string): void {
-    updateSettings({ selected_video_model_id: modelId, enable_face_model: false });
+    updateSettings({ selected_video_model_id: modelId });
     termsAccepted = {};
     faceTermsAccepted = false;
   }
@@ -2035,12 +2061,12 @@
       precision: settings.precision,
       safe_memory: settings.safe_memory,
       neural_engine: settings.neural_engine ?? true,
-      deflicker: settings.deflicker,
+      deflicker: usingTemporalVideo ? false : settings.deflicker,
       deflicker_window: settings.deflicker_window,
       video_container: settings.video_container,
       video_codec: settings.video_codec ?? 'auto',
       external_ffmpeg_path: settings.external_ffmpeg_path ?? '',
-      video_hdr_mode: settings.video_hdr_mode ?? 'tone_map',
+      video_hdr_mode: usingTemporalVideo ? 'tone_map' : (settings.video_hdr_mode ?? 'tone_map'),
       video_target_resolution: settings.video_target_resolution ?? 0,
       video_low_memory: settings.video_low_memory ?? true,
       video_crf: settings.video_crf,
@@ -2982,6 +3008,7 @@
           showLiveTiles={!choice.pinned}
           comparisonError={selectedComparisonError}
           {completedVideoOutput}
+          {videoResultId}
           compactHidden={page !== 'preview'}
           addFiles={() => void addFiles()}
           dropping={filesDragging}
@@ -3055,7 +3082,7 @@
               <label class="field-label" for="hdr-output">Colour output</label>
               <select
                 id="hdr-output"
-                value={settings.video_hdr_mode ?? 'tone_map'}
+                value={usingTemporalVideo ? 'tone_map' : (settings.video_hdr_mode ?? 'tone_map')}
                 on:change={(event) =>
                   updateSettings({
                     video_hdr_mode: event.currentTarget.value as 'tone_map' | 'preserve',

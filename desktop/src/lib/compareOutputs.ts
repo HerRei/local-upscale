@@ -10,7 +10,6 @@ export interface OutputGroup {
 export function outputGroups(media: MediaItem[], histories: MediaResults[]): OutputGroup[] {
   const byMedia = new Map(histories.map((history) => [history.media_id, history]));
   return media
-    .filter((item) => item.kind === 'image')
     .map((item): OutputGroup => ({
       media: item,
       original: { kind: 'original', media_id: item.id },

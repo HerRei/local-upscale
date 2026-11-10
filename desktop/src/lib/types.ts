@@ -570,6 +570,8 @@ export interface ResultSummary {
   kind: 'upscale' | 'restore' | 'edit' | 'video' | string;
   output_path: string;
   output_name: string;
+  /** Current file size in bytes, or 0 when unavailable. */
+  size_bytes?: number;
   /** Completed and its file exists. */
   available: boolean;
   model_id: string;
