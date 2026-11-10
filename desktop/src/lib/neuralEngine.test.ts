@@ -3,8 +3,10 @@ import {
   NEURAL_ENGINE_ID,
   acceleratorFor,
   engineLabel,
+  fitLine,
   hardwareChoices,
   hardwarePatch,
+  runsOnAccelerator,
   selectedHardware,
   withListedDevice,
 } from './neuralEngine';
@@ -146,5 +148,75 @@ describe('withListedDevice', () => {
 
   it('falls back to the first listed device when the CPU is not listed', () => {
     expect(withListedDevice({ device_id: 'cuda:7' }, listed('mps')).device_id).toBe('mps');
+  });
+});
+
+describe('library fit line', () => {
+  const GIB = 1024 ** 3;
+  const mac = {
+    devices: [
+      device('mps', { neural_engine: true, total_memory: 16 * GIB }),
+      device('cpu', { name: 'CPU', total_memory: 16 * GIB }),
+    ],
+  } as CapabilityInfo;
+  const pc = {
+    devices: [
+      device('openvino:1', { type: 'npu', name: 'Intel AI Boost (NPU)', total_memory: 16 * GIB }),
+      device('cpu', { name: 'CPU', total_memory: 16 * GIB }),
+    ],
+  } as CapabilityInfo;
+  const span = { architecture: 'SPAN', vram_estimate_mb: 1024 };
+  const hat = { architecture: 'HAT', vram_estimate_mb: 1024 };
+  const find = (capabilities: CapabilityInfo, id: string) =>
+    capabilities.devices.find((entry) => entry.id === id);
+  const onMps = { device_id: 'mps', neural_engine: true };
+
+  it('names the Neural Engine when the model and the selected hardware use it', () => {
+    expect(fitLine(span, onMps, mac, find(mac, 'mps'))?.text).toBe(
+      'Runs well here · Neural Engine',
+    );
+    expect(runsOnAccelerator(onMps, mac, 'SPAN')).toBe('Neural Engine');
+  });
+
+  it('names the device when the user chose the Apple GPU or the CPU', () => {
+    const gpu = { device_id: 'mps', neural_engine: false };
+    expect(fitLine(span, gpu, mac, find(mac, 'mps'))?.text).toBe(
+      'Runs well here · Apple GPU (Metal)',
+    );
+    const cpu = { device_id: 'cpu', neural_engine: true };
+    expect(fitLine(span, cpu, mac, find(mac, 'cpu'))?.text).toBe('Runs well here · CPU');
+    expect(runsOnAccelerator(cpu, mac, 'SPAN')).toBeUndefined();
+  });
+
+  it('names the device for a model the accelerator cannot run', () => {
+    expect(fitLine(hat, onMps, mac, find(mac, 'mps'))?.text).toBe(
+      'Runs well here · Apple GPU (Metal)',
+    );
+    expect(runsOnAccelerator(onMps, mac, 'HAT')).toBeUndefined();
+  });
+
+  it('names an NPU only while it is selected, and the CPU for a model it does not run', () => {
+    const npu = { device_id: 'openvino:1', neural_engine: true };
+    expect(fitLine(span, npu, pc, find(pc, 'openvino:1'))?.text).toBe('Runs well here · NPU');
+    expect(fitLine(hat, npu, pc, find(pc, 'openvino:1'))?.text).toBe('Runs well here · CPU');
+    const cpu = { device_id: 'cpu', neural_engine: true };
+    expect(fitLine(span, cpu, pc, find(pc, 'cpu'))?.text).toBe('Runs well here · CPU');
+  });
+
+  it('keeps the memory wording for tight and too heavy models', () => {
+    const tight = { architecture: 'SPAN', vram_estimate_mb: 12 * 1024 };
+    const huge = { architecture: 'SPAN', vram_estimate_mb: 20 * 1024 };
+    expect(fitLine(tight, onMps, mac, find(mac, 'mps'))).toEqual({
+      fit: 'heavy',
+      text: 'Heavy here · safe-memory mode · Neural Engine',
+    });
+    expect(fitLine(huge, onMps, mac, find(mac, 'mps'))).toEqual({
+      fit: 'too_heavy',
+      text: 'Too heavy for this device · Neural Engine',
+    });
+  });
+
+  it('shows nothing when the memory is unknown', () => {
+    expect(fitLine({ ...span, vram_estimate_mb: 0 }, onMps, mac, find(mac, 'mps'))).toBeUndefined();
   });
 });

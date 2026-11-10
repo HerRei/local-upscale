@@ -2786,6 +2786,20 @@ input[type='number'],
   background: #6db07f;
   box-shadow: 0 0 8px rgba(109, 176, 127, 0.2);
 }
+.row .row-fit {
+  margin-top: 3px;
+  gap: 6px;
+  font-size: calc(10px * var(--ui-scale));
+}
+.row .row-fit i {
+  flex: none;
+}
+.row .row-fit span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .fit i.warn {
   background: #de9935;
   box-shadow: none;

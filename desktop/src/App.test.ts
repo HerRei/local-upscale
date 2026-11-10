@@ -3629,12 +3629,17 @@ describe('LocalSR desktop interface', () => {
     await chooseMenuItem('view.models');
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
-    expect(within(library).getByRole('button', { name: /SPAN ×4.*Neural Engine/ })).toBeTruthy();
     expect(
-      within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }).textContent,
-    ).not.toMatch(/Neural Engine/);
+      within(library).getByRole('button', { name: /SPAN ×4.*Runs well here · Neural Engine/ }),
+    ).toBeTruthy();
+    const hatRow = within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ });
+    expect(hatRow.textContent).not.toMatch(/Neural Engine/);
+    expect(hatRow.textContent).toMatch(/Runs well here · Apple GPU \(Metal\)/);
     await user.click(within(library).getByRole('button', { name: /SPAN ×4/ }));
     expect(within(library).getByText('Runs on')).toBeTruthy();
+    expect(library.querySelector('.detail .fit')?.textContent).toMatch(
+      /Runs well here · Neural Engine/,
+    );
     // The file and the author keep their ends when the details column is narrow.
     const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
     expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
@@ -3655,12 +3660,14 @@ describe('LocalSR desktop interface', () => {
       },
       ...pc.capabilities.devices.filter((device) => device.id === 'cpu'),
     ];
-    pc.settings.device_id = 'cpu';
+    pc.settings.device_id = 'openvino:80d1';
     const user2 = await mountWith(pc);
     await chooseMenuItem('view.models');
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user2.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
-    expect(within(library).getByRole('button', { name: /SPAN ×4.*NPU/ })).toBeTruthy();
+    expect(
+      within(library).getByRole('button', { name: /SPAN ×4.*Runs well here · NPU/ }),
+    ).toBeTruthy();
   });
 
   it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {

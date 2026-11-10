@@ -1,7 +1,6 @@
 <script lang="ts">
   import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
   import {
-    FIT_LABELS,
     FIX_LABELS,
     choosePresetModel,
     displayName,
@@ -15,7 +14,7 @@
   import { formatBytes } from './lib/format';
   import FileName from './FileName.svelte';
   import { modal } from './lib/modal';
-  import { acceleratorFor } from './lib/neuralEngine';
+  import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
   import { estimateModelTrials } from './lib/api';
   import {
     EDIT_FAMILIES,
@@ -274,9 +273,16 @@
     ? undefined
     : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
   $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
-  // The accelerator a model can use here: the Neural Engine on a Mac, an Intel NPU elsewhere.
+  // The accelerator the selected hardware will use for a model: the Neural Engine on a Mac,
+  // an Intel NPU elsewhere. Memoised per model id: rows and details read it on every render.
   $: accelerator = (model: CatalogModel) =>
-    acceleratorFor(snapshot.capabilities, model.architecture);
+    runsOnAccelerator(settings, snapshot.capabilities, model.architecture);
+  $: fitLines = new Map(
+    models.map((model) => [
+      model.model_id,
+      fitLine(model, settings, snapshot.capabilities, device),
+    ]),
+  );
   $: quickId = fixing
     ? chooseFixModel(snapshot, fixing, 'quick', settings.preset_pins)?.model_id
     : context.task
@@ -590,13 +596,20 @@
                 <div>
                   <div class="name">{displayName(model)}</div>
                   <div class="role">{model.role || model.description}</div>
+                  {#if fitLines.get(model.model_id)}
+                    {@const line = fitLines.get(model.model_id)}
+                    <div class="fit row-fit" title={line?.text}>
+                      <i aria-hidden="true" class:warn={line?.fit !== 'runs'}></i><span
+                        >{line?.text}</span
+                      >
+                    </div>
+                  {/if}
                   <!-- Badges mark exceptions only: a license that limits use, a model that
                        will struggle here. Everything else is in the details. -->
-                  {#if model.model_id === quickId || model.model_id === bestId || accelerator(model) || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
+                  {#if model.model_id === quickId || model.model_id === bestId || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
                     <div class="pills">
                       {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
                       {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
-                      {#if accelerator(model)}<span class="pill ok">{accelerator(model)}</span>{/if}
                       {#if model.support_tier === 'labs'}<span class="pill labs">Labs</span>{/if}
                       {#if model.commercial_use_allowed !== true}<span class="pill warn"
                           >{rightsLabel(model)}</span
@@ -896,11 +909,10 @@
               </div>
             {/if}
           </dl>
-          {#if device && fitFor(selected, device) !== 'unknown'}
+          {#if fitLines.get(selected.model_id)}
+            {@const line = fitLines.get(selected.model_id)}
             <div class="fit">
-              <i class:warn={fitFor(selected, device) !== 'runs'}></i>{FIT_LABELS[
-                fitFor(selected, device)
-              ]} · {device.name}
+              <i aria-hidden="true" class:warn={line?.fit !== 'runs'}></i>{line?.text}
             </div>
           {/if}
           <dl class="kv">
