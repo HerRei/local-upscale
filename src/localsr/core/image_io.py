@@ -54,6 +54,9 @@ def _is_decode_failure(error: BaseException) -> bool:
 
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
+# Formats whose extra frames are animation frames or pages, not another view of the picture
+# (a phone's JPEG also lists its depth map or gain map as a second frame).
+ANIMATED_OR_PAGED_FORMATS = frozenset({"GIF", "WEBP", "PNG", "TIFF"})
 # What a JPEG's single EXIF segment can hold, header included.
 JPEG_EXIF_LIMIT = 65_533
 _EXIF_TAG_NAMES = {306: "date", 315: "artist", 33432: "copyright"}
@@ -276,7 +279,7 @@ def _develop_raw(path: str) -> np.ndarray:
 class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
-        # What the last save left out or changed that the user should know about.
+        # What loading and saving left out or changed that the user should know about.
         self.notes: list[str] = []
         self.alpha_channel = None
         # A grey source has no colour, so save() keeps only the luma a model returns.
@@ -301,6 +304,7 @@ class ImageManager:
 
     def _load(self, path: str) -> dict:
         require_ordinary_source(path)
+        self.notes = []
         self.alpha_channel = None
         self.grayscale = False
         is_raw = is_raw_input(path)
@@ -332,6 +336,12 @@ class ImageManager:
                 f"Could not read RAW metadata: {error}",
                 RuntimeWarning,
                 stacklevel=2,
+            )
+
+        frames = getattr(metadata_img, "n_frames", 1)
+        if frames > 1 and metadata_img.format in ANIMATED_OR_PAGED_FORMATS:
+            self.notes.append(
+                f"{Path(path).name} has {frames} frames or pages; only the first one was used."
             )
 
         # Copy a deliberately small privacy allow-list. In particular, GPS,
@@ -506,7 +516,6 @@ class ImageManager:
         cancel_event: threading.Event | None = None,
     ):
 
-        self.notes = []
         arr = np.transpose(writer_mmap, (1, 2, 0))
         out_img = Image.fromarray(arr, mode="RGB")
 

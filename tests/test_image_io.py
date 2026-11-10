@@ -781,3 +781,23 @@ def test_a_pipe_is_refused_as_a_source_instead_of_waiting_for_a_writer(tmp_path)
             # Release the blocked reader so the thread ends.
             os.close(os.open(pipe, os.O_WRONLY))
             thread.join(5)
+
+
+@pytest.mark.parametrize("name", ["anim.gif", "anim.webp", "anim.png", "pages.tif"])
+def test_a_file_with_several_frames_uses_the_first_and_says_so(tmp_path, name):
+    first = Image.new("RGB", (16, 12), (255, 0, 0))
+    second = Image.new("RGB", (16, 12), (0, 0, 255))
+    path = tmp_path / name
+    first.save(path, save_all=True, append_images=[second], lossless=True)
+    manager = ImageManager()
+    data = manager.load(str(path))
+    assert data["tensor"][:, 0, 0].mul(255).round().tolist()[0] > 200
+    assert manager.notes == [f"{name} has 2 frames or pages; only the first one was used."]
+
+
+def test_a_single_picture_gets_no_frame_note(tmp_path):
+    path = tmp_path / "one.png"
+    Image.new("RGB", (4, 4)).save(path)
+    manager = ImageManager()
+    manager.load(str(path))
+    assert manager.notes == []
