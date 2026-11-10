@@ -19,7 +19,19 @@ export interface Scenario {
   engineGivenUp?: boolean;
   features?: string[];
   /** Finished outputs per photo number (1-based); each entry is one model result. */
-  outputs?: Record<number, { id: string; label: string; quality?: string; seconds?: number }[]>;
+  outputs?: Record<
+    number,
+    {
+      id: string;
+      label: string;
+      quality?: string;
+      seconds?: number;
+      /** An Edit result, saved at its own pixel size (the engine rounds it down to 32s). */
+      edit?: { width: number; height: number };
+    }[]
+  >;
+  /** The host reports pair slots, as the real one does: results are compared by job id. */
+  pairs?: boolean;
   welcome?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
@@ -51,10 +63,12 @@ function hostScript(scenario: Scenario): void {
   }
 
   // A fixed picture per hue; shapes only, so every browser draws the same thing.
-  const picture = (hue: number) =>
+  // Another pixel size shows the same picture filling its frame, as an edit of the
+  // whole photo does, so it lines up with the original wherever the divider is.
+  const picture = (hue: number, width = 1600, height = 1067) =>
     'data:image/svg+xml;utf8,' +
     encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1067" viewBox="0 0 1600 1067">` +
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 1600 1067"${width === 1600 ? '' : ' preserveAspectRatio="none"'}>` +
         `<defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="hsl(${hue},55%,62%)"/>` +
         `<stop offset="1" stop-color="hsl(${hue + 30},60%,86%)"/></linearGradient></defs>` +
         `<rect width="1600" height="1067" fill="url(#s)"/>` +
@@ -192,6 +206,10 @@ function hostScript(scenario: Scenario): void {
         })),
       );
     }
+    if (scenario.pairs) {
+      const empty = { target_id: '', preview_data_url: '' };
+      s.runtime.comparison_pair = { media_id: '', generation: 0, showing: empty, against: empty };
+    }
     if (scenario.engineGivenUp) {
       Object.assign(s.runtime, {
         worker: 'failed',
@@ -221,13 +239,13 @@ function hostScript(scenario: Scenario): void {
         job_id: entry.id,
         completed_at: 1794160000 + index,
         status: 'completed',
-        kind: 'upscale',
+        kind: entry.edit ? 'edit' : 'upscale',
         output_path: `/fixture/results/alpine-lake-${n}-${entry.id}.png`,
         output_name: `alpine-lake-${n}-${entry.id}.png`,
         available: true,
         model_id: entry.id,
         model_label: entry.label,
-        scale: 4,
+        scale: entry.edit ? 0 : 4,
         stages: [],
         notes: '',
         elapsed_seconds: entry.seconds ?? 12,
@@ -253,6 +271,26 @@ function hostScript(scenario: Scenario): void {
     }));
   }
 
+  // One side of the pair the preview compares: the Original keeps the probe's size and
+  // thumbnail, a result is decoded to its own pixel size.
+  function pairSlot(mediaId: string, target: string): Json {
+    if (target === 'original') {
+      return { target_id: target, preview_data_url: '', width: 1600, height: 1067 };
+    }
+    const n = Number(mediaId.replace('photo-', ''));
+    const entry = scenario.outputs?.[n]?.find((candidate) => candidate.id === target);
+    const size = entry?.edit ?? { width: 1600 * 4, height: 1067 * 4 };
+    return {
+      target_id: target,
+      output_path: `/fixture/results/alpine-lake-${n}-${target}.png`,
+      preview_data_url: entry?.edit ? picture(190 + n * 25, size.width, size.height) : picture(30),
+      error: '',
+      ...size,
+      preview_width: Math.min(size.width, 1600),
+      preview_height: Math.min(size.height, 1067),
+    };
+  }
+
   async function handle(command: string, args: Json): Promise<unknown> {
     snapshot ??= await build();
     switch (command) {
@@ -276,6 +314,16 @@ function hostScript(scenario: Scenario): void {
             next_before: null,
           }
         );
+      case 'request_image_comparison': {
+        if (!args.showing) return null;
+        snapshot.runtime.comparison_pair = {
+          media_id: args.mediaId,
+          generation: ++compareGeneration,
+          showing: pairSlot(args.mediaId, args.showing),
+          against: pairSlot(args.mediaId, args.against),
+        };
+        return null;
+      }
       case 'request_compare':
         snapshot.runtime.compare = {
           generation: ++compareGeneration,

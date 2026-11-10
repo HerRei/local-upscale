@@ -41,3 +41,16 @@ export const video: Scenario = {
   task: 'video',
   settings: { video_interpolation: 'x2' },
 };
+
+/** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */
+export const withEdit: Scenario = {
+  ...ready,
+  pairs: true,
+  finished: true,
+  outputs: {
+    1: [
+      { id: 'edit', label: 'Qwen Edit', edit: { width: 512, height: 320 } },
+      { id: 'span', label: 'SPAN ×4' },
+    ],
+  },
+};
