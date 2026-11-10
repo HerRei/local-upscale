@@ -1114,6 +1114,14 @@
     }
   }
 
+  /* A long name or error without spaces breaks anywhere, so the block keeps to the stage and
+     stays centred. */
+  .preview-error {
+    width: 100%;
+    max-width: 520px;
+    padding: 0 24px;
+    overflow-wrap: anywhere;
+  }
   /* The notes sit above the update notice while it shows (--notice-room). */
   .comparison-error {
     position: absolute;

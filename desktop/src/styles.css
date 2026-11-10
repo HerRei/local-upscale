@@ -205,11 +205,13 @@ input:focus-visible {
   align-items: center;
   gap: 4px;
 }
-/* The anchor is only as wide as the link, so the text needs a width of its own. */
+/* The anchor is only as wide as the link, so the text needs a width of its own; the link
+   row does not wrap, the text does. */
 .try-others .help-tip-text {
   right: 0;
   left: auto;
   width: min(280px, 80vw);
+  white-space: normal;
 }
 /* With work queued the footer may take a second line for its buttons. */
 .app-shell.queue-timing-visible .status-actions {
@@ -1042,6 +1044,7 @@ input:focus-visible {
 }
 select,
 input[type='text'],
+input[type='number'],
 .recipe-input input {
   width: 100%;
   min-height: 34px;
@@ -1214,11 +1217,13 @@ input[type='text'],
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
 }
+/* The first column is as wide as the label column of the rows above, so the second starts
+   on their select edge. */
 .field-grid {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 8px;
 }
 .field-grid label {
   color: var(--secondary);
@@ -2247,6 +2252,17 @@ input[type='text'],
     border: 0;
     box-shadow: none;
   }
+  /* Enhance reads as a column as wide as Media's, centred the same way. */
+  .enhance-pane .pane-heading {
+    width: min(440px, calc(100% - 24px));
+    margin-inline: auto;
+  }
+  .enhance-pane .settings-lock {
+    margin-inline: max(16px, calc(50% - 204px));
+  }
+  .enhance-pane .inspector-scroll {
+    padding-inline: max(16px, calc(50% - 204px));
+  }
   .media-pane .pane-heading,
   .media-pane .process-scope,
   .media-pane .mode-scope,
@@ -2472,7 +2488,6 @@ input[type='text'],
   outline-offset: 1px;
 }
 .field-grid input[type='number'] {
-  width: 100%;
   margin-top: 4px;
 }
 
@@ -2806,11 +2821,18 @@ input[type='text'],
   background: #de9935;
   box-shadow: none;
 }
+/* The action area stays at the bottom of the details while they scroll. */
 .actions {
+  position: sticky;
+  /* The details keep 16 px of padding below the sticky edge; reach past it to the bottom. */
+  bottom: -16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-top: auto;
+  padding: 8px 0 16px;
+  margin-bottom: -16px;
+  background: var(--panel);
 }
 .actions .pair {
   display: grid;
@@ -2972,6 +2994,11 @@ input[type='text'],
   line-height: 1.45;
   pointer-events: none;
 }
+/* Near the bottom of a scrolling column the text opens upwards instead of being cut off. */
+.help-tip-text.above {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
 .help-tip-text[hidden] {
   display: none;
 }
@@ -2980,6 +3007,13 @@ input[type='text'],
   align-items: center;
 }
 /* A long Hardware entry (a GPU and its route) gets the full width under its label. */
+.field-row.button-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+.button-row button {
+  white-space: nowrap;
+}
 .field-row.stacked {
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;

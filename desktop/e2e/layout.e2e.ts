@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { ready, withOutputs } from './fixtures';
+import { emit } from './fake-host';
+import { ready, video, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
 // centre header keeps its tabs, file name and view options in a single row.
@@ -153,4 +154,103 @@ test('the update notice docks at the bottom right of the centre pane', async ({ 
   // Clear of the header row with its tabs and view options.
   const header = await box(page.locator('.preview-header'));
   expect(card.y).toBeGreaterThan(header.y + header.height);
+});
+
+test.describe('overflow and alignment', () => {
+  const left = async (locator: Locator) => (await box(locator)).x;
+  const right = async (locator: Locator) => {
+    const b = await box(locator);
+    return b.x + b.width;
+  };
+
+  test('a long unreadable name keeps Preview unavailable inside the stage, centred', async ({
+    page,
+  }) => {
+    const name = `${'a'.repeat(176)}.jpeg`;
+    await openApp(page, {
+      ...ready,
+      unreadable: { name, error: `Cannot open ${name}: the file ends unexpectedly.` },
+    });
+    await showPane(page, 'preview');
+    const stage = await box(page.locator('.canvas-well'));
+    const block = page.locator('.preview-error');
+    await expect(block).toBeVisible();
+    const b = await box(block);
+    expect(b.x).toBeGreaterThanOrEqual(stage.x);
+    expect(b.x + b.width).toBeLessThanOrEqual(stage.x + stage.width);
+    expect(Math.abs(b.x + b.width / 2 - (stage.x + stage.width / 2))).toBeLessThan(2);
+    const art = await box(block.locator('svg').first());
+    expect(Math.abs(art.x + art.width / 2 - (stage.x + stage.width / 2))).toBeLessThan(2);
+  });
+
+  test('the Try others tip wraps inside its box', async ({ page }) => {
+    await openApp(page, ready);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'About Try others' }).click();
+    const tip = page.getByRole('tooltip').filter({ visible: true });
+    const sizes = await tip.evaluate((node) => [node.scrollWidth, node.clientWidth]);
+    expect(sizes[0]).toBeLessThanOrEqual(sizes[1]);
+  });
+
+  test('Advanced: three selects share the select column; Find installed FFmpeg is one line', async ({
+    page,
+  }) => {
+    await openApp(page, ready);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    const column = page.locator('#device');
+    await column.scrollIntoViewIfNeeded();
+    expect(Math.abs((await left(page.locator('#halo-size'))) - (await left(column)))).toBeLessThan(
+      0.5,
+    );
+    expect(
+      Math.abs((await right(page.locator('#precision'))) - (await right(column))),
+    ).toBeLessThan(0.5);
+
+    await openApp(page, video);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    const find = page.getByRole('button', { name: 'Find installed FFmpeg' });
+    await find.scrollIntoViewIfNeeded();
+    const choose = find.locator('xpath=following-sibling::button[1]');
+    await expect(choose).toHaveText('Choose…');
+    expect(Math.abs((await box(find)).height - (await box(choose)).height)).toBeLessThan(2);
+  });
+
+  test('Edit: Steps and Seed look like the other inputs', async ({ page }) => {
+    await openApp(page, { ...ready, task: 'edit' });
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    const steps = page.getByRole('spinbutton', { name: 'Steps' });
+    await steps.scrollIntoViewIfNeeded();
+    const look = (locator: Locator) =>
+      locator.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return [style.borderRadius, style.backgroundColor, style.fontSize, style.minHeight];
+      });
+    // The values the other inputs and selects of Advanced use (styles.css).
+    const field = ['2px', 'rgb(20, 20, 20)', '12px', '34px'];
+    expect(await look(steps)).toEqual(field);
+    expect(await look(page.getByRole('spinbutton', { name: 'Seed' }))).toEqual(field);
+  });
+
+  test('at 880 px the Enhance page is a centred column as wide as Media', async ({ page }) => {
+    await page.setViewportSize({ width: 880, height: 640 });
+    await openApp(page, ready);
+    await showPane(page, 'enhance');
+    const task = await box(page.getByRole('group', { name: 'Task' }));
+    expect(task.width).toBeLessThanOrEqual(440);
+    expect(Math.abs(task.x + task.width / 2 - 440)).toBeLessThan(2);
+  });
+
+  test('at 880 x 640 the library keeps its Download button in view', async ({ page }) => {
+    await page.setViewportSize({ width: 880, height: 640 });
+    await openApp(page, ready);
+    await emit(page, 'native-menu-action', 'view.models');
+    const library = page.getByRole('dialog', { name: 'Model library' });
+    await library.getByRole('button', { name: /HAT-L ×4 ImageNet/ }).click();
+    const download = library.getByRole('button', { name: /^Download/ });
+    const b = await box(download);
+    expect(b.y + b.height).toBeLessThanOrEqual(640);
+  });
 });

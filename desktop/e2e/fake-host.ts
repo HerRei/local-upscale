@@ -21,6 +21,8 @@ export interface Scenario {
   welcome?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
+  /** The first photo could not be read: its name and the reason the host gives. */
+  unreadable?: { name: string; error: string };
 }
 
 export interface HostCall {
@@ -71,6 +73,9 @@ function hostScript(scenario: Scenario): void {
     probe_status: 'ready',
     error: '',
     selected: n === 1,
+    ...(n === 1 && scenario.unreadable
+      ? { ...scenario.unreadable, preview_data_url: '', probe_status: 'failed' }
+      : {}),
   });
   let snapshot: Json | null = null;
   let compareGeneration = 0;
