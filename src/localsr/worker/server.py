@@ -1109,6 +1109,7 @@ class WorkerServer:
                 )
             )
 
+        published = False
         try:
             first_chunk = read_chunk(window)
             if not first_chunk:
@@ -1188,6 +1189,7 @@ class WorkerServer:
                 sdr_bt709=bool(probe.hdr_format and data.get("hdr_mode") == "tone_map"),
                 temporary_directory=data.get("temporary_directory"),
             )
+            published = True
         except InterruptedError:
             # Report cancellation only after the decoder, encoder and model
             # cleanup below. The host must not start the next job too early.
@@ -1211,7 +1213,8 @@ class WorkerServer:
             except Exception:  # noqa: BLE001
                 pass
 
-        if self.cancel_event.is_set():
+        # A cancel that arrives after the file was published does not undo it.
+        if self.cancel_event.is_set() and not published:
             send_message(JobCancelled(job_id=job_id))
             return
 
@@ -1545,10 +1548,8 @@ class WorkerServer:
             preview_encoder.close()
             source_encoder.close()
 
-        if self.cancel_event.is_set():
-            send_message(JobCancelled(job_id=job_id))
-            return
-
+        # run_video_job returns only after the output was published, so a cancel
+        # that arrived during its cleanup does not undo the saved file.
         send_message(
             VideoJobCompleted(
                 job_id=job_id,
