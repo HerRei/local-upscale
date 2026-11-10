@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller onedir worker used by the additive Tauri desktop preview.
 
-This excludes the optional PySide client. The resulting engine is a
+This excludes PySide6, which the desktop app does not use. The resulting engine is a
 private subprocess resource, not a second user-facing application.
 """
 

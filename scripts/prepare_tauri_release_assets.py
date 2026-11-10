@@ -61,7 +61,7 @@ def has_release_sidecars(path: Path) -> bool:
 def locate_release_input(root: Path, filename: str) -> Path:
     """Locate an installer, combining successful jobs from workflow reruns.
 
-    The artifact server stores uploads as ``RUN_ID/ATTEMPT/PLATFORM/FILE``.
+    A downloaded set of workflow artifacts can be laid out as ``RUN_ID/ATTEMPT/PLATFORM/FILE``.
     GitHub's "re-run failed jobs" creates a new attempt but does not rerun or
     copy successful platform jobs. Select the newest complete upload for each
     filename across the run while ignoring compact publish output, which has no

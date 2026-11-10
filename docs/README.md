@@ -22,7 +22,8 @@ New here? Start with the [project README](../README.md) and the
 [Desktop app](../desktop/README.md) · [Development checks](development.md) ·
 [Testing](testing.md) · [Worker protocol](../protocol/README.md) ·
 [Desktop integrations](architecture/cross_platform_integrations.md) ·
-[Architecture decisions](adr/) · [Contributing](../CONTRIBUTING.md)
+[Architecture decisions](adr/) (0002, the Slint host decision, was removed in `a1d6415`) ·
+[Contributing](../CONTRIBUTING.md)
 
 ## Releasing and licensing
 

@@ -269,8 +269,8 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
             dest.symlink_to(so_file.resolve())
             created.append(dest)
         except OSError:
-            # We lack direct write access; try with sudo (self-hosted CI
-            # runners running as a non-root user with NOPASSWD sudo).
+            # We lack direct write access; try with sudo (a non-root user with
+            # passwordless sudo, as on a CI runner).
             result = subprocess.run(
                 ["sudo", "ln", "-sf", str(so_file.resolve()), str(dest)],
                 capture_output=True,

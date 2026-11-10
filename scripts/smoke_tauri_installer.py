@@ -206,8 +206,8 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
             timeout=timeout,
         )
         executable = installed_windows_executable(install_dir)
-        # Self-hosted Windows Actions runners commonly run as a service in
-        # Session 0. Exercise the installed Rust host and bundled worker before
+        # A Windows service or CI runner may run in Session 0, with no
+        # interactive desktop. Exercise the installed Rust host and bundled worker before
         # WebView initialization so this acceptance test does not require an
         # interactive desktop.
         run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
@@ -322,8 +322,8 @@ def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: floa
             prefix="localsr-appimage-runtime-", dir=appimage_tmp_parent
         ) as appimage_tmp:
             env["TMPDIR"] = appimage_tmp
-            # Self-hosted Linux runners may not provide a functional GTK/Wayland
-            # session even under Xvfb. Exercise the actual AppImage host, its
+            # A CI runner may not provide a functional GTK/Wayland session even
+            # under Xvfb. Exercise the actual AppImage host, its
             # resource layout and bundled worker before WebView initialization.
             try:
                 run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
