@@ -38,6 +38,7 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
+from .output_publish import OutputExistsError, publish_output
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -457,7 +458,7 @@ def _system_stream_export(
                 audio=wav,
                 cancel_event=cancel_event,
             )
-        os.replace(final, destination)
+        publish_output(final, destination, cancel_event)
         return str(destination)
     finally:
         try:
@@ -544,6 +545,7 @@ def _external_export(
             cancel_event=cancel_event,
             hdr_format=hdr_format,
             temporary_directory=temporary_directory,
+            replace_existing=True,
             **master_options,
         )
         if stage_callback is not None:
@@ -567,7 +569,7 @@ def _external_export(
             )
         except ExternalFFmpegError as error:
             raise VideoStageError("external encode", str(error)) from error
-        os.replace(final, destination)
+        publish_output(final, destination, cancel_event)
         return str(destination)
     finally:
         for temporary in (master, final):
@@ -600,6 +602,7 @@ def encode_video(
     fast: bool = False,
     stage_callback: Callable[[str], None] | None = None,
     stream_to_system: bool = False,
+    replace_existing: bool = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -609,7 +612,9 @@ def encode_video(
     are delegated to the user's own FFmpeg from a lossless FFV1 master; with
     ``stream_to_system`` (a whole, untrimmed clip of timed frames) the system's
     hardware encoder receives the frames directly. The final destination appears
-    only through one atomic replace.
+    only through one atomic publication that fails if the name is already taken;
+    ``replace_existing`` is for an app-owned temporary destination that is
+    expected to exist.
     """
     container_format = normalize_container(container_format)
     if hdr_format:
@@ -749,6 +754,12 @@ def encode_video(
         output_container.close()
         output_container = None
 
+        def publish(temporary: Path) -> None:
+            if replace_existing:
+                os.replace(temporary, destination)
+            else:
+                publish_output(temporary, destination, cancel_event)
+
         source = Path(audio_source) if audio_source else None
         if source is not None and source.is_file():
             copied = _remux_source_streams(
@@ -760,16 +771,11 @@ def encode_video(
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
             )
-            if copied:
-                os.replace(mux_temporary, destination)
-            else:
-                os.replace(encoded_temporary, destination)
+            publish(mux_temporary if copied else encoded_temporary)
         else:
-            os.replace(encoded_temporary, destination)
+            publish(encoded_temporary)
         return destination_path
-    except InterruptedError:
-        raise
-    except VideoStageError:
+    except (InterruptedError, VideoStageError, OutputExistsError):
         raise
     except BaseException as error:
         raise VideoStageError("encode", str(error)) from error

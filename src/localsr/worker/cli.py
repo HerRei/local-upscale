@@ -22,13 +22,18 @@ def main():
 
         raise SystemExit(child_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--video-playback-preview"]:
+        from localsr.core.child_processes import stop_children_on_termination
         from localsr.core.video_playback import main as playback_main
+
+        stop_children_on_termination()
 
         raise SystemExit(playback_main(sys.argv[2:]))
     # Before the server's imports, which may fail: the crashed engine's notes are then
     # already settled.
     from localsr.core import gpu_guard
+    from localsr.core.child_processes import stop_children_on_termination
 
+    stop_children_on_termination()
     gpu_guard.settle()
     from localsr.worker.server import main as server_main
 

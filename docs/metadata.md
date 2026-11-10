@@ -31,5 +31,6 @@ HEIC output exists on macOS only. LocalSR writes a lossless TIFF carrying the sR
 EXIF subset and any alpha, and `/usr/bin/sips` (ImageIO) encodes it at the chosen quality (the same
 slider as JPEG), so metadata is kept as for the other formats. HEIC stores 8-bit colour here.
 
-Every final image is encoded to a LocalSR-owned temporary sibling and atomically replaces the final
-path only after encoding succeeds. Existing outputs are not selected for overwrite by default.
+Every final image is encoded to a LocalSR-owned temporary sibling and is given its final name only
+after encoding succeeds. That step never replaces a file: if one appeared at the name while the job
+ran, the job fails for that item and the existing file is untouched.

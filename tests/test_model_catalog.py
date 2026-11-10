@@ -337,6 +337,98 @@ def test_model_download_size_mismatch_fails_and_cleans_up(tmp_path: Path):
     assert not (tmp_path / f"{model.filename}.part").exists()
 
 
+def test_model_download_never_writes_past_the_pinned_size(tmp_path: Path):
+    model = _synthetic_test_model(content=b"x" * 64)
+    destination = tmp_path / model.filename
+    partial = tmp_path / f"{model.filename}.part"
+    reads = []
+
+    class Endless:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, size):
+            # What is on disk before this read must still be within the pinned size.
+            assert not partial.exists() or partial.stat().st_size <= model.size_bytes
+            reads.append(size)
+            assert len(reads) < 1000, "the download kept reading an endless response"
+            return b"y" * size
+
+    with pytest.raises(ModelDownloadError, match="Download produced more than"):
+        download_model(
+            model, destination, opener=lambda _request, timeout: Endless(), chunk_size=48
+        )
+
+    assert not destination.exists()
+    assert not partial.exists()
+
+
+def test_model_download_rejects_the_chunk_that_would_exceed_the_size_before_writing(
+    tmp_path: Path,
+):
+    model = _synthetic_test_model(content=b"x" * 16)
+    partial = tmp_path / f"{model.filename}.part"
+    written = []
+    real_open = Path.open
+
+    def spying_open(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        if self == partial:
+            real_write = handle.write
+            handle.write = lambda data: written.append(len(data)) or real_write(data)
+        return handle
+
+    with patch.object(Path, "open", spying_open):
+        with pytest.raises(ModelDownloadError, match="Download produced more than"):
+            download_model(
+                model,
+                tmp_path / model.filename,
+                opener=lambda _request, timeout: io.BytesIO(b"y" * 1000),
+                chunk_size=100,
+            )
+    assert sum(written) <= model.size_bytes
+    assert not partial.exists()
+
+
+def test_model_download_stops_when_the_server_trickles_past_the_time_limit(tmp_path: Path):
+    import time
+
+    model = _synthetic_test_model(content=b"x" * 100_000)
+    partial = tmp_path / f"{model.filename}.part"
+    reads = []
+
+    class Trickle:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            reads.append(1)
+            assert len(reads) < 2000, "the download never gave up on a trickling response"
+            time.sleep(0.01)
+            return b"y"
+
+    started = time.monotonic()
+    with pytest.raises(ModelDownloadError, match="took too long"):
+        download_model(
+            model,
+            tmp_path / model.filename,
+            opener=lambda _request, timeout: Trickle(),
+            chunk_size=1,
+            max_seconds=0.2,
+        )
+
+    assert time.monotonic() - started < 5
+    assert not (tmp_path / model.filename).exists()
+    # The bytes that did arrive stay for a later resume, as after a cancel.
+    assert partial.exists() and partial.stat().st_size < model.size_bytes
+
+
 def test_model_download_cancellation_preserves_partial(tmp_path: Path):
     content = b"a" * 1024 * 1024  # 1MB
     model = _synthetic_test_model(content=content)

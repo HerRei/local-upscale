@@ -992,6 +992,7 @@ def download_model(
     chunk_size: int = 1024 * 1024,
     max_attempts: int = 4,
     retry_wait_seconds: float = 2.0,
+    max_seconds: float | None = None,
 ) -> Path:
     """Download with pinned SHA-256 verification, resume, and retries.
 
@@ -1000,6 +1001,12 @@ def download_model(
     download survives an unreliable connection. Cancellation also keeps the
     partial, letting a later attempt resume. Only a verification failure
     removes the partial; the final file appears atomically via os.replace.
+
+    No more than the pinned size is ever written: a response that would exceed
+    it is refused and its partial removed. The whole call, retries included,
+    is limited to ``max_seconds`` (by default 30 minutes, or the time the
+    pinned size needs at 50 kB/s if longer), so a server that only trickles
+    bytes cannot hold it forever; the partial then stays for a later resume.
     """
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1014,10 +1021,20 @@ def download_model(
 
     partial_path = destination.with_name(f"{destination.name}.part")
     open_request = opener or _open_download
+    deadline = time.monotonic() + (
+        max_seconds if max_seconds is not None else max(1800.0, model.size_bytes / 50_000)
+    )
 
     def check_cancel() -> None:
         if cancel_event is not None and cancel_event.is_set():
             raise ModelDownloadCancelled("Model download cancelled.")
+
+    def check_time() -> None:
+        if time.monotonic() > deadline:
+            raise ModelDownloadError(
+                "The model download took too long and was stopped. "
+                "Check the connection and try again; the part already received is kept."
+            )
 
     attempts = 0
     last_error: Exception | None = None
@@ -1025,6 +1042,7 @@ def download_model(
     while attempts < max_attempts:
         attempts += 1
         check_cancel()
+        check_time()
 
         try:
             offset = partial_path.stat().st_size if partial_path.is_file() else 0
@@ -1053,6 +1071,7 @@ def download_model(
             headers["Range"] = f"bytes={offset}-"
         request = urllib.request.Request(model.download_url, headers=headers)
 
+        oversized = False
         try:
             with (
                 open_request(request, timeout=15.0) as response,
@@ -1069,14 +1088,18 @@ def download_model(
                     progress_callback(downloaded, model.size_bytes)
                 while True:
                     check_cancel()
+                    check_time()
                     chunk = response.read(chunk_size)
                     if not chunk:
+                        break
+                    if downloaded + len(chunk) > model.size_bytes:
+                        oversized = True
                         break
                     output.write(chunk)
                     downloaded += len(chunk)
                     if progress_callback is not None:
                         progress_callback(downloaded, model.size_bytes)
-        except ModelDownloadCancelled:
+        except ModelDownloadError:
             raise
         except (OSError, urllib.error.URLError) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code == 416 and offset:
@@ -1095,6 +1118,13 @@ def download_model(
                 waited += 0.2
             continue
 
+        if oversized:
+            # Closed above, so the partial can go on every platform.
+            partial_path.unlink(missing_ok=True)
+            raise ModelDownloadError(
+                f"Download produced more than the expected {model.size_bytes:,} bytes. "
+                "The file was removed."
+            )
         if downloaded < model.size_bytes:
             # The connection ended early without an exception; resume.
             last_error = ModelDownloadError(
@@ -1103,16 +1133,6 @@ def download_model(
             if attempts >= max_attempts:
                 break
             continue
-        if downloaded > model.size_bytes:
-            try:
-                partial_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise ModelDownloadError(
-                f"Download produced {downloaded:,} bytes but expected "
-                f"{model.size_bytes:,}. The file was removed."
-            )
-
         hasher = hashlib.sha256()
         with partial_path.open("rb") as completed:
             while True:

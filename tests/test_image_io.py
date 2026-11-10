@@ -179,13 +179,13 @@ def test_atomic_save_error_cleanup(tmp_path, monkeypatch):
     out_mmap = np.zeros((3, 10, 10), dtype=np.uint8)
     out_path = str(tmp_path / "out_fail.png")
 
-    def bad_replace(src, dst):
+    def bad_publish(src, dst):
         assert os.path.exists(src)
-        raise RuntimeError("Disk error during replace")
+        raise RuntimeError("Disk error during publish")
 
-    monkeypatch.setattr(os, "replace", bad_replace)
+    monkeypatch.setattr(os, "link", bad_publish)
 
-    with pytest.raises(RuntimeError, match="Disk error during replace"):
+    with pytest.raises(RuntimeError, match="Disk error during publish"):
         manager.save_from_writer(out_mmap, out_path, "png", 98, False, None, {}, 1)
 
     assert not list(tmp_path.glob(".out_fail.png.localsr-image-*.tmp"))
