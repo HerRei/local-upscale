@@ -87,10 +87,10 @@ def test_every_format_has_its_own_bound_and_alpha_adds_to_the_ones_that_keep_it(
 @pytest.mark.parametrize(
     ("facts", "reserve"),
     [
-        # The system volume keeps the larger of 5 GB and 5 % of itself free.
+        # The system volume keeps the larger of 8 GB and 5 % of itself free.
         (volume(0, total=500 * GB, system=True), 25 * GB),
-        (volume(0, total=60 * GB, system=True), 5 * GB),
-        (volume(0, total=100 * GB, system=True), 5 * GB),
+        (volume(0, total=60 * GB, system=True), 8 * GB),
+        (volume(0, total=100 * GB, system=True), 8 * GB),
         # Any other volume keeps 1 GB.
         (volume(0, total=4000 * GB, system=False), 1 * GB),
     ],
@@ -127,7 +127,7 @@ def test_the_refusal_is_one_sentence_naming_the_folder_the_need_and_what_is_free
 def test_files_on_one_volume_add_up_and_files_on_two_volumes_do_not(tmp_path):
     one = lambda _folder: volume(10 * GB + 30, total=100 * GB, device=1)  # noqa: E731
     require_room([(tmp_path, 10), (tmp_path / "a", 20)], lookup=one)
-    # 5 GB reserve + 10 GB: the two claims together exceed what one volume has.
+    # 8 GB reserve + 10 GB: the two claims together exceed what one volume has.
     with pytest.raises(DiskFullError):
         require_room([(tmp_path, 10 * GB), (tmp_path / "a", 10 * GB)], lookup=one)
     by_folder = lambda folder: (  # noqa: E731

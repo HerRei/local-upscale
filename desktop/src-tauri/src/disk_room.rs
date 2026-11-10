@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::types::MediaItem;
 
 /// The system volume keeps the larger of this and 5 % of its size free; others keep less.
-const SYSTEM_RESERVE_FLOOR: u64 = 5_000_000_000;
+const SYSTEM_RESERVE_FLOOR: u64 = 8_000_000_000;
 const OTHER_RESERVE: u64 = 1_000_000_000;
 /// Headers, an ICC profile and EXIF around the pixels.
 const SLACK: u64 = 1 << 20;
