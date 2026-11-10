@@ -354,7 +354,8 @@ def test_an_output_scale_outside_one_to_native_is_refused(tmp_path, output_scale
         ImageManager().save(_writer(), str(out), "png", scale=4, output_scale=output_scale)
     assert list(tmp_path.iterdir()) == []
     for allowed in (1, 4):
-        ImageManager().save(_writer(), str(out), "png", scale=4, output_scale=allowed)
+        allowed_out = tmp_path / f"out-{allowed}.png"
+        ImageManager().save(_writer(), str(allowed_out), "png", scale=4, output_scale=allowed)
 
 
 @pytest.mark.parametrize("fmt", ["png", "tif", "tiff", "webp", "heic", "PNG", "TIFF"])

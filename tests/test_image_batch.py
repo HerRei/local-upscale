@@ -374,21 +374,22 @@ def test_a_photo_that_fails_to_decode_or_save_fails_alone(tmp_path, monkeypatch)
         bad = tmp_path / f"corrupt-{index}.png"
         bad.write_bytes(b"not an image")
         jobs[index]["image_path"] = str(bad)
-    (tmp_path / "out-4.png").write_bytes(b"previous output")
-    real_replace = os.replace
+    from localsr.core import image_io
 
-    def replace(source, destination):
+    real_publish = image_io.publish_output
+
+    def publish(source, destination, *args):
         if str(destination) == jobs[4]["output_path"]:
             raise OSError("disk full")
-        real_replace(source, destination)
+        real_publish(source, destination, *args)
 
-    monkeypatch.setattr("os.replace", replace)
+    monkeypatch.setattr(image_io, "publish_output", publish)
     assert setup.run(jobs) == []
     assert setup.terminal() == [
         (str(i), "job_failed" if i in (0, 2, 4) else "job_completed") for i in range(6)
     ]
     assert "disk full" in setup.of("job_failed", "4")[0]["error_message"]
-    assert (tmp_path / "out-4.png").read_bytes() == b"previous output"
+    assert not (tmp_path / "out-4.png").exists()
     assert not any(any((tmp_path / f"scratch-{i}").iterdir()) for i in range(6))
 
 

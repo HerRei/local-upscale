@@ -44,22 +44,22 @@ def create_srgb_icc():
 
 def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
     """
-    Stress-tests atomic saving (.tmp -> final path via os.replace) across format types
-    (PNG, JPEG, TIFF) and confirms overwriting existing files works cleanly.
+    Stress-tests atomic saving (.tmp -> final path via a hard link) across format types
+    (PNG, JPEG, TIFF) and confirms an existing file is never overwritten.
     """
     manager = ImageManager()
     mmap_arr = np.zeros((3, 30, 30), dtype=np.uint8)
 
     replace_history = []
-    orig_replace = os.replace
+    orig_link = os.link
 
-    def tracking_replace(src, dst):
+    def tracking_link(src, dst):
         replace_history.append((src, dst))
-        # Ensure .tmp exists right before replacement
-        assert os.path.exists(src), f"Temporary file {src} must exist before os.replace"
-        return orig_replace(src, dst)
+        # Ensure .tmp exists right before publication
+        assert os.path.exists(src), f"Temporary file {src} must exist before os.link"
+        return orig_link(src, dst)
 
-    monkeypatch.setattr(os, "replace", tracking_replace)
+    monkeypatch.setattr(os, "link", tracking_link)
 
     formats = [("png", "out.png"), ("jpg", "out.jpg"), ("tiff", "out.tiff")]
 
@@ -92,26 +92,24 @@ def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
         assert Path(temporary).name.startswith(f".{filename}.localsr-image-")
         assert Path(destination) == Path(dest_path)
 
-    # Overwrite test: create an existing file with dummy content first
-    overwrite_target = str(tmp_path / "overwrite_test.png")
-    with open(overwrite_target, "w") as f:
-        f.write("old data")
+    # An existing file is refused, left as it was, and no temporary stays behind.
+    overwrite_target = tmp_path / "overwrite_test.png"
+    overwrite_target.write_text("old data")
 
-    manager.save_from_writer(
-        writer_mmap=mmap_arr,
-        destination_path=overwrite_target,
-        format="png",
-        quality=98,
-        preserve_metadata=False,
-        icc_profile=None,
-        safe_exif={},
-        scale=1,
-    )
+    with pytest.raises(FileExistsError, match="Nothing was replaced"):
+        manager.save_from_writer(
+            writer_mmap=mmap_arr,
+            destination_path=str(overwrite_target),
+            format="png",
+            quality=98,
+            preserve_metadata=False,
+            icc_profile=None,
+            safe_exif={},
+            scale=1,
+        )
 
-    assert os.path.exists(overwrite_target)
-    assert not os.path.exists(overwrite_target + ".tmp")
-    with Image.open(overwrite_target) as img:
-        assert img.size == (30, 30)
+    assert overwrite_target.read_text() == "old data"
+    assert not list(tmp_path.glob(".overwrite_test.png.localsr-image-*.tmp"))
 
 
 def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
@@ -122,14 +120,14 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
     manager = ImageManager()
     mmap_arr = np.zeros((3, 20, 20), dtype=np.uint8)
 
-    # 1. Exception during os.replace
+    # 1. Exception while publishing
     dest_path1 = str(tmp_path / "fail_replace.png")
 
-    def faulty_replace(src, dst):
-        assert os.path.exists(src), ".tmp file must exist when os.replace fails"
+    def faulty_replace(src, dst, *_args):
+        assert os.path.exists(src), ".tmp file must exist when publishing fails"
         raise OSError("Simulated filesystem I/O replace error")
 
-    monkeypatch.setattr(os, "replace", faulty_replace)
+    monkeypatch.setattr("localsr.core.image_io.publish_output", faulty_replace)
 
     with pytest.raises(OSError, match="Simulated filesystem I/O replace error"):
         manager.save_from_writer(

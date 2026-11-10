@@ -13,6 +13,7 @@ import torch
 from PIL import Image, ImageCms, ImageOps
 
 from localsr.core.image_formats import is_raw_input, is_system_decoded
+from localsr.core.output_publish import publish_output
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
@@ -442,7 +443,7 @@ class ImageManager:
 
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Cancelled during image export.")
-            os.replace(tmp_path, destination)
+            publish_output(tmp_path, destination)
         except Exception:
             try:
                 tmp_path.unlink()

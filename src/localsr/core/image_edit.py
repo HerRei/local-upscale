@@ -20,6 +20,7 @@ from PIL import Image, ImageOps
 
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
 from localsr.core.image_io import open_photo
+from localsr.core.output_publish import publish_output
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
 from localsr.worker.edit_guard import native_environment, stop_process
 
@@ -450,7 +451,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             with Image.open(result) as image:
                 image.verify()
             # Publish without overwriting an existing result, even in a filename race.
-            os.link(result, output)
+            publish_output(result, output)
         finally:
             if process.stdin and not process.stdin.closed:
                 process.stdin.close()
