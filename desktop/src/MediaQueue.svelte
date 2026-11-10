@@ -149,10 +149,11 @@
     </div>
   {:else}
     {#if items.length > 1}
-      <!-- One quiet line: what Start takes, and only what that choice leaves unsaid. -->
-      <div class="process-scope">
+      <!-- One quiet line with no trailing text: what the choice leaves unsaid is its tooltip and
+           its description for screen readers. -->
+      <div class="process-scope" title={scopeHint || undefined}>
         <span>Process</span>
-        <div class="view-switch">
+        <div class="view-switch" aria-describedby={scopeHint ? 'process-scope-hint' : undefined}>
           <button
             disabled={Boolean(activeJobId)}
             class:active={!batchMode}
@@ -165,11 +166,7 @@
             on:click={() => setBatchMode(true)}>All {allCount}</button
           >
         </div>
-        {#if scopeHint}<span
-            class="process-hint"
-            class:warning={!batchMode && scopeWarning}
-            title={scopeHint}>{scopeHint}</span
-          >{/if}
+        {#if scopeHint}<span id="process-scope-hint" class="visually-hidden">{scopeHint}</span>{/if}
       </div>
     {:else if scopeWarning}
       <p class="mode-scope warning">{scopeHint}</p>

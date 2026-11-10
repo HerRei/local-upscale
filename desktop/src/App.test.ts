@@ -2026,7 +2026,14 @@ describe('LocalSR desktop interface', () => {
     const why =
       '1 video item can be queued with this setup; select the other media type to configure it separately.';
     expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toBe(why);
-    expect(document.querySelector('.process-hint')?.textContent).toBe(why);
+    // Nothing trails the line: the reason is its tooltip and the choice's description.
+    const scope = document.querySelector('.process-scope')!;
+    expect(scope.getAttribute('title')).toBe(why);
+    expect(scope.textContent?.replace(/\s+/g, ' ').trim()).toBe(`Process Selected All 1 ${why}`);
+    expect(document.querySelector('.process-hint')).toBeNull();
+    const describedBy = scope.querySelector('.view-switch')!.getAttribute('aria-describedby')!;
+    expect(document.getElementById(describedBy)?.textContent).toBe(why);
+    expect(document.getElementById(describedBy)?.classList).toContain('visually-hidden');
     expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );

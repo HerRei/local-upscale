@@ -335,8 +335,8 @@ input:focus-visible {
   opacity: 0.4;
 }
 
-/* Process Selected | All n: view-option words after a muted label, then the reason, if any,
-   cut to one line (its full text is the tooltip). The words carry 8 px of padding. */
+/* Process Selected | All n: view-option words after a muted label and nothing after them.
+   The words carry 8 px of padding. */
 .process-scope {
   display: flex;
   align-items: baseline;
@@ -354,11 +354,6 @@ input:focus-visible {
   color: var(--tertiary);
   cursor: default;
 }
-.process-hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .mode-scope {
   margin: 0 0 8px;
   padding: 0 16px;
@@ -367,7 +362,6 @@ input:focus-visible {
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
-.process-hint.warning,
 .mode-scope.warning {
   color: #e7bc72;
 }

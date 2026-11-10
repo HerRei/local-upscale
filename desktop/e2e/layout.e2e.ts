@@ -126,6 +126,11 @@ test('the Process choice is one line inside the Media pane', async ({ page }) =>
   await expect(line.getByRole('button', { name: 'Selected' })).toBeVisible();
   await expect(line.getByRole('button', { name: 'All 3' })).toBeVisible();
   expect((await box(line)).height).toBeLessThanOrEqual(30);
+  // Nothing trails the words: no visible text after All, however long an explanation is.
+  await expect(line.locator('.process-hint')).toHaveCount(0);
+  const lineBox = await box(line);
+  const allBox = await box(line.getByRole('button', { name: 'All 3' }));
+  expect(allBox.x + allBox.width).toBeLessThanOrEqual(lineBox.x + lineBox.width);
   const overflow = await page
     .locator('.media-pane')
     .evaluate((pane) => pane.scrollWidth - pane.clientWidth);
