@@ -1546,12 +1546,15 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
     use std::io::{Seek, SeekFrom};
     use std::process::{Command, Stdio};
     let mut output = tempfile::tempfile()?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg("--headless-update-version")
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    crate::process_tree::lead_own_group(&mut command);
+    let mut child = command.spawn()?;
+    let tree = crate::process_tree::ProcessTree::new(&child);
     let start = std::time::Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
@@ -1561,6 +1564,7 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
             break;
         }
         if start.elapsed() >= Duration::from_secs(10) {
+            tree.terminate();
             let _ = child.kill();
             let _ = child.wait();
             return Err(invalid("The installed application version check timed out"));

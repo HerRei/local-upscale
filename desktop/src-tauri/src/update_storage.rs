@@ -3,6 +3,7 @@
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
+    process_tree::{lead_own_group, ProcessTree},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -97,15 +98,20 @@ pub fn extract_portable(archive: &Path, destination: &Path, maximum: u64) -> App
 }
 
 pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg("--headless-smoke-test")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    // The check starts the engine as a helper: a check that is stopped has to take it along.
+    lead_own_group(&mut command);
+    let mut child = command.spawn()?;
+    let tree = ProcessTree::new(&child);
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
+            tree.terminate();
             return if status.success() {
                 Ok(())
             } else {
@@ -115,6 +121,7 @@ pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
             };
         }
         if start.elapsed() >= timeout {
+            tree.terminate();
             let _ = child.kill();
             let _ = child.wait();
             return Err(AppError::Worker(
@@ -1472,6 +1479,36 @@ mod tests {
             .unwrap()
             .success();
         assert!(!alive, "the hung check is still running");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_startup_check_takes_the_helpers_it_started_with_it() {
+        let root = tempfile::tempdir().unwrap();
+        let helper_pid = root.path().join("helper-pid");
+        let hang = script(
+            root.path(),
+            "hang",
+            &format!("sleep 60 &\necho $! > '{}'\nwait", helper_pid.display()),
+        );
+        let (result, _) = smoke_retrying(&hang, Duration::from_millis(700));
+        assert!(message(result).contains("timed out"));
+        let pid = fs::read_to_string(&helper_pid).unwrap();
+        // A process that ended but has not been reaped yet still answers `kill -0`.
+        let alive = || {
+            let listing = Command::new("ps")
+                .args(["-o", "stat=", "-p", pid.trim()])
+                .output()
+                .unwrap();
+            let state = String::from_utf8_lossy(&listing.stdout);
+            !state.trim().is_empty() && !state.trim().starts_with('Z')
+        };
+        // The signal is delivered at once; the system needs a moment to reap.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(), "the helper of the hung check is still running");
     }
 
     /// A journal as an unfinished swap writes it, with the names given.
