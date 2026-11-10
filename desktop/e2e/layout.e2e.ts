@@ -30,6 +30,29 @@ test.describe('pane headers', () => {
     const enhanceRow = page.locator('.enhance-pane > .pane-heading');
     expect((await box(header)).height).toBe((await box(enhanceRow)).height);
     expect(Math.abs((await textBottom(preview)) - (await textBottom(enhance)))).toBeLessThan(1);
+    const inputs = page
+      .getByRole('tablist', { name: 'Media' })
+      .getByRole('tab', { name: /^Inputs/ });
+    const mediaRow = page.locator('.media-pane > .pane-heading');
+    expect((await box(mediaRow)).height).toBe((await box(enhanceRow)).height);
+    expect(Math.abs((await textBottom(inputs)) - (await textBottom(enhance)))).toBeLessThan(1);
+  });
+
+  test('start the Media tabs where its title was, after the window buttons on a Mac', async ({
+    page,
+  }, info) => {
+    await openApp(page, ready);
+    const inputs = page
+      .getByRole('tablist', { name: 'Media' })
+      .getByRole('tab', { name: /^Inputs/ });
+    const left = await inputs.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return range.getBoundingClientRect().left;
+    });
+    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+    const wide = info.project.use.viewport!.width >= 1280;
+    expect(Math.round(left)).toBe(mac && wide ? 84 : 16);
   });
 
   test('keep the centre tabs, name and view options on one row', async ({ page }) => {

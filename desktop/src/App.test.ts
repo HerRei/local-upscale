@@ -635,6 +635,49 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
   });
 
+  it('heads the Media pane with its Inputs and Outputs tabs, each with its count', async () => {
+    api.listAllMediaResults.mockResolvedValue([
+      {
+        media_id: 'photo',
+        results: [],
+        total_count: 1,
+        completed_count: 1,
+        available_count: 1,
+        default_result_id: 'done',
+        next_before: null,
+      },
+    ]);
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    snapshot.jobs = [
+      {
+        id: 'done',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/out/done.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    await mountWith(snapshot);
+    const heading = document.querySelector<HTMLElement>('.media-pane .pane-heading')!;
+    const tabs = within(heading).getByRole('tablist', { name: 'Media' });
+    expect(within(tabs).getByRole('tab', { name: 'Inputs 2' })).toBeTruthy();
+    expect(within(heading).getByRole('button', { name: 'Add Media…' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Media' })).toBeNull();
+    expect(screen.queryByText('2 inputs')).toBeNull();
+    cleanup();
+
+    await mountWith(readySnapshot());
+    expect(
+      within(screen.getByRole('tablist', { name: 'Media' }))
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.trim()),
+    ).toEqual(['Inputs', 'Outputs']);
+  });
+
   it('names the narrow window pages Media, Viewer and Enhance, apart from the Preview tab', async () => {
     await mountWith(readySnapshot([image('photo', true)]));
     const pages = within(screen.getByRole('navigation', { name: 'Workspace' }));
@@ -3939,7 +3982,7 @@ describe('Comparing saved results', () => {
       api.refreshSnapshot.mockResolvedValue(left);
       api.listAllMediaResults.mockResolvedValue([historyOf('first', [row('a1')])]);
     });
-    await user.click(screen.getByRole('tab', { name: 'Inputs' }));
+    await user.click(screen.getByRole('tab', { name: /^Inputs/ }));
     await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([

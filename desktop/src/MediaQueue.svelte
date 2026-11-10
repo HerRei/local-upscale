@@ -66,52 +66,50 @@
 </script>
 
 <aside class="media-pane pane" class:compact-hidden={compactHidden}>
+  <!-- The tabs are the pane's heading; each shows how many items it holds. -->
   <div class="pane-heading" data-tauri-drag-region>
-    <h1 data-tauri-drag-region>Media</h1>
-    <span class="pane-heading-end" data-tauri-drag-region
-      >{tab === 'inputs'
-        ? `${items.length} ${items.length === 1 ? 'input' : 'inputs'}`
-        : `${outputCount} ${outputCount === 1 ? 'output' : 'outputs'}`}{#if items.length && tab === 'inputs'}<button
-          class="icon-button add-media"
-          title="Add Media…"
-          aria-label="Add Media…"
-          disabled={locked || benchmarkRunning}
-          on:click={() => addFiles(false)}
-          ><svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
-          ></button
-        >{/if}</span
+    <div
+      class="view-switch pane-tabs"
+      role="tablist"
+      tabindex="-1"
+      aria-label="Media"
+      on:keydown={tabKey}
     >
-  </div>
-  <div
-    class="seg-inline pane-tabs"
-    role="tablist"
-    tabindex="-1"
-    aria-label="Media"
-    on:keydown={tabKey}
-  >
-    <button
-      role="tab"
-      aria-selected={tab === 'inputs'}
-      tabindex={tab === 'inputs' ? 0 : -1}
-      class:active={tab === 'inputs'}
-      on:click={() => (tab = 'inputs')}>Inputs</button
-    >
-    <button
-      role="tab"
-      aria-selected={tab === 'outputs'}
-      tabindex={tab === 'outputs' ? 0 : -1}
-      class:active={tab === 'outputs'}
-      on:click={() => (tab = 'outputs')}>Outputs</button
-    >
+      <button
+        role="tab"
+        aria-selected={tab === 'inputs'}
+        tabindex={tab === 'inputs' ? 0 : -1}
+        class:active={tab === 'inputs'}
+        on:click={() => (tab = 'inputs')}
+        >Inputs{#if items.length}{' '}<span class="tab-count">{items.length}</span>{/if}</button
+      >
+      <button
+        role="tab"
+        aria-selected={tab === 'outputs'}
+        tabindex={tab === 'outputs' ? 0 : -1}
+        class:active={tab === 'outputs'}
+        on:click={() => (tab = 'outputs')}
+        >Outputs{#if outputCount}{' '}<span class="tab-count">{outputCount}</span>{/if}</button
+      >
+    </div>
+    {#if items.length && tab === 'inputs'}<button
+        class="icon-button add-media"
+        title="Add Media…"
+        aria-label="Add Media…"
+        disabled={locked || benchmarkRunning}
+        on:click={() => addFiles(false)}
+        ><svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
+        ></button
+      >{/if}
   </div>
 
   {#if tab === 'outputs'}
@@ -244,12 +242,14 @@
 </aside>
 
 <style>
-  .pane-tabs {
-    margin: 0 16px 12px;
+  /* The tab words carry 8 px of padding, so the row starts 8 px earlier to put their text
+     where the pane's title used to be. */
+  .pane-heading {
+    padding-left: 8px;
   }
-  .pane-heading-end {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+  .tab-count {
+    color: var(--secondary);
+    font-size: calc(12px * var(--ui-scale));
+    font-weight: 400;
   }
 </style>

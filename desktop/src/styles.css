@@ -156,13 +156,13 @@ input:focus-visible {
   padding-left: 84px;
 }
 /* Wide windows have no bar: the pane headings form the title row and the
-   window buttons sit at the start of the Media heading. */
+   window buttons sit at the start of the Media heading (its tab words carry 8 px). */
 .mac .media-pane .pane-heading {
-  padding-left: 84px;
+  padding-left: 76px;
 }
 @media (max-width: 1279px) {
   .mac .media-pane .pane-heading {
-    padding-left: 16px;
+    padding-left: 8px;
   }
 }
 
@@ -2233,7 +2233,6 @@ input[type='text'],
   }
   .media-pane .pane-heading,
   .media-pane .segmented,
-  .media-pane .seg-inline,
   .media-pane .empty-card,
   .media-pane .media-list,
   .media-pane .media-actions {
