@@ -30,15 +30,11 @@
   export let items: MediaItem[];
   export let jobs: JobRecord[];
   export let activeJobId: string;
-  export let batchMode: boolean;
   export let compactHidden = false;
   export let scopeWarning: boolean;
   export let scopeHint: string;
-  export let allCount: number;
-  export let allTitle = '';
   export let benchmarkRunning: boolean;
   export let inflightMediaIds: Set<string>;
-  export let setBatchMode: (value: boolean) => void;
   export let addFiles: (replace?: boolean) => Promise<void>;
   export let locked = false;
   export let selectQueueMedia: (id: string) => Promise<void>;
@@ -149,27 +145,7 @@
       </div>
     </div>
   {:else}
-    {#if items.length > 1}
-      <!-- One quiet line with no trailing text: what the choice leaves unsaid is its tooltip and
-           its description for screen readers. -->
-      <div class="process-scope" title={scopeHint || undefined}>
-        <span>Process</span>
-        <div class="view-switch" aria-describedby={scopeHint ? 'process-scope-hint' : undefined}>
-          <button
-            disabled={Boolean(activeJobId)}
-            class:active={!batchMode}
-            on:click={() => setBatchMode(false)}>Selected</button
-          >
-          <button
-            disabled={Boolean(activeJobId)}
-            class:active={batchMode}
-            title={allTitle || undefined}
-            on:click={() => setBatchMode(true)}>All {allCount}</button
-          >
-        </div>
-        {#if scopeHint}<span id="process-scope-hint" class="visually-hidden">{scopeHint}</span>{/if}
-      </div>
-    {:else if scopeWarning}
+    {#if items.length === 1 && scopeWarning}
       <p class="mode-scope warning">{scopeHint}</p>
     {/if}
     <div class="media-list">

@@ -23,6 +23,10 @@ export interface Scenario {
   welcome?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
+  /** The outputs also appear as finished jobs, so Reveal and Open are offered for the selected photo. */
+  finished?: boolean;
+  /** A queue is running: the first photo is processing and the rest wait. */
+  running?: boolean;
   /** The first photo could not be read: its name and the reason the host gives. */
   unreadable?: { name: string; error: string };
 }
@@ -157,6 +161,37 @@ function hostScript(scenario: Scenario): void {
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
     s.runtime.worker = scenario.worker ?? 'unavailable';
+    if (scenario.running) {
+      s.runtime.active_job_id = 'job-photo-1';
+      s.runtime.status_title = 'Processing';
+      s.runtime.progress = 40;
+      s.jobs = Array.from({ length: scenario.photos ?? 1 }, (_, index) => ({
+        id: `job-photo-${index + 1}`,
+        media_id: `photo-${index + 1}`,
+        media_name: `Alpine lake ${index + 1}.jpg`,
+        media_kind: 'image',
+        status: index === 0 ? 'running' : 'queued',
+        progress: index === 0 ? 40 : 0,
+        output_path: '',
+        error: '',
+        created_at: 1794160000 + index,
+      }));
+    }
+    if (scenario.finished) {
+      s.jobs = Object.entries(scenario.outputs ?? {}).flatMap(([n, list]) =>
+        list.map((entry, index) => ({
+          id: entry.id,
+          media_id: `photo-${n}`,
+          media_name: `Alpine lake ${n}.jpg`,
+          media_kind: 'image',
+          status: 'completed',
+          progress: 100,
+          output_path: `/fixture/results/alpine-lake-${n}-${entry.id}.png`,
+          error: '',
+          created_at: 1794160000 + index,
+        })),
+      );
+    }
     if (scenario.engineGivenUp) {
       Object.assign(s.runtime, {
         worker: 'failed',

@@ -349,25 +349,6 @@ input:focus-visible {
   opacity: 0.4;
 }
 
-/* Process Selected | All n: view-option words after a muted label and nothing after them.
-   The words carry 8 px of padding. */
-.process-scope {
-  display: flex;
-  align-items: baseline;
-  gap: 0 4px;
-  margin: 0 0 8px;
-  padding: 0 16px;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
-  white-space: nowrap;
-}
-.process-scope .view-switch {
-  flex: none;
-}
-.process-scope .view-switch button:disabled {
-  color: var(--tertiary);
-  cursor: default;
-}
 .mode-scope {
   margin: 0 0 8px;
   padding: 0 16px;
@@ -1346,9 +1327,15 @@ input[type='number'],
 }
 .status-actions {
   display: flex;
+  flex: none;
   gap: 6px;
 }
-.status-actions .start {
+/* The buttons keep their size; the status text gives way first. */
+.status-actions .button {
+  flex: none;
+  white-space: nowrap;
+}
+.status-actions .start:not(.scope-one) {
   min-width: 150px;
 }
 .progress {
@@ -2153,7 +2140,6 @@ input[type='number'],
     padding-inline: max(16px, calc(50% - 204px));
   }
   .media-pane .pane-heading,
-  .media-pane .process-scope,
   .media-pane .mode-scope,
   .media-pane .empty-card,
   .media-pane .media-list,

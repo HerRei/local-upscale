@@ -63,7 +63,8 @@ test.describe('dialog keyboard behaviour', () => {
   }) => {
     await openApp(page, { ...withOutputs, worker: 'ready' });
     await refuse(page, 'start_jobs', 'No GPU.');
-    const start = page.getByRole('button', { name: 'Upscale selected' });
+    // Two photos: the primary starts them all.
+    const start = page.getByRole('button', { name: 'Upscale all 2' });
     await start.focus();
     await page.keyboard.press('Enter');
     await expect(dialogOf(page)).toContainText('Could not start');
