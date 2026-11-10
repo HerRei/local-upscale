@@ -100,6 +100,8 @@ VIDEO_JOB_FIELDS = _JOB_FIELDS + (
     Field("interpolation_order", "choice", choices=("after_upscale", "before_upscale")),
     Field("interpolation_model_id", "str", nullable=True),
     Field("interpolation_bundle_dir", "str", nullable=True),
+    Field("video_model_id", "str", nullable=True),
+    Field("temporary_directory", "str", nullable=True),
 )
 
 PROBE_FIELDS = (

@@ -74,6 +74,7 @@ temporal_window
 thermal_state
 video_engines
 video_low_memory
+video_model_id
 vram_estimate_mb
 warmup_count
 working_disk_bytes

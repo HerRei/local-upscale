@@ -15,6 +15,7 @@ from localsr.protocol.messages import (
     JobRequest,
     MediaInfo,
     MediaProbeRequest,
+    VideoJobRequest,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -275,6 +276,33 @@ def test_video_job_schema_declares_every_hdr_mode_the_engine_accepts():
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     data = schema["$defs"]["videoJobRequest"]["allOf"][1]["properties"]["data"]["allOf"][1]
     assert set(data["properties"]["hdr_mode"]["enum"]) == {"reject", "tone_map", "preserve"}
+
+
+def test_video_job_schema_declares_the_fields_the_host_sends_for_temporal_jobs():
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    data = schema["$defs"]["videoJobRequest"]["allOf"][1]["properties"]["data"]["allOf"][1]
+    # The worker looks a temporal job's model up by video_model_id, and puts its scratch
+    # files in temporary_directory; the host sends both.
+    assert data["properties"]["video_model_id"]["type"] == ["string", "null"]
+    assert data["properties"]["temporary_directory"]["type"] == ["string", "null"]
+    request = json.loads(
+        VideoJobRequest(
+            job_id="j",
+            video_path="v.mp4",
+            model_path="",
+            output_video_path="o.mp4",
+            container="mp4",
+            crf=18,
+            fps=None,
+            device="cpu",
+            tile_size=256,
+            halo=16,
+            precision="fp32",
+            safe_memory=True,
+            video_model_id="seedvr2_3b",
+        ).to_json()
+    )
+    assert request["data"]["video_model_id"] == "seedvr2_3b"
 
 
 def _schema() -> dict:

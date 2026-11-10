@@ -301,7 +301,9 @@
                     "interpolation": { "enum": ["off", "x2", "x4", "fps60", "fps120"], "default": "off" },
                     "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
                     "interpolation_model_id": { "type": ["string", "null"] },
-                    "interpolation_bundle_dir": { "type": ["string", "null"] }
+                    "interpolation_bundle_dir": { "type": ["string", "null"] },
+                    "video_model_id": { "type": ["string", "null"] },
+                    "temporary_directory": { "type": ["string", "null"] }
                   }
                 }
               ]

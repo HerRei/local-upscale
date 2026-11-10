@@ -167,6 +167,10 @@ class VideoJobRequest:
     interpolation_order: str = "after_upscale"
     interpolation_model_id: str | None = None
     interpolation_bundle_dir: str | None = None
+    # A temporal job names its catalog model here; the host also gives every video job a
+    # folder for its scratch files.
+    video_model_id: str | None = None
+    temporary_directory: str | None = None
 
     hdr_mode: str = "reject"
     neural_engine: bool = True
