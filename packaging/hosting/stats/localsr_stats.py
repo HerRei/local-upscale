@@ -52,6 +52,12 @@ TOKEN = re.compile(r"[A-Za-z0-9._+-]{1,80}")
 HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
 OWN_HOSTS = {"herrei.github.io"}
 MAX_LINE = 65536
+# The pages, referrers and app versions of a day come from whoever sends the request, and
+# daily totals are kept forever. Past this many distinct keys per kind and day, new keys
+# are counted under one shared key instead of adding rows.
+MAX_KEYS_PER_DAY = 500
+VISITOR_CHOSEN = ("view", "referrer", "update_check")
+OVERFLOW_KEY = "(other)"
 GITHUB_REPOSITORY = "HerRei/local-upscale"
 
 
@@ -130,6 +136,19 @@ class Store:
             self.db.execute("DELETE FROM salts WHERE day < ?", (cutoff,))
         return cutoff
 
+    def _bounded(self, day: str, kind: str, key: str) -> str:
+        if kind not in VISITOR_CHOSEN:
+            return key
+        known = self.db.execute(
+            "SELECT 1 FROM daily WHERE day = ? AND kind = ? AND key = ?", (day, kind, key)
+        ).fetchone()
+        if known:
+            return key
+        count = self.db.execute(
+            "SELECT COUNT(*) FROM daily WHERE day = ? AND kind = ?", (day, kind)
+        ).fetchone()[0]
+        return OVERFLOW_KEY if count >= MAX_KEYS_PER_DAY else key
+
     def record(self, entry: dict, now: float | None = None) -> bool:
         found = classify(entry)
         if not found:
@@ -152,6 +171,7 @@ class Store:
                     self._salt(day) + ip.encode() + b"\0" + agent.encode()
                 ).hexdigest()[:32]
                 for kind, key in counts:
+                    key = self._bounded(day, kind, key)
                     new = self.db.execute(
                         "INSERT OR IGNORE INTO seen VALUES (?, ?, ?, ?)",
                         (day, kind, key, visitor),
