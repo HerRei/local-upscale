@@ -748,10 +748,12 @@ class _CoreMLImage(torch.nn.Module):
         """Load the next candidate unit, honouring stored verdicts."""
         program: _Program = state["program"]
         state["runner"], state["unit"], state["pending"] = None, None, False
+        skipped_for_timeout = False
         while state["remaining"]:
             unit = state["remaining"].pop(0)
             verdict = program.verdict(unit)
             if verdict is not None and not verdict.get("accepted"):
+                skipped_for_timeout |= bool(verdict.get("timed_out"))
                 continue
             if not (program.compiled / "coremldata.bin").exists():
                 try:
@@ -790,6 +792,14 @@ class _CoreMLImage(torch.nn.Module):
             if not state["pending"]:
                 self._announce(unit)
             return
+        if skipped_for_timeout:
+            # Every later job looks again: the stored timeout may have expired or been lifted,
+            # and each result that ran without Core ML for this reason says so.
+            state["retry"] = True
+            self._note(
+                f"Continuing on {self._fallback_label()}: "
+                "Core ML was not ready in time for this model earlier."
+            )
 
     def batch_lanes(self, sample: torch.Tensor, shape: tuple[int, int], *, gpu: bool) -> list:
         """Two native runners per accepted unit at one fixed shape, for photo batches.

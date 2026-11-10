@@ -882,6 +882,39 @@ def test_a_compile_that_never_returns_is_stored_and_the_next_job_skips_the_unit(
     assert fake_coreml.loads == []
 
 
+def test_a_job_that_skips_a_unit_for_a_stored_timeout_says_so_in_its_notes(fake_coreml):
+    FakeProgram.stores[("stored", (32, 32))] = {
+        NEURAL_ENGINE: coreml_runtime.timeout_verdict(120.0)
+    }
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE,), identity="stored"
+    )
+    messages, notes = [], []
+    converted.set_status_callback(messages.append)
+    converted.set_note_callback(notes.append)
+    output = run(converted)
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    assert fake_coreml.loads == []
+    expected = "Continuing on the CPU: Core ML was not ready in time for this model earlier."
+    assert notes == [expected] and messages[-1] == expected
+    # Once per job, not per tile; the next job looks at the stored timeout again.
+    converted(image(20, 20)[None])
+    assert notes == [expected]
+    run(converted)
+    assert notes == [expected, expected]
+
+
+def test_a_stored_timeout_is_not_a_fallback_when_another_unit_runs(fake_coreml):
+    FakeProgram.stores[("other", (32, 32))] = {NEURAL_ENGINE: coreml_runtime.timeout_verdict(120.0)}
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="other"
+    )
+    notes = []
+    converted.set_note_callback(notes.append)
+    run(converted)
+    assert converted.model.active_unit == CORE_ML_GPU and notes == []
+
+
 def test_the_budget_is_shared_by_every_unit_of_a_job(fake_coreml, short_budget):
     fake_coreml.behaviours.update({NEURAL_ENGINE: "hang", CORE_ML_GPU: "hang"})
     converted = CoreMLImageDescriptor(
