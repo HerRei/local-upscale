@@ -254,3 +254,62 @@ test.describe('overflow and alignment', () => {
     expect(b.y + b.height).toBeLessThanOrEqual(640);
   });
 });
+
+test.describe('contrast and targets', () => {
+  /** WCAG contrast of an element's text against the backgrounds it is drawn on. */
+  const contrastOnPage = (locator: Locator) =>
+    locator.evaluate((element) => {
+      const rgba = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+      const layers: number[][] = [];
+      for (let node: Element | null = element; node; node = node.parentElement) {
+        const [r, g, b, a = 1] = rgba(getComputedStyle(node).backgroundColor);
+        if (a > 0) layers.push([r, g, b, a]);
+        if (a >= 1) break;
+      }
+      let back = [0, 0, 0];
+      for (const [r, g, b, a] of layers.reverse())
+        back = [r * a + back[0] * (1 - a), g * a + back[1] * (1 - a), b * a + back[2] * (1 - a)];
+      const style = getComputedStyle(element);
+      const [fr, fg, fb, fa = 1] = rgba(style.color);
+      const alpha = fa * Number(style.opacity);
+      const fore = [fr, fg, fb].map((c, i) => c * alpha + back[i] * (1 - alpha));
+      const lum = (rgb: number[]) =>
+        rgb
+          .map((c) => c / 255)
+          .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+          .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+      const [hi, lo] = [lum(fore), lum(back)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    });
+
+  test('library labels on a selected row stay readable', async ({ page }) => {
+    await openApp(page, ready);
+    await emit(page, 'native-menu-action', 'view.models');
+    const library = page.getByRole('dialog', { name: 'Model library' });
+    await library.getByRole('button', { name: /^Upscale photos/ }).click();
+    const row = library.getByRole('button', { name: /RealPLKSR ×4 NomosWebPhoto/ });
+    await row.click();
+    const checks = [
+      library.locator('.rail-item.active small'),
+      row.locator('.meter').first(),
+      row.locator('.pill.labs'),
+      row.locator('.pill.best'),
+    ];
+    for (const label of checks) expect(await contrastOnPage(label)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test('help tips and the Model card links are at least 24 px targets', async ({ page }) => {
+    await openApp(page, ready);
+    await showPane(page, 'enhance');
+    const plan = page.getByRole('region', { name: 'Model plan' });
+    const targets = [
+      ...(await page.locator('.inspector-scroll .help-tip').all()),
+      ...(await plan.locator('.link-button').all()),
+    ];
+    expect(targets.length).toBeGreaterThan(3);
+    for (const target of targets) {
+      const { width, height } = await box(target);
+      expect(Math.min(width, height)).toBeGreaterThanOrEqual(24);
+    }
+  });
+});

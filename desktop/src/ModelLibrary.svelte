@@ -489,7 +489,6 @@
             {#each shown as model (model.model_id)}
               <button
                 class="row"
-                class:dimmed={editFit(model) === 'too_heavy'}
                 type="button"
                 class:selected={selectedEdit?.model_id === model.model_id}
                 aria-pressed={selectedEdit?.model_id === model.model_id}

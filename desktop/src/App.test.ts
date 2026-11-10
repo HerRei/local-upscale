@@ -439,9 +439,12 @@ describe('Edit task', () => {
     await user.click(
       within(dialog).getByRole('button', { name: /^Show \d+ more that need more memory/ }),
     );
-    await user.click(
-      within(dialog).getByRole('button', { name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/ }),
-    );
+    const heavy = within(dialog).getByRole('button', {
+      name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/,
+    });
+    // The row can still be chosen to read about it, so it is not dimmed like a disabled one.
+    expect(heavy.classList.contains('dimmed')).toBe(false);
+    await user.click(heavy);
     expect(within(dialog).getByText('48 GB memory')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
     expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');

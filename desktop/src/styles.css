@@ -2364,6 +2364,12 @@ input[type='number'],
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* In the Model card the links are 24 px targets; the padding is taken back by the margin, so
+   the text sits where it did. */
+.model-section .link-button {
+  padding-block: 5px;
+  margin-block: -5px;
+}
 .plan-row {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr) auto;
@@ -2394,7 +2400,8 @@ input[type='number'],
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin-top: -2px;
+  /* Room for the 24 px targets of the links on both lines (see .model-section .link-button). */
+  margin-top: 6px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.4;
@@ -2574,7 +2581,7 @@ input[type='number'],
   color: var(--text);
 }
 .rail-item small {
-  color: var(--tertiary);
+  color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
 .list {
@@ -2648,7 +2655,7 @@ input[type='number'],
   grid-template-columns: 42px 1fr;
   align-items: center;
   gap: 6px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
 }
 .dots {
@@ -2670,7 +2677,7 @@ input[type='number'],
 }
 .row .name .tech {
   margin-left: 7px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font:
     500 calc(10px * var(--ui-scale)) ui-monospace,
     SFMono-Regular,
@@ -2879,6 +2886,13 @@ input[type='number'],
   background: rgba(255, 255, 255, 0.04);
   color: var(--secondary);
 }
+/* On the lighter selected row the muted pills need the full text colour to stay readable. */
+.row.selected .pill.labs,
+.row.selected .pill.best,
+.row.selected .pill.quick,
+.row.selected .pill.ok {
+  color: var(--text);
+}
 .pill.warn {
   border-color: rgba(222, 153, 53, 0.3);
   background: rgba(222, 153, 53, 0.12);
@@ -2950,16 +2964,18 @@ input[type='number'],
   margin: 0;
 }
 .help-tip {
+  position: relative;
   display: inline-grid;
   place-items: center;
-  width: calc(14px * var(--ui-scale));
+  /* A 24 px target around the 14 px circle; the negative margins keep the layout of the
+     14 px button. */
+  width: calc(14px * var(--ui-scale) + 10px);
   min-width: 0;
-  height: calc(14px * var(--ui-scale));
+  height: calc(14px * var(--ui-scale) + 10px);
   min-height: 0;
-  margin: 0 0 0 5px;
+  margin: -5px -5px -5px 0;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  border: 0;
   background: transparent;
   color: var(--tertiary);
   font-size: calc(9px * var(--ui-scale));
@@ -2968,15 +2984,25 @@ input[type='number'],
   vertical-align: 1px;
   cursor: help;
 }
+.help-tip::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
 .help-tip:hover,
 .help-tip:focus-visible {
-  border-color: var(--accent-line);
   background: transparent;
   color: var(--text);
 }
+.help-tip:hover::before,
+.help-tip:focus-visible::before {
+  border-color: var(--accent-line);
+}
 .help-tip:focus-visible {
   outline: 1px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: -4px;
 }
 .help-tip-text {
   position: absolute;
