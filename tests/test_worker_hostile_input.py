@@ -326,3 +326,14 @@ def test_a_photo_batch_with_one_bad_photo_fails_every_photo_with_the_reason(work
     for answer in (first, second):
         assert answer["type"] == "job_failed"
         assert "tile_size" in answer["data"]["error_message"]
+
+
+def test_requests_are_read_as_utf_8_whatever_the_console_code_page(monkeypatch):
+    line = json.dumps(
+        {"type": "x", "data": {"path": "/Users/Jürgen/Fotos/ü.png"}}, ensure_ascii=False
+    )
+    stdin = io.TextIOWrapper(io.BytesIO(line.encode("utf-8") + b"\n"), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    server = WorkerServer()
+    server.reader_thread_func()
+    assert server.message_queue.get_nowait()["data"]["path"] == "/Users/Jürgen/Fotos/ü.png"

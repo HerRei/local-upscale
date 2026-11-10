@@ -255,10 +255,11 @@ class WorkerServer:
 
     def reader_thread_func(self):
         try:
-            # A byte that is not UTF-8 must not end the reader.
+            # Requests are UTF-8 whatever the console's code page, and a byte that is not
+            # UTF-8 must not end the reader.
             reconfigure = getattr(sys.stdin, "reconfigure", None)
             if reconfigure is not None:
-                reconfigure(errors="replace")
+                reconfigure(encoding="utf-8", errors="replace")
             for line in sys.stdin:
                 try:
                     self._read_line(line)
