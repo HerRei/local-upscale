@@ -1273,9 +1273,18 @@ fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) {
 
 fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
     let data = &envelope.data;
-    if matches!(envelope.message_type.as_str(), "progress" | "video_tile_progress" | "video_frame_started" | "video_frame_completed" | "video_stage_progress") {
+    if matches!(
+        envelope.message_type.as_str(),
+        "progress"
+            | "video_tile_progress"
+            | "video_frame_started"
+            | "video_frame_completed"
+            | "video_stage_progress"
+    ) {
         let mut runtime = lock(&state.runtime)?;
-        if runtime.hardware_note.contains(" s so far;") { runtime.hardware_note.clear(); }
+        if runtime.hardware_note.contains(" s so far;") {
+            runtime.hardware_note.clear();
+        }
     }
     match envelope.message_type.as_str() {
         "worker_ready" => {
@@ -1594,7 +1603,15 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 "Frame {} of {}{}{}",
                 (frame as u64).saturating_add(1),
                 total as u64,
-                if count > 1.0 && done > 0.0 { format!(" · Tile {} / {}", (done as u64).min(count as u64), count as u64) } else { String::new() },
+                if count > 1.0 && done > 0.0 {
+                    format!(
+                        " · Tile {} / {}",
+                        (done as u64).min(count as u64),
+                        count as u64
+                    )
+                } else {
+                    String::new()
+                },
                 if runtime.estimated_remaining_seconds > 0.0 {
                     eta_suffix(runtime.estimated_remaining_seconds)
                 } else if fraction == 0.0 {

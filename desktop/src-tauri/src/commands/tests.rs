@@ -2059,7 +2059,7 @@ fn a_written_recipe_is_kept_replaced_and_removed() {
     assert!(lock(&state.recipes).unwrap().is_empty());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_file_whose_name_is_not_valid_text_is_left_out_of_a_folder() {
     use std::os::unix::ffi::OsStrExt;

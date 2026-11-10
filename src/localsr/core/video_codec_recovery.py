@@ -7,6 +7,8 @@ import pickle
 import tempfile
 from contextlib import suppress
 
+import numpy as np
+
 from .disk_space import DiskFullError
 from .system_codecs import SystemCodecsError
 
@@ -60,6 +62,8 @@ def automatic_export(
     warning_callback,
 ):
     """Try HEVC, retaining only a bounded, complete prefix for AV1 recovery."""
+    from .video_io import TimedVideoFrame
+
     iterator = iter(frames)
     count = 0
     size = 0
@@ -74,14 +78,21 @@ def automatic_export(
             nonlocal cache, count, size
             for frame in iterator:
                 if cache is not None:
-                    frame_size = frame.rgb.nbytes
+                    pixels = frame.rgb if isinstance(frame, TimedVideoFrame) else frame
+                    frame_size = pixels.nbytes
                     if size + frame_size > REPLAY_LIMIT_BYTES:
                         with suppress(OSError):
                             cache.close()
                         cache = None
                     else:
                         try:
-                            pickle.dump(frame, cache, protocol=pickle.HIGHEST_PROTOCOL)
+                            timing = (
+                                (frame.index, frame.timestamp, frame.duration, frame.time_base)
+                                if isinstance(frame, TimedVideoFrame)
+                                else None
+                            )
+                            record = (pixels.tobytes(), pixels.shape, pixels.dtype.str, timing)
+                            pickle.dump(record, cache, protocol=pickle.HIGHEST_PROTOCOL)
                             count += 1
                             size += frame_size
                         except OSError:
@@ -111,7 +122,9 @@ def automatic_export(
             for _ in range(count):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("video job cancelled")
-                yield pickle.load(cache)
+                data, shape, dtype, timing = pickle.load(cache)
+                pixels = np.frombuffer(data, dtype=np.dtype(dtype)).reshape(shape).copy()
+                yield TimedVideoFrame(timing[0], pixels, *timing[1:]) if timing else pixels
             yield from iterator
 
         result = export(replay(), "av1")

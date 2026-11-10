@@ -1076,15 +1076,36 @@ fn video_history_reads_source_timing_for_both_result_queries() {
     let directory = tempfile::tempdir().unwrap();
     let db = Database::open(&directory.path().join("queue.db")).unwrap();
     db.insert_media("v", "/tmp/v.mp4", "v", "video").unwrap();
-    db.connection.execute("UPDATE media SET fps=15, duration_seconds=16.4 WHERE id='v'", []).unwrap();
-    for (id, request) in [("interpolated", r#"{"type":"video_job_request","data":{"interpolation":"fps60"}}"#), ("plain", r#"{"type":"video_job_request","data":{}}"#)] {
+    db.connection
+        .execute(
+            "UPDATE media SET fps=15, duration_seconds=16.4 WHERE id='v'",
+            [],
+        )
+        .unwrap();
+    for (id, request) in [
+        (
+            "interpolated",
+            r#"{"type":"video_job_request","data":{"interpolation":"fps60"}}"#,
+        ),
+        ("plain", r#"{"type":"video_job_request","data":{}}"#),
+    ] {
         db.insert_job(id, "v", request).unwrap();
         db.finish_job(id, "completed", "/tmp/out.mp4", "").unwrap();
     }
-    for history in [db.list_media_results("v", 50, None).unwrap(), db.list_all_media_results().unwrap().remove(0)] {
+    for history in [
+        db.list_media_results("v", 50, None).unwrap(),
+        db.list_all_media_results().unwrap().remove(0),
+    ] {
         for result in history.results {
             assert_eq!(result.output_duration_seconds, 16.4);
-            assert_eq!(result.output_fps, if result.job_id == "interpolated" { 60.0 } else { 15.0 });
+            assert_eq!(
+                result.output_fps,
+                if result.job_id == "interpolated" {
+                    60.0
+                } else {
+                    15.0
+                }
+            );
         }
     }
 }

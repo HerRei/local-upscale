@@ -1247,6 +1247,10 @@ fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle
         panic!("the bundled engine must not stand in for the delivered one")
     })
     .unwrap();
+    // The signed fixture is a Linux package. Adapt its extracted filename to the
+    // host so the rest of this test exercises Windows engine discovery as well.
+    #[cfg(windows)]
+    fs::rename(worker.with_file_name("localsr-worker"), &worker).unwrap();
     assert_eq!(fs::read(&worker).unwrap(), b"worker");
     assert!(worker.starts_with(root.path().join("engines").join(&id)));
     // Present again, or never delivered: the host's own engine is reused.

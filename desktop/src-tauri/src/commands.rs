@@ -1630,6 +1630,7 @@ fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn video_comparison_sources(
     state: &AppState,
     app: &AppHandle,

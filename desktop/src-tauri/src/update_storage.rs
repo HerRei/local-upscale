@@ -462,6 +462,20 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
     // locking is unsupported (Windows) no journal can exist, so every start ends here.
     match fs::symlink_metadata(journal) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Windows also reports NotFound when a path component is a file.
+            #[cfg(windows)]
+            for parent in journal_parent.ancestors() {
+                match fs::metadata(parent) {
+                    Ok(metadata) if !metadata.is_dir() => {
+                        return Err(AppError::Validation(
+                            "The journal parent is not a folder".into(),
+                        ));
+                    }
+                    Ok(_) => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
             // A crash while writing the journal leaves a temporary file; the lock tells
             // that apart from a swap that is writing it now.
             if let Ok(_lock) = lock_folder(journal_parent) {

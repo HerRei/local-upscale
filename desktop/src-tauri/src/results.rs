@@ -187,23 +187,47 @@ pub fn catalog_label(catalog: &CatalogManifest, model_id: &str) -> Option<String
 }
 
 fn video_checkpoint_id<'a>(catalog: &'a CatalogManifest, filename: &str) -> Option<&'a str> {
-    catalog.models.iter().find(|model| model.filename == filename).map(|model| model.model_id.as_str())
+    catalog
+        .models
+        .iter()
+        .find(|model| model.filename == filename)
+        .map(|model| model.model_id.as_str())
 }
 
 fn video_timing(request: &Value, source_fps: f64, source_duration: f64) -> (f64, f64) {
-    if request_kind(request) != "video" { return (0.0, 0.0); }
+    if request_kind(request) != "video" {
+        return (0.0, 0.0);
+    }
     let data = &request["data"];
-    let fps = data["fps"].as_f64().filter(|n| *n > 0.0).unwrap_or(source_fps);
+    let fps = data["fps"]
+        .as_f64()
+        .filter(|n| *n > 0.0)
+        .unwrap_or(source_fps);
     let duration = if data["start_frame"].is_number() || data["end_frame"].is_number() {
-        if source_fps <= 0.0 { 0.0 } else {
+        if source_fps <= 0.0 {
+            0.0
+        } else {
             let start = data["start_frame"].as_u64().unwrap_or(0) as f64 / source_fps;
-            let end = data["end_frame"].as_u64().map(|n| (n + 1) as f64 / source_fps).unwrap_or(source_duration);
-            if source_duration > 0.0 { (end.min(source_duration) - start).max(0.0) } else if data["end_frame"].is_number() { (end - start).max(0.0) } else { 0.0 }
+            let end = data["end_frame"]
+                .as_u64()
+                .map(|n| (n + 1) as f64 / source_fps)
+                .unwrap_or(source_duration);
+            if source_duration > 0.0 {
+                (end.min(source_duration) - start).max(0.0)
+            } else if data["end_frame"].is_number() {
+                (end - start).max(0.0)
+            } else {
+                0.0
+            }
         }
-    } else { source_duration };
+    } else {
+        source_duration
+    };
     let output_fps = match data["interpolation"].as_str().unwrap_or("off") {
-        "x2" => fps * 2.0, "x4" => fps * 4.0,
-        "fps60" if fps > 0.0 && fps < 59.4 => 60.0, "fps120" if fps > 0.0 && fps < 118.8 => 120.0,
+        "x2" => fps * 2.0,
+        "x4" => fps * 4.0,
+        "fps60" if fps > 0.0 && fps < 59.4 => 60.0,
+        "fps120" if fps > 0.0 && fps < 118.8 => 120.0,
         _ => fps,
     };
     (duration.max(0.0), output_fps.max(0.0))
@@ -246,7 +270,11 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
     let output_path: String = row.get(3)?;
     let (model_id, model_label) = request_model(&request);
     let ui_json: String = row.get(7)?;
-    let (output_duration_seconds, output_fps) = video_timing(&request, row.get::<_, Option<f64>>(8)?.unwrap_or(0.0), row.get::<_, Option<f64>>(9)?.unwrap_or(0.0));
+    let (output_duration_seconds, output_fps) = video_timing(
+        &request,
+        row.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
+        row.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
+    );
     Ok(ResultSummary {
         job_id: row.get(0)?,
         completed_at: row.get(1)?,
@@ -266,7 +294,11 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
         output_path,
         model_id,
         model_label,
-        checkpoint_filename: Path::new(data["model_path"].as_str().unwrap_or_default()).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned(),
+        checkpoint_filename: Path::new(data["model_path"].as_str().unwrap_or_default())
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned(),
         output_duration_seconds,
         output_fps,
         scale: data["output_scale"].as_u64().unwrap_or(0),
@@ -358,9 +390,13 @@ mod tests {
     #[test]
     fn video_checkpoint_matches_catalog_filename() {
         let directory = tempfile::tempdir().unwrap();
-        let catalog = crate::catalog::load_catalog(&crate::paths::AppPaths::under(directory.path())).unwrap();
+        let catalog =
+            crate::catalog::load_catalog(&crate::paths::AppPaths::under(directory.path())).unwrap();
         let model = &catalog.models[0];
-        assert_eq!(super::video_checkpoint_id(&catalog, &model.filename), Some(model.model_id.as_str()));
+        assert_eq!(
+            super::video_checkpoint_id(&catalog, &model.filename),
+            Some(model.model_id.as_str())
+        );
         assert_eq!(super::video_checkpoint_id(&catalog, "custom.pth"), None);
     }
 

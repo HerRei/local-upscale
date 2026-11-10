@@ -7,9 +7,9 @@ import threading
 from contextlib import contextmanager
 from fractions import Fraction
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
-import av
 import numpy as np
 import pytest
 
@@ -105,7 +105,22 @@ class RefusingSystem(SystemCodecs):
 
 @pytest.mark.parametrize("consume", [0, 2, 4])
 @pytest.mark.parametrize("stream", [True, False])
-def test_automatic_retries_av1_keeps_rendered_frames_and_cleans_partials(tmp_path, consume, stream):
+def test_automatic_retries_av1_keeps_rendered_frames_and_cleans_partials(
+    monkeypatch, tmp_path, consume, stream
+):
+    import localsr.core.video_io as video_io
+
+    original_encode = video_io._encode_video
+    replayed = []
+
+    def encode_without_native_av1(frames, destination, *, video_codec, **options):
+        if video_codec != "av1":
+            return original_encode(frames, destination, video_codec=video_codec, **options)
+        replayed.extend(frames)
+        Path(destination).write_bytes(b"av1")
+        return destination
+
+    monkeypatch.setattr(video_io, "_encode_video", encode_without_native_av1)
     system = RefusingSystem(SystemCodecsError("HEVC encode failed: Cannot Encode Media"), consume)
     notes, rendered = [], []
 
@@ -130,9 +145,15 @@ def test_automatic_retries_av1_keeps_rendered_frames_and_cleans_partials(tmp_pat
     assert rendered == [0, 1, 2, 3]
     assert system.calls == ["hevc"]  # Existing Automatic order is HEVC, then AV1.
     assert notes == ["HEVC export failed on this Mac; the video was written as AV1 instead."]
-    with av.open(str(output)) as result:
-        assert result.streams.video[0].codec_context.codec.canonical_name == "av1"
-        assert len(list(result.decode(video=0))) == 4
+    assert [frame.index for frame in replayed] == [0, 1, 2, 3]
+    for actual, expected in zip(replayed, pictures(), strict=True):
+        np.testing.assert_array_equal(actual.rgb, expected.rgb)
+        assert (actual.timestamp, actual.duration, actual.time_base) == (
+            expected.timestamp,
+            expected.duration,
+            expected.time_base,
+        )
+    assert output.read_bytes() == b"av1"
     assert list(tmp_path.iterdir()) == [output]
 
 
@@ -340,3 +361,32 @@ def test_cache_creation_failure_does_not_stop_export(monkeypatch, tmp_path):
     )
     assert len(result) == 4
     assert not list(tmp_path.iterdir())
+
+
+def test_replay_snapshots_pixels_before_the_first_export_mutates_them(tmp_path):
+    from localsr.core.video_codec_recovery import automatic_export
+
+    source = next(pictures())
+    expected = source.rgb.copy()
+    calls = []
+
+    def export(frames, codec):
+        calls.append(codec)
+        if codec == "hevc":
+            next(iter(frames)).rgb[:] = 255
+            raise SystemCodecsError("Cannot Encode Media")
+        return list(frames)
+
+    replayed = automatic_export(
+        iter([source]),
+        tmp_path / "out.mp4",
+        export=export,
+        cancel_event=None,
+        temporary_directory=str(tmp_path),
+        note_callback=None,
+        warning_callback=None,
+    )
+    assert calls == ["hevc", "av1"]
+    np.testing.assert_array_equal(replayed[0].rgb, expected)
+    assert replayed[0].timestamp == source.timestamp
+    assert replayed[0].rgb.flags.owndata
