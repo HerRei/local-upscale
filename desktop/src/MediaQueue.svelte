@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tabFromKey } from './lib/keyboard';
-  import { queueModelState } from './lib/queue-timing';
+  import { followAllowed, rowRun } from './lib/rowRun';
   import { tick } from 'svelte';
   import FileName from './FileName.svelte';
   import OutputsList from './OutputsList.svelte';
@@ -50,6 +50,29 @@
     if (document.activeElement && document.activeElement !== document.body) return;
     const buttons = document.querySelectorAll<HTMLButtonElement>('.media-list .remove:enabled');
     buttons[Math.min(index, buttons.length - 1)]?.focus();
+  }
+
+  /** When the user last scrolled or used the list; the list follows the work only after 10 s of calm. */
+  let listUsedAt = -Infinity;
+  const listUsed = () => (listUsedAt = Date.now());
+  let listEl: HTMLElement | undefined;
+  let runningIds = new Set<string>();
+  $: followWork(
+    new Set(
+      items
+        .filter((media) => rowRun(jobs, media.id, activeJobId).kind === 'running')
+        .map((media) => media.id),
+    ),
+  );
+  /** A picture that starts running scrolls into view; focus and selection stay where they are. */
+  async function followWork(now: Set<string>): Promise<void> {
+    const started = [...now].filter((id) => !runningIds.has(id));
+    runningIds = now;
+    if (!started.length || !followAllowed(listUsedAt, Date.now())) return;
+    await tick();
+    const rows = [...(listEl?.querySelectorAll<HTMLElement>('.media-row') ?? [])];
+    const index = items.findIndex((media) => media.id === started[0]);
+    rows[index]?.scrollIntoView?.({ block: 'nearest' });
   }
 
   /** The item's newest job when it failed, so the row says it has no result and why (tooltip).
@@ -148,9 +171,22 @@
     {#if items.length === 1 && scopeWarning}
       <p class="mode-scope warning">{scopeHint}</p>
     {/if}
-    <div class="media-list">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="media-list"
+      bind:this={listEl}
+      on:wheel|passive={listUsed}
+      on:touchstart|passive={listUsed}
+      on:pointerdown={listUsed}
+      on:keydown={listUsed}
+    >
       {#each items as media (media.id)}
-        <div class="media-row" class:selected={media.selected}>
+        {@const run = rowRun(jobs, media.id, activeJobId)}
+        <div
+          class="media-row"
+          class:selected={media.selected}
+          class:running={run.kind === 'running'}
+        >
           <button
             class="media-select"
             type="button"
@@ -179,14 +215,8 @@
                   class="queue-state failed"
                   title={failedJob(media.id)?.error}>Could not finish</small
                 >{/if}
-              {#if inflightMediaIds.has(media.id)}<small class="queue-state"
-                  >{media.kind === 'image'
-                    ? queueModelState(jobs, media.id, activeJobId)
-                    : (jobs.find(
-                        (job) =>
-                          job.media_id === media.id &&
-                          ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
-                      )?.status ?? 'queued')}</small
+              {#if run.text}<small class="queue-state" title={run.title || undefined}
+                  >{run.text}</small
                 >{/if}
             </div>
           </button>
@@ -208,6 +238,19 @@
               stroke-linejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
             ></button
           >
+          {#if run.kind === 'running'}
+            <!-- Only running rows carry a progress bar, so a long list stays quiet for screen readers. -->
+            <div
+              class="row-progress"
+              role="progressbar"
+              aria-label={`Progress of ${media.name}`}
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={run.progress === null ? undefined : Math.round(run.progress)}
+            >
+              {#if run.progress !== null}<i style={`width:${run.progress}%`}></i>{/if}
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
