@@ -359,3 +359,13 @@ def test_a_system_encoded_export_through_the_master_leaves_only_its_output(
         with pytest.raises((video_io.VideoStageError, InterruptedError)):
             video_io._external_export(iter(()), destination, **arguments)
         assert list(tmp_path.iterdir()) == []
+
+
+def test_an_output_path_that_is_the_source_leaves_the_source_unchanged(tmp_path):
+    source = tmp_path / "photo.png"
+    Image.new("RGB", (8, 8), (10, 200, 30)).save(source)
+    before = source.read_bytes()
+    with pytest.raises(OutputExistsError):
+        _save_image(source)
+    assert source.read_bytes() == before
+    assert _no_temporaries(tmp_path)
