@@ -161,15 +161,22 @@ def test_pressure_or_busy_gpu_refuses_loading(memory):
 
 
 MAC_PLAN = EditPlan(16 * GIB, 2 * GIB, 10 * GIB, 512, 16 * GIB)
-MAC_RUNNING = EditMemory(24 * GIB, 4 * GIB, 0, unified=True, pressure="low", obtainable_ram=6 * GIB)
+MAC_RUNNING = EditMemory(16 * GIB, 4 * GIB, 0, unified=True, pressure="low", obtainable_ram=6 * GIB)
 
 
 @pytest.mark.parametrize(
     "change,used,warning_seconds,critical_samples,reason",
     [
         ({"pressure": "critical"}, 0, 1.0, 2, "critical memory pressure"),
-        ({"swap_used": 3 * GIB}, 0, 0.0, 0, "swapped 3.0 GiB"),
-        ({"pressure": "warning", "swap_used": GIB}, 0, 31.0, 0, "stayed high for 31 s"),
+        ({"swap_used": int(8.5 * GIB)}, 0, 0.0, 0, "swapped 8.5 GiB to disk, more than half"),
+        (
+            {"swap_used": 3 * GIB, "disk_free": 6_000_000_000, "disk_reserve": 8_000_000_000},
+            0,
+            0.0,
+            0,
+            "only 6.0 GB of disk space was free",
+        ),
+        ({"pressure": "warning", "swap_used": int(2.5 * GIB)}, 0, 90.0, 0, "stayed high for 90 s"),
         ({}, 17 * GIB, 0.0, 0, "more than its 16.0 GiB limit"),
     ],
 )
@@ -193,6 +200,10 @@ def test_mac_supervisor_stops_only_when_the_system_is_in_trouble(
         # Compression and some swap are how a unified-memory Mac makes room.
         ({"pressure": "warning"}, 120.0, 0),
         ({"swap_used": GIB}, 0.0, 0),
+        # The owner's 16 GB Mac: a model load pushed 2.2 GiB of other apps to swap.
+        ({"pressure": "warning", "swap_used": int(2.2 * GIB)}, 40.0, 0),
+        ({"pressure": "warning", "swap_used": 3 * GIB}, 89.0, 0),
+        ({"swap_used": 3 * GIB, "disk_free": 9_000_000_000, "disk_reserve": 8_000_000_000}, 0.0, 0),
         ({"pressure": "critical"}, 0.0, 1),
         ({"obtainable_ram": GIB // 2, "available_ram": GIB // 4}, 0.0, 0),
     ],
@@ -208,6 +219,35 @@ def test_mac_supervisor_lets_macos_compress_and_swap_a_little(
         warning_seconds=warning_seconds,
         critical_samples=critical_samples,
     )
+
+
+def test_mac_swap_bound_is_half_of_memory_but_at_least_4_gib():
+    big = EditMemory(64 * GIB, 8 * GIB, 0, unified=True, pressure="low", obtainable_ram=8 * GIB)
+    plan = EditPlan(16 * GIB, 2 * GIB, 10 * GIB, 512, 16 * GIB)
+    check_edit_pressure(replace(big, swap_used=31 * GIB), plan, 0, 0)
+    with pytest.raises(MemoryError, match="swapped 33.0 GiB"):
+        check_edit_pressure(replace(big, swap_used=33 * GIB), plan, 0, 0)
+    small = EditMemory(4 * GIB, GIB, 0, unified=True, pressure="low", obtainable_ram=GIB)
+    check_edit_pressure(replace(small, swap_used=3 * GIB), plan, 0, 0)
+    with pytest.raises(MemoryError, match="swapped 5.0 GiB"):
+        check_edit_pressure(replace(small, swap_used=5 * GIB), plan, 0, 0)
+
+
+def test_sustained_warning_counts_swap_growth_inside_the_warning_period():
+    warm = replace(MAC_RUNNING, pressure="warning", swap_used=3 * GIB)
+    # Swap grew a lot before the warning began and only 0.5 GiB since: not thrashing.
+    check_edit_pressure(warm, MAC_PLAN, 0, 0, warning_seconds=200.0, warning_swap=int(2.5 * GIB))
+
+
+def test_host_memory_reads_system_disk_room(monkeypatch):
+    from localsr.core import disk_space, edit_memory
+
+    volume = disk_space.Volume(1, 5_000_000_000, 100_000_000_000, True)
+    monkeypatch.setattr(disk_space, "volume_of", lambda folder: volume)
+    memory = edit_memory.read_host_memory(unified=True)
+    assert memory.disk_free == 5_000_000_000
+    assert memory.disk_reserve == disk_space.reserve_for(volume)
+    assert edit_memory.read_host_memory(unified=False).disk_free == 0
 
 
 @pytest.mark.parametrize(

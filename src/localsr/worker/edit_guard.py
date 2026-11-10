@@ -119,6 +119,7 @@ def main(args=None) -> int:
         )
         watched = psutil.Process(process.pid)
         warning_since = None
+        warning_swap = 0
         critical_samples = 0
         while process.poll() is None:
             if cancelled.wait(0.25):
@@ -130,6 +131,8 @@ def main(args=None) -> int:
             memory = read_host_memory(spec["unified"])
             now = time.monotonic()
             raised = memory.pressure in {"warning", "critical"}
+            if raised and warning_since is None:
+                warning_swap = memory.swap_used
             warning_since = (warning_since or now) if raised else None
             critical_samples = critical_samples + 1 if memory.pressure == "critical" else 0
             check_edit_pressure(
@@ -139,6 +142,7 @@ def main(args=None) -> int:
                 used,
                 warning_seconds=now - warning_since if warning_since else 0.0,
                 critical_samples=critical_samples,
+                warning_swap=warning_swap,
             )
         return process.wait()
     except MemoryError as error:
