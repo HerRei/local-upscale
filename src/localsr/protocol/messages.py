@@ -82,6 +82,16 @@ class JobRequest:
 
 
 @dataclass
+class ImageBatchRequest:
+    """Photos of one recipe for the Mac lanes (engine feature image_batch_v1)."""
+
+    jobs: list[dict[str, object]]
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "image_batch_request", "data": asdict(self)})
+
+
+@dataclass
 class EditJobRequest:
     job_id: str
     image_path: str
@@ -140,6 +150,10 @@ class VideoJobRequest:
     # has no fixed scale factor). 0 lets the engine keep the input size.
     target_resolution: int = 0
     video_low_memory: bool = True
+    video_codec: str = "av1"
+    external_ffmpeg: str | None = None
+    scratch_directory: str | None = None
+    output_temporary_directory: str | None = None
     # Frame-by-frame engines run at the checkpoint's native scale, then
     # downsample each restored frame when a smaller 2×/3× output is requested.
     output_scale: int | None = None
@@ -147,6 +161,16 @@ class VideoJobRequest:
     preview_enabled: bool = True
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
+    # Optional frame interpolation (frame-by-frame engine): "off", "x2", "x4", "fps60"
+    # or "fps120", run "after_upscale" or "before_upscale" with a catalog RIFE bundle.
+    interpolation: str = "off"
+    interpolation_order: str = "after_upscale"
+    interpolation_model_id: str | None = None
+    interpolation_bundle_dir: str | None = None
+    # A temporal job names its catalog model here; the host also gives every video job a
+    # folder for its scratch files.
+    video_model_id: str | None = None
+    temporary_directory: str | None = None
 
     hdr_mode: str = "reject"
     neural_engine: bool = True
@@ -195,6 +219,9 @@ class CapabilitiesInfo:
     system_swap_used: int = 0
     # Which programs can open and write the formats LocalSR's runtime omits.
     media: dict = field(default_factory=dict)
+    # A GPU this edition cannot use and the download (or driver) that would use it.
+    gpu_suggestion: dict | None = None
+    npu_hint: dict | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "capabilities_info", "data": asdict(self)})
@@ -278,6 +305,11 @@ class PreviewReady:
     width: int
     height: int
     jpeg_base64: str
+    preview_width: int = 0
+    preview_height: int = 0
+    slot: str = ""
+    generation: int = 0
+    target_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_ready", "data": asdict(self)})
@@ -287,6 +319,9 @@ class PreviewReady:
 class PreviewFailed:
     image_path: str
     error_message: str
+    slot: str = ""
+    generation: int = 0
+    target_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "preview_failed", "data": asdict(self)})
@@ -427,6 +462,8 @@ class JobCompleted:
     elapsed_seconds: float = 0.0
     inference_seconds: float = 0.0
     output_path: str = ""
+    # What the user should know about a job that finished, such as a skipped fix.
+    notes: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_completed", "data": asdict(self)})
@@ -444,6 +481,11 @@ class JobCancelled:
 class JobFailed:
     job_id: str
     error_message: str
+    # The GPU device was lost: the worker exits after this message and the app must
+    # not hand it another job.
+    restart_required: bool = False
+    # The job failed for lack of disk space: the app stops the rest of the queue.
+    disk_full: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_failed", "data": asdict(self)})
@@ -539,6 +581,9 @@ class BenchmarkCompleted:
 class BenchmarkFailed:
     job_id: str
     error_message: str
+    # The GPU device was lost: the worker exits after this message and the app must
+    # not hand it another job.
+    restart_required: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "benchmark_failed", "data": asdict(self)})
@@ -642,6 +687,52 @@ class VideoJobCompleted:
     frames_processed: int
     elapsed_seconds: float = 0.0
     inference_seconds: float = 0.0
+    # What the user should know about a video that finished, such as a route that was given up.
+    notes: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
+
+
+@dataclass
+class RegionRequest:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    x: int
+    y: int
+    width: int
+    height: int
+    target_width: int
+    target_height: int
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_request", "data": asdict(self)})
+
+
+@dataclass
+class RegionReady:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    png_base64: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_ready", "data": asdict(self)})
+
+
+@dataclass
+class RegionFailed:
+    image_path: str
+    slot: str
+    generation: int
+    target_id: str
+    request_id: int
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "region_failed", "data": asdict(self)})

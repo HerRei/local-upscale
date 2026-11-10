@@ -1,10 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import * as api from './lib/api';
+  import { modal } from './lib/modal';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
   export let anonymousUpdateCount = true;
-  const dispatch = createEventDispatcher<{ anonymouscount: boolean }>();
+  export let checkAtLaunch = true;
+  const dispatch = createEventDispatcher<{ anonymouscount: boolean; checkatlaunch: boolean }>();
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
@@ -36,6 +38,10 @@
       unsubscribe?.();
     };
   });
+  // Close is off while an update installs, and so is Escape.
+  function closePanel(): void {
+    if (status.stage !== 'installing') updateDialogOpen.set(false);
+  }
   async function run(action: () => Promise<unknown>) {
     if (working) return;
     working = true;
@@ -68,6 +74,7 @@
       aria-modal="true"
       aria-labelledby="update-title"
       tabindex="-1"
+      use:modal={closePanel}
     >
       <h2 id="update-title">Software Update</h2>
       {#if status.managed_by_store}
@@ -88,14 +95,32 @@
           disabled={inProgress || status.stage === 'downloaded'}
           ><option value="stable">Stable</option><option value="beta">Beta</option></select
         >
-        <label class="count"
-          ><input
-            type="checkbox"
-            checked={anonymousUpdateCount}
-            disabled={processing}
-            on:change={(event) => dispatch('anonymouscount', event.currentTarget.checked)}
-          /> Send an anonymous update-check count (version, platform, channel)</label
-        >
+        {#if status.configured}
+          <!-- Each box shows what LocalSR has saved: a click asks for the change, and the
+               box follows once it is saved, so a failed save never leaves it showing one. -->
+          <label class="count"
+            ><input
+              type="checkbox"
+              checked={checkAtLaunch}
+              on:change={(event) => {
+                const wanted = event.currentTarget.checked;
+                event.currentTarget.checked = checkAtLaunch;
+                dispatch('checkatlaunch', wanted);
+              }}
+            /> Check for updates when LocalSR starts</label
+          >
+          <label class="count"
+            ><input
+              type="checkbox"
+              checked={anonymousUpdateCount}
+              on:change={(event) => {
+                const wanted = event.currentTarget.checked;
+                event.currentTarget.checked = anonymousUpdateCount;
+                dispatch('anonymouscount', wanted);
+              }}
+            /> Send an anonymous update-check count (version, platform, channel)</label
+          >
+        {/if}
       {/if}
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
       <p class="detail">
@@ -141,7 +166,8 @@
           >
         {:else if status.stage === 'downloading'}<button
             class="button"
-            on:click={() => api.cancelUpdate()}>Cancel download</button
+            on:click={() => api.cancelUpdate().catch((e) => updateError.set(String(e)))}
+            >Cancel download</button
           >
         {:else if status.stage === 'downloaded'}<button
             class="button"

@@ -229,7 +229,9 @@ def test_run_video_job_upscales_every_frame(synthetic_video, tmp_path):
         cancel_event=threading.Event(),
         frame_started_cb=lambda idx, total: started.append((idx, total)),
         frame_completed_cb=lambda idx, total, b64: completed.append((idx, total, b64)),
-        progress_cb=lambda done, total, elapsed: progress_events.append((done, total, elapsed)),
+        progress_cb=lambda done, total, elapsed, _remaining: progress_events.append(
+            (done, total, elapsed)
+        ),
     )
 
     assert result.frames_processed == FRAME_COUNT
@@ -272,6 +274,39 @@ def test_frame_video_respects_smaller_requested_scale(synthetic_video, tmp_path)
     result = run_video_job(config, engine, threading.Event())
     probe = probe_video(result.output_path)
     assert (probe.width, probe.height) == (FRAME_WIDTH * 2, FRAME_HEIGHT * 2)
+
+
+def test_a_video_that_does_not_fit_is_refused_before_any_frame_and_leaves_nothing(
+    synthetic_video, tmp_path, monkeypatch
+):
+    import shutil
+
+    from localsr.core import disk_space
+
+    monkeypatch.delenv("LOCALSR_DISK_RESERVE_BYTES")
+
+    monkeypatch.setattr(
+        disk_space,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(100 * 10**9, 99 * 10**9, 10**9),
+    )
+    adapter = DummyAdapter(2)
+    folder = tmp_path / "out"
+    folder.mkdir()
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(folder / "clip.mp4"),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+    )
+    with pytest.raises(disk_space.DiskFullError, match="Not enough free disk space"):
+        run_video_job(config, InferenceEngine(adapter), threading.Event())
+    assert list(folder.iterdir()) == []
 
 
 def test_frame_video_rejects_scale_above_model_native_scale(synthetic_video, tmp_path):
@@ -653,3 +688,60 @@ def test_remux_failure_names_stage_and_cleans_every_temporary(tmp_path, monkeypa
         )
     assert not destination.exists()
     assert not list(tmp_path.glob(".failure.mp4.localsr-*.tmp"))
+
+
+def test_face_aware_video_runs_frames_without_a_face_on_the_general_model(
+    synthetic_video, tmp_path, monkeypatch
+):
+    """The face checkpoint is loaded last; a frame without faces must still use the other."""
+    from localsr.core import video_pipeline
+    from localsr.core.face_detection import FaceBox, FaceMask
+
+    class Constant(nn.Module):
+        def __init__(self, scale, color):
+            super().__init__()
+            self.scale, self.color = scale, color
+
+        def forward(self, x):
+            _, _, height, width = x.shape
+            return torch.full((1, 3, height * self.scale, width * self.scale), self.color)
+
+    class TwoModels(DummyAdapter):
+        def load(self, path, device, precision):
+            color = 0.9 if "face" in path else 0.1
+            return Constant(self.scale, color).to(device).to(precision), None
+
+    adapter = TwoModels(2)
+    engine = InferenceEngine(adapter)
+    faces_in = {0: True, 1: False, 2: True, 3: False, 4: False, 5: False}
+    calls = []
+
+    def detect(rgb, cancel_event=None):
+        index = len(calls)
+        calls.append(index)
+        full = np.ones(rgb.shape[:2], dtype=bool)
+        if faces_in[index]:
+            return FaceMask(mask=full, boxes=(FaceBox(0, 0, rgb.shape[1], rgb.shape[0], 1.0),))
+        return FaceMask(mask=~full, boxes=())
+
+    monkeypatch.setattr(video_pipeline, "detect_faces", detect)
+    output = tmp_path / "faces.mp4"
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="general.pth",
+        output_video_path=str(output),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        face_model_path="face.pth",
+        face_model_info=adapter.model_info,
+        face_fidelity=1.0,
+        face_detection_interval=0,
+    )
+    run_video_job(config=config, engine=engine, cancel_event=threading.Event())
+    means = [float(rgb.mean()) for _, rgb in decode_frames(str(output))]
+    expected = [True, False, True, False, False, False]
+    assert [mean > 128 for mean in means] == expected, means

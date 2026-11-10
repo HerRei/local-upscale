@@ -6,7 +6,7 @@ const catalog = structuredClone(rawCatalog) as unknown as CatalogManifest;
 for (const model of catalog.models) {
   model.installed = false;
 }
-for (const model of catalog.video_models) {
+for (const model of [...catalog.video_models, ...catalog.interpolation_models]) {
   model.total_size_bytes = model.files.reduce((total, file) => total + file.size_bytes, 0);
   model.installed = false;
 }
@@ -19,7 +19,7 @@ const editModels: EditModel[] = rawEditModels.map((model) => ({
 
 export function demoSnapshot(): AppSnapshot {
   return {
-    app_version: '0.3.0-beta',
+    app_version: '0.4.0-beta',
     protocol_version: 1,
     catalog,
     media: [],
@@ -30,7 +30,7 @@ export function demoSnapshot(): AppSnapshot {
       task: '',
       selected_model_id: '',
       selected_video_model_id: 'frame_by_frame',
-      preprocess_model_id: '',
+      fix_stages: [],
       custom_model_path: '',
       output_scale: 4,
       output_directory: '',
@@ -49,7 +49,10 @@ export function demoSnapshot(): AppSnapshot {
       external_ffmpeg_path: '',
       video_hdr_mode: 'tone_map',
       video_crf: 18,
+      video_interpolation: 'off',
+      video_interpolation_order: 'after_upscale',
       anonymous_update_count: true,
+      check_updates_at_launch: true,
       enable_face_model: false,
       face_fidelity: 70,
       enable_live_preview: true,
@@ -106,6 +109,7 @@ export function demoSnapshot(): AppSnapshot {
       live_system_ram_available: 0,
       live_memory_pressure_percent: 0,
       thermal_status: 'Not exposed by this backend',
+      hardware_note: '',
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '' },

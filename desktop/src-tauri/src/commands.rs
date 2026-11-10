@@ -11,20 +11,23 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::{
-    catalog, downloads,
+    catalog,
+    database::NewJob,
+    downloads,
     error::{AppError, AppResult},
     integrations,
     launch::LaunchIntent,
     native_menu,
+    output_names::ReservedOutputs,
+    results::{MediaResults, ResultUi},
     state::{emit_state_changed, lock, AppState},
     types::{
-        AppSnapshot, CatalogModel, Recipe, StartBatchInput, StartBenchmarkInput, UiSettings,
-        VideoComparisonSources,
+        AppSnapshot, CatalogModel, ComparisonPair, ComparisonSlot, Recipe, StartBatchInput,
+        StartBenchmarkInput, UiSettings, VideoComparisonSources,
     },
     worker,
 };
 
-// Keep in step with src/localsr/core/image_formats.py.
 const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "gif", "avif", "jp2", "j2k",
     // Camera RAW, developed by LibRaw.
@@ -99,12 +102,7 @@ pub fn start_edit(
             "The selected editing GPU is unavailable.".into(),
         ));
     }
-    let runtime = fs::canonicalize(&input.runtime_path)?;
-    if !runtime.is_file() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
-    }
+    let runtime = edit_runtime(&state, &input.runtime_path)?;
     let media = lock(&state.database)?
         .get_media(&input.media_id)?
         .ok_or_else(|| AppError::Validation("Choose an image to edit.".into()))?;
@@ -134,6 +132,33 @@ pub fn start_edit(
     Ok(())
 }
 
+/// The editing program to run: the one the host found at start-up or one the user
+/// picked in the host's own file dialog. The web view may repeat such a path but
+/// cannot name another.
+fn edit_runtime(state: &AppState, requested: &str) -> AppResult<PathBuf> {
+    let missing = || AppError::Validation("Choose the native editing runtime.".into());
+    let found = lock(&state.edit_runtime)?.clone();
+    let found = if found.is_empty() {
+        None
+    } else {
+        fs::canonicalize(found).ok().filter(|path| path.is_file())
+    };
+    if requested.is_empty() {
+        return found.ok_or_else(missing);
+    }
+    let requested_real = fs::canonicalize(requested)
+        .ok()
+        .filter(|path| path.is_file());
+    match requested_real {
+        Some(real) if found.as_ref() == Some(&real) || state.edit_programs.check(requested).is_ok() => {
+            Ok(real)
+        }
+        _ => Err(AppError::Validation(
+            "Only an editing runtime LocalSR found itself or that you chose in its file dialog can be used.".into(),
+        )),
+    }
+}
+
 #[tauri::command]
 pub fn bootstrap(state: State<'_, Arc<AppState>>) -> AppResult<AppSnapshot> {
     state.snapshot()
@@ -156,8 +181,13 @@ pub fn scan_media_folder(path: String) -> AppResult<Vec<String>> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
+        // A name that is not valid text cannot be sent to the window and back: its
+        // lossy copy would name another file or none.
+        let Some(text) = path.to_str() else {
+            continue;
+        };
         if path.is_file() && media_kind(&path).is_some() {
-            paths.push(path.to_string_lossy().into_owned());
+            paths.push(text.to_owned());
             if paths.len() >= MAX_MEDIA_ITEMS {
                 break;
             }
@@ -213,8 +243,54 @@ pub fn add_media(
     Ok(())
 }
 
+/// Adds a finished result as a new input and selects it. The result is named the way Reveal
+/// and Open name it (a recorded, completed output that still exists and is no link), so the
+/// window never passes a path of its own choosing. A file already in the list is only selected.
+/// Returns the input's id and, when it is new, the path the engine has to probe.
+fn add_result_as_input(state: &AppState, requested: &str) -> AppResult<(String, Option<String>)> {
+    let authorized = authorized_result(state, requested)?;
+    let kind = media_kind(&authorized)
+        .ok_or_else(|| AppError::Validation("this file type cannot be used as an input".into()))?;
+    let encoded = authorized.to_string_lossy().into_owned();
+    let database = lock(&state.database)?;
+    let (id, to_probe) = match database.get_media_by_path(&encoded)? {
+        Some(existing) => (existing.id, None),
+        None => {
+            let id = Uuid::new_v4().to_string();
+            let name = authorized
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Media")
+                .to_owned();
+            database.insert_media(&id, &encoded, &name, kind)?;
+            (id, Some(encoded))
+        }
+    };
+    database.select_media(&id)?;
+    Ok((id, to_probe))
+}
+
+#[tauri::command]
+pub fn use_result_as_input(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    path: String,
+) -> AppResult<String> {
+    native_menu::set_comparison_labels(&app, false);
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
+    let (id, to_probe) = add_result_as_input(&state, &path)?;
+    if let Some(encoded) = to_probe {
+        let _ = worker::send(&state, &worker::media_probe_request(&state, &encoded));
+    }
+    emit_state_changed(&app);
+    Ok(id)
+}
+
 #[tauri::command]
 pub fn select_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
+    native_menu::set_comparison_labels(&app, false);
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
@@ -228,8 +304,20 @@ pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
-    ensure_queue_idle(&state)?;
-    lock(&state.database)?.remove_media(&id)?;
+    // The scheduler lock keeps the dispatcher from sending this picture's job meanwhile. The
+    // batch the engine already holds is not removed from under it.
+    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
+    lock(&state.database)?.remove_media_guarded(&id, &engine_jobs)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+/// Clear in the Outputs list: every result leaves the list, no file is touched.
+#[tauri::command]
+pub fn clear_results(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
+    lock(&state.database)?.hide_all_results(&engine_jobs)?;
     emit_state_changed(&app);
     Ok(())
 }
@@ -257,8 +345,103 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
         ));
     }
     validate_settings(&settings)?;
-    *lock(&state.settings)? = settings;
-    state.persist_settings()
+    state.programs.check(&settings.external_ffmpeg_path)?;
+    replace_settings(&state, settings)
+}
+
+/// Make `settings` the current ones and write them. When the write fails the
+/// previous settings stay, so the window never uses what the file does not hold.
+fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()> {
+    let previous = {
+        // Read and replace under one guard, so a switch saved in between is kept.
+        let mut current = lock(&state.settings)?;
+        keep_update_switches(&current, &mut settings);
+        std::mem::replace(&mut *current, settings)
+    };
+    persist_or_restore(state, |state| {
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
+/// Write the settings and recipes; on a failed write run `restore` to put the
+/// previous values back.
+fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppResult<()> {
+    let written = state.persist_settings();
+    if written.is_err() {
+        restore(state);
+    }
+    written
+}
+
+/// The update switches change only through set_update_switch. A full settings save
+/// carries the window's copy, which an older refresh may have left behind; it must
+/// never turn an opt-out back on.
+fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
+    incoming.check_updates_at_launch = current.check_updates_at_launch;
+    incoming.anonymous_update_count = current.anonymous_update_count;
+}
+
+/// Set one update switch. It may change while jobs run: it does not touch them.
+#[tauri::command]
+pub fn set_update_switch(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    name: String,
+    value: bool,
+) -> AppResult<()> {
+    let result = apply_update_switch(&state, &name, |_| value);
+    refresh_update_switches(&app);
+    result
+}
+
+/// The menu's own click: flip the saved value, whatever the window shows.
+pub fn toggle_update_switch(state: &AppState, app: &AppHandle, name: &str) {
+    if let Err(error) = apply_update_switch(state, name, |current| !current) {
+        eprintln!("LocalSR: could not save {name}: {error}");
+    }
+    refresh_update_switches(app);
+}
+
+/// Change one switch and write it, as one step: other writers wait, so two quick clicks
+/// are two flips and no older copy of the settings lands after this one.
+fn apply_update_switch(
+    state: &AppState,
+    name: &str,
+    change: impl FnOnce(bool) -> bool,
+) -> AppResult<()> {
+    let _io = lock(&state.settings_io)?;
+    let previous = {
+        let mut settings = lock(&state.settings)?;
+        let field = match name {
+            "check_updates_at_launch" => &mut settings.check_updates_at_launch,
+            "anonymous_update_count" => &mut settings.anonymous_update_count,
+            _ => {
+                return Err(AppError::Validation(format!(
+                    "unknown update switch: {name}"
+                )))
+            }
+        };
+        let previous = *field;
+        *field = change(previous);
+        previous
+    };
+    if let Err(error) = state.write_settings() {
+        // Shown and used must match what is on disk.
+        if let Ok(mut settings) = lock(&state.settings) {
+            match name {
+                "check_updates_at_launch" => settings.check_updates_at_launch = previous,
+                _ => settings.anonymous_update_count = previous,
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// The menu sets its own check mark when clicked; it and the window show what is saved.
+fn refresh_update_switches(app: &AppHandle) {
+    native_menu::reconcile(app);
+    emit_state_changed(app);
 }
 
 #[tauri::command]
@@ -276,18 +459,10 @@ pub fn save_recipe(
             "recipe name or task is invalid".into(),
         ));
     }
-    if (!recipe.output_format.is_empty()
-        && !matches!(
-            recipe.output_format.as_str(),
-            "png" | "jpg" | "tif" | "webp"
-        ))
+    if (!recipe.output_format.is_empty() && !output_format_is_valid(&recipe.output_format))
         || (!recipe.video_container.is_empty()
-            && !matches!(recipe.video_container.as_str(), "mp4" | "mkv"))
-        || (!recipe.video_codec.is_empty()
-            && !matches!(
-                recipe.video_codec.as_str(),
-                "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
-            ))
+            && !video_container_is_valid(&recipe.video_container))
+        || (!recipe.video_codec.is_empty() && !video_codec_is_valid(&recipe.video_codec))
         || recipe
             .jpeg_quality
             .is_some_and(|value| !(1..=100).contains(&value))
@@ -295,24 +470,24 @@ pub fn save_recipe(
         || recipe
             .deflicker_window
             .is_some_and(|value| !(1..=9).contains(&value))
+        || (!recipe.video_interpolation.is_empty()
+            && !interpolation_choice_is_valid(
+                &recipe.video_interpolation,
+                if recipe.video_interpolation_order.is_empty() {
+                    "after_upscale"
+                } else {
+                    &recipe.video_interpolation_order
+                },
+            ))
     {
         return Err(AppError::Validation(
             "recipe contains unsupported output settings".into(),
         ));
     }
     validate_recipe_stages(&recipe)?;
-    let mut recipes = lock(&state.recipes)?;
-    if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
-        *existing = recipe;
-    } else {
-        if recipes.len() >= 100 {
-            return Err(AppError::Validation("recipe limit reached".into()));
-        }
-        recipes.push(recipe);
-    }
-    drop(recipes);
-    state.persist_settings()?;
-    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
+    store_recipe(&state, recipe)?;
+    let switches = native_menu::switches(&*lock(&state.settings)?);
+    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -321,13 +496,45 @@ pub fn save_recipe(
     Ok(())
 }
 
+/// Add or replace a recipe and write it; a failed write leaves the recipes as they were.
+fn store_recipe(state: &AppState, recipe: Recipe) -> AppResult<()> {
+    let previous = {
+        let mut recipes = lock(&state.recipes)?;
+        let previous = recipes.clone();
+        if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
+            *existing = recipe;
+        } else {
+            if recipes.len() >= 100 {
+                return Err(AppError::Validation("recipe limit reached".into()));
+            }
+            recipes.push(recipe);
+        }
+        previous
+    };
+    persist_or_restore(state, |state| {
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
+/// Remove a recipe and write the change; a failed write leaves the recipes as they were.
+fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
+    let previous = {
+        let mut recipes = lock(&state.recipes)?;
+        let previous = recipes.clone();
+        recipes.retain(|recipe| recipe.id != id);
+        previous
+    };
+    persist_or_restore(state, |state| {
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
 fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
     if recipe.stages.is_empty() {
-        // Recipes saved by pre-v0.0.11 previews are deliberately accepted and
-        // reconstructed from their legacy top-level fields by the frontend.
+        // The frontend reconstructs recipes without stages from their top-level fields.
         return Ok(());
     }
-    if recipe.stages.len() > 3
+    if recipe.stages.len() > 5
         || recipe.stages.iter().any(|stage| {
             stage.model_id.trim().is_empty()
                 || !matches!(
@@ -344,6 +551,19 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         ));
     }
 
+    // Recipes saved before several fixes name no fix; newer ones name it on each restoration.
+    let mut fixes = HashSet::new();
+    if recipe.stages.iter().any(|stage| {
+        stage.fix.as_deref().is_some_and(|fix| {
+            !matches!(fix, "blur" | "jpeg" | "noise")
+                || !matches!(stage.kind.as_str(), "deblock" | "restore")
+                || !fixes.insert(fix)
+        })
+    }) {
+        return Err(AppError::Validation(
+            "recipe fix kinds must be known, unique and on restoration stages".into(),
+        ));
+    }
     let kinds: Vec<&str> = recipe
         .stages
         .iter()
@@ -354,15 +574,24 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
             let upscale = kinds.iter().position(|kind| *kind == "upscale");
             upscale.is_some_and(|index| {
                 kinds.iter().filter(|kind| **kind == "upscale").count() == 1
-                    && index <= 1
-                    && (index == 0 || matches!(kinds[0], "deblock" | "restore"))
+                    && index <= 3
+                    && kinds[..index]
+                        .iter()
+                        .all(|kind| matches!(*kind, "deblock" | "restore"))
                     && kinds[index + 1..]
                         .iter()
                         .all(|kind| *kind == "face_restore")
                     && kinds[index + 1..].len() <= 1
             })
         }
-        "denoise" => kinds.as_slice() == ["restore"],
+        // Up to three fixes, then the Restore model itself, which is always a restore stage.
+        "denoise" => kinds.split_last().is_some_and(|(last, before)| {
+            *last == "restore"
+                && before.len() <= 3
+                && before
+                    .iter()
+                    .all(|kind| matches!(*kind, "restore" | "deblock"))
+        }),
         "video" => {
             matches!(kinds.as_slice(), ["video"] | ["video", "face_restore"])
         }
@@ -381,9 +610,9 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
-    lock(&state.recipes)?.retain(|recipe| recipe.id != id);
-    state.persist_settings()?;
-    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
+    remove_recipe(&state, &id)?;
+    let switches = native_menu::switches(&*lock(&state.settings)?);
+    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -413,7 +642,20 @@ pub fn start_jobs(
     {
         return Err(AppError::Validation("An update is being installed".into()));
     }
-    validate_start_input(&input, external_codecs_available(&state))?;
+    let mut input = input;
+    input.device = resolve_device(&state, &input.device)?;
+    validate_start(&input, &state)?;
+    validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
+    if input.task == "video"
+        && input.video_interpolation != "off"
+        && !lock(&state.engine)?
+            .as_ref()
+            .is_some_and(|engine| engine.features.iter().any(|f| f == "video_interpolation"))
+    {
+        return Err(AppError::Validation(
+            "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
+        ));
+    }
 
     // Do not hash the complete model library on the UI command path. A
     // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
@@ -426,6 +668,7 @@ pub fn start_jobs(
     // never in this latency-sensitive command.
 
     let output_directory = prepare_output_directory(&state, &input.output_directory)?;
+    check_output_room(&output_directory, &input, platform_path_limit())?;
     let selection = resolve_model_selection(&state, &input)?;
     let media = {
         let database = lock(&state.database)?;
@@ -464,8 +707,6 @@ pub fn start_jobs(
         ));
     }
 
-    let mut reserved = HashSet::new();
-    let mut jobs = Vec::with_capacity(media.len());
     for item in &media {
         if item.probe_status == "failed" {
             return Err(AppError::Validation(format!(
@@ -491,25 +732,42 @@ pub fn start_jobs(
                 "the chosen task does not match one or more media items".into(),
             ));
         }
-        let job_id = Uuid::new_v4().to_string();
-        let output = unique_output_path(&output_directory, &item.path, &input, &mut reserved);
-        let message = build_job_message(
-            &job_id,
-            item,
-            &output,
-            &state.paths.work_root,
-            &input,
-            &selection,
-        )?;
-        jobs.push((job_id, item.id.clone(), serde_json::to_string(&message)?));
     }
-
-    for (id, media_id, request) in jobs {
-        lock(&state.database)?.insert_job(&id, &media_id, &request)?;
-    }
+    refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
+    let ui_json = ui_json(input.ui.as_ref())?;
+    let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
+    lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
+        media
+            .iter()
+            .map(|item| -> AppResult<NewJob> {
+                let job_id = Uuid::new_v4().to_string();
+                let output = unique_output_path(&output_directory, &item.path, &input, reserved);
+                let message = build_job_message(
+                    &job_id,
+                    item,
+                    &output,
+                    &state.paths.work_root,
+                    &input,
+                    &selection,
+                )?;
+                Ok(NewJob {
+                    id: job_id,
+                    media_id: item.id.clone(),
+                    request_json: serde_json::to_string(&message)?,
+                    ui_json: ui_json.clone(),
+                })
+            })
+            .collect()
+    })?;
     worker::dispatch_next_locked(&state, &app)?;
     emit_state_changed(&app);
     Ok(())
+}
+
+/// "Try again" after the host gave up restarting the inference engine.
+#[tauri::command]
+pub fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    worker::retry_engine(&state, &app)
 }
 
 #[tauri::command]
@@ -518,9 +776,13 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
     let mut cancellation = lock(&state.worker.cancellation)?;
     lock(&state.database)?.cancel_queued_jobs()?;
     let active = lock(&state.runtime)?.active_job_id.clone();
-    if !active.is_empty() {
+    // A second request while the first is still being carried out changes nothing.
+    if !active.is_empty() && !cancellation.is_cancelling(&active) {
         cancellation.request(&active, std::time::Instant::now());
-        lock(&state.database)?.set_job_status(&active, "cancelling")?;
+        // Photos of a batch that never started were cancelled with the queue above.
+        for id in &cancellation.job_ids {
+            lock(&state.database)?.mark_cancelling(id)?;
+        }
         {
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = "Cancelling".into();
@@ -532,6 +794,463 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
             &state,
             &json!({"type": "cancel_request", "data": {"job_id": active}}),
         )?;
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+/// Tell the user before anything is queued when even the first job cannot be written to
+/// the output folder's volume. The queue checks each job again before it is sent.
+fn refuse_when_disk_is_short(
+    input: &StartBatchInput,
+    selection: &ModelSelection,
+    first: &crate::types::MediaItem,
+    output_directory: &Path,
+) -> AppResult<()> {
+    let ModelSelection::Image { native_scale, .. } = selection else {
+        return Ok(());
+    };
+    let native = u64::from(*native_scale);
+    let saved = if input.task == "denoise" {
+        1
+    } else {
+        u64::from(input.output_scale).min(native).max(1)
+    };
+    let (width, height) = (u64::from(first.width), u64::from(first.height));
+    let need = if input.task == "video" {
+        crate::disk_room::video_bytes(
+            width.saturating_mul(saved),
+            height.saturating_mul(saved),
+            first.frame_count,
+            false,
+        )
+    } else {
+        crate::disk_room::image_need(width, height, native, saved, &input.output_format, false)
+            .total()
+    };
+    match crate::disk_room::check(output_directory, need) {
+        Some(reason) => Err(AppError::Validation(reason)),
+        None => Ok(()),
+    }
+}
+
+/// "Cancel runs for this image": its queued jobs are cancelled and its active
+/// job is signalled. Other media keep their queued work, and completed results
+/// stay. The queue-wide action remains `cancel_jobs` ("Cancel queue").
+#[tauri::command]
+pub fn cancel_jobs_for_media(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let mut cancellation = lock(&state.worker.cancellation)?;
+    let active = lock(&state.database)?.cancel_jobs_for_media(&media_id)?;
+    if let Some(active) = active {
+        cancellation.request(&active, std::time::Instant::now());
+        {
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.active_job_id == active {
+                runtime.status_title = "Cancelling".into();
+                runtime.status_detail =
+                    "Stopping this image's run at the next model step. Other images stay queued."
+                        .into();
+            }
+        }
+        worker::send(
+            &state,
+            &json!({"type": "cancel_request", "data": {"job_id": active}}),
+        )?;
+    }
+    drop(cancellation);
+    emit_state_changed(&app);
+    Ok(())
+}
+
+/// "Try others…": the same image once per model, as ordinary jobs admitted
+/// together. Returns their ids in queue order.
+#[tauri::command]
+pub fn start_model_trials(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+    model_ids: Vec<String>,
+    base_settings: StartBatchInput,
+) -> AppResult<Vec<String>> {
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
+    let ids = admit_model_trials(&state, &media_id, &model_ids, &base_settings)?;
+    worker::dispatch_next_locked(&state, &app)?;
+    emit_state_changed(&app);
+    Ok(ids)
+}
+
+struct TrialCandidate {
+    input: StartBatchInput,
+    selection: ModelSelection,
+}
+
+/// Problems a 1× checkpoint fixes; mirrors `fixesOf` in desktop/src/lib/plan.ts.
+fn model_fixes(model: &CatalogModel) -> Vec<String> {
+    if !model.fixes.is_empty() {
+        return model.fixes.clone();
+    }
+    let has = |purpose: &str| model.purposes.iter().any(|item| item == purpose);
+    if model.native_scale != 1 || has("face") {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    if has("denoise") {
+        found.push("noise".to_owned());
+    }
+    if has("deblur") {
+        found.push("blur".to_owned());
+    }
+    if has("restoration") && found.is_empty() {
+        found.push("jpeg".to_owned());
+    }
+    found
+}
+
+/// Validate every candidate against the settings the plan card shows. A model
+/// that cannot keep the scale, the fix recipe or Faces is refused; nothing is
+/// adjusted to make it fit, except that a model gets at least the tile overlap
+/// it needs (as choosing it in the library does).
+fn trial_candidates(
+    state: &AppState,
+    media_id: &str,
+    model_ids: &[String],
+    base: &StartBatchInput,
+) -> AppResult<Vec<TrialCandidate>> {
+    if model_ids.len() < 2
+        || model_ids.len() > 4
+        || model_ids.iter().collect::<HashSet<_>>().len() != model_ids.len()
+    {
+        return Err(AppError::Validation(
+            "Pick 2 to 4 different installed models.".into(),
+        ));
+    }
+    if !matches!(base.task.as_str(), "upscale" | "denoise")
+        || base.batch_mode
+        || base.media_ids != [media_id]
+    {
+        return Err(AppError::Validation(
+            "Try others needs one selected image in Upscale or Restore.".into(),
+        ));
+    }
+    let mut resolved = base.clone();
+    resolved.device = resolve_device(state, &base.device)?;
+    let base = &resolved;
+    validate_start(base, state)?;
+    validate_fix_engine(base, lock(&state.engine)?.as_ref())?;
+    // The Restore model is the fix: each candidate must fix the active problem.
+    // With several fixes it is the last one: the fixes before it keep their models.
+    let active_fix = base.fix_stages.last().map(|stage| stage.fix.clone());
+    let mut candidates = Vec::with_capacity(model_ids.len());
+    for model_id in model_ids {
+        let (halo, fixes, name) = {
+            let catalog = lock(&state.catalog)?;
+            let model = catalog
+                .models
+                .iter()
+                .find(|model| model.model_id == *model_id)
+                .ok_or_else(|| {
+                    AppError::Validation("Try others uses installed catalog models.".into())
+                })?;
+            let name = crate::results::catalog_label(&catalog, model_id)
+                .unwrap_or_else(|| model.name.clone());
+            if !model.installed {
+                return Err(AppError::Validation(format!("{name} is not installed.")));
+            }
+            (model.recommended_halo, model_fixes(model), name)
+        };
+        if base.task == "denoise" && active_fix.as_ref().is_some_and(|fix| !fixes.contains(fix)) {
+            return Err(AppError::Validation(format!(
+                "{name} does not fix the selected problem."
+            )));
+        }
+        let mut input = base.clone();
+        input.model_id = model_id.clone();
+        if base.task == "denoise" {
+            if let Some(last) = input.fix_stages.last_mut() {
+                last.model_id = model_id.clone();
+            }
+        }
+        input.name_by_model = true;
+        input.halo = base.halo.max(halo);
+        input.allow_unsafe_pickle_model = false;
+        if *model_id != base.model_id {
+            // Another model under the same settings is a custom choice, not
+            // the Quick, Best or recipe pick that was showing.
+            if let Some(ui) = &mut input.ui {
+                ui.quality = "custom".into();
+                ui.recipe_name.clear();
+            }
+        }
+        // Scale, the fix stage and the Faces companion are checked here, as
+        // for any job; the candidate is refused rather than changed.
+        let selection = resolve_model_selection(state, &input)
+            .map_err(|error| AppError::Validation(format!("{name}: {error}")))?;
+        if let ModelSelection::Image {
+            path,
+            preprocess,
+            face_path,
+            ..
+        } = &selection
+        {
+            let missing = std::iter::once(path.as_str())
+                .chain(preprocess.iter().map(|stage| stage.path.as_str()))
+                .chain(face_path.iter().map(String::as_str))
+                .any(|path| !Path::new(path).is_file());
+            if missing {
+                return Err(AppError::Validation(format!(
+                    "{name}: a checkpoint is no longer installed."
+                )));
+            }
+        }
+        candidates.push(TrialCandidate { input, selection });
+    }
+    Ok(candidates)
+}
+
+/// Admit 2-4 candidates for one idle image under the scheduler lock (held by
+/// the caller): all of them, in the order given, or none.
+fn admit_model_trials(
+    state: &AppState,
+    media_id: &str,
+    model_ids: &[String],
+    base: &StartBatchInput,
+) -> AppResult<Vec<String>> {
+    if model_ids.len() < 2 {
+        return Err(AppError::Validation(
+            "Pick 2 to 4 different installed models.".into(),
+        ));
+    }
+    let candidates = trial_candidates(state, media_id, model_ids, base)?;
+    let directory = prepare_output_directory(state, &base.output_directory)?;
+    check_output_room(&directory, base, platform_path_limit())?;
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(media_id)?
+        .ok_or_else(|| AppError::Validation("The selected image is no longer queued.".into()))?;
+    if media.kind != "image" || media.probe_status != "ready" || !Path::new(&media.path).is_file() {
+        return Err(AppError::Validation(
+            "Choose an available image with a ready preview.".into(),
+        ));
+    }
+    refuse_when_disk_is_short(
+        &candidates[0].input,
+        &candidates[0].selection,
+        &media,
+        &directory,
+    )?;
+    let mut ids = Vec::with_capacity(candidates.len());
+    database.admit_jobs(&[media_id], |reserved| {
+        candidates
+            .iter()
+            .map(|candidate| -> AppResult<NewJob> {
+                let id = Uuid::new_v4().to_string();
+                let output =
+                    unique_output_path(&directory, &media.path, &candidate.input, reserved);
+                let message = build_job_message(
+                    &id,
+                    &media,
+                    &output,
+                    &state.paths.work_root,
+                    &candidate.input,
+                    &candidate.selection,
+                )?;
+                ids.push(id.clone());
+                Ok(NewJob {
+                    id,
+                    media_id: media_id.to_owned(),
+                    request_json: serde_json::to_string(&message)?,
+                    ui_json: ui_json(candidate.input.ui.as_ref())?,
+                })
+            })
+            .collect()
+    })?;
+    Ok(ids)
+}
+
+fn ui_json(ui: Option<&ResultUi>) -> AppResult<String> {
+    Ok(ui
+        .map(serde_json::to_string)
+        .transpose()?
+        .unwrap_or_default())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct TrialEstimate {
+    model_id: String,
+    model_label: String,
+    /// Measured run time of the same work on this device; None when unknown.
+    seconds: Option<f64>,
+}
+
+/// Run times for "Try others…" before anything is queued, from earlier jobs
+/// with the same work profile.
+#[tauri::command]
+pub fn estimate_model_trials(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+    model_ids: Vec<String>,
+    base_settings: StartBatchInput,
+) -> AppResult<Vec<TrialEstimate>> {
+    let candidates = trial_candidates(&state, &media_id, &model_ids, &base_settings)?;
+    let labels: Vec<String> = {
+        let catalog = lock(&state.catalog)?;
+        candidates
+            .iter()
+            .map(|candidate| {
+                crate::results::catalog_label(&catalog, &candidate.input.model_id)
+                    .unwrap_or_else(|| candidate.input.model_id.clone())
+            })
+            .collect()
+    };
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(&media_id)?
+        .ok_or_else(|| AppError::Validation("The selected image is no longer queued.".into()))?;
+    candidates
+        .iter()
+        .zip(labels)
+        .map(|(candidate, model_label)| -> AppResult<TrialEstimate> {
+            // The work profile ignores paths and ids; these placeholders never run.
+            let message = build_job_message(
+                "estimate",
+                &media,
+                Path::new(""),
+                &state.paths.work_root,
+                &candidate.input,
+                &candidate.selection,
+            )?;
+            Ok(TrialEstimate {
+                model_label,
+                model_id: candidate.input.model_id.clone(),
+                seconds: database.estimate_request_seconds(&message.to_string(), &media)?,
+            })
+        })
+        .collect()
+}
+
+/// The finished attempts of one media for the result choosers, with catalog
+/// names. `before` is the `next_before` of the previous page.
+#[tauri::command]
+pub fn list_media_results(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+    limit: Option<u32>,
+    before: Option<String>,
+) -> AppResult<MediaResults> {
+    let mut history = lock(&state.database)?.list_media_results(
+        &media_id,
+        limit.unwrap_or(50),
+        before.as_deref(),
+    )?;
+    let catalog = lock(&state.catalog)?;
+    for result in &mut history.results {
+        crate::results::label_summary(&catalog, result);
+    }
+    Ok(history)
+}
+
+/// All media histories in one IPC call for the Outputs pane.
+#[tauri::command]
+pub fn list_all_media_results(state: State<'_, Arc<AppState>>) -> AppResult<Vec<MediaResults>> {
+    let mut histories = lock(&state.database)?.list_all_media_results()?;
+    let catalog = lock(&state.catalog)?;
+    for history in &mut histories {
+        for result in &mut history.results {
+            crate::results::label_summary(&catalog, result);
+        }
+    }
+    Ok(histories)
+}
+
+/// Replace the Compare tab's picks in slot order, using only host-owned files.
+#[tauri::command]
+pub fn request_compare(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    picks: Vec<crate::compare::ComparePick>,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::plan(&database, &mut runtime.compare, &picks)?
+    };
+    let shortfall = lock(&state.engine)?
+        .as_ref()
+        .and_then(|engine| crate::compare::engine_shortfall(&engine.features));
+    for request in requests {
+        let sent = match shortfall {
+            Some(reason) => Err(AppError::Worker(reason.into())),
+            None => worker::send(&state, &request),
+        };
+        if let Err(error) = sent {
+            let mut failure = request["data"].clone();
+            failure["error_message"] = json!(error.to_string());
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply(&database, &mut runtime.compare, &failure, true)?;
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn request_compare_regions(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    generation: u64,
+    regions: Vec<Option<crate::compare::Region>>,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    if !lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "compare_regions")
+    }) {
+        return Ok(());
+    }
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        if runtime.compare.generation != generation {
+            return Ok(());
+        }
+        crate::compare::plan_regions(&database, &mut runtime.compare, &regions)?
+    };
+    for request in requests {
+        if worker::send(&state, &request).is_err() {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            crate::compare::apply_region(&database, &mut runtime.compare, &request["data"], true)?;
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_compare_regions(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::plan_regions(&database, &mut runtime.compare, &[])?;
+    }
+    if lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "compare_regions")
+    }) {
+        let _ = worker::send(&state, &json!({"type":"region_clear", "data":{}}));
     }
     emit_state_changed(&app);
     Ok(())
@@ -599,14 +1318,14 @@ pub fn start_benchmark(
                 "wait for the current work to finish before benchmarking".into(),
             ));
         }
-        runtime.active_job_id = job_id.clone();
+        runtime.begin_active_job(job_id.clone());
         runtime.status_title = "Benchmark preparing".into();
         runtime.status_detail = "Loading the fixed LocalSR benchmark workload.".into();
         runtime.progress = 0.0;
     }
     if let Err(error) = worker::send(&state, &message) {
         lock(&state.worker.cancellation)?.finish()?;
-        lock(&state.runtime)?.active_job_id.clear();
+        lock(&state.runtime)?.take_active_job();
         return Err(error);
     }
     emit_state_changed(&app);
@@ -641,14 +1360,9 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
             "the chosen benchmark file already exists; choose a new name".into(),
         ));
     }
-    let file_name = destination
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| AppError::Validation("benchmark destination is invalid".into()))?;
-    let temporary = parent.join(format!(
-        ".{file_name}.localsr-benchmark-{}.tmp",
-        Uuid::new_v4()
-    ));
+    // A short fixed name: the destination's own name may already be at the file
+    // system's limit.
+    let temporary = parent.join(format!(".localsr-benchmark-{}.tmp", Uuid::new_v4()));
     let export_result = (|| -> AppResult<()> {
         let mut output = fs::OpenOptions::new()
             .write(true)
@@ -657,19 +1371,7 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
         output.write_all(bytes)?;
         output.sync_all()?;
         drop(output);
-
-        // hard_link() creates the destination without replacing an existing
-        // file, then unlinking our same-directory temporary makes the publish
-        // atomic and no-clobber on supported desktop filesystems.
-        fs::hard_link(&temporary, destination).map_err(|error| {
-            if destination.exists() {
-                AppError::Validation(
-                    "the chosen benchmark file already exists; choose a new name".into(),
-                )
-            } else {
-                AppError::Io(error)
-            }
-        })?;
+        publish_without_replacing(&temporary, destination, |from, to| fs::hard_link(from, to))?;
         fs::remove_file(&temporary)?;
         Ok(())
     })();
@@ -679,11 +1381,164 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
     export_result
 }
 
+/// Give `temporary` the name `destination` without replacing a file that is there.
+/// A hard link does it atomically; a volume that has none (FAT, exFAT, a network
+/// share) gets a copy into a file only this call created.
+fn publish_without_replacing(
+    temporary: &Path,
+    destination: &Path,
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> AppResult<()> {
+    let Err(error) = link(temporary, destination) else {
+        return Ok(());
+    };
+    if destination.exists() {
+        return Err(AppError::Validation(
+            "the chosen benchmark file already exists; choose a new name".into(),
+        ));
+    }
+    let copied = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .and_then(|mut output| {
+            std::io::copy(&mut fs::File::open(temporary)?, &mut output)?;
+            output.sync_all()
+        });
+    if copied.is_err() {
+        let _ = fs::remove_file(destination);
+        return Err(AppError::Io(error));
+    }
+    Ok(())
+}
+
+/// Decode saved results for the preview. With `showing` (and `against`, which
+/// defaults to the Original), each target is "original" or the id of a
+/// completed job of this media whose file exists; the host checks that before
+/// anything is decoded, and the two previews arrive in the pair slots. The
+/// Original side is drawn from the probe thumbnail and is never decoded here.
+/// Without targets, the newest completed result is decoded on its own: the
+/// fallback the preview uses when the result history cannot be read.
 #[tauri::command]
 pub fn request_image_comparison(
     state: State<'_, Arc<AppState>>,
+    app: AppHandle,
     media_id: String,
+    showing: Option<String>,
+    against: Option<String>,
 ) -> AppResult<()> {
+    let Some(showing) = showing else {
+        native_menu::set_comparison_labels(&app, false);
+        return request_latest_comparison(&state, media_id);
+    };
+    let against = against.unwrap_or_else(|| "original".into());
+    let (media, showing_path, against_path) = {
+        let database = lock(&state.database)?;
+        let media = database
+            .get_media(&media_id)?
+            .ok_or_else(|| AppError::Validation("the selected image is no longer queued".into()))?;
+        if media.kind != "image" {
+            return Err(AppError::Validation(
+                "select an image for this comparison".into(),
+            ));
+        }
+        let resolve = |target: &str| -> AppResult<String> {
+            if target == "original" {
+                Ok(String::new())
+            } else {
+                database.media_result_output(&media_id, target)
+            }
+        };
+        let showing_path = resolve(&showing)?;
+        let against_path = resolve(&against)?;
+        (media, showing_path, against_path)
+    };
+    native_menu::set_comparison_labels(&app, against != "original");
+    let requests = plan_pair_requests(
+        &mut *lock(&state.runtime)?,
+        &media,
+        (&showing, &showing_path),
+        (&against, &against_path),
+    );
+    for request in requests {
+        worker::send(&state, &request)?;
+    }
+    Ok(())
+}
+
+/// Record the requested pair and return the decodes it still needs. A side
+/// that already shows the same file keeps its preview, also on the other side;
+/// asking again for a fully decoded pair changes nothing. `(target, path)`:
+/// the path is empty for the Original.
+fn plan_pair_requests(
+    runtime: &mut crate::types::RuntimeStatus,
+    media: &crate::types::MediaItem,
+    showing: (&str, &str),
+    against: (&str, &str),
+) -> Vec<Value> {
+    let previous = &runtime.comparison_pair;
+    let current = |slot: &ComparisonSlot, (target, path): (&str, &str)| {
+        slot.target_id == target && slot.output_path == path
+    };
+    let settled =
+        |slot: &ComparisonSlot| slot.target_id == "original" || !slot.preview_data_url.is_empty();
+    // A side that is still loading or failed is asked for again, as after an
+    // engine restart.
+    if previous.media_id == media.id
+        && current(&previous.showing, showing)
+        && current(&previous.against, against)
+        && settled(&previous.showing)
+        && settled(&previous.against)
+    {
+        return Vec::new();
+    }
+    let generation = previous.generation + 1;
+    let side = |(target, path): (&str, &str)| -> ComparisonSlot {
+        if target == "original" {
+            return ComparisonSlot {
+                target_id: target.into(),
+                width: media.width,
+                height: media.height,
+                ..Default::default()
+            };
+        }
+        [&previous.showing, &previous.against]
+            .into_iter()
+            .filter(|_| previous.media_id == media.id)
+            .find(|slot| current(slot, (target, path)) && !slot.preview_data_url.is_empty())
+            .cloned()
+            .unwrap_or_else(|| ComparisonSlot {
+                target_id: target.into(),
+                output_path: path.into(),
+                ..Default::default()
+            })
+    };
+    let pair = ComparisonPair {
+        media_id: media.id.clone(),
+        generation,
+        showing: side(showing),
+        against: side(against),
+    };
+    let requests = [("showing", &pair.showing), ("against", &pair.against)]
+        .into_iter()
+        .filter(|(_, slot)| slot.target_id != "original" && slot.preview_data_url.is_empty())
+        .map(|(name, slot)| {
+            json!({"type": "preview_request", "data": {
+                "image_path": slot.output_path,
+                "max_dimension": worker::RESULT_PREVIEW_MAX_DIMENSION,
+                "comparison": true,
+                "slot": name,
+                "generation": generation,
+                "target_id": slot.target_id,
+            }})
+        })
+        .collect();
+    runtime.comparison_pair = pair;
+    requests
+}
+
+/// The newest completed result of an image, as one bounded comparison.
+fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()> {
     let output = {
         let database = lock(&state.database)?;
         let media = database
@@ -698,6 +1553,7 @@ pub fn request_image_comparison(
             .latest_completed_output_for_media(&media_id)?
             .ok_or_else(|| AppError::Validation("this image has no completed output".into()))?
     };
+    crate::results::ensure_not_linked(Path::new(&output))?;
     if !Path::new(&output).is_file() {
         return Err(AppError::Validation(
             "the completed image is no longer available".into(),
@@ -720,21 +1576,41 @@ pub fn request_image_comparison(
     // job. The worker response carries its path, so a late response from a
     // previously selected result cannot replace the current comparison.
     worker::send(
-        &state,
+        state,
         &json!({
-            "type": "preview_request", "data": {"image_path": output, "max_dimension": 2048, "comparison": true}
+            "type": "preview_request",
+            "data": {"image_path": output, "max_dimension": worker::RESULT_PREVIEW_MAX_DIMENSION, "comparison": true}
         }),
     )
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_video_comparison(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     media_id: String,
     request_id: String,
     force_compatible: bool,
+    result_id: Option<String>,
+    defer_conversion: Option<bool>,
+    compare_generation: Option<u64>,
+    compare_slot: Option<usize>,
 ) -> AppResult<VideoComparisonSources> {
+    let compare_path = match (compare_generation, compare_slot) {
+        (Some(generation), Some(index)) => {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            Some(crate::compare::video_path(
+                &database,
+                &mut runtime.compare,
+                generation,
+                index,
+            )?)
+        }
+        (None, None) => None,
+        _ => return Err(AppError::Validation("Invalid Compare slot".into())),
+    };
     let cancel = state.video_preview.begin(&request_id)?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
@@ -744,22 +1620,57 @@ pub async fn prepare_video_comparison(
             &media_id,
             &request_id,
             force_compatible,
+            result_id.as_deref(),
+            defer_conversion.unwrap_or(false),
             cancel,
+            compare_path,
         )
     })
     .await
     .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
 }
 
+/// A completed video result: the real path of a file the engine wrote, never what a
+/// link left in its place points to.
+fn canonical_result_video(path: PathBuf) -> AppResult<PathBuf> {
+    crate::results::ensure_not_linked(&path)?;
+    canonical_video(path)
+}
+
+/// The real path of a video file, or the message that it is gone (a deleted or moved
+/// file) instead of the system's own error text.
+fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
+    match fs::canonicalize(path) {
+        Ok(real) if real.is_file() => Ok(real),
+        _ => Err(AppError::Validation(
+            "the original or enhanced video is no longer available".into(),
+        )),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn video_comparison_sources(
     state: &AppState,
     app: &AppHandle,
     media_id: &str,
     request_id: &str,
     force_compatible: bool,
+    result_id: Option<&str>,
+    defer_conversion: bool,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    compare_path: Option<(String, bool)>,
 ) -> AppResult<VideoComparisonSources> {
-    let (original, enhanced) = {
+    let (original, enhanced) = if let Some((path, is_result)) = compare_path {
+        let path = PathBuf::from(path);
+        (
+            if is_result {
+                canonical_result_video(path)?
+            } else {
+                canonical_video(path)?
+            },
+            None,
+        )
+    } else {
         let database = lock(&state.database)?;
         let media = database
             .get_media(media_id)?
@@ -770,19 +1681,23 @@ fn video_comparison_sources(
             ));
         }
         // Before a job finishes there is no output: play the source alone.
-        let output = database.latest_completed_output_for_media(media_id)?;
+        let output = match result_id {
+            Some("") => None,
+            Some(id) => Some(database.media_result_output(media_id, id)?),
+            None => database.latest_completed_output_for_media(media_id)?,
+        };
         (PathBuf::from(media.path), output.map(PathBuf::from))
     };
-    let original = fs::canonicalize(original)?;
-    let enhanced = enhanced.map(fs::canonicalize).transpose()?;
-    if !original.is_file() || enhanced.as_ref().is_some_and(|path| !path.is_file()) {
-        return Err(AppError::Validation(
-            "the original or enhanced video is no longer available".into(),
-        ));
-    }
+    let original = canonical_video(original)?;
+    let enhanced = enhanced.map(canonical_result_video).transpose()?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
+            if defer_conversion {
+                return Err(AppError::Validation(
+                    "This video needs a playback conversion. It will load when the current video is done.".into(),
+                ));
+            }
             converted = true;
             let reporter = app.clone();
             let request = request_id.to_owned();
@@ -829,20 +1744,13 @@ fn video_comparison_sources(
     };
     #[cfg(not(target_os = "linux"))]
     let (original_url, enhanced_url) = (None, None);
-    Ok(VideoComparisonSources {
-        original_path: original.to_string_lossy().into_owned(),
-        enhanced_path: enhanced
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+    Ok(crate::video_preview::sources(
+        original,
+        enhanced,
         original_url,
         enhanced_url,
-        playback_note: if converted {
-            "Compatible SDR playback copy · up to 1280 px. Source and saved export are unchanged."
-                .into()
-        } else {
-            String::new()
-        },
-    })
+        converted,
+    ))
 }
 
 #[tauri::command]
@@ -899,8 +1807,7 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String)
         ));
     }
     // A queued source must update its own persisted thumbnail. `preview_ready`
-    // is reserved for the completed output comparison; using it for sources
-    // previously left the center canvas empty while populating result state.
+    // is reserved for the completed output comparison.
     if queued_media.is_some() {
         lock(&state.database)?.start_media_probe(&encoded)?;
         emit_state_changed(&app);
@@ -978,6 +1885,11 @@ pub fn remove_model(
     };
     match path {
         Some(path) => {
+            if lock(&state.database)?.unfinished_job_needs_model(&path)? {
+                return Err(AppError::Validation(
+                    "a queued job still needs this model; finish or cancel it first".into(),
+                ));
+            }
             if path.is_file() {
                 fs::remove_file(&path)?;
             }
@@ -985,7 +1897,7 @@ pub fn remove_model(
         }
         // Editing bundles live beside the catalog; shared components survive.
         None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
-            return Err(AppError::Validation("unknown image model".into()));
+            return Err(AppError::Validation("unknown model".into()));
         }
         None => {}
     }
@@ -1082,6 +1994,11 @@ fn import_verified_catalog_file(
 #[tauri::command]
 pub fn open_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
     let authorized = authorized_result(&state, &path)?;
+    if !is_openable_output(&authorized) {
+        return Err(AppError::Validation(
+            "this file type is not opened from LocalSR; use Reveal instead".into(),
+        ));
+    }
     open::that_detached(authorized)
         .map_err(|error| AppError::Config(format!("could not open the output: {error}")))
 }
@@ -1122,45 +2039,83 @@ pub fn uninstall_integrations() -> AppResult<integrations::IntegrationStatus> {
 /// Suggest FFmpeg executables the user installed. LocalSR never runs one
 /// until the user selects it, and never downloads or bundles FFmpeg.
 #[tauri::command]
-pub fn detect_external_ffmpeg() -> Vec<String> {
-    let name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    let mut found: Vec<String> = Vec::new();
-    let mut consider = |path: PathBuf| {
-        if path.is_file() {
-            let text = path.to_string_lossy().into_owned();
-            if !found.contains(&text) {
-                found.push(text);
-            }
-        }
-    };
-    if let Some(paths) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&paths) {
-            consider(directory.join(name));
-        }
-    }
-    for directory in [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/snap/bin",
-        "C:\\ffmpeg\\bin",
-    ] {
-        consider(PathBuf::from(directory).join(name));
+pub fn detect_external_ffmpeg(state: State<'_, Arc<AppState>>) -> Vec<String> {
+    let found = crate::programs::find_ffmpeg();
+    for path in &found {
+        state.programs.grant(path);
     }
     found
 }
 
-/// Open the FFmpeg project's download page in the user's browser. Installing
+/// Let the user pick the FFmpeg program in the host's own file dialog. The host
+/// remembers the choice: only programs it found or was shown this way are run.
+#[tauri::command]
+pub async fn choose_external_ffmpeg(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    current: String,
+) -> AppResult<Option<String>> {
+    let title = "Select the FFmpeg program installed on this computer";
+    let picked = pick_program(app, title, &current).await?;
+    if let Some(path) = &picked {
+        state.programs.grant(path);
+    }
+    Ok(picked)
+}
+
+/// Let the user pick the native editing runtime (sd-cli) in the host's own file
+/// dialog. Start Edit runs only the runtime the host found or one picked here.
+#[tauri::command]
+pub async fn choose_edit_runtime(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Option<String>> {
+    let picked = pick_program(app, "Choose the sd-cli image editing runtime", "").await?;
+    if let Some(path) = &picked {
+        state.edit_programs.grant(path);
+    }
+    Ok(picked)
+}
+
+/// The host's own file dialog for one program, opened beside `current` when that
+/// names a file in an existing folder.
+async fn pick_program(app: AppHandle, title: &str, current: &str) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app.dialog().file().set_title(title);
+    if let Some(folder) = Path::new(current).parent().filter(|folder| folder.is_dir()) {
+        dialog = dialog.set_directory(folder);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?
+        .to_string_lossy()
+        .into_owned();
+    Ok(Some(path))
+}
+
 pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";
 
 #[tauri::command]
 pub fn open_user_guide() -> AppResult<()> {
     open::that_detached(USER_GUIDE_URL)
         .map_err(|error| AppError::Config(format!("could not open the user guide: {error}")))
+}
+
+/// The editions that use a GPU this one cannot (CUDA, DirectML, ROCm) are on this page;
+/// ci/public-beta-release.json publishes the same address.
+pub(crate) const DOWNLOAD_PAGE_URL: &str = "https://herrei.github.io/localsr/download/";
+
+#[tauri::command]
+pub fn open_download_page() -> AppResult<()> {
+    open::that_detached(DOWNLOAD_PAGE_URL)
+        .map_err(|error| AppError::Config(format!("could not open the download page: {error}")))
 }
 
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.
@@ -1418,7 +2373,82 @@ fn clear_completed_result(state: &AppState) -> AppResult<()> {
     Ok(())
 }
 
+/// HEIC, MOV and ProRes are written by macOS's own encoders, so only macOS accepts them.
+fn output_format_is_valid(format: &str) -> bool {
+    matches!(format, "png" | "jpg" | "tif" | "webp")
+        || (format == "heic" && cfg!(target_os = "macos"))
+}
+
+fn video_container_is_valid(container: &str) -> bool {
+    matches!(container, "mp4" | "mkv") || (container == "mov" && cfg!(target_os = "macos"))
+}
+
+fn video_codec_is_valid(codec: &str) -> bool {
+    matches!(codec, "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc")
+        || (codec == "prores" && cfg!(target_os = "macos"))
+}
+
+/// Whether the engine announced `name` in the list `media[key]` (or in `media[key][sub]`).
+fn announced(list: &Value, name: &str) -> bool {
+    list.as_array()
+        .is_some_and(|items| items.iter().any(|item| item == name))
+}
+
+/// HEIC images and MOV/ProRes videos need the macOS codecs the engine reports. The
+/// engine says so in the capabilities; a host that has not heard from it offers neither.
+fn validate_system_outputs(input: &StartBatchInput, media: &Value) -> AppResult<()> {
+    if input.task == "video" {
+        if (input.video_container == "mov" || input.video_codec == "prores")
+            && !announced(&media["system_codecs"]["encode"], "prores")
+        {
+            return Err(AppError::Validation(
+                "MOV and ProRes export use the codecs of macOS, which this computer does not have."
+                    .into(),
+            ));
+        }
+    } else if input.output_format == "heic" && !announced(&media["image_output"], "heic") {
+        return Err(AppError::Validation(
+            "HEIC output needs macOS, which provides the HEIC encoder.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The device a run uses. A device this computer does not report is refused, except
+/// the one saved in the settings: it stays saved, since the device may come back,
+/// and the run uses the CPU, which is always there.
+fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
+    let capabilities = lock(&state.capabilities)?;
+    let reported = |id: &str| capabilities.devices.iter().any(|device| device.id == id);
+    if reported(requested) {
+        return Ok(requested.to_owned());
+    }
+    if capabilities.system_ram_total == 0 {
+        return Err(AppError::Validation(
+            "LocalSR is still detecting this computer's hardware. Try again in a moment.".into(),
+        ));
+    }
+    if requested == lock(&state.settings)?.device_id && reported("cpu") {
+        return Ok("cpu".into());
+    }
+    Err(AppError::Validation(
+        "The selected device is not available on this computer. Choose another one in Advanced settings.".into(),
+    ))
+}
+
+fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
+    validate_start_input(input, external_codecs_available(state))?;
+    state.programs.check(&input.external_ffmpeg_path)?;
+    let media = state
+        .capabilities
+        .lock()
+        .map(|capabilities| capabilities.media.clone())
+        .unwrap_or(Value::Null);
+    validate_system_outputs(input, &media)
+}
+
 fn validate_settings(settings: &UiSettings) -> AppResult<()> {
+    validate_fix_selections(&settings.fix_stages)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
         return Err(AppError::Validation(
             "interface scale must be 100, 110, or 125 percent".into(),
@@ -1459,16 +2489,15 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
             "unsupported quality, content, fix, or preset pin setting".into(),
         ));
     }
-    if !matches!(
-        settings.output_format.as_str(),
-        "png" | "jpg" | "tif" | "webp"
-    ) || !matches!(settings.video_container.as_str(), "mp4" | "mkv")
-        || !matches!(
-            settings.video_codec.as_str(),
-            "auto" | "av1" | "vp9" | "ffv1" | "h264" | "hevc"
-        )
+    if !output_format_is_valid(&settings.output_format)
+        || !video_container_is_valid(&settings.video_container)
+        || !video_codec_is_valid(&settings.video_codec)
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
         || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
+        || !interpolation_choice_is_valid(
+            &settings.video_interpolation,
+            &settings.video_interpolation_order,
+        )
     {
         return Err(AppError::Validation(
             "unsupported output or precision setting".into(),
@@ -1477,6 +2506,18 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     if settings.video_codec == "ffv1" && settings.video_container != "mkv" {
         return Err(AppError::Validation(
             "Lossless FFV1 video requires the MKV container.".into(),
+        ));
+    }
+    if settings.video_container == "mov"
+        && !matches!(settings.video_codec.as_str(), "hevc" | "prores")
+    {
+        return Err(AppError::Validation(
+            "MOV holds only HEVC or Apple ProRes video.".into(),
+        ));
+    }
+    if settings.video_codec == "prores" && settings.video_container != "mov" {
+        return Err(AppError::Validation(
+            "Apple ProRes video requires the MOV container.".into(),
         ));
     }
     if settings.external_ffmpeg_path.len() > 4096 || settings.external_ffmpeg_path.contains('\0') {
@@ -1503,6 +2544,49 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     Ok(())
 }
 
+/// Engines without image_multi_fix run at most one fix; a longer plan would only fail in the
+/// worker after it was queued.
+fn validate_fix_engine(
+    input: &StartBatchInput,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if input.fix_stages.len() > 1
+        && !engine.is_some_and(|engine| {
+            engine
+                .features
+                .iter()
+                .any(|feature| feature == "image_multi_fix")
+        })
+    {
+        return Err(AppError::Validation(
+            "This engine runs one fix at a time. Update LocalSR to run several.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppResult<()> {
+    let mut fixes = HashSet::new();
+    if stages.len() > 3
+        || stages.iter().any(|stage| {
+            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise")
+                || !fixes.insert(&stage.fix)
+                || stage.model_id.len() > 64
+        })
+    {
+        return Err(AppError::Validation(
+            "choose up to three different fixes: blur, JPEG or noise".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Frame interpolation targets and orders the worker accepts.
+fn interpolation_choice_is_valid(target: &str, order: &str) -> bool {
+    matches!(target, "off" | "x2" | "x4" | "fps60" | "fps120")
+        && matches!(order, "after_upscale" | "before_upscale")
+}
+
 fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppResult<()> {
     let settings = UiSettings {
         interface_scale: 100,
@@ -1510,7 +2594,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         task: input.task.clone(),
         selected_model_id: input.model_id.clone(),
         selected_video_model_id: input.video_model_id.clone(),
-        preprocess_model_id: input.preprocess_model_id.clone(),
+        fix_stages: input.fix_stages.clone(),
         custom_model_path: input.custom_model_path.clone(),
         output_scale: input.output_scale,
         output_directory: input.output_directory.clone(),
@@ -1536,9 +2620,19 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         face_fidelity: input.face_fidelity,
         enable_live_preview: input.enable_live_preview,
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
+        video_interpolation: input.video_interpolation.clone(),
+        video_interpolation_order: input.video_interpolation_order.clone(),
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
+    if input.task == "video"
+        && input.video_interpolation != "off"
+        && input.video_model_id != "frame_by_frame"
+    {
+        return Err(AppError::Validation(
+            "Frame interpolation works with the Frame-by-frame video engine in this version. Choose Frame-by-frame or turn interpolation off.".into(),
+        ));
+    }
     if input.task == "video"
         && matches!(input.video_codec.as_str(), "h264" | "hevc")
         && input.external_ffmpeg_path.trim().is_empty()
@@ -1559,10 +2653,11 @@ enum ModelSelection {
     Image {
         model_id: String,
         path: String,
-        preprocess: Option<ResolvedImageStage>,
+        preprocess: Vec<ResolvedImageStage>,
         face_path: Option<String>,
         face_model_id: String,
         native_scale: u32,
+        interpolation: Option<ResolvedInterpolation>,
     },
     Temporal {
         model_id: String,
@@ -1573,14 +2668,28 @@ enum ModelSelection {
     },
 }
 
+/// The downloaded frame-interpolation bundle a video job uses.
+#[derive(Clone)]
+struct ResolvedInterpolation {
+    model_id: String,
+    bundle_dir: String,
+}
+
 #[derive(Clone)]
 struct ResolvedImageStage {
     kind: &'static str,
+    fix: String,
     model_id: String,
     path: String,
 }
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
+    validate_fix_selections(&input.fix_stages)?;
+    if !input.fix_stages.is_empty() && !matches!(input.task.as_str(), "upscale" | "denoise") {
+        return Err(AppError::Validation(
+            "fixes run only before an image upscale or restore".into(),
+        ));
+    }
     let catalog = lock(&state.catalog)?;
     if input.task == "video" && input.video_model_id != "frame_by_frame" {
         let model = catalog
@@ -1674,39 +2783,53 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
     } else {
         None
     };
-    let preprocess = if input.preprocess_model_id.is_empty() {
-        None
-    } else {
-        if input.task != "upscale" {
-            return Err(AppError::Validation(
-                "pre-processing can only be chained before an image upscale".into(),
-            ));
-        }
+    let mut preprocess = Vec::with_capacity(input.fix_stages.len());
+    for selection in &input.fix_stages {
         let model = catalog
             .models
             .iter()
-            .find(|model| model.model_id == input.preprocess_model_id)
-            .ok_or_else(|| AppError::Validation("unknown pre-processing model".into()))?;
-        if model.native_scale != 1 || model.purposes.iter().any(|purpose| purpose == "face") {
+            .find(|model| model.model_id == selection.model_id)
+            .ok_or_else(|| {
+                AppError::Validation(format!("choose a model for the {} fix", selection.fix))
+            })?;
+        if model.native_scale != 1
+            || model.purposes.iter().any(|purpose| purpose == "face")
+            || !model.fixes.contains(&selection.fix)
+        {
+            return Err(AppError::Validation(format!(
+                "the {} fix must use a 1× restoration model that fixes it",
+                selection.fix
+            )));
+        }
+        if !model.installed || model.installed_path.as_deref().is_none_or(str::is_empty) {
             return Err(AppError::Validation(
-                "the pre-processing stage must use a 1× restoration model".into(),
+                "download and verify every selected fix model first".into(),
             ));
         }
-        if !model.installed {
-            return Err(AppError::Validation(
-                "download and verify the selected pre-processing model first".into(),
-            ));
-        }
-        Some(ResolvedImageStage {
-            kind: if model.model_id == "fbcnn_color" {
+        preprocess.push(ResolvedImageStage {
+            // As the plan card names it (plan.ts resolvePlan).
+            kind: if model.stage == "deblock" || selection.fix == "jpeg" {
                 "deblock"
             } else {
                 "restore"
             },
+            fix: selection.fix.clone(),
             model_id: model.model_id.clone(),
             path: model.installed_path.clone().unwrap_or_default(),
-        })
-    };
+        });
+    }
+    if input.task == "denoise" && !preprocess.is_empty() {
+        if preprocess
+            .last()
+            .is_none_or(|stage| stage.model_id != input.model_id)
+        {
+            // Restore's model is its last fix; the fixes before it run first.
+            return Err(AppError::Validation(
+                "Restore must use the last fix as its model.".into(),
+            ));
+        }
+        preprocess.pop();
+    }
     Ok(ModelSelection::Image {
         model_id: input.model_id.clone(),
         path,
@@ -1718,7 +2841,29 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         native_scale: selected_model
             .map(|model| model.native_scale)
             .unwrap_or(input.output_scale),
+        interpolation: resolve_interpolation(&catalog, input)?,
     })
+}
+
+fn resolve_interpolation(
+    catalog: &crate::types::CatalogManifest,
+    input: &StartBatchInput,
+) -> AppResult<Option<ResolvedInterpolation>> {
+    if input.task != "video" || input.video_interpolation == "off" {
+        return Ok(None);
+    }
+    let model = catalog.interpolation_models.first().ok_or_else(|| {
+        AppError::Validation("this build has no frame interpolation model".into())
+    })?;
+    if !model.installed {
+        return Err(AppError::Validation(
+            "download the frame interpolation model first".into(),
+        ));
+    }
+    Ok(Some(ResolvedInterpolation {
+        model_id: model.model_id.clone(),
+        bundle_dir: model.installed_path.clone().unwrap_or_default(),
+    }))
 }
 
 fn validate_model_for_task(model: &CatalogModel, task: &str) -> AppResult<()> {
@@ -1755,6 +2900,7 @@ fn build_job_message(
             face_path,
             face_model_id,
             native_scale,
+            ..
         } if input.task != "video" => Ok(json!({
             "type": "job_request",
             "data": {
@@ -1779,57 +2925,74 @@ fn build_job_message(
                 "face_model_path": face_path,
                 "face_fidelity": f64::from(input.face_fidelity) / 100.0,
                 "stages": image_pipeline_stages(
-                    preprocess.as_ref(),
+                    preprocess,
                     model_id,
                     path,
                     face_path.as_deref(),
                     face_model_id,
-                    input.face_fidelity,
-                    &input.task,
+                    input,
                 ),
                 "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
             }
         })),
         ModelSelection::Image {
-            path, face_path, ..
-        } => Ok(json!({
-            "type": "video_job_request",
-            "data": {
-                "job_id": job_id,
-                "video_path": media.path,
-                "hdr_mode": input.video_hdr_mode,
-                "model_path": path,
-                "output_video_path": output,
-                "container": input.video_container,
-                "video_codec": input.video_codec,
-                "external_ffmpeg": input.external_ffmpeg_path,
-                "crf": input.video_crf,
-                "fps": null,
-                "device": input.device,
-                "tile_size": input.tile_size,
-                "halo": input.halo,
-                "precision": input.precision,
-                "safe_memory": input.safe_memory,
-                "neural_engine": input.neural_engine,
-                "keyframe_interval": null,
-                "start_frame": null,
-                "end_frame": null,
-                "face_model_path": face_path,
-                "face_fidelity": f64::from(input.face_fidelity) / 100.0,
-                "deflicker": input.deflicker,
-                "deflicker_window": input.deflicker_window,
-                "model_kind": "spandrel_image",
-                "bundle_dir": null,
-                "temporal_window": 0,
-                "temporal_overlap": 0,
-                "target_resolution": 0,
-                "output_scale": input.output_scale,
-                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
-                "preview_enabled": input.enable_live_preview,
-                "preview_max_fps": 2.0,
-                "preview_max_dimension": 320
+            path,
+            face_path,
+            interpolation,
+            ..
+        } => {
+            if interpolation.is_some()
+                && input.video_hdr_mode == "preserve"
+                && !media.hdr_format.is_empty()
+            {
+                return Err(AppError::Validation(format!(
+                    "Frame interpolation is not yet available with HDR preservation. Choose Convert to SDR for {}, or turn interpolation off.",
+                    media.name
+                )));
             }
-        })),
+            Ok(json!({
+                "type": "video_job_request",
+                "data": {
+                    "job_id": job_id,
+                    "video_path": media.path,
+                    "hdr_mode": input.video_hdr_mode,
+                    "model_path": path,
+                    "output_video_path": output,
+                    "container": input.video_container,
+                    "video_codec": input.video_codec,
+                    "external_ffmpeg": input.external_ffmpeg_path,
+                    "crf": input.video_crf,
+                    "fps": null,
+                    "device": input.device,
+                    "tile_size": input.tile_size,
+                    "halo": input.halo,
+                    "precision": input.precision,
+                    "safe_memory": input.safe_memory,
+                    "neural_engine": input.neural_engine,
+                    "keyframe_interval": null,
+                    "start_frame": null,
+                    "end_frame": null,
+                    "face_model_path": face_path,
+                    "face_fidelity": f64::from(input.face_fidelity) / 100.0,
+                    "deflicker": input.deflicker,
+                    "deflicker_window": input.deflicker_window,
+                    "model_kind": "spandrel_image",
+                    "bundle_dir": null,
+                    "temporal_window": 0,
+                    "temporal_overlap": 0,
+                    "target_resolution": 0,
+                    "output_scale": input.output_scale,
+                    "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                    "preview_enabled": input.enable_live_preview,
+                    "preview_max_fps": 2.0,
+                    "preview_max_dimension": 320,
+                    "interpolation": if interpolation.is_some() { input.video_interpolation.as_str() } else { "off" },
+                    "interpolation_order": input.video_interpolation_order,
+                    "interpolation_model_id": interpolation.as_ref().map(|resolved| resolved.model_id.clone()),
+                    "interpolation_bundle_dir": interpolation.as_ref().map(|resolved| resolved.bundle_dir.clone())
+                }
+            }))
+        }
         ModelSelection::Temporal {
             model_id,
             engine_kind,
@@ -1881,7 +3044,8 @@ fn build_job_message(
                     "allow_unverified_checkpoint": false,
                     "preview_enabled": input.enable_live_preview,
                     "preview_max_fps": 2.0,
-                    "preview_max_dimension": 320
+                    "preview_max_dimension": 320,
+                    "interpolation": "off"
                 }
             }))
         }
@@ -1889,24 +3053,27 @@ fn build_job_message(
 }
 
 fn image_pipeline_stages(
-    preprocess: Option<&ResolvedImageStage>,
+    preprocess: &[ResolvedImageStage],
     model_id: &str,
     model_path: &str,
     face_path: Option<&str>,
     face_model_id: &str,
-    face_fidelity: u32,
-    task: &str,
+    input: &StartBatchInput,
 ) -> Vec<Value> {
-    let mut stages = Vec::with_capacity(3);
-    if let Some(stage) = preprocess {
+    let mut stages = Vec::with_capacity(5);
+    for stage in preprocess {
         stages.push(json!({
             "kind": stage.kind,
+            "role": "fix",
+            "fix": stage.fix,
             "model_id": stage.model_id,
             "model_path": stage.path,
         }));
     }
     stages.push(json!({
-        "kind": if task == "denoise" { "restore" } else { "upscale" },
+        "kind": if input.task == "denoise" { "restore" } else { "upscale" },
+        "role": "primary",
+        "fix": if input.task == "denoise" { input.fix_stages.last().map(|stage| stage.fix.as_str()) } else { None },
         "model_id": model_id,
         "model_path": model_path,
     }));
@@ -1915,7 +3082,7 @@ fn image_pipeline_stages(
             "kind": "face_restore",
             "model_id": face_model_id,
             "model_path": path,
-            "fidelity": f64::from(face_fidelity) / 100.0,
+            "fidelity": f64::from(input.face_fidelity) / 100.0,
             "execution": "fused-with-upscale",
         }));
     }
@@ -1928,6 +3095,13 @@ fn prepare_output_directory(state: &AppState, requested: &str) -> AppResult<Path
     } else {
         PathBuf::from(requested)
     };
+    // A relative folder would be made below the working directory, which for a
+    // desktop app is wherever the system started it.
+    if !path.is_absolute() {
+        return Err(AppError::Validation(
+            "choose the full path of the output folder".into(),
+        ));
+    }
     fs::create_dir_all(&path)?;
     let canonical = fs::canonicalize(path)?;
     if !canonical.is_dir() {
@@ -1942,13 +3116,20 @@ fn unique_output_path(
     directory: &Path,
     input_path: &str,
     input: &StartBatchInput,
-    reserved: &mut HashSet<PathBuf>,
+    reserved: &mut ReservedOutputs,
 ) -> PathBuf {
-    let stem = Path::new(input_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("output");
-    let suffix = match input.task.as_str() {
+    unique_output_path_within(
+        directory,
+        input_path,
+        input,
+        reserved,
+        platform_path_limit(),
+    )
+}
+
+/// The name and extension a result of `input` ends with, before any counter.
+fn output_ending(input: &StartBatchInput) -> (String, &str) {
+    let mut suffix = match input.task.as_str() {
         "denoise" => "_denoised".to_owned(),
         "video"
             if input.video_model_id != "frame_by_frame" && input.video_target_resolution > 0 =>
@@ -1958,11 +3139,32 @@ fn unique_output_path(
         "video" => format!("_video_{}x", input.output_scale),
         _ => format!("_upscaled_{}x", input.output_scale),
     };
+    if input.name_by_model && input.task != "video" {
+        suffix.push('_');
+        suffix.push_str(&model_slug(&input.model_id));
+    }
     let extension = if input.task == "video" {
         input.video_container.as_str()
     } else {
         input.output_format.as_str()
     };
+    (suffix, extension)
+}
+
+/// `unique_output_path` for a given limit on the whole path (see `path_room`).
+fn unique_output_path_within(
+    directory: &Path,
+    input_path: &str,
+    input: &StartBatchInput,
+    reserved: &mut ReservedOutputs,
+    path_limit: Option<usize>,
+) -> PathBuf {
+    let stem = Path::new(input_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let (suffix, extension) = output_ending(input);
+    let room = path_limit.map(|limit| path_room(directory, limit));
     let mut counter = 0_u32;
     loop {
         let numbered = if counter == 0 {
@@ -1970,11 +3172,122 @@ fn unique_output_path(
         } else {
             format!("_{counter}")
         };
-        let candidate = directory.join(format!("{stem}{suffix}{numbered}.{extension}"));
-        if !candidate.exists() && reserved.insert(candidate.clone()) {
+        let ending = format!("{suffix}{numbered}.{extension}");
+        let stem = fit_stem(stem, MAX_FILE_NAME_BYTES.saturating_sub(ending.len()));
+        let stem = match room {
+            Some(room) => fit_stem_units(stem, room.saturating_sub(ending.encode_utf16().count())),
+            None => stem,
+        };
+        let candidate = directory.join(format!("{stem}{ending}"));
+        if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
         }
         counter = counter.saturating_add(1);
+    }
+}
+
+/// The longest file name file systems accept (APFS, ext4, NTFS and exFAT all allow 255
+/// bytes or characters). A name in UTF-8 that fits is short enough for each.
+const MAX_FILE_NAME_BYTES: usize = 255;
+
+/// `stem` cut to at most `limit` bytes, on a character boundary.
+fn fit_stem(stem: &str, limit: usize) -> &str {
+    let mut end = limit.min(stem.len());
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    &stem[..end]
+}
+
+/// `stem` cut to at most `limit` UTF-16 units, on a character boundary.
+fn fit_stem_units(stem: &str, limit: usize) -> &str {
+    let mut units = 0;
+    for (index, character) in stem.char_indices() {
+        units += character.len_utf16();
+        if units > limit {
+            return &stem[..index];
+        }
+    }
+    stem
+}
+
+/// How long a full path may be where long paths are off: Windows' MAX_PATH, which counts
+/// the terminating NUL. The engine and the tools it starts do not all use the extended
+/// form that lifts it.
+const WINDOWS_PATH_LIMIT: usize = 260;
+
+fn platform_path_limit() -> Option<usize> {
+    cfg!(windows).then_some(WINDOWS_PATH_LIMIT)
+}
+
+/// What the engine makes below the output folder: its scratch folder
+/// (`.localsr-job-` and a 36-character id), a separator and its longest temporary name
+/// (`.localsr-external-` and 8 characters and `.tmp`).
+const ENGINE_PATH_BELOW_FOLDER: usize = 49 + 1 + 30;
+
+/// The fewest characters of the source's name worth keeping in the result's.
+const MIN_STEM_UNITS: usize = 16;
+
+/// The length of `directory` the way another tool sees it: the extended-length prefix
+/// (`\\?\`, `\\?\UNC\`) that `canonicalize` adds on Windows is not part of it.
+fn path_units_without_prefix(directory: &Path) -> usize {
+    let text = directory.to_string_lossy();
+    let units = text.encode_utf16().count();
+    if text.starts_with("\\\\?\\UNC\\") {
+        units - "\\\\?\\UNC\\".len() + 2
+    } else if text.starts_with("\\\\?\\") {
+        units - "\\\\?\\".len()
+    } else {
+        units
+    }
+}
+
+/// How many UTF-16 units a file name in `directory` may have so that the whole path
+/// stays under `limit`: the terminating NUL, the folder and a separator come off.
+fn path_room(directory: &Path, limit: usize) -> usize {
+    limit.saturating_sub(path_units_without_prefix(directory) + 2)
+}
+
+/// Refuse a folder whose path leaves no room for a sensible result name and for what the
+/// engine makes below it, instead of failing after the work is done.
+fn check_output_room(
+    directory: &Path,
+    input: &StartBatchInput,
+    path_limit: Option<usize>,
+) -> AppResult<()> {
+    let Some(limit) = path_limit else {
+        return Ok(());
+    };
+    let (suffix, extension) = output_ending(input);
+    // The ending, a counter such as `_12`, and a stem worth reading.
+    let name = MIN_STEM_UNITS + suffix.len() + 1 + extension.len() + 4;
+    if path_room(directory, limit) < name.max(ENGINE_PATH_BELOW_FOLDER) {
+        return Err(AppError::Validation(format!(
+            "The folder {} has too long a path for LocalSR to save results in it: Windows limits a full path to {} characters. Choose a shorter output folder.",
+            directory.display(),
+            limit - 1
+        )));
+    }
+    Ok(())
+}
+
+fn model_slug(id: &str) -> String {
+    let mut slug = String::new();
+    for character in id.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.len() == 24 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "model".into()
+    } else {
+        slug.into()
     }
 }
 
@@ -2012,7 +3325,7 @@ fn normalize_media_paths(paths: Vec<String>) -> AppResult<Vec<(PathBuf, &'static
         let mut children = fs::read_dir(&canonical)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.is_file() && media_kind(path).is_some())
+            .filter(|path| path.to_str().is_some() && path.is_file() && media_kind(path).is_some())
             .collect::<Vec<_>>();
         children.sort_by_key(|path| path.to_string_lossy().to_lowercase());
         for child in children {
@@ -2060,15 +3373,34 @@ fn canonical_directory(path: &str) -> AppResult<PathBuf> {
     Ok(canonical)
 }
 
+/// The file types LocalSR writes as results. Open hands the file to the system's
+/// default handler, so anything else (an executable, a script, a shortcut) must
+/// never be launched through it, whatever the history says.
+fn is_openable_output(path: &Path) -> bool {
+    const OUTPUT_EXTENSIONS: &[&str] = &[
+        "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "mp4", "mkv", "mov",
+    ];
+    extension(path).is_some_and(|extension| OUTPUT_EXTENSIONS.contains(&extension.as_str()))
+}
+
 /// Open and Reveal act on the selected item's result, which is often not the
 /// most recent output (a finished batch, or a result from an earlier session),
 /// so any completed job's output is allowed alongside the last one.
 fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     let recorded = lock(&state.database)?.is_completed_output(requested)?;
     let last_output = lock(&state.runtime)?.last_output_path.clone();
-    if !recorded && last_output.is_empty() {
-        return Err(AppError::Validation("there is no completed output".into()));
+    let is_last_output = !last_output.is_empty()
+        && (last_output == requested
+            || fs::canonicalize(&last_output)
+                .map(|expected| expected == Path::new(requested))
+                .unwrap_or(false));
+    if !recorded && !is_last_output {
+        return Err(AppError::Validation(
+            "output path was not authorized".into(),
+        ));
     }
+    fs::symlink_metadata(requested)?;
+    crate::results::ensure_not_linked(Path::new(requested))?;
     let requested = fs::canonicalize(requested)?;
     let is_last_output = !last_output.is_empty()
         && fs::canonicalize(last_output)
@@ -2080,612 +3412,6 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
         ));
     }
     Ok(requested)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::RecipeStage;
-
-    #[test]
-    fn face_companions_require_the_matching_installed_model_and_explicit_selection() {
-        let directory = tempfile::tempdir().unwrap();
-        let paths = crate::paths::AppPaths::under(directory.path());
-        fs::create_dir_all(&paths.next_root).unwrap();
-        fs::create_dir_all(&paths.model_root).unwrap();
-        let state = AppState::from_paths(paths).unwrap();
-        for (primary_id, face_id) in [
-            ("hat_s_x4", "hat_s_x4_face"),
-            ("hat_l_x4_imagenet", "hat_l_x4_face"),
-        ] {
-            {
-                let mut catalog = lock(&state.catalog).unwrap();
-                for model in &mut catalog.models {
-                    model.installed = model.model_id == primary_id || model.model_id == face_id;
-                    model.installed_path = model
-                        .installed
-                        .then(|| format!("/models/{}", model.filename));
-                }
-            }
-            let mut options = input("upscale");
-            options.model_id = primary_id.into();
-            options.enable_face_model = false;
-            assert!(matches!(
-                resolve_model_selection(&state, &options).unwrap(),
-                ModelSelection::Image {
-                    face_path: None,
-                    ..
-                }
-            ));
-            options.enable_face_model = true;
-            match resolve_model_selection(&state, &options).unwrap() {
-                ModelSelection::Image {
-                    face_path,
-                    face_model_id,
-                    ..
-                } => {
-                    assert_eq!(face_model_id, face_id);
-                    assert!(face_path.unwrap().starts_with("/models/"));
-                }
-                _ => panic!("expected an image model"),
-            }
-            {
-                let mut catalog = lock(&state.catalog).unwrap();
-                catalog
-                    .models
-                    .iter_mut()
-                    .find(|model| model.model_id == face_id)
-                    .unwrap()
-                    .installed = false;
-            }
-            let missing = resolve_model_selection(&state, &options).err().unwrap();
-            assert!(missing
-                .to_string()
-                .contains("import the verified face checkpoint"));
-            options.model_id = face_id.into();
-            assert!(resolve_model_selection(&state, &options).is_err());
-        }
-    }
-
-    #[test]
-    fn revisiting_video_comparisons_keeps_only_explicit_files_authorized() {
-        let app = tauri::test::mock_app();
-        let scope = tauri::scope::fs::Scope::new(
-            &app,
-            &tauri::utils::config::FsScope::AllowedPaths(Vec::new()),
-        )
-        .unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let files: Vec<_> = [
-            "first.mov",
-            "first-output.mp4",
-            "second-output.mp4",
-            "private.mp4",
-        ]
-        .iter()
-        .map(|name| {
-            let path = directory.path().join(name);
-            fs::write(&path, b"test media").unwrap();
-            fs::canonicalize(path).unwrap()
-        })
-        .collect();
-        // Open A, start a job using A's output, inspect B, then return to A.
-        for (original, enhanced) in [(0, 1), (1, 2), (0, 1), (1, 2)] {
-            allow_video_preview_pair(&scope, &files[original], Some(&files[enhanced])).unwrap();
-            assert!(scope.is_allowed(&files[original]));
-            assert!(scope.is_allowed(&files[enhanced]));
-            assert!(!scope.is_allowed(&files[3]));
-            assert!(!scope.is_allowed(directory.path()));
-        }
-        // An unfinished video authorizes only its source.
-        allow_video_preview_pair(&scope, &files[3], None).unwrap();
-        assert!(scope.is_allowed(&files[3]));
-        assert!(!scope.is_allowed(directory.path()));
-        assert!(scope.forbidden_patterns().is_empty());
-    }
-
-    fn input(task: &str) -> StartBatchInput {
-        StartBatchInput {
-            media_ids: vec!["media".into()],
-            batch_mode: false,
-            task: task.into(),
-            model_id: "model".into(),
-            video_model_id: "frame_by_frame".into(),
-            preprocess_model_id: String::new(),
-            custom_model_path: String::new(),
-            output_directory: String::new(),
-            output_format: "png".into(),
-            output_scale: 4,
-            preserve_metadata: true,
-            jpeg_quality: 98,
-            device: "cpu".into(),
-            tile_size: 256,
-            halo: 32,
-            precision: "fp32".into(),
-            safe_memory: false,
-            deflicker: false,
-            deflicker_window: 3,
-            video_container: "mp4".into(),
-            video_codec: "av1".into(),
-            external_ffmpeg_path: String::new(),
-            video_hdr_mode: "tone_map".into(),
-            video_target_resolution: 0,
-            video_low_memory: true,
-            video_crf: 18,
-            neural_engine: true,
-            enable_face_model: false,
-            face_fidelity: 70,
-            enable_live_preview: true,
-            allow_unsafe_pickle_model: false,
-        }
-    }
-
-    #[test]
-    fn output_names_do_not_overwrite_existing_or_batched_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let options = input("upscale");
-        fs::write(directory.path().join("photo_upscaled_4x.png"), b"old").unwrap();
-        let mut reserved = HashSet::new();
-        let first = unique_output_path(
-            directory.path(),
-            "/media/photo.png",
-            &options,
-            &mut reserved,
-        );
-        let second = unique_output_path(
-            directory.path(),
-            "/other/photo.jpg",
-            &options,
-            &mut reserved,
-        );
-        assert_eq!(first.file_name().unwrap(), "photo_upscaled_4x_1.png");
-        assert_eq!(second.file_name().unwrap(), "photo_upscaled_4x_2.png");
-        let mut video = input("video");
-        video.video_model_id = "seedvr2_3b".into();
-        video.video_target_resolution = 256;
-        let smaller =
-            unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
-        assert_eq!(smaller.file_name().unwrap(), "clip_video_256px.mp4");
-        video.video_model_id = "frame_by_frame".into();
-        let tiled = unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
-        assert_eq!(tiled.file_name().unwrap(), "clip_video_4x.mp4");
-    }
-
-    #[test]
-    fn benchmark_export_is_unique_atomic_and_never_clobbers() {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("result.json");
-        let unrelated = directory.path().join("result.json.tmp");
-        fs::write(&unrelated, b"user-owned").unwrap();
-
-        write_benchmark_export(&destination, br#"{"score":42}"#).unwrap();
-        assert_eq!(fs::read(&destination).unwrap(), br#"{"score":42}"#);
-        assert_eq!(fs::read(&unrelated).unwrap(), b"user-owned");
-        assert!(directory.path().read_dir().unwrap().all(|entry| !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains("localsr-benchmark")));
-
-        let error = write_benchmark_export(&destination, b"replacement").unwrap_err();
-        assert!(error.to_string().contains("already exists"));
-        assert_eq!(fs::read(&destination).unwrap(), br#"{"score":42}"#);
-    }
-
-    #[test]
-    fn extension_matching_is_case_insensitive_and_bounded() {
-        assert_eq!(media_kind(Path::new("A.DNG")), Some("image"));
-        assert_eq!(media_kind(Path::new("pixel.BMP")), Some("image"));
-        assert_eq!(media_kind(Path::new("DSCF0001.RAF")), Some("image"));
-        assert_eq!(media_kind(Path::new("IMG_0001.CR3")), Some("image"));
-        assert_eq!(media_kind(Path::new("photo.avif")), Some("image"));
-        let heic = media_kind(Path::new("IMG_0001.HEIC"));
-        assert_eq!(heic, cfg!(target_os = "macos").then_some("image"));
-        assert_eq!(media_kind(Path::new("clip.MKV")), Some("video"));
-        assert_eq!(media_kind(Path::new("notes.txt")), None);
-    }
-
-    #[test]
-    fn launch_directories_expand_supported_files_without_recursing() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("B.MP4"), b"video").unwrap();
-        fs::write(directory.path().join("a.png"), b"image").unwrap();
-        fs::write(directory.path().join("notes.txt"), b"ignored").unwrap();
-        fs::create_dir(directory.path().join("nested")).unwrap();
-        fs::write(directory.path().join("nested/hidden.png"), b"ignored").unwrap();
-
-        let normalized = normalize_media_paths(vec![directory.path().to_string_lossy().into()])
-            .expect("directory should expand");
-
-        assert_eq!(normalized.len(), 2);
-        assert_eq!(normalized[0].0.file_name().unwrap(), "a.png");
-        assert_eq!(normalized[0].1, "image");
-        assert_eq!(normalized[1].0.file_name().unwrap(), "B.MP4");
-        assert_eq!(normalized[1].1, "video");
-    }
-
-    #[test]
-    fn launch_path_expansion_deduplicates_and_rejects_explicit_unknown_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let image = directory.path().join("photo.png");
-        let text = directory.path().join("notes.txt");
-        fs::write(&image, b"image").unwrap();
-        fs::write(&text, b"text").unwrap();
-
-        let duplicated = normalize_media_paths(vec![
-            image.to_string_lossy().into(),
-            image.to_string_lossy().into(),
-        ])
-        .unwrap();
-        assert_eq!(duplicated.len(), 1);
-        assert!(normalize_media_paths(vec![text.to_string_lossy().into()]).is_err());
-    }
-
-    #[test]
-    fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
-        let media = crate::types::MediaItem {
-            id: "media".into(),
-            path: "/input/photo.png".into(),
-            name: "photo.png".into(),
-            kind: "image".into(),
-            width: 100,
-            height: 80,
-            frame_count: 1,
-            fps: 0.0,
-            duration_seconds: 0.0,
-            preview_data_url: String::new(),
-            probe_status: "ready".into(),
-            hdr_format: String::new(),
-            audio_warning: String::new(),
-            error: String::new(),
-            selected: true,
-        };
-        let selection = ModelSelection::Image {
-            model_id: "model".into(),
-            path: "/models/upscaler.safetensors".into(),
-            preprocess: None,
-            face_path: None,
-            face_model_id: String::new(),
-            native_scale: 4,
-        };
-
-        let message = build_job_message(
-            "job",
-            &media,
-            Path::new("/output/photo.png"),
-            Path::new("/app-owned/work"),
-            &input("upscale"),
-            &selection,
-        )
-        .unwrap();
-
-        assert_eq!(message["data"]["preview_enabled"], true);
-        assert_eq!(message["data"]["preview_max_fps"], 2.0);
-        assert_eq!(message["data"]["preview_max_dimension"], 320);
-        assert_eq!(message["data"]["face_fidelity"], 0.7);
-        assert_eq!(message["data"]["scratch_directory"], "/app-owned/work");
-        assert_eq!(message["data"]["stages"].as_array().unwrap().len(), 1);
-        assert_eq!(message["data"]["stages"][0]["kind"], "upscale");
-        assert_eq!(message["data"]["neural_engine"], true);
-
-        // Probed average FPS is metadata, not a request to retime a VFR clip.
-        let mut video = media.clone();
-        video.kind = "video".into();
-        video.fps = 29.97;
-        let video_message = build_job_message(
-            "video-job",
-            &video,
-            Path::new("/output/clip.mp4"),
-            Path::new("/app-owned/work"),
-            &input("video"),
-            &selection,
-        )
-        .unwrap();
-        assert_eq!(video_message["type"], "video_job_request");
-        assert!(video_message["data"]["fps"].is_null());
-        assert_eq!(video_message["data"]["neural_engine"], true);
-        let mut without_neural_engine = input("video");
-        without_neural_engine.neural_engine = false;
-        let gpu_message = build_job_message(
-            "gpu-job",
-            &video,
-            Path::new("/output/gpu.mp4"),
-            Path::new("/app-owned/work"),
-            &without_neural_engine,
-            &selection,
-        )
-        .unwrap();
-        assert_eq!(gpu_message["data"]["neural_engine"], false);
-        assert_eq!(video_message["data"]["hdr_mode"], "tone_map");
-        let mut hdr_input = input("video");
-        hdr_input.video_hdr_mode = "preserve".into();
-        let hdr_message = build_job_message(
-            "hdr-job",
-            &video,
-            Path::new("/output/hdr.mp4"),
-            Path::new("/app-owned/work"),
-            &hdr_input,
-            &selection,
-        )
-        .unwrap();
-        assert_eq!(hdr_message["data"]["hdr_mode"], "preserve");
-
-        let temporal = ModelSelection::Temporal {
-            model_id: "seedvr2_3b".into(),
-            engine_kind: "seedvr2".into(),
-            bundle_dir: "/models/seedvr2".into(),
-            temporal_window: 9,
-            temporal_overlap: 2,
-        };
-        let temporal_message = build_job_message(
-            "temporal-job",
-            &video,
-            Path::new("/output/clip.mp4"),
-            Path::new("/app-owned/work"),
-            &input("video"),
-            &temporal,
-        )
-        .unwrap();
-        assert!(temporal_message["data"]["fps"].is_null());
-        assert_eq!(temporal_message["data"]["video_low_memory"], true);
-        assert_eq!(temporal_message["data"]["hdr_mode"], "tone_map");
-        let mut smaller = input("video");
-        smaller.video_target_resolution = 512;
-        smaller.video_low_memory = false;
-        let smaller_message = build_job_message(
-            "small-job",
-            &video,
-            Path::new("/output/small.mp4"),
-            Path::new("/app-owned/work"),
-            &smaller,
-            &temporal,
-        )
-        .unwrap();
-        assert_eq!(smaller_message["data"]["target_resolution"], 512);
-        assert_eq!(smaller_message["data"]["video_low_memory"], false);
-        let mut old_settings = serde_json::to_value(UiSettings::default()).unwrap();
-        old_settings
-            .as_object_mut()
-            .unwrap()
-            .remove("neural_engine");
-        assert!(
-            serde_json::from_value::<UiSettings>(old_settings)
-                .unwrap()
-                .neural_engine
-        );
-        let mut old_memory_settings = serde_json::to_value(UiSettings::default()).unwrap();
-        old_memory_settings
-            .as_object_mut()
-            .unwrap()
-            .remove("video_low_memory");
-        assert!(
-            serde_json::from_value::<UiSettings>(old_memory_settings)
-                .unwrap()
-                .video_low_memory
-        );
-        let mut old_settings = serde_json::to_value(UiSettings::default()).unwrap();
-        old_settings
-            .as_object_mut()
-            .unwrap()
-            .remove("video_target_resolution");
-        assert_eq!(
-            serde_json::from_value::<UiSettings>(old_settings)
-                .unwrap()
-                .video_target_resolution,
-            0
-        );
-    }
-
-    #[test]
-    fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
-        let media = crate::types::MediaItem {
-            id: "media".into(),
-            path: "/input/photo.png".into(),
-            name: "photo.png".into(),
-            kind: "image".into(),
-            width: 100,
-            height: 80,
-            frame_count: 1,
-            fps: 0.0,
-            duration_seconds: 0.0,
-            preview_data_url: String::new(),
-            probe_status: "ready".into(),
-            hdr_format: String::new(),
-            audio_warning: String::new(),
-            error: String::new(),
-            selected: true,
-        };
-        let selection = ModelSelection::Image {
-            model_id: "upscale".into(),
-            path: "/models/upscale.pth".into(),
-            preprocess: Some(ResolvedImageStage {
-                kind: "deblock",
-                model_id: "fbcnn_color".into(),
-                path: "/models/fbcnn.pth".into(),
-            }),
-            face_path: Some("/models/face.pth".into()),
-            face_model_id: "hat_l_x4_face".into(),
-            native_scale: 4,
-        };
-        let mut options = input("upscale");
-        options.enable_face_model = true;
-        options.face_fidelity = 65;
-        let message = build_job_message(
-            "job",
-            &media,
-            Path::new("/output/photo.png"),
-            Path::new("/app-owned/work"),
-            &options,
-            &selection,
-        )
-        .unwrap();
-
-        let stages = message["data"]["stages"].as_array().unwrap();
-        assert_eq!(
-            stages
-                .iter()
-                .map(|stage| stage["kind"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["deblock", "upscale", "face_restore"]
-        );
-        assert_eq!(stages[2]["model_id"], "hat_l_x4_face");
-        assert_eq!(stages[2]["model_path"], "/models/face.pth");
-        assert_eq!(stages[2]["execution"], "fused-with-upscale");
-        assert_eq!(stages[2]["fidelity"], 0.65);
-    }
-
-    #[test]
-    fn install_hints_follow_the_distribution() {
-        let fedora = "NAME=\"Fedora Linux\"\nID=fedora\nID_LIKE=\"rhel centos\"\n";
-        assert_eq!(
-            install_hint_for("linux", fedora).command,
-            "sudo dnf install ffmpeg"
-        );
-        assert!(install_hint_for("linux", fedora)
-            .note
-            .contains("RPM Fusion"));
-        let mint = "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n";
-        assert_eq!(
-            install_hint_for("linux", mint).command,
-            "sudo apt install ffmpeg"
-        );
-        assert_eq!(install_hint_for("linux", mint).system, "Ubuntu");
-        assert_eq!(
-            install_hint_for("linux", "ID=arch\n").command,
-            "sudo pacman -S ffmpeg"
-        );
-        assert_eq!(
-            install_hint_for("linux", "").command,
-            "sudo apt install ffmpeg"
-        );
-        assert_eq!(install_hint_for("macos", "").command, "brew install ffmpeg");
-        assert_eq!(
-            install_hint_for("windows", "").command,
-            "winget install Gyan.FFmpeg"
-        );
-    }
-
-    #[test]
-    fn video_codec_settings_follow_the_media_policy() {
-        let mut video = input("video");
-        assert!(validate_start_input(&video, false).is_ok());
-        video.video_codec = "ffv1".into();
-        assert!(
-            validate_start_input(&video, false).is_err(),
-            "FFV1 requires MKV"
-        );
-        video.video_container = "mkv".into();
-        assert!(validate_start_input(&video, false).is_ok());
-        video.video_codec = "h264".into();
-        video.video_container = "mp4".into();
-        assert!(
-            validate_start_input(&video, false).is_err(),
-            "H.264 export needs the system codecs or an FFmpeg"
-        );
-        assert!(
-            validate_start_input(&video, true).is_ok(),
-            "the system codecs or a found FFmpeg write H.264"
-        );
-        video.external_ffmpeg_path = "/opt/homebrew/bin/ffmpeg".into();
-        assert!(validate_start_input(&video, false).is_ok());
-        video.video_codec = "x264".into();
-        assert!(validate_start_input(&video, false).is_err());
-    }
-
-    #[test]
-    fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
-        let legacy = Recipe {
-            id: "legacy".into(),
-            name: "Legacy".into(),
-            task: "upscale".into(),
-            model_id: "model".into(),
-            output_scale: 4,
-            tile_size: 256,
-            halo: 32,
-            precision: "fp32".into(),
-            safe_memory: true,
-            video_model_id: String::new(),
-            custom_model_path: String::new(),
-            output_format: "png".into(),
-            preserve_metadata: Some(true),
-            jpeg_quality: Some(98),
-            deflicker: None,
-            deflicker_window: None,
-            video_container: String::new(),
-            video_codec: String::new(),
-            video_hdr_mode: "tone_map".into(),
-            video_target_resolution: 0,
-            video_low_memory: true,
-            video_crf: None,
-            enable_face_model: None,
-            face_fidelity: None,
-            stages: Vec::new(),
-            quality: String::new(),
-            content: String::new(),
-            fixes: Vec::new(),
-        };
-        assert!(validate_recipe_stages(&legacy).is_ok());
-
-        let mut invalid = legacy;
-        invalid.stages = vec![
-            RecipeStage {
-                kind: "upscale".into(),
-                model_id: "first".into(),
-                fidelity: None,
-            },
-            RecipeStage {
-                kind: "upscale".into(),
-                model_id: "second".into(),
-                fidelity: None,
-            },
-        ];
-        assert!(validate_recipe_stages(&invalid).is_err());
-    }
-
-    #[test]
-    fn verified_catalog_import_is_atomic_and_idempotent() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("downloaded.pth");
-        let destination = directory.path().join("models").join("model.pth");
-        fs::create_dir(destination.parent().unwrap()).unwrap();
-        fs::write(&source, b"trusted checkpoint").unwrap();
-        let source = fs::canonicalize(source).unwrap();
-        let digest = catalog::sha256_file(&source).unwrap();
-
-        import_verified_catalog_file(&source, &destination, 18, &digest).unwrap();
-        assert_eq!(fs::read(&destination).unwrap(), b"trusted checkpoint");
-        assert!(directory
-            .path()
-            .join("models")
-            .read_dir()
-            .unwrap()
-            .all(|entry| !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".tmp")));
-
-        import_verified_catalog_file(&source, &destination, 18, &digest).unwrap();
-        assert_eq!(fs::read(&destination).unwrap(), b"trusted checkpoint");
-    }
-
-    #[test]
-    fn verified_catalog_import_rejects_conflict_and_bad_digest() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("downloaded.pth");
-        let destination = directory.path().join("models").join("model.pth");
-        fs::create_dir(destination.parent().unwrap()).unwrap();
-        fs::write(&source, b"trusted checkpoint").unwrap();
-        let source = fs::canonicalize(source).unwrap();
-
-        assert!(import_verified_catalog_file(&source, &destination, 18, &"0".repeat(64)).is_err());
-        assert!(!destination.exists());
-
-        fs::write(&destination, b"conflicting bytes").unwrap();
-        let digest = catalog::sha256_file(&source).unwrap();
-        assert!(import_verified_catalog_file(&source, &destination, 18, &digest).is_err());
-        assert_eq!(fs::read(&destination).unwrap(), b"conflicting bytes");
-    }
 }
 
 #[tauri::command]
@@ -2713,3 +3439,6 @@ pub fn open_model_license(
     open::that(url)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

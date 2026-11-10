@@ -49,6 +49,7 @@
     const scale = Math.min(2, window.devicePixelRatio || 1);
     const width = Math.round(shot.clientWidth * scale);
     const height = Math.round(shot.clientHeight * scale);
+    if (width <= 0 || height <= 0) return;
     canvas.width = width;
     canvas.height = height;
     const sharp = document.createElement('canvas');

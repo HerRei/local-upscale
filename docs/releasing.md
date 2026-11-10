@@ -1,8 +1,8 @@
 # Releasing
 
-Current release: **v0.3.0-beta** for macOS. Release notes live in
-[`releases/`](releases/), one file per tag; the release workflow uses that file
-as the GitHub release body.
+Current release: **v0.3.0-beta**; release candidate: **v0.4.0-beta** for macOS, Windows and Linux. Release notes live in
+[`releases/`](releases/), one file per tag; that file is the GitHub release
+body.
 
 ## Versions
 
@@ -73,46 +73,72 @@ file resumes at the wrong offset.
 After the build:
 
 Public installers, source bundles and updater files use
-`https://github.com/HerRei/local-upscale/releases/download/v<version>/`. The
-Mac mini keeps a copy at `https://downloads.hermesr.duckdns.org/releases/v<version>/`,
-reached through the Infomaniak VPS over WireGuard. The site does not link it.
+`https://github.com/HerRei/local-upscale/releases/download/v<version>/`.
 
 1. Upload the DMG, the update archive and its signature, the engine payload and
    its parts, the source bundle, the `.sha256` files and `SHA256SUMS` to the
-   **draft** GitHub release, then copy them to the Mac mini with
-   `gh release download` on the host. A direct `scp` through the Tailscale relay
-   runs at about 750 KB/s. The draft is published once its exact files are
-   verified.
-2. Verify the copies on the host with `shasum -a 256 -c SHA256SUMS`.
+   **draft** GitHub release. Publish only after verifying its exact files.
+2. Download the draft release's files and verify them with
+   `shasum -a 256 -c SHA256SUMS`.
 3. Install the previous version on a test Mac and confirm that the update
    downloads, installs and relaunches on the new version.
-4. Add the entry to the website's `updates/beta.json`, update `release.json` and
-   run `localsr/tools/sync_release.py` and `validate_site.py`, then publish.
-   GitHub Pages caches the feed for ten minutes.
+4. Add the Windows and Linux entries ([Windows and Linux updates](#windows-and-linux-updates)).
+5. Copy `build/release-<version>/beta.json` to the website's `updates/beta.json`,
+   update `release.json` and run `localsr/tools/sync_release.py` and
+   `validate_site.py`, then publish. GitHub Pages caches the feed for ten minutes.
 
-The signing identity (`Developer ID Application: Hermes Reisner`) and the
-notarization profile `LocalSR-Z2TU844D84-notary` live in the login Keychain of
-the release Mac and never in the repository. To renew the notarization
-credentials, create an app-specific password and run:
+The release requires a Developer ID signing identity and notarization credentials.
+The updater signing key is managed by `scripts/beta_update_signing.py`; see
+[Updates](updates.md).
 
-```sh
-xcrun notarytool store-credentials LocalSR-Z2TU844D84-notary \
-  --apple-id YOUR_APPLE_ID --team-id Z2TU844D84
-```
+### Windows and Linux updates
 
-The tool prompts for the password. The updater key is handled the same way by
-`scripts/beta_update_signing.py`; see [Updates](updates.md).
+Every Windows and Linux package carries its update identity and updates itself
+([Updates](updates.md)); its feed entry is written and signed on the Mac, after the
+macOS build, from the workflow runs at the same commit:
 
-## Signed release workflow
+1. Download both runs into one folder: `gh run download <run> -D
+   build/release-<version>/platforms` for the Windows and the Linux run. Every
+   artifact lands in its target's folder (`windows-x86_64-cpu`, …). With the Linux
+   CUDA and ROCm AppImages and their engine packages this is roughly 45 GB; signing
+   a split AppImage needs room for one more copy of it.
+2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
+   --feed build/release-<version>/beta.json --commit <sha>` checks every package
+   against its checksum file, its installed smoke report (version and update
+   identity) and its engine package, and signs nothing unless all of them pass. It
+   then signs private copies of exactly those files with the Keychain key, adds the
+   entries with their signed release statements next to the macOS entry, and prints
+   the `.sig` files it wrote. The copies need room for the largest package once more.
+3. `python scripts/verify_prepared_release.py --feed
+   build/release-<version>/beta.json --commit <sha> --files build/release-<version>
+   --files build/release-<version>/platforms` must pass: one entry per release
+   target, with its backend, kind, protocol, engine id and engine package, and every
+   statement and signature verified against the public key over the local files.
+4. Attach the packages, their parts and engine packages from the same runs
+   (`release_tag`, or `attach-release-assets.yml`), and upload the printed `.sig`
+   files from the Mac to the release. The signatures cover the exact files of those
+   runs; a rerun produces different files and needs new signatures.
+5. Install the previous version on a Windows machine and from an AppImage on Linux
+   and confirm that the update downloads, installs and relaunches, before the feed
+   goes live.
 
-`.github/workflows/desktop-release.yml` builds every target in
-`ci/tauri-targets.json` and fails without production signing.
+## Windows and Linux packages
+
+`windows-installers.yml` and `linux-appimages.yml` build the packages on
+GitHub-hosted runners. Both start only by hand, at the release tag or commit
+(`--ref`). Given `release_tag`, they attach the verified files to that existing
+release; otherwise the files stay run artifacts for 14 days, and
+`attach-release-assets.yml` can copy one reviewed artifact to a release later.
+Each build gets its update identity from `scripts/release_targets.py --update-env`
+and writes its engine package (`<package>.engine-payload.json` and its
+`.engine.tar.gz.part-*` files) next to the package; the updater signatures are made
+on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
 
 ### Targets
 
 | Platform | Engines | Runtime |
 | --- | --- | --- |
-| macOS, Apple Silicon | MPS | Torch 2.13, native ARM64 runner |
+| macOS, Apple Silicon | MPS | Torch 2.13, built and signed on a Mac with `release_macos_beta.sh` |
 | Windows 10/11, x86-64 | CPU, CUDA, DirectML | Torch 2.13; CUDA ships as an installer plus verified external engine payloads; DirectML through ONNX Runtime |
 | Linux, x86-64 | CPU, CUDA, AMD ROCm | separate Torch 2.13 distributions |
 
@@ -122,67 +148,54 @@ Intel XPU is listed under `withheld_targets`; see
 `ci/tauri-release-artifacts.json`, written by `scripts/release_targets.py
 --write-manifests`, must match the registry exactly. `requirements/locks/` holds
 the reviewed Windows and Linux dependency locks with hashes; refresh them with
-`scripts/lock_backend_requirements.py` and uv 0.12.8. Builders reuse verified
-wheelhouses (`backend_wheelhouse.py`) from `/ci-scratch/wheelhouses` or
-`C:\lsr-ci\wheelhouses` and install offline. Cargo output stays under
-`cargo-target/tauri-*`; only bundle output is cleared between variants. The
-registry budgets 15–100 GiB of scratch per backend; ROCm needs the most because
-its wheel, expanded runtime, frozen worker, AppDir and smoke extraction can
-coexist.
+`scripts/lock_backend_requirements.py` and uv 0.12.8. Builders install offline
+from verified wheelhouses prepared by `backend_wheelhouse.py`.
 
 Windows CUDA's installer embeds its engine manifest; the Rust host verifies the
 adjacent 1,900 MiB payload parts before extracting them into a staging directory
-and promoting them atomically. Oversized Linux AppImages are published as
-verified parts plus a shell helper that reconstructs the executable.
-`release-index.json` lists the exact files of each distribution.
+and promoting them atomically. AppImages larger than GitHub's 2 GB file limit
+are published as 1,900 MiB parts with the checksum of the whole file.
 
 ### Gates
 
-Every platform installs the package it built and starts the bundled host in
-headless smoke mode, which must complete the worker handshake. The publishing
-job streams the SHA-256 of every distribution, rejects duplicate content and
-requires a valid ARM64 Mach-O tree in the DMG, an x86-64 PE installer, an
-x86-64 ELF AppImage, Developer ID and notarization evidence for macOS,
-Authenticode evidence for Windows and a passing installed smoke test with a
-verified backend identity on every target. It downloads the draft release again
-and verifies every checksum before making it visible; published releases are
-never overwritten.
+Every package is installed and its bundled host started in headless smoke mode,
+which must complete the worker handshake with the expected backend
+(`smoke_tauri_installer.py`). `verify_tauri_release_package.py` checks the file
+format and architecture, `verify_codec_allowlist.py` the media runtime against
+`packaging/ffmpeg/codec-policy.json`, `verify_nvidia_redistributables.py` the
+NVIDIA files, and `pip check` the build environment. Every AppImage must also
+need at most glibc 2.35 (`verify_appimage_libc.py`) and show its window without
+network within 30 seconds (`verify_appimage_window.py`), as AppImageHub tests
+it. Each package gets its corresponding source bundle.
 
-Public files are the installers, payload parts and helpers, `SHA256SUMS` and
-`release-index.json`. Builders send their evidence to the private receiver with
-timestamped, nonce-bound HMAC; the token itself is never transmitted.
+The installed host's smoke report must also show the edition's update identity
+(`smoke_tauri_installer.py --update-target`), so a package built without its updater
+key cannot reach a release.
 
-### Signing secrets
+`scripts/check_desktop_architecture.py` fails when either workflow loses one of
+these gates, its update identity or its engine package, starts on anything but a
+manual run, or lets a job other than the attach job write to releases, and when
+`release_macos_beta.sh` loses its signing, notarization or smoke tests.
 
-macOS: `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`,
-`MACOS_SIGNING_IDENTITY`, `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_PASSWORD`,
-`MACOS_TEAM_ID`. Tauri signs, submits and staples; the verifier checks the
-signature chain, the Team ID, both tickets and Gatekeeper acceptance.
+### Signing
 
-Windows: `WINDOWS_CERTIFICATE_PFX_BASE64`, `WINDOWS_CERTIFICATE_PASSWORD`,
-`WINDOWS_CERTIFICATE_THUMBPRINT`, `WINDOWS_TIMESTAMP_URL`. The certificate is
-imported into the runner user's temporary store, Tauri signs the host and the
-NSIS installer, and the verifier requires a matching signer and timestamp. The
-beta's direct Windows installers are unsigned until a certificate is bought;
-the Microsoft Store package is signed by the Store.
+macOS: `release_macos_beta.sh` signs with the Developer ID identity, notarizes,
+staples and checks the app and the disk image with Gatekeeper, and signs the
+update archive with the updater key. The Windows and Linux updater files are signed
+with the same key on the Mac (`beta_update_signing.py platforms`). No workflow uses
+signing secrets.
+
+Windows: the beta's direct installers are not Authenticode-signed until a
+certificate is bought; the Microsoft Store package is signed by the Store.
 
 ### Failure recovery
 
-- Transient failure, same commit: re-run the failed jobs. Verified platform
-  artifacts from earlier attempts of the same run are reused.
-- Fix requires a new commit: start a new run and rebuild every platform.
+- Transient failure, same commit: re-run the failed jobs.
+- Fix requires a new commit: build every platform again from that commit.
 - Never present binaries from an older commit as products of a newer one.
 
 ### Runners
 
-Since September 2026, `linux-appimages.yml`, `windows-installers.yml` and macOS
-tests use GitHub-hosted runners. PR CI and Preview now also use `ubuntu-24.04`,
-`windows-2022` and Apple Silicon `macos-latest`, independently of release work.
-The mini runner and its on-demand Windows VM are retired on the host after this
-migration merges; see [ADR 0008](adr/0008-hosted-ci.md).
-
-`desktop-release.yml` remains manual-only with self-hosted Linux/Windows legs
-and hosted macOS. It is a candidate for removal and will need reprovisioning if
-used after the mini runner is retired. The manual `cleanup-runner.yml` and
-`macos-runner-maintenance.yml` and their scripts remain for legacy maintenance;
-Windows runner provisioning scripts live in `infra/windows/`.
+Every workflow runs on GitHub-hosted runners; see
+[ADR 0008](adr/0008-hosted-ci.md). The self-hosted release workflow, the runner
+maintenance workflows and their provisioning were removed in 0.3.1.

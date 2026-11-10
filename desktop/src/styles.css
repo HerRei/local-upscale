@@ -82,6 +82,11 @@ input:focus-visible {
   outline-offset: 1px;
 }
 
+/* A dialog takes the focus itself when it opens; the controls inside show the ring. */
+[role='dialog']:focus {
+  outline: none;
+}
+
 .startup-failure {
   width: min(620px, calc(100% - 48px));
   margin: 12vh auto 0;
@@ -124,6 +129,13 @@ input:focus-visible {
 .app-shell.booting {
   cursor: progress;
 }
+/* A route note or a hardware hint adds a status line; the bar grows to hold it. */
+.app-shell.status-extra {
+  grid-template-rows: 1fr minmax(54px, auto);
+}
+.app-shell.status-extra .status-bar {
+  padding-block: 7px;
+}
 .app-shell.queue-timing-visible {
   grid-template-rows: 1fr minmax(90px, auto);
 }
@@ -143,25 +155,82 @@ input:focus-visible {
 .mac .toolbar {
   padding-left: 84px;
 }
-/* Wide windows have no bar: the pane headings form the title row and the
-   window buttons sit at the start of the Media heading. */
-.mac .media-pane .pane-heading {
-  padding-left: 84px;
-}
-@media (max-width: 1279px) {
+/* Wide windows have no bar and the window buttons sit over the Media pane's top-left.
+   The first row is a clear strip with only the add button (and a line like the centre
+   header's); the tabs follow in a row of their own, level with the list content. */
+@media (min-width: 1280px) {
   .mac .media-pane .pane-heading {
-    padding-left: 16px;
+    flex: none;
+    display: grid;
+    grid-template-rows: 52px auto;
+    justify-content: stretch;
+    align-items: center;
+    padding-block: 0 4px;
   }
-}
-
-.pane-heading-meta {
-  margin-left: 8px;
-  margin-right: auto;
-  color: var(--tertiary);
+  .mac .media-pane .pane-heading::before {
+    content: '';
+    grid-area: 1 / 1;
+    align-self: stretch;
+    margin-inline: -8px -16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    pointer-events: none;
+  }
+  .mac .media-pane .pane-heading .add-media {
+    grid-area: 1 / 1;
+    justify-self: end;
+  }
+  .mac .media-pane .pane-heading .pane-tabs {
+    grid-area: 2 / 1;
+    justify-self: start;
+    margin-top: 8px;
+  }
 }
 .installed-row {
   grid-template-columns: minmax(0, 1fr) 96px auto;
   padding-right: 12px;
+}
+/* "Try others…": a checkbox per model; the whole row toggles it. */
+.trial-row {
+  grid-template-columns: 18px minmax(0, 1fr) 96px;
+  cursor: pointer;
+}
+.trial-row input {
+  margin: 0;
+}
+.trial-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.trial-summary h3,
+.trial-summary p {
+  margin: 0;
+}
+.trial-summary p {
+  color: var(--secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.try-others {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* The anchor is only as wide as the link, so the text needs a width of its own; the link
+   row does not wrap, the text does. */
+.try-others .help-tip-text {
+  right: 0;
+  left: auto;
+  width: min(280px, 80vw);
+  white-space: normal;
+}
+/* With work queued the footer may take a second line for its buttons. */
+.app-shell.queue-timing-visible .status-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .installed-row .row-select {
   min-width: 0;
@@ -171,39 +240,28 @@ input:focus-visible {
   text-align: left;
 }
 
+/* Narrow windows: the panes become pages, chosen with pane tabs (view-switch words). */
 .compact-nav {
-  display: none;
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  height: 30px;
-  padding: 3px;
-  border-radius: var(--radius);
-  background: var(--recess);
-  border: 1px solid rgba(255, 255, 255, 0.06);
 }
-.compact-nav button {
-  min-width: 78px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
+.view-switch.compact-nav {
+  display: none;
 }
-.compact-nav button.active {
-  color: white;
-  background: var(--raised);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
-}
+/* The count takes the word's colour; on the faint border tint both stay above 4.5:1. */
 .compact-nav span {
   margin-left: 4px;
   padding: 1px 5px;
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.121);
-  color: var(--secondary);
+  background: var(--border);
+  color: inherit;
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 400;
 }
 
 .workspace {
+  position: relative;
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -224,6 +282,26 @@ input:focus-visible {
   margin: 0;
   padding: 0;
   border: 0;
+}
+/* While a job runs the fieldset disables every setting. They all take the look the Task
+   and Quality cards already had when disabled; headings, the pane header and the "?" tips stay
+   at full strength so the pane can still be read. A label that wraps its checkbox dims as one,
+   so the checkbox itself is left out to keep the 38% from being applied twice. */
+.processing-settings:disabled
+  :is(
+    select,
+    textarea,
+    input:not([type='checkbox']),
+    label,
+    .field-label,
+    .directory-path,
+    .directory-field small,
+    .directory-field > b,
+    .range-head > b,
+    button:not(.disclosure)
+  ) {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 .enhance-pane {
   min-height: 0;
@@ -255,6 +333,14 @@ input:focus-visible {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
 }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .icon-button {
   width: 28px;
   height: 28px;
@@ -275,45 +361,19 @@ input:focus-visible {
   opacity: 0.4;
 }
 
-.segmented {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  margin: 0 12px 12px;
-  padding: 3px;
-  border-radius: var(--radius);
-  background: var(--recess);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-.segmented button {
-  min-height: 30px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
+.mode-scope {
+  margin: 0 0 8px;
+  padding: 0 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
-}
-.segmented button.active {
-  background: var(--raised);
-  color: var(--text);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
-}
-.segmented button:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-.mode-scope {
-  min-height: 30px;
-  margin: -5px 16px 8px;
-  color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .mode-scope.warning {
   color: #e7bc72;
 }
 .empty-card {
-  margin: 0 12px;
+  margin: 0 16px;
   padding: 22px 16px;
   text-align: center;
   display: flex;
@@ -329,7 +389,7 @@ input:focus-visible {
 .empty-card p {
   margin: 4px 0 14px;
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
   line-height: 1.45;
 }
 .empty-actions {
@@ -352,7 +412,7 @@ input:focus-visible {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 8px;
+  padding: 0 6px;
 }
 .media-row {
   position: relative;
@@ -361,7 +421,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 8px 0 10px;
+  padding: 0 10px;
   border: 0;
   border-radius: var(--radius);
   text-align: left;
@@ -370,8 +430,29 @@ input:focus-visible {
 .media-row:hover {
   background: rgba(255, 255, 255, 0.035);
 }
+/* Lighter at the thumbnail and fading out, so it reads differently from the flat selected grey. */
+.media-row.running {
+  background: linear-gradient(90deg, var(--raised), var(--panel));
+}
 .media-row.selected {
   background: rgba(255, 255, 255, 0.075);
+}
+/* The running picture's own progress, inside the row's bottom edge. */
+.row-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--border);
+}
+.row-progress i {
+  position: relative;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  background: var(--accent-hi);
+  transition: width 0.5s ease;
 }
 .media-select {
   min-width: 0;
@@ -433,14 +514,16 @@ input:focus-visible {
 }
 .media-copy span {
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
 }
 .media-copy .queue-state {
   width: fit-content;
   color: var(--secondary);
-  font-size: calc(10px * var(--ui-scale));
+  font-size: calc(11px * var(--ui-scale));
   line-height: 1;
-  text-transform: capitalize;
+}
+.media-row.running .queue-state {
+  color: var(--text);
 }
 .remove {
   appearance: none;
@@ -476,41 +559,57 @@ input:focus-visible {
 .media-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 8px 16px;
 }
 
 .preview-pane {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 52px 1fr;
+  /* A long name in the header must not widen the pane. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--base);
 }
+/* One row: the pane tabs, the file and its size, the view options at the end. The words
+   carry 8 px of padding, so the row's 8 px puts their text on the panes' 16 px line. */
 .preview-header {
+  min-height: 52px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+  gap: 8px;
+  padding: 0 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   background: #1b1b1d;
+  white-space: nowrap;
 }
-.preview-header > div:first-child {
+.preview-header > .view-switch {
+  flex: none;
+  margin-left: auto;
+}
+/* The name shrinks first and keeps its end. When even a short name would not fit beside
+   the size, the size wraps onto a second line that the fixed height hides. */
+.header-file {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.preview-header strong {
-  max-width: 45vw;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  height: 1.4em;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: calc(13px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
 }
-.preview-header span {
+.header-name {
+  flex: 1 1 96px;
+  min-width: 0;
+  max-width: max-content;
+}
+.header-size {
+  flex: none;
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
 }
 .labs-chip,
 .original-chip {
@@ -540,6 +639,11 @@ input:focus-visible {
 .view-switch button.active {
   color: var(--text);
   box-shadow: inset 0 -1px 0 var(--text);
+}
+/* Pane tabs: the same words a size up; they head their pane. */
+.view-switch.pane-tabs button {
+  font-size: calc(13px * var(--ui-scale));
+  font-weight: 600;
 }
 .canvas-well {
   position: relative;
@@ -600,11 +704,57 @@ input:focus-visible {
   pointer-events: none;
   image-rendering: auto;
 }
-.result-image {
+.result-image,
+.reference-image {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+/* A side whose preview is decoding or failed: never the Original underneath. */
+.side-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #18181a;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  text-align: center;
+}
+.side-placeholder.failed {
+  color: #ffc6bd;
+  background: #241514;
+}
+/* One label per side of the divider, in the lower corners. */
+.divider-labels {
+  position: absolute;
+  z-index: 5;
+  left: 12px;
+  right: 12px;
+  /* Above the docked update notice while it shows (--notice-room). */
+  bottom: max(12px, var(--notice-room, 0px));
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  pointer-events: none;
+}
+.divider-labels span {
+  box-sizing: border-box;
+  /* One fixed height, so what sits above the labels can clear them exactly. */
+  height: calc(11px * var(--ui-scale) * 1.3 + 10px);
+  line-height: 1.3;
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius);
+  background: rgba(24, 24, 26, 0.78);
+  color: #d0d0d3;
+  font-size: calc(11px * var(--ui-scale));
 }
 .progressive-image {
   position: absolute;
@@ -679,7 +829,8 @@ input:focus-visible {
   position: absolute;
   z-index: 5;
   right: 14px;
-  bottom: 14px;
+  /* --notice-room: the update notice's height plus its margins while it shows. */
+  bottom: max(14px, var(--notice-room, 0px));
   display: flex;
   min-height: 34px;
   padding: 3px;
@@ -687,6 +838,10 @@ input:focus-visible {
   background: rgba(24, 24, 26, 0.82);
   opacity: 0;
   transition: opacity 160ms ease-out;
+}
+/* With label chips along the bottom, the zoom control sits one gap above them. */
+.canvas-well:has(.divider-labels) .zoom-hud {
+  bottom: calc(max(12px, var(--notice-room, 0px)) + 11px * var(--ui-scale) * 1.3 + 10px + 8px);
 }
 .zoom-hud.shown,
 .zoom-hud:focus-within {
@@ -742,87 +897,11 @@ input:focus-visible {
   margin: 14px 0 8px;
   font-size: calc(16px * var(--ui-scale));
 }
-.canvas-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin: 22px 0 0;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
-}
-.canvas-hint svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: #bdbdbd;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.canvas-capabilities {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-  margin: 22px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.canvas-capabilities li {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  min-width: 132px;
-  padding: 14px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.025);
-}
-.canvas-capabilities svg {
-  width: 22px;
-  height: 22px;
-  margin-bottom: 4px;
-  fill: none;
-  stroke: #bdbdbd;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.canvas-capabilities b {
-  font-size: calc(12px * var(--ui-scale));
-  font-weight: 600;
-}
-.canvas-capabilities span {
-  color: var(--tertiary);
-  font-size: calc(11px * var(--ui-scale));
-}
 .canvas-empty p {
   margin: 0 0 18px;
   color: var(--tertiary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.55;
-}
-.preview-loading .canvas-icon {
-  animation: preview-pulse 1.25s ease-in-out infinite;
-}
-.canvas-icon {
-  width: 72px;
-  height: 60px;
-  margin: auto;
-}
-.canvas-icon svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-.canvas-icon rect {
-  fill: #19191b;
-  stroke: #69717e;
-  stroke-width: 1.5;
-}
-.canvas-icon circle:not(.video-disc) {
-  fill: #9a9a9a;
 }
 .canvas-icon path:not(.play-mark) {
   fill: none;
@@ -830,11 +909,6 @@ input:focus-visible {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-.canvas-icon .video-disc {
-  fill: #696969;
-  stroke: #bdbdbd;
-  stroke-width: 1.2;
 }
 .canvas-icon .play-mark {
   fill: white;
@@ -919,6 +993,7 @@ input:focus-visible {
 }
 select,
 input[type='text'],
+input[type='number'],
 .recipe-input input {
   width: 100%;
   min-height: 34px;
@@ -934,17 +1009,6 @@ input[type='text'],
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.45;
-}
-.license-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 9px;
-  color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
-}
-.license-line span:last-child {
-  text-align: right;
 }
 .terms,
 .check-row {
@@ -977,7 +1041,7 @@ input[type='text'],
   font-size: calc(11px * var(--ui-scale));
 }
 .download-track,
-.hardware-card > i {
+.meter-clip > i {
   display: block;
   height: 3px;
   margin-top: 6px;
@@ -986,10 +1050,15 @@ input[type='text'],
   background: #111113;
 }
 .download-track i,
-.hardware-card > i {
+.meter-clip > i {
   display: block;
   height: 100%;
   background: var(--accent-hi);
+}
+/* Memory pressure is information, not an action: grey, so terracotta stays on Start and
+   progress. */
+.meter-clip > i {
+  background: var(--tertiary);
 }
 .inline-warning {
   margin: 8px 0;
@@ -1042,13 +1111,18 @@ input[type='text'],
   gap: 8px;
 }
 .field-row label,
-.range-row label {
+.range-row label,
+.range-head {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.range-row label {
+.range-row {
+  position: relative;
+}
+.range-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 5px;
 }
 .range-row input {
@@ -1056,6 +1130,7 @@ input[type='text'],
   accent-color: #cfcfcf;
 }
 .directory-field {
+  position: relative;
   width: 100%;
   min-height: 46px;
   padding: 7px 9px;
@@ -1068,8 +1143,19 @@ input[type='text'],
   background: var(--recess);
   text-align: left;
 }
-.directory-field span {
+/* The whole card picks the folder; the "?" sits above this layer. */
+.directory-hit {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+.directory-text {
   min-width: 0;
+}
+.directory-path {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1086,10 +1172,13 @@ input[type='text'],
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
 }
+/* The first column is as wide as the label column of the rows above, so the second starts
+   on their select edge. */
 .field-grid {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 8px;
 }
 .field-grid label {
   color: var(--secondary);
@@ -1100,7 +1189,6 @@ input[type='text'],
 }
 .hardware-card {
   position: relative;
-  overflow: hidden;
   min-height: 38px;
   padding: 8px;
   display: flex;
@@ -1112,16 +1200,45 @@ input[type='text'],
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.hardware-card button {
-  border: 0;
-  background: transparent;
+.memory-refresh {
+  display: inline-grid;
+  padding: 1px 6px;
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
+  cursor: pointer;
+  user-select: none;
 }
-.hardware-card > i {
+.memory-refresh:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.memory-refresh[aria-disabled='true'] {
+  cursor: default;
+}
+/* Both words share one cell, so the button is as wide as the longer one. */
+.refresh-ghost,
+.refresh-now {
+  grid-area: 1 / 1;
+  text-align: right;
+}
+.refresh-ghost {
+  visibility: hidden;
+}
+/* Clips the meter to the card's rounded corners; the card itself must not clip, or its help
+   tip would be cut off. */
+.meter-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.meter-clip > i {
   position: absolute;
   left: 0;
   bottom: 0;
+  /* A thin meter along the bottom edge; the shared rule above makes it full height. */
+  height: 3px;
   margin: 0;
   max-width: 100%;
 }
@@ -1178,33 +1295,6 @@ input[type='text'],
   border-radius: var(--radius);
   background: var(--accent);
   font-size: calc(11px * var(--ui-scale));
-}
-.about-block {
-  padding: 17px 0;
-  color: var(--secondary);
-}
-.about-heading {
-  display: flex;
-  justify-content: space-between;
-}
-.about-heading b {
-  color: var(--text);
-  font-size: calc(12px * var(--ui-scale));
-}
-.about-heading span {
-  font-size: calc(11px * var(--ui-scale));
-}
-.about-link {
-  margin: 9px 10px 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: calc(11px * var(--ui-scale));
-}
-.about-block > p {
-  font-size: calc(11px * var(--ui-scale));
-  line-height: 1.5;
 }
 
 .button {
@@ -1275,12 +1365,11 @@ input[type='text'],
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #6db07f;
-  box-shadow: 0 0 8px rgba(109, 176, 127, 0.2);
+  /* Grey, not green: the dot cannot tell "ready" from a lost device or a failure. */
+  background: var(--tertiary);
 }
 .status-copy > i.working {
   background: var(--accent);
-  animation: pulse 1.2s infinite;
 }
 .status-copy > div {
   min-width: 0;
@@ -1299,11 +1388,38 @@ input[type='text'],
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
+/* A failure or a GPU note can run long; two lines keep its instruction readable, and the
+   tooltip holds the rest. */
+.status-copy span.status-detail,
+.status-copy span.status-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  line-height: 1.35;
+}
+/* The engine's route note and the hint for a faster unit, on a line of their own. */
+.status-copy span.status-note {
+  color: var(--text);
+}
+.status-note .link-button {
+  color: var(--text);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .status-actions {
   display: flex;
+  flex: none;
   gap: 6px;
 }
-.status-actions .start {
+/* The buttons keep their size; the status text gives way first. */
+.status-actions .button {
+  flex: none;
+  white-space: nowrap;
+}
+.status-actions .start:not(.scope-one) {
   min-width: 150px;
 }
 .progress {
@@ -1322,37 +1438,42 @@ input[type='text'],
   background: var(--accent-hi);
   transition: width 0.5s ease;
 }
-/* A moving shine shows that work continues between progress updates. */
-.progress i::after {
+/* A moving shine shows that work continues between progress updates. It is a layer as wide as
+   the whole line, moved by transform on the compositor and clipped by the filled part, so a
+   change of the fill's width neither restarts it nor makes it jump. */
+.progress,
+.row-progress {
+  container-type: inline-size;
+}
+.progress i::after,
+.row-progress i::after {
   content: '';
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100cqw;
   background: linear-gradient(
     100deg,
-    transparent 30%,
+    transparent 40%,
     rgba(231, 231, 231, 0.8) 50%,
-    transparent 70%
+    transparent 60%
   );
-  background-size: 250% 100%;
   animation: progress-shine 1.6s linear infinite;
 }
 @keyframes progress-shine {
   from {
-    background-position: 125% 0;
+    transform: translateX(-100%);
   }
   to {
-    background-position: -125% 0;
+    transform: translateX(100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .progress i::after {
+  .progress i::after,
+  .row-progress i::after {
     animation: none;
-  }
-}
-@keyframes pulse {
-  50% {
-    opacity: 0.45;
-    transform: scale(0.8);
+    display: none;
   }
 }
 
@@ -1705,14 +1826,14 @@ input[type='text'],
 .benchmark-device-heading > div:first-child {
   min-width: 0;
 }
-.benchmark-device-heading > div:first-child span {
+.benchmark-device-heading > div:first-child > span {
   display: block;
   margin-bottom: 3px;
   color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
   font-weight: 600;
 }
-.benchmark-device.cpu .benchmark-device-heading > div:first-child span {
+.benchmark-device.cpu .benchmark-device-heading > div:first-child > span {
   color: var(--tertiary);
 }
 .benchmark-device-heading > div:first-child strong {
@@ -1916,7 +2037,7 @@ input[type='text'],
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px 14px;
+  padding: 0 14px max(14px, var(--notice-room, 0px));
 }
 /* In the video bar, zoom sits beside the always-visible transport: fading it
    on pointer-out left the bar cut short with an empty gap. */
@@ -2052,6 +2173,9 @@ input[type='text'],
   .app-shell {
     grid-template-rows: 52px 1fr 54px;
   }
+  .app-shell.status-extra {
+    grid-template-rows: 52px 1fr minmax(54px, auto);
+  }
   .app-shell.queue-timing-visible {
     grid-template-rows: 52px 1fr minmax(90px, auto);
   }
@@ -2064,13 +2188,13 @@ input[type='text'],
   .enhance-pane {
     position: absolute;
     z-index: 20;
-    top: 52px;
+    top: 0;
     right: 0;
-    bottom: 54px;
+    bottom: 0;
     width: 360px;
     box-shadow: -22px 0 50px rgba(0, 0, 0, 0.38);
   }
-  .compact-nav {
+  .view-switch.compact-nav {
     display: flex;
   }
   .compact-nav button:first-child {
@@ -2086,7 +2210,6 @@ input[type='text'],
   }
   .workspace {
     display: block;
-    position: relative;
   }
   .workspace > * {
     position: absolute;
@@ -2100,8 +2223,16 @@ input[type='text'],
     border: 0;
     box-shadow: none;
   }
+  /* Enhance reads as a column as wide as Media's, centred the same way. */
+  .enhance-pane .pane-heading {
+    width: min(440px, calc(100% - 24px));
+    margin-inline: auto;
+  }
+  .enhance-pane .inspector-scroll {
+    padding-inline: max(16px, calc(50% - 204px));
+  }
   .media-pane .pane-heading,
-  .media-pane .segmented,
+  .media-pane .mode-scope,
   .media-pane .empty-card,
   .media-pane .media-list,
   .media-pane .media-actions {
@@ -2200,32 +2331,96 @@ input[type='text'],
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.plan {
-  overflow: hidden;
+/* In the Model card the links are 24 px targets; the padding is taken back by the margin, so
+   the text sits where it did. */
+.model-section .link-button {
+  padding-block: 5px;
+  margin-block: -5px;
 }
 .plan-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
+  grid-template-columns: 68px minmax(0, 1fr) auto;
+  gap: 2px 6px;
+  align-items: center;
   padding: 4px 0;
 }
 .plan-row .stage {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
 }
-.plan-copy {
-  min-width: 0;
-}
 .plan-row .name {
+  min-width: 0;
+  overflow: hidden;
   font-size: calc(13px * var(--ui-scale));
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.plan-row .meta {
-  margin-top: 2px;
+/* Line 2 holds the library links, line 3 the note; both run from the name column to the right
+   edge. The note takes at most two lines (the full text is its tooltip). */
+.plan-links,
+.plan-note,
+.plan-extra {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+.plan-links {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  /* Room for the 24 px targets of the links on both lines (see .model-section .link-button). */
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+}
+.plan-links .link-button,
+.plan-links .try-others {
+  flex: none;
+  white-space: nowrap;
+}
+.plan-links .try-others {
+  margin-left: auto;
+}
+.plan-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 2px 0 0;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.4;
+}
+.plan-end {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* As tall as the arrow buttons, so a row's links never touch the line below. */
+  min-height: 24px;
+}
+.plan-moves {
+  display: flex;
+}
+.move-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--secondary);
+  font-size: calc(13px * var(--ui-scale));
+  line-height: 1;
+}
+.move-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.plan-row .state:empty {
+  display: none;
 }
 .plan-row .state {
   white-space: nowrap;
@@ -2262,7 +2457,6 @@ input[type='text'],
   outline-offset: 1px;
 }
 .field-grid input[type='number'] {
-  width: 100%;
   margin-top: 4px;
 }
 
@@ -2349,7 +2543,7 @@ input[type='text'],
   color: var(--text);
 }
 .rail-item small {
-  color: var(--tertiary);
+  color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
 .list {
@@ -2423,7 +2617,7 @@ input[type='text'],
   grid-template-columns: 42px 1fr;
   align-items: center;
   gap: 6px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
 }
 .dots {
@@ -2445,7 +2639,7 @@ input[type='text'],
 }
 .row .name .tech {
   margin-left: 7px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font:
     500 calc(10px * var(--ui-scale)) ui-monospace,
     SFMono-Regular,
@@ -2569,6 +2763,15 @@ input[type='text'],
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A long author shrinks and keeps its end; the link words always show. */
+.kv dd .link-button {
+  display: inline-flex;
+  max-width: 100%;
+}
+.kv dd .source-link {
+  flex: none;
+  white-space: pre;
+}
 .fit {
   display: flex;
   align-items: center;
@@ -2583,15 +2786,36 @@ input[type='text'],
   background: #6db07f;
   box-shadow: 0 0 8px rgba(109, 176, 127, 0.2);
 }
+.row .row-fit {
+  margin-top: 3px;
+  gap: 6px;
+  font-size: calc(10px * var(--ui-scale));
+}
+.row .row-fit i {
+  flex: none;
+}
+.row .row-fit span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .fit i.warn {
   background: #de9935;
   box-shadow: none;
 }
+/* The action area stays at the bottom of the details while they scroll. */
 .actions {
+  position: sticky;
+  /* The details keep 16 px of padding below the sticky edge; reach past it to the bottom. */
+  bottom: -16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-top: auto;
+  padding: 8px 0 16px;
+  margin-bottom: -16px;
+  background: var(--panel);
 }
 .actions .pair {
   display: grid;
@@ -2637,6 +2861,13 @@ input[type='text'],
   border-color: var(--border);
   background: rgba(255, 255, 255, 0.04);
   color: var(--secondary);
+}
+/* On the lighter selected row the muted pills need the full text colour to stay readable. */
+.row.selected .pill.labs,
+.row.selected .pill.best,
+.row.selected .pill.quick,
+.row.selected .pill.ok {
+  color: var(--text);
 }
 .pill.warn {
   border-color: rgba(222, 153, 53, 0.3);
@@ -2696,4 +2927,146 @@ input[type='text'],
 }
 .ffmpeg-notice .modal-actions {
   flex-wrap: wrap;
+}
+
+/* A visible "?" next to a setting; its text spans the nearest positioned container. */
+.field-heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 12px 0 6px;
+}
+.field-heading .field-label {
+  margin: 0;
+}
+.help-tip {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  /* A 24 px target around the 14 px circle; the negative margins keep the layout of the
+     14 px button. */
+  width: calc(14px * var(--ui-scale) + 10px);
+  flex: none;
+  min-width: 0;
+  height: calc(14px * var(--ui-scale) + 10px);
+  min-height: 0;
+  margin: -5px -5px -5px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--tertiary);
+  font-size: calc(9px * var(--ui-scale));
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: 1px;
+  cursor: help;
+  user-select: none;
+}
+.help-tip::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+.help-tip:hover,
+.help-tip:focus-visible {
+  background: transparent;
+  color: var(--text);
+}
+.help-tip:hover::before,
+.help-tip:focus-visible::before {
+  border-color: var(--accent-line);
+}
+.help-tip:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: -4px;
+}
+.help-tip-text {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: var(--raised);
+  color: var(--text);
+  font-size: calc(11.5px * var(--ui-scale));
+  font-weight: 400;
+  line-height: 1.45;
+  pointer-events: none;
+}
+/* Near the bottom of a scrolling column the text opens upwards instead of being cut off. */
+.help-tip-text.above {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.help-tip-text[hidden] {
+  display: none;
+}
+.label-with-tip {
+  display: inline-flex;
+  align-items: center;
+}
+/* A long Hardware entry (a GPU and its route) gets the full width under its label. */
+.field-row.button-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+.button-row button {
+  white-space: nowrap;
+}
+.field-row.stacked {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+.failure-note p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.field-row {
+  position: relative;
+}
+.check-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.main-area {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.main-area > .preview-pane {
+  flex: 1;
+}
+/* A Compare slot's number: on the chips, the image labels and the picked Outputs rows. */
+.slot-number {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--base);
+  font-size: 10px;
+  font-weight: 600;
+}
+.compare-request-error {
+  color: var(--text);
+  background: var(--panel);
+  padding: 6px 16px;
+}
+@media (max-width: 919px) {
+  .main-area.compact-hidden {
+    display: none;
+  }
 }

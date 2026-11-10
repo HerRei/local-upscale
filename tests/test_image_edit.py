@@ -161,15 +161,22 @@ def test_pressure_or_busy_gpu_refuses_loading(memory):
 
 
 MAC_PLAN = EditPlan(16 * GIB, 2 * GIB, 10 * GIB, 512, 16 * GIB)
-MAC_RUNNING = EditMemory(24 * GIB, 4 * GIB, 0, unified=True, pressure="low", obtainable_ram=6 * GIB)
+MAC_RUNNING = EditMemory(16 * GIB, 4 * GIB, 0, unified=True, pressure="low", obtainable_ram=6 * GIB)
 
 
 @pytest.mark.parametrize(
     "change,used,warning_seconds,critical_samples,reason",
     [
         ({"pressure": "critical"}, 0, 1.0, 2, "critical memory pressure"),
-        ({"swap_used": 3 * GIB}, 0, 0.0, 0, "swapped 3.0 GiB"),
-        ({"pressure": "warning", "swap_used": GIB}, 0, 31.0, 0, "stayed high for 31 s"),
+        ({"swap_used": int(8.5 * GIB)}, 0, 0.0, 0, "swapped 8.5 GiB to disk, more than half"),
+        (
+            {"swap_used": 3 * GIB, "disk_free": 6_000_000_000, "disk_reserve": 8_000_000_000},
+            0,
+            0.0,
+            0,
+            "only 6.0 GB of disk space was free",
+        ),
+        ({"pressure": "warning", "swap_used": int(2.5 * GIB)}, 0, 90.0, 0, "stayed high for 90 s"),
         ({}, 17 * GIB, 0.0, 0, "more than its 16.0 GiB limit"),
     ],
 )
@@ -193,6 +200,10 @@ def test_mac_supervisor_stops_only_when_the_system_is_in_trouble(
         # Compression and some swap are how a unified-memory Mac makes room.
         ({"pressure": "warning"}, 120.0, 0),
         ({"swap_used": GIB}, 0.0, 0),
+        # The owner's 16 GB Mac: a model load pushed 2.2 GiB of other apps to swap.
+        ({"pressure": "warning", "swap_used": int(2.2 * GIB)}, 40.0, 0),
+        ({"pressure": "warning", "swap_used": 3 * GIB}, 89.0, 0),
+        ({"swap_used": 3 * GIB, "disk_free": 9_000_000_000, "disk_reserve": 8_000_000_000}, 0.0, 0),
         ({"pressure": "critical"}, 0.0, 1),
         ({"obtainable_ram": GIB // 2, "available_ram": GIB // 4}, 0.0, 0),
     ],
@@ -208,6 +219,35 @@ def test_mac_supervisor_lets_macos_compress_and_swap_a_little(
         warning_seconds=warning_seconds,
         critical_samples=critical_samples,
     )
+
+
+def test_mac_swap_bound_is_half_of_memory_but_at_least_4_gib():
+    big = EditMemory(64 * GIB, 8 * GIB, 0, unified=True, pressure="low", obtainable_ram=8 * GIB)
+    plan = EditPlan(16 * GIB, 2 * GIB, 10 * GIB, 512, 16 * GIB)
+    check_edit_pressure(replace(big, swap_used=31 * GIB), plan, 0, 0)
+    with pytest.raises(MemoryError, match="swapped 33.0 GiB"):
+        check_edit_pressure(replace(big, swap_used=33 * GIB), plan, 0, 0)
+    small = EditMemory(4 * GIB, GIB, 0, unified=True, pressure="low", obtainable_ram=GIB)
+    check_edit_pressure(replace(small, swap_used=3 * GIB), plan, 0, 0)
+    with pytest.raises(MemoryError, match="swapped 5.0 GiB"):
+        check_edit_pressure(replace(small, swap_used=5 * GIB), plan, 0, 0)
+
+
+def test_sustained_warning_counts_swap_growth_inside_the_warning_period():
+    warm = replace(MAC_RUNNING, pressure="warning", swap_used=3 * GIB)
+    # Swap grew a lot before the warning began and only 0.5 GiB since: not thrashing.
+    check_edit_pressure(warm, MAC_PLAN, 0, 0, warning_seconds=200.0, warning_swap=int(2.5 * GIB))
+
+
+def test_host_memory_reads_system_disk_room(monkeypatch):
+    from localsr.core import disk_space, edit_memory
+
+    volume = disk_space.Volume(1, 5_000_000_000, 100_000_000_000, True)
+    monkeypatch.setattr(disk_space, "volume_of", lambda folder: volume)
+    memory = edit_memory.read_host_memory(unified=True)
+    assert memory.disk_free == 5_000_000_000
+    assert memory.disk_reserve == disk_space.reserve_for(volume)
+    assert edit_memory.read_host_memory(unified=False).disk_free == 0
 
 
 @pytest.mark.parametrize(
@@ -393,6 +433,100 @@ def test_edit_job_lifecycle_with_tiny_files_and_no_model_runtime(monkeypatch, tm
     assert all(child.stdin.closed and child.stdout.closed for child in children)
 
 
+def test_an_edit_that_does_not_fit_is_refused_before_anything_is_written(monkeypatch, tmp_path):
+    import shutil
+
+    from PIL import Image
+
+    from localsr.core import disk_space
+
+    monkeypatch.delenv("LOCALSR_DISK_RESERVE_BYTES")
+
+    request = {
+        "job_id": "fixture-edit",
+        "model_id": model()["model_id"],
+        "prompt": "Change the background.",
+        "device": "mps",
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": str(tmp_path),
+        "image_path": str(tmp_path / "source.png"),
+        "output_path": str(tmp_path / "output.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    (tmp_path / "scratch").mkdir()
+    Image.new("RGB", (128, 96)).save(request["image_path"])
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+    monkeypatch.setattr(
+        image_edit,
+        "verify_bundle",
+        lambda *_: {entry["role"]: Path(entry["filename"]) for entry in model()["files"]},
+    )
+    monkeypatch.setattr(
+        disk_space,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(100 * 10**9, 99 * 10**9, 10**9),
+    )
+    monkeypatch.setattr(
+        image_edit.subprocess, "Popen", lambda *a, **k: pytest.fail("the editor must not start")
+    )
+    memory = EditMemory(26 * GIB, 25 * GIB, unified=True)
+    with pytest.raises(disk_space.DiskFullError, match="Not enough free disk space"):
+        image_edit.run_edit_job(
+            request, threading.Event(), lambda _: None, sampler=lambda _: memory
+        )
+    assert not list((tmp_path / "scratch").iterdir())
+    assert not Path(request["output_path"]).exists()
+
+
+def test_a_cancel_during_verification_stops_the_edit_before_it_is_published(monkeypatch, tmp_path):
+    from PIL import Image
+
+    request = {
+        "job_id": "fixture-edit",
+        "model_id": model()["model_id"],
+        "prompt": "Change the background.",
+        "device": "mps",
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": str(tmp_path),
+        "image_path": str(tmp_path / "source.png"),
+        "output_path": str(tmp_path / "output.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    (tmp_path / "scratch").mkdir()
+    Image.new("RGB", (128, 96)).save(request["image_path"])
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+    monkeypatch.setattr(
+        image_edit,
+        "verify_bundle",
+        lambda *_: {entry["role"]: Path(entry["filename"]) for entry in model()["files"]},
+    )
+    cancel = threading.Event()
+
+    class FixtureProcess:
+        def __init__(self, command, **_kwargs):
+            native = json.loads(Path(command[-1]).read_text())["command"]
+            Image.new("RGB", (128, 96), "red").save(native[native.index("-o") + 1])
+            self.stdin, self.stdout, self.returncode = io.BytesIO(), io.BytesIO(b""), 0
+
+        def poll(self):
+            return self.returncode
+
+    from PIL import PngImagePlugin
+
+    real_verify = PngImagePlugin.PngImageFile.verify
+
+    def verify_then_cancel(image):
+        real_verify(image)
+        cancel.set()
+
+    monkeypatch.setattr(image_edit.subprocess, "Popen", FixtureProcess)
+    monkeypatch.setattr(PngImagePlugin.PngImageFile, "verify", verify_then_cancel)
+    memory = EditMemory(26 * GIB, 25 * GIB, unified=True)
+    with pytest.raises(InterruptedError):
+        image_edit.run_edit_job(request, cancel, lambda _: None, sampler=lambda _: memory)
+    assert not Path(request["output_path"]).exists()
+
+
 @pytest.mark.parametrize("outcome", ["success", "cancel", "failure"])
 def test_worker_releases_restoration_caches_before_edit_and_clears_active_job(monkeypatch, outcome):
     from types import SimpleNamespace
@@ -427,6 +561,28 @@ def test_worker_releases_restoration_caches_before_edit_and_clears_active_job(mo
             assert ("job_cancelled" if outcome == "cancel" else "job_failed") in events
     finally:
         server.result_previews.close()
+
+
+def test_edit_refuses_an_output_name_the_file_system_cannot_hold_before_any_work(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        image_edit, "check_runtime", lambda _: pytest.fail("Runtime must not start")
+    )
+    request = {
+        "job_id": "long-name",
+        "model_id": model()["model_id"],
+        "prompt": "Change the background.",
+        "device": "mps",
+        "output_path": str(tmp_path / ("y" * 252 + ".png")),
+    }
+    with pytest.raises(ValueError, match="allows at most"):
+        image_edit.run_edit_job(
+            request,
+            threading.Event(),
+            lambda _message: None,
+            sampler=lambda _: EditMemory(64 * GIB, 60 * GIB, unified=True),
+        )
 
 
 def test_catalog_offers_only_openly_licensed_bundles():

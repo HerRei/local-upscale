@@ -131,6 +131,48 @@ describe('video comparison player', () => {
     expect(videos[1].getAttribute('src')).toBeNull();
   });
 
+  it('keeps the original in step when the enhanced video pauses or stalls on its own', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/generated-original.mp4',
+      enhancedSrc: 'asset://localhost/generated-enhanced.mp4',
+    });
+    const [original, enhanced] = rendered.container.querySelectorAll('video');
+    const pause = vi.spyOn(original, 'pause');
+    const play = vi.spyOn(original, 'play').mockResolvedValue(undefined);
+    await fireEvent(enhanced, new Event('pause'));
+    expect(pause).toHaveBeenCalledTimes(1);
+    Object.defineProperty(original, 'paused', { configurable: true, value: true });
+    await fireEvent(enhanced, new Event('playing'));
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts playback although the enhanced video buffers before both have started', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/generated-original.mp4',
+      enhancedSrc: 'asset://localhost/generated-enhanced.mp4',
+    });
+    const [original, enhanced] = rendered.container.querySelectorAll('video');
+    Object.defineProperty(enhanced, 'paused', { configurable: true, writable: true, value: true });
+    // A pending play() is aborted by pause(), as in WebKit.
+    let started = false;
+    const pending = (video: HTMLVideoElement) =>
+      new Promise<void>((resolve, reject) => {
+        video.addEventListener('test-start', () => resolve());
+        vi.spyOn(video, 'pause').mockImplementation(() => {
+          if (!started) reject(new DOMException('interrupted', 'AbortError'));
+        });
+      });
+    vi.spyOn(original, 'play').mockImplementation(() => pending(original));
+    vi.spyOn(enhanced, 'play').mockImplementation(() => pending(enhanced));
+    await fireEvent.click(screen.getByRole('button', { name: 'Play comparison' }));
+    await fireEvent(enhanced, new Event('waiting'));
+    started = true;
+    original.dispatchEvent(new Event('test-start'));
+    enhanced.dispatchEvent(new Event('test-start'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/Playback could not start/)).toBeNull();
+  });
+
   it('zooms like a photo: wheel, zoom HUD, Fit and 1:1, and pans when zoomed', async () => {
     canvasRect(800, 450);
     const { container } = render(VideoComparison, {
@@ -220,3 +262,28 @@ function canvasRect(width: number, height: number): void {
     toJSON: () => ({}),
   });
 }
+
+describe('video comparison slider', () => {
+  it('announces a value text that moves with aria-valuenow', async () => {
+    const { container } = render(VideoComparison, {
+      originalSrc: 'asset://o.mp4',
+      enhancedSrc: 'asset://e.mp4',
+      sourceWidth: 1280,
+      sourceHeight: 720,
+    });
+    const viewport = container.querySelector('.video-viewport') as HTMLDivElement;
+    const divider = screen.getByRole('slider', { name: 'Video before and after comparison' });
+    await fireEvent.keyDown(divider, { key: 'Home' });
+    const low = [
+      Number(divider.getAttribute('aria-valuenow')),
+      Number(/(\d+)%/.exec(divider.getAttribute('aria-valuetext') ?? '')?.[1]),
+    ];
+    await fireEvent.keyDown(divider, { key: 'End' });
+    const high = [
+      Number(divider.getAttribute('aria-valuenow')),
+      Number(/(\d+)%/.exec(divider.getAttribute('aria-valuetext') ?? '')?.[1]),
+    ];
+    expect(viewport).toBeTruthy();
+    expect(Math.sign(high[0] - low[0])).toBe(Math.sign(high[1] - low[1]));
+  });
+});

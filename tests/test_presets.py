@@ -15,12 +15,9 @@ from localsr.core.presets import (
     Preset,
     PresetMode,
     _balanced_score,
-    _device_priority,
     _mode_category,
     _purpose_match,
-    get_preset_model,
     rank_models_for_preset,
-    resolve_settings_for_model,
     select_model_for_preset,
 )
 
@@ -216,7 +213,7 @@ class TestPresetRankingFormulas:
 
 class TestStandardCatalogRankings:
     def test_photo_fast_preset_selects_span_photo_x4(self):
-        selected = get_preset_model(Preset.FAST, ModelPurpose.PHOTO)
+        selected = select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.PHOTO)
         assert selected.model_id == "span_photo_x4"
 
         selected_quick = select_model_for_preset(
@@ -225,7 +222,7 @@ class TestStandardCatalogRankings:
         assert selected_quick.model_id == "span_photo_x4"
 
     def test_photo_ultra_preset_selects_realplksr_nomos8k(self):
-        selected = get_preset_model(Preset.ULTRA, ModelPurpose.PHOTO)
+        selected = select_model_for_preset(MODEL_CATALOG, Preset.ULTRA, purpose=ModelPurpose.PHOTO)
         assert selected.model_id == "realplksr_nomoswebphoto_x4"
 
         selected_best = select_model_for_preset(
@@ -234,21 +231,33 @@ class TestStandardCatalogRankings:
         assert selected_best.model_id == "realplksr_nomoswebphoto_x4"
 
     def test_photo_quality_preset_selects_realplksr(self):
-        selected = get_preset_model(Preset.QUALITY, ModelPurpose.PHOTO)
+        selected = select_model_for_preset(
+            MODEL_CATALOG, Preset.QUALITY, purpose=ModelPurpose.PHOTO
+        )
         assert selected.model_id == "realplksr_nomoswebphoto_x4"
 
-    def test_illustration_fast_preset_selects_the_compact_anime_model(self):
-        # Real-ESRGAN Anime 6B is the fastest verified illustration checkpoint;
-        # HFA2k stays the Best pick (same quality tier, larger model).
-        selected = get_preset_model(Preset.FAST, ModelPurpose.ILLUSTRATION)
-        assert selected.model_id == "realesrgan_x4plus_anime_6b"
-        assert get_preset_model(Preset.ULTRA, ModelPurpose.ILLUSTRATION).model_id == (
-            "realplksr_hfa2k_anime_x4"
-        )
+    def test_illustration_presets_pick_the_illustration_models(self):
+        quick = "realesrgan_x4plus_anime_6b"
+        best = "realplksr_hfa2k_anime_x4"
+        for purpose in (ModelPurpose.ILLUSTRATION, "illustration", "anime"):
+            assert (
+                select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=purpose).model_id
+                == quick
+            )
+            assert (
+                select_model_for_preset(MODEL_CATALOG, Preset.ULTRA, purpose=purpose).model_id
+                == best
+            )
+        for mode, expected in ((PresetMode.QUICK_UPSCALE, quick), (PresetMode.BEST_UPSCALE, best)):
+            assert (
+                select_model_for_preset(MODEL_CATALOG, mode, purpose="illustration").model_id
+                == expected
+            )
 
-    def test_illustration_via_string_anime_selects_the_compact_anime_model(self):
-        selected = get_preset_model(Preset.FAST, "anime")
-        assert selected.model_id == "realesrgan_x4plus_anime_6b"
+    def test_photo_presets_never_pick_an_illustration_model(self):
+        for mode in (PresetMode.QUICK_UPSCALE, PresetMode.BEST_UPSCALE):
+            picked = select_model_for_preset(MODEL_CATALOG, mode, purpose=ModelPurpose.PHOTO)
+            assert ModelPurpose.PHOTO in picked.purposes
 
     def test_face_quick_selects_hat_s_x4_face(self):
         selected = select_model_for_preset(
@@ -277,11 +286,35 @@ class TestStandardCatalogRankings:
         )
         assert selected.model_id == "nafnet_sidd_width64"
 
+    def test_slow_specialists_never_become_a_preset(self):
+        from dataclasses import replace
+
+        # Shipped choices exclude ineligible catalogue entries.
+        for mode in Preset:
+            for purpose in (ModelPurpose.PHOTO, ModelPurpose.GENERAL):
+                ranked = rank_models_for_preset(MODEL_CATALOG, mode, purpose=purpose)
+                assert all(model.preset_eligible for model in ranked)
+        assert (
+            select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.PHOTO).model_id
+            == "span_photo_x4"
+        )
+        assert (
+            select_model_for_preset(MODEL_CATALOG, Preset.QUALITY, purpose=ModelPurpose.PHOTO)
+            is not None
+        )
+        # Even a higher tier and a larger file do not make one the Best preset.
+        dat2 = next(model for model in MODEL_CATALOG if model.model_id == "bhi_dat2_real_x4")
+        louder = replace(dat2, quality_tier=QualityTier.ULTRA, size_bytes=10**10)
+        ranked = rank_models_for_preset([*MODEL_CATALOG, louder], Preset.QUALITY)
+        assert louder not in ranked
+
     def test_deblur_selects_nafnet_gopro_deblur(self):
-        selected = get_preset_model(Preset.FAST, ModelPurpose.DEBLUR)
+        selected = select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.DEBLUR)
         assert selected.model_id == "nafnet_gopro_deblur"
 
-        selected_restoration = get_preset_model(Preset.QUALITY, "restoration")
+        selected_restoration = select_model_for_preset(
+            MODEL_CATALOG, Preset.QUALITY, purpose="restoration"
+        )
         assert selected_restoration.model_id == "nafnet_gopro_deblur"
 
 
@@ -384,177 +417,3 @@ class TestEdgeCases:
                 )
                 assert all(m.native_scale >= scale for m in ranked)
                 assert all(_purpose_match(m, target_purpose) > 0 for m in ranked)
-
-
-class TestDevicePriorityAndSettingsResolution:
-    @pytest.mark.parametrize("mode", [PresetMode.QUICK_UPSCALE, PresetMode.BEST_UPSCALE])
-    def test_presets_use_an_available_intel_igpu_before_cpu(self, mode):
-        gib = 1024**3
-        model = _make_dummy_model("m1")
-        settings = resolve_settings_for_model(
-            model=model,
-            mode=mode,
-            devices=[
-                {
-                    "id": "cpu",
-                    "type": "cpu",
-                    "name": "CPU",
-                    "free_memory": 8 * gib,
-                    "supports_fp16": False,
-                    "recommended_tile_sizes": [64, 128],
-                },
-                {
-                    "id": "directml:1",
-                    "type": "directml",
-                    "name": "Intel(R) Iris(R) Xe Graphics (DirectML)",
-                    "free_memory": 2 * gib,
-                    "supports_fp16": True,
-                    "recommended_tile_sizes": [64, 128],
-                    "is_integrated": True,
-                },
-            ],
-            image_width=128,
-            image_height=96,
-            output_scale=4,
-            available_system_memory=8 * gib,
-            available_disk=10 * gib,
-            model_half_supported=True,
-        )
-        assert settings.device_id == "directml:1"
-        assert settings.device_type == "directml"
-        assert settings.safe_memory is True
-        assert not settings.estimate.blocking
-        assert settings.precision == ("fp16" if mode == PresetMode.QUICK_UPSCALE else "fp32")
-
-    def test_device_priority_ordering(self):
-        cuda_dev = {"id": "cuda:0", "type": "cuda", "free_memory": 4 * 1024**3}
-        rocm_dev = {"id": "rocm:0", "type": "rocm", "free_memory": 4 * 1024**3}
-        mps_dev = {"id": "mps", "type": "mps", "free_memory": 8 * 1024**3}
-        xpu_dev = {"id": "xpu:0", "type": "xpu", "free_memory": 6 * 1024**3}
-        cpu_dev = {"id": "cpu", "type": "cpu", "free_memory": 16 * 1024**3}
-        unknown_dev = {"id": "other", "type": "custom", "free_memory": 32 * 1024**3}
-
-        assert _device_priority(cuda_dev)[0] == 5
-        assert _device_priority(rocm_dev)[0] == 5
-        assert _device_priority(mps_dev)[0] == 4
-        assert _device_priority(xpu_dev)[0] == 3
-        assert _device_priority(cpu_dev)[0] == 1
-        assert _device_priority(unknown_dev)[0] == 0
-
-    def test_resolve_settings_raises_on_invalid_image_dimensions(self):
-        m = _make_dummy_model("m1", native_scale=4)
-        with pytest.raises(ValueError, match="An image must be selected"):
-            resolve_settings_for_model(
-                model=m,
-                mode=PresetMode.QUICK_UPSCALE,
-                devices=[{"id": "cpu", "type": "cpu"}],
-                image_width=0,
-                image_height=100,
-                output_scale=4,
-                available_system_memory=8 * 1024**3,
-                available_disk=10 * 1024**3,
-                model_half_supported=True,
-            )
-
-        with pytest.raises(ValueError, match="An image must be selected"):
-            resolve_settings_for_model(
-                model=m,
-                mode=PresetMode.QUICK_UPSCALE,
-                devices=[{"id": "cpu", "type": "cpu"}],
-                image_width=100,
-                image_height=-5,
-                output_scale=4,
-                available_system_memory=8 * 1024**3,
-                available_disk=10 * 1024**3,
-                model_half_supported=True,
-            )
-
-    def test_resolve_settings_raises_on_invalid_output_scale(self):
-        m = _make_dummy_model("m1", native_scale=4)
-        with pytest.raises(ValueError, match="incompatible with the selected model"):
-            resolve_settings_for_model(
-                model=m,
-                mode=PresetMode.QUICK_UPSCALE,
-                devices=[{"id": "cpu", "type": "cpu"}],
-                image_width=100,
-                image_height=100,
-                output_scale=5,
-                available_system_memory=8 * 1024**3,
-                available_disk=10 * 1024**3,
-                model_half_supported=True,
-            )
-
-        with pytest.raises(ValueError, match="incompatible with the selected model"):
-            resolve_settings_for_model(
-                model=m,
-                mode=PresetMode.QUICK_UPSCALE,
-                devices=[{"id": "cpu", "type": "cpu"}],
-                image_width=100,
-                image_height=100,
-                output_scale=0,
-                available_system_memory=8 * 1024**3,
-                available_disk=10 * 1024**3,
-                model_half_supported=True,
-            )
-
-    def test_resolve_settings_raises_on_no_devices(self):
-        m = _make_dummy_model("m1", native_scale=4)
-        with pytest.raises(ValueError, match="No compute device is available"):
-            resolve_settings_for_model(
-                model=m,
-                mode=PresetMode.QUICK_UPSCALE,
-                devices=[],
-                image_width=100,
-                image_height=100,
-                output_scale=4,
-                available_system_memory=8 * 1024**3,
-                available_disk=10 * 1024**3,
-                model_half_supported=True,
-            )
-
-    def test_low_memory_enables_safe_memory_and_rotates_tile_sizes(self):
-        gib = 1024**3
-        m = _make_dummy_model("m1", native_scale=4, size_bytes=50 * 1024**2)
-        device = {
-            "id": "cuda:0",
-            "type": "cuda",
-            "free_memory": int(1.5 * gib),
-            "supports_fp16": True,
-            "recommended_tile_sizes": [64, 128, 256],
-        }
-        settings = resolve_settings_for_model(
-            model=m,
-            mode=PresetMode.QUICK_UPSCALE,
-            devices=[device],
-            image_width=1000,
-            image_height=1000,
-            output_scale=4,
-            available_system_memory=8 * gib,
-            available_disk=10 * gib,
-            model_half_supported=True,
-        )
-        assert settings.safe_memory is True
-        assert settings.tile_size == 128
-
-    def test_cpu_never_selects_fp16_even_if_supports_fp16_is_true(self):
-        gib = 1024**3
-        m = _make_dummy_model("m1", native_scale=4, size_bytes=50 * 1024**2)
-        device = {
-            "id": "cpu",
-            "type": "cpu",
-            "free_memory": 16 * gib,
-            "supports_fp16": True,
-            "recommended_tile_sizes": [64],
-        }
-        settings = resolve_settings_for_model(
-            model=m,
-            mode=PresetMode.QUICK_UPSCALE,
-            devices=[device],
-            image_width=500,
-            image_height=500,
-            output_scale=4,
-            available_system_memory=16 * gib,
-            available_disk=10 * gib,
-            model_half_supported=True,
-        )
-        assert settings.precision == "fp32"

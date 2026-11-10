@@ -118,13 +118,17 @@ def test_automation_parser_exposes_process_benchmark_and_watch_commands():
     "arguments,message",
     [
         (["--video-codec", "ffv1"], "MKV"),
-        (["--video-codec", "h264"], "--external-ffmpeg"),
+        (["--video-codec", "h264"], "No FFmpeg was found"),
+        (["--video-codec", "av1", "--video-container", "mov"], "HEVC or Apple ProRes"),
+        (["--video-codec", "prores", "--video-container", "mov"], "codecs of macOS"),
+        (["--video-codec", "hevc", "--video-container", "mov"], "codecs of macOS"),
     ],
 )
 def test_automation_rejects_codec_choices_that_cannot_run(arguments, message, monkeypatch):
     from localsr.automation import AutomationError, _validate_automation_args
 
     monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: False)
+    monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: None)
     args = build_automation_parser().parse_args(["process", "a.mp4", "--output", "out", *arguments])
     with pytest.raises(AutomationError, match=message):
         _validate_automation_args(args)
@@ -318,3 +322,118 @@ def test_watch_rejects_non_finite_polling_without_starting(monkeypatch, tmp_path
     )
     assert result == 2
     assert closed == [True]
+
+
+def test_watch_tries_a_failing_file_again_only_after_it_changes(tmp_path):
+    incoming = tmp_path / "incoming"
+    output = tmp_path / "output"
+    incoming.mkdir()
+    source = incoming / "photo.png"
+    source.write_bytes(b"broken fixture")
+    args = build_automation_parser().parse_args(
+        [
+            "watch",
+            str(incoming),
+            "--output",
+            str(output),
+            "--stable-seconds",
+            "1",
+            "--poll-seconds",
+            "1",
+        ]
+    )
+
+    class FailingRunner:
+        def __init__(self):
+            self.reporter = Reporter(json_lines=True)
+            self.cancel_event = threading.Event()
+            self.attempts = 0
+
+        def process(self, path, destination, **_options):
+            self.attempts += 1
+            raise RuntimeError("cannot decode")
+
+    runner = FailingRunner()
+    now = [0.0]
+    polls = [0]
+
+    def sleeper(seconds):
+        now[0] += seconds
+        polls[0] += 1
+        if polls[0] == 10:
+            source.write_bytes(b"replaced fixture, longer")  # the user replaces the file
+        if polls[0] >= 20:
+            runner.cancel_event.set()
+
+    _watch(args, runner, "cpu", clock=lambda: now[0], sleeper=sleeper)
+    assert runner.attempts == 2  # once as found, once after the change
+
+
+def test_automation_writes_mov_and_heic_only_where_macos_provides_them(monkeypatch):
+    from localsr.automation import AutomationError, _validate_automation_args
+
+    arguments = ["process", "a.mp4", "--output", "out", "--format", "heic"]
+    mov = ["--video-codec", "prores", "--video-container", "mov"]
+    monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: True)
+    monkeypatch.setattr("localsr.automation.sys.platform", "darwin")
+    _validate_automation_args(build_automation_parser().parse_args([*arguments, *mov]))
+    monkeypatch.setattr("localsr.automation.sys.platform", "linux")
+    with pytest.raises(AutomationError, match="HEIC output needs macOS"):
+        _validate_automation_args(build_automation_parser().parse_args(arguments))
+
+
+class _IdleRunner:
+    def __init__(self):
+        self.reporter = Reporter(json_lines=True)
+        self.cancel_event = threading.Event()
+        self.processed = []
+
+    def process(self, path, destination, **_options):
+        self.processed.append(path)
+
+
+@pytest.mark.parametrize("relation", ["same", "output_holds_input"])
+def test_watch_refuses_an_output_folder_that_would_hide_every_input(tmp_path, relation):
+    from localsr.automation import AutomationError
+
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    (inner / "photo.png").write_bytes(b"fixture")
+    watched, output = (inner, inner) if relation == "same" else (inner, outer)
+    args = build_automation_parser().parse_args(
+        ["watch", str(watched), "--output", str(output), "--once"]
+    )
+    runner = _IdleRunner()
+    with pytest.raises(AutomationError, match="output folder"):
+        _watch(args, runner, "cpu")
+    assert runner.processed == []
+
+
+def test_watch_stops_at_once_on_a_signal_instead_of_finishing_the_poll_sleep(tmp_path):
+    import time
+
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    args = build_automation_parser().parse_args(
+        ["watch", str(incoming), "--output", str(tmp_path / "out"), "--poll-seconds", "30"]
+    )
+    runner = _IdleRunner()
+    threading.Timer(0.3, runner.cancel_event.set).start()
+    started = time.monotonic()
+    assert _watch(args, runner, "cpu") == 130
+    assert time.monotonic() - started < 5
+
+
+def test_automation_accepts_h264_when_only_an_installed_ffmpeg_can_write_it(monkeypatch):
+    from localsr.automation import AutomationError, _validate_automation_args
+
+    monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: False)
+    args = build_automation_parser().parse_args(
+        ["process", "a.mp4", "--output", "out", "--video-codec", "h264"]
+    )
+    monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: object())
+    _validate_automation_args(args)
+    monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: None)
+    with pytest.raises(AutomationError, match="No FFmpeg was found"):
+        _validate_automation_args(args)

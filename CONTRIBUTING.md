@@ -37,8 +37,10 @@ GPU support.
 - Worker stdout is JSON Lines; diagnostics go to stderr.
 - Native operations go through Rust, with access limited to the files the user
   chose.
-- Output files are replaced atomically; temporary files are cleaned up; jobs can
-  be cancelled at any point.
+- Output files never replace an existing file and are never copied into their
+  final name (hard link, else no-replace rename, else a placeholder that is
+  renamed over; see `output_publish.py`);
+  temporary files are cleaned up; jobs can be cancelled at any point.
 - Model files are verified by size and SHA-256 before deserialization.
 - Model downloads stay optional, and each author's terms and attribution stay
   visible.

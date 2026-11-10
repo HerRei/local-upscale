@@ -20,11 +20,14 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .disk_space import require_video_room
+from .eta import RemainingTime
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
+from .frame_interpolation import ORDERS, InterpolationTarget, interpolate_frames
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine
-from .media_codecs import validate_output
+from .media_codecs import EXTERNAL_OUTPUT_CODECS, validate_output
 from .tiling import generate_tiles
 from .video_io import (
     TimedVideoFrame,
@@ -185,6 +188,12 @@ class VideoJobConfig:
     external_ffmpeg: object | None = None
     # Source of audio/subtitles when it differs from the decoded picture source.
     audio_path: str | None = None
+    # Optional frame interpolation (see frame_interpolation.py): "off", "x2", "x4",
+    # "fps60" or "fps120", run before or after the upscale.
+    interpolation: str = "off"
+    interpolation_order: str = "after_upscale"
+    # The worker resolves the initial codec before inference; retain retry intent.
+    automatic_codec: bool = False
 
 
 @dataclass
@@ -202,26 +211,37 @@ def run_video_job(
     frame_started_cb: Callable[[int, int], None] | None = None,
     frame_completed_cb: Callable[[int, int, str], None] | None = None,
     enhanced_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
-    progress_cb: Callable[[int, int, float], None] | None = None,
+    progress_cb: Callable[[int, int, float, float | None], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
     tile_progress_cb: Callable[..., None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
     source_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
     stage_cb: Callable[[str], None] | None = None,
+    synthesizer=None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
 
     frame_started_cb(frame_index, total_frames) and
     frame_completed_cb(frame_index, total_frames, jpeg_b64) are called
-    per frame. progress_cb(frames_done, total_frames, elapsed_seconds)
-    is called after each frame. All callbacks are optional.
+    per frame. progress_cb(frames_done, total_frames, elapsed_seconds, remaining_seconds)
+    is called after each frame; the remaining time is None until the speed is measured. All callbacks are optional. With
+    ``config.interpolation`` set, ``synthesizer`` makes the in-between frames.
 
     Sources in a format LocalSR does not include are first converted to a
     lossless intermediate by the user's selected FFmpeg, if any.
     """
     from dataclasses import replace
 
-    from .media_bridge import decodable_source, validate_export
+    from .media_bridge import automatic_video_codec, decodable_source, validate_export
+
+    if config.video_codec == "auto":
+        config = replace(
+            config,
+            automatic_codec=True,
+            video_codec=automatic_video_codec(
+                config.external_ffmpeg, config.container, config.hdr_mode
+            ),
+        )
 
     validate_output(config.video_codec, config.container)
     validate_export(config.external_ffmpeg, config.video_codec, config.container)
@@ -246,6 +266,7 @@ def run_video_job(
             warning_callback=warning_callback,
             source_frame_cb=source_frame_cb,
             stage_cb=stage_cb,
+            synthesizer=synthesizer,
         )
 
 
@@ -263,6 +284,7 @@ def _run_video_job(
     warning_callback,
     source_frame_cb,
     stage_cb,
+    synthesizer=None,
 ) -> VideoJobResult:
     # Python 3.11's Windows monotonic clock can tick more slowly than a tile.
     # Measure short inference intervals with the highest-resolution clock so
@@ -275,7 +297,7 @@ def _run_video_job(
     transfer = 18 if probe.hdr_format == "HLG" else 16
     precision_str = "fp32" if preserve_hdr else config.precision_str
     if preserve_hdr:
-        validate_hdr_encoder(config.video_codec, config.external_ffmpeg)
+        validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
         for info in (config.model_info, config.face_model_info):
@@ -288,8 +310,22 @@ def _run_video_job(
     fps = config.fps_override if config.fps_override else probe.fps
     if fps <= 0:
         fps = 25.0
+    interpolation = _interpolation_target(config, probe.fps, preserve_hdr, synthesizer)
+    if interpolation is not None and not interpolation.applies_to(probe.fps):
+        if warning_callback:
+            warning_callback(
+                f"This video already plays at {probe.fps:g} fps, so frame interpolation to "
+                f"{interpolation.output_fps(probe.fps):g} fps was skipped."
+            )
+        interpolation = None
+    before_upscale = interpolation is not None and config.interpolation_order == "before_upscale"
 
     total_frames = selected_frame_count(probe.frame_count, config.start_frame, config.end_frame)
+    if before_upscale and interpolation is not None:
+        total_frames = interpolation.expected_frames(total_frames, fps)
+    # One estimate for the tile and the frame reports. Model loading and the first tile,
+    # which compiles and warms up, are not part of the speed it measures.
+    remaining_time = RemainingTime(total_frames) if total_frames > 0 else None
 
     model_info = config.model_info
     native_scale = int(getattr(model_info, "scale", 1))
@@ -300,6 +336,25 @@ def _run_video_job(
         )
     output_width = probe.width * output_scale
     output_height = probe.height * output_scale
+    from .media_bridge import validate_export
+
+    validate_export(
+        config.external_ffmpeg,
+        config.video_codec,
+        config.container,
+        size=(output_width, output_height),
+        fps=float(fps),
+    )
+    require_video_room(
+        {
+            "temporary_directory": config.temporary_directory,
+            "output_video_path": config.output_video_path,
+        },
+        output_width,
+        output_height,
+        total_frames,
+        master=config.video_codec in EXTERNAL_OUTPUT_CODECS,
+    )
 
     # Load the model once and reuse it for every frame.
     engine.load_model(
@@ -339,6 +394,9 @@ def _run_video_job(
             ),
             4,
         )
+        if before_upscale and interpolation is not None:
+            # On this thread, not the decoder's: one thread drives the GPU.
+            decoded = interpolate_frames(decoded, interpolation, synthesizer, cancel_event)
         for output_frame_index, source_frame in enumerate(decoded):
             rgb = source_frame.rgb
             if cancel_event.is_set():
@@ -365,17 +423,12 @@ def _run_video_job(
                 *,
                 frame_index=output_frame_index,
                 source_rgb=rgb,
-                inference_start=inference_started_at,
             ):
+                if phase == "completed" and remaining_time is not None and count:
+                    remaining_time.update(time.perf_counter(), frame_index + done / count)
                 if tile_progress_cb is not None:
-                    fraction = frame_index + (done / count if count else 0)
                     elapsed = time.perf_counter() - job_started_at
-                    measured = time.perf_counter() - (inference_start or job_started_at)
-                    remaining = (
-                        measured / fraction * max(0, total_frames - fraction)
-                        if fraction > 0 and total_frames > 0
-                        else None
-                    )
+                    remaining = remaining_time.remaining() if remaining_time else None
                     tile_progress_cb(
                         frame_index, total_frames, done, count, elapsed, remaining, size
                     )
@@ -428,7 +481,9 @@ def _run_video_job(
                             **float_options,
                         )
                     else:
-                        # No faces detected — use the general model.
+                        # No faces detected — use the general model. The face model was
+                        # loaded last, and a frame with faces leaves either one active.
+                        engine.switch_model(config.model_path)
                         out_chw = engine.process_frame(
                             img_tensor=tensor,
                             model_info=model_info,
@@ -491,8 +546,17 @@ def _run_video_job(
                 frame_completed_cb(output_frame_index, total_frames, "")
 
             if progress_cb is not None:
-                elapsed = time.perf_counter() - job_started_at
-                progress_cb(frames_processed, total_frames, elapsed)
+                now = time.perf_counter()
+                if remaining_time is not None:
+                    remaining_time.update(now, frames_processed)
+                progress_cb(
+                    min(frames_processed, max(0, total_frames - 1))
+                    if interpolation is not None and not before_upscale and total_frames > 0
+                    else frames_processed,
+                    total_frames,
+                    now - job_started_at,
+                    remaining_time.remaining() if remaining_time else None,
+                )
 
             yield source_frame.with_pixels(out_rgb)
 
@@ -502,6 +566,24 @@ def _run_video_job(
         output_frames = _deflicker_frames(frame_generator(), config.deflicker_window, cancel_event)
     else:
         output_frames = frame_generator()
+    if interpolation is not None:
+        if not before_upscale:
+            output_frames = interpolate_frames(
+                output_frames, interpolation, synthesizer, cancel_event
+            )
+            if progress_cb is not None:
+
+                def report_interpolation_done(frames):
+                    yield from frames
+                    progress_cb(
+                        frames_processed,
+                        total_frames,
+                        time.perf_counter() - job_started_at,
+                        remaining_time.remaining() if remaining_time else None,
+                    )
+
+                output_frames = report_interpolation_done(output_frames)
+        fps = interpolation.output_fps(fps)
     # Restore the next frames while the encoder writes the previous ones.
     output_frames = _prefetch(output_frames, 2)
 
@@ -521,6 +603,8 @@ def _run_video_job(
         fps=fps,
         container_format=config.container,
         video_codec=config.video_codec,
+        automatic_codec=config.automatic_codec,
+        note_callback=getattr(engine, "add_note", None),
         crf=config.crf,
         width=output_width,
         height=output_height,
@@ -545,6 +629,32 @@ def _run_video_job(
         elapsed_seconds=completed_at - job_started_at,
         inference_seconds=(completed_at - (inference_started_at or completed_at)),
     )
+
+
+def _interpolation_target(
+    config: VideoJobConfig, source_fps: float, preserve_hdr: bool, synthesizer
+) -> InterpolationTarget | None:
+    """Validate the interpolation request before any model loads."""
+    target = InterpolationTarget.parse(config.interpolation)
+    if target is None:
+        return None
+    if config.interpolation_order not in ORDERS:
+        raise ValueError("Frame interpolation runs before or after the upscale.")
+    if config.fps_override is not None:
+        raise ValueError(
+            "Frame interpolation keeps the source timing; it cannot be combined with an "
+            "FPS override."
+        )
+    if preserve_hdr:
+        raise ValueError(
+            "Frame interpolation is not yet available with HDR preservation. "
+            "Convert to SDR or turn interpolation off."
+        )
+    if synthesizer is None:
+        raise ValueError("Frame interpolation needs its interpolation model; download it first.")
+    if source_fps <= 0:
+        raise ValueError("Frame interpolation needs the source frame rate.")
+    return target
 
 
 def process_frame_face_aware(

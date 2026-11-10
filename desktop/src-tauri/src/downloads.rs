@@ -17,8 +17,18 @@ use crate::{
     catalog::{safe_model_filename, sha256_file, verified_file},
     error::{AppError, AppResult},
     state::{emit_state_changed, lock, AppState},
-    types::{CatalogModel, CatalogVideoModel, ModelFile, WorkerEnvelope},
+    types::{CatalogManifest, CatalogModel, CatalogVideoModel, ModelFile, WorkerEnvelope},
 };
+
+/// A multi-file bundle by id: a video engine or a frame-interpolation model.
+fn bundle_model(catalog: &CatalogManifest, model_id: &str) -> Option<CatalogVideoModel> {
+    catalog
+        .video_models
+        .iter()
+        .chain(catalog.interpolation_models.iter())
+        .find(|model| model.model_id == model_id)
+        .cloned()
+}
 
 pub async fn download_model(
     state: Arc<AppState>,
@@ -34,12 +44,8 @@ pub async fn download_model(
             .find(|model| model.model_id == model_id)
         {
             DownloadTarget::Image(Box::new(model.clone()))
-        } else if let Some(model) = catalog
-            .video_models
-            .iter()
-            .find(|model| model.model_id == model_id)
-        {
-            DownloadTarget::Video(Box::new(model.clone()))
+        } else if let Some(model) = bundle_model(&catalog, &model_id) {
+            DownloadTarget::Video(Box::new(model))
         } else if let Some(model) = crate::editing::catalog(&state.paths)?
             .into_iter()
             .find(|model| model.model_id == model_id)
@@ -64,6 +70,7 @@ pub async fn download_model(
         }
         downloads.insert(model_id.clone(), cancellation.clone());
     }
+    let slot = DownloadSlot::new(&state, &model_id);
     {
         let mut runtime = lock(&state.runtime)?;
         runtime.download_model_id = model_id.clone();
@@ -77,7 +84,7 @@ pub async fn download_model(
     let result = target
         .download(&state, &app, &model_id, cancellation.as_ref())
         .await;
-    lock(&state.downloads)?.remove(&model_id);
+    drop(slot);
     {
         let mut runtime = lock(&state.runtime)?;
         runtime.download_model_id.clear();
@@ -114,6 +121,29 @@ pub async fn download_model(
     }
     emit_state_changed(&app);
     result
+}
+
+/// A model's place among the running downloads. Dropping it frees the place however
+/// the download ended, so a failure or a panic never blocks the next download.
+struct DownloadSlot<'a> {
+    state: &'a AppState,
+    model_id: &'a str,
+}
+
+impl<'a> DownloadSlot<'a> {
+    fn new(state: &'a AppState, model_id: &'a str) -> Self {
+        Self { state, model_id }
+    }
+}
+
+impl Drop for DownloadSlot<'_> {
+    fn drop(&mut self) {
+        self.state
+            .downloads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(self.model_id);
+    }
 }
 
 pub fn cancel_download(state: &AppState, model_id: &str) -> AppResult<()> {
@@ -237,13 +267,15 @@ async fn download_bundle(
             completed += file.size_bytes;
             continue;
         }
-        download_video_file(
+        download_one(
             client,
             app,
             state,
             model_id,
-            file,
+            &file.download_url,
             &destination,
+            file.size_bytes,
+            &file.sha256,
             completed,
             total,
             cancellation,
@@ -252,34 +284,6 @@ async fn download_bundle(
         completed += file.size_bytes;
     }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn download_video_file(
-    client: &Client,
-    app: &AppHandle,
-    state: &Arc<AppState>,
-    model_id: &str,
-    file: &ModelFile,
-    destination: &Path,
-    completed: u64,
-    total: u64,
-    cancellation: &AtomicBool,
-) -> AppResult<()> {
-    download_one(
-        client,
-        app,
-        state,
-        model_id,
-        &file.download_url,
-        destination,
-        file.size_bytes,
-        &file.sha256,
-        completed,
-        total,
-        cancellation,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -311,6 +315,9 @@ async fn download_one(
         .parent()
         .ok_or_else(|| AppError::Validation("model destination has no parent".into()))?;
     fs::create_dir_all(parent).await?;
+    if reuse_complete_partial(&partial, destination, expected_size, expected_sha256).await? {
+        return Ok(());
+    }
     let partial_size = fs::metadata(&partial)
         .await
         .map(|metadata| metadata.len())
@@ -322,7 +329,7 @@ async fn download_one(
     let needed = remaining.saturating_mul(115) / 100;
     if available < needed {
         return Err(AppError::Download(format!(
-            "not enough disk space: need about {} MB more, but only {} MB is free",
+            "not enough disk space: the download needs about {} MB free, but only {} MB is available",
             needed / 1_000_000,
             available / 1_000_000
         )));
@@ -411,7 +418,7 @@ async fn download_attempt(
     if offset > 0 {
         request = request.header(header::RANGE, format!("bytes={offset}-"));
     }
-    let response = request.send().await?;
+    let response = until_data(request.send(), cancellation, STALL_LIMIT).await??;
     if response.url().scheme() != "https" {
         return Err(AppError::Download("model redirect left HTTPS".into()));
     }
@@ -446,8 +453,7 @@ async fn download_attempt(
         fs::File::create(partial).await?
     };
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        check_cancel(cancellation)?;
+    while let Some(chunk) = until_data(stream.next(), cancellation, STALL_LIMIT).await? {
         let chunk = chunk?;
         downloaded = downloaded.saturating_add(chunk.len() as u64);
         if downloaded > expected_size {
@@ -513,6 +519,32 @@ fn validate_artifact_metadata(url: &str, size: u64, sha256: &str) -> AppResult<(
     Ok(())
 }
 
+/// A partial that already has the full length was cut off before its check. A sound one is
+/// installed; a corrupt one is removed so this download starts over instead of failing.
+async fn reuse_complete_partial(
+    partial: &Path,
+    destination: &Path,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> AppResult<bool> {
+    let complete = fs::metadata(partial)
+        .await
+        .is_ok_and(|metadata| metadata.len() == expected_size);
+    if !complete {
+        return Ok(false);
+    }
+    let partial_for_hash = partial.to_path_buf();
+    let actual_sha256 = tokio::task::spawn_blocking(move || sha256_file(&partial_for_hash))
+        .await
+        .map_err(|error| AppError::Download(format!("checksum task failed: {error}")))??;
+    if actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        install_atomically(partial, destination).await?;
+        return Ok(true);
+    }
+    fs::remove_file(partial).await?;
+    Ok(false)
+}
+
 async fn install_atomically(partial: &Path, destination: &Path) -> AppResult<()> {
     let backup = appended_path(destination, ".replaced");
     let had_destination = fs::metadata(destination).await.is_ok();
@@ -528,9 +560,9 @@ async fn install_atomically(partial: &Path, destination: &Path) -> AppResult<()>
         }
         return Err(error.into());
     }
-    if had_destination {
-        let _ = fs::remove_file(backup).await;
-    }
+    // The copy a crash between the two renames left behind is as stale as the one
+    // just replaced.
+    let _ = fs::remove_file(backup).await;
     Ok(())
 }
 
@@ -601,6 +633,37 @@ fn emit_download_event(app: &AppHandle, message_type: &str, data: serde_json::Va
     );
 }
 
+/// How long a server may stay silent, before it answers and between two pieces of the
+/// file, before the attempt is given up. The attempt can resume from the partial file.
+const STALL_LIMIT: Duration = Duration::from_secs(45);
+/// How often a wait for the server looks at the cancel flag.
+const CANCEL_POLL: Duration = Duration::from_millis(250);
+
+/// Wait for `data`, but end the wait when the user cancels or the server has been
+/// silent for `stall_limit`. A dead connection never answers, so without this a
+/// cancel would be seen only after the next piece of data.
+async fn until_data<T>(
+    data: impl std::future::Future<Output = T>,
+    cancellation: &AtomicBool,
+    stall_limit: Duration,
+) -> AppResult<T> {
+    let mut data = std::pin::pin!(data);
+    let started = tokio::time::Instant::now();
+    loop {
+        check_cancel(cancellation)?;
+        let silent = started.elapsed();
+        if silent >= stall_limit {
+            return Err(AppError::Download(
+                "the model server stopped sending data".into(),
+            ));
+        }
+        let wait = CANCEL_POLL.min(stall_limit - silent);
+        if let Ok(value) = tokio::time::timeout(wait, data.as_mut()).await {
+            return Ok(value);
+        }
+    }
+}
+
 fn check_cancel(cancellation: &AtomicBool) -> AppResult<()> {
     if cancellation.load(Ordering::SeqCst) {
         Err(AppError::Download("download cancelled".into()))
@@ -612,6 +675,161 @@ fn check_cancel(cancellation: &AtomicBool) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn current_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_old_copy_left_by_an_interrupted_install_is_removed_by_the_next_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("model.bin");
+        let leftover = directory.path().join("model.bin.replaced");
+        std::fs::write(&leftover, b"old").unwrap();
+        let partial = directory.path().join("model.bin.part");
+        std::fs::write(&partial, b"new").unwrap();
+        current_thread_runtime()
+            .block_on(install_atomically(&partial, &destination))
+            .unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+        assert!(!leftover.exists());
+    }
+
+    #[test]
+    fn a_silent_server_ends_the_wait_after_the_stall_limit() {
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let outcome = current_thread_runtime().block_on(until_data(
+            std::future::pending::<()>(),
+            &cancel,
+            Duration::from_millis(300),
+        ));
+        assert!(
+            matches!(outcome, Err(AppError::Download(message)) if message.contains("stopped sending"))
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_cancel_ends_the_wait_for_a_silent_server_within_a_second() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let outcome = current_thread_runtime().block_on(until_data(
+            std::future::pending::<()>(),
+            cancel.as_ref(),
+            Duration::from_secs(600),
+        ));
+        assert!(
+            matches!(outcome, Err(AppError::Download(message)) if message == "download cancelled")
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn data_that_arrives_in_time_is_returned_unchanged() {
+        let cancel = AtomicBool::new(false);
+        let outcome = current_thread_runtime().block_on(until_data(
+            async {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                7
+            },
+            &cancel,
+            Duration::from_secs(5),
+        ));
+        assert_eq!(outcome.unwrap(), 7);
+    }
+
+    #[test]
+    fn a_download_gives_up_its_place_on_every_way_out() {
+        let directory = tempfile::tempdir().unwrap();
+        let state =
+            crate::state::AppState::from_paths(crate::paths::AppPaths::under(directory.path()))
+                .unwrap();
+        let register = |id: &str| {
+            state
+                .downloads
+                .lock()
+                .unwrap()
+                .insert(id.into(), Arc::new(AtomicBool::new(false)));
+        };
+        register("finished");
+        drop(DownloadSlot::new(&state, "finished"));
+        register("panicked");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _slot = DownloadSlot::new(&state, "panicked");
+            panic!("the download task failed");
+        }));
+        assert!(outcome.is_err());
+        assert!(state.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_complete_partial_is_installed_when_sound_and_downloaded_again_when_corrupt() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("model.pth");
+        let partial = directory.path().join("model.pth.part");
+        let content = b"twelve bytes";
+        let sound = sha256_file(&{
+            std::fs::write(&partial, content).unwrap();
+            partial.clone()
+        })
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let reuse = |sha: &str| {
+            runtime.block_on(reuse_complete_partial(
+                &partial,
+                &destination,
+                content.len() as u64,
+                sha,
+            ))
+        };
+        // Corrupt (another hash): removed, so the download starts over.
+        assert!(!reuse(&"0".repeat(64)).unwrap());
+        assert!(!partial.exists() && !destination.exists());
+        // Sound: installed without a request.
+        std::fs::write(&partial, content).unwrap();
+        assert!(reuse(&sound).unwrap());
+        assert_eq!(std::fs::read(&destination).unwrap(), content);
+        // A shorter partial is left to resume.
+        std::fs::write(&partial, b"short").unwrap();
+        assert!(!reuse(&sound).unwrap());
+        assert!(partial.exists());
+    }
+
+    #[test]
+    fn interpolation_models_download_as_verified_bundles() {
+        let manifest: crate::types::CatalogManifest =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        let rife = bundle_model(&manifest, "rife_4_26").unwrap();
+        assert_eq!(rife.engine_kind, "rife");
+        assert!(rife.automated_download_allowed);
+        assert!(!rife.terms_acceptance_required);
+        for file in &rife.files {
+            assert!(
+                validate_artifact_metadata(&file.download_url, file.size_bytes, &file.sha256)
+                    .is_ok()
+            );
+        }
+        assert!(DownloadTarget::Video(Box::new(rife))
+            .validate_policy(false)
+            .is_ok());
+        assert_eq!(
+            bundle_model(&manifest, "seedvr2_3b").unwrap().engine_kind,
+            "seedvr2"
+        );
+        assert!(bundle_model(&manifest, "span_photo_x4").is_none());
+    }
 
     #[test]
     fn declared_cc_by_downloads_do_not_unlock_unresolved_face_weights() {

@@ -269,8 +269,8 @@ def _symlink_engine_libs_for_linuxdeploy() -> list[Path]:
             dest.symlink_to(so_file.resolve())
             created.append(dest)
         except OSError:
-            # We lack direct write access; try with sudo (self-hosted CI
-            # runners running as a non-root user with NOPASSWD sudo).
+            # We lack direct write access; try with sudo (a non-root user with
+            # passwordless sudo, as on a CI runner).
             result = subprocess.run(
                 ["sudo", "ln", "-sf", str(so_file.resolve()), str(dest)],
                 capture_output=True,
@@ -524,6 +524,79 @@ def remove_host_provided_libraries(appdir: Path) -> list[Path]:
     return removed
 
 
+def _elf_dynamic(path: Path) -> tuple[str | None, set[str]]:
+    """The SONAME and the NEEDED entries of an ELF file."""
+    dynamic = subprocess.run(
+        ["readelf", "-d", "-W", str(path)], capture_output=True, text=True, check=False
+    ).stdout
+    soname = re.search(r"Library soname: \[([^\]]+)\]", dynamic)
+    return (soname.group(1) if soname else None), set(
+        re.findall(r"Shared library: \[([^\]]+)\]", dynamic)
+    )
+
+
+def _is_elf(path: Path) -> bool:
+    if path.is_symlink() or not path.is_file():
+        return False
+    with path.open("rb") as stream:
+        return stream.read(4) == b"\x7fELF"
+
+
+def remove_engine_library_copies(appdir: Path) -> list[Path]:
+    """Remove the copies of the engine's own libraries that linuxdeploy puts in usr/lib.
+
+    linuxdeploy also deploys the dependencies of the worker's libraries into usr/lib, and
+    the AppImage's AppRun puts usr/lib first on LD_LIBRARY_PATH, so the worker loads those
+    copies instead of its own files. They break where a library opens a neighbour by
+    name: rocSHMEM's constructor opens libnuma.so, which exists only next to torch, and
+    calls exit() without it, and rocprofiler-sdk's exit handler then deadlocks the load
+    of torch. The engine is self-contained, so a copy goes unless something outside the
+    engine needs it.
+    """
+    library_root = appdir / "usr" / "lib"
+    engines = sorted(path for path in library_root.glob("*/engine") if path.is_dir())
+    if len(engines) != 1:
+        raise RuntimeError(f"expected one engine directory in {library_root}, found {engines}")
+    engine = engines[0]
+    engine_names: set[str] = set()
+    for library in engine.rglob("*.so*"):
+        if _is_elf(library):
+            engine_names.add(library.name)
+            soname, _ = _elf_dynamic(library)
+            if soname:
+                engine_names.add(soname)
+
+    copies: dict[Path, tuple[set[str], set[str]]] = {}
+    for library in sorted(library_root.iterdir()):
+        if not _is_elf(library.resolve()):
+            continue
+        soname, needed = _elf_dynamic(library.resolve())
+        names = {library.name} | ({soname} if soname else set())
+        if names & engine_names:
+            copies[library] = (names, needed)
+
+    # Everything outside the engine stays, and so does every copy it needs, directly or
+    # through another copy.
+    needed: set[str] = set()
+    for path in appdir.rglob("*"):
+        if path in copies or engine in path.parents or not _is_elf(path):
+            continue
+        needed |= _elf_dynamic(path)[1]
+    kept: set[Path] = set()
+    while True:
+        more = {path for path, (names, _) in copies.items() if path not in kept and names & needed}
+        if not more:
+            break
+        kept |= more
+        for path in more:
+            needed |= copies[path][1]
+
+    removed = [path for path in copies if path not in kept]
+    for path in removed:
+        path.unlink()
+    return removed
+
+
 def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Path]:
     """Rebuild Linux AppImage payloads with system gzip-capable mksquashfs.
 
@@ -561,6 +634,12 @@ def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Pa
         )
     for library in remove_host_provided_libraries(appdir):
         print(f"Removed host-provided {library.relative_to(appdir)} from the AppDir.", flush=True)
+    copies = remove_engine_library_copies(appdir)
+    print(
+        f"Removed {len(copies)} copies of engine libraries from usr/lib: "
+        + ", ".join(path.name for path in copies),
+        flush=True,
+    )
     verify = subprocess.run(
         [
             sys.executable,
@@ -942,9 +1021,13 @@ def main() -> int:
     bundles = cargo_target / ("debug" if args.debug else "release") / "bundle"
     if bundles.exists():
         shutil.rmtree(bundles)
-    linuxdeploy_symlinks = _symlink_engine_libs_for_linuxdeploy()
-    linuxdeploy_backup = _wrap_linuxdeploy_for_appimage() if args.bundles == "appimage" else None
+    linuxdeploy_symlinks: list[Path] = []
+    linuxdeploy_backup = None
     try:
+        # Inside the try: a failed wrapper setup must still remove the links already made.
+        linuxdeploy_symlinks = _symlink_engine_libs_for_linuxdeploy()
+        if args.bundles == "appimage":
+            linuxdeploy_backup = _wrap_linuxdeploy_for_appimage()
         run(command, cwd=DESKTOP, env=environment)
         if args.bundles == "appimage":
             _repack_linux_appimages_with_system_mksquashfs(bundles)

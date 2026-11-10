@@ -13,37 +13,15 @@ import threading
 import time
 from pathlib import Path
 
+from localsr.core.child_processes import native_environment, stop_process
 from localsr.core.edit_memory import EditPlan, check_edit_pressure, read_host_memory
-
-
-def native_environment() -> dict:
-    environment = os.environ.copy()
-    if getattr(sys, "frozen", False):
-        for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
-            original = environment.get(key + "_ORIG", "")
-            if original:
-                environment[key] = original
-            else:
-                environment.pop(key, None)
-    return environment
-
-
-def stop_process(process):
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
 
 
 def process_memory(process) -> int:
     """The editor's own memory: physical footprint on macOS, RSS elsewhere.
 
     On macOS RSS includes the memory-mapped weights, clean pages the system drops
-    under pressure at no cost; the footprint is what Activity Monitor shows. A
-    FLUX.2 klein 4B edit on a 16 GB Mac peaked at 6.4 GiB RSS and 2.6 GiB footprint.
+    under pressure at no cost; the footprint is what Activity Monitor shows.
     """
     if sys.platform == "darwin":
         import ctypes
@@ -141,6 +119,7 @@ def main(args=None) -> int:
         )
         watched = psutil.Process(process.pid)
         warning_since = None
+        warning_swap = 0
         critical_samples = 0
         while process.poll() is None:
             if cancelled.wait(0.25):
@@ -152,6 +131,8 @@ def main(args=None) -> int:
             memory = read_host_memory(spec["unified"])
             now = time.monotonic()
             raised = memory.pressure in {"warning", "critical"}
+            if raised and warning_since is None:
+                warning_swap = memory.swap_used
             warning_since = (warning_since or now) if raised else None
             critical_samples = critical_samples + 1 if memory.pressure == "critical" else 0
             check_edit_pressure(
@@ -161,6 +142,7 @@ def main(args=None) -> int:
                 used,
                 warning_seconds=now - warning_since if warning_since else 0.0,
                 critical_samples=critical_samples,
+                warning_swap=warning_swap,
             )
         return process.wait()
     except MemoryError as error:

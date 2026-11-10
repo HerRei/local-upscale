@@ -1,23 +1,103 @@
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{CheckMenuItemBuilder, IsMenuItem, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     App, AppHandle, Emitter, Manager, Runtime,
 };
 
-use crate::types::Recipe;
+use crate::types::{Recipe, UiSettings};
+
+/// The two update switches the menu shows with a check mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Switches {
+    pub check_at_launch: bool,
+    pub update_count: bool,
+}
+
+pub fn switches(settings: &UiSettings) -> Switches {
+    Switches {
+        check_at_launch: settings.check_updates_at_launch,
+        update_count: settings.anonymous_update_count,
+    }
+}
 
 pub const EVENT_NAME: &str = "native-menu-action";
 
-pub fn install<R: Runtime>(app: &App<R>, recipes: &[Recipe]) -> tauri::Result<()> {
-    install_for_manager(app, recipes)
+/// The update entries in menu order: macOS shows them in the LocalSR menu, Windows and
+/// Linux at the end of Help. The two switches exist only in builds that check a signed
+/// feed themselves (crate::updates::checks_for_updates); the others, such as Store
+/// builds, neither check at launch nor send the count.
+fn update_items(switchable: bool) -> &'static [&'static str] {
+    if switchable {
+        &[
+            "app.updates",
+            "app.check-updates-at-launch",
+            "app.update-count",
+        ]
+    } else {
+        &["app.updates"]
+    }
 }
 
-pub fn rebuild<R: Runtime>(app: &AppHandle<R>, recipes: &[Recipe]) -> tauri::Result<()> {
-    install_for_manager(app, recipes)
+/// The saved setting a switch's menu entry flips.
+fn switch_setting(id: &str) -> Option<&'static str> {
+    match id {
+        "app.check-updates-at-launch" => Some("check_updates_at_launch"),
+        "app.update-count" => Some("anonymous_update_count"),
+        _ => None,
+    }
+}
+
+const PREVIOUS_RESULT_ACCELERATOR: &str = "CmdOrCtrl+Alt+Left";
+const NEXT_RESULT_ACCELERATOR: &str = "CmdOrCtrl+Alt+Right";
+
+/// The View menu names the two single-side views after what they show: the
+/// Original and the result, or the reference and Showing when both are results.
+fn comparison_labels(reference_is_result: bool) -> (&'static str, &'static str) {
+    if reference_is_result {
+        ("Show Reference", "Show Showing Result")
+    } else {
+        ("Show Original", "Show Enhanced")
+    }
+}
+
+/// Rename the two comparison items in place. Menu lookups by id only search
+/// one level, so each submenu is asked; a rebuilt menu starts with the
+/// Original names until the next comparison request.
+pub fn set_comparison_labels(app: &AppHandle, reference_is_result: bool) {
+    let Some(menu) = app.menu() else { return };
+    let Ok(items) = menu.items() else { return };
+    let (reference, showing) = comparison_labels(reference_is_result);
+    for (id, label) in [
+        ("view.compare-original", reference),
+        ("view.compare-enhanced", showing),
+    ] {
+        for submenu in items.iter().filter_map(|item| item.as_submenu()) {
+            if let Some(item) = submenu.get(id).and_then(|item| item.as_menuitem().cloned()) {
+                let _ = item.set_text(label);
+            }
+        }
+    }
+}
+
+pub fn install<R: Runtime>(
+    app: &App<R>,
+    recipes: &[Recipe],
+    switches: Switches,
+) -> tauri::Result<()> {
+    install_for_manager(app, recipes, switches)
+}
+
+pub fn rebuild<R: Runtime>(
+    app: &AppHandle<R>,
+    recipes: &[Recipe],
+    switches: Switches,
+) -> tauri::Result<()> {
+    install_for_manager(app, recipes, switches)
 }
 
 fn install_for_manager<R: Runtime, M: Manager<R>>(
     manager: &M,
     recipes: &[Recipe],
+    switches: Switches,
 ) -> tauri::Result<()> {
     let add_media = MenuItemBuilder::with_id("file.add-media", "Add Media…")
         .accelerator("CmdOrCtrl+O")
@@ -32,7 +112,9 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let start = MenuItemBuilder::with_id("file.start", "Start Processing")
         .accelerator("CmdOrCtrl+R")
         .build(manager)?;
-    let cancel = MenuItemBuilder::with_id("file.cancel", "Cancel Job")
+    // Queue-wide, as the footer's Cancel queue; "Cancel runs for this image"
+    // is the per-image action in the window.
+    let cancel = MenuItemBuilder::with_id("file.cancel", "Cancel Queue")
         .accelerator("CmdOrCtrl+.")
         .build(manager)?;
     let integrations =
@@ -84,6 +166,14 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         MenuItemBuilder::with_id("view.compare-split", "Show Split Comparison").build(manager)?;
     let show_enhanced =
         MenuItemBuilder::with_id("view.compare-enhanced", "Show Enhanced").build(manager)?;
+    // Older and newer saved result on the Showing side. Arrows, not brackets:
+    // on Swiss German and German Mac keyboards brackets need Option already.
+    let previous = MenuItemBuilder::with_id("view.previous-result", "Previous Result")
+        .accelerator(PREVIOUS_RESULT_ACCELERATOR)
+        .build(manager)?;
+    let next = MenuItemBuilder::with_id("view.next-result", "Next Result")
+        .accelerator(NEXT_RESULT_ACCELERATOR)
+        .build(manager)?;
     let refresh = MenuItemBuilder::with_id("view.refresh-hardware", "Refresh Hardware Status")
         .build(manager)?;
     // A single ampersand is interpreted as a Windows mnemonic by the native
@@ -101,6 +191,8 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .item(&show_original)
         .item(&show_split)
         .item(&show_enhanced)
+        .item(&previous)
+        .item(&next)
         .separator()
         .item(&models)
         .separator()
@@ -110,8 +202,24 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
 
     let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
-    // macOS keeps update checks in the app menu; elsewhere they sit under Help.
     let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
+    let check_at_launch =
+        CheckMenuItemBuilder::with_id("app.check-updates-at-launch", "Check for Updates at Launch")
+            .checked(switches.check_at_launch)
+            .build(manager)?;
+    let update_count =
+        CheckMenuItemBuilder::with_id("app.update-count", "Send Anonymous Update Count")
+            .checked(switches.update_count)
+            .build(manager)?;
+    let update_entries: Vec<&dyn IsMenuItem<R>> =
+        update_items(crate::updates::checks_for_updates())
+            .iter()
+            .map(|id| match *id {
+                "app.check-updates-at-launch" => &check_at_launch as &dyn IsMenuItem<R>,
+                "app.update-count" => &update_count,
+                _ => &updates,
+            })
+            .collect();
     #[cfg(target_os = "macos")]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
@@ -122,7 +230,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .item(&guide)
         .item(&github)
         .separator()
-        .item(&updates)
+        .items(&update_entries)
         .build()?;
 
     #[cfg(target_os = "macos")]
@@ -137,7 +245,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
                 ),
                 ..Default::default()
             }))
-            .item(&updates)
+            .items(&update_entries)
             .separator()
             .services()
             .separator()
@@ -156,8 +264,13 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .minimize()
         .maximize()
         .separator()
-        .close_window()
-        .build()?;
+        .close_window();
+    // Closing the window only hides it on macOS, so the menu needs a way back to it.
+    #[cfg(target_os = "macos")]
+    let window_menu = window_menu
+        .separator()
+        .item(&MenuItemBuilder::with_id("window.main", "LocalSR").build(manager)?);
+    let window_menu = window_menu.build()?;
     let menu = menu_builder
         .item(&file_menu)
         .item(&presets_menu)
@@ -169,7 +282,44 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     Ok(())
 }
 
+/// Show the saved update switches. The rebuild runs on the UI thread and reads the settings
+/// there, so when several overlap, the last one shows the newest state.
+pub fn reconcile(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(state) = handle.try_state::<std::sync::Arc<crate::state::AppState>>() else {
+            return;
+        };
+        let Ok(switches) = crate::state::lock(&state.settings).map(|settings| switches(&settings))
+        else {
+            return;
+        };
+        let Ok(recipes) = crate::state::lock(&state.recipes).map(|recipes| recipes.clone()) else {
+            return;
+        };
+        if let Err(error) = rebuild(&handle, &recipes, switches) {
+            eprintln!("LocalSR: could not refresh the update switches in the menu: {error}");
+        }
+    });
+}
+
 pub fn dispatch(app: &AppHandle, id: &str) {
+    // The update switches are the host's own settings: it flips the saved value, so a
+    // window that has not caught up cannot send the opposite.
+    if let Some(name) = switch_setting(id) {
+        // Off the menu's thread: saving writes a file.
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
+                crate::commands::toggle_update_switch(&state, &app, name);
+            }
+        });
+        return;
+    }
+    if id == "window.main" {
+        crate::focus_main_window(app);
+        return;
+    }
     if id == "help.guide" {
         let _ = open::that_detached(crate::commands::USER_GUIDE_URL);
         return;
@@ -179,4 +329,59 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         return;
     }
     let _ = app.emit(EVENT_NAME, id.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_update_switches_follow_the_check_wherever_a_build_checks_its_feed() {
+        // Help menu on Windows and Linux, the LocalSR menu on macOS: the same entries.
+        assert_eq!(
+            update_items(true),
+            [
+                "app.updates",
+                "app.check-updates-at-launch",
+                "app.update-count"
+            ]
+        );
+        // A build without an update identity (or a Store build) keeps only the check.
+        assert_eq!(update_items(false), ["app.updates"]);
+    }
+
+    #[test]
+    fn each_switch_flips_its_own_saved_setting() {
+        assert_eq!(
+            switch_setting("app.check-updates-at-launch"),
+            Some("check_updates_at_launch")
+        );
+        assert_eq!(
+            switch_setting("app.update-count"),
+            Some("anonymous_update_count")
+        );
+        assert_eq!(switch_setting("app.updates"), None);
+        for id in update_items(true) {
+            assert!(*id == "app.updates" || switch_setting(id).is_some());
+        }
+    }
+
+    #[test]
+    fn comparison_menu_names_the_selected_reference_truthfully() {
+        assert_eq!(
+            super::comparison_labels(false),
+            ("Show Original", "Show Enhanced")
+        );
+        assert_eq!(
+            super::comparison_labels(true),
+            ("Show Reference", "Show Showing Result")
+        );
+    }
+
+    #[test]
+    fn result_navigation_uses_arrows_that_every_keyboard_layout_can_type() {
+        // muda 0.20 reads "Left"/"Right" as the arrow keys (accelerator/mod.rs).
+        assert_eq!(super::PREVIOUS_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Left");
+        assert_eq!(super::NEXT_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Right");
+    }
 }

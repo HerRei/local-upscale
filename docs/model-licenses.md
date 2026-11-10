@@ -156,6 +156,8 @@ checkpoint rights.
   "CC-BY-0.4", and the author's
   [Hugging Face card](https://huggingface.co/Phips/1xDeNoise_realplksr_otf) for the same model
   declares `cc-by-4.0`, which LocalSR records.
+- Training-data provenance: [NomosUni](https://openmodeldb.info/models/4x-NomosUni-span-multijpg)
+  identifies `nomos_uni`; its constituent image permissions have not been verified here.
 
 ### NAFNet SIDD and GoPro (`nafnet_sidd_width64`, `nafnet_gopro_deblur`)
 
@@ -187,8 +189,63 @@ app. HFA2k's `.pth` hash matches the catalog, and all 340 NomosWebPhoto tensors 
 author's licensed conversion. CC BY 4.0 permits sharing and commercial use with attribution and
 retained notices; it does not imply the author's endorsement of LocalSR.
 
+The [NomosWebPhoto card](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR)
+identifies Nomos-v2 as training data. The [dataset publisher](https://github.com/neosr-project/neosr#-datasets)
+describes the Nomos series as drawn from multiple sources, including datasets with
+different terms, but does not provide a per-image licence manifest there. The
+checkpoint licence above is verified; clearance of every training image is not.
+
+### DAT2 BHI Real and RealWebPhoto v4 (`bhi_dat2_real_x4`, `realwebphoto_v4_dat2_x4`)
+
+- Exact assets: `4xBHI_dat2_real.pth` and `4xRealWebPhoto_v4_dat2.pth` from Philip Hofmann's own
+  [models releases](https://github.com/Phhofm/models/releases) on GitHub, both re-downloaded and
+  hashed on 2026-11-08.
+- Sizes: `140,196,334` and `140,299,118` bytes.
+- SHA-256: `14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0` and
+  `9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9`.
+- Terms: CC BY 4.0, declared on both GitHub releases and on the author's Hugging Face cards
+  ([BHI Real](https://huggingface.co/Phips/4xBHI_dat2_real),
+  [RealWebPhoto v4](https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2)). The DAT architecture
+  is Apache-2.0 ([zhengchen1999/DAT](https://github.com/zhengchen1999/DAT)).
+- Training data, recorded because it differs between the two: RealWebPhoto v4 was trained on
+  Nomos8k (stock photos). BHI Real was trained on the author's
+  [BHI set](https://huggingface.co/datasets/Phips/BHI), filtered tiles from thirteen sources
+  including FFHQ (whose dataset terms are CC BY-NC-SA 4.0, with images under mixed licences),
+  ImageNet, DF2K, COCO and iNaturalist 2019. As for the other checkpoints in this catalogue, which
+  include models trained on DF2K and ImageNet, LocalSR follows the license the author grants for
+  the weights and lists the training data here.
+
+Both are library models: no preset picks them on its own (`preset_eligible=False`), because
+they take about ten times as long as Best. A model pinned to Best by the user is still used.
+
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
+
+## Frame interpolation
+
+### RIFE 4.26 (`rife_4_26`)
+
+- Model: Practical-RIFE v4.26 by hzwer ([hzwer/Practical-RIFE](https://github.com/hzwer/Practical-RIFE)),
+  described in Huang et al., ECCV 2022. The author recommends 4.25 for most scenes;
+  LocalSR selected 4.26 based on the synthetic comparison in [video support](video-support.md).
+- Terms: the project is [MIT](https://github.com/hzwer/Practical-RIFE/blob/main/LICENSE), and its
+  README states that linked trained models are under the same MIT license. The vendored code and
+  MIT text are in `src/localsr/video_models/rife/NOTICE.md`.
+- Official copy: `train_log/flownet.pkl` in the v4.26 archive linked by the README on Google Drive
+  (file `1gViYvvQrtETBgU1w8axZSsr7YUuw31uy`).
+- Download: `flownet_v4.26.pkl` from [HolyWu/vs-rife's model release](https://github.com/HolyWu/vs-rife/releases/tag/model).
+  On 2026-11-09 its bytes matched both the official Drive archive and hzwer's
+  [Hugging Face zip](https://huggingface.co/hzwer/RIFE); installation checks size and SHA-256.
+- Size: `24,636,301` bytes; SHA-256: `45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f`.
+- Load: tensors only (`torch.load(weights_only=True)`); training-only `teacher` tensors are
+  ignored, and every network tensor must match.
+- Training data: not stated by the README; the RIFE paper trains on Vimeo-90K, whose terms are
+  not published on its [project page](http://toflow.csail.mit.edu/). LocalSR follows the
+  license the author grants for the weights.
+- Alternatives checked: v4.25 (`6615790efd627772917205db291f51cd392528a157ecbb2ecaeec3bff8eb6de2`)
+  and v4.25 lite (`81cdba223fe72a120130cc8552e5d2ecac824259d406f0c15323b3decf96b8b1`),
+  each matched to the official Drive archive. The unofficial "heavy" files were excluded.
+  GMFSS was excluded because its forward-warping kernel is academic-use only.
 
 ## Image-editing models
 

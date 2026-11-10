@@ -1,12 +1,63 @@
 // @vitest-environment jsdom
 
+import { updateDialogOpen } from './lib/updates';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { AppSnapshot, LaunchIntent, MediaItem, UiSettings, WorkerEnvelope } from './lib/types';
+import type {
+  AppSnapshot,
+  DeviceInfo,
+  JobRecord,
+  LaunchIntent,
+  MediaItem,
+  MediaResults,
+  Recipe,
+  ResultSummary,
+  StartBatchInput,
+  TrialEstimate,
+  UiSettings,
+  WorkerEnvelope,
+} from './lib/types';
+
+/** One finished attempt of an image, as list_media_results reports it. */
+function row(id: string, overrides: Partial<ResultSummary> = {}): ResultSummary {
+  return {
+    job_id: id,
+    completed_at: 1_700_000_000_000,
+    status: 'completed',
+    kind: 'upscale',
+    output_path: `/out/${id}.png`,
+    output_name: `${id}.png`,
+    available: true,
+    model_id: id,
+    model_label: id,
+    scale: 4,
+    prompt: '',
+    max_dimension: 0,
+    stages: [],
+    notes: '',
+    elapsed_seconds: 12,
+    ui: null,
+    ...overrides,
+  };
+}
+
+function historyOf(mediaId: string, rows: ResultSummary[]): MediaResults {
+  const saved = rows.filter((result) => result.status === 'completed');
+  const available = saved.filter((result) => result.available);
+  return {
+    media_id: mediaId,
+    results: rows,
+    total_count: rows.length,
+    completed_count: saved.length,
+    available_count: available.length,
+    default_result_id: available[0]?.job_id ?? null,
+    next_before: null,
+  };
+}
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -22,9 +73,12 @@ const api = vi.hoisted(() => ({
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
+  clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
+  setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
+  retryEngine: vi.fn(async (): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
   exportBenchmark: vi.fn(async () => true),
   cancelVideoComparison: vi.fn(async () => {}),
@@ -33,22 +87,44 @@ const api = vi.hoisted(() => ({
     original_url: 'asset://localhost/original.mp4',
     enhanced_url: 'asset://localhost/enhanced.mp4',
   })),
-  requestImageComparison: vi.fn(async (_mediaId: string): Promise<void> => undefined),
+  requestImageComparison: vi.fn(
+    async (_mediaId: string, _pair?: { showing: string; against: string }): Promise<void> =>
+      undefined,
+  ),
+  listMediaResults: vi.fn(async (mediaId: string): Promise<MediaResults> => historyOf(mediaId, [])),
+  listAllMediaResults: vi.fn(async (): Promise<MediaResults[]> => []),
+  prepareCompareVideo: vi.fn(async () => ({
+    original_url: 'asset://localhost/compare.mp4',
+    enhanced_url: '',
+  })),
+  requestCompare: vi.fn(async (): Promise<void> => undefined),
+  startModelTrials: vi.fn(
+    async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
+  ),
+  estimateModelTrials: vi.fn(
+    async (
+      _mediaId: string,
+      _modelIds: string[],
+      _base: StartBatchInput,
+    ): Promise<TrialEstimate[]> => [],
+  ),
+  cancelJobsForMedia: vi.fn(async (_mediaId: string): Promise<void> => undefined),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
   chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
   openFfmpegDownloadPage: vi.fn(async () => undefined),
+  openDownloadPage: vi.fn(async () => undefined),
   ffmpegInstallHint: vi.fn(async () => null),
   openTerminalWithInstallCommand: vi.fn(async () => undefined),
-  downloadModel: vi.fn(async () => undefined),
+  downloadModel: vi.fn(async (_id: string, _accepted: boolean) => undefined),
   cancelDownload: vi.fn(async () => undefined),
   removeModel: vi.fn(async () => undefined),
   importCatalogModel: vi.fn(async () => undefined),
   startEdit: vi.fn(async () => undefined),
   openEditLink: vi.fn(async () => undefined),
   chooseEditRuntime: vi.fn(async (): Promise<string | null> => null),
-  saveRecipe: vi.fn(async () => undefined),
+  saveRecipe: vi.fn(async (_recipe: Recipe) => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
     configured: false,
@@ -67,6 +143,7 @@ const api = vi.hoisted(() => ({
   openModelSource: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
   openUserGuide: vi.fn(async () => undefined),
+  useResultAsInput: vi.fn(async (): Promise<string> => 'new-input'),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
   openOutputDirectory: vi.fn(async () => undefined),
@@ -88,8 +165,12 @@ const api = vi.hoisted(() => ({
   ),
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async (_handler: (action: string) => void) => () => undefined),
-  listenForLaunchIntent: vi.fn(async () => () => undefined),
-  listenForFileDrops: vi.fn(async () => () => undefined),
+  listenForLaunchIntent: vi.fn(async (_handler: () => void) => () => undefined),
+  listenForFileDrops: vi.fn(
+    async (_handlers: { hover: (active: boolean) => void; drop: (paths: string[]) => void }) =>
+      () =>
+        undefined,
+  ),
 }));
 
 vi.mock('./lib/api', () => api);
@@ -127,7 +208,7 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     minimum_protocol_version: 1,
     engine_id: 'localsr.test',
     engine_version: '0.0.11-alpha',
-    features: ['image', 'video_frame', 'video_seedvr2'],
+    features: ['image', 'image_multi_fix', 'video_frame', 'video_seedvr2', 'video_interpolation'],
     model_formats: ['.safetensors'],
     video_engines: ['spandrel_image', 'seedvr2'],
   };
@@ -204,6 +285,49 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
   return snapshot;
 }
 
+describe('Update switches', () => {
+  it('go to the host on their own, even during a job, and never through a full save', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'job-running';
+    // A direct build with its own update feed shows the switches; no launch check runs.
+    snapshot.settings.check_updates_at_launch = false;
+    const unconfigured = api.updateStatus.getMockImplementation();
+    onTestFinished(() => {
+      if (unconfigured) api.updateStatus.mockImplementation(unconfigured);
+    });
+    api.updateStatus.mockResolvedValue({
+      configured: true,
+      channel: 'beta',
+      target: 'darwin-aarch64-mps-native',
+      stage: 'idle',
+      version: '',
+      notes: '',
+      size: 0,
+      downloaded: 0,
+      message: '',
+      settings_recovery: false,
+    });
+    const user = await mountWith(snapshot);
+    await chooseMenuItem('app.updates');
+    await user.click(
+      await screen.findByLabelText(
+        'Send an anonymous update-check count (version, platform, channel)',
+      ),
+    );
+    await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
+    expect(api.setUpdateSwitch.mock.calls).toEqual([
+      ['anonymous_update_count', false],
+      ['check_updates_at_launch', true], // it started off in this test
+    ]);
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ anonymous_update_count: false }),
+    );
+    // The menu's own items are the host's: the window does not act on them.
+    await chooseMenuItem('app.update-count');
+    expect(api.setUpdateSwitch).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('Edit task', () => {
   it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
     // 36 GB: the Qwen editor fits within the share of memory a default may use.
@@ -244,6 +368,21 @@ describe('Edit task', () => {
     await user.click(screen.getByRole('button', { name: /^Download [\d.]+ GB, then edit$/ }));
     expect(api.downloadModel).toHaveBeenCalledWith('qwen_edit_2511_q3_k_s', false);
     expect(api.startEdit).not.toHaveBeenCalled();
+  });
+
+  it('starts an edit with the runtime the host dialog returned when the build has none', async () => {
+    const snapshot = editSnapshot(16);
+    snapshot.edit.runtime_path = '';
+    api.chooseEditRuntime.mockResolvedValueOnce('/chosen/sd-cli');
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+    await user.click(screen.getByRole('button', { name: 'Choose runtime…' }));
+    expect(api.chooseEditRuntime).toHaveBeenCalledTimes(1);
+    await user.type(screen.getByLabelText('What to change'), 'Add snow');
+    await user.click(screen.getByRole('button', { name: 'Edit selected' }));
+    expect(api.startEdit).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime_path: '/chosen/sd-cli' }),
+    );
   });
 
   it('starts a 16 GB Mac on FLUX.2 klein Q4_0, with its own step count', async () => {
@@ -287,7 +426,7 @@ describe('Edit task', () => {
     restricted.terms_acceptance_required = true;
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Edit$/);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the edit model' }));
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText('Choosing for Edit')).toBeTruthy();
     expect(within(dialog).getByText('FLUX.2 klein 4B')).toBeTruthy();
@@ -324,9 +463,12 @@ describe('Edit task', () => {
     await user.click(
       within(dialog).getByRole('button', { name: /^Show \d+ more that need more memory/ }),
     );
-    await user.click(
-      within(dialog).getByRole('button', { name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/ }),
-    );
+    const heavy = within(dialog).getByRole('button', {
+      name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/,
+    });
+    // The row can still be chosen to read about it, so it is not dimmed like a disabled one.
+    expect(heavy.classList.contains('dimmed')).toBe(false);
+    await user.click(heavy);
     expect(within(dialog).getByText('48 GB memory')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
     expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');
@@ -376,6 +518,13 @@ beforeEach(() => {
   api.takeLaunchIntents.mockResolvedValue([]);
   api.chooseMediaFolder.mockReset().mockResolvedValue(null);
   api.requestImageComparison.mockReset().mockResolvedValue(undefined);
+  api.listMediaResults.mockReset().mockImplementation(async (id: string) => historyOf(id, []));
+  api.listAllMediaResults.mockReset().mockResolvedValue([]);
+  api.requestCompare.mockReset().mockResolvedValue(undefined);
+  api.startModelTrials.mockReset().mockResolvedValue([]);
+  api.estimateModelTrials.mockReset().mockResolvedValue([]);
+  api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
+  api.retryEngine.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
@@ -385,9 +534,148 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  updateDialogOpen.set(false); // the dialog's store outlives each test's window
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('Job activity', () => {
+  const mountRunning = async (snapshot: AppSnapshot) => {
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel' });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Editing/),
+    );
+  };
+  const running = () => {
+    const snapshot = editSnapshot(26);
+    snapshot.settings.task = 'edit';
+    snapshot.settings.edit_model_id = 'flux2_klein_4b_q4_0';
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.status_title = 'Editing';
+    snapshot.runtime.status_detail = 'Loading the model';
+    snapshot.runtime.progress = 5;
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 5,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  };
+
+  it('has one progress display for a running edit and names the model in the status bar', async () => {
+    await mountRunning(running());
+    expect(document.querySelector('.model-activity')).toBeNull();
+    const bars = screen.getAllByRole('progressbar').filter((bar) => !bar.closest('.media-list'));
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute('aria-valuenow')).toBe('5');
+    const bar = document.querySelector('.status-bar')!;
+    expect(bar.querySelector('strong')?.textContent).toBe('Editing · 5%');
+    const detail = bar.querySelector('.status-detail')!;
+    expect(detail.textContent).toMatch(/^FLUX\.2 klein 4B.* · Loading the model$/);
+    expect(detail.getAttribute('title')).toBe(detail.textContent);
+    expect(detail.getAttribute('role')).toBe('status');
+    expect(screen.getAllByRole('status').filter((node) => bar.contains(node))).toHaveLength(1);
+  });
+
+  it('says Saving the result from 100 % on, with the model and no percentage or time left', async () => {
+    const snapshot = running();
+    snapshot.runtime.progress = 100;
+    snapshot.runtime.status_title = 'Editing';
+    snapshot.runtime.status_detail = 'Step 4 of 4 · ETA ≈ 3s';
+    snapshot.runtime.estimated_remaining_seconds = 3;
+    snapshot.jobs[0].progress = 100;
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel' });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Saving the result'),
+    );
+    const bar = document.querySelector('.status-bar')!;
+    expect(bar.querySelector('.status-detail')?.textContent).toMatch(/^FLUX\.2 klein 4B/);
+    expect(bar.textContent).not.toMatch(/ETA|≈|100%/);
+    expect(document.querySelector('.media-pane')!.textContent).toContain('Saving…');
+    expect(document.querySelector('.media-pane')!.textContent).not.toContain('100 %');
+  });
+
+  it('offers no Add to queue button while the running picture is the selected one', async () => {
+    await mountRunning(running());
+    expect(screen.queryByRole('button', { name: /to queue$/ })).toBeNull();
+  });
+});
+
+describe('Cancel buttons while work runs', () => {
+  const job = (n: number, status: JobRecord['status']): JobRecord => ({
+    id: `job-${n}`,
+    media_id: `p${n}`,
+    media_name: `p${n}.png`,
+    media_kind: 'image',
+    status,
+    progress: 0,
+    output_path: '',
+    error: '',
+    created_at: 1_000,
+  });
+  const mount = async (jobs: JobRecord[], lanes: string[] = []) => {
+    const snapshot = readySnapshot([1, 2, 3, 4].map((n) => image(`p${n}`, n === 1)));
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.active_batch_job_ids = lanes;
+    snapshot.jobs = jobs;
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findAllByRole('button', { name: /^Cancel/ });
+  };
+  const cancels = () =>
+    [...document.querySelectorAll('.status-actions .button')]
+      .map((button) => button.textContent)
+      .filter((text) => /^Cancel/.test(text ?? ''));
+
+  it('says Cancel for the one job, with no queue and no per-image button', async () => {
+    await mount([job(1, 'running')]);
+    expect(cancels()).toEqual(['Cancel']);
+  });
+
+  it('says Cancel queue when jobs wait behind the running one', async () => {
+    await mount([job(1, 'running'), job(2, 'queued'), job(3, 'queued'), job(4, 'queued')]);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('says Cancel queue for two lanes with nothing queued', async () => {
+    await mount([job(1, 'running'), job(2, 'running')], ['job-1', 'job-2']);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('changes to Cancel when the queue drains to its last job', async () => {
+    const current = readySnapshot([image('p1', true), image('p2')]);
+    current.settings.task = 'upscale';
+    current.runtime.active_job_id = 'job-2';
+    current.jobs = [job(2, 'running'), job(1, 'completed')];
+    current.jobs.push(job(3, 'queued'));
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel queue' });
+    current.jobs = current.jobs.filter((entry) => entry.id !== 'job-3');
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await screen.findByRole('button', { name: 'Cancel' });
+    expect(screen.queryByRole('button', { name: 'Cancel queue' })).toBeNull();
+  });
 });
 
 describe('LocalSR desktop interface', () => {
@@ -502,7 +790,7 @@ describe('LocalSR desktop interface', () => {
   it('mounts the complete three-pane workspace after native bootstrap', async () => {
     await mountWith(readySnapshot());
 
-    expect(screen.getByRole('heading', { name: 'Media' })).toBeTruthy();
+    expect(screen.getByRole('tablist', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Drop photos or videos here')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(1);
@@ -511,6 +799,60 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add Media…' })).toBeNull();
     expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
+  });
+
+  it('heads the Media pane with its Inputs and Outputs tabs, each with its count', async () => {
+    api.listAllMediaResults.mockResolvedValue([
+      {
+        media_id: 'photo',
+        results: [],
+        total_count: 1,
+        completed_count: 1,
+        available_count: 1,
+        default_result_id: 'done',
+        next_before: null,
+      },
+    ]);
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    snapshot.jobs = [
+      {
+        id: 'done',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/out/done.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    await mountWith(snapshot);
+    const heading = document.querySelector<HTMLElement>('.media-pane .pane-heading')!;
+    const tabs = within(heading).getByRole('tablist', { name: 'Media' });
+    expect(within(tabs).getByRole('tab', { name: 'Inputs 2' })).toBeTruthy();
+    expect(within(heading).getByRole('button', { name: 'Add Media…' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Media' })).toBeNull();
+    expect(screen.queryByText('2 inputs')).toBeNull();
+    cleanup();
+
+    await mountWith(readySnapshot());
+    expect(
+      within(screen.getByRole('tablist', { name: 'Media' }))
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.trim()),
+    ).toEqual(['Inputs', 'Outputs']);
+  });
+
+  it('names the narrow window pages Media, Viewer and Enhance, apart from the Preview tab', async () => {
+    await mountWith(readySnapshot([image('photo', true)]));
+    const pages = within(screen.getByRole('navigation', { name: 'Workspace' }));
+    expect(pages.getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
+      'Media 1',
+      'Viewer',
+      'Enhance',
+    ]);
+    expect(pages.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
   it('makes the real benchmark discoverable and starts it from the View menu', async () => {
@@ -755,6 +1097,9 @@ describe('LocalSR desktop interface', () => {
       within(dialog).getByRole('article', { name: 'Apple GPU (Metal) benchmark result' }),
     ).toBeTruthy();
     expect(within(dialog).getByRole('article', { name: 'CPU benchmark result' })).toBeTruthy();
+    expect(
+      dialog.querySelector('.benchmark-device .file-name[title="Apple GPU (Metal)"]'),
+    ).toBeTruthy();
     expect(within(dialog).getByText('Hardware results')).toBeTruthy();
   });
 
@@ -912,8 +1257,9 @@ describe('LocalSR desktop interface', () => {
       }),
     );
     await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+    expect(hdr.value).toBe('preserve');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
@@ -923,7 +1269,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByText(/The current adapter requires HAT/)).toBeTruthy();
   });
 
-  it('normalizes a saved incompatible HDR setting when reopening SeedVR2', async () => {
+  it('keeps a saved HDR preference when reopening SeedVR2', async () => {
     const snapshot = readySnapshot([{ ...video('hdr', true), hdr_format: 'HLG' }]);
     Object.assign(snapshot.settings, {
       task: 'video',
@@ -934,7 +1280,7 @@ describe('LocalSR desktop interface', () => {
     expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('tone_map');
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ video_hdr_mode: 'tone_map' }),
+        expect.objectContaining({ video_hdr_mode: 'preserve' }),
       ),
     );
   });
@@ -988,7 +1334,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: /^Quick\s*Fast, clean result/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Best\s*Finest detail, slower/i })).toBeTruthy();
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Change…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
     const hardware = screen.getByLabelText('Hardware');
@@ -1060,14 +1406,168 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
-  it.each(['incompatible-runtime', 'directml:0', 'xpu:0'])(
+  it.each([false, true])(
+    'preserves video options across engine switches with de-flicker %s',
+    async (deflicker) => {
+      const snapshot = readySnapshot([video('clip', true)]);
+      snapshot.engine!.features.push('face_aware');
+      Object.assign(snapshot.settings, {
+        task: 'video',
+        quality: 'custom',
+        selected_model_id: 'hat_l_x4_imagenet',
+        fixes: ['faces'],
+        deflicker,
+        video_interpolation: 'x2',
+        enable_face_model: true,
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      const engine = screen.getByLabelText('Video engine');
+      await user.selectOptions(engine, 'seedvr2_3b');
+      await user.selectOptions(engine, 'frame_by_frame');
+      expect(
+        (screen.getByRole('checkbox', { name: /De-flicker · Labs/i }) as HTMLInputElement).checked,
+      ).toBe(deflicker);
+      expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: true }),
+      );
+    },
+  );
+
+  it('disables interpolation when the engine does not advertise it', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.engine!.features = ['video_frame'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('allows interpolation for SDR with a saved HDR preference', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_hdr_mode = 'preserve';
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
+    expect(rate.disabled).toBe(false);
+    await user.selectOptions(rate, 'x2');
+    expect(rate.value).toBe('x2');
+  });
+
+  it('distinguishes video recipes by interpolation target and order', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+    snapshot.recipes = [
+      {
+        id: 'one',
+        name: 'Original recipe',
+        task: 'video',
+        model_id: model.model_id,
+        output_scale: 4,
+        tile_size: 256,
+        halo: 32,
+        precision: 'fp32',
+        safe_memory: true,
+        video_interpolation: 'off',
+        video_interpolation_order: 'after_upscale',
+      },
+      {
+        id: 'two',
+        name: 'Motion recipe',
+        task: 'video',
+        model_id: model.model_id,
+        output_scale: 4,
+        tile_size: 256,
+        halo: 32,
+        precision: 'fp32',
+        safe_memory: true,
+        video_interpolation: 'fps120',
+        video_interpolation_order: 'before_upscale',
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const original = screen.getByRole('button', { name: /^Original recipe/ });
+    const motion = screen.getByRole('button', { name: /^Motion recipe/ });
+    await user.click(motion);
+    await waitFor(() => expect(motion.getAttribute('aria-pressed')).toBe('true'));
+    expect(original.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('offers frame interpolation for video, off by default, and sends it with Start', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
+    expect(rate.value).toBe('off');
+    expect(screen.queryByLabelText('Interpolate')).toBeNull();
+    expect(screen.queryByText('Interpolate to 60 fps')).toBeNull();
+
+    await user.selectOptions(rate, 'fps60');
+    const order = screen.getByLabelText('Interpolate') as HTMLSelectElement;
+    expect(order.value).toBe('after_upscale');
+    expect(screen.getByText('Interpolate to 60 fps')).toBeTruthy();
+    expect(screen.getByText(/24 → 60 fps/)).toBeTruthy();
+    await user.selectOptions(order, 'before_upscale');
+
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: 'video',
+        video_interpolation: 'fps60',
+        video_interpolation_order: 'before_upscale',
+      }),
+    );
+  });
+
+  it('downloads the interpolation model when Start needs it', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Download 23 MB, then start video' }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('rife_4_26', false));
+  });
+
+  it('keeps interpolation out of SeedVR2 jobs and HDR preservation', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
+    const user = await mountWith(snapshot);
+    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect(screen.queryByLabelText('Frame rate')).toBeNull();
+    expect(screen.queryByText('Interpolate 2×')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video_model_id: 'seedvr2_3b',
+        video_interpolation: 'off',
+        deflicker: false,
+      }),
+    );
+  });
+
+  it.each(['incompatible-runtime', 'directml:0', 'xpu:0', 'openvino:80d1d11eb738'])(
     'blocks unavailable SeedVR2 recipes and downloads on %s',
     async (backend) => {
       const snapshot = readySnapshot([video('clip', true)]);
       snapshot.settings.task = 'video';
       snapshot.settings.selected_video_model_id = 'seedvr2_3b';
       if (backend === 'incompatible-runtime') snapshot.engine!.video_engines = ['spandrel_image'];
-      else snapshot.settings.device_id = backend;
+      else {
+        snapshot.settings.device_id = backend;
+        snapshot.capabilities.devices.push(gpu(backend, backend.split(':')[0], 'Test GPU'));
+      }
       snapshot.catalog.video_models.forEach((model) => {
         model.installed = false;
       });
@@ -1086,6 +1586,31 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
+  it('shows the precision of the CPU for a model the selected NPU does not run', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      {
+        id: 'openvino:80d1',
+        type: 'npu',
+        name: 'Intel(R) AI Boost (NPU)',
+        total_memory: 16 * 1024 ** 3,
+        free_memory: 8 * 1024 ** 3,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [128, 256],
+      },
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+    ];
+    snapshot.settings.device_id = 'openvino:80d1';
+    snapshot.settings.selected_model_id = 'hat_l_x4_imagenet';
+    snapshot.settings.precision = 'fp32';
+    snapshot.settings.quality = 'custom';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
+    expect(precision.value).toBe('fp32');
+  });
+
   it('keeps processing settings locked while another media item is selected', async () => {
     const snapshot = readySnapshot([image('active-image'), video('next-video', true)]);
     snapshot.settings.task = 'upscale';
@@ -1095,12 +1620,37 @@ describe('LocalSR desktop interface', () => {
       true,
     );
     expect(screen.getByRole('button', { name: 'Add Media…' }).matches(':disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(
-      true,
-    );
+    // The selected video cannot join an upscale queue: no button, not a disabled one.
+    expect(screen.queryByRole('button', { name: 'Add selected to queue' })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
+    // The header says it once, with the explanation as its tooltip; no second line under it.
+    const note = screen.getByText('Locked while running');
+    expect(note.getAttribute('title')).toBe('Finish or cancel the run to change settings.');
+    expect(screen.queryByText(/Finish or cancel the queue/)).toBeNull();
+    expect(document.querySelector('.settings-lock')).toBeNull();
+    const region = screen.getByRole('region', { name: 'Enhancement settings' });
+    const described = document.getElementById(region.getAttribute('aria-describedby') ?? '');
+    expect(described?.textContent).toBe('Finish or cancel the run to change settings.');
+    expect(described?.getAttribute('role')).toBe('status');
+  });
+
+  it('disables every control of the Enhance pane while a job runs, help tips apart', async () => {
+    const snapshot = readySnapshot([image('active-image')]);
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'image-job';
+    await mountWith(snapshot);
+    const region = screen.getByRole('region', { name: 'Enhancement settings' });
+    const interactive = [
+      ...region.querySelectorAll(
+        'button, select, input, textarea, a[href], [role=button], [tabindex]',
+      ),
+    ].filter((item) => !item.classList.contains('help-tip'));
+    expect(interactive.length).toBeGreaterThan(10);
+    const open = interactive.filter((item) => !item.matches(':disabled'));
+    expect(open.map((item) => item.outerHTML.slice(0, 80))).toEqual([]);
+    expect(region.querySelectorAll('.help-tip').length).toBeGreaterThan(0);
   });
 
   it('disables media-incompatible task cards', async () => {
@@ -1120,6 +1670,63 @@ describe('LocalSR desktop interface', () => {
     expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it.each([
+    [
+      { name: 'Intel(R) UHD Graphics 620', download: 'DirectML' },
+      /Runs on the CPU\. This computer has Intel UHD Graphics 620, which the DirectML download of LocalSR can use\./,
+      true,
+    ],
+    [
+      { name: 'Intel graphics', download: 'intel-driver' },
+      /Runs on the CPU\. Intel graphics can run models once Intel's compute driver, the intel-opencl-icd package, is installed\./,
+      false,
+    ],
+  ] as const)(
+    'names the download or driver for a GPU this edition cannot use in the idle status line',
+    async (suggestion, text, downloads) => {
+      const snapshot = readySnapshot([image('photo', true)]);
+      snapshot.settings.device_id = 'cpu';
+      snapshot.capabilities.gpu_suggestion = suggestion;
+      const user = await mountWith(snapshot);
+      const status = document.querySelector('.status-copy') as HTMLElement;
+      expect(within(status).getByText(text)).toBeTruthy();
+      // Another download of LocalSR gets a link; Intel's driver is a system package, named instead.
+      const link = within(status).queryByRole('button', { name: 'Download page' });
+      expect(Boolean(link)).toBe(downloads);
+      if (link) {
+        await user.click(link);
+        expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
+      }
+      // The hint moved: Advanced does not repeat it.
+      await chooseTask(user, /^Upscale$/);
+      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      expect(screen.getAllByText(text)).toHaveLength(1);
+    },
+  );
+
+  it('keeps the CPU hint out of the status line while a job runs or after a failure', async () => {
+    const running = readySnapshot([image('photo', true)]);
+    running.settings.device_id = 'cpu';
+    running.capabilities.gpu_suggestion = { name: 'an NVIDIA GPU', download: 'CUDA' };
+    await mountWith(running);
+    expect(screen.getByText(/the CUDA download of LocalSR can use/)).toBeTruthy();
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    await waitFor(() =>
+      expect(screen.queryByText(/the CUDA download of LocalSR can use/)).toBeNull(),
+    );
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: 'The output folder is not writable.' },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('alert', { name: 'Last error' }).textContent).toContain(
+        'The output folder is not writable.',
+      ),
+    );
+    expect(screen.queryByText(/the CUDA download of LocalSR can use/)).toBeNull();
   });
 
   it('preserves every executable backend id from worker discovery to job settings', async () => {
@@ -1166,6 +1773,16 @@ describe('LocalSR desktop interface', () => {
         is_integrated: true,
         recommended_tile_sizes: [64, 128],
       },
+      {
+        id: 'openvino:8680677d060000000002000000000000',
+        type: 'openvino',
+        name: 'Intel(R) Graphics (iGPU) (OpenVINO)',
+        total_memory: 8,
+        free_memory: 6,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [64, 128],
+      },
     ];
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
@@ -1178,7 +1795,9 @@ describe('LocalSR desktop interface', () => {
       'NVIDIA GPU (CUDA)',
       'AMD GPU (ROCm)',
       'Intel GPU (XPU)',
-      'Intel(R) Iris(R) Xe Graphics (DirectML)',
+      // Adapter names lose the trademark marks, OpenVINO's (iGPU) and a single route's tag.
+      'Intel Iris Xe Graphics',
+      'Intel Graphics',
     ]) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
@@ -1189,7 +1808,438 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'directml:0' }),
       ),
     );
-    expect(screen.getByText(/DirectML uses the selected Windows GPU/)).toBeTruthy();
+    expect(screen.getByText(/DirectML has not been tested on real hardware yet/)).toBeTruthy();
+    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
+    // The saved scale is a number; the menu must still show the matching option.
+    expect((screen.getByLabelText('Interface text') as HTMLSelectElement).selectedIndex).toBe(0);
+    // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
+    const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
+    expect(precision.disabled).toBe(true);
+    expect(precision.value).toBe('fp32');
+
+    await user.selectOptions(hardware, 'openvino:8680677d060000000002000000000000');
+    await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
+    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
+    expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('shows the CPU and starts on it when the saved GPU is no longer listed', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'cuda:7';
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(hardware.selectedOptions[0]?.textContent).toBe('CPU');
+    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({ device: 'cpu' }));
+    // The saved choice stays until the user makes another: the GPU may be plugged in again.
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ device_id: 'cuda:7' }),
+    );
+  });
+
+  function gpu(id: string, type: string, name: string): DeviceInfo {
+    return {
+      id,
+      type,
+      name,
+      total_memory: 8 * 1024 ** 3,
+      free_memory: 6 * 1024 ** 3,
+      supports_fp16: false,
+      is_integrated: true,
+      recommended_tile_sizes: [64, 128],
+    };
+  }
+
+  it('groups a GPU reached through DirectML and OpenVINO under its name, with its routes as options', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+      // OpenVINO names the same GPU with its own (iGPU) tag.
+      gpu('openvino:8680', 'openvino', 'Intel(R) UHD Graphics 620 (iGPU) (OpenVINO)'),
+      gpu('openvino:80d1', 'npu', 'Intel(R) AI Boost (NPU)'),
+      gpu('directml:1', 'directml', 'NVIDIA GeForce RTX 3060 (DirectML)'),
+    ];
+    snapshot.settings.device_id = 'directml:0';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+
+    const groups = [...hardware.querySelectorAll('optgroup')];
+    expect(groups.map((group) => group.label)).toEqual(['Intel UHD Graphics 620']);
+    expect([...groups[0].querySelectorAll('option')].map((option) => option.textContent)).toEqual([
+      'Intel UHD Graphics 620 · DirectML',
+      'Intel UHD Graphics 620 · OpenVINO',
+    ]);
+    // A device reached one way is one entry; the NPU keeps its tag.
+    for (const name of ['CPU', 'NVIDIA GeForce RTX 3060', 'Intel AI Boost (NPU)']) {
+      expect(within(hardware).getByRole('option', { name })).toBeTruthy();
+    }
+    // The closed menu shows the whole name and route: the menu gets the row's full width,
+    // and its tooltip repeats the entry.
+    expect(hardware.selectedOptions[0].textContent).toBe('Intel UHD Graphics 620 · DirectML');
+    expect(hardware.title).toBe('Intel UHD Graphics 620 · DirectML');
+    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(true);
+    // The status line names the GPU as the menu and the engine do.
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(
+      /· Intel UHD Graphics 620 \(DirectML\)$/,
+    );
+
+    await user.selectOptions(hardware, 'openvino:8680');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'openvino:8680' }),
+      ),
+    );
+    expect(hardware.title).toBe('Intel UHD Graphics 620 · OpenVINO');
+    await user.selectOptions(hardware, 'openvino:80d1');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'openvino:80d1' }),
+      ),
+    );
+    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+  });
+
+  it('keeps short Hardware entries beside their label', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(hardware.querySelector('optgroup')).toBeNull();
+    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(false);
+  });
+
+  it('keeps the engine route note for the whole job, through a snapshot refresh', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const note =
+      'RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here (412 ms against 288 ms per tile).';
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({ type: 'engine_status', data: { job_id: 'job-1', message: note } });
+    expect(await screen.findByText(note)).toBeTruthy();
+    callback({
+      type: 'progress',
+      data: { job_id: 'job-1', percentage: 12, completed_tiles: 3, total_tiles: 25 },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toContain('3 of 25 tiles'),
+    );
+    expect(document.querySelector('.status-note')?.textContent).toBe(note);
+
+    // The host keeps the note in its snapshot (worker.rs), so a refresh does not drop it.
+    const running = structuredClone(snapshot);
+    Object.assign(running.runtime, {
+      active_job_id: 'job-1',
+      status_title: 'Enhancing',
+      status_detail: '4 of 25 tiles',
+      progress: 16,
+      hardware_note: note,
+    });
+    api.refreshSnapshot.mockResolvedValue(running);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toContain('4 of 25 tiles'),
+    );
+    expect(document.querySelector('.status-note')?.textContent).toBe(note);
+
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    callback({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out.png' } });
+    await waitFor(() => expect(document.querySelector('.status-note')).toBeNull());
+  });
+
+  it('shows the last failure above Advanced and offers the CPU when a GPU caused it', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices.push(
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+    );
+    snapshot.settings.device_id = 'directml:0';
+    const user = await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: 'The output folder is not writable.' },
+    });
+    let failure = await screen.findByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('The output folder is not writable.');
+    // Not a GPU's fault: the CPU would not help.
+    expect(within(failure).queryByRole('button', { name: 'Use the CPU' })).toBeNull();
+
+    const rejection =
+      'RealESRGAN gives different results on Intel UHD Graphics 620 (DirectML) than on the CPU, so LocalSR does not use that GPU for this model. Select the CPU for it.';
+    callback({ type: 'job_started', data: { job_id: 'job-2' } });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
+    callback({ type: 'job_failed', data: { job_id: 'job-2', error_message: rejection } });
+    failure = await screen.findByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('Select the CPU for it.');
+    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ device_id: 'cpu' }),
+      ),
+    );
+    expect(
+      within(screen.getByRole('alert', { name: 'Last error' })).queryByRole('button', {
+        name: 'Use the CPU',
+      }),
+    ).toBeNull();
+  });
+
+  const driverReset =
+    'The graphics driver stopped Intel UHD Graphics 620 (DirectML) while it ran RealESRGAN (device removed or reset). The engine restarts with a fresh device; if this repeats, choose a smaller tile or the CPU.';
+
+  async function failOnTheGpu(): Promise<(message: WorkerEnvelope) => void> {
+    // The newest mount's listener.
+    const callback = api.listenForWorker.mock.lastCall![0] as (message: WorkerEnvelope) => void;
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({
+      type: 'job_failed',
+      data: { job_id: 'job-1', error_message: driverReset, restart_required: true },
+    });
+    await screen.findByRole('alert', { name: 'Last error' });
+    return callback;
+  }
+
+  function onTheGpu(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices.push(
+      gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
+    );
+    snapshot.settings.device_id = 'directml:0';
+    snapshot.settings.task = 'upscale';
+    return snapshot;
+  }
+
+  it('keeps a GPU failure and its CPU shortcut while the engine restarts after it', async () => {
+    const snapshot = onTheGpu();
+    await mountWith(snapshot);
+    const callback = await failOnTheGpu();
+    // The host restarts the engine for a driver reset: its snapshot says so, then Ready.
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    for (const [worker, title, detail] of [
+      ['starting', 'Starting engine', 'The inference process is loading.'],
+      ['ready', 'Ready', 'The isolated inference engine is ready.'],
+    ]) {
+      const restarted = structuredClone(snapshot);
+      Object.assign(restarted.runtime, { worker, status_title: title, status_detail: detail });
+      api.refreshSnapshot.mockResolvedValue(restarted);
+      refresh();
+      await waitFor(() =>
+        expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(
+          new RegExp(`^${title}`),
+        ),
+      );
+    }
+    const failure = screen.getByRole('alert', { name: 'Last error' });
+    expect(failure.textContent).toContain('device removed or reset');
+    expect(within(failure).getByRole('button', { name: 'Use the CPU' })).toBeTruthy();
+    // The next job starts without it.
+    callback({ type: 'job_started', data: { job_id: 'job-2' } });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
+  });
+
+  it('keeps keyboard focus on a control after Use the CPU', async () => {
+    const user = await mountWith(onTheGpu());
+    await failOnTheGpu();
+    let failure = screen.getByRole('alert', { name: 'Last error' });
+    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    // Advanced is closed: the error stays and takes the focus.
+    await waitFor(() => expect(document.activeElement).toBe(failure));
+    cleanup();
+
+    const open = await mountWith(onTheGpu());
+    await chooseTask(open, /^Upscale$/);
+    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await failOnTheGpu();
+    failure = screen.getByRole('alert', { name: 'Last error' });
+    await open.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
+    // Advanced is open: the Hardware menu that now says CPU takes it.
+    await waitFor(() => expect(document.activeElement?.id).toBe('device'));
+    expect((document.activeElement as HTMLSelectElement).value).toBe('cpu');
+  });
+
+  describe('Try again for an engine the host gave up on', () => {
+    async function mountStatus(snapshot: AppSnapshot): Promise<ReturnType<typeof userEvent.setup>> {
+      api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      render(App);
+      await waitFor(() =>
+        expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+          snapshot.runtime.status_title,
+        ),
+      );
+      return userEvent.setup();
+    }
+
+    function givenUp(): AppSnapshot {
+      const snapshot = readySnapshot([image('photo', true)]);
+      Object.assign(snapshot.runtime, {
+        worker: 'failed',
+        status_title: 'Engine unavailable',
+        status_detail: 'The inference engine repeatedly stopped. Try again, or restart LocalSR.',
+        engine_retry: true,
+      });
+      return snapshot;
+    }
+
+    it('offers one button beside the disabled primary action and calls the command', async () => {
+      const user = await mountStatus(givenUp());
+      const bar = within(document.querySelector('footer.status-bar') as HTMLElement);
+      expect(bar.getByText(/Try again, or restart LocalSR\./)).toBeTruthy();
+      expect(
+        (bar.getByRole('button', { name: /^Upscale selected/ }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      const button = bar.getByRole('button', { name: 'Try again' }) as HTMLButtonElement;
+      expect(button.className).toBe('button');
+      let finish: () => void = () => {};
+      api.retryEngine.mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+      await user.click(button);
+      expect(api.retryEngine).toHaveBeenCalledTimes(1);
+      expect(button.disabled).toBe(true);
+      finish();
+      await waitFor(() => expect(button.disabled).toBe(false));
+    });
+
+    it('is not offered for any other failed or stopped engine', async () => {
+      for (const [worker, title] of [
+        ['failed', 'Engine incompatible'],
+        ['failed', 'Engine unavailable'],
+        ['unavailable', 'Engine stopped'],
+        ['starting', 'Starting engine'],
+      ]) {
+        const snapshot = givenUp();
+        Object.assign(snapshot.runtime, { worker, status_title: title, engine_retry: false });
+        await mountStatus(snapshot);
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        cleanup();
+      }
+      await mountWith(readySnapshot([image('photo', true)]));
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    });
+
+    it("shows the host's refusal in the dialog", async () => {
+      const user = await mountStatus(givenUp());
+      api.retryEngine.mockRejectedValueOnce(
+        'the inference engine is not waiting to be tried again',
+      );
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Could not restart the engine')).toBeTruthy();
+      expect(within(dialog).getByText(/not waiting to be tried again/)).toBeTruthy();
+    });
+  });
+
+  it('shows the CPU hint only for a task the CPU runs, with the engine ready', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'cpu';
+    snapshot.settings.task = 'upscale';
+    snapshot.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
+    await mountWith(snapshot);
+    expect(screen.getByText(/Runs on the CPU\. The NPU \(Intel AI Boost\)/)).toBeTruthy();
+    // The engine stopped: no hint beside its status.
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    const stopped = structuredClone(snapshot);
+    Object.assign(stopped.runtime, {
+      worker: 'unavailable',
+      status_title: 'Engine unavailable',
+      status_detail: 'The inference engine could not start.',
+    });
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    refresh();
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Engine unavailable'),
+    );
+    expect(screen.queryByText(/Runs on the CPU/)).toBeNull();
+    cleanup();
+
+    // Editing needs a GPU: neither the CPU nor this NPU runs it.
+    const editing = structuredClone(snapshot);
+    editing.settings.task = 'edit';
+    await mountWith(editing);
+    expect(screen.queryByText(/Runs on the CPU/)).toBeNull();
+  });
+
+  it("drops an ended job's route note before a benchmark, even after a forced stop", async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const note =
+      'RealESRGAN runs on Intel UHD Graphics 620 (DirectML), but slower than on the CPU here.';
+    callback({ type: 'job_started', data: { job_id: 'job-1' } });
+    callback({ type: 'engine_status', data: { job_id: 'job-1', message: note } });
+    expect(await screen.findByText(note)).toBeTruthy();
+    // A forced cancellation kills the engine: the host's snapshot no longer has the job.
+    const stopped = structuredClone(snapshot);
+    // It still carried the old job's note (worker.rs did not clear it on that path).
+    Object.assign(stopped.runtime, {
+      status_title: 'Cancelled',
+      status_detail: 'Work stopped; temporary output removed. Restarting engine…',
+      hardware_note: note,
+    });
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.queryByText(note)).toBeNull());
+    callback({
+      type: 'benchmark_started',
+      data: {
+        job_id: 'bench-1',
+        workload_version: 'localsr-benchmark-v2',
+        measured_frame_count: 3,
+      },
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Benchmark/),
+    );
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
+  it('says in its row that a queue item could not finish, until a later run finishes', async () => {
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    const failed: JobRecord = {
+      id: 'job-1',
+      media_id: 'photo',
+      media_name: 'photo.png',
+      media_kind: 'image',
+      status: 'failed',
+      progress: 0,
+      output_path: '',
+      error: 'The graphics driver stopped Intel UHD Graphics 620 (DirectML).',
+      created_at: 100,
+    };
+    snapshot.jobs = [failed];
+    await mountWith(snapshot);
+    const label = screen.getByText('Could not finish');
+    expect(label.getAttribute('title')).toBe(failed.error);
+    // Sentence case: the row's state style capitalises single words, not this.
+    expect(label.classList.contains('failed')).toBe(true);
+    expect(screen.getAllByText('Could not finish')).toHaveLength(1);
+
+    const later = structuredClone(snapshot);
+    later.jobs = [
+      {
+        ...failed,
+        id: 'job-2',
+        status: 'completed',
+        error: '',
+        output_path: '/out.png',
+        created_at: 200,
+      },
+      failed,
+    ];
+    api.refreshSnapshot.mockResolvedValue(later);
+    const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
+    refresh();
+    await waitFor(() => expect(screen.queryByText('Could not finish')).toBeNull());
   });
 
   it.each(['mps', 'directml:1', 'xpu:0'])(
@@ -1229,85 +2279,145 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
-  it('submits every compatible item when batch mode is selected', async () => {
-    const snapshot = readySnapshot([image('first', true), image('second')]);
-    const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Batch' }));
-    await chooseTask(user, /^Upscale$/);
+  describe('start buttons with several inputs', () => {
+    const startButtons = () =>
+      [...document.querySelectorAll('.status-actions .start')] as HTMLButtonElement[];
 
-    const start = screen.getByRole('button', { name: 'Start 2 items' });
-    await user.click(start);
+    it('offers Only this one, then the primary for all, and starts the chosen scope', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second'), image('third')]);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.batch_mode = true;
+      const user = await mountWith(snapshot);
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['first', 'second'], batch_mode: true }),
-    );
-  });
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual([
+        'Only this one',
+        'Upscale all 3',
+      ]);
+      expect(startButtons()[0].classList).not.toContain('primary');
+      expect(startButtons()[1].classList).toContain('primary');
+      expect(screen.getByRole('button', { name: 'Upscale all 3' }).hasAttribute('title')).toBe(
+        false,
+      );
 
-  it('routes a mixed batch by the selected media type', async () => {
-    const snapshot = readySnapshot([
-      video('selected-video', true),
-      image('first-image'),
-      image('second-image'),
-    ]);
-    snapshot.settings.batch_mode = true;
-    snapshot.settings.task = 'upscale';
-    const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: 'Only this one' }));
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ media_ids: ['first'], batch_mode: false }),
+      );
+      // The scope used is the one File > Start and automatic starts follow afterwards.
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ batch_mode: false }),
+      );
+    });
 
-    const start = screen.getByRole('button', { name: 'Start 1 item' }) as HTMLButtonElement;
-    expect(start.disabled).toBe(false);
-    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect((screen.getByRole('button', { name: /^Upscale$/ }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    await user.click(start);
+    it('starts every compatible item from the primary and stores the scope', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second')]);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.batch_mode = false;
+      const user = await mountWith(snapshot);
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        media_ids: ['selected-video'],
-        batch_mode: true,
-        task: 'video',
-      }),
-    );
-  });
+      await user.click(screen.getByRole('button', { name: 'Upscale all 2' }));
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({ media_ids: ['first', 'second'], batch_mode: true }),
+      );
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ batch_mode: true }),
+      );
+    });
 
-  it('switches from batch to a non-destructive selected-item single scope', async () => {
-    const snapshot = readySnapshot([image('first', true), image('second')]);
-    snapshot.settings.batch_mode = true;
-    snapshot.settings.task = 'upscale';
-    const user = await mountWith(snapshot);
+    it('tabs from Only this one to the primary, and the primary is the last button', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second')]);
+      snapshot.settings.task = 'upscale';
+      await mountWith(snapshot);
+      const buttons = [...document.querySelectorAll('.status-actions button')];
+      expect(buttons.at(-1)!.textContent?.trim()).toBe('Upscale all 2');
+      expect(buttons.at(-2)!.textContent?.trim()).toBe('Only this one');
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Single' }));
+    it.each([
+      ['denoise', 'Restore all 2', 'Restore selected'],
+      ['video', 'Start all 2 videos', 'Start selected video'],
+    ] as const)('names the %s task in the primary', async (task, all, single) => {
+      const make = task === 'video' ? video : image;
+      const snapshot = readySnapshot([make('first', true), make('second')]);
+      snapshot.settings.task = task;
+      await mountWith(snapshot);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Only this one', all]);
+      cleanup();
+      const lone = readySnapshot([make('only', true)]);
+      lone.settings.task = task;
+      await mountWith(lone);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual([single]);
+    });
 
-    expect(screen.getAllByText('first.png').length).toBeGreaterThan(0);
-    expect(screen.getByText('second.png')).toBeTruthy();
-    expect(screen.getByText(/Single processes only “first.png”/i)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    it('says how many inputs are left out and why on the primary', async () => {
+      const snapshot = readySnapshot([image('selected', true), image('second'), video('clip')]);
+      snapshot.settings.task = 'upscale';
+      await mountWith(snapshot);
+      const primary = screen.getByRole('button', { name: 'Upscale all 2' });
+      expect(primary.getAttribute('title')).toBe(
+        '2 image items can be queued with this setup; select the other media type to configure it separately.',
+      );
+    });
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['first'], batch_mode: false }),
-    );
-  });
+    it('gives one primary button with the explanation when only one item can run', async () => {
+      const snapshot = readySnapshot([
+        video('selected-video', true),
+        image('first-image'),
+        image('second-image'),
+      ]);
+      snapshot.settings.batch_mode = true;
+      snapshot.settings.task = 'upscale';
+      const user = await mountWith(snapshot);
 
-  it('automatically chooses the compatible task and disables mismatched task cards', async () => {
-    const snapshot = readySnapshot([video('selected-video', true), image('available-image')]);
-    snapshot.settings.batch_mode = true;
-    snapshot.settings.task = 'upscale';
-    const user = await mountWith(snapshot);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Start selected video']);
+      const why =
+        '1 video item can be queued with this setup; select the other media type to configure it separately.';
+      const start = screen.getByRole('button', { name: 'Start selected video' });
+      expect(start.getAttribute('title')).toBe(why);
+      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(true);
+      await user.click(start);
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({ media_ids: ['selected-video'], task: 'video' }),
+      );
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Single' }));
+    it('keeps Edit to one primary button that explains why', async () => {
+      const snapshot = editSnapshot(32);
+      snapshot.media = [image('photo', true), image('other')];
+      snapshot.settings.task = 'edit';
+      await mountWith(snapshot);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Edit selected']);
+      expect(startButtons()[0].getAttribute('title')).toBe(
+        'Edit processes only “photo.png”; batches are not supported yet.',
+      );
+    });
 
-    expect(screen.getByText(/Single processes only “selected-video.mp4”/i)).toBeTruthy();
-    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect(
-      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement).disabled,
-    ).toBe(false);
+    it('puts the scope after the download note and the note in the tooltip of Only this one', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second')]);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.quality = 'best';
+      snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
+      snapshot.catalog.models.find(
+        (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+      )!.installed = false;
+      const user = await mountWith(snapshot);
+      const [one, all] = startButtons();
+      expect(one.textContent?.trim()).toBe('Only this one');
+      expect(one.getAttribute('title')).toMatch(/^Downloads [\d.]+ MB first/);
+      expect(all.textContent?.trim()).toMatch(/^Download [\d.]+ MB, then upscale all 2$/);
+      await user.click(all);
+      await waitFor(() =>
+        expect(api.downloadModel).toHaveBeenCalledWith('realplksr_nomoswebphoto_x4', false),
+      );
+    });
+
+    it('leaves the buttons to the one input as before', async () => {
+      await mountWith(readySnapshot([image('only', true)]));
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Upscale selected']);
+    });
   });
 
   it('reconciles a native photo launch with a persisted video task without requiring a preset', async () => {
@@ -1343,18 +2453,150 @@ describe('LocalSR desktop interface', () => {
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
   });
 
-  it('locks the single/batch scope for an active queue', async () => {
+  it('hides a status bar button whose count would be 0 and keeps no room for it', async () => {
+    const queued = (id: string, status: JobRecord['status']): JobRecord => ({
+      id: `job-${id}`,
+      media_id: id,
+      media_name: `${id}.png`,
+      media_kind: 'image',
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 1,
+    });
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.settings.batch_mode = true;
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-first';
+    snapshot.jobs = [queued('first', 'running'), queued('second', 'queued')];
+    await mountWith(snapshot);
+    expect(screen.queryByRole('button', { name: /^Add \d+ to queue$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+    expect(
+      [...document.querySelectorAll('.status-actions .button')].map((b) => b.textContent),
+    ).toEqual(['Cancel runs for this image', 'Cancel queue']);
+    cleanup();
+
+    // Between two jobs of a queue every item is queued: there is nothing to start.
+    snapshot.runtime.active_job_id = '';
+    snapshot.jobs = [queued('first', 'queued'), queued('second', 'queued')];
+    await mountWith(snapshot);
+    expect(screen.queryByRole('button', { name: /^Start \d+ items?$/ })).toBeNull();
+  });
+
+  describe('adding to a running queue', () => {
+    const job = (n: number, status: JobRecord['status']): JobRecord => ({
+      id: `job-${n}`,
+      media_id: `p${n}`,
+      media_name: `p${n}.png`,
+      media_kind: 'image',
+      status,
+      progress: status === 'running' ? 40 : 0,
+      output_path: '',
+      error: status === 'failed' ? 'broke' : '',
+      created_at: 1_000, // one enqueue: the jobs of a batch are created together
+    });
+    // p1-p3 finished, p4 runs, p5-p7 wait: the queue of one run.
+    const running = (extra: MediaItem[] = [], selected = 'p4', batch = true) => {
+      const media = [1, 2, 3, 4, 5, 6, 7].map((n) => image(`p${n}`, `p${n}` === selected));
+      const snapshot = readySnapshot([...media, ...extra]);
+      for (const item of snapshot.media) item.selected = item.id === selected;
+      snapshot.settings.batch_mode = batch;
+      snapshot.settings.task = 'upscale';
+      snapshot.runtime.active_job_id = 'job-4';
+      snapshot.jobs = [
+        job(7, 'queued'),
+        job(6, 'queued'),
+        job(5, 'queued'),
+        job(4, 'running'),
+        job(3, 'completed'),
+        job(2, 'completed'),
+        job(1, 'completed'),
+      ];
+      return snapshot;
+    };
+    const addButton = () => screen.queryByRole('button', { name: /^Add (selected|\d+) to queue$/ });
+
+    it('offers nothing while every input has a job in this run', async () => {
+      await mountWith(running());
+      expect(addButton()).toBeNull();
+    });
+
+    it('counts only the inputs added after the queue started', async () => {
+      await mountWith(running([image('n1'), image('n2')]));
+      expect(addButton()?.textContent).toBe('Add 2 to queue');
+    });
+
+    it('does not count an input whose job in this run failed or was cancelled', async () => {
+      const snapshot = running([image('n1'), image('n2')]);
+      snapshot.jobs[6] = job(1, 'failed');
+      snapshot.jobs[5] = job(2, 'cancelled');
+      await mountWith(snapshot);
+      expect(addButton()?.textContent).toBe('Add 2 to queue');
+    });
+
+    it('counts a finished picture from an earlier run as old, but not as new input once it ran', async () => {
+      const snapshot = running([image('n1')]);
+      snapshot.jobs.push({ ...job(8, 'completed'), media_id: 'n1', created_at: 10 });
+      await mountWith(snapshot);
+      // The earlier run's job is not part of this run, so the picture is still offered.
+      expect(addButton()?.textContent).toBe('Add 1 to queue');
+    });
+
+    it('offers Add selected to queue only for a selected input that is new', async () => {
+      await mountWith(running([image('n1')], 'p2', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'p4', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'p6', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'n1', false));
+      expect(addButton()?.textContent).toBe('Add selected to queue');
+    });
+
+    it('shows the button when new inputs arrive while the queue runs', async () => {
+      const current = running();
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+      await screen.findByRole('button', { name: 'Cancel queue' });
+      expect(addButton()).toBeNull();
+      current.media.push(image('n1'), image('n2'));
+      await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+      (api.listenForStateChange.mock.calls[0][0] as () => void)();
+      await waitFor(() => expect(addButton()?.textContent).toBe('Add 2 to queue'));
+    });
+
+    it('leaves the idle counts alone once the queue has ended', async () => {
+      const snapshot = running();
+      snapshot.runtime.active_job_id = '';
+      snapshot.jobs = snapshot.jobs.map((entry) => ({ ...entry, status: 'completed' }));
+      await mountWith(snapshot);
+      expect(screen.getByRole('button', { name: 'Only this one' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /all 7/i })).toBeTruthy();
+    });
+  });
+
+  it('has no Process line and keeps the scope buttons out of the Media pane', async () => {
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.settings.task = 'upscale';
+    await mountWith(snapshot);
+    expect(document.querySelector('.process-scope')).toBeNull();
+    expect(document.querySelector('.media-pane')!.textContent).not.toMatch(/Process|All 2/);
+    expect(screen.queryByRole('button', { name: 'Selected' })).toBeNull();
+  });
+
+  it('shows no scope buttons while a queue runs', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     snapshot.settings.task = 'upscale';
     snapshot.runtime.active_job_id = 'running-job';
     await mountWith(snapshot);
-
-    expect((screen.getByRole('button', { name: 'Single' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(screen.queryByRole('button', { name: 'Only this one' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Upscale all/ })).toBeNull();
   });
 
   it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {
@@ -1368,9 +2610,9 @@ describe('LocalSR desktop interface', () => {
     });
     render(App);
     const user = userEvent.setup();
-    const cancel = await screen.findByRole('button', { name: 'Cancel queue' });
+    const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
-    expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
@@ -1380,6 +2622,142 @@ describe('LocalSR desktop interface', () => {
       expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false),
     );
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the settings locked while the next queued job has not shown up yet', async () => {
+    const current = readySnapshot([image('first', true), image('second')]);
+    current.settings.task = 'upscale';
+    const queued = (id: string, media: string, status: 'running' | 'queued') => ({
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 1,
+    });
+    current.runtime.active_job_id = 'job-1';
+    current.jobs = [queued('job-1', 'first', 'running'), queued('job-2', 'second', 'queued')];
+    await mountWith(current);
+    const listener = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    // job-1 ends; the host already runs job-2, but the window learns of it with its next refresh.
+    listener({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out/first.png' } });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Complete/),
+    );
+    expect(screen.getByRole('button', { name: /^Best/ }).matches(':disabled')).toBe(true);
+  });
+
+  describe('after Cancel queue, while the engine still stops', () => {
+    const lane = (id: string, media: string, status: JobRecord['status'], created = 10) => ({
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status,
+      progress: 40,
+      output_path: '',
+      error: '',
+      created_at: created,
+      elapsed_seconds: status === 'completed' ? 31 : 0,
+    });
+    const stopping = () => {
+      const current = readySnapshot(['a', 'b', 'c', 'd', 'e'].map((id, i) => image(id, i === 0)));
+      current.settings.task = 'upscale';
+      current.settings.batch_mode = true;
+      current.runtime.active_job_id = 'j2';
+      current.runtime.active_batch_job_ids = ['j2', 'j3'];
+      current.runtime.status_title = 'Processing';
+      current.runtime.status_detail = 'Finishing the other photos of this batch. · ETA ≈ 9s';
+      current.runtime.progress = 40;
+      current.jobs = [
+        lane('j1', 'a', 'completed'),
+        lane('j2', 'b', 'cancelling'),
+        lane('j3', 'c', 'cancelling'),
+        lane('j4', 'd', 'cancelled'),
+        lane('j5', 'e', 'cancelled'),
+      ];
+      return current;
+    };
+    const strong = () => document.querySelector('.status-copy strong')?.textContent;
+    const mountNow = async (current: AppSnapshot) => {
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+    };
+    const rowTexts = () =>
+      [...document.querySelectorAll('.media-pane .media-row')].map((row) => row.textContent);
+
+    it('shows Stopping in the bar, the buttons and the rows of a 2-lane batch', async () => {
+      await mountNow(stopping());
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      const detail = document.querySelector('.status-detail')!.textContent;
+      expect(detail).toContain('Stopping 2 photos');
+      expect(detail).toContain('up to 8 s');
+      expect(document.querySelector('.status-bar')!.textContent).not.toMatch(/ETA|≈|40%/);
+      expect(screen.queryByRole('button', { name: 'Cancel queue' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+      expect(screen.queryByRole('button', { name: /^Add \d+ to queue/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Only this one|all \d+/i })).toBeNull();
+      const rows = rowTexts();
+      expect(rows[0]).toContain('Done · 31 s');
+      expect(rows[1]).toContain('Stopping…');
+      expect(rows[2]).toContain('Stopping…');
+      expect(rows[3]).not.toMatch(/Stopping|Queued|Running|Done/);
+      expect(rows[4]).not.toMatch(/Stopping|Queued|Running|Done/);
+    });
+
+    it('says what a single stopping job waits for', async () => {
+      const current = stopping();
+      current.runtime.active_batch_job_ids = [];
+      current.jobs = [lane('j2', 'b', 'cancelling')];
+      await mountNow(current);
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      expect(document.querySelector('.status-detail')!.textContent).toContain(
+        'Waiting for the engine to stop (up to 8 s).',
+      );
+      expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+    });
+
+    it('returns to idle with one Stopped line and the idle buttons', async () => {
+      const current = stopping();
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      current.runtime.active_job_id = '';
+      current.runtime.active_batch_job_ids = [];
+      current.runtime.status_title = 'Cancelled';
+      current.runtime.status_detail = 'Temporary output was cleaned up.';
+      current.jobs = current.jobs.map((entry) => ({
+        ...entry,
+        status: entry.status === 'completed' ? 'completed' : 'cancelled',
+      }));
+      (api.listenForStateChange.mock.calls[0][0] as () => void)();
+      await waitFor(() => expect(strong()).toBe('Cancelled'));
+      expect(document.querySelector('.status-detail')!.textContent).toBe(
+        'Stopped. 1 of 5 finished.',
+      );
+      expect(screen.queryByRole('button', { name: 'Stopping…' })).toBeNull();
+    });
+  });
+
+  it('asks before Clear: Cancel keeps the list, confirming clears it', async () => {
+    const snapshot = readySnapshot([image('first', true), image('second', false)]);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items from the list?');
+    expect(screen.getByRole('dialog').textContent).toContain('not deleted');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(api.clearMedia).toHaveBeenCalledTimes(1));
   });
 
   it('appends from the main Add Media action even in single mode', async () => {
@@ -1585,6 +2963,206 @@ describe('LocalSR desktop interface', () => {
     expect(Number(divider.getAttribute('aria-valuenow'))).toBe(77);
   });
 
+  it('shows the photo of a batch that started last and keeps it while an earlier one saves', async () => {
+    class DecodedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private value = '';
+
+      set src(value: string) {
+        this.value = value;
+        queueMicrotask(() => this.onload?.());
+      }
+
+      get src(): string {
+        return this.value;
+      }
+    }
+    vi.stubGlobal('Image', DecodedImage);
+    const source = image('large-batch', true);
+    source.width = 3024;
+    source.height = 1964;
+    const snapshot = readySnapshot([source]);
+    snapshot.runtime.active_job_id = 'a';
+    snapshot.runtime.active_batch_job_ids = ['a', 'b'];
+    await mountWith(snapshot);
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    const tile = (jobId: string, jpeg: string): WorkerEnvelope => ({
+      type: 'tile_update',
+      data: {
+        job_id: jobId,
+        phase: 'completed',
+        output_x: 0,
+        output_y: 0,
+        output_width: 256,
+        output_height: 256,
+        image_width: 12096,
+        image_height: 7856,
+        jpeg_base64: jpeg,
+      },
+    });
+    listener({ type: 'job_started', data: { job_id: 'a' } });
+    listener({ type: 'job_started', data: { job_id: 'b' } });
+    listener(tile('b', 'tile-of-b'));
+    const canvas = screen.getByLabelText('Progressive tiled preview') as HTMLCanvasElement;
+    const drawImage = vi.mocked(canvas.getContext('2d')!.drawImage);
+    await waitFor(() => expect(drawImage).toHaveBeenCalled());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '1:1' }));
+    const zoom = screen.getByTitle(/Dynamic maximum/).textContent;
+    const draws = drawImage.mock.calls.length;
+    // A late tile and the save of the earlier photo leave the shown photo alone.
+    listener(tile('a', 'late-tile-of-a'));
+    listener({ type: 'job_completed', data: { job_id: 'a', output_path: '/output/a.png' } });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(drawImage.mock.calls.length).toBe(draws);
+    expect(screen.getByTitle(/Dynamic maximum/).textContent).toBe(zoom);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('keeps the progress of the photo on screen when a photo saving off screen reports too', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'b';
+    snapshot.runtime.active_batch_job_ids = ['a', 'b'];
+    await mountWith(snapshot);
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    listener({
+      type: 'progress',
+      data: { job_id: 'b', completed_tiles: 4, total_tiles: 10, percentage: 40 },
+    });
+    // The earlier photo's last progress lands in the same display frame.
+    listener({
+      type: 'progress',
+      data: { job_id: 'a', completed_tiles: 10, total_tiles: 10, percentage: 100 },
+    });
+    expect(await screen.findByText('4 of 10 tiles')).toBeTruthy();
+  });
+
+  describe('Outputs while a queue runs', () => {
+    function runningQueue(ids: string[], batch: boolean) {
+      const snapshot = readySnapshot(ids.map((id, index) => image(id, index === 0)));
+      snapshot.runtime.active_job_id = ids[0];
+      snapshot.runtime.active_batch_job_ids = batch ? ids : [];
+      snapshot.jobs = ids.map((id, index) => ({
+        id: `job-${id}`,
+        media_id: id,
+        media_name: `${id}.png`,
+        media_kind: 'image' as const,
+        status: index === 0 ? ('running' as const) : ('queued' as const),
+        progress: 0,
+        output_path: '',
+        error: '',
+        created_at: 10 - index,
+      }));
+      snapshot.runtime.active_job_id = `job-${ids[0]}`;
+      snapshot.runtime.active_batch_job_ids = batch ? ids.map((id) => `job-${id}`) : [];
+      return snapshot;
+    }
+
+    /** The host's state after `finished` ended: its row is completed and its history has the result. */
+    function finish(snapshot: AppSnapshot, ids: string[], finished: string[]): void {
+      const next = structuredClone(snapshot);
+      for (const job of next.jobs) {
+        if (finished.includes(job.media_id)) {
+          job.status = 'completed';
+          job.progress = 100;
+          job.output_path = `/out/${job.id}.png`;
+        }
+      }
+      api.refreshSnapshot.mockResolvedValue(next);
+      api.listAllMediaResults.mockResolvedValue(
+        ids
+          .filter((id) => finished.includes(id))
+          .map((id) => historyOf(id, [row(`job-${id}`, { model_label: 'SPAN x4' })])),
+      );
+    }
+
+    it.each([
+      ['single queue', false],
+      ['batch lanes', true],
+    ])('lists a finished photo of a running %s at once, without a click', async (_name, batch) => {
+      const ids = ['a', 'b', 'c'];
+      const snapshot = runningQueue(ids, batch);
+      let stateChanged: () => void = () => {};
+      api.listenForStateChange.mockImplementation(async (handler) => {
+        stateChanged = handler;
+        return () => undefined;
+      });
+      const user = await mountWith(snapshot);
+      const listener = api.listenForWorker.mock.calls[0]?.[0] as (m: WorkerEnvelope) => void;
+      // The photo saving off screen in a batch, or the one running in a queue, ends while others go on.
+      const ended = batch ? 'b' : 'a';
+      finish(snapshot, ids, [ended]);
+      listener({
+        type: 'job_completed',
+        data: { job_id: `job-${ended}`, output_path: `/out/job-${ended}.png` },
+      });
+      stateChanged();
+      await user.click(screen.getByRole('tab', { name: /^Outputs/ }));
+      const row1 = await screen.findByRole('button', { name: `Show SPAN x4, ${ended}.png` });
+      expect(row1.textContent).toContain('SPAN x4');
+      expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('1');
+      // A second one follows the same way.
+      const other = batch ? 'a' : 'b';
+      finish(snapshot, ids, [ended, other]);
+      listener({
+        type: 'job_completed',
+        data: { job_id: `job-${other}`, output_path: `/out/job-${other}.png` },
+      });
+      await waitFor(() =>
+        expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('2'),
+      );
+    });
+    it('keeps listing finished photos while the host reports a change every few milliseconds', async () => {
+      // A fast batch changes state faster than one refresh takes: the list must still move on.
+      const ids = ['a', 'b', 'c', 'd'];
+      const snapshot = runningQueue(ids, true);
+      let stateChanged: () => void = () => {};
+      api.listenForStateChange.mockImplementation(async (handler) => {
+        stateChanged = handler;
+        return () => undefined;
+      });
+      const user = await mountWith(snapshot);
+      const listener = api.listenForWorker.mock.calls[0]?.[0] as (m: WorkerEnvelope) => void;
+      await user.click(screen.getByRole('tab', { name: /^Outputs/ }));
+      api.listAllMediaResults.mockImplementation(async () => {
+        const answer = structuredClone(await historiesNow());
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return answer;
+      });
+      let moving = 0;
+      const historiesNow = async () =>
+        ['b']
+          .filter(() => moving > 0)
+          .map((id) => historyOf(id, [row(`job-${id}`, { model_label: 'SPAN x4' })]));
+      const stream = setInterval(() => {
+        // Every tick another photo starts or ends: the job rows keep changing.
+        moving += 1;
+        const next = structuredClone(snapshot);
+        next.jobs.forEach((job, index) => {
+          if (job.media_id === 'b') {
+            job.status = 'completed';
+            job.output_path = '/out/job-b.png';
+          } else if (index === moving % next.jobs.length) job.status = 'running';
+        });
+        api.refreshSnapshot.mockResolvedValue(next);
+        stateChanged();
+      }, 25);
+      try {
+        listener({
+          type: 'job_completed',
+          data: { job_id: 'job-b', output_path: '/out/job-b.png' },
+        });
+        await waitFor(
+          () => expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('1'),
+          { timeout: 1500 },
+        );
+      } finally {
+        clearInterval(stream);
+      }
+    });
+  });
+
   it('composites progressive tiles without exposing comparison and keeps 1:1 controls responsive', async () => {
     class DecodedImage {
       onload: (() => void) | null = null;
@@ -1723,7 +3301,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.quality = 'best';
     snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
     snapshot.settings.fixes = ['jpeg'];
-    snapshot.settings.preprocess_model_id = 'fbcnn_color';
+    snapshot.settings.fix_stages = [{ fix: 'jpeg' as const, model_id: 'fbcnn_color' }];
     snapshot.catalog.models.find((model) => model.model_id === 'fbcnn_color')!.installed = false;
     const user = await mountWith(snapshot);
 
@@ -1787,6 +3365,9 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     expect(screen.getByText('Quick · Illustration')).toBeTruthy();
+    // An illustration model is picked outright, with no note about a stand-in.
+    expect(screen.queryByText(/fully verified illustration/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -1807,7 +3388,10 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['jpeg'], preprocess_model_id: 'fbcnn_color' }),
+        expect.objectContaining({
+          fixes: ['jpeg'],
+          fix_stages: [{ fix: 'jpeg' as const, model_id: 'fbcnn_color' }],
+        }),
       ),
     );
     expect(
@@ -1816,25 +3400,369 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: ['blur'], preprocess_model_id: 'nafnet_gopro_deblur' }),
+        expect.objectContaining({
+          fixes: ['blur', 'jpeg'],
+          fix_stages: [
+            { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' },
+            { fix: 'jpeg', model_id: 'fbcnn_color' },
+          ],
+        }),
       ),
     );
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ fixes: [], preprocess_model_id: '' }),
+        expect.objectContaining({
+          fixes: ['jpeg'],
+          fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+        }),
       ),
+    );
+  });
+
+  it('chooses the fix model without touching the upscaler and remembers it', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fixes: ['noise'],
+          fix_stages: [{ fix: 'noise' as const, model_id: 'nafnet_sidd_width64' }],
+        }),
+      ),
+    );
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
+    // Only models that fix noise; the JPEG model is not offered for this job.
+    expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    expect(within(library).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          halo: 16,
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
+          preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+        }),
+      ),
+    );
+    expect(screen.getByText('Model')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Back to Best' })).toBeNull();
+    expect(within(stages).getByText(/Your pick/)).toBeTruthy();
+
+    // The choice survives the chip going off and on, Quick and back, and the content switch.
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ fix: 'noise' as const, model_id: 'denoise_realplksr_1x' }],
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          content: 'illustration',
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    const again = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(again).getByRole('button', { name: 'Back to the default' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ fix: 'noise' as const, model_id: 'nafnet_sidd_width64' }],
+          preset_pins: {},
+        }),
+      ),
+    );
+  });
+
+  it('keeps a fix chosen for a hand-picked upscaler through a chip round trip', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'custom',
+          selected_model_id: 'hat_l_x4_imagenet',
+          fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
+        }),
+      ),
+    );
+  });
+
+  it('lets Restore choose its model per problem and retains the last fix as primary', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Restore · Noise')).toBeTruthy();
+    expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'scunet_color_real_psnr',
+          output_scale: 1,
+          halo: 16,
+          preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+        }),
+      ),
+    );
+    // Blur enters before noise; the chosen denoiser remains primary.
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fixes: ['blur', 'noise'],
+          selected_model_id: 'scunet_color_real_psnr',
+          fix_stages: [
+            { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
+            { fix: 'noise', model_id: 'scunet_color_real_psnr' },
+          ],
+        }),
+      ),
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText(
+        'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('Back to the default in Restore also replaces a model picked by hand', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'nafnet_sidd_width64',
+          quality: 'best',
+          preset_pins: {},
+        }),
+      ),
+    );
+  });
+
+  it('warns before the blur fix that it can fail on sharp pictures', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText(
+        'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Fix first' })).toBeTruthy();
+  });
+
+  it('names the fix of a recipe saved before fix chips existed', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    snapshot.recipes = [
+      {
+        id: 'old',
+        name: 'Old scans',
+        task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp32',
+        safe_memory: true,
+        // The host fills a missing list with [], so an old recipe arrives like this.
+        fixes: [],
+        stages: [
+          { kind: 'deblock', model_id: 'fbcnn_color' },
+          { kind: 'upscale', model_id: 'span_photo_x4' },
+        ],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Old scans/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fixes: ['jpeg'],
+          fix_stages: [{ fix: 'jpeg' as const, model_id: 'fbcnn_color' }],
+        }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'JPEG artifacts', pressed: true })).toBeTruthy();
+  });
+
+  it('keeps Faces on when the newly picked upscaler has a face companion', async () => {
+    const snapshot = readySnapshot([image('portrait', true)]);
+    snapshot.engine!.features.push('face_aware');
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-S ×4/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'hat_s_x4', enable_face_model: true }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
+  });
+
+  it('names in the library which models run on the Neural Engine or an NPU', async () => {
+    const mac = readySnapshot([image('photo', true)]);
+    mac.capabilities.devices[0].neural_engine = true;
+    const user = await mountWith(mac);
+    await chooseMenuItem('view.models');
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
+    expect(
+      within(library).getByRole('button', { name: /SPAN ×4.*Runs well here · Neural Engine/ }),
+    ).toBeTruthy();
+    const hatRow = within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ });
+    expect(hatRow.textContent).not.toMatch(/Neural Engine/);
+    expect(hatRow.textContent).toMatch(/Runs well here · Apple GPU \(Metal\)/);
+    await user.click(within(library).getByRole('button', { name: /SPAN ×4/ }));
+    expect(within(library).getByText('Runs on')).toBeTruthy();
+    expect(library.querySelector('.detail .fit')?.textContent).toMatch(
+      /Runs well here · Neural Engine/,
+    );
+    // The file and the author keep their ends when the details column is narrow.
+    const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
+    expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
+    expect(library.querySelector(`.kv .file-name[title="${file.author}"]`)).toBeTruthy();
+    cleanup();
+
+    const pc = readySnapshot([image('photo', true)]);
+    pc.capabilities.devices = [
+      {
+        id: 'openvino:80d1',
+        type: 'npu',
+        name: 'Intel(R) AI Boost (NPU)',
+        total_memory: 16 * 1024 ** 3,
+        free_memory: 8 * 1024 ** 3,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [128, 256],
+      },
+      ...pc.capabilities.devices.filter((device) => device.id === 'cpu'),
+    ];
+    pc.settings.device_id = 'openvino:80d1';
+    const user2 = await mountWith(pc);
+    await chooseMenuItem('view.models');
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user2.click(within(library).getByRole('button', { name: /^Upscale photos/ }));
+    expect(
+      within(library).getByRole('button', { name: /SPAN ×4.*Runs well here · NPU/ }),
+    ).toBeTruthy();
+  });
+
+  it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.capabilities.devices = [
+      {
+        id: 'openvino:80d1',
+        type: 'npu',
+        name: 'Intel(R) AI Boost (NPU)',
+        total_memory: 16 * 1024 ** 3,
+        free_memory: 8 * 1024 ** 3,
+        supports_fp16: false,
+        is_integrated: true,
+        recommended_tile_sizes: [128, 256],
+      },
+      ...snapshot.capabilities.devices.filter((device) => device.id === 'cpu'),
+    ];
+    snapshot.settings.device_id = 'openvino:80d1';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
+    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+    cleanup();
+
+    const missing = readySnapshot([image('photo', true)]);
+    missing.capabilities.devices = missing.capabilities.devices.filter((d) => d.id === 'cpu');
+    missing.capabilities.npu_hint = { name: 'Intel(R) AI Boost', missing: 'compiler' };
+    missing.settings.device_id = 'cpu';
+    const user2 = await mountWith(missing);
+    // Like a GPU this edition cannot use, the missing compiler is named in the idle status line;
+    // it is a system package, so there is no link to LocalSR's downloads.
+    const status = document.querySelector('.status-copy') as HTMLElement;
+    expect(
+      within(status).getByText(
+        /Runs on the CPU\. The NPU \(Intel AI Boost\) can run models once the (intel-driver-compiler-npu package|current Intel NPU driver)/,
+      ),
+    ).toBeTruthy();
+    expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
+    await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
+      /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
     );
   });
 
   it('picks a model for this job from the library and marks the recipe as custom', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     expect(within(library).getByText('Apache-2.0 ↗')).toBeTruthy();
+    expect(
+      within(library).getByRole('button', { name: /XPixel Group · model source/ }),
+    ).toBeTruthy();
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
     expect(screen.getByText('Model · chosen by you')).toBeTruthy();
@@ -1854,12 +3782,43 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it('shows compatible models left and opens the library filtered to the current job', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await user.click(screen.getByRole('button', { name: /more models in the library/i }));
+
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · Quick · Photo')).toBeTruthy();
+    expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
+    expect(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ })).toBeTruthy();
+    expect(within(library).queryByRole('button', { name: /HAT-L ×4 Face/ })).toBeNull();
+  });
+
+  it('uses the tile overlap a library model needs', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /DAT2 ×4 BHI Real/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'bhi_dat2_real_x4', halo: 32 }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Back to Best' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'realplksr_nomoswebphoto_x4', halo: 16 }),
+      ),
+    );
+  });
+
   it('pins a library model to Best and removes an installed model', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     api.removeModel.mockResolvedValue(undefined);
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Make my Best · Photo' }));
@@ -1872,7 +3831,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const reopened = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(reopened).getByRole('button', { name: /^Installed/ }));
     await user.click(within(reopened).getByRole('button', { name: 'Remove SPAN ×4 NomosUni' }));
@@ -1891,6 +3850,20 @@ describe('LocalSR desktop interface', () => {
       screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
     );
     await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
+  });
+
+  it('offers the illustration model as a download on Start when it is not installed', async () => {
+    const snapshot = readySnapshot([image('frame', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.content = 'illustration';
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await user.click(
+      screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
+    );
+    await waitFor(() =>
+      expect(api.downloadModel).toHaveBeenCalledWith('realesrgan_x4plus_anime_6b', false),
+    );
   });
 
   it('keeps Best selected when the content type changes', async () => {
@@ -1984,4 +3957,1803 @@ it('asks for FFmpeg before starting an H.264 export instead of failing later', a
   expect(api.startJobs).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: 'Not now' }));
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+describe('Several fixes in one pass', () => {
+  const blur = { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' };
+  const jpeg = { fix: 'jpeg' as const, model_id: 'fbcnn_color' };
+  const rows = () => within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem');
+  const labels = () => rows().map((row) => row.querySelector('.stage')?.textContent);
+  const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
+
+  it('toggles each fix on its own, adds it at its place, moves it and changes its model', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    // One fix has nowhere to move.
+    expect(screen.queryByRole('button', { name: /^Move the/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(screen.getByRole('button', { name: 'Noise', pressed: true })).toBeTruthy();
+    expect(labels()).toEqual(['Fix blur', 'Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    const move = (name: string) => screen.getByRole('button', { name });
+    // Each fix offers only the moves it can make.
+    expect(screen.queryByRole('button', { name: 'Move the blur fix earlier' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Move the noise fix later' })).toBeNull();
+    expect(move('Move the JPEG fix earlier')).toBeTruthy();
+    expect(move('Move the JPEG fix later')).toBeTruthy();
+    // One line per model: role, name, Change… and the arrows; notes and links below it.
+    const jpegRow = rows()[1];
+    const end = jpegRow.querySelector('.plan-end')!;
+    expect([...end.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+      '↑',
+      '↓',
+      'Change…',
+    ]);
+    // A fix that can move one way shows one arrow, with no empty slot beside it.
+    expect(
+      [...rows()[2].querySelectorAll('.plan-end button')].map((button) => button.textContent),
+    ).toEqual(['↑', 'Change…']);
+    expect(document.querySelector('.move-gap')).toBeNull();
+    expect(move('Move the JPEG fix earlier').getAttribute('title')).toBe('Move earlier');
+    expect(move('Move the JPEG fix later').getAttribute('title')).toBe('Move later');
+    expect(jpegRow.querySelector('.name')?.getAttribute('title')).toBe('FBCNN Color');
+    expect(rows()[0].querySelector('.plan-note')?.textContent).toMatch(/^Can add artifacts/);
+    expect(screen.queryByText('Move earlier')).toBeNull();
+
+    await user.click(move('Move the noise fix earlier'));
+    expect(labels()).toEqual(['Fix blur', 'Fix noise', 'Fix JPEG', 'Upscale ×4']);
+    // The keyboard stays on the fix that moved.
+    expect(document.activeElement).toBe(move('Move the noise fix earlier'));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'realplksr_nomoswebphoto_x4',
+        fixes: ['blur', 'noise', 'jpeg'],
+        fix_stages: [blur, { fix: 'noise', model_id: 'nafnet_sidd_width64' }, jpeg],
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
+    // The library opens on the model this fix uses now.
+    expect(within(library).getByRole('heading', { name: 'NAFNet SIDD Width64' })).toBeTruthy();
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'realplksr_nomoswebphoto_x4',
+        fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }, jpeg],
+        preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+      }),
+    );
+    expect(within(rows()[1]).getByText(/Your pick/)).toBeTruthy();
+    expect(within(rows()[2]).queryByText(/Your pick/)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(library).getByText('Choosing for Upscale · JPEG artifacts')).toBeTruthy();
+    expect(within(library).getByRole('heading', { name: 'FBCNN Color' })).toBeTruthy();
+    expect(within(library).queryByRole('button', { name: /SCUNet/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Close model library' }));
+
+    // Turning one fix off keeps the others, their order and their models.
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        fixes: ['noise', 'jpeg'],
+        fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }, jpeg],
+      }),
+    );
+    // A fix moved to the top keeps the keyboard on its way back down.
+    await user.click(move('Move the JPEG fix earlier'));
+    expect(labels()).toEqual(['Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    expect(document.activeElement).toBe(move('Move the JPEG fix later'));
+  });
+
+  it('moves a fix without choosing anything again', async () => {
+    // A recipe's models and a scale and overlap set by hand, none of them Best's own.
+    const snapshot = readySnapshot([image('photo', true)]);
+    const noise = { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' };
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'hat_s_x4',
+      output_scale: 2,
+      halo: 64,
+      safe_memory: true,
+      fixes: ['noise', 'blur'],
+      fix_stages: [noise, blur],
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix later' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        quality: 'best',
+        selected_model_id: 'hat_s_x4',
+        output_scale: 2,
+        halo: 64,
+        safe_memory: true,
+        fixes: ['blur', 'noise'],
+        fix_stages: [blur, noise],
+      }),
+    );
+  });
+
+  it('moves a fix in Restore and only a new last fix brings its model and overlap', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const noise = { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' };
+    Object.assign(snapshot.settings, {
+      task: 'denoise',
+      quality: 'best',
+      selected_model_id: 'scunet_color_real_psnr',
+      output_scale: 1,
+      halo: 64,
+      fixes: ['blur', 'jpeg', 'noise'],
+      fix_stages: [blur, jpeg, noise],
+    });
+    const user = await mountWith(snapshot);
+    // The last fix stays: the Restore model and its overlap stay as they are.
+    await user.click(screen.getByRole('button', { name: 'Move the blur fix later' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'scunet_color_real_psnr',
+        halo: 64,
+        fix_stages: [jpeg, blur, noise],
+      }),
+    );
+    // Blur becomes last: its model is the Restore model now, with the overlap it needs.
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        quality: 'best',
+        selected_model_id: 'nafnet_gopro_deblur',
+        halo: 32,
+        fixes: ['jpeg', 'noise', 'blur'],
+        fix_stages: [jpeg, noise, blur],
+      }),
+    );
+  });
+
+  it('runs the fixes before the last one first in Restore, whose last fix is its model', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    // JPEG goes before noise; the noise fix stays the model.
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        halo: 8,
+        fixes: ['jpeg', 'noise'],
+        fix_stages: [jpeg, { fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+      }),
+    );
+    expect(labels()).toEqual(['Fix JPEG', 'Restore']);
+    // A fix before the model is chosen like one before an upscale; the model stays.
+    await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
+    const fixLibrary = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(fixLibrary).getByText('Choosing for Restore · JPEG artifacts')).toBeTruthy();
+    await user.click(
+      within(fixLibrary).getByRole('button', { name: 'Use for JPEG artifacts · Quick' }),
+    );
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'denoise_realplksr_1x',
+        halo: 8,
+        preset_pins: { 'fix/jpeg/quick': 'fbcnn_color' },
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    expect(
+      within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
+        'Choosing for Restore · Noise',
+      ),
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Close model library' }));
+
+    // Now JPEG is last: FBCNN becomes the model, with the overlap it needs.
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'fbcnn_color',
+        halo: 32,
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
+      }),
+    );
+    expect(labels()).toEqual(['Fix noise', 'Restore']);
+
+    // The host answers the save with the settings it holds.
+    snapshot.settings = structuredClone(lastSaved());
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Scan clean-up');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe.mock.calls[0][0].stages).toEqual([
+      { kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' },
+      { kind: 'restore', model_id: 'fbcnn_color', fix: 'jpeg' },
+    ]);
+
+    await user.click(screen.getByRole('button', { name: 'Restore selected' }));
+    await waitFor(() =>
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: 'denoise',
+          model_id: 'fbcnn_color',
+          fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
+        }),
+      ),
+    );
+  });
+
+  it('keeps a model picked by hand when it fixes the first problem chosen in Restore', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        quality: 'custom',
+        selected_model_id: 'scunet_color_real_psnr',
+        fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      }),
+    );
+    // A problem it cannot fix brings a model that can, as one fix did before.
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'nafnet_gopro_deblur',
+        fix_stages: [blur],
+      }),
+    );
+  });
+
+  it('lets your own checkpoint be the Restore model without a fix in front of it', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: '__custom__',
+        fix_stages: [],
+        fixes: [],
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Blur', pressed: false })).toBeTruthy();
+  });
+
+  it('saves the fixes in order in a recipe and applies them again', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
+    api.saveRecipe.mockImplementationOnce(async (recipe: Recipe) => {
+      snapshot.recipes = [recipe];
+      snapshot.settings = structuredClone(lastSaved());
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Two fixes');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const recipe = api.saveRecipe.mock.calls[0][0];
+    expect(recipe.fixes).toEqual(['noise', 'blur']);
+    expect(recipe.stages).toEqual([
+      { kind: 'restore', model_id: 'nafnet_sidd_width64', fix: 'noise' },
+      { kind: 'restore', model_id: 'nafnet_gopro_deblur', fix: 'blur' },
+      { kind: 'upscale', model_id: 'realplksr_nomoswebphoto_x4' },
+    ]);
+    const saved = await screen.findByRole('button', { name: /^Two fixes/ });
+    expect(saved.getAttribute('aria-pressed')).toBe('true');
+
+    await user.click(screen.getByRole('button', { name: 'Move the blur fix earlier' }));
+    await waitFor(() => expect(saved.getAttribute('aria-pressed')).toBe('false'));
+    await user.click(saved);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        fixes: ['noise', 'blur'],
+        fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }, blur],
+      }),
+    );
+    expect(saved.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it.each([
+    {
+      name: 'Restore with a chip',
+      recipe: {
+        task: 'denoise' as const,
+        model_id: 'fbcnn_color',
+        output_scale: 1,
+        fixes: ['jpeg' as const],
+        stages: [{ kind: 'restore' as const, model_id: 'fbcnn_color' }],
+      },
+      fix_stages: [jpeg],
+      fixes: ['jpeg'],
+    },
+    {
+      name: 'Restore without a chip',
+      recipe: {
+        task: 'denoise' as const,
+        model_id: 'scunet_color_real_psnr',
+        output_scale: 1,
+        fixes: [],
+        stages: [{ kind: 'restore' as const, model_id: 'scunet_color_real_psnr' }],
+      },
+      fix_stages: [],
+      fixes: [],
+    },
+    {
+      name: 'Upscale with a fix and Faces',
+      recipe: {
+        task: 'upscale' as const,
+        model_id: 'hat_l_x4_imagenet',
+        output_scale: 4,
+        fixes: ['noise' as const, 'faces' as const],
+        stages: [
+          { kind: 'restore' as const, model_id: 'scunet_color_real_psnr' },
+          { kind: 'upscale' as const, model_id: 'hat_l_x4_imagenet' },
+        ],
+      },
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      fixes: ['noise', 'faces'],
+    },
+  ])('applies a 0.3.5 recipe: $name', async ({ recipe, fix_stages, fixes }) => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'old',
+        name: 'Old recipe',
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp32',
+        safe_memory: true,
+        ...recipe,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Old recipe/ }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: recipe.task,
+        selected_model_id: recipe.model_id,
+        fix_stages,
+        fixes,
+      }),
+    );
+    expect(screen.getByRole('button', { name: /^Old recipe/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+  });
+
+  it('keeps a frame-by-frame video recipe and shows no fixes for video', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      quality: 'best',
+      selected_model_id: 'span_photo_x4',
+      selected_video_model_id: 'frame_by_frame',
+    });
+    const user = await mountWith(snapshot);
+    // Video runs no fixes, so it offers none; Faces stays.
+    expect(screen.queryByRole('button', { name: 'Noise' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Blur' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Faces' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe.mock.calls[0][0].stages).toEqual([
+      { kind: 'video', model_id: 'span_photo_x4' },
+    ]);
+  });
+
+  it('drops the fixes when the task becomes video', async () => {
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'custom',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'noise'],
+      fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+    });
+    const user = await mountWith(snapshot);
+    const switched = structuredClone(snapshot);
+    switched.media = [image('photo'), video('clip', true)];
+    api.refreshSnapshot.mockResolvedValue(switched);
+    await user.click(screen.getByRole('button', { name: /^▶ clip\.mp4/ }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ task: 'video', fix_stages: [], fixes: [] }),
+    );
+  });
+
+  it('keeps a fix without a model in the plan and neither downloads nor starts', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur'],
+      fix_stages: [{ fix: 'blur', model_id: 'retired_model' }],
+    });
+    snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
+    const user = await mountWith(snapshot);
+    expect(within(rows()[0]).getByText('No model for this fix')).toBeTruthy();
+    expect(rows()[0].textContent).not.toContain('Needs your file');
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Change the blur fix model' }));
+    expect(
+      within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
+        'Choosing for Upscale · Blur',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('does not blame an engine that has not answered yet', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine = null;
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'jpeg'],
+      fix_stages: [blur, jpeg],
+    });
+    await mountWith(snapshot);
+    expect(screen.queryByText(/runs one fix at a time/)).toBeNull();
+  });
+
+  it('refuses several fixes on an engine that runs one', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features = snapshot.engine!.features.filter(
+      (feature) => feature !== 'image_multi_fix',
+    );
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    expect(screen.queryByText(/runs one fix at a time/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(
+      screen.getByText('This engine runs one fix at a time. Update LocalSR to run several.'),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('keeps the terms acceptance of each fix model apart', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    // The catalog is shared between tests; change a copy.
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'jpeg'],
+      fix_stages: [blur, jpeg],
+    });
+    for (const id of ['nafnet_gopro_deblur', 'fbcnn_color']) {
+      const model = snapshot.catalog.models.find((entry) => entry.model_id === id)!;
+      model.installed = false;
+      model.terms_acceptance_required = true;
+    }
+    const user = await mountWith(snapshot);
+    const blurTerms = within(rows()[0]).getByRole('checkbox') as HTMLInputElement;
+    const jpegTerms = within(rows()[1]).getByRole('checkbox') as HTMLInputElement;
+    // Start cannot fetch a model whose terms nobody accepted.
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    await user.click(blurTerms);
+    expect(blurTerms.checked).toBe(true);
+    expect(jpegTerms.checked).toBe(false);
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    await user.click(within(rows()[0]).getByRole('button', { name: /^Download model/ }));
+    await waitFor(() =>
+      expect(api.downloadModel).toHaveBeenCalledWith('nafnet_gopro_deblur', true),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('checkbox', { name: /reviewed.*license/i }));
+    await user.click(within(library).getByRole('button', { name: /^Download/ }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('fbcnn_color', true));
+    await user.click(screen.getByRole('button', { name: 'Close model library' }));
+    expect((within(rows()[0]).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    expect((within(rows()[1]).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('clears a remembered fix on a custom upscaler without keeping the old checkpoint', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'custom',
+      selected_model_id: 'hat_s_x4',
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
+    await user.click(screen.getByRole('button', { name: 'Back to the default' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'hat_s_x4',
+        quality: 'custom',
+        fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }],
+        preset_pins: {},
+      }),
+    );
+  });
+
+  it('keeps Faces for the way back from Restore', async () => {
+    const snapshot = readySnapshot([image('portrait', true)]);
+    snapshot.engine!.features.push('face_aware');
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'best',
+      selected_model_id: 'hat_l_x4_imagenet',
+      // Best brings HAT-L back, whose face companion Faces needs.
+      preset_pins: { 'upscale/photo/best': 'hat_l_x4_imagenet' },
+      fixes: ['faces'],
+      enable_face_model: true,
+    });
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise', 'faces'] }),
+    );
+    await chooseTask(user, /^Upscale/);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        enable_face_model: true,
+        fixes: ['noise', 'faces'],
+      }),
+    );
+  });
+
+  it.each([false, true])(
+    'downloads every fix once and only starts if preparation completes (cancel: %s)',
+    async (cancel) => {
+      const snapshot = readySnapshot([image('photo', true)]);
+      Object.assign(snapshot.settings, {
+        task: 'upscale',
+        quality: 'best',
+        selected_model_id: 'span_photo_x4',
+        fixes: ['blur', 'jpeg', 'noise'],
+        fix_stages: [blur, jpeg, { fix: 'noise', model_id: 'nafnet_sidd_width64' }],
+      });
+      const ids = snapshot.settings.fix_stages.map((stage) => stage.model_id);
+      for (const model of snapshot.catalog.models)
+        if (ids.includes(model.model_id)) model.installed = false;
+      let rejectDownload!: (error: Error) => void;
+      api.downloadModel.mockImplementation(async (id: string) => {
+        if (cancel)
+          return new Promise((_, reject) => {
+            rejectDownload = reject;
+          });
+        snapshot.catalog.models.find((model) => model.model_id === id)!.installed = true;
+        api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      });
+      api.cancelDownload.mockImplementationOnce(async () => {
+        rejectDownload(new Error('cancelled'));
+        return undefined;
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
+      if (cancel) {
+        await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
+        await waitFor(() => expect(api.cancelDownload).toHaveBeenCalledWith(ids[0]));
+        await screen.findByRole('button', { name: /^Download .*then upscale$/ });
+        expect(api.startJobs).not.toHaveBeenCalled();
+        expect(api.downloadModel).toHaveBeenCalledTimes(1);
+      } else {
+        await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
+        expect(api.downloadModel.mock.calls.map((call) => call[0])).toEqual(ids);
+        expect(api.startJobs).toHaveBeenCalledWith(
+          expect.objectContaining({ fix_stages: snapshot.settings.fix_stages }),
+        );
+      }
+    },
+  );
+});
+
+describe('Comparing saved results', () => {
+  /** A host with pair slots, answering every pair request with decoded previews. */
+  function pairHost(
+    snapshot: AppSnapshot,
+    sizes: Record<string, { width: number; height: number }> = {},
+  ): AppSnapshot {
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    const slot = (target: string) =>
+      target === 'original'
+        ? { target_id: target, preview_data_url: '', width: 640, height: 480 }
+        : {
+            target_id: target,
+            preview_data_url: `data:image/jpeg;base64,${target}`,
+            width: sizes[target]?.width ?? 2560,
+            height: sizes[target]?.height ?? 1920,
+            preview_width: Math.min(sizes[target]?.width ?? 2048, 2048),
+            preview_height: Math.min(sizes[target]?.height ?? 1536, 1536),
+          };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing: slot(pair.showing),
+        against: slot(pair.against),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return snapshot;
+  }
+
+  function completedJob(id: string, media = 'photo') {
+    return {
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status: 'completed' as const,
+      progress: 100,
+      output_path: `/out/${id}.png`,
+      error: '',
+      created_at: 1,
+    };
+  }
+
+  it('waits for the history, then decodes the newest result against the Original by id', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('saved')];
+    let answer: (history: MediaResults) => void = () => {};
+    api.listMediaResults.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await mountWith(snapshot);
+    expect(api.requestImageComparison).not.toHaveBeenCalled();
+    answer(historyOf('photo', [row('saved')]));
+    await waitFor(() =>
+      expect(api.requestImageComparison).toHaveBeenCalledWith('photo', {
+        showing: 'saved',
+        against: 'original',
+      }),
+    );
+    // One saved result keeps the compact view without choosers.
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('saved'),
+    );
+    expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
+    expect(document.querySelector('.divider-labels')?.textContent).toContain('saved');
+  });
+
+  describe('an Edit result of a 4896 × 3264 photo', () => {
+    const camera = { ...image('photo', true), width: 4896, height: 3264 };
+    const open = async (size: { width: number; height: number }) => {
+      const snapshot = pairHost(readySnapshot([camera]), { edited: size });
+      snapshot.jobs = [completedJob('edited')];
+      api.listMediaResults.mockResolvedValue(
+        historyOf('photo', [row('edited', { kind: 'edit', model_label: 'Qwen Edit', scale: 0 })]),
+      );
+      await mountWith(snapshot);
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('edited'),
+      );
+    };
+
+    it('opens in Split with the divider and the three views, as an upscale does', async () => {
+      // The engine's Edit size of 512 px gives 512 × 320 for this photo.
+      await open({ width: 512, height: 320 });
+      expect(screen.getByRole('slider', { name: 'Before and after comparison' })).toBeTruthy();
+      const views = screen.getByRole('radiogroup', { name: 'Comparison view' });
+      expect(
+        within(views)
+          .getAllByRole('radio')
+          .map((view) => view.textContent?.trim()),
+      ).toEqual(['Original', 'Split', 'Enhanced']);
+      expect(within(views).getByRole('radio', { name: 'Split' }).getAttribute('aria-checked')).toBe(
+        'true',
+      );
+      expect(document.querySelector('.comparison-note')).toBeNull();
+      expect(document.querySelector('.divider-labels')?.textContent).toContain(
+        'Qwen Edit · 512 × 320',
+      );
+      expect(document.querySelector('.source-image.contained')).toBeNull();
+    });
+
+    it('lets M peek at the original', async () => {
+      await open({ width: 1024, height: 672 });
+      expect(screen.getByRole('slider', { name: 'Before and after comparison' })).toBeTruthy();
+      const result = document.querySelector<HTMLElement>('.result-image')!;
+      const clipBefore = result.style.clipPath;
+      await fireEvent.keyDown(window, { key: 'm' });
+      expect(document.querySelector('.original-chip')?.textContent).toBe('Original');
+      expect(document.querySelector<HTMLElement>('.result-image')!.style.clipPath).toBe(
+        'inset(0 0 0 100%)',
+      );
+      await fireEvent.keyUp(window, { key: 'm' });
+      expect(document.querySelector('.original-chip')).toBeNull();
+      expect(document.querySelector<HTMLElement>('.result-image')!.style.clipPath).toBe(clipBefore);
+    });
+
+    it('stays alone, with the note, when it has another shape', async () => {
+      await open({ width: 512, height: 512 });
+      expect(screen.queryByRole('slider', { name: 'Before and after comparison' })).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.comparison-note')?.textContent).toContain(
+        'has a different framing from the original',
+      );
+    });
+  });
+
+  describe('Use as input', () => {
+    const useButton = () => screen.queryByRole('button', { name: 'Use as input' });
+
+    it('is offered only while a finished result is on screen', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      await mountWith(snapshot);
+      expect(useButton()).toBeNull();
+      cleanup();
+      const finished = pairHost(readySnapshot([image('photo', true)]));
+      finished.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      await mountWith(finished);
+      expect(await screen.findByRole('button', { name: 'Use as input' })).toBeTruthy();
+      expect(useButton()?.getAttribute('title')).toBe(
+        'Add this result to Inputs so it can be processed again',
+      );
+    });
+
+    it('asks the host for the shown result, then shows the Inputs tab', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('a1')])]);
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await user.click(await screen.findByRole('button', { name: 'Use as input' }));
+      expect(api.useResultAsInput).toHaveBeenCalledWith('/out/a1.png');
+      expect(screen.getByRole('tab', { name: /^Inputs/ }).getAttribute('aria-selected')).toBe(
+        'true',
+      );
+    });
+
+    it('shows the host sentence when the result cannot be used', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      api.useResultAsInput.mockRejectedValueOnce('output path was not authorized');
+      const user = await mountWith(snapshot);
+      await user.click(await screen.findByRole('button', { name: 'Use as input' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Could not use the result as input')).toBeTruthy();
+      expect(within(dialog).getByText(/output path was not authorized/)).toBeTruthy();
+    });
+  });
+
+  describe('a click on an Outputs row', () => {
+    it('shows another photo result during a video run and returns to the running input', async () => {
+      const snapshot = pairHost(readySnapshot([video('clip', true), image('photo')]));
+      snapshot.settings.task = 'video';
+      snapshot.runtime.active_job_id = 'running';
+      snapshot.jobs = [
+        {
+          ...completedJob('running', 'clip'),
+          media_kind: 'video',
+          status: 'running',
+          output_path: '',
+        },
+        completedJob('saved'),
+      ];
+      const history = historyOf('photo', [row('saved')]);
+      api.listMediaResults.mockResolvedValue(history);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      api.selectMedia.mockImplementation(async (id) => {
+        for (const media of snapshot.media) media.selected = media.id === id;
+        api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: 'Show saved, photo.png' }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('saved'),
+      );
+      await user.click(screen.getByRole('tab', { name: /Inputs/ }));
+      await user.click(document.querySelector<HTMLButtonElement>('.media-list .media-select')!);
+      await waitFor(() =>
+        expect(document.querySelector('.preview-header')?.textContent).toContain('clip.mp4'),
+      );
+      expect(document.querySelector('.result-image')).toBeNull();
+    });
+    it('browses a saved video of the running input and returns to live preview from Inputs', async () => {
+      const snapshot = pairHost(readySnapshot([video('clip', true)]));
+      snapshot.settings.task = 'video';
+      snapshot.runtime.active_job_id = 'running';
+      snapshot.jobs = [
+        {
+          ...completedJob('running', 'clip'),
+          media_kind: 'video',
+          status: 'running',
+          output_path: '',
+        },
+      ];
+      const history = historyOf('clip', [
+        row('old', { kind: 'video', output_path: '/out/old.mp4' }),
+      ]);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: 'Show old, clip.mp4' }));
+      await waitFor(() =>
+        expect(api.prepareVideoComparison).toHaveBeenCalledWith(
+          'clip',
+          expect.any(String),
+          false,
+          'old',
+          true,
+        ),
+      );
+      expect(await screen.findByRole('group', { name: 'Video playback controls' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+      await user.click(screen.getByRole('tab', { name: /Inputs/ }));
+      await user.click(document.querySelector<HTMLButtonElement>('.media-list .media-select')!);
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull());
+      expect(screen.queryByRole('group', { name: 'Video playback controls' })).toBeNull();
+      expect(document.querySelector('.source-image')).toBeTruthy();
+    });
+    const open = async (answer?: (target: string) => Promise<void>) => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1'), completedJob('a2')];
+      const history = historyOf('photo', [row('a2'), row('a1')]);
+      api.listMediaResults.mockResolvedValue(history);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      const user = await mountWith(snapshot);
+      if (answer) {
+        const immediate = api.requestImageComparison.getMockImplementation()!;
+        api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+          if (pair) await answer(pair.showing);
+          await immediate(mediaId, pair);
+        });
+      }
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      return user;
+    };
+    const views = () =>
+      within(screen.getByRole('radiogroup', { name: 'Comparison view' }))
+        .getAllByRole('radio')
+        .map((view) => view.textContent?.trim());
+
+    it('on Original shows the original alone, without a divider or view options', async () => {
+      const user = await open();
+      await user.click(await screen.findByRole('button', { name: /^Show the original/ }));
+      await waitFor(() => expect(document.querySelector('.source-image')).toBeTruthy());
+      expect(screen.queryByRole('slider', { name: 'Before and after comparison' })).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.result-image')).toBeNull();
+    });
+
+    it('on a result shows the original left and that result right, then another result', async () => {
+      const user = await open();
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1'),
+      );
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2'),
+      );
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+    });
+
+    it('keeps the previous picture with a loading note until the pair is ready, then splits', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const user = await open(async (target) => {
+        if (target === 'a2') await gate;
+      });
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1'),
+      );
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      expect(await screen.findByText('Loading a2…')).toBeTruthy();
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1');
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.divider-labels')).toBeNull();
+      release();
+      await waitFor(() => expect(screen.queryByText('Loading a2…')).toBeNull());
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2');
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+    });
+
+    it('shows the indicator over the original when only that was shown, and ignores a late answer', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const user = await open(async (target) => {
+        if (target === 'a1') await gate;
+      });
+      await user.click(await screen.findByRole('button', { name: /^Show the original/ }));
+      await user.click(screen.getByRole('button', { name: /^Show a1/ }));
+      expect(await screen.findByText('Loading a1…')).toBeTruthy();
+      expect(document.querySelector('.source-image')).toBeTruthy();
+      expect(document.querySelector('.result-image')).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2'),
+      );
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2');
+      expect(screen.queryByText('Loading a1…')).toBeNull();
+    });
+  });
+
+  describe('Clear in the Outputs tab', () => {
+    const open = async (rows: ResultSummary[]) => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = rows.map((entry) => completedJob(entry.job_id));
+      let history = historyOf('photo', rows);
+      api.listAllMediaResults.mockImplementation(async () => [history]);
+      api.clearResults.mockImplementation(async () => {
+        history = historyOf('photo', []);
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+      return user;
+    };
+
+    it('asks with the count, keeps the list on Cancel and empties it on Clear', async () => {
+      const user = await open([row('new'), row('old')]);
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.textContent).toContain('Clear all 2 outputs from the list?');
+      expect(dialog.textContent).toContain(
+        'The files stay in their folders; only the list is emptied.',
+      );
+      expect(document.activeElement?.textContent).toBe('Cancel');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(api.clearResults).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.clearResults).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+      await waitFor(() => expect(api.clearResults).toHaveBeenCalledTimes(1));
+      expect(api.clearMedia).not.toHaveBeenCalled();
+      await screen.findByText('Results appear here as they finish.');
+    });
+
+    it('Unpick all drops the picks only, and clearing the list drops them too', async () => {
+      const user = await open([row('new'), row('old')]);
+      await user.click(screen.getByRole('checkbox', { name: 'Original, photo.png' }));
+      await user.click(screen.getByRole('checkbox', { name: 'old, photo.png' }));
+      expect(screen.getByText(/^2 of 4 chosen/).textContent).toContain('Unpick all');
+      await user.click(screen.getByRole('button', { name: 'Unpick all' }));
+      expect(screen.queryByText(/of 4 chosen/)).toBeNull();
+      expect(api.clearResults).not.toHaveBeenCalled();
+      expect(screen.getByRole('checkbox', { name: 'old, photo.png' })).toBeTruthy();
+      await user.click(screen.getByRole('checkbox', { name: 'old, photo.png' }));
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+      await screen.findByText('Results appear here as they finish.');
+      expect(screen.queryByText(/of 4 chosen/)).toBeNull();
+    });
+  });
+
+  it('opens video Compare only from its button, shows two players and one transport, then three boxes, and releases on closing', async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('clip', [
+        { ...row('slow'), kind: 'video', output_fps: 15 },
+        { ...row('fast'), kind: 'video', output_fps: 60 },
+      ]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'slow, clip.mp4' }));
+    await user.click(screen.getByRole('checkbox', { name: 'fast, clip.mp4' }));
+    expect(document.querySelector('.compare-pane')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(document.querySelectorAll('.compare-pane video')).toHaveLength(2);
+    expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
+    expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Compare canvas'),
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Original, clip.mp4' }));
+    expect(document.querySelectorAll('.compare-pane .boxes video')).toHaveLength(3);
+    await user.click(screen.getByRole('tab', { name: 'Preview' }));
+    expect(document.querySelectorAll('video')).toHaveLength(0);
+    expect(pause).toHaveBeenCalled();
+    expect(load).toHaveBeenCalled();
+  });
+
+  it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('new'), row('old')])]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+    const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
+    // No picks: Clear alone, no count and no Compare button.
+    expect(document.querySelector('.compare-bar')?.textContent?.trim()).toBe('Clear');
+    await user.click(original);
+    expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
+    expect(screen.getByText(/^1 of 4 chosen/)).toBeTruthy();
+    await user.click(output);
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([
+        { kind: 'original', media_id: 'photo' },
+        { kind: 'output', media_id: 'photo', job_id: 'old' },
+      ]),
+    );
+    // A picked row shows its slot number at its end.
+    expect(original.querySelector('.slot-number')?.textContent).toBe('1');
+    expect(output.querySelector('.slot-number')?.textContent).toBe('2');
+    expect(
+      screen.getByRole('checkbox', { name: 'new, photo.png' }).querySelector('.slot-number'),
+    ).toBeNull();
+    // Picking never changes the centre: no tabs, no Compare, until the button is pressed.
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    expect(screen.queryByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.queryByRole('button', { name: /^Compare these|^Comparing/ })).toBeNull();
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
+    expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
+    expect(
+      within(screen.getByRole('tablist', { name: 'Main pane' }))
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual(['Preview', 'Compare']);
+    await user.click(screen.getByRole('tab', { name: 'Preview' }));
+    // Back in the preview the tabs are gone, the picks stay and the button is offered again.
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
+    await fireEvent.keyDown(screen.getByRole('tablist', { name: 'Main pane' }), {
+      key: 'ArrowLeft',
+    });
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+  });
+
+  async function openCompareOfTwo() {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('new'), row('old')])]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+    const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
+    await user.click(original);
+    await user.click(output);
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    return { user, original, output, snapshot };
+  }
+
+  it('leaves Compare for the preview on Escape, but not while a dialog is open', async () => {
+    const { user } = await openCompareOfTwo();
+    await user.click(screen.getByRole('tab', { name: /^Inputs/ }));
+    await user.click(screen.getByRole('button', { name: /^Clear$/ }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+  });
+
+  it('asks the host to compare once per change of picks, however often the state refreshes', async () => {
+    let changed: () => void = () => {};
+    api.listenForStateChange.mockImplementation(async (handler) => {
+      changed = handler;
+      return () => undefined;
+    });
+    const { snapshot } = await openCompareOfTwo();
+    expect(api.requestCompare).toHaveBeenCalledTimes(2);
+    for (let round = 0; round < 4; round++) {
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      changed();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    expect(api.requestCompare).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes Compare by itself when fewer than two picks remain', async () => {
+    const { user, output } = await openCompareOfTwo();
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(output);
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
+    await user.click(output);
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    await user.click(screen.getByRole('button', { name: 'Remove old from the compare' }));
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+  });
+
+  it('shows the file name with its size and the view options in one row, with no tabs', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('saved')];
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('saved')]));
+    await mountWith(snapshot);
+    const header = document.querySelector<HTMLElement>('.preview-header')!;
+    expect(within(header).queryByRole('tablist')).toBeNull();
+    expect(header.firstElementChild?.classList.contains('header-file')).toBe(true);
+    expect(header.querySelector('.file-name')?.getAttribute('title')).toBe('photo.png');
+    expect(within(header).getByText('640 × 480')).toBeTruthy();
+    expect(await within(header).findByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
+    expect(document.querySelector('.main-heading')).toBeNull();
+  });
+
+  it('keeps the end of a long file name in the list, the header and Outputs, with the full name on hover', async () => {
+    const name = 'IMG_490C1E18-B4D1-47E5-AC62-FD97F5A26811.jpeg';
+    const snapshot = pairHost(readySnapshot([{ ...image('photo', true), name }]));
+    snapshot.jobs = [completedJob('saved')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('saved')])]);
+    const user = await mountWith(snapshot);
+    const named = (scope: string) =>
+      document.querySelector(`${scope} .file-name[title="${name}"] .file-name-tail`)?.textContent;
+    expect(named('.media-row')).toBe('26811.jpeg');
+    expect(named('.preview-header')).toBe('26811.jpeg');
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await waitFor(() => expect(named('.group-head')).toBe('26811.jpeg'));
+  });
+
+  it('a click on an Outputs row selects its input and shows that result in the Preview', async () => {
+    const current = pairHost(readySnapshot([image('first', true), image('second')]), {
+      a1: { width: 1600, height: 1067 },
+      b1: { width: 512, height: 320 },
+    });
+    current.jobs = [completedJob('a1', 'first'), completedJob('b1', 'second')];
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('first', [row('a1')]),
+      historyOf('second', [row('b1', { kind: 'edit', model_label: 'Qwen Edit', scale: 0 })]),
+    ]);
+    api.listMediaResults.mockImplementation(async (id: string) =>
+      id === 'first' ? historyOf('first', [row('a1')]) : historyOf('second', [row('b1')]),
+    );
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    render(App);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: /^Outputs/ }));
+    // Two picks, Compare open: a click on a row still goes to the Preview of that picture.
+    await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'a1, first.png' }));
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Show Qwen Edit, second.png' }));
+    expect(api.selectMedia).toHaveBeenCalledWith('second');
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('b1'),
+    );
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    // The shown row is marked, and no pick changed.
+    expect(
+      screen.getByRole('button', { name: 'Show Qwen Edit, second.png' }).closest('.media-row')
+        ?.classList,
+    ).toContain('selected');
+    expect(
+      screen.getByRole('checkbox', { name: 'a1, first.png' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('checkbox', { name: 'Qwen Edit, second.png' }).getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {
+    const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
+    snapshot.jobs = [completedJob('a1', 'first'), completedJob('b1', 'second')];
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('first', [row('a1')]),
+      historyOf('second', [row('b1')]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'b1, second.png' }));
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([expect.anything(), expect.anything()]),
+    );
+    api.removeMedia.mockImplementationOnce(async () => {
+      const left = structuredClone(snapshot);
+      left.media = left.media.filter((item) => item.id === 'first');
+      left.jobs = left.jobs.filter((job) => job.media_id === 'first');
+      api.refreshSnapshot.mockResolvedValue(left);
+      api.listAllMediaResults.mockResolvedValue([historyOf('first', [row('a1')])]);
+    });
+    await user.click(screen.getByRole('tab', { name: /^Inputs/ }));
+    await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([
+        { kind: 'original', media_id: 'first' },
+      ]),
+    );
+  });
+
+  it('drops a late history answer that belongs to another image', async () => {
+    const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
+    snapshot.jobs = [completedJob('a1', 'first'), completedJob('a2', 'first')];
+    api.listMediaResults.mockImplementation(async () =>
+      historyOf('second', [row('b1'), row('b2')]),
+    );
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listMediaResults).toHaveBeenCalledWith('first'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole('button', { name: /^Showing:/ })).toBeNull();
+    expect(screen.queryByText(/b1/)).toBeNull();
+  });
+
+  it('cancels only the selected image runs and keeps Cancel queue for everything', async () => {
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    snapshot.runtime.active_job_id = 'trial-1';
+    snapshot.jobs = [
+      { ...completedJob('other-job', 'other'), status: 'queued', output_path: '' },
+      { ...completedJob('trial-1'), status: 'running', output_path: '' },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
+    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo');
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('runs 2 to 4 installed models from Try others with the settings the plan card showed', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.batch_mode = false;
+    api.estimateModelTrials.mockImplementation(async (_media, ids) =>
+      ids.map((id, index) => ({
+        model_id: id,
+        model_label: id,
+        seconds: index === 0 ? 30 : null,
+      })),
+    );
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(
+      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByText('Try other upscalers on photo.png')).toBeTruthy();
+    const boxes = within(dialog)
+      .getAllByRole('checkbox')
+      .filter((box) => !(box as HTMLInputElement).disabled);
+    expect(boxes.length).toBeGreaterThanOrEqual(2);
+    await user.click(boxes[0]);
+    expect(
+      (within(dialog).getByRole('button', { name: 'Run 1 model' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(boxes[1]);
+    // A total only when every model was measured; here one is not.
+    expect(await within(dialog).findByText(/not yet measured for/)).toBeTruthy();
+    const run = within(dialog).getByRole('button', { name: 'Run 2 models' });
+    expect(run.classList.contains('primary')).toBe(false);
+    await user.click(run);
+    expect(api.startModelTrials).toHaveBeenCalledTimes(1);
+    expect(api.startJobs).not.toHaveBeenCalled();
+    const [media, ids, base] = api.startModelTrials.mock.calls[0];
+    expect(media).toBe('photo');
+    expect(ids).toHaveLength(2);
+    expect(base).toMatchObject({
+      media_ids: ['photo'],
+      batch_mode: false,
+      task: 'upscale',
+      output_scale: snapshot.settings.output_scale,
+      ui: expect.objectContaining({ content: expect.any(String) }),
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  });
+});
+
+/** Files dropped on the window, as the native drop listener reports them. */
+function dropFiles(paths: string[]): void {
+  api.listenForFileDrops.mock.calls[0][0].drop(paths);
+}
+
+describe('Dialogs and refused host calls', () => {
+  it('a dialog opened over the Clear question replaces it, buttons included', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    api.addMedia.mockRejectedValueOnce('The file type is not supported.');
+    dropFiles(['/x/bad.xyz']);
+    await waitFor(() =>
+      expect(screen.getByRole('dialog').textContent).toContain('Could not add dropped files'),
+    );
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.queryByRole('button', { name: 'Clear' })).toBeNull();
+    expect(dialog.getByRole('button', { name: 'OK' })).toBeTruthy();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+  });
+
+  it('gives an error dialog the keyboard: Tab stays in, Escape closes, focus returns', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Upscale$/);
+    api.startJobs.mockRejectedValueOnce('No GPU.');
+    const start = screen.getByRole('button', { name: 'Upscale selected' });
+    start.focus();
+    await user.keyboard('{Enter}');
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    for (let step = 0; step < 4; step++) {
+      await user.tab();
+      expect(dialog.contains(document.activeElement), `Tab ${step + 1}`).toBe(true);
+    }
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(start);
+  });
+
+  it('answers the Clear question with Cancel on Escape, and puts Cancel first', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+  });
+
+  it('closes the model library on Escape and gives it the keyboard', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    const library = await screen.findByRole('dialog', { name: 'Model library' });
+    expect(library.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
+  });
+
+  it('closes the update panel on Escape', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('app.updates');
+    const panel = await screen.findByRole('dialog', { name: 'Software Update' });
+    expect(panel.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps the count in the Clear question true while the list changes', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    const more = readySnapshot([
+      image('first', true),
+      image('second'),
+      image('third'),
+      image('fourth'),
+      image('fifth'),
+    ]);
+    api.refreshSnapshot.mockResolvedValue(structuredClone(more));
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(screen.getByRole('dialog').textContent).toContain('Clear all 5 items'),
+    );
+    // Nothing left to clear: the question goes away.
+    api.refreshSnapshot.mockResolvedValue(structuredClone(readySnapshot([])));
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('ignores menu actions while a question is open, so a job cannot start behind it', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await chooseMenuItem('file.start');
+    await chooseMenuItem('file.add-media');
+    expect(api.startJobs).not.toHaveBeenCalled();
+    expect(api.chooseMediaFiles).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    // Cancel is never held back: it ends work instead of starting any.
+    await chooseMenuItem('file.cancel');
+    expect(api.cancelJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the user when the host refuses a confirmed Clear', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    api.clearMedia.mockRejectedValueOnce(
+      'wait for the current queue to finish or cancel it before changing media',
+    );
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('queue'));
+    expect(screen.getByRole('dialog').textContent).toContain('Could not clear the list');
+  });
+
+  it('keeps the keyboard in the list when the focused Remove button goes with its row', async () => {
+    const current = readySnapshot([image('first', true), image('second'), image('third')]);
+    const user = await mountWith(current);
+    api.removeMedia.mockImplementationOnce(async () => {
+      current.media = current.media.filter((item) => item.id !== 'second');
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    screen.getByRole('button', { name: 'Remove second.png' }).focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove second.png' })).toBeNull(),
+    );
+    // The next row's Remove button takes over; after the last row it is the one before.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove third.png' })),
+    );
+    api.removeMedia.mockImplementationOnce(async () => {
+      current.media = current.media.filter((item) => item.id !== 'third');
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove first.png' })),
+    );
+  });
+
+  describe('when the host refuses what the user asked for', () => {
+    const refusal = 'unsupported media file type';
+    const shown = async (title: string) => {
+      await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain(title));
+      expect(screen.getByRole('dialog').textContent).toContain(refusal);
+    };
+
+    it('says so for Add Media…', async () => {
+      const user = await mountWith(readySnapshot([image('first', true)]));
+      api.chooseMediaFiles.mockResolvedValueOnce(['/x/photo.heic']);
+      api.addMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getAllByRole('button', { name: 'Add Media…' })[0]);
+      await shown('Could not add files');
+    });
+
+    it('says so for Add Folder…', async () => {
+      const user = await mountWith(readySnapshot([image('first', true)]));
+      api.chooseMediaFolder.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await shown('Could not add the folder');
+      api.chooseMediaFolder.mockResolvedValueOnce({ paths: ['/x/a.png'], outputDirectory: '/x' });
+      api.addMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'OK' }));
+      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await shown('Could not add the folder');
+      expect(api.saveSettings).not.toHaveBeenCalledWith(
+        expect.objectContaining({ output_directory: '/x' }),
+      );
+    });
+
+    it('says so for clicking an item', async () => {
+      const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+      api.selectMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: /^second\.png/ }));
+      await shown('Could not select the item');
+    });
+
+    it('says so for Remove', async () => {
+      const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+      api.removeMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+      await shown('Could not remove the item');
+    });
+
+    it('says so for Open and Reveal on a result', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      snapshot.jobs = [
+        {
+          id: 'job-first',
+          media_id: 'first',
+          media_name: 'first.png',
+          media_kind: 'image',
+          status: 'completed',
+          progress: 100,
+          output_path: '/private/first-output.png',
+          error: '',
+          created_at: 1,
+        },
+      ];
+      snapshot.runtime.last_output_path = '/private/first-output.png';
+      const user = await mountWith(snapshot);
+      api.openResult.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Open' }));
+      await shown('Could not open the result');
+      await user.click(screen.getByRole('button', { name: 'OK' }));
+      api.revealResult.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Reveal' }));
+      await shown('Could not show the result');
+    });
+
+    it('says so for Delete on a saved recipe', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+      snapshot.recipes = [
+        {
+          id: 'jens67',
+          name: 'Jens67',
+          task: 'upscale',
+          model_id: model.model_id,
+          output_scale: 4,
+          tile_size: 256,
+          halo: 32,
+          precision: 'fp32',
+          safe_memory: true,
+        },
+      ];
+      const user = await mountWith(snapshot);
+      api.deleteRecipe.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await shown('Could not delete the recipe');
+    });
+  });
+});
+
+describe('automatic starts and comparison labels', () => {
+  function pairHost(snapshot: AppSnapshot): AppSnapshot {
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    const slot = (target: string) =>
+      target === 'original'
+        ? { target_id: target, preview_data_url: '', width: 640, height: 480 }
+        : {
+            target_id: target,
+            preview_data_url: `data:image/jpeg;base64,${target}`,
+            width: 2560,
+            height: 1920,
+            preview_width: 2048,
+            preview_height: 1536,
+          };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing: slot(pair.showing),
+        against: slot(pair.against),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return snapshot;
+  }
+
+  function completedJob(id: string, media = 'photo') {
+    return {
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status: 'completed' as const,
+      progress: 100,
+      output_path: `/out/${id}.png`,
+      error: '',
+      created_at: 1,
+    };
+  }
+
+  it('relaunching an already loaded file with auto_start must run only that file', async () => {
+    const current = readySnapshot([image('photo1', true), image('photo2')]);
+    current.settings.task = 'upscale';
+    current.settings.batch_mode = true;
+    current.settings.selected_model_id = current.catalog.models.find(
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+    )!.model_id;
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async () => undefined);
+    api.saveSettings.mockImplementation(async (s: UiSettings) => {
+      current.settings = structuredClone(s);
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/photo1.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    render(App);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalled(), { timeout: 3_000 });
+    const input = api.startJobs.mock.calls[0] as unknown as [StartBatchInput];
+    expect(input[0].media_ids).toEqual(['photo1']);
+  });
+
+  it('a launch while the first file still probes keeps the first file queued', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'upscale';
+    current.settings.selected_model_id = current.catalog.models.find(
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+    )!.model_id;
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async (paths: string[]) => {
+      for (const path of paths) {
+        const id = path.split('/').at(-1)!.replace('.png', '');
+        const item = image(id, current.media.length === 0);
+        if (id === 'slow') item.probe_status = 'pending';
+        current.media.push(item);
+      }
+    });
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.saveSettings.mockImplementation(async (s: UiSettings) => {
+      current.settings = structuredClone(s);
+    });
+    let listener: () => void = () => {};
+    api.listenForLaunchIntent.mockImplementation(async (cb: () => void) => {
+      listener = cb;
+      return () => undefined;
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/slow.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    render(App);
+    await waitFor(() => expect(api.addMedia).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 700));
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/fast.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    listener();
+    await new Promise((r) => setTimeout(r, 700));
+    current.media.find((m) => m.id === 'slow')!.probe_status = 'ready';
+    nativeMenu?.('view.refresh-hardware');
+    api.refreshCapabilities.mockResolvedValue(undefined);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalled(), { timeout: 3_000 });
+    const ids = (api.startJobs.mock.calls[0] as unknown as [StartBatchInput])[0].media_ids;
+    expect(ids.sort()).toEqual(['fast', 'slow']);
+  });
+
+  it('with two saved results the split labels the showing side with its model', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listMediaResults.mockImplementation(async (id: string) =>
+      historyOf(id, [
+        row('new', { model_label: 'Model NEW' }),
+        row('old', { model_label: 'Model OLD' }),
+      ]),
+    );
+    await mountWith(snapshot);
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('new'),
+    );
+    const labels = document.querySelector('.divider-labels');
+    expect(labels?.textContent ?? '').toContain('Model NEW');
+  });
+
+  it('a saved edit size above the device limit leaves Edit usable (select shows the clamp)', async () => {
+    const snapshot = editSnapshot(16);
+    snapshot.settings.edit_max_dimension = 1024;
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+    await user.type(screen.getByLabelText('What to change'), 'Add snow');
+    const select = document.querySelector('#edit-size') as HTMLSelectElement | null;
+    if (select) expect(select.value).toBe('512');
+    expect(
+      (screen.getByRole('button', { name: 'Edit selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('a failed progress listener must not break the Retry comparison button', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    api.listenVideoComparisonProgress.mockRejectedValueOnce(new Error('ipc glitch'));
+    await mountWith(snapshot);
+    const retry = await screen.findByRole('button', { name: 'Retry comparison' });
+    api.prepareVideoComparison.mockClear();
+    retry.click();
+    await waitFor(() => expect(api.prepareVideoComparison).toHaveBeenCalled(), { timeout: 2_000 });
+  });
+
+  it('auto start must not start a video job whose interpolation model is missing', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'video';
+    current.settings.video_interpolation = 'x2' as never;
+    current.catalog.interpolation_models.forEach((m) => (m.installed = false));
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async (paths: string[]) => {
+      for (const path of paths) {
+        const id = path.split('/').at(-1)!.replace('.mp4', '');
+        current.media.push(video(id, current.media.length === 0));
+      }
+    });
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.saveSettings.mockImplementation(async (s: UiSettings) => {
+      current.settings = structuredClone(s);
+    });
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/clip.mp4'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    render(App);
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(api.startJobs).not.toHaveBeenCalled();
+  });
+});
+
+it('waits for hardware detection before automatically starting an unavailable saved device', async () => {
+  const current = readySnapshot([image('photo', true)]);
+  current.settings.task = 'upscale';
+  current.settings.selected_model_id = current.catalog.models.find(
+    (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+  )!.model_id;
+  current.capabilities.system_ram_total = 0;
+  current.capabilities.devices = current.capabilities.devices.filter(
+    (device) => device.id !== current.settings.device_id,
+  );
+  api.bootstrap.mockResolvedValue(structuredClone(current));
+  api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+  api.takeLaunchIntents
+    .mockResolvedValueOnce([
+      { files: ['/private/photo.png'], preset: null, recipe: null, auto_start: true },
+    ])
+    .mockResolvedValueOnce([]);
+  render(App);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  expect(api.startJobs).not.toHaveBeenCalled();
+  current.capabilities.system_ram_total = 16 * 1024 ** 3;
+  await chooseMenuItem('view.refresh-hardware');
+  await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
+});
+
+it('explains why the menu cannot start when the worker is unavailable', async () => {
+  const snapshot = readySnapshot([image('photo', true)]);
+  snapshot.runtime.worker = 'unavailable';
+  await mountWith(snapshot);
+  await chooseMenuItem('file.start');
+  expect(screen.getByRole('dialog', { name: 'Cannot start yet' }).textContent).toMatch(
+    /engine|worker/i,
+  );
+});
+
+it('mentions video when asking for a task before applying a preset', async () => {
+  await mountWith(readySnapshot());
+  await chooseMenuItem('preset.quick');
+  expect(screen.getByRole('dialog', { name: 'Choose a task' }).textContent).toContain('Video');
+});
+
+it('does not ask for a catalog model under Your own file', async () => {
+  const user = await mountWith(readySnapshot([image('photo', true)]));
+  await chooseTask(user, /^Restore/);
+  await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+  await user.click(screen.getByRole('button', { name: /Your own file/ }));
+  expect(
+    screen.queryByText('Select a model to see what it is for and where it comes from.'),
+  ).toBeNull();
 });

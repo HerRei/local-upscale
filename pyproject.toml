@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.3.0-beta"
+version = "0.4.0-beta"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -43,6 +43,8 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
+    "hypothesis>=6.125.0",
+    "pytest-random-order>=1.2.0,<2",
     "ruff==0.17.3",
     "pyright==1.1.414",
     "vulture==2.16",
@@ -113,6 +115,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "localsr.core" = ["benchmark_references.json", "edit_catalog.json"]
+"localsr.video_models.rife" = ["*.md"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",
     "*.md",

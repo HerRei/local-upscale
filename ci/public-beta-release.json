@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.3.0-beta",
+  "version": "0.4.0-beta",
   "channel": "beta",
   "contact": "hermes.reisner@gmail.com",
   "download_page": "https://herrei.github.io/localsr/download/",
@@ -14,7 +14,7 @@
       "architecture": "arm64",
       "backend": "MPS",
       "coverage": "main-path",
-      "package": "published",
+      "package": "candidate",
       "signing": "developer-id-notarized"
     },
     {
@@ -23,7 +23,7 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "coverage": "labs",
-      "package": "published",
+      "package": "candidate",
       "signing": "unsigned-direct-installer"
     },
     {
@@ -32,7 +32,7 @@
       "architecture": "x86_64",
       "backend": "CPU",
       "coverage": "main-path",
-      "package": "published",
+      "package": "candidate",
       "signing": "unsigned-direct-installer"
     },
     {
@@ -41,7 +41,7 @@
       "architecture": "x86_64",
       "backend": "DirectML",
       "coverage": "main-path",
-      "package": "published",
+      "package": "candidate",
       "signing": "unsigned-direct-installer",
       "store": "HerRei.LocalSR",
       "tested_adapters": ["Intel UHD 620"]
@@ -52,7 +52,7 @@
       "architecture": "x86_64",
       "backend": "CPU",
       "coverage": "main-path",
-      "package": "published",
+      "package": "candidate",
       "signing": "sha256-and-update-signature"
     },
     {
@@ -61,7 +61,7 @@
       "architecture": "x86_64",
       "backend": "CUDA",
       "coverage": "labs",
-      "package": "published",
+      "package": "candidate",
       "signing": "sha256-and-update-signature"
     },
     {
@@ -70,7 +70,7 @@
       "architecture": "x86_64",
       "backend": "AMD-ROCm",
       "coverage": "main-path",
-      "package": "published",
+      "package": "candidate",
       "signing": "sha256-and-update-signature"
     }
   ]

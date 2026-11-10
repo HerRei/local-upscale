@@ -16,8 +16,25 @@ struct SettingsDocument {
     recipes: Vec<Recipe>,
 }
 
+/// The copy a Windows save keeps while it replaces the file (see `replace_settings_file`).
+fn previous_copy(paths: &AppPaths) -> std::path::PathBuf {
+    paths.settings.with_extension("json.previous")
+}
+
+/// The file the settings come from: the settings file, or, when a save stopped between
+/// its renames and left none, the previous copy. Whatever this names is protected: it is
+/// never replaced while it cannot be read.
+fn effective_document_path(paths: &AppPaths) -> Option<std::path::PathBuf> {
+    [paths.settings.clone(), previous_copy(paths)]
+        .into_iter()
+        .find(|path| path.exists())
+}
+
 pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
-    if let Some(mut document) = read_document(&paths.settings) {
+    // A save that stopped between its two renames leaves no settings file but the
+    // previous copy, which holds the last complete settings.
+    let document = effective_document_path(paths).and_then(|path| read_document(&path));
+    if let Some(mut document) = document {
         adopt_automatic_video_format(&mut document.ui);
         return (document.ui, document.recipes);
     }
@@ -47,8 +64,105 @@ fn adopt_automatic_video_format(settings: &mut UiSettings) {
 
 fn read_document(path: &Path) -> Option<SettingsDocument> {
     let contents = fs::read_to_string(path).ok()?;
-    let document: SettingsDocument = serde_json::from_str(&contents).ok()?;
-    (document.schema_version == 1).then_some(document)
+    parse_document(&contents)
+}
+
+fn parse_document(contents: &str) -> Option<SettingsDocument> {
+    let mut value: Value = serde_json::from_str(contents).ok()?;
+    match value.get("schema_version")?.as_u64()? {
+        1 => migrate_v1(&mut value)?,
+        SCHEMA_VERSION => {}
+        // A newer LocalSR wrote this; never read or overwrite it with defaults.
+        _ => return None,
+    }
+    serde_json::from_value(value).ok()
+}
+
+/// Schema 2 replaced the single `preprocess_model_id` with the ordered `fix_stages`.
+const SCHEMA_VERSION: u64 = 2;
+
+/// Version 1 ran at most one fix: the resolved `preprocess_model_id` before an upscale, or
+/// in Restore the selected model when a chip was on. Only that becomes a fix stage; the old
+/// chip list is not an execution list, so nothing else is made up from it. Edit left the
+/// image task's setup in place, so it migrates as the task it came from.
+fn migrate_v1(value: &mut Value) -> Option<()> {
+    let ui = value.get_mut("ui")?.as_object_mut()?;
+    if !ui.contains_key("fix_stages") {
+        let text = |key: &str| ui.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+        let chips: Vec<String> = ui
+            .get("fixes")
+            .and_then(Value::as_array)
+            .map(|fixes| {
+                fixes
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|fix| matches!(*fix, "noise" | "jpeg" | "blur"))
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let catalog = crate::catalog::bundled_catalog().ok()?;
+        let model_fixes = |id: &str| -> Vec<String> {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.model_id == id && model.native_scale == 1)
+                .map(|model| model.fixes.clone())
+                .unwrap_or_default()
+        };
+        // Restore's model was the fix itself when a chip it fixes was on.
+        let restore = || {
+            let id = text("selected_model_id");
+            let fixes = model_fixes(&id);
+            chips
+                .iter()
+                .find(|chip| fixes.contains(chip))
+                .map(|fix| (fix.clone(), id))
+        };
+        let upscale = || {
+            let id = text("preprocess_model_id");
+            let fixes = model_fixes(&id);
+            // The chip names the problem; a model that fixes it, or a model the catalog
+            // no longer lists, keeps that name. Otherwise the model's own problem does.
+            let fix = chips
+                .iter()
+                .find(|chip| fixes.is_empty() || fixes.contains(chip))
+                .or_else(|| fixes.first())
+                .cloned();
+            fix.filter(|_| !id.is_empty()).map(|fix| (fix, id))
+        };
+        let stage = match text("task").as_str() {
+            "video" => None,
+            "denoise" => restore(),
+            "upscale" => upscale(),
+            // Edit kept the image task's model and chips for the way back. Only Restore
+            // selects a 1x model, so that model says which task Edit came from.
+            _ if !model_fixes(&text("selected_model_id")).is_empty() => restore(),
+            _ => upscale(),
+        };
+        let stages = stage
+            .map(|(fix, model_id)| serde_json::json!([{"fix": fix, "model_id": model_id}]))
+            .unwrap_or_else(|| serde_json::json!([]));
+        ui.insert("fix_stages".into(), stages);
+    }
+    // The chips now show the fixes that run, plus Faces.
+    let mut fixes: Vec<Value> = ui
+        .get("fix_stages")?
+        .as_array()?
+        .iter()
+        .map(|stage| stage.get("fix").cloned().unwrap_or(Value::Null))
+        .collect();
+    if ui
+        .get("fixes")
+        .and_then(Value::as_array)
+        .is_some_and(|old| old.iter().any(|fix| fix == "faces"))
+    {
+        fixes.push(Value::String("faces".into()));
+    }
+    ui.insert("fixes".into(), Value::Array(fixes));
+    ui.remove("preprocess_model_id");
+    value["schema_version"] = Value::from(SCHEMA_VERSION);
+    Some(())
 }
 
 fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
@@ -98,13 +212,14 @@ fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
 }
 
 pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppResult<()> {
-    // Never overwrite an unreadable or future-version document with defaults.
-    if paths.settings.exists() && read_document(&paths.settings).is_none() {
+    // Never overwrite an unreadable or future-version document with defaults. A version-1
+    // file is kept by the profile backup taken when this version first started.
+    if needs_recovery(paths) {
         return Err(AppError::Config("Settings need recovery. The original file has been preserved; open Check for Updates… and press Recover settings before saving changes.".into()));
     }
     fs::create_dir_all(&paths.next_root)?;
     let document = SettingsDocument {
-        schema_version: 1,
+        schema_version: SCHEMA_VERSION as u32,
         ui: settings.clone(),
         recipes: recipes.to_vec(),
     };
@@ -116,17 +231,17 @@ pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppR
 }
 
 pub fn needs_recovery(paths: &AppPaths) -> bool {
-    paths.settings.exists() && read_document(&paths.settings).is_none()
+    effective_document_path(paths).is_some_and(|path| read_document(&path).is_none())
 }
 
 pub fn recover_defaults(paths: &AppPaths) -> AppResult<()> {
-    if !needs_recovery(paths) {
+    let Some(unreadable) = effective_document_path(paths).filter(|_| needs_recovery(paths)) else {
         return Ok(());
-    }
+    };
     let backup = paths
         .next_root
         .join(format!("settings.recovery-{}.json", uuid::Uuid::new_v4()));
-    fs::rename(&paths.settings, backup)?;
+    fs::rename(unreadable, backup)?;
     Ok(())
 }
 
@@ -175,6 +290,182 @@ fn replace_settings_file(temporary: &Path, destination: &Path) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_are_read_from_the_previous_copy_when_a_save_stopped_between_its_renames() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let saved = UiSettings {
+            tile_size: 192,
+            ..UiSettings::default()
+        };
+        save(&paths, &saved, &[]).unwrap();
+        fs::rename(&paths.settings, previous_copy(&paths)).unwrap();
+        assert_eq!(load(&paths).0.tile_size, 192);
+        // A settings file that exists but cannot be read is never replaced by the old copy.
+        fs::write(&paths.settings, b"{ cut off").unwrap();
+        assert_ne!(load(&paths).0.tile_size, 192);
+        assert!(needs_recovery(&paths));
+    }
+
+    #[test]
+    fn v1_fix_migration_preserves_choices_and_explicit_empty_lists() {
+        for (id, fix) in [
+            ("fbcnn_color", "jpeg"),
+            ("nafnet_gopro_deblur", "blur"),
+            ("scunet_color_real_psnr", "noise"),
+        ] {
+            for explicit_empty in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let paths = AppPaths::under(directory.path());
+                fs::create_dir_all(&paths.next_root).unwrap();
+                let mut ui =
+                    serde_json::json!({"preprocess_model_id": id, "fixes": ["noise", "blur"]});
+                if explicit_empty {
+                    ui["fix_stages"] = serde_json::json!([]);
+                }
+                let original =
+                    serde_json::json!({"schema_version": 1, "ui": ui, "recipes": []}).to_string();
+                fs::write(&paths.settings, &original).unwrap();
+                let (settings, recipes) = load(&paths);
+                let value = serde_json::to_value(&settings).unwrap();
+                assert_eq!(
+                    value["fix_stages"],
+                    if explicit_empty {
+                        serde_json::json!([])
+                    } else {
+                        serde_json::json!([{"fix": fix, "model_id": id}])
+                    }
+                );
+                assert!(value.get("preprocess_model_id").is_none());
+                save(&paths, &settings, &recipes).unwrap();
+                let written: Value =
+                    serde_json::from_slice(&fs::read(&paths.settings).unwrap()).unwrap();
+                assert_eq!(written["schema_version"], 2);
+                assert_eq!(
+                    serde_json::to_value(load(&paths).0).unwrap()["fix_stages"],
+                    value["fix_stages"]
+                );
+            }
+        }
+    }
+
+    fn migrated_ui(ui: Value) -> Value {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(
+            &paths.settings,
+            serde_json::json!({"schema_version": 1, "ui": ui, "recipes": []}).to_string(),
+        )
+        .unwrap();
+        serde_json::to_value(load(&paths).0).unwrap()
+    }
+
+    #[test]
+    fn v1_migration_runs_only_what_ran_before() {
+        // 0.3.5 sent its fix only to Upscale: a stale ID next to Restore or Video never ran.
+        let restore = migrated_ui(serde_json::json!({
+            "task": "denoise", "selected_model_id": "scunet_color_real_psnr",
+            "fixes": ["noise"], "preprocess_model_id": "fbcnn_color"
+        }));
+        assert_eq!(
+            restore["fix_stages"],
+            serde_json::json!([{"fix": "noise", "model_id": "scunet_color_real_psnr"}])
+        );
+        let video = migrated_ui(serde_json::json!({
+            "task": "video", "selected_model_id": "span_photo_x4",
+            "fixes": ["jpeg", "faces"], "preprocess_model_id": "fbcnn_color"
+        }));
+        assert_eq!(video["fix_stages"], serde_json::json!([]));
+        assert_eq!(video["fixes"], serde_json::json!(["faces"]));
+        // Restore without a chip has no fix; its model is a plain restore choice.
+        let plain = migrated_ui(serde_json::json!({
+            "task": "denoise", "selected_model_id": "scunet_color_real_psnr", "fixes": []
+        }));
+        assert_eq!(plain["fix_stages"], serde_json::json!([]));
+        // Edit leaves the Upscale setup alone for the way back.
+        let edit = migrated_ui(serde_json::json!({
+            "task": "edit", "selected_model_id": "span_photo_x4",
+            "fixes": ["jpeg", "faces"], "preprocess_model_id": "fbcnn_color"
+        }));
+        assert_eq!(
+            edit["fix_stages"],
+            serde_json::json!([{"fix": "jpeg", "model_id": "fbcnn_color"}])
+        );
+        assert_eq!(edit["fixes"], serde_json::json!(["jpeg", "faces"]));
+        // Edit after Restore: 0.3.5 kept Restore's model and chip for the way back. Only
+        // Restore selects a 1x model, so that is where Edit came from.
+        let restore_then_edit = migrated_ui(serde_json::json!({
+            "task": "edit", "selected_model_id": "fbcnn_color",
+            "fixes": ["jpeg"], "preprocess_model_id": ""
+        }));
+        assert_eq!(
+            restore_then_edit["fix_stages"],
+            serde_json::json!([{"fix": "jpeg", "model_id": "fbcnn_color"}])
+        );
+        assert_eq!(restore_then_edit["fixes"], serde_json::json!(["jpeg"]));
+        // A model the catalog no longer lists cannot say what it fixed; the chip still can.
+        let unknown = migrated_ui(serde_json::json!({
+            "task": "upscale", "fixes": ["blur"], "preprocess_model_id": "retired_model"
+        }));
+        assert_eq!(
+            unknown["fix_stages"],
+            serde_json::json!([{"fix": "blur", "model_id": "retired_model"}])
+        );
+    }
+
+    #[test]
+    fn the_first_start_of_this_version_keeps_the_v1_file_before_saving_v2() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::create_dir_all(&paths.model_root).unwrap();
+        let original = serde_json::json!({"schema_version": 1, "ui": {
+            "task": "upscale", "fixes": ["noise"], "preprocess_model_id": "scunet_color_real_psnr"
+        }, "recipes": []})
+        .to_string();
+        fs::write(&paths.settings, &original).unwrap();
+        let state = crate::state::AppState::from_paths(paths.clone()).unwrap();
+        let settings = state.settings.lock().unwrap().clone();
+        save(&paths, &settings, &[]).unwrap();
+        let written: Value = serde_json::from_slice(&fs::read(&paths.settings).unwrap()).unwrap();
+        assert_eq!(written["schema_version"], 2);
+        let kept: Vec<_> = fs::read_dir(paths.next_root.join("backups"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path().join("settings.json")).unwrap())
+            .collect();
+        assert_eq!(kept, [original]);
+    }
+
+    #[test]
+    fn v1_restore_keeps_its_resolved_fix_and_does_not_invent_extra_stages() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(&paths.settings, serde_json::json!({"schema_version":1,"ui":{
+            "task":"denoise","selected_model_id":"fbcnn_color","fixes":["jpeg"],"preprocess_model_id":""
+        },"recipes":[]}).to_string()).unwrap();
+        let value = serde_json::to_value(load(&paths).0).unwrap();
+        assert_eq!(
+            value["fix_stages"],
+            serde_json::json!([{"fix":"jpeg","model_id":"fbcnn_color"}])
+        );
+        assert_eq!(value["fixes"], serde_json::json!(["jpeg"]));
+    }
+
+    #[test]
+    fn future_settings_are_never_overwritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        let original = r#"{"schema_version":3,"ui":{},"recipes":[]}"#;
+        fs::write(&paths.settings, original).unwrap();
+        assert!(needs_recovery(&paths));
+        let (settings, recipes) = load(&paths);
+        assert!(save(&paths, &settings, &recipes).is_err());
+        assert_eq!(fs::read_to_string(&paths.settings).unwrap(), original);
+    }
 
     #[test]
     fn legacy_import_does_not_mutate_legacy_file() {
@@ -262,5 +553,41 @@ mod recovery_tests {
             .collect();
         assert_eq!(copies.len(), 1);
         assert_eq!(fs::read(copies[0].path()).unwrap(), b"{broken recipes");
+    }
+
+    #[test]
+    fn an_unreadable_previous_copy_is_protected_like_an_unreadable_settings_file() {
+        for original in [
+            &br#"{broken"#[..],
+            &br#"{"schema_version":3,"ui":{},"recipes":[]}"#[..],
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let paths = AppPaths::under(root.path());
+            fs::create_dir_all(&paths.next_root).unwrap();
+            // A save stopped between its renames and the only copy cannot be read.
+            fs::write(previous_copy(&paths), original).unwrap();
+            assert!(!paths.settings.exists());
+            assert!(needs_recovery(&paths));
+            let (settings, recipes) = load(&paths);
+            assert!(save(&paths, &settings, &recipes).is_err());
+            assert_eq!(fs::read(previous_copy(&paths)).unwrap(), original);
+            assert!(!paths.settings.exists());
+            // Recovery sets it aside instead of deleting it, and saving works again.
+            recover_defaults(&paths).unwrap();
+            assert!(!previous_copy(&paths).exists());
+            assert!(!needs_recovery(&paths));
+            save(&paths, &settings, &recipes).unwrap();
+            let copies: Vec<_> = fs::read_dir(&paths.next_root)
+                .unwrap()
+                .flatten()
+                .filter(|p| {
+                    p.file_name()
+                        .to_string_lossy()
+                        .starts_with("settings.recovery-")
+                })
+                .collect();
+            assert_eq!(copies.len(), 1);
+            assert_eq!(fs::read(copies[0].path()).unwrap(), original);
+        }
     }
 }

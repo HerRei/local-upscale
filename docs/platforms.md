@@ -8,11 +8,13 @@ fetched on demand.
 | --- | --- | --- | --- |
 | macOS · Apple Silicon | MPS | Published (v0.3.0-beta) | MacBook Pro M1 Pro, 16 GB |
 | Windows · x86-64 | CPU | Published (v0.3.0-beta) · not code-signed | Windows 11 virtual machine, 4 cores (v0.2.0-beta); earlier builds: Core i7-8550U |
-| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs) | Published (v0.3.0-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
+| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs, integrated ones included) | Published (v0.3.0-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
+| Windows · x86-64 | OpenVINO (Intel GPUs), in the DirectML download | From v0.3.2-beta · **untested** · not code-signed | Not yet run on Windows |
 | Windows · x86-64 | NVIDIA CUDA | Published (v0.3.0-beta) · **untested** · not code-signed | Not yet run on an NVIDIA GPU |
 | Linux · x86-64 | CPU | Published (v0.3.0-beta) | Earlier builds: Fedora 44 |
 | Linux · x86-64 | AMD ROCm | Published (v0.3.0-beta) | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
 | Linux · x86-64 | NVIDIA CUDA | Published (v0.3.0-beta) · **untested** | Not yet run on an NVIDIA GPU |
+| Linux · x86-64 | OpenVINO (Intel GPUs), in the CPU download | From v0.3.2-beta | Intel Arc Graphics (Arrow Lake, Core Ultra 7 270K Plus), Fedora 44, see below |
 | Linux · x86-64 | Intel XPU | Withheld | — |
 
 "Tested" means the recorded checks in [Testing](testing.md) passed on that
@@ -25,8 +27,10 @@ The Windows and Linux packages of v0.3.0-beta were built on GitHub-hosted runner
 allowlisted LGPL media runtime, passed the codec policy and an automated smoke test
 of the installed app, and ship with their corresponding-source bundles. The Windows
 CPU installer of v0.2.0-beta was also installed and used in a Windows 11 virtual
-machine; later versions passed the same automated build and smoke tests. None of them
-update themselves yet. The CUDA and DirectML packages are published **untested**: they pass
+machine; later versions passed the same automated build and smoke tests. They update
+themselves in the app like the Mac build ([Updates](updates.md)); that path is covered
+by the automated tests but has not yet been tried on a real Windows or Linux
+installation. The CUDA and DirectML packages are published **untested**: they pass
 the same automated checks on runners without a GPU, but CUDA has never run on an
 NVIDIA GPU and DirectML has not produced results within the accuracy tolerance on
 one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in parts.
@@ -39,7 +43,7 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   files the license does not list are left out. The Windows engine ships as verified parts next to
   the installer. Nobody has run either package on an NVIDIA GPU yet.
 - **AMD ROCm (Linux).** PyTorch's ROCm wheel bundles libnuma and libelf built on
-  AlmaLinux. The package ships Ubuntu 24.04's own builds instead, found by soname under
+  AlmaLinux. The package ships Ubuntu 22.04's own builds instead, found by soname under
   every file name they appear as (every library that uses them is link-checked with
   `ldd -r`), and its source bundle carries their Ubuntu sources. AMD's aqlprofile is MIT-licensed in
   [ROCm/rocm-systems](https://github.com/ROCm/rocm-systems).
@@ -100,6 +104,31 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
 - **DirectML.** Any DXGI adapter with D3D12 support can be selected; only the
   UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
   DirectML implementation.
+- **The GPU check (DirectML and OpenVINO, from v0.3.2-beta).** These routes run the
+  model as an ONNX graph in FP32. The first time a model runs on a GPU, at each tile
+  shape, LocalSR compares the GPU's result with PyTorch on the CPU on a fixed test
+  pattern and on the real tile, and uses the GPU only at 50 dB or better. Otherwise it
+  tries the next configuration (DirectML without the driver's metacommands, then with
+  basic graph optimizations only; OpenVINO in its accuracy mode) and, when none
+  matches, stops with a message to use the CPU. The result is stored per model, tile
+  shape, device, driver and version, so the check repeats only after an update. A GPU
+  the driver resets fails that job, and the engine restarts with a fresh device.
+- **OpenVINO.** Intel GPUs also appear as "(OpenVINO)" devices in the Windows
+  DirectML and the Linux CPU downloads, through ONNX Runtime's OpenVINO plugin. They
+  need Intel's graphics compute driver (Linux: the `intel-opencl-icd` package); without
+  it the device does not appear. On the Arrow Lake GPU (Linux), whole photos matched the
+  CPU for every model tried, at most 1/255 apart: SPAN 91 dB, RealPLKSR 95 dB, HAT-S
+  93 dB, FBCNN 94 dB, Real-ESRGAN 89 dB, SwinIR 88 dB. NAFNet SIDD stopped on the same
+  test photo on the CPU too (its instability guard). Next to that desktop's 24-core CPU
+  the integrated GPU was faster for SPAN, RealPLKSR and HAT-S and slower for Real-ESRGAN,
+  FBCNN and SwinIR; the app says so when the GPU is slower than the CPU.
+- **Integrated GPUs and memory.** Windows says how much memory it grants LocalSR on
+  each adapter; an integrated GPU counts its shared memory, and an AMD APU with a
+  large BIOS carve-out is no longer mistaken for a discrete card. Under ROCm, an
+  integrated GPU is budgeted from shared memory instead of its carve-out.
+- **Recording a new GPU.** `scripts/gpu_route_report.py` measures a route against the
+  CPU for one model and photo and writes a JSON report; attach it when reporting a GPU
+  that has no row above.
 - **ROCm.** PyTorch addresses the GPU as `cuda:0`; that is normal. On gfx1200 a
   tall `[N,3] @ [3,3]` matrix multiply returned wrong values after row 524,288,
   which corrupted colour conversion; LocalSR uses per-channel arithmetic there

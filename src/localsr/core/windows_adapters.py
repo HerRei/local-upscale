@@ -1,8 +1,23 @@
-"""Enumerate hardware adapters in the DXGI order used by DirectML."""
+"""Enumerate hardware adapters in the DXGI order used by DirectML.
+
+Besides the description, each adapter reports, when Windows can tell: whether it shares
+memory with the CPU (D3D12 UMA), the memory budget Windows grants this process right now
+(IDXGIAdapter3::QueryVideoMemoryInfo) and its user-mode driver version. Each of these
+queries is optional: a failure leaves the field None and never hides the adapter.
+"""
 
 import ctypes
+import logging
 import sys
 import uuid
+
+logger = logging.getLogger(__name__)
+
+_ADAPTER3_IID = "645967a4-1392-4310-a798-8053ce3e93fd"
+_DEVICE_IID = "189819f1-1db6-4b57-be54-1821339b85f7"  # ID3D12Device
+_DXGI_DEVICE_IID = "54ec77fa-1377-44e6-8c32-88fd5f44c84c"  # IDXGIDevice, for the driver version
+_FEATURE_LEVEL_11_0 = 0xB000
+_D3D12_FEATURE_ARCHITECTURE = 1
 
 
 class _Guid(ctypes.Structure):
@@ -32,6 +47,24 @@ class _AdapterDescription(ctypes.Structure):
     ]
 
 
+class _Architecture(ctypes.Structure):
+    _fields_ = [
+        ("node_index", ctypes.c_uint32),
+        ("tile_based_renderer", ctypes.c_int32),
+        ("uma", ctypes.c_int32),
+        ("cache_coherent_uma", ctypes.c_int32),
+    ]
+
+
+class _VideoMemoryInfo(ctypes.Structure):
+    _fields_ = [
+        ("budget", ctypes.c_uint64),
+        ("current_usage", ctypes.c_uint64),
+        ("available_for_reservation", ctypes.c_uint64),
+        ("current_reservation", ctypes.c_uint64),
+    ]
+
+
 def _method(pointer, index, result, *arguments):
     table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
     return ctypes.WINFUNCTYPE(result, ctypes.c_void_p, *arguments)(table[index])
@@ -42,7 +75,91 @@ def _release(pointer):
         _method(pointer, 2, ctypes.c_uint32)(pointer)
 
 
-def directml_adapters() -> list[dict]:
+def _driver_version(adapter) -> str | None:
+    # IDXGIAdapter::CheckInterfaceSupport (slot 9) reports the user-mode driver version.
+    version = ctypes.c_int64()
+    check = _method(
+        adapter, 9, ctypes.c_int32, ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_int64)
+    )
+    if check(adapter, _Guid(_DXGI_DEVICE_IID), ctypes.byref(version)) < 0:
+        return None
+    value = version.value & 0xFFFFFFFFFFFFFFFF
+    return ".".join(str((value >> shift) & 0xFFFF) for shift in (48, 32, 16, 0))
+
+
+def _uma(create_device, adapter) -> bool | None:
+    device = ctypes.c_void_p()
+    if create_device(adapter, _FEATURE_LEVEL_11_0, _Guid(_DEVICE_IID), ctypes.byref(device)) < 0:
+        return None
+    try:
+        architecture = _Architecture()
+        # ID3D12Device::CheckFeatureSupport is slot 13.
+        check = _method(device, 13, ctypes.c_int32, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
+        if (
+            check(
+                device,
+                _D3D12_FEATURE_ARCHITECTURE,
+                ctypes.byref(architecture),
+                ctypes.sizeof(architecture),
+            )
+            < 0
+        ):
+            return None
+        return bool(architecture.uma)
+    finally:
+        _release(device)
+
+
+def _memory_budget(adapter) -> tuple[int, int, int, int] | None:
+    """Budget and current usage of the local and non-local segments for this process.
+
+    Intel reports an iGPU's shared memory as local; AMD reports only the BIOS carve-out
+    as local and the shared system memory as non-local, so callers need both.
+    """
+    adapter3 = ctypes.c_void_p()
+    query = _method(
+        adapter, 0, ctypes.c_int32, ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_void_p)
+    )
+    if query(adapter, _Guid(_ADAPTER3_IID), ctypes.byref(adapter3)) < 0:
+        return None
+    try:
+        # IDXGIAdapter3::QueryVideoMemoryInfo is slot 14; segment group 0 is local,
+        # 1 is non-local.
+        read = _method(
+            adapter3,
+            14,
+            ctypes.c_int32,
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.POINTER(_VideoMemoryInfo),
+        )
+        values = []
+        for group in (0, 1):
+            info = _VideoMemoryInfo()
+            if read(adapter3, 0, group, ctypes.byref(info)) < 0:
+                return None
+            values += [int(info.budget), int(info.current_usage)]
+        return tuple(values)
+
+    finally:
+        _release(adapter3)
+
+
+def _optional(name: str, query, *arguments):
+    try:
+        return query(*arguments)
+    except (OSError, ValueError, ctypes.ArgumentError) as error:
+        logger.info("Graphics adapter query %s failed: %s", name, error)
+        return None
+
+
+def directml_adapters(*, include_software: bool = False, probe: bool = True) -> list[dict]:
+    """DirectX 12 adapters in DXGI order. ``include_software`` lets tests use WARP.
+
+    ``probe=False`` only reads names, ids, memory and drivers: it creates no Direct3D
+    device, so a sleeping laptop GPU stays asleep, and it does not test DirectX 12
+    support or integrated memory ("uma" is None). Use it for lookups, not for picking
+    a DirectML device."""
     if sys.platform != "win32":
         return []
     # Load system DLLs with an explicit system-directory search flag.
@@ -54,15 +171,15 @@ def directml_adapters() -> list[dict]:
     factory = ctypes.c_void_p()
     if create(_Guid("770aae78-f26f-4dba-a829-253c83d1b387"), ctypes.byref(factory)) < 0:
         raise RuntimeError("Windows could not enumerate graphics adapters")
-    supports_d3d12 = d3d12.D3D12CreateDevice
-    supports_d3d12.argtypes = [
+    create_device = d3d12.D3D12CreateDevice
+    create_device.argtypes = [
         ctypes.c_void_p,
         ctypes.c_int,
         ctypes.POINTER(_Guid),
-        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
     ]
-    supports_d3d12.restype = ctypes.c_int32
-    device_iid = _Guid("189819f1-1db6-4b57-be54-1821339b85f7")
+    create_device.restype = ctypes.c_int32
+    device_iid = _Guid(_DEVICE_IID)
     adapters = []
     try:
         enumerate_adapter = _method(
@@ -82,10 +199,21 @@ def directml_adapters() -> list[dict]:
                 )
                 if get_description(adapter, ctypes.byref(description)) < 0:
                     raise RuntimeError(f"Could not read graphics adapter {index}")
-                if description.flags & 2:  # Software rendering is not GPU acceptance.
+                # Microsoft's Basic Render Driver (WARP) does not always carry the software
+                # flag, for example on a machine without a GPU driver.
+                software = bool(description.flags & 2) or description.vendor_id == 0x1414
+                if software and not include_software:
+                    continue  # Software rendering is not GPU acceptance.
+                if probe and create_device(adapter, _FEATURE_LEVEL_11_0, device_iid, None) < 0:
                     continue
-                if supports_d3d12(adapter, 0xB000, device_iid, None) < 0:
-                    continue
+                budget = _optional("memory budget", _memory_budget, adapter)
+                # NVIDIA makes no x86 integrated GPUs; a second device just to ask is spared.
+                if not probe:
+                    uma = None
+                elif description.vendor_id == 0x10DE:
+                    uma = False
+                else:
+                    uma = _optional("architecture", _uma, create_device, adapter)
                 adapters.append(
                     {
                         "index": index,
@@ -93,6 +221,17 @@ def directml_adapters() -> list[dict]:
                         "dedicated_memory": int(description.dedicated_video_memory),
                         "shared_memory": int(description.shared_system_memory),
                         "vendor_id": int(description.vendor_id),
+                        "device_id": int(description.device_id),
+                        "subsystem_id": int(description.subsystem_id),
+                        "revision": int(description.revision),
+                        "luid": f"{description.luid.high & 0xFFFFFFFF:08x}{description.luid.low:08x}",
+                        "software": software,
+                        "uma": uma,
+                        "budget": None if budget is None else budget[0],
+                        "usage": None if budget is None else budget[1],
+                        "shared_budget": None if budget is None else budget[2],
+                        "shared_usage": None if budget is None else budget[3],
+                        "driver_version": _optional("driver version", _driver_version, adapter),
                     }
                 )
             finally:

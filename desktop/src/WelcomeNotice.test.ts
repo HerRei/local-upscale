@@ -34,15 +34,35 @@ it('welcomes a first launch, discloses the update count and opens the guide', as
   expect(api.openUserGuide).toHaveBeenCalledTimes(1);
 });
 
-it('says where the count can be turned off without a button for it', () => {
+it('keeps the welcome short: privacy and downloads, no tour of the window', () => {
   render(WelcomeNotice, { anonymousUpdateCount: true });
-  expect(screen.getByText(/turn it off under Check for Updates/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      'Photos and videos stay on this computer. Models download once, when a task first needs them.',
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Drop photos or videos in the middle/)).toBeNull();
+});
+
+it('says where the launch check and the count can be turned off without a button for it', () => {
+  render(WelcomeNotice, { anonymousUpdateCount: true, checkAtLaunch: true });
+  expect(screen.getByText(/You can turn either off in the .* menu/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: /turn off/i })).toBeNull();
 });
 
 it('says the count is off when it is', () => {
-  render(WelcomeNotice, { anonymousUpdateCount: false });
-  expect(screen.getByText('The anonymous update-check count is off.')).toBeTruthy();
+  render(WelcomeNotice, { anonymousUpdateCount: false, checkAtLaunch: true });
+  expect(
+    screen.getByText(
+      'At launch LocalSR checks for updates; the anonymous update-check count is off.',
+    ),
+  ).toBeTruthy();
+});
+
+it('says when LocalSR does not check at launch', () => {
+  render(WelcomeNotice, { anonymousUpdateCount: true, checkAtLaunch: false });
+  expect(screen.getByText(/does not check for updates at launch/)).toBeTruthy();
+  expect(screen.queryByText(/sends an anonymous count/)).toBeNull();
 });
 
 it('stays closed after Got It', async () => {

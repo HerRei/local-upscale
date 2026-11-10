@@ -2,8 +2,11 @@
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
   import EmptyStage from './EmptyStage.svelte';
+  import FileName from './FileName.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
+  import SplitComparison from './SplitComparison.svelte';
+  import type { ComparisonSide } from './lib/results';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import {
@@ -29,17 +32,37 @@
   } from './lib/types';
 
   export let selectedMedia: MediaItem | undefined;
+  /** The Showing side: a saved result's preview, '' while there is none to compare. */
   export let resultPreview: string;
   export let comparisonError = '';
+  // A saved result as the reference (against). The Original then stays under it
+  // and only holding M shows it.
+  export let referenceIsResult = false;
+  export let referencePreview = '';
+  /** Side labels; '' keeps the single-result view without labels. */
+  export let showingLabel = '';
+  export let referenceLabel = 'Original';
+  export let showingState: ComparisonSide['state'] = 'ready';
+  export let referenceState: ComparisonSide['state'] = 'ready';
+  export let showingError = '';
+  export let referenceError = '';
+  /** Showing alone in its own framing (an Edit result that does not match the source). */
+  /** The result a pair is still waiting for: the picture stays as it was, no divider or view options. */
+  export let loadingLabel = '';
+  export let singleFrame: { width: number; height: number } | null = null;
+  /** Live tiles of a running job; off once a saved result was chosen for this image. */
+  export let showLiveTiles = true;
+  /** Why a pair is shown as a single result, for example a different framing. */
+  export let comparisonNote = '';
   export let completedVideoOutput: string;
+  export let videoResultId = '';
   export let compactHidden = false;
-  export let modelLabel = '';
-  export let activityLabel = '';
-  // Editing names its phase and reports an overall percentage; tiles do not exist.
-  export let activityDetail = '';
-  export let activityProgress = 0;
+  // The status bar reports the job; the pane only says which live frame it shows.
+  export let liveFrame = -1;
+  $: liveFrame = progressiveFrame;
   export let editing = false;
   export let processing = false;
+  export let videoEngineBusy = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
   export let dropping = false;
@@ -80,19 +103,72 @@
     compare,
   );
   // The header switch keeps a view; holding M peeks at the original from any of them.
+  // With a saved result as the reference the views are Reference / Split /
+  // Showing, and M still shows the real Original, not the reference.
   type ComparisonView = 'original' | 'split' | 'enhanced';
-  const comparisonViews: { id: ComparisonView; label: string; title: string }[] = [
-    { id: 'original', label: 'Original', title: 'Show only the original · hold M to peek' },
-    { id: 'split', label: 'Split', title: 'Original left, result right · drag the divider' },
-    { id: 'enhanced', label: 'Enhanced', title: 'Show only the result' },
-  ];
+  $: comparisonViews = (
+    referenceIsResult
+      ? [
+          {
+            id: 'original',
+            label: 'Reference',
+            title: 'Show only the reference · hold M to peek at the original',
+          },
+          {
+            id: 'split',
+            label: 'Split',
+            title: 'Reference left, Showing right · drag the divider',
+          },
+          { id: 'enhanced', label: 'Showing', title: 'Show only the Showing result' },
+        ]
+      : [
+          { id: 'original', label: 'Original', title: 'Show only the original · hold M to peek' },
+          { id: 'split', label: 'Split', title: 'Original left, result right · drag the divider' },
+          { id: 'enhanced', label: 'Enhanced', title: 'Show only the result' },
+        ]
+  ) as { id: ComparisonView; label: string; title: string }[];
   let comparisonView: ComparisonView = 'split';
   let holdingOriginal = false;
-  $: canCompare = Boolean(resultPreview || videoComparison?.enhanced_url);
-  $: if (!canCompare) holdingOriginal = false;
+  // Two saved sides compare even while one of them is still decoding.
+  $: loading = loadingLabel !== '';
+  $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image' && !loading;
+  $: canCompare =
+    !loading &&
+    Boolean((resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url);
+  $: canPeek = canCompare || Boolean(singleFrame && resultPreview);
+  $: if (!canPeek) holdingOriginal = false;
   $: shownView = holdingOriginal ? 'original' : comparisonView;
-  $: resultClip =
-    shownView === 'original' ? 100 : shownView === 'enhanced' ? 0 : comparison.imagePercent;
+  $: resultClip = loading
+    ? 0
+    : singleFrame
+      ? holdingOriginal
+        ? 100
+        : 0
+      : shownView === 'original'
+        ? 100
+        : shownView === 'enhanced'
+          ? 0
+          : comparison.imagePercent;
+  $: splitActive = canCompare && !videoComparison;
+  let showingSide: ComparisonSide;
+  $: showingSide = {
+    src: resultPreview,
+    label: showingLabel,
+    state: pairShown ? showingState : 'ready',
+    error: showingError,
+  };
+  let referenceSide: ComparisonSide | undefined;
+  $: referenceSide = pairShown
+    ? { src: referencePreview, label: referenceLabel, state: referenceState, error: referenceError }
+    : undefined;
+  $: dividerPercent = Math.round(100 - comparison.enhancedPercent);
+  $: liveTilesShown = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
+  $: frameKey = singleFrame ? `${singleFrame.width}x${singleFrame.height}` : '';
+  let laidOutFrame = '';
+  $: if (frameKey !== laidOutFrame) {
+    laidOutFrame = frameKey;
+    scheduleViewportReset();
+  }
   let minZoom = 1;
   let maxZoom = 8;
   let actualPixelZoom = 1;
@@ -123,10 +199,14 @@
   let disposed = false;
 
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
-  // Keep the image mounted across transient WebKit decode errors so
-  // re-probing cannot turn into an endless loading loop.
-  $: renderableSourcePreview = sourcePreview;
-  $: displayedSourcePreview = videoSourcePreview || sourcePreview;
+  $: displayedSourcePreview = (processing && videoSourcePreview) || sourcePreview;
+  $: deferredPreview = Boolean(
+    videoEngineBusy &&
+    selectedMedia &&
+    !sourcePreview &&
+    (selectedMedia.probe_status === 'pending' ||
+      (selectedMedia.probe_status === 'ready' && selectedMedia.kind === 'image')),
+  );
   $: waitingForVideoFrame =
     processing &&
     selectedMedia?.kind === 'video' &&
@@ -145,6 +225,17 @@
   $: if (desiredVideoComparisonKey !== videoComparisonKey) {
     void loadVideoComparison(desiredVideoComparisonKey);
   }
+  let videoWasBusy = false;
+  $: if (videoWasBusy !== videoEngineBusy) {
+    videoWasBusy = videoEngineBusy;
+    if (videoEngineBusy) previewRetryMediaId = '';
+    if (
+      !videoEngineBusy &&
+      videoComparisonKey &&
+      videoComparisonError.includes('current video is done')
+    )
+      void loadVideoComparison(videoComparisonKey, playbackFallbackUsed);
+  }
 
   $: if ((selectedMedia?.id ?? '') !== viewedMediaId) {
     viewedMediaId = selectedMedia?.id ?? '';
@@ -162,7 +253,12 @@
     scheduleViewportReset();
   }
 
-  $: if (selectedMedia && selectedMedia.probe_status === 'ready' && !sourcePreview) {
+  $: if (
+    selectedMedia &&
+    selectedMedia.probe_status === 'ready' &&
+    !sourcePreview &&
+    !videoEngineBusy
+  ) {
     void repairSelectedPreview();
   }
 
@@ -222,7 +318,7 @@
 
   function onSourcePreviewError(): void {
     previewRetryMediaId = '';
-    void repairSelectedPreview();
+    if (!videoEngineBusy) void repairSelectedPreview();
   }
 
   export function resetProgressivePreview(jobId = '', frame = -1): void {
@@ -499,7 +595,7 @@
   function pointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     const target = event.target instanceof Element ? event.target : null;
-    if (resultPreview && (target?.closest('.compare-line') || pointerNearComparison(event))) {
+    if (splitActive && (target?.closest('.compare-line') || pointerNearComparison(event))) {
       draggingComparison = true;
       dragging = false;
       updateComparisonFromPointer(event.clientX);
@@ -519,7 +615,7 @@
   }
 
   function comparisonPointerDown(event: PointerEvent): void {
-    if (event.button !== 0 || !resultPreview) return;
+    if (event.button !== 0 || !splitActive) return;
     draggingComparison = true;
     dragging = false;
     updateComparisonFromPointer(event.clientX);
@@ -567,7 +663,7 @@
   }
 
   function pointerNearComparison(event: PointerEvent): boolean {
-    if (!canvasWell || !resultPreview || shownView !== 'split') return false;
+    if (!canvasWell || !splitActive || shownView !== 'split') return false;
     const rectangle = canvasWell.getBoundingClientRect();
     const y = event.clientY - rectangle.top;
     return (
@@ -608,7 +704,7 @@
   }
 
   function windowKeyDown(event: KeyboardEvent): void {
-    if (!canCompare || !holdsOriginalKey(event)) return;
+    if (!canPeek || !holdsOriginalKey(event)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
     holdingOriginal = true;
@@ -629,6 +725,7 @@
     videoRequestId = '';
     if (oldRequest && api.isTauri()) void api.cancelVideoComparison(oldRequest).catch(() => {});
     videoComparisonKey = key;
+    if (key) comparisonView = completedVideoOutput ? 'enhanced' : 'original';
     videoComparison = null;
     videoComparisonError = '';
     videoPreparationProgress = null;
@@ -652,9 +749,18 @@
           videoPreparationProgress = data;
         }
       });
-      await playbackListener;
+      await playbackListener.catch((error) => {
+        playbackListener = undefined;
+        throw error;
+      });
       if (disposed || requestId !== videoRequestId) return;
-      const sources = await api.prepareVideoComparison(mediaId, requestId, forceCompatible);
+      const sources = await api.prepareVideoComparison(
+        mediaId,
+        requestId,
+        forceCompatible,
+        videoResultId,
+        ...(videoEngineBusy ? ([true] as const) : []),
+      );
       if (disposed || requestId !== videoRequestId || mediaId !== selectedMedia?.id) return;
       videoComparison = sources;
     } catch (error) {
@@ -714,8 +820,16 @@
     const rectangle = canvasWell.getBoundingClientRect();
     canvasWidth = Math.max(1, rectangle.width);
     canvasHeight = Math.max(1, rectangle.height);
-    const sourceWidth = Math.max(1, selectedMedia?.width || previewNaturalWidth);
-    const sourceHeight = Math.max(1, selectedMedia?.height || previewNaturalHeight);
+    // A result in its own framing sets the stage; otherwise the source does,
+    // and every result is drawn into that source-shaped stage.
+    const sourceWidth = Math.max(
+      1,
+      singleFrame?.width || selectedMedia?.width || previewNaturalWidth,
+    );
+    const sourceHeight = Math.max(
+      1,
+      singleFrame?.height || selectedMedia?.height || previewNaturalHeight,
+    );
     const fitted = fitSize(
       { width: canvasWidth, height: canvasHeight },
       { width: sourceWidth, height: sourceHeight },
@@ -780,9 +894,9 @@
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header" data-tauri-drag-region>
-    <div data-tauri-drag-region>
-      <strong data-tauri-drag-region>{selectedMedia?.name ?? 'Preview'}</strong>
-      <span
+    <div class="header-file" data-tauri-drag-region>
+      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
+        >{/if}<span class="header-size" data-tauri-drag-region
         >{selectedMedia
           ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
           : 'No media selected'}</span
@@ -806,7 +920,7 @@
   <div
     bind:this={canvasWell}
     class="canvas-well"
-    class:rendering={progressiveVisible && !resultPreview}
+    class:rendering={liveTilesShown}
     class:panning={dragging}
     class:comparing={draggingComparison}
     role="application"
@@ -822,26 +936,11 @@
     {#if selectedMedia}
       {#if comparisonError}<p class="comparison-error" role="alert">
           Comparison unavailable: {comparisonError}
+        </p>{:else if comparisonNote}<p class="comparison-note" role="status">
+          {comparisonNote}
         </p>{/if}
-      {#if processing}
-        {#if editing}<div class="edit-sweep" aria-hidden="true"></div>{/if}
-        <div class="model-activity" class:with-progress={editing} role="status">
-          <i></i><span
-            >{modelLabel} · {activityLabel
-              ? `${activityLabel}${progressiveFrame >= 0 ? ` · Frame ${progressiveFrame + 1}` : ''}`
-              : progressiveFrame >= 0
-                ? `Frame ${progressiveFrame + 1} · live tiles`
-                : 'Preparing model output…'}{selectedMedia.hdr_format
-              ? ' · SDR display preview'
-              : ''}</span
-          >
-          {#if editing}<small
-              >{activityDetail || 'Starting…'} · {Math.round(activityProgress)}%</small
-            ><b class="activity-track"
-              ><em style={`width:${Math.max(2, Math.min(100, activityProgress))}%`}></em></b
-            >{/if}
-        </div>
-      {/if}
+      <!-- Always mounted: showing and hiding it must never restart its animation. -->
+      <div class="edit-sweep" class:on={processing && editing} aria-hidden="true"></div>
       {#if videoComparison}
         {#key videoComparisonKey}
           <VideoComparison
@@ -855,16 +954,31 @@
             on:compatibilityneeded={compatiblePlayback}
           />
         {/key}
-      {:else if renderableSourcePreview}
-        <div
-          class="image-stage"
-          style={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+      {:else if sourcePreview}
+        <SplitComparison
+          stageStyle={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+          split={splitActive}
+          view={comparisonView}
+          peeking={holdingOriginal}
+          {resultClip}
+          showing={showingSide}
+          reference={referenceSide}
+          showingAlt={referenceIsResult || showingLabel
+            ? `Showing: ${showingLabel || 'result'}`
+            : 'Enhanced result'}
+          divider={{ ...comparison, percent: dividerPercent }}
+          dividerDown={comparisonPointerDown}
+          dividerMove={comparisonPointerMove}
+          dividerUp={comparisonPointerUp}
+          dividerKey={compareKeyDown}
         >
           <img
             class="source-image"
             class:waiting-frame={waitingForVideoFrame}
+            class:contained={Boolean(singleFrame)}
+            class:covered={Boolean(singleFrame) && !holdingOriginal}
             src={displayedSourcePreview}
-            alt={videoSourcePreview
+            alt={processing && videoSourcePreview
               ? `Source frame ${videoSourceFrame + 1} of ${selectedMedia.name}`
               : `Preview of ${selectedMedia.name}`}
             draggable="false"
@@ -874,50 +988,20 @@
           <canvas
             bind:this={progressiveCanvas}
             class="progressive-image"
-            class:visible={progressiveVisible && !resultPreview}
+            class:visible={liveTilesShown}
             aria-label="Progressive tiled preview"
           ></canvas>
-          {#if progressiveVisible && activeTileVisible && !resultPreview}
+          {#if liveTilesShown && activeTileVisible}
             <div
               class="active-tile"
               aria-hidden="true"
               style={`left:${activeTileX}%;top:${activeTileY}%;width:${activeTileWidth}%;height:${activeTileHeight}%`}
             ></div>
           {/if}
-          {#if resultPreview}
-            <img
-              class="result-image"
-              style={`clip-path: inset(0 0 0 ${resultClip}%)`}
-              src={resultPreview}
-              alt="Enhanced result"
-              draggable="false"
-            />
-          {/if}
-        </div>
-        {#if resultPreview}
-          <div
-            class="compare-line"
-            class:held={shownView !== 'split'}
-            role="slider"
-            tabindex={shownView === 'split' ? 0 : -1}
-            aria-hidden={shownView !== 'split'}
-            aria-label="Before and after comparison"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
-            aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
-            style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
-            on:pointerdown|stopPropagation={comparisonPointerDown}
-            on:pointermove|stopPropagation={comparisonPointerMove}
-            on:pointerup|stopPropagation={comparisonPointerUp}
-            on:pointercancel|stopPropagation={comparisonPointerUp}
-            on:keydown={compareKeyDown}
-          >
-            <span aria-hidden="true">↔</span>
-          </div>
-          {#if shownView === 'original'}<span class="original-chip" role="status">Original</span
-            >{/if}
-        {/if}
+        </SplitComparison>
+        {#if loading}<div class="pair-loading">
+            <PreviewActivity media={selectedMedia} loading={loadingLabel} />
+          </div>{/if}
         {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
@@ -939,7 +1023,7 @@
             <button
               aria-label="Zoom in"
               disabled={zoom >= maxZoom}
-              on:click={() => setZoom(zoom * 1.25)}>＋</button
+              on:click={() => setZoom(zoom * 1.25)}>+</button
             >
             <button class:active={Math.abs(zoom - 1) < 0.001} on:click={fitView}>Fit</button>
             <button
@@ -949,7 +1033,16 @@
             >
           </div>{/if}
       {:else}
-        {#if selectedMedia.probe_status === 'pending'}
+        {#if deferredPreview}
+          <div class="canvas-empty preview-error">
+            <MediaIllustration still />
+            <h2>Preview unavailable</h2>
+            <p role="status">
+              This preview needs the engine, which is busy with the video. It will load when the
+              video is done.
+            </p>
+          </div>
+        {:else if selectedMedia.probe_status === 'pending'}
           {#key selectedMedia.id}<PreviewActivity media={selectedMedia} />{/key}
         {:else}
           <div class="canvas-empty preview-error">
@@ -1001,6 +1094,13 @@
 </section>
 
 <style>
+  .pair-loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+  }
   .playback-preparation {
     position: absolute;
     left: 16px;
@@ -1049,117 +1149,87 @@
     }
   }
 
+  /* A long name or error without spaces breaks anywhere, so the block keeps to the stage and
+     stays centred. */
+  .preview-error {
+    width: 100%;
+    max-width: 520px;
+    padding: 0 24px;
+    overflow-wrap: anywhere;
+  }
+  /* The notes sit above the update notice while it shows (--notice-room). */
   .comparison-error {
     position: absolute;
     z-index: 5;
     left: 16px;
     right: 16px;
-    bottom: 16px;
+    bottom: max(16px, var(--notice-room, 0px));
     padding: 12px;
     border-radius: var(--radius);
     background: #351918;
     color: #ffc6bd;
   }
-  .model-activity {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 8;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    max-width: calc(100% - 24px);
-    padding: 8px 10px;
-    background: #1e1e1eed;
-    color: #d1d1d1;
-    border: 1px solid #6b6b6b;
-    border-radius: var(--radius);
-    font-size: 11px;
-    pointer-events: none;
-  }
-  .model-activity i {
-    flex: 0 0 auto;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 2px solid #bfbfbf40;
-    border-top-color: #cccccc;
-    animation: model-spin 1s linear infinite;
-  }
-  .model-activity.with-progress {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    row-gap: 6px;
-    min-width: 260px;
-  }
-  .model-activity small {
-    grid-column: 2;
-    color: #b2b2b2;
-    font-size: 11px;
-  }
-  .activity-track {
-    grid-column: 1 / -1;
-    position: relative;
-    display: block;
-    height: 4px;
-    overflow: hidden;
-    border-radius: 2px;
-    background: #353535;
-  }
-  .activity-track em {
-    position: relative;
-    display: block;
-    height: 100%;
-    overflow: hidden;
-    border-radius: 2px;
-    background: var(--accent-hi);
-    transition: width 0.5s ease;
-  }
-  .activity-track em::after,
+  /* The band is a layer as wide as the picture, moved by transform on the compositor. */
   .edit-sweep {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    overflow: hidden;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .edit-sweep.on {
+    opacity: 1;
+  }
+  .edit-sweep::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      100deg,
-      transparent 35%,
-      rgba(226, 226, 226, 0.55) 50%,
-      transparent 65%
-    );
-    background-size: 250% 100%;
-    animation: sweep 1.6s linear infinite;
-  }
-  .edit-sweep {
-    z-index: 7;
-    pointer-events: none;
     background: linear-gradient(
       100deg,
       transparent 40%,
       rgba(204, 204, 204, 0.07) 50%,
       transparent 60%
     );
-    background-size: 250% 100%;
-    animation-duration: 3.2s;
+    animation: sweep 3.2s linear infinite;
   }
   .active-tile {
     animation: tile-pulse 1.2s ease-in-out infinite;
   }
   @keyframes sweep {
     from {
-      background-position: 125% 0;
+      transform: translateX(-100%);
     }
     to {
-      background-position: -125% 0;
+      transform: translateX(100%);
     }
   }
-  .source-image.waiting-frame {
+  .source-image.waiting-frame,
+  .source-image.covered {
     visibility: hidden;
   }
-  @keyframes model-spin {
-    to {
-      transform: rotate(360deg);
-    }
+  /* A result in its own framing sets the stage; the peeked Original keeps its shape. */
+  .source-image.contained {
+    object-fit: contain;
+  }
+  .comparison-note {
+    position: absolute;
+    z-index: 5;
+    left: 16px;
+    bottom: max(16px, var(--notice-room, 0px));
+    max-width: calc(100% - 32px);
+    margin: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: rgba(24, 24, 26, 0.84);
+    color: var(--secondary);
+    font-size: calc(11px * var(--ui-scale));
+    pointer-events: none;
+  }
+  /* Above the Original's label chip at the same corner. */
+  .canvas-well:has(:global(.divider-labels)) .comparison-note {
+    bottom: calc(max(12px, var(--notice-room, 0px)) + 11px * var(--ui-scale) * 1.3 + 10px + 8px);
   }
   @keyframes tile-pulse {
     50% {
@@ -1168,10 +1238,8 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .model-activity i,
     .active-tile,
-    .activity-track em::after,
-    .edit-sweep {
+    .edit-sweep::before {
       animation: none;
     }
   }

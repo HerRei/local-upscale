@@ -11,6 +11,10 @@ pub struct CatalogManifest {
     pub catalog_revision: String,
     pub models: Vec<CatalogModel>,
     pub video_models: Vec<CatalogVideoModel>,
+    // Catalog schema 3: optional frame-interpolation stages of a video job. They share
+    // the bundle layout of video models but are never offered as video engines.
+    #[serde(default)]
+    pub interpolation_models: Vec<CatalogVideoModel>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -39,15 +43,16 @@ pub struct CatalogModel {
     pub pair_with: String,
     pub commercial_use_status: String,
     pub commercial_use_allowed: Option<bool>,
+    // False: the library offers it, but no preset picks it on its own.
+    #[serde(default = "preset_eligible_default")]
+    pub preset_eligible: bool,
     pub automated_download_allowed: bool,
     pub redistribution_allowed: bool,
     pub attribution_required: bool,
     pub terms_acceptance_required: bool,
     pub engine_id: String,
     pub support_tier: String,
-    // Model-library fields (catalog schema 2). Defaults keep an older
-    // manifest loadable; `support_tier` stays the validation axis while
-    // `rights_status` says what the checkpoint's terms allow.
+    // `support_tier` controls validation; `rights_status` describes checkpoint terms.
     #[serde(default)]
     pub rights_status: String,
     #[serde(default)]
@@ -127,6 +132,11 @@ pub struct MediaItem {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct JobRecord {
+    /// The primary model of the recorded request, and its catalog name.
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub model_label: String,
     pub id: String,
     pub media_id: String,
     pub media_name: String,
@@ -142,6 +152,10 @@ pub struct JobRecord {
     pub work_units: f64,
     #[serde(default)]
     pub elapsed_seconds: f64,
+    /// What one work unit typically took in earlier runs of this workload; 0 until two
+    /// comparable runs were measured.
+    #[serde(default)]
+    pub seconds_per_unit: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -175,6 +189,12 @@ pub struct CapabilityInfo {
     /// (system codecs, a found FFmpeg); the worker reports it, the UI reads it.
     #[serde(default)]
     pub media: serde_json::Value,
+    /// A GPU this edition cannot use and the download that would (or the missing driver).
+    #[serde(default)]
+    pub gpu_suggestion: serde_json::Value,
+    /// An Intel NPU the machine has but cannot use yet (its compiler is missing).
+    #[serde(default)]
+    pub npu_hint: serde_json::Value,
 }
 
 impl CapabilityInfo {
@@ -237,7 +257,7 @@ pub struct Recipe {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
-    #[serde(default = "default_low_memory")]
+    #[serde(default = "default_true")]
     pub video_low_memory: bool,
     #[serde(default)]
     pub video_crf: Option<u32>,
@@ -255,14 +275,27 @@ pub struct Recipe {
     pub content: String,
     #[serde(default)]
     pub fixes: Vec<String>,
+    // Empty in recipes saved before frame interpolation existed.
+    #[serde(default)]
+    pub video_interpolation: String,
+    #[serde(default)]
+    pub video_interpolation_order: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecipeStage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
     pub kind: String,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FixStageSelection {
+    pub fix: String,
+    pub model_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -273,7 +306,7 @@ pub struct UiSettings {
     pub task: String,
     pub selected_model_id: String,
     pub selected_video_model_id: String,
-    pub preprocess_model_id: String,
+    pub fix_stages: Vec<FixStageSelection>,
     pub custom_model_path: String,
     pub output_scale: u32,
     pub output_directory: String,
@@ -301,15 +334,23 @@ pub struct UiSettings {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
-    #[serde(default = "default_low_memory")]
+    #[serde(default = "default_true")]
     pub video_low_memory: bool,
     pub video_crf: u32,
+    // Optional frame interpolation: off, x2, x4, fps60 or fps120, before or after the upscale.
+    #[serde(default = "default_interpolation")]
+    pub video_interpolation: String,
+    #[serde(default = "default_interpolation_order")]
+    pub video_interpolation_order: String,
     // Apple silicon: run supported models through Core ML on the Neural Engine.
-    #[serde(default = "default_neural_engine")]
+    #[serde(default = "default_true")]
     pub neural_engine: bool,
     // Direct builds send version, platform and channel after an update check.
-    #[serde(default = "default_anonymous_update_count")]
+    #[serde(default = "default_true")]
     pub anonymous_update_count: bool,
+    // Direct builds look for an update once at launch, silently.
+    #[serde(default = "default_true")]
+    pub check_updates_at_launch: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
@@ -333,7 +374,7 @@ pub struct UiSettings {
     pub edit_seed: u32,
 }
 
-fn default_anonymous_update_count() -> bool {
+fn default_true() -> bool {
     true
 }
 
@@ -349,16 +390,16 @@ fn default_edit_seed() -> u32 {
     42
 }
 
-fn default_low_memory() -> bool {
-    true
-}
-
-fn default_neural_engine() -> bool {
-    true
-}
-
 fn default_hdr_mode() -> String {
     "tone_map".into()
+}
+
+pub(crate) fn default_interpolation() -> String {
+    "off".into()
+}
+
+pub(crate) fn default_interpolation_order() -> String {
+    "after_upscale".into()
 }
 
 pub(crate) fn default_video_codec() -> String {
@@ -374,7 +415,7 @@ impl Default for UiSettings {
             task: String::new(),
             selected_model_id: String::new(),
             selected_video_model_id: "frame_by_frame".into(),
-            preprocess_model_id: String::new(),
+            fix_stages: Vec::new(),
             custom_model_path: String::new(),
             output_scale: 4,
             output_directory: String::new(),
@@ -396,8 +437,11 @@ impl Default for UiSettings {
             video_target_resolution: 0,
             video_low_memory: true,
             video_crf: 18,
+            video_interpolation: default_interpolation(),
+            video_interpolation_order: default_interpolation_order(),
             neural_engine: true,
             anonymous_update_count: true,
+            check_updates_at_launch: true,
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,
@@ -417,9 +461,15 @@ impl Default for UiSettings {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeStatus {
     #[serde(default)]
+    pub compare: crate::compare::CompareState,
+    #[serde(default)]
+    pub comparison_pair: ComparisonPair,
+    #[serde(default)]
     pub video_memory: Option<serde_json::Value>,
     pub worker: String,
     pub active_job_id: String,
+    #[serde(default)]
+    pub active_batch_job_ids: Vec<String>,
     pub status_title: String,
     pub status_detail: String,
     pub progress: f64,
@@ -445,6 +495,18 @@ pub struct RuntimeStatus {
     pub live_system_ram_available: u64,
     pub live_memory_pressure_percent: f64,
     pub thermal_status: String,
+    /// What the engine said about the hardware route during the running job (a check, a
+    /// GPU slower than the CPU, a model the NPU does not run). Progress replaces
+    /// `status_detail`; this stays until the job ends.
+    #[serde(default)]
+    pub hardware_note: String,
+    /// The engine stopped too often and the host gave up restarting it; `retry_engine`
+    /// may start it again. A protocol mismatch or any other failure never sets this.
+    #[serde(default)]
+    pub engine_retry: bool,
+    /// How long a cancelled job may take to stop before the engine is restarted.
+    #[serde(default)]
+    pub cancel_grace_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -559,11 +621,29 @@ impl BenchmarkResult {
     }
 }
 
+impl RuntimeStatus {
+    /// Makes `id` the running job or benchmark; the route note belonged to the one before.
+    pub fn begin_active_job(&mut self, id: String) {
+        self.active_job_id = id;
+        self.hardware_note.clear();
+    }
+
+    /// Ends or abandons the running job, whatever ended it (its own message, a failed
+    /// send, a killed or crashed engine), and returns its id. Its route note goes with it.
+    pub fn take_active_job(&mut self) -> String {
+        self.hardware_note.clear();
+        std::mem::take(&mut self.active_job_id)
+    }
+}
+
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
+            compare: crate::compare::CompareState::default(),
+            comparison_pair: ComparisonPair::default(),
             worker: "starting".into(),
             active_job_id: String::new(),
+            active_batch_job_ids: Vec::new(),
             status_title: "Starting".into(),
             status_detail: "Opening the isolated inference engine.".into(),
             progress: 0.0,
@@ -586,8 +666,39 @@ impl Default for RuntimeStatus {
             live_system_ram_available: 0,
             live_memory_pressure_percent: 0.0,
             thermal_status: "Not exposed by this backend".into(),
+            hardware_note: String::new(),
+            engine_retry: false,
+            cancel_grace_seconds: 0,
         }
     }
+}
+
+/// The two saved results the preview compares. The host numbers each request;
+/// a worker answer updates a slot only when its slot, generation and target
+/// match, so a late answer for an earlier pair or media is dropped.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ComparisonPair {
+    pub media_id: String,
+    pub generation: u64,
+    pub showing: ComparisonSlot,
+    pub against: ComparisonSlot,
+}
+
+/// One side of the pair. The Original is drawn from the probe thumbnail the
+/// media already carries, so its slot holds only the target and dimensions.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ComparisonSlot {
+    /// "original" or a job id.
+    pub target_id: String,
+    #[serde(skip)]
+    pub output_path: String,
+    pub preview_data_url: String,
+    pub error: String,
+    /// The saved file's dimensions, and the bounded preview's.
+    pub width: u32,
+    pub height: u32,
+    pub preview_width: u32,
+    pub preview_height: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -622,12 +733,20 @@ pub struct VideoComparisonSources {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartBatchInput {
+    /// Host-only: "Try others…" names each output after its model. The UI
+    /// cannot set it, so Start, Finder and the CLI keep their names.
+    #[serde(skip)]
+    pub name_by_model: bool,
+    /// The quality, content and recipe the plan card showed, kept with the job
+    /// (`jobs.ui_json`) and never sent to the worker.
+    #[serde(default)]
+    pub ui: Option<crate::results::ResultUi>,
     pub media_ids: Vec<String>,
     pub batch_mode: bool,
     pub task: String,
     pub model_id: String,
     pub video_model_id: String,
-    pub preprocess_model_id: String,
+    pub fix_stages: Vec<FixStageSelection>,
     pub custom_model_path: String,
     pub output_directory: String,
     pub output_format: String,
@@ -650,15 +769,19 @@ pub struct StartBatchInput {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
-    #[serde(default = "default_low_memory")]
+    #[serde(default = "default_true")]
     pub video_low_memory: bool,
     pub video_crf: u32,
-    #[serde(default = "default_neural_engine")]
+    #[serde(default = "default_true")]
     pub neural_engine: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
     pub allow_unsafe_pickle_model: bool,
+    #[serde(default = "default_interpolation")]
+    pub video_interpolation: String,
+    #[serde(default = "default_interpolation_order")]
+    pub video_interpolation_order: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -669,9 +792,28 @@ pub struct WorkerEnvelope {
     pub data: serde_json::Value,
 }
 
+fn preset_eligible_default() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_models_without_the_preset_flag_stay_preset_eligible() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        for entry in catalog["models"].as_array().unwrap() {
+            let model: CatalogModel = serde_json::from_value(entry.clone()).unwrap();
+            let excluded = model.model_id.contains("dat2");
+            assert_eq!(model.preset_eligible, !excluded, "{}", model.model_id);
+            let mut older = entry.clone();
+            older.as_object_mut().unwrap().remove("preset_eligible");
+            let older: CatalogModel = serde_json::from_value(older).unwrap();
+            assert!(older.preset_eligible, "{}", model.model_id);
+        }
+    }
 
     #[test]
     fn v1_benchmark_results_keep_deserializing_after_v2_fields_were_added() {

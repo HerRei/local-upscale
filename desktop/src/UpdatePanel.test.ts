@@ -85,19 +85,69 @@ it('uses Store updates and waits for the active queue to finish', async () => {
   expect(api.installUpdate).not.toHaveBeenCalled();
 });
 
-it('lets direct builds turn off the anonymous update-check count, but not while processing', async () => {
+it('lets direct builds turn off the launch check and the count, even while processing', async () => {
   const user = userEvent.setup();
-  const changes: boolean[] = [];
+  const counts: boolean[] = [];
+  const launches: boolean[] = [];
   const view = render(UpdatePanel, {
-    props: { processing: true, anonymousUpdateCount: true },
-    events: { anonymouscount: (event: CustomEvent<boolean>) => changes.push(event.detail) },
+    // Neither switch touches a running job, so neither waits for one.
+    props: { processing: true, anonymousUpdateCount: true, checkAtLaunch: true },
+    events: {
+      anonymouscount: (event: CustomEvent<boolean>) => counts.push(event.detail),
+      checkatlaunch: (event: CustomEvent<boolean>) => launches.push(event.detail),
+    },
   });
-  const box = await screen.findByLabelText(
+  const count = await screen.findByLabelText(
     'Send an anonymous update-check count (version, platform, channel)',
   );
-  expect((box as HTMLInputElement).checked).toBe(true);
-  expect(box.matches(':disabled')).toBe(true);
-  await view.rerender({ processing: false, anonymousUpdateCount: true });
-  await user.click(box);
-  expect(changes).toEqual([false]);
+  const launch = screen.getByLabelText('Check for updates when LocalSR starts');
+  expect((count as HTMLInputElement).checked).toBe(true);
+  expect((launch as HTMLInputElement).checked).toBe(true);
+  await user.click(count);
+  await user.click(launch);
+  expect(counts).toEqual([false]);
+  expect(launches).toEqual([false]);
+  // The boxes show what is saved until the host has saved the change (or refused it).
+  expect((count as HTMLInputElement).checked).toBe(true);
+  expect((launch as HTMLInputElement).checked).toBe(true);
+  await view.rerender({ processing: true, anonymousUpdateCount: false, checkAtLaunch: false });
+  expect((count as HTMLInputElement).checked).toBe(false);
+  expect((launch as HTMLInputElement).checked).toBe(false);
+});
+
+it('shows no update switches in a build without its own update feed', async () => {
+  api.updateStatus.mockResolvedValue({
+    configured: false,
+    channel: 'beta',
+    target: '',
+    stage: 'idle',
+    version: '',
+    notes: '',
+    size: 0,
+    downloaded: 0,
+    message: '',
+    settings_recovery: false,
+  });
+  render(UpdatePanel, { anonymousUpdateCount: true, checkAtLaunch: true });
+  await screen.findByText('Software Update');
+  expect(screen.queryByLabelText('Check for updates when LocalSR starts')).toBeNull();
+});
+it('shows the host message when cancelling the download is refused', async () => {
+  api.updateStatus.mockResolvedValue({
+    configured: true,
+    channel: 'beta',
+    target: 'linux-x86_64-rocm-portable',
+    stage: 'downloading',
+    version: '0.0.13-beta.2',
+    notes: '',
+    size: 1024,
+    downloaded: 100,
+    message: '',
+    settings_recovery: false,
+  });
+  api.cancelUpdate.mockRejectedValueOnce('The update could not be cancelled.');
+  const user = userEvent.setup();
+  render(UpdatePanel);
+  await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('could not be cancelled');
 });

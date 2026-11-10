@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+import glob
 import heapq
 import os
 import tempfile
@@ -27,6 +28,7 @@ from .hdr import tone_map_to_sdr
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     EXTERNAL_OUTPUT_CODECS,
+    SYSTEM_OUTPUT_CODECS,
     UNDECODABLE_VIDEO_MESSAGE,
     UndecodableVideoError,
     encode_spec,
@@ -36,6 +38,7 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
+from .output_publish import OutputExistsError, owned_temporary, publish_output
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -74,8 +77,7 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
     our standalone output is rebased to that image's bounds. Keep rejecting
     perspective, scaling and arbitrary rotations instead of changing geometry.
     """
-    # Look up by name: iterating side_data yields SideData before PyAV 19 and
-    # Type keys from 19 on, while .values() fails before 19.
+    # Look up by name for compatibility across supported PyAV versions.
     side_data = frame.side_data.get("DISPLAYMATRIX")
     if side_data is None:
         return 0, False
@@ -402,10 +404,14 @@ def decode_timed_frames(
             yield pending
 
 
-def validate_hdr_encoder(video_codec: str = "av1", external_ffmpeg=None) -> None:
+def validate_hdr_encoder(
+    video_codec: str = "av1", external_ffmpeg=None, container: str | None = None
+) -> None:
     """Fail before inference if this export cannot carry 10-bit HDR."""
     try:
-        validate_output(video_codec, "mkv" if video_codec == "ffv1" else "mp4", hdr=True)
+        validate_output(
+            video_codec, container or ("mkv" if video_codec == "ffv1" else "mp4"), hdr=True
+        )
         if video_codec in EXTERNAL_OUTPUT_CODECS:
             if external_ffmpeg is None:
                 raise ValueError("HEVC HDR export requires a selected external FFmpeg.")
@@ -451,12 +457,26 @@ def _system_stream_export(
                 audio=wav,
                 cancel_event=cancel_event,
             )
-        os.replace(final, destination)
+        publish_output(final, destination, cancel_event)
         return str(destination)
     finally:
         try:
             final.unlink()
         except FileNotFoundError:
+            pass
+        _remove_system_sidecars(final)
+
+
+def _remove_system_sidecars(final: Path) -> None:
+    """Remove the copy macOS keeps beside a file the system encoder wrote.
+
+    It is named `<name>.sb-...` and, for ProRes, is a full extra copy. Only the ones
+    of this job's own file go.
+    """
+    for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
+        try:
+            sidecar.unlink()
+        except OSError:
             pass
 
 
@@ -531,6 +551,7 @@ def _external_export(
             cancel_event=cancel_event,
             hdr_format=hdr_format,
             temporary_directory=temporary_directory,
+            replace_existing=True,
             **master_options,
         )
         if stage_callback is not None:
@@ -554,7 +575,7 @@ def _external_export(
             )
         except ExternalFFmpegError as error:
             raise VideoStageError("external encode", str(error)) from error
-        os.replace(final, destination)
+        publish_output(final, destination, cancel_event)
         return str(destination)
     finally:
         for temporary in (master, final):
@@ -562,9 +583,59 @@ def _external_export(
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+        _remove_system_sidecars(final)
 
 
 def encode_video(
+    frames,
+    destination_path: str,
+    *,
+    video_codec: str = "av1",
+    automatic_codec: bool = False,
+    note_callback: Callable[[str], None] | None = None,
+    **options,
+) -> str:
+    """Export video, retaining Automatic's HEVC → AV1 recovery intent."""
+    from .media_bridge import automatic_video_codec
+    from .video_codec_recovery import automatic_export, system_export_failure
+
+    if video_codec == "auto":
+        automatic_codec = True
+        video_codec = automatic_video_codec(
+            options.get("external_ffmpeg"),
+            options.get("container_format", "mp4"),
+            "preserve" if options.get("hdr_format") else "reject",
+        )
+    if (
+        automatic_codec
+        and video_codec == "hevc"
+        and options.get("container_format", "mp4") == "mp4"
+    ):
+        return automatic_export(
+            frames,
+            destination_path,
+            export=lambda replay, codec: _encode_video(
+                replay, destination_path, video_codec=codec, **options
+            ),
+            cancel_event=options.get("cancel_event"),
+            temporary_directory=options.get("temporary_directory"),
+            note_callback=note_callback,
+            warning_callback=options.get("warning_callback"),
+        )
+    try:
+        return _encode_video(frames, destination_path, video_codec=video_codec, **options)
+    except Exception as error:
+        if video_codec in {"h264", "hevc"} and system_export_failure(error):
+            from .system_codecs import SystemCodecsError
+
+            message = f"{error}. Choose Automatic or AV1 under Advanced > Video format."
+            if isinstance(error, SystemCodecsError):
+                raise SystemCodecsError(message) from error
+            raise VideoStageError("encode", message) from error
+        raise
+
+
+def _encode_video(
     frames,
     destination_path: str,
     *,
@@ -587,6 +658,7 @@ def encode_video(
     fast: bool = False,
     stage_callback: Callable[[str], None] | None = None,
     stream_to_system: bool = False,
+    replace_existing: bool = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -596,15 +668,17 @@ def encode_video(
     are delegated to the user's own FFmpeg from a lossless FFV1 master; with
     ``stream_to_system`` (a whole, untrimmed clip of timed frames) the system's
     hardware encoder receives the frames directly. The final destination appears
-    only through one atomic replace.
+    only through one atomic publication that fails if the name is already taken;
+    ``replace_existing`` is for an app-owned temporary destination that is
+    expected to exist.
     """
     container_format = normalize_container(container_format)
     if hdr_format:
         if hdr_format not in {"HLG", "PQ"} or sdr_bt709:
             raise ValueError("HDR output must be HLG or PQ, without SDR conversion.")
-        validate_hdr_encoder(video_codec, external_ffmpeg)
+        validate_hdr_encoder(video_codec, external_ffmpeg, container_format)
     validate_output(video_codec, container_format, hdr=bool(hdr_format))
-    if video_codec in EXTERNAL_OUTPUT_CODECS:
+    if video_codec in EXTERNAL_OUTPUT_CODECS + SYSTEM_OUTPUT_CODECS:
         return _external_export(
             frames,
             Path(destination_path),
@@ -729,12 +803,16 @@ def encode_video(
             for packet in stream.encode(frame):
                 mux(packet)
             frame_count += 1
-        if frame_count == 0:
-            raise ValueError("the inference pipeline produced no frames")
         for packet in stream.encode():
             mux(packet)
         output_container.close()
         output_container = None
+
+        def publish(temporary: Path) -> None:
+            if replace_existing:
+                os.replace(temporary, destination)
+            else:
+                publish_output(temporary, destination, cancel_event)
 
         source = Path(audio_source) if audio_source else None
         if source is not None and source.is_file():
@@ -747,16 +825,11 @@ def encode_video(
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
             )
-            if copied:
-                os.replace(mux_temporary, destination)
-            else:
-                os.replace(encoded_temporary, destination)
+            publish(mux_temporary if copied else encoded_temporary)
         else:
-            os.replace(encoded_temporary, destination)
+            publish(encoded_temporary)
         return destination_path
-    except InterruptedError:
-        raise
-    except VideoStageError:
+    except (InterruptedError, VideoStageError, OutputExistsError):
         raise
     except BaseException as error:
         raise VideoStageError("encode", str(error)) from error
@@ -775,13 +848,7 @@ def encode_video(
 
 def _owned_output_temporary(destination: Path, phase: str, directory: str | None = None) -> Path:
     """Reserve one unique LocalSR-owned sibling for an atomic final replace."""
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{destination.name}.localsr-{phase}-",
-        suffix=".tmp",
-        dir=directory or destination.parent,
-    )
-    os.close(descriptor)
-    return Path(name)
+    return owned_temporary(directory or destination.parent, phase)
 
 
 def _packet_time(packet: av.Packet) -> float:
@@ -963,8 +1030,6 @@ def _remux_source_streams(
         raise
     except (av.FFmpegError, ValueError, OSError) as error:
         raise VideoStageError("audio/subtitle remux", str(error)) from error
-    except BaseException:
-        raise
     finally:
         for container in (output_container, source_container, video_container):
             if container is not None:

@@ -17,7 +17,7 @@ PROFILE=LocalSR-Z2TU844D84-notary
 OUT="$PWD/build/release-$VERSION"
 mkdir -p "$OUT"
 APP_NAME="LocalSR.app"
-# Public downloads come from GitHub Releases. The Mac mini keeps a copy.
+# Public downloads come from GitHub Releases.
 HOST_BASE="https://github.com/HerRei/local-upscale/releases/download/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 
@@ -38,7 +38,7 @@ COMMIT=$(git rev-parse HEAD)
 export LOCALSR_UPDATE_PUBLIC_KEY="$(tr -d '\n' < packaging/updates/production.pub)"
 export LOCALSR_UPDATE_BACKEND=mps
 export LOCALSR_UPDATE_KIND=native
-export LOCALSR_ENGINE_ID="macos-arm64-mps-${COMMIT:0:12}"
+export LOCALSR_ENGINE_ID="$(python scripts/release_targets.py --update-env macos-arm64-mps --commit "$COMMIT" | sed -n 's/^LOCALSR_ENGINE_ID=//p')"
 echo "commit $COMMIT engine $LOCALSR_ENGINE_ID"
 
 step "verify licensing-clean media runtime"
@@ -194,5 +194,7 @@ json.dump({"version": version, "commit": commit, "engine_id": engine_id,
           open(f"{out}/release.json", "w"), indent=2)
 print("feed entry written")
 PY
+# The app trusts the entry's version, channel and identity only as this signed statement says.
+python scripts/beta_update_signing.py statement "$OUT/beta.json"
 step "done"
 cat "$OUT/SHA256SUMS"

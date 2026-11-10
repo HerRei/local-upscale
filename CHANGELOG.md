@@ -1,5 +1,478 @@
 # Changelog
 
+## [0.4.0-beta] - Unreleased
+
+0.4.0-beta is the first public release since 0.3.0-beta. It includes the changes
+listed under 0.3.1 to 0.3.8 below, which were never published on their own.
+
+### Added
+
+- Compare videos in the same slider or linked boxes as photos, with one synchronised
+  transport, a shared timeline and audio from the first slot.
+
+- Finished videos appear in Outputs with their catalog model name, duration, frame rate
+  and size; they can be played, revealed, opened and used as input.
+- An Interpolate help tip explains the video setting.
+- Two start buttons in the status bar: "Only this one" runs the selected picture and a
+  second button ("Upscale all N") runs all of them. A button that would start 0 items
+  is hidden.
+- "Use as input" adds the result on screen to Inputs and selects it.
+- Click a result in Outputs to see it in the centre, alone or against its original.
+  Picking for Compare moves to a box at the end of the row; Compare opens only from
+  "Compare these N", shows its tabs only while it is open and closes below two picks.
+- Clear in the Outputs list asks first and hides finished jobs without touching any file.
+  Unpick all keeps its old action. Every Outputs group starts open, and the empty tab
+  says how to fill it.
+- An Edit result's list row shows its file size next to its time and its instruction as
+  a tooltip.
+- Help tips ("?") on the Advanced controls that had none.
+- The model library shows which hardware each model will run on, in its details and on
+  every row.
+- Before a job starts, LocalSR checks that its files fit on the output's volume and
+  keeps 8 GB free on the system volume (1 GB on other volumes). A job that does not
+  fit is refused, a write that runs out of space is reported in words, and the queue
+  stops once instead of failing every job.
+- Try again is offered when the inference engine has stopped too often to restart itself.
+- Every dialog takes keyboard focus when it opens, keeps Tab inside, closes with Escape
+  and returns focus to the control that opened it.
+
+### Changed
+
+- Other inputs and results can be viewed while a video job runs.
+- The External FFmpeg row is restyled, and Faces and HDR choices are kept when switching
+  the video engine to SeedVR2 and back.
+- The remaining-time estimate is rewritten. An image job's time comes from its steady
+  pixel rate and a video's from its steady frame rate, both without model loading or
+  the first tile or frame, and none is shown until a rate is measured. The shown time
+  counts down by itself, follows a new speed only when it has lasted, and rounds to
+  steps that do not flicker. A photo batch has one speed over all lanes, and queued jobs
+  are predicted from the typical speed of recent comparable runs.
+- The Illustration choice now picks illustration models: Real-ESRGAN Anime 6B for Quick
+  and RealPLKSR HFA2k for Best. This replaces the 0.3.7 choice of the photo models, and
+  the note about the missing illustration model is gone from the Enhance pane.
+- The Single and Batch switch is gone; see the start buttons above.
+- The Media pane has Inputs and Outputs tabs with their counts in its header row. The
+  centre pane's tabs, file name and view options share one header row, Preview and
+  Compare form a segmented switch, and the narrow window's middle page is called Viewer.
+- The running picture has its own progress line, a lighter row and a "Running" percentage.
+  "Saving…" replaces a full percentage while the result is written, and "Stopping…"
+  shows from Cancel until the engine is idle. A single job says Cancel; Cancel queue
+  appears only when more than one job is running or waiting.
+- While a job runs, the Enhance pane is dimmed with one quiet "Settings locked" line,
+  pictures that are not running can be removed, and Refresh keeps working.
+- In the library each model sits on one line with Change and arrow buttons and its notes
+  on a second line; model names get the full line width.
+- FFmpeg and the editing runtime are chosen only through the app's own file dialogs, and
+  only programs the app found itself or the user picked there are run.
+- On a Mac, editing no longer stops for 2 GiB of swap; it stops only when the edit is
+  large for the Mac or the system disk is nearly full.
+- Text and layout: library labels that were too faint have more contrast, help tips and
+  model links have 24 px targets, long text stays inside its space, the update notice
+  sits at the bottom right of the preview, and a cut file name keeps its end in view with
+  the full name on hover.
+
+### Fixed
+
+- H.264 and HEVC export no longer fails with "Cannot Encode Media" for low-sample-rate
+  audio: the AAC bit rate is one the system encoder accepts.
+- With Video format Automatic, an early system HEVC encoder refusal can continue as AV1
+  with a note, using at most 256 MiB of temporary space.
+- Preparation notices disappear when preparation ends, and the status line shows each
+  fact once.
+- Clear in Outputs hides only finished jobs; an unrecorded result path is refused before
+  any disk access.
+- The free-space estimate handles very large videos, temporal models’ target resolution
+  and the reserve override.
+- On Windows, an update-journal location beneath a file is reported as an error.
+- A result is never written over an existing file. The finished file is renamed into its
+  final name without replacing anything, a file that appeared at that name during the job
+  makes the job fail for that item, and names that differ only by letter case or Unicode
+  normalisation count as one. A long source name is shortened so the result name fits
+  the file system, and a path Windows cannot open is refused before the job runs.
+- Core ML preparation can no longer hang a job. Preparation has one cancellable 120 s
+  budget per job; a program that does not finish compiling is remembered and tried again
+  after a week or after an app or macOS update, and the job continues on the standard
+  path with a note. Model checks, downloads and the GPU preflight are bounded too.
+- Intel NPU models are compiled in a separate process, so a compiler that never returns
+  cannot freeze the engine.
+- Engine processes and their helpers (FFmpeg, the system codec helper, the playback
+  converter) are stopped as a whole group when the engine ends or a job fails.
+- A damaged queue database is moved aside, the app starts, and the user is told once.
+  Settings and recipes are put back when writing them fails.
+- A job whose output folder cannot be used fails by itself instead of stopping the queue
+  behind it. A relative output folder is refused, and a watch output folder that is the
+  watched folder or holds it is refused.
+- The engine ignores messages about jobs that have ended or were never dispatched, and a
+  job that reports a result the app did not ask for fails and restarts the engine.
+- A model download stops when the server goes silent or exceeds its pinned size, and a
+  resumed download checks the disk space it still needs.
+- Source images: those up to the decompression limit open without a warning and larger
+  ones are refused in one sentence before decoding; a PNG that ends early is refused
+  instead of filled with black; pipes, devices and sockets are refused; floating-point
+  grey TIFFs are accepted and the range used is noted, and floating-point colour TIFFs
+  are refused with an explanation. A source tag too long for a JPEG's EXIF block is left
+  out and the job says so.
+- A tile's output is rounded to the nearest level instead of truncated, and video frames
+  without a face run on the general model.
+- Compare crops are cut from results above Pillow's pixel limit, such as a 4x upscale of
+  a phone photo, and an engine too old for Compare says so instead of leaving every box on
+  Loading.
+- The command line writes H.264 and HEVC with an FFmpeg found on the computer, as its help
+  says. A device the computer does not report is refused, and a saved device that is no
+  longer listed runs on the CPU.
+- After an interrupted job, only the scratch folder recorded for it is removed, and the
+  scratch folders a stopped app left beside outputs are cleaned up.
+- Internal: the front end's state module is split, unused scripts and styles are removed,
+  and the host's tests moved into their own files.
+
+## [0.3.8-beta] - Unreleased
+
+### Added
+
+- The model plan shows how many compatible models remain in the library and opens
+  the library filtered to the current task. Model details identify each author
+  beside its source link and link the catalog license name.
+- Add fixed-seed property tests for video timing, image colour handling, tiling,
+  Compare geometry and signed update validation.
+- End-to-end tests of the desktop interface with Playwright in Chromium and WebKit:
+  the Inputs, Outputs and Compare tabs, the plan card, Advanced settings, keyboard
+  navigation at 1024×700 and 1440×900, and screenshot baselines of nine key screens. A
+  new CI job runs the behaviour tests on Linux.
+- On the Mac, HEIC image output and MOV video output
+  ([#94](https://github.com/HerRei/local-upscale/issues/94)). HEIC joins PNG,
+  JPEG, TIFF and WebP under Advanced > Format with the same quality slider as JPEG;
+  it keeps the sRGB profile, the safe metadata and transparency. MOV joins MP4 and
+  MKV as a container and holds HEVC or Apple ProRes 422, and the video format menu
+  lists only the codecs the chosen container holds. macOS writes both with its own
+  encoders, so Windows and Linux do not offer them.
+
+### Changed
+
+- Dependency updates.
+- The signed release statement of an update now also covers the package size and the
+  name, size and digest of every package part and engine part (format 2,
+  `statement_v2`). The app checks them before it downloads anything, so a tampered feed
+  can no longer make it fetch oversized or extra files. Older apps keep reading the
+  unchanged format 1 statement from the same feed.
+- Hardened cross-platform CI and test isolation.
+
+### Fixed
+
+- The engine uses UTF-8 for text files on Windows regardless of the system code page.
+
+- Apple ProRes is offered only on Macs that can encode it. Virtual machines and some
+  other Macs cannot, and the export used to fail there.
+- The Core ML route no longer stores a rejection for a model and size after a
+  resource failure (out of memory on the GPU, a full disk, a killed or timed-out
+  compile); the next run tries the faster program again, and rejections already
+  stored for such a reason are ignored. Real accuracy failures stay stored.
+- The in-app updater cleans up after a crash at any step: a killed AppImage swap no
+  longer leaves a staged or backup file (or a stale journal temporary), a killed
+  engine package install restores the previous engine and removes its half-unpacked
+  folder, and the Windows install marker leaves no temporary file.
+- Updater crash safety, second round: a crash while the swap journal was rewritten no
+  longer leaves a temporary file; removed backups and staged files are made durable
+  before the journal that names them goes; a backup that is a link is never renamed
+  over the application; clean-up removes only the files an installation itself
+  creates. A new engine's files are synced before the old engine is deleted, a
+  half-removed old engine is never restored, and an engine moved aside by a killed
+  installation is put back at the next start.
+- Video export no longer leaves the system encoder's hidden `.sb-` copy beside the
+  output; frame interpolation by x2 or x4 keeps every source frame's slot, so the
+  last frame is held and the output is exactly as long as the source; HDR with ProRes
+  names the real rule (ProRes is SDR) instead of a container error; a whole-frame
+  Core ML program for a large video is only compiled with enough free disk space,
+  otherwise the frame runs in tiles.
+
+## [0.3.7-beta] - Unreleased
+
+### Added
+
+- Optional frame interpolation for frame-by-frame video jobs
+  ([#98](https://github.com/HerRei/local-upscale/issues/98)). Under Advanced > Video,
+  choose 2×, 4×, 60 fps or 120 fps; Original remains the default. RIFE 4.26
+  downloads on first use (about 25 MB). Interpolation after upscaling avoids
+  upscaling the extra frames; before upscaling works at the smaller source size
+  but upscales more frames. The clip keeps its duration and compatible audio.
+  Scene cuts (SSIM below 0.2) hold the previous frame instead of blending, and
+  repeated runs of up to two frames are bridged so animation on twos moves
+  evenly. This Labs feature does not yet support SeedVR2 or HDR preservation;
+  DirectML and OpenVINO devices interpolate on the CPU; NVIDIA CUDA uses FP16.
+- Compare saved image results in a separate Compare tab: the left pane gets
+  Inputs and Outputs tabs; pick up to four originals or outputs from the Outputs list, use a slider for two versions of
+  the same image or linked boxes for several images, and zoom into full-resolution
+  details.
+- **Try others…** under **Change…** in the library: queues 2 to 4 installed
+  models that keep the shown scale, fix, and Faces settings for the same image,
+  giving each output the model name slug and showing estimated run times when
+  models have been measured.
+- **Cancel runs for this image** in the queue footer next to Cancel Queue,
+  cancelling queued runs for the active image and signalling its current run
+  without cancelling the rest of the queue.
+- Run up to three fixes in one pass
+  ([#90](https://github.com/HerRei/local-upscale/issues/90)): Noise, JPEG and
+  Blur chips under **Fix first** toggle independently and run in order before the
+  upscaler or Restore model. Each fix row in the Model plan has its own
+  **Change…** to choose its model and **Move earlier** / **Move later** to adjust
+  order.
+- Photo batch processing on Apple Silicon Macs: queued photos sharing the same
+  recipe (SPAN, Real-ESRGAN or FBCNN on the Neural Engine route without fixes or
+  Faces, up to 64 photos) run through shared batch lanes with two Neural Engine
+  runners and, on AC power, two Core ML GPU runners with parallel saving,
+  about 1.9–2.8× faster than one photo at a time on an M1 Pro.
+- In-app updates on Windows and Linux: the update switches (check automatically,
+  turn updates off) now work there too, as on macOS.
+  Updates download engine packages only when the engine changes; Linux AppImages
+  swap atomically with journalled rollback and split parts for downloads over
+  2 GB, and Windows keeps the installed engine when it is
+  unchanged. Upgrading from 0.3.3–0.3.6 requires a one-time manual install.
+
+### Changed
+
+- Dependency updates.
+- Illustration presets: Quick uses SPAN NomosUni and Best uses RealPLKSR
+  NomosWebPhoto; HFA2k is moved to Labs only because it softens fine tones,
+  darkens paper, and washes out color on manga and comic scans
+  ([#97](https://github.com/HerRei/local-upscale/issues/97)).
+- Status dot and memory meter: the idle status dot is now a calm grey instead of
+  pulsing green, turning terracotta without a pulse while a job runs; the memory
+  meter under Advanced is grey.
+- The first-launch welcome notice is shorter, stating that files stay on this
+  computer and models download once without touring the window.
+- The Hardware menu groups GPU routes: a graphics card available through
+  multiple backends (such as DirectML and OpenVINO) appears once with its routes
+  listed beneath it, removing trademark marks and iGPU/dGPU tags, and uses full
+  row width for long names. Routes are grouped only when the card pairing is
+  certain.
+- Hardware route notes from the engine (such as running on the CPU or slower GPU
+  fallbacks) persist on their own line in the status bar for the entire job, and
+  the bar expands to hold them.
+- When running CPU-only on a computer with an available GPU or NPU, the idle
+  status line displays hints with links or system package names (`intel-opencl-icd`,
+  NPU compiler) instead of showing them under Advanced.
+
+### Fixed
+
+- Grey manga and photo scans upscaled with a color tint: grey sources
+  (grayscale, 1-bit, 16-bit grey, or neutral RGB) now retain only their luma
+  across all three channels, eliminating warm and chroma casts introduced by
+  upscaling models ([#97](https://github.com/HerRei/local-upscale/issues/97)).
+- 16-bit grey PNG and TIFF scans (modes I;16 and I) were clipped to 8-bit values
+  at 255, turning all light greys white; they are now properly scaled across the
+  full 8-bit range.
+- Embedded grey color profiles (Dot Gain, Gray Gamma) and CMYK profiles were
+  ignored and left untagged because profile conversion failed; they now convert
+  to sRGB and retain the sRGB profile.
+- Core ML FP16 stability: RealPLKSR gate tiles with low detail (< 4/255 standard
+  deviation, such as blank margins) are marked inconclusive and run on PyTorch
+  rather than accepting an untested FP16 program that fails on manga and comic
+  detail.
+- An unstable optional fix before an upscaler no longer halts the job: the fix is
+  skipped with a note naming the problem and model, and processing continues
+  with the previous image.
+- The failure notice panel now stays visible next to Hardware in Advanced after
+  an engine restart, and includes a "Use the CPU" button when caused by GPU or
+  NPU driver errors.
+- Clicking "Use the CPU" moves keyboard focus to the Hardware menu instead of
+  dropping focus to the page body.
+- Reordering fixes in the Model plan no longer resets custom model selections,
+  scale, or halo overlap.
+- Settings migration: switching back from Edit preserves the Restore task and
+  models previously configured.
+- In batch processing, batch failures and on-screen progress stay pinned to the
+  photo being displayed; off-screen photos update their own queue rows without
+  interfering with the active view.
+
+## [0.3.6-beta] - Unreleased
+
+### Added
+
+- Intel NPUs ("Intel AI Boost" in Core Ultra processors) as a device under Advanced >
+  Hardware, on Linux and Windows. The NPU runs SPAN (Quick), the Real-ESRGAN models, FBCNN
+  (the JPEG fix) and NAFNet (the noise and blur fixes), 2-9 times as fast as the CPU and
+  about twice as fast as the same processor's graphics on a Core Ultra 200; with the NPU
+  selected, other models run on the CPU, and the app says so. The first time a model runs on the NPU at a tile size, LocalSR compiles it, which can
+  take a minute, and keeps the result (up to 2 GB). The NPU computes in FP16, so LocalSR
+  checks once that its result stays close to the CPU's.
+  - Linux needs Intel's NPU driver with its compiler (the `intel-driver-compiler-npu`
+    package from Intel's NPU driver releases; Fedora's driver package has no compiler).
+    Where the compiler is missing, Advanced says so instead of offering the NPU.
+  - Windows: Intel's NPU driver brings the compiler. Not yet tested on a Windows computer
+    with an NPU.
+  - AMD NPUs (Ryzen AI) are not supported yet.
+- The model library names the accelerator a model can use on this computer: the Neural
+  Engine on a Mac, or an Intel NPU.
+
+### Changed
+
+- The Linux CPU download uses ONNX Runtime 1.31.1, the first line that finds NPUs on Linux.
+
+### Fixed
+
+- A graphics or NPU driver that crashed LocalSR while it listed OpenVINO devices crashed it
+  again on every start. The next start now goes on without OpenVINO devices.
+
+## [0.3.5-beta] - Unreleased
+
+### Added
+
+- You can choose the model for **Fix first**
+  ([#90](https://github.com/HerRei/local-upscale/issues/90)). Every step in the Model plan
+  has its own **Change…**: on the fix step it opens the library with only the models for
+  that problem, and **Use for Noise · Best** (or Quick) keeps that choice for the problem
+  and preset, in Upscale and in Restore. **Back to the default** in the library forgets
+  it. Steps now say **Fix noise**, **Fix JPEG** or **Fix blur**, and a chosen model is
+  marked **Your pick**. The blur fix says before the job that it can add artifacts to
+  sharp pictures and line art. Several fixes in one pass are not in this release.
+
+### Fixed
+
+- On a Mac, Command-W and the window's close button quit LocalSR, even with a queue of
+  images. They now only close the window, as in other Mac apps: the queue keeps running,
+  and the Dock icon, **Window > LocalSR** or opening a file brings it back. Quit ends the
+  app.
+- Turning **Safe memory mode** off did not give image jobs more GPU memory; only video
+  jobs used the setting for the memory limit. Now both do.
+- A fix before upscaling ran with the overlap between tiles that the upscaler needs, which
+  can be smaller than the fix model's own (NAFNet needs 32 pixels). It now uses at least
+  its own.
+- Memory: LocalSR kept every upscaler used since it started in memory, and a fix model
+  loaded on top of them. Now only the models of the current job stay, and a fix runs
+  alone.
+- Choosing an upscaler in the library turned **Faces** off while the chip stayed on. It
+  now stays on when the new model has a face companion.
+- In Restore, choosing another problem kept a model picked by hand even when it does not
+  fix that problem.
+- A recipe saved before the Fix first chips existed now lights up the chip for its fix.
+- A fix before upscaling that its model cannot process no longer stops the whole job
+  ([#95](https://github.com/HerRei/local-upscale/issues/95)). NAFNet's deblur, which
+  **Blur** under Fix first uses, runs away on line art, screentone, QR codes and already
+  sharp pictures. LocalSR never keeps that damaged result, and it used to end the job with
+  "Could not finish". Now the image is upscaled without that fix, and the finished job
+  says that the fix was skipped.
+- Two images with the same file name from different folders, started one after the other
+  into the same output folder, got the same output name, and the second result replaced
+  the first. Output names now also avoid those of jobs still waiting or running.
+- The Finder action "Enhance with LocalSR": Cancel no longer starts processing, and the
+  Quick and Best choices now take effect (they were ignored).
+- Quitting LocalSR during a job no longer leaves a hidden `.localsr-job-...` folder with
+  partial files in the output folder.
+- A model that a waiting job still needs can no longer be removed.
+- A model download that was cut off just before its check no longer fails the next
+  attempt: a complete file is checked first, and a damaged one is downloaded again.
+- A late error inside the window no longer replaces the whole interface with the
+  "LocalSR could not open" screen.
+- In the video comparison, pausing the enhanced video from outside (for example with the
+  keyboard's media keys) or a stall while buffering now pauses the original too.
+- `localsr watch` tries a file that failed again only after the file changes, instead of
+  on every poll.
+
+## [0.3.4-beta] - Unreleased
+
+### Added
+
+- Two DAT2 models in the model library, both by Philip Hofmann under CC BY 4.0:
+  **DAT2 ×4 BHI Real** for lettering and buildings, and **DAT2 ×4 RealWebPhoto v4** for
+  noisy photos. On an M1 Pro they take about ten times as long as Best (around 73 seconds
+  per input megapixel); on a CPU the gap is smaller. No preset picks them on its own;
+  choose one in the library, or pin it to Best. For them, keep the tile size at 256 where
+  memory allows: with smaller tiles their tile borders differ more from a whole-image run. Their licences and training
+  data are listed in [docs/model-licenses.md](docs/model-licenses.md).
+
+### Fixed
+
+- A model chosen in the library now uses the overlap between tiles it needs, as the
+  presets already did. Before, it kept the previous model's overlap.
+
+## [0.3.3-beta] - Unreleased
+
+### Added
+
+- Two switches next to Check for Updates… in the LocalSR menu: **Check for Updates at
+  Launch** and **Send Anonymous Update Count**. The first
+  stops the check LocalSR makes when it starts; Check for Updates… still works when you
+  ask. The second stops the anonymous count (app version, platform and channel) sent after
+  a check. Both are on by default, as before, are also in the Software Update dialog, and
+  can change while LocalSR is working. They appear in builds that check for updates
+  themselves, which for now is the Mac download.
+
+### Fixed
+
+- A settings change that arrives late can no longer turn the anonymous count back on after
+  you turned it off: the two switches are saved on their own, one write at a time.
+
+## [0.3.2-beta] - Unreleased
+
+### Added
+
+- Integrated graphics. On Windows, the DirectML download can use built-in graphics too
+  (Intel UHD, Iris Xe and Arc, AMD Radeon). That has not run on real hardware yet, which
+  is why every GPU first has to pass the check below. Intel graphics also appear as
+  "(OpenVINO)" devices in the Windows DirectML and the Linux CPU downloads, through
+  Intel's own runtime; on an Intel Arrow Lake GPU under Linux, six models matched the
+  CPU within 1/255 per pixel value (88 to 95 dB).
+- A check before LocalSR trusts a GPU. The first time a model runs on a DirectML or
+  OpenVINO device, LocalSR compares the GPU's result with the CPU's on a detailed test
+  image and on the real picture, and uses the GPU only when they match. If they do not,
+  it tries safer settings, and when none matches it says so and asks you to use the
+  CPU. The result is remembered per model, tile size, device and driver; a new tile size
+  or a driver update brings the check back, and where LocalSR cannot identify the driver
+  it checks again whenever it loads the model.
+- When a download cannot use this computer's GPU, the hardware settings name the one
+  that can (or, on Linux, the Intel driver that is missing).
+
+### Changed
+
+- DirectML and OpenVINO always run in full precision (FP32); the precision setting shows
+  that and cannot be changed there.
+- LocalSR reads how much memory Windows grants to each graphics adapter and treats
+  built-in graphics as such, including AMD chips with a large reserved memory.
+- If the graphics driver resets the GPU during a job, that job stops with an
+  explanation, and the engine restarts with a fresh device before the next one.
+- Before a GPU's first use, LocalSR runs a tiny model on it in a separate process, so a
+  graphics driver that crashes cannot take the engine down with it. If that process
+  crashes in the driver, as Intel's OpenVINO did with a 2020 driver on a UHD 620, or the
+  engine later crashes inside a GPU call, LocalSR does not use that GPU and says so. It
+  tries again after the next LocalSR update, or after a driver update where it can tell
+  the driver apart.
+- On Linux the engine uses the computer's C++ runtime when it is newer than the one it
+  brings along, so drivers built for newer systems, such as Intel's, load inside the
+  AppImage.
+- The status line shows long messages on two lines, with the full text on hover.
+
+### Fixed
+
+- Built-in AMD graphics under ROCm on Linux were limited to their small reserved memory.
+- The Interface text menu in the advanced settings showed no value.
+- Symbols that minimal Linux systems drew as empty boxes (the plus to add media, zoom in,
+  the Advanced arrow).
+
+## [0.3.1-beta] - Unreleased
+
+### Changed
+
+- The Linux AppImages are now built on Ubuntu 22.04, so they run on Ubuntu 22.04
+  and on other distributions with glibc 2.35 or newer; v0.3.0-beta needed glibc
+  2.39 (Ubuntu 24.04). Before release, every AppImage is checked the way the
+  AppImage catalog checks it: no file in it may need a newer glibc than 2.35, and
+  it must open its window without a network connection.
+- The ROCm and CUDA AppImages are about a third smaller: they no longer carry a
+  second copy of the engine's libraries. On a Radeon RX 9060 XT, the engine
+  inside the ROCm AppImage passed the checks for images, video with audio, and
+  cancelling and recovering.
+- On a Mac, Homebrew installs LocalSR: `brew install --cask herrei/tap/localsr`.
+- The advanced settings explain Tile, Halo and Precision, and the Photo and
+  Illustration buttons say which kind of model they pick, right where you set them.
+- Dependency updates, among them Tauri 2.12.
+
+### Fixed
+
+- Building the app from source works again: after a dependency update the Rust
+  half of the file dialog plugin was one version behind its JavaScript half, and
+  Tauri refuses to build with mismatched halves.
+- The Windows installers build again: MSYS2 renamed its zlib DLL to
+  `libz-1.dll`, which the check of the media runtime's DLLs did not accept yet.
+
 ## [0.3.0-beta] - 2026-10-24
 
 The Neural Engine, and videos twice as fast.

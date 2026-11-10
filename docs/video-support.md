@@ -7,16 +7,30 @@ the verified formats are listed in [Testing](testing.md).
 
 ## Media contract
 
-- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. Export AV1 (default, MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. On macOS, H.264, HEVC and AAC go through the system codecs (`localsr-media`, AVFoundation). Other formats LocalSR does not include (WMV, DivX, FLV, H.263), and every such format on Windows and Linux, use an FFmpeg the user installed, found automatically or selected under Advanced settings; otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
+- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. The desktop defaults to Automatic (hardware HEVC for SDR MP4 on macOS, AV1 otherwise); the Python API defaults to AV1 in MP4. Export AV1 (MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. On macOS, H.264, HEVC and AAC go through the system codecs (`localsr-media`, AVFoundation). Other formats LocalSR does not include (WMV, DivX, FLV, H.263), and every such format on Windows and Linux, use an FFmpeg the user installed, found automatically or selected under Advanced settings; otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
 - Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
 - Decodable audio the output container accepts is copied unchanged (MP4: MP3, Opus, FLAC, ALAC, AC-3; MKV: any decodable track). Other decodable audio is converted to 48 kHz Opus, preserving timing and channel layout. Copied audio has packet-level trim precision; converted audio has sample-level trimming plus Opus encoder padding. Unsupported subtitles and audio that can neither be copied nor decoded produce a warning and are omitted, unless a user-installed FFmpeg converts them.
 - An explicit API/CLI FPS override changes speed by assigning evenly spaced timestamps and omits audio/subtitles. Desktop jobs send no override. They preserve source timing.
-- The HDR control chooses **Preserve HLG/PQ · 10-bit · Labs** or **Convert to SDR · 8-bit** before Start; the video format setting picks AV1, VP9, FFV1 or (with a user-installed FFmpeg) HEVC. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
+- The HDR control chooses **Preserve HLG/PQ · 10-bit · Labs** or **Convert to SDR · 8-bit** before Start. Preserved HDR exports 10-bit AV1, VP9 or FFV1, or HEVC Main 10 through a user-installed FFmpeg. The video format setting defaults to Automatic and also offers explicit AV1, VP9, FFV1, H.264 or HEVC; H.264 and HEVC use the macOS codecs or a user-installed FFmpeg. Existing preferences default to conversion. Direct worker/API jobs keep `hdr_mode="reject"` by default; opt into `"tone_map"` or `"preserve"`. The source is unchanged.
 - Selecting SeedVR2 or another incompatible catalog model switches to SDR and disables the HDR preservation option. Custom image checkpoints retain that option; the worker checks that the loaded architecture is compatible with the HAT preservation adapter.
-- Output creation is atomic. Cancellation checks extend through frame skipping and audio/subtitle remuxing; an existing destination survives failures or cancellation.
+- Output creation never replaces a file: if one appeared at the name while the job ran, the job fails for that item and the existing file is untouched. The finished result lies next to its final name and is never copied into it. A hard link or, where the file system has none (exFAT/FAT sticks, some network shares), an atomic no-replace rename gives it the name at once. Where neither exists, an empty placeholder holds the name until the result is renamed over it; if the process dies in between, that empty file stays under the final name. Cancellation checks extend through frame skipping, audio/subtitle remuxing and the moment just before the file is published; once it is published, the job counts as completed even if a cancel arrives afterwards.
 
 Packet durations are restored from the source presentation intervals after encoding, so variable frame rate and the last held frame survive AV1, VP9 and FFV1 export. H.264/HEVC exports written by a user-installed FFmpeg use its passthrough timing mode.
+
+Automatic MP4 export tries macOS HEVC first. Rendered frames and their exact
+timestamps are cached in private temporary storage up to 256 MiB of frame data.
+If the system encoder refuses while the complete prefix is cached, bundled AV1
+replays it without rerunning the model and the completed job notes identify AV1.
+Once the limit would be exceeded, the cache is removed and export continues;
+a later encoder failure asks you to run the job again with AV1. Cancellation and
+a full disk stop the job. Explicit H.264/HEVC choices still fail with guidance
+to choose Automatic or AV1. MOV has no AV1 fallback because that container accepts
+only HEVC or ProRes.
+
+## MOV, HEVC and Apple ProRes (macOS)
+
+On macOS the container menu also offers **MOV**. The video format menu then lists only the codecs the chosen container holds: MOV takes HEVC or Apple ProRes 422, while MP4 and MKV keep their usual choices (ProRes needs MOV, FFV1 needs MKV). Choosing MOV switches an incompatible format to HEVC, and choosing ProRes switches the container to MOV. Both are written by the Mac's own AVFoundation encoders through `localsr-media`; Windows and Linux do not offer them, the worker announces them in its media capabilities (`system_codecs.encode` lists `prores`) and rejects a request for them elsewhere. ProRes 422 is an editing format: files are several times larger than HEVC, the quality setting does not apply, and HDR preservation is not available for it (choose HEVC). Audio is handled as for MP4: decodable audio is converted to AAC. A user-installed FFmpeg never writes MOV or ProRes. The command line takes `--video-container mov` with `--video-codec hevc|prores`.
 
 ## Legacy recordings
 
@@ -104,6 +118,32 @@ their own bounded encoder and frame ownership, so a late source image cannot era
 completed tiles or put an earlier frame beneath a newer frame's output.
 
 ## Optional processing
+
+### Frame interpolation · Labs
+
+Frame interpolation is off by default. Under **Advanced > Video > Frame rate**,
+choose 2×, 4×, 60 fps or 120 fps for the frame-by-frame engine. The first job
+downloads and verifies RIFE 4.26 (about 25 MB); its code and weights are MIT
+licensed. **Interpolate** chooses whether RIFE runs after upscaling (the default,
+which upscales fewer frames) or before it (smaller interpolation frames, but more
+upscales). High resolutions can require substantial time and memory.
+
+The 2× and 4× choices divide each source interval, retaining variable timing and
+source frame timestamps. The fixed-rate choices sample a regular grid from the
+first frame; a target at or below roughly the source rate is skipped with a warning.
+The clip's start and end stay the same, and compatible audio is retained under the
+usual media contract. The last frame is held instead of extrapolated. Detected
+scene cuts hold the preceding image, while short runs of repeated frames can be
+bridged for animation. These are heuristics; inspect motion, cuts and fine detail
+for artifacts.
+
+Interpolation is unavailable with SeedVR2, HDR preservation or an explicit
+API/CLI FPS override. It uses CPU when the selected upscaler backend cannot run
+the PyTorch model. Real-weight worker runs on Linux CPU have exercised both
+orders with audio; Mac MPS performance and memory, system HEVC timing and the
+desktop controls still need acceptance on macOS.
+
+### De-flicker
 
 De-flicker is off by default. It blends toward the local temporal median only where neighboring RGB samples differ by at most 12 levels, at half strength. Motion and scene cuts with larger differences bypass filtering. It is deliberately conservative, not optical-flow restoration, and remains Labs. Representative low-contrast motion still needs visual acceptance.
 
@@ -215,3 +255,32 @@ This suite is a regression and visual-inspection aid, not a perceptual quality s
 Processing settings lock from Start until processing or cancellation finishes. Media selection and diagnostics remain available. SeedVR2 checks cancellation between model modules even when live previews are disabled. If a video worker does not stop within eight seconds, the host resets that worker, removes its own partial-output directory and starts a fresh worker. Existing finished exports are preserved.
 
 Reduce GPU memory is available for NVIDIA CUDA and AMD ROCm. Apple Metal and CPU use the smaller clip/tile plan automatically; Metal does not use the CUDA block-offload option. Intel backends do not expose an unimplemented offload switch. HAT’s Safe memory control remains a separate image-pipeline option.
+
+### RIFE checkpoint comparison
+
+On 2026-11-09 we compared the MIT-licensed Practical-RIFE 4.25, 4.26 and
+4.25 lite checkpoints on a CPU (PyTorch 2.13 CPU, four threads). Each
+640×360 synthetic 60 fps clip supplied six even-frame pairs; the intervening
+frames were held out. Scores are mean per-frame RGB PSNR (dB) and Gaussian
+11×11 RGB SSIM. The scene-cut guard was enabled. The 1080p times are median
+synthesis times for three frames after warm-up; they exclude decoding. Lite
+uses its upstream network dimensions and scales. No external footage was named
+in the research, and LPIPS was unavailable. The environment had CPU-only
+PyTorch, so no GPU result was collected.
+
+| Synthetic clip | 4.25 PSNR / SSIM | 4.26 PSNR / SSIM | 4.25 lite PSNR / SSIM |
+| --- | ---: | ---: | ---: |
+| testsrc2 | 26.68 / 0.9640 | 26.78 / 0.9645 | 26.31 / 0.9621 |
+| mandelbrot | 24.72 / 0.9707 | 24.60 / 0.9701 | 25.42 / 0.9739 |
+| moving text and line art | 25.50 / 0.9868 | 26.65 / 0.9887 | 23.60 / 0.9829 |
+| fast pan | 9.68 / 0.8044 | 9.68 / 0.8044 | 9.68 / 0.8044 |
+| scene cut | 22.24 / 0.8576 | 22.28 / 0.8578 | 22.24 / 0.8576 |
+| 1080p seconds/frame | 1.30 | 1.41 | 1.22 |
+
+The guard identified the intentional cut, but also treated all six fast-pan
+pairs as cuts, so those scores measure the guard's hold behavior rather than
+model quality. These short synthetic clips cannot establish general perceptual
+quality. We chose 4.26 for its stronger text and line-art result and small
+advantage on testsrc2, accepting a small mandelbrot regression and the measured
+CPU cost. The upstream author recommends 4.25 for most scenes. Checkpoint
+provenance and verified hashes are in [model licenses](model-licenses.md).

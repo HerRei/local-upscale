@@ -1,5 +1,38 @@
 {
   "catalog_revision": "867e7c0ad519aba5d36b5bb4ef4a4a91781914c4",
+  "interpolation_models": [
+    {
+      "attribution_required": false,
+      "author": "hzwer \u00b7 Practical-RIFE",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "description": "Makes in-between frames for smoother motion: 2\u00d7 or 4\u00d7 the frame rate, or 60 or 120 fps. Small and fast; runs on Apple, NVIDIA and AMD GPUs and on the CPU. Very fast motion can smear, and scene cuts are kept as cuts.",
+      "engine_id": "localsr.video.rife",
+      "engine_kind": "rife",
+      "family": "rife_4_26",
+      "files": [
+        {
+          "download_url": "https://github.com/HolyWu/vs-rife/releases/download/model/flownet_v4.26.pkl",
+          "filename": "flownet_v4.26.pkl",
+          "role": "flownet",
+          "sha256": "45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f",
+          "size_bytes": 24636301
+        }
+      ],
+      "license_name": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "min_unified_memory_gb": 8,
+      "min_vram_gb": 2,
+      "model_id": "rife_4_26",
+      "name": "RIFE 4.26 \u2014 Labs",
+      "redistribution_allowed": false,
+      "source_url": "https://github.com/hzwer/Practical-RIFE",
+      "support_tier": "labs",
+      "temporal_overlap": 1,
+      "temporal_window": 2,
+      "terms_acceptance_required": false
+    }
+  ],
   "models": [
     {
       "architecture": "HAT",
@@ -24,6 +57,7 @@
       "name": "HAT-S \u00d74 \u2014 Slim",
       "native_scale": 4,
       "pair_with": "hat_s_x4_face",
+      "preset_eligible": true,
       "purposes": [
         "general",
         "photo"
@@ -68,6 +102,7 @@
       "name": "HAT-S \u00d74 Face \u2014 Restoration",
       "native_scale": 4,
       "pair_with": "hat_s_x4",
+      "preset_eligible": true,
       "purposes": [
         "face",
         "photo"
@@ -111,6 +146,7 @@
       "name": "HAT-L \u00d74 ImageNet \u2014 Large",
       "native_scale": 4,
       "pair_with": "hat_l_x4_face",
+      "preset_eligible": true,
       "purposes": [
         "general",
         "photo"
@@ -155,6 +191,7 @@
       "name": "HAT-L \u00d74 Face \u2014 Restoration",
       "native_scale": 4,
       "pair_with": "hat_l_x4_imagenet",
+      "preset_eligible": true,
       "purposes": [
         "face",
         "photo"
@@ -200,6 +237,7 @@
       "name": "RealPLKSR Denoise \u2014 Slim",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "denoise",
         "photo"
@@ -245,6 +283,7 @@
       "name": "NAFNet SIDD Width64 \u2014 Large",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "denoise",
         "photo"
@@ -273,10 +312,9 @@
       "commercial_use_allowed": true,
       "commercial_use_status": "allowed",
       "content": [
-        "photo",
         "illustration"
       ],
-      "description": "Fast RealPLKSR model trained for anime, illustrations, and clean line art.",
+      "description": "Experimental anime-frame upscaler. It can soften fine lines and screentones, darken white paper, and reduce colour saturation.",
       "display_name": "RealPLKSR \u00d74 HFA2k",
       "download_url": "https://github.com/Phhofm/models/releases/download/4xHFA2k_ludvae_realplksr_dysample/4xHFA2k_ludvae_realplksr_dysample.pth",
       "engine_id": "localsr.pytorch-spandrel",
@@ -289,16 +327,16 @@
       "name": "RealPLKSR 4x HFA2k \u2014 Anime",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "illustration",
-        "anime",
-        "general"
+        "anime"
       ],
       "quality_tier": 2,
       "recommended_halo": 16,
       "redistribution_allowed": true,
       "rights_status": "attribution",
-      "role": "Anime, illustration and clean line art",
+      "role": "Anime and illustration \u00b7 high quality",
       "sha256": "c6e44af18fd3159787b0dbf81d432a6c1ba12c736fc1184b107ed091e49e327c",
       "size_bytes": 29715988,
       "source_url": "https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample",
@@ -333,6 +371,7 @@
       "name": "SPAN 4x NomosUni \u2014 Quick",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -376,6 +415,7 @@
       "name": "RealPLKSR 4x NomosWebPhoto \u2014 Best",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -419,6 +459,7 @@
       "name": "Real-ESRGAN \u00d72 \u2014 Compact",
       "native_scale": 2,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -464,6 +505,7 @@
       "name": "FBCNN Color \u2014 JPEG Restoration",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "restoration",
         "photo"
@@ -509,6 +551,7 @@
       "name": "NAFNet GoPro Deblur",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "deblur",
         "restoration",
@@ -553,6 +596,7 @@
       "name": "Real-ESRGAN \u00d74 \u2014 Classic",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -596,6 +640,7 @@
       "name": "Real-ESRGAN \u00d74 Anime \u2014 Fast",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "illustration",
         "anime"
@@ -639,6 +684,7 @@
       "name": "SwinIR \u00d74 Real \u2014 Transformer",
       "native_scale": 4,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "photo",
         "general"
@@ -684,6 +730,7 @@
       "name": "SCUNet Color \u2014 Blind Denoise",
       "native_scale": 1,
       "pair_with": "",
+      "preset_eligible": true,
       "purposes": [
         "denoise",
         "photo"
@@ -703,9 +750,95 @@
       "terms_acceptance_required": false,
       "time_factor": 0.8,
       "vram_estimate_mb": 1500
+    },
+    {
+      "architecture": "DAT",
+      "attribution_required": true,
+      "author": "Philip Hofmann",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "commercial_use_status": "allowed",
+      "content": [
+        "photo"
+      ],
+      "description": "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on lettering, masonry and clean photos; foliage and fur can come out soft. Up to ten times slower than Best, so no preset picks it on its own.",
+      "display_name": "DAT2 \u00d74 BHI Real",
+      "download_url": "https://github.com/Phhofm/models/releases/download/4xBHI_dat2_real/4xBHI_dat2_real.pth",
+      "engine_id": "localsr.pytorch-spandrel",
+      "filename": "4xBHI_dat2_real.pth",
+      "fixes": [],
+      "license_name": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "memory_factor": 2.0,
+      "model_id": "bhi_dat2_real_x4",
+      "name": "DAT2 \u00d74 BHI Real \u2014 Lettering and buildings",
+      "native_scale": 4,
+      "pair_with": "",
+      "preset_eligible": false,
+      "purposes": [
+        "photo"
+      ],
+      "quality_tier": 3,
+      "recommended_halo": 32,
+      "redistribution_allowed": false,
+      "rights_status": "attribution",
+      "role": "Lettering, buildings and clean photos; very slow",
+      "sha256": "14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0",
+      "size_bytes": 140196334,
+      "source_url": "https://huggingface.co/Phips/4xBHI_dat2_real",
+      "speed_factor": 0.1,
+      "speed_tier": 1,
+      "stage": "upscale",
+      "support_tier": "supported",
+      "terms_acceptance_required": false,
+      "time_factor": 1.9,
+      "vram_estimate_mb": 4000
+    },
+    {
+      "architecture": "DAT",
+      "attribution_required": true,
+      "author": "Philip Hofmann",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "commercial_use_status": "allowed",
+      "content": [
+        "photo"
+      ],
+      "description": "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed and noisy before upscaling. Up to ten times slower than Best, so no preset picks it on its own.",
+      "display_name": "DAT2 \u00d74 RealWebPhoto v4",
+      "download_url": "https://github.com/Phhofm/models/releases/download/4xRealWebPhoto_v4_dat2/4xRealWebPhoto_v4_dat2.pth",
+      "engine_id": "localsr.pytorch-spandrel",
+      "filename": "4xRealWebPhoto_v4_dat2.pth",
+      "fixes": [],
+      "license_name": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "memory_factor": 2.0,
+      "model_id": "realwebphoto_v4_dat2_x4",
+      "name": "DAT2 \u00d74 RealWebPhoto v4 \u2014 Noisy photos",
+      "native_scale": 4,
+      "pair_with": "",
+      "preset_eligible": false,
+      "purposes": [
+        "photo"
+      ],
+      "quality_tier": 3,
+      "recommended_halo": 32,
+      "redistribution_allowed": false,
+      "rights_status": "attribution",
+      "role": "Noisy, compressed web and phone photos; very slow",
+      "sha256": "9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9",
+      "size_bytes": 140299118,
+      "source_url": "https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2",
+      "speed_factor": 0.1,
+      "speed_tier": 1,
+      "stage": "upscale",
+      "support_tier": "supported",
+      "terms_acceptance_required": false,
+      "time_factor": 1.9,
+      "vram_estimate_mb": 4000
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "video_models": [
     {
       "attribution_required": true,

@@ -2,7 +2,8 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   const dispatch = createEventDispatcher<{ compatibilityneeded: void }>();
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
-  import { commonDuration, formatMediaTime, synchronizationDecision } from './lib/video-sync';
+  import VideoTransport from './VideoTransport.svelte';
+  import { commonDuration, synchronizationDecision } from './lib/video-sync';
   import {
     clampPan,
     comparisonGeometry,
@@ -73,8 +74,6 @@
       : view === 'enhanced'
         ? 0
         : comparison.imagePercent;
-  $: fractional = duration > 0 && duration < 1;
-  $: played = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   function currentPanBounds(scale = zoom) {
     return panBounds({ width: canvasWidth, height: canvasHeight }, fitted, scale);
@@ -386,7 +385,14 @@
             playing = false;
             original?.pause();
           }}
-          on:pause={() => (playing = false)}
+          on:pause={() => {
+            // Also when paused from outside, such as the keyboard's media keys.
+            playing = false;
+            original?.pause();
+          }}
+          on:playing={() => {
+            if (original?.paused) void original.play().catch(() => undefined);
+          }}
           on:play={() => (playing = true)}
           on:error={(event) => mediaError('Enhanced', event)}
         ></video>
@@ -402,7 +408,7 @@
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow={Math.round(100 - comparison.enhancedPercent)}
-        aria-valuetext={`${Math.round(comparison.enhancedPercent)}% enhanced`}
+        aria-valuetext={`${Math.round(100 - comparison.enhancedPercent)}% original, ${Math.round(comparison.enhancedPercent)}% enhanced`}
         style={`left:${comparison.x}px;top:${comparison.top}px;height:${comparison.bottom - comparison.top}px;--handle-top:${comparison.handleY - comparison.top}px`}
         on:keydown={compareKeyDown}
       >
@@ -412,48 +418,16 @@
       >{/if}
   </div>
   <div class="video-hud">
-    <div class="video-transport" role="group" aria-label="Video playback controls">
-      <button
-        type="button"
-        class="transport-play"
-        title="Play or pause · Space"
-        aria-label={`${playing ? 'Pause' : 'Play'} ${single ? 'video' : 'comparison'}`}
-        on:click={togglePlayback}
-      >
-        {#if playing}
-          <svg viewBox="0 0 16 16" aria-hidden="true"
-            ><rect x="4" y="3" width="3" height="10" /><rect
-              x="9"
-              y="3"
-              width="3"
-              height="10"
-            /></svg
-          >
-        {:else}
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3l8 5-8 5z" /></svg>
-        {/if}
-      </button>
-      <span class="transport-time">{formatMediaTime(currentTime, fractional)}</span>
-      <input
-        class="transport-scrubber"
-        aria-label="Video position"
-        type="range"
-        min="0"
-        max={duration || 0}
-        step="0.01"
-        value={currentTime}
-        style={`--played:${played}%`}
-        on:input={(event) => seek(Number(event.currentTarget.value))}
-      />
-      <span class="transport-time">{formatMediaTime(duration, fractional)}</span>
-      <button
-        type="button"
-        class="transport-rate"
-        title="Playback speed"
-        aria-label="Playback speed"
-        on:click={nextRate}>{playbackRate}×</button
-      >
-    </div>
+    <VideoTransport
+      {playing}
+      {currentTime}
+      {duration}
+      {playbackRate}
+      label={single ? 'video' : 'comparison'}
+      toggle={togglePlayback}
+      {seek}
+      {nextRate}
+    />
     <div class="zoom-hud" class:shown={pointerOver} role="group" aria-label="Video zoom">
       <button
         type="button"
@@ -468,7 +442,7 @@
         type="button"
         aria-label="Zoom in"
         disabled={zoom >= limits.max}
-        on:click={() => setZoom(zoom * 1.25)}>＋</button
+        on:click={() => setZoom(zoom * 1.25)}>+</button
       >
       <button type="button" class:active={Math.abs(zoom - 1) < 0.001} on:click={fitView}>Fit</button
       >

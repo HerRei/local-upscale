@@ -35,6 +35,8 @@ export interface CatalogModel {
   pair_with: string;
   commercial_use_status: string;
   commercial_use_allowed: boolean | null;
+  /** False: the library offers it, but no preset picks it on its own. */
+  preset_eligible?: boolean;
   automated_download_allowed: boolean;
   redistribution_allowed: boolean;
   attribution_required: boolean;
@@ -134,6 +136,8 @@ export interface CatalogManifest {
   catalog_revision: string;
   models: CatalogModel[];
   video_models: CatalogVideoModel[];
+  /** Optional frame-interpolation stages of a video job; never video engines. */
+  interpolation_models: CatalogVideoModel[];
 }
 
 export interface MediaItem {
@@ -157,6 +161,9 @@ export interface MediaItem {
 }
 
 export interface JobRecord {
+  /** The primary model of the recorded request, and its catalog name. */
+  model_id?: string;
+  model_label?: string;
   id: string;
   media_id: string;
   media_name: string;
@@ -169,6 +176,8 @@ export interface JobRecord {
   work_key?: string;
   work_units?: number;
   elapsed_seconds?: number;
+  /** What one work unit typically took in comparable earlier runs; 0 or missing until two ran. */
+  seconds_per_unit?: number;
 }
 
 export interface DeviceInfo {
@@ -193,6 +202,8 @@ export interface MediaCapabilities {
     encode: string[];
     containers: string[];
   } | null;
+  /** Still-image formats the system writes beyond PNG, JPEG, TIFF and WebP (HEIC on macOS). */
+  image_output?: string[];
   /** An FFmpeg found on this computer, used without being selected. */
   external_ffmpeg?: { detected: string[]; candidates: string[] };
 }
@@ -207,6 +218,9 @@ export interface CapabilityInfo {
   system_swap_used: number;
   devices: DeviceInfo[];
   media?: MediaCapabilities | null;
+  gpu_suggestion?: { name: string; download: 'DirectML' | 'CUDA' | 'ROCm' | 'intel-driver' } | null;
+  /** An Intel NPU the machine has but cannot use yet (its compiler is missing). */
+  npu_hint?: { name: string; missing: 'compiler' } | null;
 }
 
 export interface EngineInfo {
@@ -231,7 +245,7 @@ export interface Recipe {
   safe_memory: boolean;
   video_model_id?: string;
   custom_model_path?: string;
-  output_format?: 'png' | 'jpg' | 'tif' | 'webp';
+  output_format?: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
   preserve_metadata?: boolean;
   jpeg_quality?: number;
   deflicker?: boolean;
@@ -239,7 +253,7 @@ export interface Recipe {
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
   video_low_memory?: boolean;
-  video_container?: 'mp4' | 'mkv';
+  video_container?: 'mp4' | 'mkv' | 'mov';
   video_codec?: VideoCodec | '';
   video_crf?: number;
   enable_face_model?: boolean;
@@ -248,12 +262,27 @@ export interface Recipe {
   quality?: Quality | '';
   content?: Exclude<ContentKind, 'face'> | '';
   fixes?: FixKind[];
+  video_interpolation?: InterpolationTarget | '';
+  video_interpolation_order?: InterpolationOrder | '';
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
-export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc';
+export type VideoCodec = 'auto' | 'av1' | 'vp9' | 'ffv1' | 'h264' | 'hevc' | 'prores';
+
+/** One fix in run order; in Restore the last one is the model itself. */
+export interface FixStageSelection {
+  fix: Exclude<FixKind, 'faces'>;
+  /** Empty while no catalog model fixes this problem; Start then waits. */
+  model_id: string;
+}
+
+/** Frame interpolation: a frame-rate multiplier or a fixed output rate. */
+export type InterpolationTarget = 'off' | 'x2' | 'x4' | 'fps60' | 'fps120';
+export type InterpolationOrder = 'after_upscale' | 'before_upscale';
 
 export interface RecipeStage {
+  /** The problem a restoration stage fixes; recipes saved before several fixes omit it. */
+  fix?: Exclude<FixKind, 'faces'>;
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
   model_id: string;
   fidelity?: number;
@@ -265,11 +294,11 @@ export interface UiSettings {
   task: TaskKind | '';
   selected_model_id: string;
   selected_video_model_id: string;
-  preprocess_model_id: string;
+  fix_stages: FixStageSelection[];
   custom_model_path: string;
   output_scale: number;
   output_directory: string;
-  output_format: 'png' | 'jpg' | 'tif' | 'webp';
+  output_format: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
   preserve_metadata: boolean;
   jpeg_quality: number;
   device_id: string;
@@ -283,14 +312,18 @@ export interface UiSettings {
   video_hdr_mode?: 'tone_map' | 'preserve';
   video_target_resolution?: number;
   video_low_memory?: boolean;
-  video_container: 'mp4' | 'mkv';
+  video_container: 'mp4' | 'mkv' | 'mov';
   video_codec: VideoCodec;
   /** Set once the old AV1 default moved to 'auto'; kept so it is not repeated. */
   automatic_video_format?: boolean;
   external_ffmpeg_path: string;
   video_crf: number;
+  /** Off by default; the host fills both in for settings saved before 0.3.7. */
+  video_interpolation?: InterpolationTarget;
+  video_interpolation_order?: InterpolationOrder;
   /** Direct builds send version, platform and channel after an update check. Defaults to true. */
   anonymous_update_count?: boolean;
+  check_updates_at_launch?: boolean;
   enable_face_model: boolean;
   face_fidelity: number;
   enable_live_preview: boolean;
@@ -335,9 +368,14 @@ export interface VideoMemoryStatus {
 }
 
 export interface RuntimeStatus {
+  comparison_pair?: ComparisonPair;
+  compare?: CompareState;
   video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
+  /** The host gave up restarting the engine; `retryEngine` starts it again. */
+  engine_retry?: boolean;
   active_job_id: string;
+  active_batch_job_ids?: string[];
   status_title: string;
   status_detail: string;
   progress: number;
@@ -359,6 +397,11 @@ export interface RuntimeStatus {
   live_system_ram_available: number;
   live_memory_pressure_percent: number;
   thermal_status: string;
+  /** What the engine said about the hardware route during this job; outlives progress ticks
+   *  (worker.rs keeps it in the host's snapshot until the job ends). */
+  hardware_note: string;
+  /** How long a cancelled job may take to stop before the engine is restarted. */
+  cancel_grace_seconds?: number;
 }
 
 export interface BenchmarkRender {
@@ -471,12 +514,13 @@ export interface WorkerEnvelope {
 }
 
 export interface StartBatchInput {
+  ui?: ResultUi;
   media_ids: string[];
   batch_mode: boolean;
   task: TaskKind;
   model_id: string;
   video_model_id: string;
-  preprocess_model_id: string;
+  fix_stages: FixStageSelection[];
   custom_model_path: string;
   output_directory: string;
   output_format: string;
@@ -502,6 +546,104 @@ export interface StartBatchInput {
   face_fidelity: number;
   enable_live_preview: boolean;
   allow_unsafe_pickle_model: boolean;
+  video_interpolation?: InterpolationTarget;
+  video_interpolation_order?: InterpolationOrder;
+}
+
+/** The plan card's labels when a job was queued; host-only, never sent to the worker. */
+export interface ResultUi {
+  quality: string;
+  content: string;
+  recipe_name: string;
+  fixes?: string[];
+}
+export interface ResultStage {
+  kind: string;
+  model_id: string;
+  model_label: string;
+}
+/** One finished attempt of a media item, as `list_media_results` returns it. */
+export interface ResultSummary {
+  job_id: string;
+  completed_at: number;
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted' | string;
+  kind: 'upscale' | 'restore' | 'edit' | 'video' | string;
+  output_path: string;
+  output_name: string;
+  /** Current file size in bytes, or 0 when unavailable. */
+  size_bytes?: number;
+  output_duration_seconds?: number;
+  output_fps?: number;
+  /** Completed and its file exists. */
+  available: boolean;
+  model_id: string;
+  model_label: string;
+  scale: number;
+  /** The written instruction of an Edit; empty for other kinds. */
+  prompt: string;
+  /** The longest output edge an Edit was asked for; 0 for other kinds. */
+  max_dimension: number;
+  stages: ResultStage[];
+  notes: string;
+  /** Run time including loading and saving; 0 when unknown. */
+  elapsed_seconds: number;
+  ui: ResultUi | null;
+}
+export interface MediaResults {
+  media_id: string;
+  /** Newest first, up to the requested page size. */
+  results: ResultSummary[];
+  total_count: number;
+  completed_count: number;
+  available_count: number;
+  default_result_id: string | null;
+  next_before: string | null;
+}
+export type ComparePick =
+  { kind: 'original'; media_id: string } | { kind: 'output'; media_id: string; job_id: string };
+export interface CompareSlot {
+  pick: ComparePick;
+  media_kind?: string;
+  status: 'loading' | 'ready' | 'error' | 'missing';
+  preview_data_url: string;
+  error: string;
+  width: number;
+  height: number;
+  preview_width: number;
+  preview_height: number;
+  region?: { bounds: import('./compareRegions').Region; data_url: string } | null;
+}
+export interface CompareState {
+  generation: number;
+  slots: CompareSlot[];
+}
+/** "original" or the job id of a saved result. */
+export type ResultTarget = string;
+export interface PairChoice {
+  showing: ResultTarget;
+  against: ResultTarget;
+  /** A manual choice; it holds through later completions for this session. */
+  pinned: boolean;
+}
+export interface ComparisonSlot {
+  target_id: string;
+  preview_data_url: string;
+  error?: string;
+  width?: number;
+  height?: number;
+  preview_width?: number;
+  preview_height?: number;
+}
+export interface ComparisonPair {
+  media_id: string;
+  generation: number;
+  showing: ComparisonSlot;
+  against: ComparisonSlot;
+}
+export interface TrialEstimate {
+  model_id: string;
+  model_label: string;
+  seconds: number | null;
 }
 
 export interface LaunchIntent {

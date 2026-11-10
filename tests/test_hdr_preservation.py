@@ -115,8 +115,9 @@ def test_float_h_at_pipeline_preserves_timing_audio_colour_and_reports_first_fra
     )
     assert result.frames_processed == 3
     assert all(frame.dtype == np.float32 for frame in previews)
-    assert any(e[0] == 0 and 0 < e[2] < e[3] and e[5] > 0 for e in events)
-    assert events[0][5] is None
+    # The first frame warms the model up, so it reports tiles but no remaining time yet.
+    assert any(e[0] == 0 and 0 < e[2] < e[3] for e in events)
+    assert all(e[5] is None for e in events if e[0] == 0)
     decoded_source = list(decode_timed_frames(str(source), hdr_mode="preserve"))
     assert [
         float(f.timestamp) for f in decode_timed_frames(str(output), hdr_mode="preserve")
@@ -157,3 +158,10 @@ def test_uint8_is_refused_by_hdr_encoder_without_publishing_output(tmp_path):
             hdr_format="HLG",
         )
     assert not output.exists()
+
+
+def test_prores_hdr_names_the_sdr_rule_not_the_container():
+    from localsr.core.video_io import VideoStageError, validate_hdr_encoder
+
+    with pytest.raises(VideoStageError, match="ProRes export is SDR"):
+        validate_hdr_encoder("prores", None, "mov")

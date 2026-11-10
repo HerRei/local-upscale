@@ -15,7 +15,7 @@ from localsr.core.inference import (
     _resolve_torch_device,
 )
 from localsr.core.model_adapter import NormalizedModelInfo
-from localsr.core.model_catalog import get_model_by_id
+from localsr.core.model_catalog import CATALOG_BY_ID
 
 
 class DummyModel(nn.Module):
@@ -161,7 +161,7 @@ def test_inference_dimensions():
 
 
 def test_catalog_native_x2_contract_covers_tiling_alpha_and_cancellation(tmp_path):
-    catalog_model = get_model_by_id("realesrgan_x2plus")
+    catalog_model = CATALOG_BY_ID.get("realesrgan_x2plus")
     assert catalog_model is not None
     assert catalog_model.native_scale == 2
 
@@ -352,3 +352,80 @@ def test_nan_inf_detection():
             lambda c, t, s: None,
             False,
         )
+
+
+@pytest.mark.parametrize("frame", [False, True])
+def test_safe_memory_accepts_small_tiles(frame, tmp_path):
+    adapter = DummyAdapter(2)
+    engine = InferenceEngine(adapter)
+    tensor = torch.rand((3, 16, 16))
+    cancel = threading.Event()
+    if frame:
+        engine.load_model("dummy", "cpu", "fp32", adapter.model_info)
+        result = engine.process_frame(tensor, adapter.model_info, 32, 0, cancel, lambda *_: None)
+        assert result.shape == (3, 32, 32)
+    else:
+        writer = engine.process_image(
+            {"tensor": tensor},
+            adapter.model_info,
+            "dummy",
+            "cpu",
+            "fp32",
+            32,
+            0,
+            cancel,
+            lambda *_: None,
+            temporary_directory=str(tmp_path),
+        )
+        try:
+            assert writer.get_array().shape == (3, 32, 32)
+        finally:
+            writer.cleanup()
+
+
+def test_a_tile_size_that_cannot_be_used_leaves_no_output_file_behind(tmp_path):
+    adapter = DummyAdapter(2)
+    engine = InferenceEngine(adapter)
+    with pytest.raises(TypeError):
+        engine.process_image(
+            {"tensor": torch.rand((3, 16, 16))},
+            adapter.model_info,
+            "dummy",
+            "cpu",
+            "fp32",
+            "64",
+            8,
+            threading.Event(),
+            lambda *_: None,
+            temporary_directory=str(tmp_path),
+        )
+    assert list(tmp_path.glob("localsr-output-*")) == []
+
+
+def test_tile_output_is_rounded_to_the_nearest_level_not_truncated(tmp_path):
+    class Fixed(nn.Module):
+        def forward(self, x):
+            return torch.full((1, 3, x.shape[2], x.shape[3]), 100.7 / 255.0)
+
+    class FixedAdapter(DummyAdapter):
+        def load(self, path, device, precision):
+            return Fixed().to(device).to(precision), None
+
+    adapter = FixedAdapter(1)
+    engine = InferenceEngine(adapter)
+    writer = engine.process_image(
+        {"tensor": torch.rand((3, 8, 8))},
+        adapter.model_info,
+        "fixed",
+        "cpu",
+        "fp32",
+        32,
+        0,
+        threading.Event(),
+        lambda *_: None,
+        temporary_directory=str(tmp_path),
+    )
+    try:
+        assert set(np.unique(writer.get_array()).tolist()) == {101}
+    finally:
+        writer.cleanup()

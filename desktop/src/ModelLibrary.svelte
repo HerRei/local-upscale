@@ -1,14 +1,21 @@
 <script lang="ts">
+  import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
   import {
-    FIT_LABELS,
+    FIX_LABELS,
     choosePresetModel,
     displayName,
     fitFor,
     fixesOf,
-    formatBytes,
+    libraryModelsForTask,
     modelsForTask,
     rightsAllowPreset,
-  } from './lib/state';
+  } from './lib/plan';
+  import { chooseFixModel, fixQuality, rememberedFixModel } from './lib/fixStages';
+  import { formatBytes } from './lib/format';
+  import FileName from './FileName.svelte';
+  import { modal } from './lib/modal';
+  import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
+  import { estimateModelTrials } from './lib/api';
   import {
     EDIT_FAMILIES,
     EDIT_FIT_LABELS,
@@ -29,7 +36,9 @@
     EditModel,
     FixKind,
     Quality,
+    StartBatchInput,
     TaskKind,
+    TrialEstimate,
     UiSettings,
   } from './lib/types';
 
@@ -39,7 +48,7 @@
     task: TaskKind | '';
     content: Exclude<ContentKind, 'face'>;
     quality: Quality | '';
-    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit';
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
   };
   export let device: DeviceInfo | undefined;
@@ -48,8 +57,18 @@
   export let busy = false;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
+  /** Remember a model for one problem (Fix first, or Restore with a chip on). */
+  export let rememberFix: (model: CatalogModel, fix: Exclude<FixKind, 'faces'>) => void;
+  export let forgetFix: (fix: Exclude<FixKind, 'faces'>) => void;
   export let useEditModel: (model: EditModel) => void;
   export let pin: (model: CatalogModel, quality: 'quick' | 'best') => void;
+  // "Try others…": the image, the settings frozen when the sheet opened, and
+  // the action that queues one run per ticked model.
+  export let trialMedia: { id: string; name: string } | undefined = undefined;
+  export let trialBase: StartBatchInput | undefined = undefined;
+  export let runTrials: (modelIds: string[]) => Promise<void> = async () => {};
+  /** Trials queue behind other work, so only starting one blocks the sheet. */
+  export let trialBusy = false;
   export let download: (
     model: CatalogModel | CatalogVideoModel | EditModel,
     accepted?: boolean,
@@ -65,9 +84,28 @@
 
   let group: GroupId =
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
-  let selectedId = '';
+  // Choosing the model for one problem: Fix first, or Restore with a chip on.
+  $: fixing =
+    context.fix !== undefined &&
+    (context.slot === 'fix' || (context.slot === 'primary' && context.task === 'denoise'))
+      ? context.fix
+      : undefined;
+  // A fix picker opens on the model the job uses now.
+  let selectedId =
+    context.fix === undefined
+      ? ''
+      : context.slot === 'fix'
+        ? (settings.fix_stages.find((selection) => selection.fix === context.fix)?.model_id ?? '')
+        : context.slot === 'primary' && context.task === 'denoise'
+          ? settings.selected_model_id
+          : '';
   let termsAccepted = false;
   let showHeavyEdit = false;
+  let trialIds: string[] = [];
+  let trialEstimates: TrialEstimate[] = [];
+  let estimateKey = '';
+  let estimateError = '';
+  let runningTrials = false;
 
   $: models = snapshot.catalog.models;
   $: videoModels = snapshot.catalog.video_models;
@@ -94,36 +132,55 @@
     if (context.slot === 'face') return models.filter((model) => model.purposes.includes('face'));
     if (context.slot === 'fix') {
       const fix = context.fix;
-      return models.filter(
-        (model) =>
-          model.native_scale === 1 &&
-          !model.purposes.includes('face') &&
-          (!fix || fixesOf(model).includes(fix)),
-      );
+      return libraryModelsForTask(models, 'denoise', context.content, fix);
     }
-    const candidates = modelsForTask(snapshot, context.task);
-    if (context.task === 'denoise') return candidates;
-    const matches = (model: CatalogModel): number =>
-      context.content === 'illustration'
-        ? model.purposes.includes('illustration') || model.purposes.includes('anime')
-          ? 2
-          : model.purposes.includes('general')
-            ? 1
-            : 0
-        : model.purposes.includes('photo')
-          ? 2
-          : model.purposes.includes('general')
-            ? 1
-            : 0;
-    return candidates
-      .filter((model) => matches(model) > 0)
-      .sort(
-        (left, right) =>
-          matches(right) - matches(left) ||
-          right.quality_tier - left.quality_tier ||
-          right.speed_tier - left.speed_tier,
-      );
+    return libraryModelsForTask(models, context.task, context.content, context.fix);
   })();
+  // Installed models for this job first; the rest say why they cannot join.
+  $: trialModels =
+    context.slot === 'try'
+      ? [
+          ...jobModels,
+          ...modelsForTask(snapshot, context.task).filter(
+            (model) =>
+              model.installed &&
+              !jobModels.includes(model) &&
+              (context.task !== 'denoise' || !context.fix || fixesOf(model).includes(context.fix)),
+          ),
+        ].sort((left, right) => Number(right.installed) - Number(left.installed))
+      : [];
+  $: trialReason = (model: CatalogModel): string => trialIncompatibility(model, settings, models);
+  $: if (context.slot === 'try' && trialIds.join('|') !== estimateKey)
+    void estimateTrials(trialIds.join('|'));
+
+  async function estimateTrials(key: string): Promise<void> {
+    estimateKey = key;
+    estimateError = '';
+    trialEstimates = [];
+    if (!trialIds.length || !trialBase || !trialMedia) return;
+    const ids = [...trialIds];
+    try {
+      const estimates = await estimateModelTrials(trialMedia.id, ids, trialBase);
+      if (estimateKey === key) trialEstimates = estimates;
+    } catch (error) {
+      if (estimateKey === key) estimateError = String(error);
+    }
+  }
+
+  function toggleTrial(id: string): void {
+    trialIds = trialIds.includes(id) ? trialIds.filter((value) => value !== id) : [...trialIds, id];
+    selectedId = id;
+  }
+
+  async function startTrials(): Promise<void> {
+    runningTrials = true;
+    try {
+      await runTrials([...trialIds]);
+    } finally {
+      runningTrials = false;
+    }
+  }
+
   $: groups = [
     ...(context.slot !== 'browse' &&
     context.slot !== 'edit' &&
@@ -167,7 +224,8 @@
       label: 'Installed',
       count: models.filter((model) => model.installed).length + installedEditModels.length,
     },
-    { id: 'own' as GroupId, label: 'Your own file', count: 0 },
+    // A fix runs a catalog model only; a file of your own replaces the upscaler.
+    ...(context.slot === 'fix' ? [] : [{ id: 'own' as GroupId, label: 'Your own file', count: 0 }]),
   ];
   $: rows = ((): CatalogModel[] => {
     switch (group) {
@@ -215,19 +273,36 @@
     ? undefined
     : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
   $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
-  $: quickId = context.task
-    ? choosePresetModel(snapshot, context.task, 'quick', context.content, settings.preset_pins)
-        ?.model_id
-    : '';
-  $: bestId = context.task
-    ? choosePresetModel(snapshot, context.task, 'best', context.content, settings.preset_pins)
-        ?.model_id
-    : '';
+  // The accelerator the selected hardware will use for a model: the Neural Engine on a Mac,
+  // an Intel NPU elsewhere. Memoised per model id: rows and details read it on every render.
+  $: accelerator = (model: CatalogModel) =>
+    runsOnAccelerator(settings, snapshot.capabilities, model.architecture);
+  $: fitLines = new Map(
+    models.map((model) => [
+      model.model_id,
+      fitLine(model, settings, snapshot.capabilities, device),
+    ]),
+  );
+  $: quickId = fixing
+    ? chooseFixModel(snapshot, fixing, 'quick', settings.preset_pins)?.model_id
+    : context.task
+      ? choosePresetModel(snapshot, context.task, 'quick', context.content, settings.preset_pins)
+          ?.model_id
+      : '';
+  $: bestId = fixing
+    ? chooseFixModel(snapshot, fixing, 'best', settings.preset_pins)?.model_id
+    : context.task
+      ? choosePresetModel(snapshot, context.task, 'best', context.content, settings.preset_pins)
+          ?.model_id
+      : '';
+  $: rememberedFix = fixing
+    ? rememberedFixModel(snapshot, fixing, fixQuality(context.quality), settings.preset_pins)
+    : undefined;
   $: canUseForJob = (model: CatalogModel): boolean =>
     context.slot !== 'browse' &&
     jobModels.some((candidate) => candidate.model_id === model.model_id);
   $: canPin = (model: CatalogModel): boolean =>
-    context.slot === 'primary' &&
+    (context.slot === 'primary' || context.slot === 'try') &&
     context.task !== 'denoise' &&
     canUseForJob(model) &&
     rightsAllowPreset(model);
@@ -269,17 +344,25 @@
       ? `about ${(model.vram_estimate_mb / 1000).toFixed(model.vram_estimate_mb % 1000 ? 1 : 0)} GB`
       : `about ${model.vram_estimate_mb} MB`;
   }
-
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close();
-  }
 </script>
 
-<div class="modal-backdrop library-backdrop" role="presentation" on:keydown={onKeydown}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="library-title" tabindex="-1">
+<div class="modal-backdrop library-backdrop" role="presentation">
+  <div
+    class="sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="library-title"
+    tabindex="-1"
+    use:modal={close}
+  >
     <div class="sheet-head">
       <h2 id="library-title">Model library</h2>
-      {#if context.slot === 'edit'}
+      {#if context.slot === 'try'}
+        <span class="sheet-context"
+          >Try other {context.task === 'denoise' ? 'restoration models' : 'upscalers'} on {trialMedia?.name ??
+            'this image'}</span
+        >
+      {:else if context.slot === 'edit'}
         <span class="sheet-context">Choosing for Edit</span>
       {:else if context.slot !== 'browse' && context.task}
         <span class="sheet-context"
@@ -287,11 +370,13 @@
             ? 'Video'
             : context.task === 'denoise'
               ? 'Restore'
-              : 'Upscale'}{context.slot === 'fix'
-            ? ' · fix'
-            : context.slot === 'face'
-              ? ' · faces'
-              : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'} · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}</span
+              : 'Upscale'}{fixing
+            ? ` · ${FIX_LABELS[fixing]}`
+            : context.slot === 'fix'
+              ? ' · fix'
+              : context.slot === 'face'
+                ? ' · faces'
+                : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'} · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}</span
         >
       {/if}
       <div class="sheet-right">
@@ -315,7 +400,7 @@
     </div>
     <div class="sheet-body">
       <nav class="rail" aria-label="Model groups">
-        {#each groups as item (item.id)}
+        {#each context.slot === 'try' ? groups.filter((item) => item.id === 'job') : groups as item (item.id)}
           <button
             class="rail-item"
             class:active={group === item.id}
@@ -334,7 +419,44 @@
       </nav>
 
       <section class="list" aria-label="Models">
-        {#if group === 'video'}
+        {#if context.slot === 'try'}
+          <div class="list-head">For this job<span>Pick 2 to 4 installed models</span></div>
+          {#each trialModels as model (model.model_id)}
+            {@const reason = trialReason(model)}
+            {@const picked = trialIds.includes(model.model_id)}
+            <label
+              class="row trial-row"
+              class:dimmed={Boolean(reason)}
+              class:selected={selected?.model_id === model.model_id}
+            >
+              <input
+                type="checkbox"
+                checked={picked}
+                disabled={trialBusy || Boolean(reason) || (!picked && trialIds.length >= 4)}
+                on:change={() => toggleTrial(model.model_id)}
+              />
+              <div>
+                <div class="name">{displayName(model)}</div>
+                <div class="role">{reason || model.role || model.description}</div>
+                {#if model.model_id === quickId || model.model_id === bestId || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
+                  <div class="pills">
+                    {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
+                    {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
+                    {#if fitFor(model, device) === 'heavy'}<span class="pill warn">Heavy here</span
+                      >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
+                        >Too heavy</span
+                      >{/if}
+                  </div>
+                {/if}
+              </div>
+              <div class="right">
+                <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
+                    >Installed</span
+                  >{:else}<span>Not installed</span>{/if}
+              </div>
+            </label>
+          {/each}
+        {:else if group === 'video'}
           <div class="list-head">Video · Labs<span>SeedVR2 engines</span></div>
           {#each videoModels as model (model.model_id)}
             <button
@@ -371,7 +493,6 @@
             {#each shown as model (model.model_id)}
               <button
                 class="row"
-                class:dimmed={editFit(model) === 'too_heavy'}
                 type="button"
                 class:selected={selectedEdit?.model_id === model.model_id}
                 aria-pressed={selectedEdit?.model_id === model.model_id}
@@ -475,6 +596,14 @@
                 <div>
                   <div class="name">{displayName(model)}</div>
                   <div class="role">{model.role || model.description}</div>
+                  {#if fitLines.get(model.model_id)}
+                    {@const line = fitLines.get(model.model_id)}
+                    <div class="fit row-fit" title={line?.text}>
+                      <i aria-hidden="true" class:warn={line?.fit !== 'runs'}></i><span
+                        >{line?.text}</span
+                      >
+                    </div>
+                  {/if}
                   <!-- Badges mark exceptions only: a license that limits use, a model that
                        will struggle here. Everything else is in the details. -->
                   {#if model.model_id === quickId || model.model_id === bestId || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
@@ -503,7 +632,7 @@
                   <div class="meter">
                     Speed<span class="dots"
                       >{#each [1, 2, 3, 4] as tier}<i
-                          class:f={model.speed_tier >= (tier === 4 ? 3 : tier) && tier <= 3}
+                          class:f={model.speed_tier >= tier && tier <= 3}
                         ></i>{/each}</span
                     >
                   </div>
@@ -549,6 +678,39 @@
       </section>
 
       <aside class="detail" aria-label="Model details">
+        {#if context.slot === 'try'}
+          <div class="trial-summary" aria-live="polite">
+            <h3>{trialIds.length === 1 ? '1 model picked' : `${trialIds.length} models picked`}</h3>
+            <p>
+              Each runs the full image with your current settings ({keptTrialSettings(
+                settings,
+                Boolean(trialBase?.enable_face_model),
+              )}).
+            </p>
+            {#if trialIds.length && trialEstimates.length === trialIds.length}
+              <p>{trialTime(trialEstimates)}</p>
+            {/if}
+            <p>
+              {trialIds.length || 'No'} new file{trialIds.length === 1 ? '' : 's'} in
+              <span class="path-text"
+                >{trialBase?.output_directory || 'the LocalSR output folder'}</span
+              >, named by model.
+            </p>
+            <button
+              class="button"
+              type="button"
+              disabled={trialBusy || runningTrials || trialIds.length < 2 || trialIds.length > 4}
+              on:click={() => void startTrials()}
+              >{runningTrials
+                ? 'Queueing…'
+                : `Run ${trialIds.length} model${trialIds.length === 1 ? '' : 's'}`}</button
+            >
+            <p>Pick 2 to 4. Results appear under Showing in the preview.</p>
+            {#if estimateError}<p role="status">
+                Run time estimate unavailable: {estimateError}
+              </p>{/if}
+          </div>
+        {/if}
         {#if group === 'video' && selectedVideo}
           <div>
             <h3>{selectedVideo.name}</h3>
@@ -740,12 +902,17 @@
               <dt>Speed</dt>
               <dd>{speedLabel(selected)}</dd>
             </div>
+            {#if accelerator(selected)}
+              <div>
+                <dt>Runs on</dt>
+                <dd>{accelerator(selected)}</dd>
+              </div>
+            {/if}
           </dl>
-          {#if device && fitFor(selected, device) !== 'unknown'}
+          {#if fitLines.get(selected.model_id)}
+            {@const line = fitLines.get(selected.model_id)}
             <div class="fit">
-              <i class:warn={fitFor(selected, device) !== 'runs'}></i>{FIT_LABELS[
-                fitFor(selected, device)
-              ]} · {device.name}
+              <i aria-hidden="true" class:warn={line?.fit !== 'runs'}></i>{line?.text}
             </div>
           {/if}
           <dl class="kv">
@@ -766,13 +933,14 @@
                 <button
                   class="link-button"
                   type="button"
-                  on:click={() => void openSource(selected.model_id)}>Model source ↗</button
+                  title={selected.source_url}
+                  aria-label={`${selected.author} · model source`}
+                  on:click={() => void openSource(selected.model_id)}
+                  ><FileName name={selected.author} /><span class="source-link"
+                    >{' · model source ↗'}</span
+                  ></button
                 >
               </dd>
-            </div>
-            <div>
-              <dt>Author</dt>
-              <dd>{selected.author}</dd>
             </div>
             <div>
               <dt>Architecture</dt>
@@ -780,7 +948,7 @@
             </div>
             <div>
               <dt>File</dt>
-              <dd title={selected.filename}>{selected.filename}</dd>
+              <dd><FileName name={selected.filename} /></dd>
             </div>
             <div>
               <dt>Integrity</dt>
@@ -801,11 +969,21 @@
           </dl>
           <div class="actions">
             {#if !selected.installed && selected.automated_download_allowed}
+              {#if selected.terms_acceptance_required}
+                <label class="terms"
+                  ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model license
+                  and restrictions.</label
+                >
+              {/if}
               <button
                 class="button primary"
                 type="button"
-                disabled={busy || (Boolean(activeDownload) && activeDownload !== selected.model_id)}
-                on:click={() => void download(selected)}
+                disabled={busy ||
+                  (Boolean(activeDownload) && activeDownload !== selected.model_id) ||
+                  (selected.terms_acceptance_required &&
+                    !termsAccepted &&
+                    activeDownload !== selected.model_id)}
+                on:click={() => void download(selected, termsAccepted)}
                 >{activeDownload === selected.model_id
                   ? `Downloading ${Math.round(downloadProgress)}% · Cancel`
                   : `Download ${formatBytes(selected.size_bytes)}`}</button
@@ -825,7 +1003,32 @@
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
             {/if}
-            {#if canUseForJob(selected)}
+            {#if fixing}
+              {@const problem = fixing}
+              <div class="pair">
+                {#if canUseForJob(selected) && rightsAllowPreset(selected)}
+                  <button
+                    class="button"
+                    type="button"
+                    disabled={busy}
+                    on:click={() => rememberFix(selected, problem)}
+                    >Use for {FIX_LABELS[problem]}{context.quality === 'quick'
+                      ? ' · Quick'
+                      : context.quality === 'best'
+                        ? ' · Best'
+                        : ''}</button
+                  >
+                {/if}
+                {#if rememberedFix}
+                  <button
+                    class="link-button"
+                    type="button"
+                    disabled={busy}
+                    on:click={() => forgetFix(problem)}>Back to the default</button
+                  >
+                {/if}
+              </div>
+            {:else if canUseForJob(selected)}
               <div class="pair">
                 <button
                   class="button"
@@ -862,7 +1065,7 @@
               {/if}
             {/if}
           </div>
-        {:else}
+        {:else if group !== 'own'}
           <p class="model-description">
             Select a model to see what it is for and where it comes from.
           </p>

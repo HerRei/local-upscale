@@ -14,6 +14,9 @@ import type {
   VideoComparisonProgress,
   WorkerEnvelope,
   StartEditInput,
+  MediaResults,
+  TrialEstimate,
+  ComparePick,
 } from './types';
 
 export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window;
@@ -141,21 +144,25 @@ export const addMedia = (paths: string[], replace: boolean): Promise<void> =>
 export const selectMedia = (id: string): Promise<void> => invoke('select_media', { id });
 export const removeMedia = (id: string): Promise<void> => invoke('remove_media', { id });
 export const clearMedia = (): Promise<void> => invoke('clear_media');
+export const clearResults = (): Promise<void> => invoke('clear_results');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
+
+/** One update switch, saved by the host on its own: a full settings save never changes it. */
+export const setUpdateSwitch = (
+  name: 'check_updates_at_launch' | 'anonymous_update_count',
+  value: boolean,
+): Promise<void> => invoke('set_update_switch', { name, value });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
   invoke('open_edit_link', { modelId, link });
+/** The host's own file dialog for the editing runtime; the host remembers the pick. */
 export async function chooseEditRuntime(): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: false,
-    title: 'Choose the sd-cli image editing runtime',
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_edit_runtime');
 }
+export const retryEngine = (): Promise<void> => invoke('retry_engine');
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });
@@ -175,9 +182,13 @@ export async function detectExternalFFmpeg(): Promise<string[]> {
   return invoke<string[]>('detect_external_ffmpeg');
 }
 
-/** Open the LocalSR user guide on the project website. */
 export async function openUserGuide(): Promise<void> {
   if (isTauri()) await invoke('open_user_guide');
+}
+
+/** LocalSR's download page, for the editions that use a GPU this one cannot (CUDA, DirectML, ROCm). */
+export async function openDownloadPage(): Promise<void> {
+  if (isTauri()) await invoke('open_download_page');
 }
 
 /** Open ffmpeg.org's download page; installing FFmpeg stays the user's own action. */
@@ -191,7 +202,6 @@ export interface FfmpegInstallHint {
   system: string;
 }
 
-/** The package manager command that installs FFmpeg on this computer. */
 export async function ffmpegInstallHint(): Promise<FfmpegInstallHint | null> {
   if (!isTauri()) return null;
   return invoke<FfmpegInstallHint>('ffmpeg_install_hint');
@@ -204,19 +214,15 @@ export async function openTerminalWithInstallCommand(command: string): Promise<v
 
 export async function chooseExternalFFmpeg(current: string): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: false,
-    defaultPath: current || undefined,
-    title: 'Select the FFmpeg program installed on this computer',
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_external_ffmpeg', { current });
 }
 
 export const prepareVideoComparison = async (
   mediaId: string,
   requestId: string,
   forceCompatible = false,
+  resultId?: string,
+  deferConversion = false,
 ): Promise<VideoComparisonSources> => {
   const paths = await invoke<{
     playback_note: string;
@@ -224,13 +230,45 @@ export const prepareVideoComparison = async (
     enhanced_path: string;
     original_url?: string | null;
     enhanced_url?: string | null;
-  }>('prepare_video_comparison', { mediaId, requestId, forceCompatible });
+  }>('prepare_video_comparison', {
+    mediaId,
+    requestId,
+    forceCompatible,
+    resultId,
+    deferConversion,
+  });
   return {
     playback_note: paths.playback_note,
     original_url: paths.original_url ?? convertFileSrc(paths.original_path),
     // Empty before a job finishes: the player then shows the source alone.
     enhanced_url:
       paths.enhanced_url ?? (paths.enhanced_path ? convertFileSrc(paths.enhanced_path) : ''),
+  };
+};
+/** A slot index and generation, never a path, selects a host-authorised video. */
+export const prepareCompareVideo = async (
+  generation: number,
+  slot: number,
+  requestId: string,
+  forceCompatible = false,
+  deferConversion = false,
+): Promise<VideoComparisonSources> => {
+  const paths = await invoke<{
+    original_path: string;
+    original_url?: string | null;
+    playback_note: string;
+  }>('prepare_video_comparison', {
+    mediaId: '',
+    requestId,
+    forceCompatible,
+    deferConversion,
+    compareGeneration: generation,
+    compareSlot: slot,
+  });
+  return {
+    original_url: paths.original_url ?? convertFileSrc(paths.original_path),
+    enhanced_url: '',
+    playback_note: paths.playback_note,
   };
 };
 export const cancelVideoComparison = (requestId: string): Promise<void> =>
@@ -240,8 +278,35 @@ export const listenVideoComparisonProgress = (
 ): Promise<UnlistenFn> =>
   listen<VideoComparisonProgress>('video-comparison-progress', (event) => callback(event.payload));
 export const refreshCapabilities = (): Promise<void> => invoke('refresh_capabilities');
-export const requestImageComparison = (mediaId: string): Promise<void> =>
-  invoke('request_image_comparison', { mediaId });
+/** With a pair, both targets ("original" or a job id of this image) are decoded
+ * into the runtime's pair slots; without one, the newest result is decoded alone. */
+export const requestImageComparison = (
+  mediaId: string,
+  pair?: { showing: string; against: string },
+): Promise<void> =>
+  pair
+    ? invoke('request_image_comparison', { mediaId, showing: pair.showing, against: pair.against })
+    : invoke('request_image_comparison', { mediaId });
+export const listAllMediaResults = (): Promise<MediaResults[]> => invoke('list_all_media_results');
+export const requestCompare = (picks: ComparePick[]): Promise<void> =>
+  invoke('request_compare', { picks });
+export const listMediaResults = (
+  mediaId: string,
+  limit = 50,
+  before: string | null = null,
+): Promise<MediaResults> => invoke('list_media_results', { mediaId, limit, before });
+export const startModelTrials = (
+  mediaId: string,
+  modelIds: string[],
+  baseSettings: StartBatchInput,
+): Promise<string[]> => invoke('start_model_trials', { mediaId, modelIds, baseSettings });
+export const estimateModelTrials = (
+  mediaId: string,
+  modelIds: string[],
+  baseSettings: StartBatchInput,
+): Promise<TrialEstimate[]> => invoke('estimate_model_trials', { mediaId, modelIds, baseSettings });
+export const cancelJobsForMedia = (mediaId: string): Promise<void> =>
+  invoke('cancel_jobs_for_media', { mediaId });
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>
   invoke('download_model', { modelId, acceptedTerms });
@@ -257,6 +322,9 @@ export const saveRecipe = (recipe: Recipe): Promise<void> => invoke('save_recipe
 export const deleteRecipe = (id: string): Promise<void> => invoke('delete_recipe', { id });
 export const openResult = (path: string): Promise<void> => invoke('open_result', { path });
 export const revealResult = (path: string): Promise<void> => invoke('reveal_result', { path });
+/** Adds a finished result as an input and selects it; the host checks the path like Reveal does. */
+export const useResultAsInput = (path: string): Promise<string> =>
+  invoke('use_result_as_input', { path });
 export const diagnosticSummary = (): Promise<string> => invoke('diagnostic_summary');
 export const openOutputDirectory = (): Promise<void> => invoke('open_output_directory');
 export const takeLaunchIntents = (): Promise<LaunchIntent[]> => invoke('take_launch_intents');
@@ -269,7 +337,10 @@ export async function listenForWorker(
   handler: (message: WorkerEnvelope) => void,
 ): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
-  return listen<WorkerEnvelope>('worker-message', (event) => handler(event.payload));
+  // The host forwards a message the engine sent without data as null.
+  return listen<WorkerEnvelope>('worker-message', (event) =>
+    handler({ ...event.payload, data: event.payload.data ?? {} }),
+  );
 }
 
 export async function listenForStateChange(handler: () => void): Promise<UnlistenFn> {
@@ -337,3 +408,9 @@ export const discardUpdate = (): Promise<void> => invoke('discard_update');
 export const recoverUpdateSettings = (): Promise<void> => invoke('recover_update_settings');
 export const listenForUpdates = (callback: (status: UpdateStatus) => void): Promise<UnlistenFn> =>
   listen<UpdateStatus>('update-status', (event) => callback(event.payload));
+
+export const requestCompareRegions = (
+  generation: number,
+  regions: (import('./compareRegions').Region | null)[],
+): Promise<void> => invoke('request_compare_regions', { generation, regions });
+export const clearCompareRegions = (): Promise<void> => invoke('clear_compare_regions');

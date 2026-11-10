@@ -6,7 +6,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
 - **Desktop host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
   components retain their upstream permissive or file-level terms (including Apache, BSD, ISC,
   MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. macOS uses WKWebView and Windows uses WebView2. The Linux AppImages bundle
-  WebKitGTK/GTK/GStreamer libraries from Ubuntu 24.04; these include LGPL and other
+  WebKitGTK/GTK/GStreamer libraries from Ubuntu 22.04; these include LGPL and other
   licenses and require the matching notices and applicable source/relinking materials.
 - **IBM Plex Sans** — Copyright © 2017 IBM Corp., with Reserved Font Name "Plex", under the
   SIL Open Font License 1.1. The interface bundles the unmodified variable font from IBM's
@@ -35,12 +35,21 @@ own terms; this file is a distribution notice, not a replacement for their licen
   AMD under MIT, BSD, University of Illinois/NCSA and Apache-2.0-with-LLVM-exception terms in
   [ROCm's repositories](https://github.com/ROCm/rocm-systems); the MIT notice they share is
   reproduced below. Its libnuma (LGPL-2.1) and libelf (elfutils, LGPL-3.0-or-later or
-  GPL-2.0-or-later) are Ubuntu 24.04's own builds, and the ROCm source bundle carries their
+  GPL-2.0-or-later) are Ubuntu 22.04's own builds, and the ROCm source bundle carries their
   Ubuntu source packages. libdrm is MIT.
 - **Windows DirectML engine** — ONNX is Apache-2.0; ONNX Runtime is MIT and ships its own
   third-party notices. The DirectML build uses ONNX 1.22.0, ONNX Runtime DirectML 1.24.4 and
   Torch 2.13.0 CPU for loading and conversion; `ml_dtypes` is Apache-2.0. The provider DLLs
   keep their shipped terms, and the license and notice files are included in the frozen worker.
+- **Intel GPUs through OpenVINO** (Windows DirectML and Linux CPU editions) —
+  `onnxruntime-ep-openvino` 1.8.1 is MIT and carries its own OpenVINO runtime (Apache-2.0),
+  oneTBB (Apache-2.0) and hwloc 2.9.3 (BSD-3-Clause, reproduced below). Its
+  `third-party-programs.txt`, listing ONNX Runtime and nlohmann/json (MIT) and OpenVINO, ONNX,
+  flatbuffers, opencv_contrib and a TensorFlow allocator (Apache-2.0), is included in the frozen
+  worker. The Linux CPU edition also ships ONNX 1.22.0 (Apache-2.0) and ONNX Runtime 1.24.4 (MIT)
+  for the model conversion. The Linux CPU edition bundles Ubuntu 22.04's OpenCL ICD loader
+  `libOpenCL.so.1` (ocl-icd 2.2.14, BSD-2-Clause, reproduced below), which finds the system's
+  GPU driver; the driver itself comes from the system and is not distributed.
 - **macOS system codecs** — `localsr-media` links Apple's AVFoundation, CoreMedia, CoreVideo and
   VideoToolbox frameworks, which are part of macOS and not distributed by LocalSR. It adds no
   third-party code to the package.
@@ -79,6 +88,10 @@ own terms; this file is a distribution notice, not a replacement for their licen
   OpenCV Zoo with an exact size and SHA-256 rather than bundled in the application.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included
   `src/localsr/video_models/seedvr2/NOTICE.md` and `vendor/LICENSE`; model bundles remain external.
+- **RIFE frame interpolation** — the IFNet network code from Practical-RIFE (MIT, copyright
+  2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.26
+  checkpoint (MIT, per the Practical-RIFE README) is an optional, checksum-pinned download and is
+  not included in installers.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
   download. CC-BY checkpoints require attribution. The official Real-ESRGAN ×2 project/asset is
   recorded as BSD-3-Clause and the official FBCNN project/model-zoo asset as Apache-2.0. The HAT-S
@@ -133,3 +146,73 @@ NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPO
 NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
 OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## hwloc BSD notice
+
+Copyright © 2004-2006 The Trustees of Indiana University and Indiana University Research and Technology Corporation.  All rights reserved.
+Copyright © 2004-2005 The University of Tennessee and The University of Tennessee Research Foundation.  All rights reserved.
+Copyright © 2004-2005 High Performance Computing Center Stuttgart, University of Stuttgart.  All rights reserved.
+Copyright © 2004-2005 The Regents of the University of California. All rights reserved.
+Copyright © 2009      CNRS
+Copyright © 2009-2016 Inria.  All rights reserved.
+Copyright © 2009-2015 Université Bordeaux
+Copyright © 2009-2015 Cisco Systems, Inc.  All rights reserved.
+Copyright © 2009-2012 Oracle and/or its affiliates.  All rights reserved.
+Copyright © 2010      IBM
+Copyright © 2010      Jirka Hladky
+Copyright © 2012      Aleksej Saushev, The NetBSD Foundation
+Copyright © 2012      Blue Brain Project, EPFL. All rights reserved.
+Copyright © 2013-2014 University of Wisconsin-La Crosse. All rights reserved.
+Copyright © 2015      Research Organization for Information Science and Technology (RIST). All rights reserved.
+Copyright © 2015-2016 Intel, Inc.  All rights reserved.
+See COPYING in top-level directory.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## ocl-icd BSD notice
+
+From `ocl_icd_loader.c` of ocl-icd 2.2.14:
+
+Copyright (c) 2012-2020, Brice Videau <bvideau@anl.gov>
+Copyright (c) 2012-2020, Vincent Danjean <Vincent.Danjean@ens-lyon.org>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

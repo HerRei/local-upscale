@@ -12,6 +12,19 @@ from .coreml_runtime import coreml_available
 
 logger = logging.getLogger(__name__)
 
+# OpenVINO's name for a GPU ends in "(iGPU)" or "(dGPU)"; the DirectML adapter name of the
+# same GPU does not.
+_OPENVINO_KIND = re.compile(r"\s*\((?:iGPU|dGPU)\)\s*$")
+_TRADEMARKS = re.compile(r"\((?:R|TM|C)\)|[®™©]")
+
+
+def display_name(name: str) -> str:
+    """An adapter name as people know it, without trademark marks or OpenVINO's (iGPU) tag.
+
+    The engine's messages use it, so they name a GPU as the Hardware menu does
+    (cleanDeviceName in desktop/src/lib/hardwareRoutes.ts)."""
+    return " ".join(_TRADEMARKS.sub("", _OPENVINO_KIND.sub("", name)).split())
+
 
 def _system_memory() -> tuple[int, int]:
     if sys.platform == "win32":
@@ -226,6 +239,19 @@ def get_memory_snapshot(device_id: str) -> dict:
     return snapshot
 
 
+def with_current_memory(report: dict) -> dict:
+    """``report`` with only its memory readings taken again.
+
+    The GPU drivers are not asked, so this is safe beside a running job."""
+    total_ram, available_ram = _system_memory()
+    return {
+        **report,
+        "system_ram_total": total_ram,
+        "system_ram_available": available_ram,
+        **_system_pressure_snapshot(total_ram, available_ram),
+    }
+
+
 def get_capability_report() -> dict:
     total_ram, available_ram = _system_memory()
     devices = []
@@ -256,6 +282,10 @@ def get_capability_report() -> dict:
                 free, total = torch.cuda.mem_get_info(index)
                 properties = torch.cuda.get_device_properties(index)
             major, minor = properties.major, properties.minor
+            integrated = bool(getattr(properties, "is_integrated", False))
+            if integrated:
+                # The device reports its BIOS carve-out; it really uses shared memory.
+                total, free = total_ram, max(int(free), available_ram // 2)
             devices.append(
                 {
                     "id": f"cuda:{index}",
@@ -265,7 +295,7 @@ def get_capability_report() -> dict:
                     "free_memory": int(free),
                     "supports_fp16": (major, minor) >= (5, 3),
                     "recommended_tile_sizes": _recommended_tiles(int(free)),
-                    "is_integrated": False,
+                    "is_integrated": integrated,
                 }
             )
 
@@ -290,6 +320,8 @@ def get_capability_report() -> dict:
 
     if sys.platform == "win32":
         _detect_directml(devices, total_ram, available_ram)
+    if sys.platform in {"win32", "linux"}:
+        _detect_openvino(devices, available_ram)
         # QNN provider discovery is intentionally not exposed yet. The current
         # inference engine consumes PyTorch/Spandrel checkpoints and cannot
         # execute them through ONNX Runtime QNN without a separate conversion
@@ -317,9 +349,116 @@ def get_capability_report() -> dict:
         "system_ram_available": available_ram,
         "devices": devices,
         "media": media_capabilities(),
+        "gpu_suggestion": _gpu_suggestion(devices),
+        "npu_hint": _npu_hint() if sys.platform in {"win32", "linux"} else None,
     }
     report.update(_system_pressure_snapshot(total_ram, available_ram))
     return report
+
+
+_GPU_TYPES = {"mps", "cuda", "rocm", "xpu", "directml", "openvino"}
+_LINUX_VENDORS = {"0x10de": "CUDA", "0x1002": "ROCm", "0x8086": "intel-driver"}
+_DRM_ROOT = Path("/sys/class/drm")
+
+
+def _gpu_suggestion(devices: list[dict]) -> dict | None:
+    """A GPU this edition cannot use, and the download (or driver) that would use it."""
+    if any(device["type"] in _GPU_TYPES for device in devices):
+        return None
+    try:
+        if sys.platform == "win32":
+            from .windows_adapters import directml_adapters
+
+            for adapter in directml_adapters(probe=False):
+                download = "CUDA" if adapter["vendor_id"] == 0x10DE else "DirectML"
+                return {"name": adapter["name"], "download": download}
+        elif sys.platform == "linux":
+            found: dict[str, Path] = {}
+            for vendor_file in sorted(_DRM_ROOT.glob("card[0-9]*/device/vendor")):
+                download = _LINUX_VENDORS.get(
+                    vendor_file.read_text(encoding="utf-8").strip().lower()
+                )
+                if download is not None:
+                    found.setdefault(download, vendor_file.parent)
+            for download in ("CUDA", "ROCm"):
+                if download in found:
+                    return {"name": _linux_gpu_name(found[download]), "download": download}
+            # Intel's compute driver helps only an edition that ships OpenVINO, and only
+            # when it is missing.
+            if "intel-driver" in found:
+                from .openvino_devices import intel_gpu_runtime_installed, plugin_registered
+
+                if plugin_registered() and not intel_gpu_runtime_installed():
+                    return {
+                        "name": _linux_gpu_name(found["intel-driver"]),
+                        "download": "intel-driver",
+                    }
+    except Exception:  # noqa: BLE001 - a hint must never break the capability report
+        logger.debug("GPU suggestion failed", exc_info=True)
+    return None
+
+
+def _linux_gpu_name(device: Path) -> str:
+    vendor = device.joinpath("vendor").read_text(encoding="utf-8").strip().lower()
+    return {"0x10de": "an NVIDIA GPU", "0x1002": "an AMD GPU", "0x8086": "Intel graphics"}[vendor]
+
+
+def _npu_hint() -> dict | None:
+    """An Intel NPU this machine has but cannot use yet, and what it is missing."""
+    try:
+        from .openvino_devices import npu_compiler_present, npu_devices
+
+        for device in npu_devices():
+            if not npu_compiler_present(device):
+                return {"name": device["name"], "missing": "compiler"}
+    except Exception:  # noqa: BLE001 - a hint must never break the capability report
+        logger.debug("NPU hint failed", exc_info=True)
+    return None
+
+
+def _detect_openvino(devices: list[dict], available_ram: int) -> None:
+    """Intel GPUs and NPUs through ONNX Runtime's OpenVINO plugin, where the build ships it."""
+    try:
+        from .openvino_devices import gpu_devices, npu_compiler_present, npu_devices
+
+        found = gpu_devices()
+        npus = [device for device in npu_devices() if npu_compiler_present(device)]
+    except Exception:  # noqa: BLE001 - discovery must never hide the other devices
+        logger.debug("OpenVINO discovery failed", exc_info=True)
+        return
+    for device in npus:
+        # The NPU works in the computer's own memory and computes in FP16 whatever the
+        # Precision setting says; LocalSR checks its result against the CPU.
+        devices.append(
+            {
+                "id": f"openvino:{device['key']}",
+                "type": "npu",
+                "name": f"{device['name']} (NPU)",
+                "total_memory": available_ram,
+                "free_memory": available_ram // 2,
+                "supports_fp16": False,
+                "recommended_tile_sizes": _recommended_tiles(available_ram // 2),
+                "is_integrated": True,
+            }
+        )
+    for device in found:
+        integrated = device["integrated"]
+        budget = available_ram // 2
+        if not integrated and device["total_memory"]:
+            budget = min(budget, device["total_memory"])
+        devices.append(
+            {
+                "id": f"openvino:{device['key']}",
+                "type": "openvino",
+                "name": f"{device['name']} (OpenVINO)",
+                "total_memory": device["total_memory"] or budget,
+                "free_memory": budget,
+                # The route runs FP32 so its results match the CPU's.
+                "supports_fp16": False,
+                "recommended_tile_sizes": _recommended_tiles(budget),
+                "is_integrated": integrated,
+            }
+        )
 
 
 def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) -> None:
@@ -338,10 +477,21 @@ def _detect_directml(devices: list[dict], total_ram: int, available_ram: int) ->
 
             for adapter in directml_adapters():
                 dedicated = adapter["dedicated_memory"]
-                integrated = dedicated < 512 * 1024**2
+                # D3D12 says whether the adapter shares memory with the CPU; the old
+                # guess (little dedicated memory) is the fallback when it cannot tell.
+                uma = adapter.get("uma")
+                integrated = uma if uma is not None else dedicated < 512 * 1024**2
                 budget = (
                     min(available_ram // 2, dedicated) if not integrated else available_ram // 2
                 )
+                # What Windows grants this process on the adapter right now, with headroom.
+                # An integrated GPU may also use the non-local (shared) segment.
+                if adapter.get("budget") is not None:
+                    granted = adapter["budget"] - (adapter.get("usage") or 0)
+                    if integrated and adapter.get("shared_budget") is not None:
+                        granted += adapter["shared_budget"] - (adapter.get("shared_usage") or 0)
+                    # No floor: a near-exhausted grant must not be reported as more.
+                    budget = min(budget, max(0, int(granted * 0.85)))
                 devices.append(
                     {
                         "id": f"directml:{adapter['index']}",

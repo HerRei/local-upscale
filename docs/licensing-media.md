@@ -43,14 +43,16 @@ VideoToolbox). It decodes into the same lossless FFV1/FLAC intermediate the
 FFmpeg route uses and encodes exports with VideoToolbox, exchanging raw frames
 with the worker over pipes. LocalSR's binaries still contain no code for these
 formats, and the helper adds no third-party code to the package. It writes
-H.264/HEVC into MP4 or MOV; MKV output and formats macOS cannot read (WMV,
+H.264/HEVC into MP4 or MOV and Apple ProRes 422 into MOV; MKV output and formats macOS cannot read (WMV,
 DivX, FLV, H.263) still go through a user-installed FFmpeg. Windows has
 equivalent codecs in Media Foundation; a helper for them is planned.
 
 HEIC and HEIF photos carry HEVC too. On macOS the worker hands them, and JPEG
 XL, to ImageIO through `/usr/bin/sips`, which writes a temporary TIFF that
 Pillow reads; LocalSR ships no HEIF or HEVC decoder (no libheif, libde265 or
-x265), so these formats are offered on macOS only. The other still formats
+x265), so these formats are offered on macOS only. HEIC output works the same way
+in reverse: LocalSR writes a lossless TIFF and `/usr/bin/sips` encodes it with the system
+HEIC encoder, so LocalSR ships no HEVC encoder for photos either. The other still formats
 need no patent licence and use decoders already in the package: AVIF (AV1,
 royalty-free under the Alliance for Open Media patent licence) and JPEG 2000
 (Part 1, royalty-free) through the libavif and OpenJPEG libraries inside Pillow,
@@ -83,9 +85,10 @@ shows the command for the actual distribution and can run it in a terminal.
 
 - H.264/HEVC videos need a user-installed FFmpeg on Windows and Linux; macOS
   uses its own codecs.
-- The default export is AV1 in MP4. AV1 encodes more slowly than x264 and some
-  older players and editors cannot open it; VP9 and lossless FFV1 (MKV) are
-  alternatives.
+- The desktop defaults to Automatic: HEVC through the Mac hardware encoder for
+  SDR MP4 exports, AV1 otherwise. The Python API defaults to AV1 in MP4. AV1
+  encodes more slowly than x264 and some older players and editors cannot open
+  it; VP9 and lossless FFV1 (MKV) are alternatives.
 - Comparison playback copies are VP9/Opus WebM.
 - HDR preservation exports 10-bit AV1, VP9 or FFV1, or HEVC Main 10 through the
   user's FFmpeg (libx265).
@@ -135,7 +138,7 @@ packages are labelled untested wherever they are offered (see
 - **AMD ROCm** — PyTorch's ROCm wheel carries libnuma (LGPL-2.1) and libelf
   (elfutils, LGPL-3.0-or-later or GPL-2.0-or-later) built on AlmaLinux, some of them
   twice under different file names. The build finds every copy by the soname inside
-  the file, replaces it with the build host's Ubuntu 24.04 build and link-checks every
+  the file, replaces it with the build host's Ubuntu 22.04 build and link-checks every
   library that uses them, and `build_source_bundle.py` refuses a package with any copy
   whose GNU build ID is not Ubuntu's, so the Ubuntu source packages in the bundle
   correspond exactly.
@@ -186,5 +189,5 @@ shipped on a guess. Updated on 18 September 2026 for the GPU packages.
    Settled: the cuDNN 9 DLLs ship in the Windows CUDA package.
 6. **Operating system codecs.** Apple and Microsoft license H.264, HEVC and AAC
    for use through their public APIs, which every video application on those
-   systems relies on. The same holds for HEIC/HEIF photos decoded by macOS
-   ImageIO. Settled.
+   systems relies on. The same holds for HEIC/HEIF photos decoded and written by
+   macOS ImageIO, and for ProRes written by AVFoundation. Settled.

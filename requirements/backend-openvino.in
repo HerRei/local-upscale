@@ -1,0 +1,7 @@
+# Intel GPUs and NPUs on Linux through ONNX Runtime's OpenVINO plugin (linux-x86_64-cpu
+# only): the ONNX exporter, the runtime the plugin registers into, and the plugin with its
+# own OpenVINO runtime. A GPU appears only where the host has Intel's compute driver.
+# ONNX Runtime finds an NPU on Linux only from 1.28 on (it reads /sys/class/accel).
+onnx==1.22.0
+onnxruntime==1.31.1
+onnxruntime-ep-openvino==1.8.1

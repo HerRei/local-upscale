@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from localsr.core.disk_space import format_size
+
 GIB = 1024**3
 
 
@@ -23,14 +25,17 @@ class EditMemory:
     # macOS's own free level (kern.memorystatus_level) as bytes: what the system can
     # hand out without pressure, counting reclaimable file cache and compression.
     obtainable_ram: int = 0
+    # Free space on the system volume, where macOS swaps to, and the part of it that
+    # must stay free. 0 and 0 when unknown, which never stops an edit.
+    disk_free: int = 0
+    disk_reserve: int = 0
 
     @property
     def free_ram(self) -> int:
         """Memory an edit can take now: the macOS free level when known, else available RAM.
 
-        psutil's figure on macOS is free plus inactive pages only. On a busy 16 GB
-        Mac it reads about 5.5 GiB while the kernel reports 70% free, and a 4.5 GiB
-        FLUX.2 klein edit then runs without pressure or swap.
+        The macOS kernel's free level includes reclaimable memory, while
+        psutil reports free and inactive pages.
         """
         return self.obtainable_ram or self.available_ram
 
@@ -106,6 +111,17 @@ def read_host_memory(unified: bool = False) -> EditMemory:
         pressure = {1: "low", 2: "warning", 4: "critical"}.get(level, "unknown")
         if free_percent is not None:
             obtainable = int(ram.total) * min(100, max(0, free_percent)) // 100
+    disk_free = disk_reserve = 0
+    if unified:
+        from pathlib import Path
+
+        from localsr.core import disk_space
+
+        try:
+            volume = disk_space.volume_of(Path.home())
+            disk_free, disk_reserve = volume.free, disk_space.reserve_for(volume)
+        except (OSError, RuntimeError):
+            pass
     return EditMemory(
         int(ram.total),
         int(ram.available),
@@ -113,6 +129,8 @@ def read_host_memory(unified: bool = False) -> EditMemory:
         unified=unified,
         pressure=pressure,
         obtainable_ram=obtainable,
+        disk_free=disk_free,
+        disk_reserve=disk_reserve,
     )
 
 
@@ -177,11 +195,14 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
     return EditPlan(required, reserve, budget, limit, process_limit)
 
 
-# On unified memory macOS compresses and swaps to make room, and "warning"
-# pressure is routine while a model loads (measured: a FLUX.2 klein edit raised it
-# at 34% free with no swap). The edit stops only when the Mac is in trouble.
-HEAVY_SWAP = 2 * GIB
-SUSTAINED_WARNING_SECONDS = 30.0
+# On unified memory macOS compresses and swaps to make room, and on a busy 16 GB
+# Mac loading a model pushes a few GiB of other apps to swap by design. The stops
+# aim at the two real dangers: thrashing, and filling the system disk with swap.
+SWAP_FLOOR = 4 * GIB
+SWAP_SHARE = 0.5
+SWAP_GROWING = 512 * 1024**2
+SUSTAINED_WARNING_SECONDS = 90.0
+SUSTAINED_WARNING_SWAP = 2 * GIB
 WARNING_SWAP = 512 * 1024**2
 
 
@@ -192,13 +213,15 @@ def check_edit_pressure(
     used: int,
     warning_seconds: float = 0.0,
     critical_samples: int = 1,
+    warning_swap: int | None = None,
 ):
     """Stop the edit when the system is in trouble or the editor runs away.
 
     ``used`` is the editor's own memory: its physical footprint on macOS, where
     memory-mapped weights are clean pages the system can drop, else its RSS.
     ``warning_seconds`` is how long pressure has stayed at warning or above, and
-    ``critical_samples`` how many consecutive samples have been critical.
+    ``critical_samples`` how many consecutive samples have been critical, and
+    ``warning_swap`` the swap in use when that pressure began.
     """
     swapped = memory.swap_used - initial_swap
     advice = "Close apps or choose a smaller model, and retry."
@@ -210,12 +233,24 @@ def check_edit_pressure(
     elif memory.unified:
         if memory.pressure == "critical" and critical_samples >= 2:
             reason = "macOS reported critical memory pressure"
-        elif swapped > HEAVY_SWAP:
-            reason = f"the Mac swapped {swapped / GIB:.1f} GiB to disk"
-        elif warning_seconds >= SUSTAINED_WARNING_SECONDS and swapped > WARNING_SWAP:
+        elif swapped > max(SWAP_FLOOR, int(memory.total_ram * SWAP_SHARE)):
+            reason = (
+                f"the Mac swapped {swapped / GIB:.1f} GiB to disk, more than half of its memory"
+            )
+        elif swapped > SWAP_GROWING and memory.disk_free < memory.disk_reserve:
+            reason = (
+                f"only {format_size(memory.disk_free)} of disk space was free "
+                f"on the system volume while the Mac swapped {swapped / GIB:.1f} GiB to it"
+            )
+            advice = "Free up disk space, and retry."
+        elif (
+            warning_seconds >= SUSTAINED_WARNING_SECONDS
+            and memory.swap_used - (initial_swap if warning_swap is None else warning_swap)
+            > SUSTAINED_WARNING_SWAP
+        ):
             reason = (
                 f"memory pressure stayed high for {warning_seconds:.0f} s "
-                f"while the Mac swapped {swapped / GIB:.1f} GiB"
+                "while the Mac kept swapping"
             )
         else:
             return

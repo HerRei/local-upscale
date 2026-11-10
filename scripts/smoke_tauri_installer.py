@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from release_targets import expected_update_identity, target
+
 PE_ARCHES = {0x014C: "x86", 0x8664: "x86_64", 0xAA64: "arm64"}
 
 
@@ -204,8 +206,8 @@ def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: fl
             timeout=timeout,
         )
         executable = installed_windows_executable(install_dir)
-        # Self-hosted Windows Actions runners commonly run as a service in
-        # Session 0. Exercise the installed Rust host and bundled worker before
+        # A Windows service or CI runner may run in Session 0, with no
+        # interactive desktop. Exercise the installed Rust host and bundled worker before
         # WebView initialization so this acceptance test does not require an
         # interactive desktop.
         run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
@@ -319,12 +321,12 @@ def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: floa
         with temporary_directory(
             prefix="localsr-appimage-runtime-", dir=appimage_tmp_parent
         ) as appimage_tmp:
-            env["TMPDIR"] = appimage_tmp
-            # Self-hosted Linux runners may not provide a functional GTK/Wayland
-            # session even under Xvfb. Exercise the actual AppImage host, its
+            direct_env = {**env, "TMPDIR": appimage_tmp}
+            # A CI runner may not provide a functional GTK/Wayland session even
+            # under Xvfb. Exercise the actual AppImage host, its
             # resource layout and bundled worker before WebView initialization.
             try:
-                run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
+                run([str(artifact), "--headless-smoke-test"], env=direct_env, timeout=timeout)
                 direct_smoke_passed = True
             except subprocess.CalledProcessError as error:
                 print(
@@ -391,6 +393,30 @@ def validate_report(report: Path) -> dict[str, object]:
     return payload
 
 
+def check_update_identity(payload: dict[str, object], target_id: str, commit: str) -> None:
+    """The installed host must carry its edition's updater key, feed target and engine id.
+
+    Without them the build never checks its feed and shows no update switches.
+    """
+    expected = expected_update_identity(target(target_id), commit)
+    if payload.get("update") != expected:
+        raise RuntimeError(
+            f"installed host has the wrong update identity: {payload.get('update')} "
+            f"instead of {expected}"
+        )
+
+
+def record_commit(report: Path, commit: str) -> None:
+    """Stamp the release commit the build came from into its smoke report.
+
+    The signing tool reads the stamp back: reports and downloads from another run's
+    commit are refused before anything is signed.
+    """
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["commit"] = commit
+    report.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def resolve_artifact(pattern: str) -> Path:
     matches = [Path(value).resolve() for value in glob.glob(pattern)]
     if len(matches) != 1:
@@ -449,10 +475,21 @@ def main() -> int:
     parser.add_argument(
         "--backend", choices=("CPU", "CUDA", "DirectML", "Intel-XPU", "AMD-ROCm", "MPS")
     )
+    parser.add_argument(
+        "--update-target",
+        metavar="TARGET",
+        help="Release target whose update identity the installed host must report",
+    )
+    parser.add_argument("--commit", help="Release commit for --update-target")
     args = parser.parse_args()
+    if args.update_target and not args.commit:
+        parser.error("--update-target requires --commit")
     if args.backend:
         os.environ["LOCALSR_SMOKE_BACKEND"] = args.backend
-    smoke(resolve_artifact(args.artifact_glob), args.report, args.timeout)
+    payload = smoke(resolve_artifact(args.artifact_glob), args.report, args.timeout)
+    if args.update_target:
+        check_update_identity(payload, args.update_target, args.commit)
+        record_commit(args.report, args.commit)
     return 0
 
 

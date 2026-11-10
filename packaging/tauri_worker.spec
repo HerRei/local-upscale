@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller onedir worker used by the additive Tauri desktop preview.
+"""PyInstaller onedir worker used by the Tauri desktop app.
 
-This excludes the optional PySide client. The resulting engine is a
+This excludes PySide6, which the desktop app does not use. The resulting engine is a
 private subprocess resource, not a second user-facing application.
 """
 
@@ -14,7 +14,13 @@ from pathlib import Path
 
 from PyInstaller.building.datastruct import TOC
 from PyInstaller.config import CONF
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 ROOT = Path(SPECPATH).parent
@@ -33,6 +39,10 @@ datas = spandrel_datas + [
     (
         str(SOURCE / "localsr" / "video_models" / "seedvr2"),
         "localsr/video_models/seedvr2",
+    ),
+    (
+        str(SOURCE / "localsr" / "video_models" / "rife" / "NOTICE.md"),
+        "localsr/video_models/rife",
     ),
 ]
 edit_runtime = ROOT / ".cache" / "edit-runtime"
@@ -69,6 +79,42 @@ if find_spec("onnxruntime") is not None:
         except PackageNotFoundError:
             continue
     onnx_hidden += ["onnxruntime", "torch.onnx"]
+openvino_package_libraries: set[str] = set()
+if find_spec("onnxruntime_ep_openvino") is not None:
+    # Intel GPUs and NPUs: the OpenVINO plugin and its own OpenVINO runtime, loaded by
+    # path from this package directory. The NPU plugin loads Level Zero at device
+    # discovery; on Windows the wheel also carries the NPU compiler, on Linux the user's
+    # Intel NPU driver provides it.
+    openvino_binaries = collect_dynamic_libs("onnxruntime_ep_openvino")
+    if not any("providers_openvino_plugin" in Path(entry[0]).name for entry in openvino_binaries):
+        raise RuntimeError("The OpenVINO plugin library was not found for bundling")
+    spandrel_binaries += openvino_binaries
+    # Every library file in the plugin's directory, versioned names included (libopenvino.so.2641,
+    # libtbb.so.12): collect_dynamic_libs only lists the plain .so files, while the dependency
+    # analysis copies exactly the versioned ones to the top level.
+    openvino_package_libraries = {
+        path.name
+        for path in Path(find_spec("onnxruntime_ep_openvino").submodule_search_locations[0]).iterdir()
+        if path.is_file() and (".so" in path.name or path.suffix.lower() == ".dll")
+    }
+    # On Windows the DLLs load through a side-by-side manifest (openvino_runtime.manifest);
+    # without it Windows refuses them (error 14001) and the plugin cannot register.
+    openvino_notices = collect_data_files(
+        "onnxruntime_ep_openvino",
+        includes=["third-party-programs.txt", "cache.json", "*.manifest"],
+    )
+    if not any(Path(entry[0]).name == "third-party-programs.txt" for entry in openvino_notices):
+        raise RuntimeError("The OpenVINO third-party notices must be bundled")
+    package_manifests = {
+        path.name
+        for path in Path(
+            find_spec("onnxruntime_ep_openvino").submodule_search_locations[0]
+        ).glob("*.manifest")
+    }
+    if not package_manifests <= {Path(entry[0]).name for entry in openvino_notices}:
+        raise RuntimeError(f"The OpenVINO manifests must be bundled: {sorted(package_manifests)}")
+    datas += openvino_notices + copy_metadata("onnxruntime-ep-openvino")
+    onnx_hidden += ["onnxruntime_ep_openvino"]
 coreml_hidden = []
 if sys.platform == "darwin" and find_spec("coremltools") is not None:
     # Core ML conversion and execution on Apple silicon. coremltools swallows a
@@ -203,7 +249,7 @@ pyz = PYZ(analysis.pure)
 executable = EXE(
     pyz,
     analysis.scripts,
-    [],
+    [("X utf8", None, "OPTION")],
     exclude_binaries=True,
     name="localsr-worker",
     debug=False,
@@ -237,6 +283,22 @@ collection = COLLECT(
     upx=False,
     name="engine",
 )
+
+# PyInstaller also copies OpenVINO's own libraries (libopenvino, its ONNX frontend, oneTBB)
+# to the top level when it assembles the folder. The frozen worker puts the top level first
+# on the library path, so the plugin would load that copy, and OpenVINO, which finds its
+# device plugins next to itself, would list no device at all. Nothing else needs them, and
+# the plugin finds them in its own directory, so the copies go.
+if openvino_package_libraries:
+    internal = Path(DISTPATH) / "engine" / "_internal"
+    plugin_directory = internal / "onnxruntime_ep_openvino"
+    if not plugin_directory.is_dir():
+        raise RuntimeError(f"The OpenVINO plugin directory is missing: {plugin_directory}")
+    for name in sorted(openvino_package_libraries):
+        duplicate = internal / name
+        if (duplicate.is_file() or duplicate.is_symlink()) and (plugin_directory / name).exists():
+            duplicate.unlink()
+            print(f"Removed the top-level copy of {name}")
 
 # Fail the build if any bundled media component falls outside the codec policy
 # (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC). Private,

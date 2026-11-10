@@ -63,6 +63,8 @@ def probe(backend: str) -> dict[str, object]:
             raise RuntimeError(f"Torch lacks a built MPS backend: {result}")
     else:
         raise ValueError(f"Unknown backend: {backend}")
+    if normalized in {"cpu", "directml"}:
+        _check_openvino_plugin(result)
     sample = torch.ones((1, 1, 5, 5), device="cpu")
     kernel = torch.ones((1, 1, 3, 3), device="cpu")
     if float(torch.nn.functional.conv2d(sample, kernel).sum()) != 81.0:
@@ -70,3 +72,28 @@ def probe(backend: str) -> dict[str, object]:
     result["cpu_inference_verified"] = True
     result["runtime_verified"] = True
     return result
+
+
+def _check_openvino_plugin(result: dict[str, object]) -> None:
+    """Where the build ships the OpenVINO plugin, its library must load. Which devices it
+    then lists depends on the machine (a GitHub runner lists none), so they are recorded,
+    not required; the packaged engine's devices are checked on real hardware."""
+    import importlib.util
+
+    if importlib.util.find_spec("onnxruntime_ep_openvino") is None:
+        return
+    import onnxruntime as ort
+
+    from localsr.core.openvino_devices import EP_NAME, plugin_registered
+
+    if not plugin_registered():
+        from localsr.core import openvino_devices
+
+        result["openvino_error"] = openvino_devices.registration_error
+        raise RuntimeError(f"The bundled OpenVINO plugin could not be registered: {result}")
+    devices = sorted(
+        str(device.device.type).rsplit(".", 1)[-1]
+        for device in ort.get_ep_devices()
+        if device.ep_name == EP_NAME
+    )
+    result["openvino_devices"] = devices

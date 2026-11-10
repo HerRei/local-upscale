@@ -11,8 +11,8 @@ loading. Restoration weights are not included in installers.
 | SPAN NomosUni | 4× | Quick photo upscaling | 4.5 MB | CC BY 4.0 |
 | HAT-S | 4× | General photo upscaling | 81.1 MB | Apache-2.0 |
 | HAT-L ImageNet | 4× | Larger general photo model | 165.8 MB | Apache-2.0 |
-| RealPLKSR NomosWebPhoto | 4× | Degraded web photos · Labs | 29.7 MB | CC BY 4.0 |
-| RealPLKSR HFA2k | 4× | Anime and line art · Labs | 29.7 MB | CC BY 4.0 |
+| RealPLKSR NomosWebPhoto | 4× | Degraded web photos | 29.7 MB | CC BY 4.0 |
+| RealPLKSR HFA2k | 4× | Anime video frames · Labs | 29.7 MB | CC BY 4.0 |
 | Real-ESRGAN x2plus | 2× | Native 2× upscaling | 67.1 MB | BSD-3-Clause |
 | RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC BY 4.0 |
 | NAFNet SIDD | 1× | Camera-noise removal | 464.2 MB | MIT |
@@ -22,6 +22,8 @@ loading. Restoration weights are not included in installers.
 | Real-ESRGAN x4plus Anime 6B | 4× | Fast anime and illustration | 17.9 MB | BSD-3-Clause |
 | SwinIR-M Real x4 GAN | 4× | Transformer real-world upscaling | 67.1 MB | Apache-2.0 |
 | SCUNet Color (PSNR) | 1× | Blind real-photo denoising | 72.0 MB | Apache-2.0 |
+| DAT2 BHI Real | 4× | Lettering, buildings and clean photos · very slow | 140.2 MB | CC BY 4.0 |
+| DAT2 RealWebPhoto v4 | 4× | Noisy, compressed web and phone photos · very slow | 140.3 MB | CC BY 4.0 |
 | HAT-S Face | 4× | Face companion · verified import | 40.5 MB | Rights unresolved |
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |
 
@@ -29,9 +31,18 @@ The native scale is the model's trained output scale. A smaller requested output
 can be resampled after inference. A 1× restoration model cleans an image without
 enlarging it and can run before an upscaler.
 
-**Quick** selects SPAN NomosUni; **Best** selects RealPLKSR NomosWebPhoto. HAT-S is
-the smaller stock HAT option. Model choice changes speed, memory use and visual
-results; compare a representative crop before processing a large folder.
+For photos, **Quick** selects SPAN NomosUni and **Best** selects RealPLKSR
+NomosWebPhoto. For illustrations, **Quick** selects Real-ESRGAN Anime 6B and
+**Best** selects RealPLKSR HFA2k, which can soften fine lines and screentones,
+darken white paper and reduce colour saturation on some manga and comic scans.
+Photo models remain a choice in the library. HAT-S is
+the smaller stock HAT option. No preset picks the two DAT2 models on its own: on an M1
+Pro they take about ten times as long as Best (around 73 seconds per input megapixel;
+on a CPU the gap is smaller), so choose them in the library, or pin one to Best, for
+the photos they suit. Keep the tile size at 256 for them where memory allows: at 64 their
+tile borders differ more from a whole-image run than Best's. Model choice
+changes speed, memory use and visual results; compare a representative crop before
+processing a large folder.
 
 ## Author credit and checkpoint terms
 
@@ -60,6 +71,11 @@ FP8** are separate, optional Labs downloads for supported engines. They export
 SDR and can require substantial RAM, GPU memory and time. A smaller FP8 file does
 not guarantee that a high-resolution clip fits in memory.
 
+Optional frame interpolation uses **RIFE 4.26**, a separate approximately 25 MB
+download, with the frame-by-frame engine. Its code and weights are MIT licensed;
+see [model licenses](../model-licenses.md) for the source and checkpoint details.
+It does not work with SeedVR2 or HDR preservation in this version.
+
 Experimental HAT HDR preservation exports HLG/PQ, but these models were trained
 on SDR. HDR quality remains unverified. For the exact codec, engine and feature
 boundaries, read [video support](../video-support.md).
@@ -67,6 +83,7 @@ boundaries, read [video support](../video-support.md).
 ## Your own models
 
 Supported `.safetensors` checkpoints can be imported. Unverified pickle or
-TorchScript files are blocked by default; set
-`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` only for files whose publisher you trust. Check your model's license, architecture,
+TorchScript files are blocked by default. For files whose publisher you trust,
+tick **Allow this pickle-based checkpoint** in the app; on the command line, set
+`LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`. Check your model's license, architecture,
 scale and colour assumptions before using it.

@@ -77,6 +77,9 @@ class CatalogModel:
     # Pipeline stage the checkpoint serves: upscale, deblock, restore, or
     # face_restore. Derived from purposes and scale when left empty.
     stage: str = ""
+    # False keeps a checkpoint out of the Quick and Best presets: the library offers it,
+    # and a user can pin it, but no preset picks it on its own (a slow specialist).
+    preset_eligible: bool = True
 
     @property
     def stage_kind(self) -> str:
@@ -343,11 +346,14 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="realplksr_hfa2k_anime_x4",
-        role="Anime, illustration and clean line art",
+        role="Anime and illustration · high quality",
         stage="upscale",
         name="RealPLKSR 4x HFA2k — Anime",
         filename="4xHFA2k_ludvae_realplksr_dysample.pth",
-        description="Fast RealPLKSR model trained for anime, illustrations, and clean line art.",
+        description=(
+            "Experimental anime-frame upscaler. It can soften fine lines and screentones, "
+            "darken white paper, and reduce colour saturation."
+        ),
         size_bytes=29_715_988,
         sha256="c6e44af18fd3159787b0dbf81d432a6c1ba12c736fc1184b107ed091e49e327c",
         download_url=(
@@ -356,7 +362,7 @@ MODEL_CATALOG = (
         ),
         architecture="RealPLKSR",
         native_scale=4,
-        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME, ModelPurpose.GENERAL),
+        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME),
         quality_tier=QualityTier.HIGH,
         speed_tier=SpeedTier.FAST,
         recommended_halo=16,
@@ -632,15 +638,77 @@ MODEL_CATALOG = (
         speed_factor=0.7,
         vram_estimate_mb=1500,
     ),
+    CatalogModel(
+        model_id="bhi_dat2_real_x4",
+        role="Lettering, buildings and clean photos; very slow",
+        stage="upscale",
+        name="DAT2 ×4 BHI Real — Lettering and buildings",
+        filename="4xBHI_dat2_real.pth",
+        description=(
+            "Philip Hofmann's DAT2 transformer trained on his BHI photo set. Sharpest on "
+            "lettering, masonry and clean photos; foliage and fur can come out soft. Up to ten "
+            "times slower than Best, so no preset picks it on its own."
+        ),
+        size_bytes=140_196_334,
+        sha256="14d85e754935332e289d04ab9c29ca2ebaf33dcc8ead4a637d92fe3fbbaaa0b0",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/4xBHI_dat2_real/4xBHI_dat2_real.pth"
+        ),
+        architecture="DAT",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=32,
+        source_url="https://huggingface.co/Phips/4xBHI_dat2_real",
+        license_name="CC BY 4.0",
+        author="Philip Hofmann",
+        memory_factor=2.0,
+        # Measured 73 s per input megapixel on an M1 Pro (MPS baseline 38 s/MP).
+        time_factor=1.9,
+        speed_factor=0.10,
+        vram_estimate_mb=4000,
+        commercial_use_status="allowed",
+        preset_eligible=False,
+    ),
+    CatalogModel(
+        model_id="realwebphoto_v4_dat2_x4",
+        role="Noisy, compressed web and phone photos; very slow",
+        stage="upscale",
+        name="DAT2 ×4 RealWebPhoto v4 — Noisy photos",
+        filename="4xRealWebPhoto_v4_dat2.pth",
+        description=(
+            "Philip Hofmann's DAT2 transformer trained for photos that were resized, compressed "
+            "and noisy before upscaling. Up to ten times slower than Best, so no preset picks it "
+            "on its own."
+        ),
+        size_bytes=140_299_118,
+        sha256="9b82f8f60826e59b9d2e56a6e6ad9a842b84d57a9ec5ed7377bf120032b2c4c9",
+        download_url=(
+            "https://github.com/Phhofm/models/releases/download/"
+            "4xRealWebPhoto_v4_dat2/4xRealWebPhoto_v4_dat2.pth"
+        ),
+        architecture="DAT",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
+        recommended_halo=32,
+        source_url="https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2",
+        license_name="CC BY 4.0",
+        author="Philip Hofmann",
+        memory_factor=2.0,
+        # Measured 73 s per input megapixel on an M1 Pro (MPS baseline 38 s/MP).
+        time_factor=1.9,
+        speed_factor=0.10,
+        vram_estimate_mb=4000,
+        commercial_use_status="allowed",
+        preset_eligible=False,
+    ),
 )
 
 CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}
 CATALOG_BY_FILENAME = {model.filename: model for model in MODEL_CATALOG}
-
-
-def get_model_by_id(model_id: str) -> CatalogModel | None:
-    """Look up a single-image catalog model by its unique ID."""
-    return CATALOG_BY_ID.get(model_id)
 
 
 def default_model_directory() -> Path:
@@ -775,6 +843,46 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
 )
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}
 
+# Frame interpolation models: optional stages of a video job, never video engines.
+# RIFE 4.26 was selected using synthetic held-out-frame comparisons; the
+# Practical-RIFE README places its model links under the project's MIT license. The official copy sits in a
+# Google Drive archive that cannot serve pinned downloads; HolyWu/vs-rife (MIT) publishes
+# the same bytes as a release asset, and the size and SHA-256 below are those of
+# train_log/flownet.pkl in the official archive.
+INTERPOLATION_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
+    CatalogVideoModel(
+        model_id="rife_4_26",
+        name="RIFE 4.26 — Labs",
+        description=(
+            "Makes in-between frames for smoother motion: 2× or 4× the frame rate, or 60 or "
+            "120 fps. Small and fast; runs on Apple, NVIDIA and AMD GPUs and on the CPU. "
+            "Very fast motion can smear, and scene cuts are kept as cuts."
+        ),
+        family="rife_4_26",
+        engine_kind="rife",
+        files=(
+            ModelFile(
+                role="flownet",
+                filename="flownet_v4.26.pkl",
+                size_bytes=24_636_301,
+                sha256="45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f",
+                download_url=(
+                    "https://github.com/HolyWu/vs-rife/releases/download/model/flownet_v4.26.pkl"
+                ),
+            ),
+        ),
+        license_name="MIT",
+        author="hzwer · Practical-RIFE",
+        source_url="https://github.com/hzwer/Practical-RIFE",
+        min_unified_memory_gb=8,
+        min_vram_gb=2,
+        temporal_window=2,
+        temporal_overlap=1,
+    ),
+)
+INTERPOLATION_CATALOG_BY_ID = {model.model_id: model for model in INTERPOLATION_MODEL_CATALOG}
+DEFAULT_INTERPOLATION_MODEL_ID = "rife_4_26"
+
 
 class ModelStore:
     def __init__(self, root: str | Path | None = None):
@@ -878,6 +986,7 @@ def download_model(
     chunk_size: int = 1024 * 1024,
     max_attempts: int = 4,
     retry_wait_seconds: float = 2.0,
+    max_seconds: float | None = None,
 ) -> Path:
     """Download with pinned SHA-256 verification, resume, and retries.
 
@@ -886,11 +995,23 @@ def download_model(
     download survives an unreliable connection. Cancellation also keeps the
     partial, letting a later attempt resume. Only a verification failure
     removes the partial; the final file appears atomically via os.replace.
+
+    No more than the pinned size is ever written: a response that would exceed
+    it is refused and its partial removed. The whole call, retries included,
+    is limited to ``max_seconds`` (by default 30 minutes, or the time the
+    pinned size needs at 50 kB/s if longer), so a server that only trickles
+    bytes cannot hold it forever; the partial then stays for a later resume.
     """
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    required_disk = int(model.size_bytes * 1.15)
+    partial_path = destination.with_name(f"{destination.name}.part")
+    try:
+        # A resumed download only needs room for what is still missing.
+        kept = min(partial_path.stat().st_size, model.size_bytes) if partial_path.is_file() else 0
+    except OSError:
+        kept = 0
+    required_disk = int((model.size_bytes - kept) * 1.15)
     available_disk = shutil.disk_usage(destination.parent).free
     if available_disk < required_disk:
         raise ModelDownloadError(
@@ -898,22 +1019,52 @@ def download_model(
             f"but only {available_disk / 1_000_000:.0f} MB is free."
         )
 
-    partial_path = destination.with_name(f"{destination.name}.part")
     open_request = opener or _open_download
+    deadline = time.monotonic() + (
+        max_seconds if max_seconds is not None else max(1800.0, model.size_bytes / 50_000)
+    )
 
     def check_cancel() -> None:
         if cancel_event is not None and cancel_event.is_set():
             raise ModelDownloadCancelled("Model download cancelled.")
 
+    def check_time() -> None:
+        if time.monotonic() > deadline:
+            raise ModelDownloadError(
+                "The model download took too long and was stopped. "
+                "Check the connection and try again; the part already received is kept."
+            )
+
+    def limit_wait(response) -> None:
+        """Keep the next socket wait within the time left (best effort on the raw socket)."""
+        remaining = max(deadline - time.monotonic(), 0.05)
+        try:
+            response.fp.raw._sock.settimeout(min(15.0, remaining))
+        except AttributeError:
+            pass
+
     attempts = 0
     last_error: Exception | None = None
+    restarted_after_416 = False
     while attempts < max_attempts:
         attempts += 1
         check_cancel()
+        check_time()
 
         try:
             offset = partial_path.stat().st_size if partial_path.is_file() else 0
         except OSError:
+            offset = 0
+        if offset == model.size_bytes and partial_path.is_file():
+            hasher = hashlib.sha256()
+            with partial_path.open("rb") as completed:
+                while block := completed.read(chunk_size):
+                    check_cancel()
+                    hasher.update(block)
+            if hasher.hexdigest() == model.sha256:
+                os.replace(partial_path, destination)
+                return destination
+            partial_path.unlink()
             offset = 0
         if offset > model.size_bytes:
             try:
@@ -927,6 +1078,7 @@ def download_model(
             headers["Range"] = f"bytes={offset}-"
         request = urllib.request.Request(model.download_url, headers=headers)
 
+        oversized = False
         try:
             with (
                 open_request(request, timeout=15.0) as response,
@@ -943,16 +1095,30 @@ def download_model(
                     progress_callback(downloaded, model.size_bytes)
                 while True:
                     check_cancel()
-                    chunk = response.read(chunk_size)
+                    check_time()
+                    # read1 returns what one socket wait delivers; read(n) would wait for n
+                    # bytes in total, so a trickle could hold it far past the deadline.
+                    limit_wait(response)
+                    reader = getattr(response, "read1", None) or response.read
+                    chunk = reader(chunk_size)
                     if not chunk:
+                        break
+                    if downloaded + len(chunk) > model.size_bytes:
+                        oversized = True
                         break
                     output.write(chunk)
                     downloaded += len(chunk)
                     if progress_callback is not None:
                         progress_callback(downloaded, model.size_bytes)
-        except ModelDownloadCancelled:
+        except ModelDownloadError:
             raise
         except (OSError, urllib.error.URLError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code == 416 and offset:
+                partial_path.unlink(missing_ok=True)
+                if not restarted_after_416:
+                    restarted_after_416 = True
+                    attempts -= 1
+                    continue
             last_error = error
             if attempts >= max_attempts:
                 break
@@ -963,6 +1129,13 @@ def download_model(
                 waited += 0.2
             continue
 
+        if oversized:
+            # Closed above, so the partial can go on every platform.
+            partial_path.unlink(missing_ok=True)
+            raise ModelDownloadError(
+                f"Download produced more than the expected {model.size_bytes:,} bytes. "
+                "The file was removed."
+            )
         if downloaded < model.size_bytes:
             # The connection ended early without an exception; resume.
             last_error = ModelDownloadError(
@@ -971,16 +1144,6 @@ def download_model(
             if attempts >= max_attempts:
                 break
             continue
-        if downloaded > model.size_bytes:
-            try:
-                partial_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise ModelDownloadError(
-                f"Download produced {downloaded:,} bytes but expected "
-                f"{model.size_bytes:,}. The file was removed."
-            )
-
         hasher = hashlib.sha256()
         with partial_path.open("rb") as completed:
             while True:

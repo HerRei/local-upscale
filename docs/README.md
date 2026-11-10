@@ -8,6 +8,7 @@ New here? Start with the [project README](../README.md) and the
 | Guide | What it covers |
 | --- | --- |
 | [Models](models/README.md) | The catalog, Quick and Best, licenses, importing your own checkpoints |
+| [Comparing results](comparing-results.md) | Saved image pairs, result history and trying 2–4 installed models |
 | [Image editing](image-editing.md) | The Edit task, the Qwen and FLUX.2 bundles, memory needs per platform and the memory guards |
 | [Video](video-support.md) | Formats, timing, rotation, audio, HDR, SeedVR2 and the other Labs features |
 | [Platforms](platforms.md) | Engines per operating system, what has been tested on which hardware |
@@ -21,7 +22,8 @@ New here? Start with the [project README](../README.md) and the
 [Desktop app](../desktop/README.md) · [Development checks](development.md) ·
 [Testing](testing.md) · [Worker protocol](../protocol/README.md) ·
 [Desktop integrations](architecture/cross_platform_integrations.md) ·
-[Architecture decisions](adr/) · [Contributing](../CONTRIBUTING.md)
+[Architecture decisions](adr/) (0002, the Slint host decision, was removed in `a1d6415`) ·
+[Contributing](../CONTRIBUTING.md)
 
 ## Releasing and licensing
 

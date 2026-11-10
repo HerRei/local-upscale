@@ -30,7 +30,7 @@ def create_test_image(path: str, width: int, height: int, color="red") -> str:
 
 
 def _ipc_timeout() -> float:
-    """Allow constrained self-hosted CI VMs to import PyTorch before IPC begins."""
+    """Allow constrained CI machines to import PyTorch before IPC begins."""
     return 120.0 if os.environ.get("CI") else 10.0
 
 

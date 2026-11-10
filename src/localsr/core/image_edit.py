@@ -18,10 +18,12 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from localsr.core.child_processes import native_environment, stop_process
+from localsr.core.disk_space import edit_bytes, require_room
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
 from localsr.core.image_io import open_photo
+from localsr.core.output_publish import publish_output, require_output_name
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
-from localsr.worker.edit_guard import native_environment, stop_process
 
 CATALOG_PATH = Path(__file__).with_name("edit_catalog.json")
 REQUIRED_FLAGS = ("--max-vram", "--mmap", "--model-args", "--backend", "--vae-tiling")
@@ -104,10 +106,8 @@ def validate_request(data: dict) -> dict:
 class EditProgress:
     """Turns the native runtime's log into a phase label and a moving percentage.
 
-    Measured with FLUX.2 klein 4B at 512 px on a 16 GB M1 Pro (127 s): the photo
-    and the instruction take about 20 s each without a counter, the four
-    sampling steps 35 s, and the tiled decode 48 s in six parts. Phases without a
-    counter creep forward with time so the bar never stands still.
+    Phase weights allocate progress to loading, sampling and decoding. Phases
+    without a counter creep forward with time so the bar never stands still.
     """
 
     PHASES = (
@@ -309,6 +309,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     plan = plan_edit(model, initial, data.get("max_dimension", 512))
     if cancel.is_set():
         raise InterruptedError("Editing cancelled.")
+    require_output_name(data["output_path"])
     runtime = check_runtime(str(data.get("runtime_path", "")))
     job_id = str(data["job_id"])
     emit(StageStarted(job_id, 0, 1, "edit", model["name"]))
@@ -352,6 +353,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         raise FileExistsError("The edit result already exists; choose a new output filename.")
     output.parent.mkdir(parents=True, exist_ok=True)
     scratch = data.get("output_temporary_directory") or data.get("scratch_directory")
+    require_room([(scratch or output.parent, edit_bytes(plan.max_dimension))])
     with tempfile.TemporaryDirectory(prefix="localsr-edit-", dir=scratch or output.parent) as work:
         work = Path(work)
         reference, result = work / "reference.png", work / "result.png"
@@ -450,7 +452,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             with Image.open(result) as image:
                 image.verify()
             # Publish without overwriting an existing result, even in a filename race.
-            os.link(result, output)
+            publish_output(result, output, cancel)
         finally:
             if process.stdin and not process.stdin.closed:
                 process.stdin.close()

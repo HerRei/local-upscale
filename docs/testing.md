@@ -31,6 +31,12 @@ download verification, the updater (signature, checksum, interrupted transfers,
 disk space, rollback) and the packaging tools. It uses generated fixtures and
 does not download models.
 
+Bounded, fixed-seed property tests add generated cases for interpolation grids,
+grey scaling and ICC neutrality, tile stitching, Compare slot/region/viewport
+invariants, and release-statement validation. Hypothesis, fast-check and proptest
+are development-only dependencies; the properties run a bounded number of cases
+and are reproducible in CI.
+
 Real-model checks are separate: `python scripts/validate_live_models.py`
 downloads every catalog checkpoint, verifies its hash, loads it through
 Spandrel and runs a small inference.

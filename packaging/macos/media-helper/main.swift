@@ -9,9 +9,10 @@
 //   localsr-media version
 //   localsr-media probe <file>
 //   localsr-media decode <file> [--audio out.wav] [--max-frames N] [--no-video]
-//   localsr-media encode --output out.mp4 --codec h264|hevc [--quality 0..1]
-//                        [--bitrate N] [--hdr HLG|PQ] [--audio in.wav]
-//                        [--aac-bitrate N] [--rotation DEG] < frames
+//   localsr-media canencode [--width N --height N]
+//   localsr-media encode --output out.mp4 --codec h264|hevc|prores [--quality 0..1]
+//                        [--container mp4|mov] [--bitrate N] [--hdr HLG|PQ]
+//                        [--audio in.wav] [--aac-bitrate N] [--rotation DEG] < frames
 //
 // Frame stream (both directions): one JSON header line, then for each frame a
 // 16-byte little-endian record (pts int64, duration int32, payload uint32) and
@@ -31,6 +32,19 @@ let streamTag = "localsr-media/1"
 struct HelperError: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
+}
+
+/// localizedDescription hides the VideoToolbox/OSStatus cause (and disk-full codes).
+/// Preserve the complete NSError chain so a failed real-Mac export is diagnosable.
+func errorDetails(_ error: Error?) -> String {
+    guard let error else { return "unknown error" }
+    let ns = error as NSError
+    var detail = "\(ns.domain) (\(ns.code)): \(ns.localizedDescription)"
+    if let reason = ns.localizedFailureReason { detail += "; \(reason)" }
+    if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+        detail += "; caused by \(errorDetails(underlying))"
+    }
+    return detail
 }
 
 func fail(_ message: String) -> Never {
@@ -775,13 +789,44 @@ final class VideoFeed {
         attachColor(pixels, colors)
         let pts = CMTime(value: frame.pts, timescale: header.timescale)
         guard adaptor.append(pixels, withPresentationTime: pts) else {
-            throw HelperError("\(codec.uppercased()) encode failed: \(writer.error?.localizedDescription ?? "unknown error")")
+            throw HelperError("\(codec.uppercased()) encode failed at frame \(frames), pts \(frame.pts)/\(header.timescale), \(header.width)x\(header.height) @ \(header.fps) fps: \(errorDetails(writer.error))")
         }
         let duration = frame.duration > 0 ? CMTime(value: Int64(frame.duration), timescale: header.timescale)
             : (header.fps > 0 ? CMTime(seconds: 1 / header.fps, preferredTimescale: header.timescale) : .zero)
         lastEnd = CMTimeAdd(pts, duration)
         frames += 1
     }
+}
+
+/// The highest AAC bit rate the system encoder accepts for this sample rate and
+/// channel count, not above the wanted one. A rate it does not accept makes the
+/// whole export fail with "Cannot Encode Media" (an 11 kHz mono track takes far
+/// less than the default). Falls back to the wanted rate when the encoder cannot
+/// be asked.
+func supportedAACBitRate(_ wanted: Int, sampleRate: Double, channels: Int) -> Int {
+    var pcm = AudioStreamBasicDescription(
+        mSampleRate: sampleRate, mFormatID: kAudioFormatLinearPCM,
+        mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+        mBytesPerPacket: UInt32(2 * channels), mFramesPerPacket: 1, mBytesPerFrame: UInt32(2 * channels),
+        mChannelsPerFrame: UInt32(channels), mBitsPerChannel: 16, mReserved: 0)
+    var aac = AudioStreamBasicDescription()
+    aac.mSampleRate = sampleRate
+    aac.mFormatID = kAudioFormatMPEG4AAC
+    aac.mChannelsPerFrame = UInt32(channels)
+    var converter: AudioConverterRef?
+    guard AudioConverterNew(&pcm, &aac, &converter) == noErr, let converter else { return wanted }
+    defer { AudioConverterDispose(converter) }
+    var size: UInt32 = 0
+    guard
+        AudioConverterGetPropertyInfo(converter, kAudioConverterApplicableEncodeBitRates, &size, nil) == noErr,
+        size > 0
+    else { return wanted }
+    var ranges = [AudioValueRange](repeating: AudioValueRange(), count: Int(size) / MemoryLayout<AudioValueRange>.size)
+    guard AudioConverterGetProperty(converter, kAudioConverterApplicableEncodeBitRates, &size, &ranges) == noErr
+    else { return wanted }
+    let accepted = ranges.map { Int($0.mMaximum) }.filter { $0 > 0 && $0 <= wanted }
+    if let best = accepted.max() { return best }
+    return ranges.map { Int($0.mMinimum) }.filter { $0 > 0 }.min() ?? wanted
 }
 
 /// PCM from a WAV file into the AAC input; runs inside the writer's ready callback.
@@ -810,9 +855,10 @@ final class AudioFeeder {
         var layout = AudioChannelLayout()
         layout.mChannelLayoutTag = channels == 1 ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_Stereo
         let layoutData = Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size)
+        let bitRate = supportedAACBitRate(aacBitRate, sampleRate: basic.mSampleRate, channels: channels)
         let aac: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: basic.mSampleRate,
-            AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: aacBitRate, AVChannelLayoutKey: layoutData,
+            AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: bitRate, AVChannelLayoutKey: layoutData,
         ]
         guard writer.canApply(outputSettings: aac, forMediaType: .audio) else { throw HelperError("AAC settings rejected") }
         input = AVAssetWriterInput(mediaType: .audio, outputSettings: aac)
@@ -837,7 +883,7 @@ final class AudioFeeder {
                 return true
             }
             guard input.append(sample) else {
-                error = HelperError("AAC encode failed: \(writer.error?.localizedDescription ?? "unknown error")")
+                error = HelperError("AAC encode failed: \(errorDetails(writer.error))")
                 finished = true
                 input.markAsFinished()
                 return true
@@ -848,11 +894,41 @@ final class AudioFeeder {
     }
 }
 
+/// The one place that builds the video output settings, so `canencode` asks the encoder
+/// exactly what an export will ask.
+func videoOutputSettings(
+    codecName: String, width: Int, height: Int, fps: Double, colors: [String: Any]?, hdr: String,
+    quality: Double, bitrate: Int
+) -> [String: Any] {
+    let codec: AVVideoCodecType = ["h264": .h264, "hevc": .hevc, "prores": .proRes422][codecName]!
+    var compression: [String: Any] = [:]
+    // ProRes sets its own data rate: it takes neither a quality nor a bitrate.
+    if codecName != "prores" {
+        if bitrate > 0 {
+            compression[AVVideoAverageBitRateKey] = bitrate
+        } else {
+            compression[AVVideoQualityKey] = max(0.0, min(1.0, quality))
+        }
+    }
+    if fps > 0 { compression[AVVideoExpectedSourceFrameRateKey] = fps }
+    if !hdr.isEmpty { compression[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String }
+    var settings: [String: Any] = [
+        AVVideoCodecKey: codec, AVVideoWidthKey: width, AVVideoHeightKey: height,
+        AVVideoCompressionPropertiesKey: compression,
+    ]
+    if let colors { settings[AVVideoColorPropertiesKey] = colors }
+    return settings
+}
+
 func encode(_ arguments: Arguments) throws {
     guard let outputPath = arguments.options["output"] else { throw HelperError("encode needs --output") }
-    guard let codecName = arguments.options["codec"], ["h264", "hevc"].contains(codecName) else {
-        throw HelperError("encode needs --codec h264 or hevc")
+    guard let codecName = arguments.options["codec"], ["h264", "hevc", "prores"].contains(codecName) else {
+        throw HelperError("encode needs --codec h264, hevc or prores")
     }
+    // The container is named explicitly because LocalSR writes to a temporary file
+    // whose extension says nothing; without it the extension decides, as before.
+    let containerName = arguments.options["container"] ?? ""
+    guard ["", "mp4", "mov"].contains(containerName) else { throw HelperError("--container must be mp4 or mov") }
     let hdr = arguments.options["hdr"] ?? ""
     guard ["", "HLG", "PQ"].contains(hdr) else { throw HelperError("--hdr must be HLG or PQ") }
     if !hdr.isEmpty && codecName != "hevc" { throw HelperError("HDR export needs HEVC") }
@@ -870,32 +946,23 @@ func encode(_ arguments: Arguments) throws {
 
     let url = URL(fileURLWithPath: outputPath)
     try? FileManager.default.removeItem(at: url)
-    let fileType: AVFileType = url.pathExtension.lowercased() == "mov" ? .mov : .mp4
+    let fileType: AVFileType = (containerName.isEmpty ? url.pathExtension.lowercased() : containerName) == "mov" ? .mov : .mp4
+    if codecName == "prores" && fileType != .mov { throw HelperError("ProRes is written into MOV") }
     let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
     writer.shouldOptimizeForNetworkUse = true
 
-    let codec: AVVideoCodecType = codecName == "h264" ? .h264 : .hevc
     let colors = colorProperties(header.color, hdr: hdr)
-    var compression: [String: Any] = [:]
-    if bitrate > 0 {
-        compression[AVVideoAverageBitRateKey] = bitrate
-    } else {
-        compression[AVVideoQualityKey] = max(0.0, min(1.0, quality))
-    }
-    if header.fps > 0 { compression[AVVideoExpectedSourceFrameRateKey] = header.fps }
-    if !hdr.isEmpty { compression[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String }
-    var settings: [String: Any] = [
-        AVVideoCodecKey: codec, AVVideoWidthKey: header.width, AVVideoHeightKey: header.height,
-        AVVideoCompressionPropertiesKey: compression,
-    ]
-    if let colors { settings[AVVideoColorPropertiesKey] = colors }
-    if !writer.canApply(outputSettings: settings, forMediaType: .video) && bitrate == 0 {
+    var settings = videoOutputSettings(
+        codecName: codecName, width: header.width, height: header.height, fps: header.fps,
+        colors: colors, hdr: hdr, quality: quality, bitrate: bitrate)
+    if !writer.canApply(outputSettings: settings, forMediaType: .video) && bitrate == 0 && codecName != "prores" {
         // Constant-quality encoding is not available on every encoder; fall back to
         // a bitrate of about 0.12 bits per pixel per frame, like the FFmpeg route.
-        compression.removeValue(forKey: AVVideoQualityKey)
         let fps = header.fps > 0 ? header.fps : 30
-        compression[AVVideoAverageBitRateKey] = max(500_000, Int(Double(header.width * header.height) * fps * 0.12))
-        settings[AVVideoCompressionPropertiesKey] = compression
+        settings = videoOutputSettings(
+            codecName: codecName, width: header.width, height: header.height, fps: header.fps,
+            colors: colors, hdr: hdr, quality: quality,
+            bitrate: max(500_000, Int(Double(header.width * header.height) * fps * 0.12)))
     }
     guard writer.canApply(outputSettings: settings, forMediaType: .video) else {
         throw HelperError("macOS cannot encode \(codecName.uppercased())\(hdr.isEmpty ? "" : " \(hdr)") at \(header.width)x\(header.height)")
@@ -917,7 +984,7 @@ func encode(_ arguments: Arguments) throws {
         audio = try AudioFeeder(wav: wav, writer: writer, aacBitRate: aacBitRate)
     }
     guard writer.startWriting() else {
-        throw HelperError("cannot start writing \(outputPath): \(writer.error?.localizedDescription ?? "unknown error")")
+        throw HelperError("cannot start \(codecName.uppercased()) at \(header.width)x\(header.height) @ \(header.fps) fps, timescale \(header.timescale): \(errorDetails(writer.error))")
     }
     // The session starts at the first frame's timestamp, so read that one here.
     guard let first = try FrameHeader.read(STDIN_FILENO) else { throw HelperError("no frames were received") }
@@ -944,9 +1011,31 @@ func encode(_ arguments: Arguments) throws {
     writer.finishWriting { semaphore.signal() }
     semaphore.wait()
     guard writer.status == .completed else {
-        throw HelperError("finishing \(outputPath) failed: \(writer.error?.localizedDescription ?? "unknown error")")
+        throw HelperError("finishing \(outputPath) failed: \(errorDetails(writer.error))")
     }
     try printJSON(["frames": video.frames, "output": outputPath, "codec": codecName, "hdr": hdr])
+}
+
+// MARK: - canencode
+
+/// Whether this Mac can write ProRes: some Macs (virtual machines among them) have no
+/// ProRes encoder, and AVAssetWriter refuses the settings there.
+func canEncode(_ arguments: Arguments) throws {
+    let width = try arguments.int("width", default: 1920)
+    let height = try arguments.int("height", default: 1080)
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("localsr-probe-\(UUID().uuidString).mov")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+    let fps = Double(arguments.options["fps"] ?? "") ?? 0
+    // "primaries,transfer,matrix" in FFmpeg's names; the default is the BT.709 SDR
+    // tagging the app writes when the source has none.
+    let names = (arguments.options["color"] ?? "bt709,bt709,bt709").split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+    var tags = ColorTags()
+    if names.count == 3 { (tags.primaries, tags.transfer, tags.matrix) = (names[0], names[1], names[2]) }
+    let settings = videoOutputSettings(
+        codecName: "prores", width: width, height: height, fps: fps,
+        colors: colorProperties(tags, hdr: ""), hdr: "", quality: 0.7, bitrate: 0)
+    try printJSON(["prores": writer.canApply(outputSettings: settings, forMediaType: .video)])
 }
 
 // MARK: - main
@@ -966,6 +1055,8 @@ do {
         try decode(parsed)
     case "encode":
         try encode(parsed)
+    case "canencode":
+        try canEncode(parsed)
     default:
         throw HelperError("unknown command \(command)")
     }

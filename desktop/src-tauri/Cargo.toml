@@ -1,6 +1,6 @@
 [package]
 name = "localsr-next"
-version = "0.3.0-beta"
+version = "0.4.0-beta"
 description = "LocalSR desktop control plane"
 authors = ["Hermes Reisner"]
 license = "MIT"
@@ -40,15 +40,17 @@ tauri-plugin-updater = "2"
 minisign-verify = "0.2"
 semver = "1"
 tempfile = "3.23.0"
-tauri-plugin-dialog = "2.7.2"
+tauri-plugin-dialog = "2.8.4"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-single-instance = "2.4.3"
 thiserror = "2.0.20"
 tokio = { version = "1.48.0", features = ["fs", "io-util", "sync", "time"] }
 tower-http = { version = "0.6.11", features = ["fs"] }
+unicode-normalization = "0.1"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+proptest = "1"
 tauri = { version = "2.11.5", features = ["test"] }
 
 [lints.rust]

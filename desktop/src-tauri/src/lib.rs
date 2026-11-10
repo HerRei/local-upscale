@@ -1,7 +1,9 @@
 mod cancellation;
 mod catalog;
 mod commands;
+mod compare;
 mod database;
+mod disk_room;
 mod distribution;
 mod downloads;
 mod editing;
@@ -13,8 +15,13 @@ mod launch;
 #[cfg(any(target_os = "linux", test))]
 mod media_server;
 mod native_menu;
+mod output_names;
 mod paths;
+mod pipe_lines;
+mod process_tree;
+mod programs;
 mod queue_timing;
+mod results;
 mod settings;
 mod state;
 mod types;
@@ -49,6 +56,15 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
 static EARLY_OPEN_INTENTS: std::sync::Mutex<Vec<LaunchIntent>> = std::sync::Mutex::new(Vec::new());
 
 pub fn run() {
+    // No UI, profile or worker: other updater processes query the file they are
+    // about to replace, rather than trusting their own running package version.
+    if env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--headless-update-version")
+    {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if let Some(exit_code) = engine_payload::run_arguments(&env::args_os().collect::<Vec<_>>()) {
         std::process::exit(exit_code);
     }
@@ -68,6 +84,15 @@ pub fn run() {
         return;
     }
 
+    // A crash during an executable swap is rolled back before anything opens the profile.
+    if updates::recover_interrupted_update() {
+        return;
+    }
+    // And an engine installation that a crash killed between its two renames, beside it.
+    if let Ok(executable) = env::current_exe() {
+        engine_payload::recover_beside(&executable);
+    }
+
     let initial_intent = parsed.intent;
     let smoke_test = parsed.smoke_test;
     let application = tauri::Builder::default()
@@ -84,8 +109,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| native_menu::dispatch(app, event.id().as_ref()))
+        .on_window_event(hide_instead_of_close)
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
+            // A Windows installer that finished while LocalSR was closed.
+            updates::confirm_pending_install(
+                &state.paths.next_root,
+                &app.package_info().version.to_string(),
+            );
             if !initial_intent.is_empty() {
                 lock(&state.launch_intents)?.push(initial_intent.clone());
             }
@@ -94,8 +125,12 @@ pub fn run() {
                 lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
+            if !smoke_test {
+                show_startup_notices(app.handle(), &state);
+            }
             *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
-            native_menu::install(app, &lock(&state.recipes)?)?;
+            let switches = native_menu::switches(&*lock(&state.settings)?);
+            native_menu::install(app, &lock(&state.recipes)?, switches)?;
             fit_main_window(app.handle());
             if let Err(error) = worker::start_worker(state.clone(), app.handle().clone()) {
                 if let Ok(mut runtime) = state.runtime.lock() {
@@ -127,7 +162,9 @@ pub fn run() {
             commands::select_media,
             commands::remove_media,
             commands::clear_media,
+            commands::clear_results,
             commands::save_settings,
+            commands::set_update_switch,
             commands::save_recipe,
             commands::delete_recipe,
             commands::start_jobs,
@@ -138,7 +175,16 @@ pub fn run() {
             commands::prepare_video_comparison,
             commands::cancel_video_comparison,
             commands::request_image_comparison,
+            commands::request_compare,
+            commands::request_compare_regions,
+            commands::clear_compare_regions,
+            commands::retry_engine,
             commands::cancel_jobs,
+            commands::cancel_jobs_for_media,
+            commands::start_model_trials,
+            commands::estimate_model_trials,
+            commands::list_media_results,
+            commands::list_all_media_results,
             commands::refresh_capabilities,
             commands::probe_path,
             commands::download_model,
@@ -147,9 +193,13 @@ pub fn run() {
             commands::import_catalog_model,
             commands::open_result,
             commands::open_user_guide,
+            commands::open_download_page,
             commands::reveal_result,
+            commands::use_result_as_input,
             commands::open_output_directory,
             commands::detect_external_ffmpeg,
+            commands::choose_external_ffmpeg,
+            commands::choose_edit_runtime,
             commands::open_ffmpeg_download_page,
             commands::ffmpeg_install_hint,
             commands::open_terminal_with_install_command,
@@ -165,6 +215,13 @@ pub fn run() {
         if matches!(&event, tauri::RunEvent::Exit) {
             let state = app.state::<Arc<AppState>>();
             worker::shutdown(&state);
+            // Keep the process alive until the supervisor has removed the job's scratch.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while state.worker.pid.load(std::sync::atomic::Ordering::SeqCst) != 0
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             #[cfg(target_os = "linux")]
             if let Ok(mut server) = state.media_server.lock() {
                 server.take();
@@ -192,6 +249,21 @@ pub fn run() {
             focus_main_window(app);
         }
     });
+}
+
+/// Tell the user once about what start-up had to work around.
+fn show_startup_notices(app: &tauri::AppHandle, state: &AppState) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let notices = state.take_startup_notices();
+    if notices.is_empty() {
+        return;
+    }
+    app.dialog()
+        .message(notices.join("\n\n"))
+        .title("LocalSR")
+        .kind(MessageDialogKind::Warning)
+        .show(|_| {});
 }
 
 fn run_immediate_action(action: ImmediateAction) -> Option<i32> {
@@ -266,7 +338,22 @@ fn fit_main_window(app: &tauri::AppHandle) {
     let _ = window.set_position(tauri::PhysicalPosition::new(left, top));
 }
 
-fn focus_main_window(app: &tauri::AppHandle) {
+/// On macOS, closing the window (Command-W or the close button) only hides it, as in other
+/// single-window Mac apps: the queue keeps running, and the Dock icon, Window > LocalSR or
+/// opening a file brings it back. Quit ends the app.
+fn hide_instead_of_close(window: &tauri::Window, event: &tauri::WindowEvent) {
+    #[cfg(target_os = "macos")]
+    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        if window.label() == "main" {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, event);
+}
+
+pub(crate) fn focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -307,7 +394,7 @@ fn start_smoke_monitor(app: tauri::AppHandle, state: Arc<AppState>) {
                 "status_title": status_title,
                 "status_detail": status_detail,
             });
-            let _ = write_smoke_report(Path::new(&report_path), &report);
+            let _ = headless_smoke::write_report(Path::new(&report_path), &report);
         }
         app.exit(exit_code);
     });
@@ -322,13 +409,6 @@ fn smoke_terminal_exit_code(worker_status: &str) -> Option<i32> {
         // that recovery path instead of terminating the host first.
         _ => None,
     }
-}
-
-fn write_smoke_report(path: &Path, report: &serde_json::Value) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_vec_pretty(report).unwrap_or_default())
 }
 
 #[cfg(test)]

@@ -1,3 +1,5 @@
+import os
+import stat
 import sys
 from pathlib import Path
 
@@ -77,6 +79,13 @@ SUPPORTED_INPUT_EXTENSIONS = (
 )
 
 
+def system_image_output_formats() -> list[str]:
+    """Still-image formats this computer writes with its own codecs (HEIC on macOS, via sips)."""
+    if sys.platform == "darwin" and os.access("/usr/bin/sips", os.X_OK):
+        return ["heic"]
+    return []
+
+
 def is_raw_input(path: str | Path) -> bool:
     return Path(path).suffix.lower() in RAW_INPUT_EXTENSIONS
 
@@ -87,3 +96,20 @@ def is_system_decoded(path: str | Path) -> bool:
 
 def is_video_input(path: str | Path) -> bool:
     return Path(path).suffix.lower() in VIDEO_INPUT_EXTENSIONS
+
+
+def require_ordinary_source(path: str | os.PathLike) -> None:
+    """Refuse a pipe, device or socket as a source, before anything opens it.
+
+    Opening a pipe waits for a writer that may never come, and no cancel can end that
+    wait. A missing file or a folder is left for the caller's own, clear error.
+    """
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return
+    if stat.S_ISFIFO(mode) or stat.S_ISCHR(mode) or stat.S_ISBLK(mode) or stat.S_ISSOCK(mode):
+        raise ValueError(
+            f"{Path(path).name} is a pipe, device or socket, not a file. "
+            "LocalSR reads only ordinary files."
+        )

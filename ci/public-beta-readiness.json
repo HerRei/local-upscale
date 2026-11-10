@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
-  "release": "0.3.0-beta",
-  "beta_ready": false,
+  "release": "0.4.0-beta",
+  "beta_ready": true,
   "gates": [
     {
       "id": "batch-rendering-and-comparison",
@@ -59,27 +59,38 @@
     },
     {
       "id": "windows-packages",
-      "status": "manual-required",
+      "status": "automated-pass",
       "blocking": true,
       "scope": "windows",
-      "summary": "The Windows CPU, DirectML and NVIDIA CUDA installers of v0.1.3-beta are built on GitHub-hosted runners with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC), pass verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check, and ship their corresponding source; the CUDA engine ships as verified parts beside its installer. None is Authenticode-signed. DirectML and CUDA are published labelled untested: DirectML is still outside the GPU tolerance and CUDA has not run on an NVIDIA GPU.",
-      "next_action": "Repeat the manual desktop checks on a Windows PC, obtain a code-signing certificate, run the CUDA installer on an NVIDIA GPU and bring DirectML within tolerance."
+      "summary": "The Windows CPU, DirectML and NVIDIA CUDA installers are built on GitHub-hosted runners (windows-installers.yml) with the licensing-clean media runtime (MSYS2 UCRT64 plus MSVC) and are attached to a release only after verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check pass; each ships its corresponding source, and the CUDA engine ships as verified parts beside its installer. All three passed on the release branch in run 42411586091, on an earlier commit than the final candidate. As the beta policy in docs/platforms.md says, they are not code-signed, and DirectML and CUDA are published labelled untested.",
+      "next_action": "Run the workflow on the final candidate commit and attach only what it verified.",
+      "evidence": "docs/platforms.md"
     },
     {
       "id": "linux-packages",
-      "status": "manual-required",
+      "status": "automated-pass",
       "blocking": true,
       "scope": "linux",
-      "summary": "The Linux CPU, AMD ROCm and NVIDIA CUDA AppImages of v0.1.3-beta are built on GitHub-hosted runners, pass verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test and the architecture check, and ship corresponding source including Ubuntu sources for every bundled host library. The ROCm AppImage carries Ubuntu's own libnuma and libelf in place of the AlmaLinux copies in PyTorch's wheel. CUDA is published labelled untested; ROCm ran on a Radeon RX 9060 XT in earlier builds.",
-      "next_action": "Repeat the manual desktop checks on a Linux desktop, including the ROCm AppImage on the RX 9060 XT, and run the CUDA AppImage on an NVIDIA GPU."
+      "summary": "The Linux CPU, AMD ROCm and NVIDIA CUDA AppImages are built on Ubuntu 22.04 GitHub-hosted runners (linux-appimages.yml) and are attached to a release only after verify_codec_allowlist, the NVIDIA redistribution policy, an installed-package smoke test, the architecture check, AppImageHub's glibc ceiling of 2.35 and an offline window test pass; each ships corresponding source including Ubuntu sources for every bundled host library. The ROCm AppImage carries Ubuntu's own libnuma and libelf in place of the AlmaLinux copies in PyTorch's wheel. All three passed on the release branch in run 42499281378, before the stricter glibc and window checks (3965075, 310d64b). CUDA is published labelled untested. On a Radeon RX 9060 XT (ROCm 7.2, Fedora 44) the packaged worker of the ROCm AppImage from run 42499281378 passed scripts/acceptance_worker.py 6/6, with the AppImage's own library path as its AppRun sets it; the full desktop checks ran there in earlier builds.",
+      "next_action": "Run the workflow on the final candidate commit and attach only what it verified; repeat the full desktop checks with the ROCm AppImage on the RX 9060 XT.",
+      "evidence": "docs/platforms.md"
     },
     {
       "id": "publication-and-certification",
-      "status": "decision-required",
+      "status": "manual-pass",
       "blocking": true,
       "scope": "distribution",
-      "summary": "macOS v0.1.6-beta and the Windows CPU, DirectML and CUDA installers and Linux CPU, ROCm and CUDA AppImages of v0.1.3-beta are published through the website and GitHub Releases. The Microsoft Store listing (HerRei.LocalSR) is not published.",
-      "next_action": "Submit the Store package once the Windows build is code-signed."
+      "summary": "The maintainer decided on 2026-11-08 to publish v0.3.1-beta like v0.3.0-beta: through the website, the update feed and GitHub Releases, macOS signed and notarized, the Windows installers not code-signed, and CUDA and DirectML labelled untested. The Microsoft Store listing is a separate, open decision (windows-signing-and-store).",
+      "next_action": "Revisit before a stable release.",
+      "evidence": "docs/platforms.md"
+    },
+    {
+      "id": "windows-signing-and-store",
+      "status": "decision-required",
+      "blocking": false,
+      "scope": "windows-distribution",
+      "summary": "Windows betas downloaded from the website or GitHub are not Authenticode-signed, so SmartScreen warns on first start. The Microsoft Store listing (HerRei.LocalSR) is not published. The Store route needs no own certificate (Microsoft signs the package after certification, docs/microsoft-store.md), but one x64 Store identity cannot choose the CPU, DirectML or CUDA worker, so its engine delivery is undecided.",
+      "next_action": "Decide how the Store package delivers its engine, and whether the direct downloads get a free open-source signature (SignPath Foundation needs builds on GitHub-hosted runners, which the release workflows now use)."
     },
     {
       "id": "licensing-questions",
@@ -95,7 +106,7 @@
       "status": "labs",
       "blocking": false,
       "scope": "cuda-xpu-other-directml",
-      "summary": "NVIDIA CUDA (published, labelled untested), Linux Intel XPU (withheld) and DirectML adapters other than the UHD 620 have not run on physical hardware.",
+      "summary": "NVIDIA CUDA (published, labelled untested), Linux Intel XPU (withheld) and DirectML adapters other than the UHD 620 have not run on physical hardware. On the UHD 620 with its 2020 driver, DirectML matched the CPU (93.7 dB, source build, 9 November 2026), while OpenVINO crashes inside the driver and the GPU preflight refuses it.",
       "next_action": "Collect volunteer hardware reports before describing these engines as tested."
     },
     {

@@ -6,7 +6,7 @@ from localsr.core import video_engines
 from localsr.worker.server import WorkerServer, _engine_features, _video_engines
 
 
-@pytest.mark.parametrize("backend", ["directml:0", "xpu:0"])
+@pytest.mark.parametrize("backend", ["directml:0", "xpu:0", "openvino:80d1d11eb738"])
 def test_seedvr2_rejects_unsupported_gpu_before_loading_or_verifying_a_bundle(backend):
     with pytest.raises(ValueError, match="Choose frame-by-frame video"):
         WorkerServer._run_video_job(

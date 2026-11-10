@@ -29,14 +29,19 @@ from pathlib import Path
 import av
 import numpy as np
 
+from .child_processes import start as start_child
 from .external_ffmpeg import ExternalFFmpegError
-from .media_codecs import encode_spec
+from .media_codecs import MOV_CODECS, encode_spec
 
 ENVIRONMENT_VARIABLE = "LOCALSR_MEDIA_HELPER"
 HELPER_NAME = "localsr-media"
 STREAM_TAG = "localsr-media/1"
 FRAME_HEADER = struct.Struct("<qiI")
-SYSTEM_ENCODERS = {"h264": "h264_videotoolbox", "hevc": "hevc_videotoolbox"}
+SYSTEM_ENCODERS = {
+    "h264": "h264_videotoolbox",
+    "hevc": "hevc_videotoolbox",
+    "prores": "prores_videotoolbox",
+}
 
 # FFmpeg's names for colour tags, as the helper reports them, to AVCOL_* values.
 _PRIMARIES = {
@@ -116,6 +121,7 @@ def _helper_version(path: Path) -> int | None:
 
 _detected: dict[str, SystemCodecs | None] = {}
 _detect_lock = threading.Lock()
+_encode_probe: dict[tuple[str, str, int, int, float, str], bool] = {}
 
 
 def detect_system_codecs(*, refresh: bool = False) -> SystemCodecs | None:
@@ -359,6 +365,39 @@ class SystemCodecs:
         except (ValueError, IndexError) as error:
             raise SystemCodecsError("The system codec helper returned no result.") from error
 
+    def can_encode(
+        self,
+        video_codec: str,
+        width: int = 1920,
+        height: int = 1080,
+        *,
+        fps: float = 0.0,
+        color: str = "",
+    ) -> bool:
+        """Whether this computer can write ``video_codec`` at this frame size. Only ProRes
+        is in doubt: some Macs (virtual machines) lack its encoder or refuse some sizes.
+        ``fps`` and ``color`` ("primaries,transfer,matrix" in FFmpeg names) are what the
+        export will send, because the encoder judges the full settings; empty means the
+        helper's defaults (no fps hint, BT.709 SDR). Asked once per combination and run."""
+        if video_codec != "prores":
+            return True
+        key = (self.path, video_codec, int(width), int(height), float(fps), color)
+        with _detect_lock:
+            if key in _encode_probe:
+                return _encode_probe[key]
+        try:
+            command = ["canencode", "--width", str(int(width)), "--height", str(int(height))]
+            if fps > 0:
+                command += ["--fps", repr(float(fps))]
+            if color:
+                command += ["--color", color]
+            answer = bool(self._run(command, timeout=30).get("prores", True))
+        except SystemCodecsError:
+            answer = True  # an older helper cannot say; the export reports the failure
+        with _detect_lock:
+            _encode_probe[key] = answer
+        return answer
+
     def probe(self, path: str) -> dict:
         return self._run(["probe", str(path)], timeout=120)
 
@@ -383,23 +422,33 @@ class SystemCodecs:
             raise SystemCodecsError(f"{self.name} do not encode {video_codec}.")
         if hdr and video_codec != "hevc":
             raise SystemCodecsError("HDR export needs HEVC.")
-        if container not in {"mp4", "mov"}:
+        if container == "mov":
+            if video_codec not in MOV_CODECS:
+                raise SystemCodecsError(f"MOV holds HEVC or Apple ProRes, not {video_codec}.")
+        elif video_codec == "prores":
+            raise SystemCodecsError("Apple ProRes is written into MOV. Choose the MOV container.")
+        elif container != "mp4":
             raise SystemCodecsError(
-                f"{self.name} write H.264/HEVC into MP4 or MOV. Choose MP4, or select an "
+                f"{self.name} write H.264 into MP4 and HEVC into MP4 or MOV. Choose MP4, or select an "
                 "FFmpeg you installed for MKV."
             )
         return SYSTEM_ENCODERS[video_codec]
 
     @contextmanager
     def _process(self, arguments: list[str], *, stdin: bool = False) -> Iterator[subprocess.Popen]:
-        with tempfile.TemporaryFile(mode="w+t") as errors:
-            process = subprocess.Popen(
-                [self.path, *arguments],
-                stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=errors,
-                creationflags=_creation_flags(),
-            )
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
+            try:
+                process = start_child(
+                    [self.path, *arguments],
+                    stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=errors,
+                    creationflags=_creation_flags(),
+                )
+            except OSError as error:
+                raise SystemCodecsError(
+                    f"Could not start the system codec helper: {error}"
+                ) from error
             process.error_log = errors  # type: ignore[attr-defined]
             try:
                 yield process
@@ -540,6 +589,8 @@ class SystemCodecs:
                 str(destination),
                 "--codec",
                 video_codec,
+                "--container",
+                container,
                 "--quality",
                 f"{_quality(crf):.3f}",
             ]
@@ -612,6 +663,8 @@ class SystemCodecs:
             str(destination),
             "--codec",
             video_codec,
+            "--container",
+            container,
             "--quality",
             f"{_quality(crf):.3f}",
         ]
@@ -644,7 +697,9 @@ class SystemCodecs:
                     pts = int(round((frame.timestamp - origin) * timescale))
                     picture = av.VideoFrame.from_ndarray(frame.rgb, format="rgb24")
                     payload = payload_from_frame(picture, "nv12")
-                    stdin.write(FRAME_HEADER.pack(pts, 0, len(payload)))
+                    stdin.write(
+                        FRAME_HEADER.pack(pts, int(round(frame.duration * timescale)), len(payload))
+                    )
                     stdin.write(payload)
                     count += 1
                 stdin.close()

@@ -31,14 +31,6 @@ PREBUILT = {
         "sd-master-3f8527a-bin-win-rocm-7.14.0-x64.zip",
         "13fd3a7f159a73b6ff6b046665db4009fc4f253eef8c14d93f0e9612818606e3",
     ),
-    ("linux", "CUDA"): (
-        "sd-master-3f8527a-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip",
-        "e35cc73cf5ba9637d1dc1d717760e7b8428376a4905d57e72ec8c871864f62c7",
-    ),
-    ("linux", "ROCM"): (
-        "sd-master-3f8527a-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip",
-        "e35cc73cf5ba9637d1dc1d717760e7b8428376a4905d57e72ec8c871864f62c7",
-    ),
 }
 WINDOWS_CUDA_RUNTIME = (
     "cudart-sd-bin-win-cu12-x64.zip",
@@ -130,9 +122,6 @@ def build(backend: str, destination: Path, source: Path | None = None, arch: str
     destination.mkdir(parents=True, exist_ok=True)
     asset = PREBUILT.get((sys.platform, backend))
     if asset:
-        # Linux CUDA/ROCm editions use the native Vulkan backend. This avoids
-        # adding a GPU compiler toolchain to the existing hosted release builds.
-        # The worker still measures the selected GPU through PyTorch.
         files = unpack_verified_release(asset, destination)
         if ("sd-cli.exe" if sys.platform == "win32" else "sd-cli") not in files:
             raise RuntimeError("The verified native archive contains no editing executable")
@@ -151,9 +140,21 @@ def build(backend: str, destination: Path, source: Path | None = None, arch: str
         "-DSD_WEBM=OFF",
         "-DGGML_METAL_EMBED_LIBRARY=ON",
     ]
-    flag = {"MPS": "SD_METAL", "CUDA": "SD_CUDA", "ROCM": "SD_HIPBLAS", "XPU": "SD_SYCL"}.get(
-        backend
-    )
+    # Linux CUDA/ROCm editions use the native Vulkan backend, built here like the CPU edition: the
+    # project's own Linux builds need Ubuntu 24.04's C library (glibc 2.38), and the AppImages must run on
+    # the oldest supported LTS. Vulkan needs only glslc and headers (a Vulkan SDK), no GPU compiler; the
+    # worker still measures the selected GPU through PyTorch.
+    if actual_backend == "VULKAN" and not shutil.which("glslc"):
+        raise RuntimeError(
+            "Building the Vulkan editing runtime needs glslc: install a Vulkan SDK and set VULKAN_SDK"
+        )
+    flag = {
+        "MPS": "SD_METAL",
+        "CUDA": "SD_CUDA",
+        "ROCM": "SD_HIPBLAS",
+        "XPU": "SD_SYCL",
+        "VULKAN": "SD_VULKAN",
+    }.get(actual_backend)
     if flag:
         options += [f"-D{flag}=ON"]
     if arch and sys.platform == "darwin":
@@ -195,8 +196,8 @@ def build(backend: str, destination: Path, source: Path | None = None, arch: str
     for file in executable.parent.iterdir():
         if file.suffix in {".dll", ".dylib", ".so", ".metallib"}:
             shutil.copy2(file, destination / file.name)
-    write_notices(source, destination, revision, backend)
-    print(f"Built editing runtime ({backend}); no models were loaded.")
+    write_notices(source, destination, revision, actual_backend)
+    print(f"Built editing runtime ({actual_backend}); no models were loaded.")
 
 
 def write_notices(source, destination, revision, backend):

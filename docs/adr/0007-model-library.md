@@ -22,7 +22,7 @@ policy questions about presets could not be answered from the data.
   checkpoint each stage will run, its license, size, hardware fit and install state. The
   dropdowns are gone; "Change…" opens the library.
 - **One resolver.** `resolvePlan`, `choosePresetModel` and `chooseFixModel` in
-  `desktop/src/lib/state.ts` mirror `presets.py`: exact content matches rank above general
+  `desktop/src/lib/plan.ts` mirror `presets.py`: exact content matches rank above general
   models; Quick orders by speed then quality, Best by quality then speed; installed models win
   ties. Quick/Best never select a checkpoint whose rights are unresolved or non-commercial
   (`_rights_allow_preset` in `presets.py`, `rightsAllowPreset` in the frontend). Labs remains a
@@ -44,9 +44,13 @@ policy questions about presets could not be answered from the data.
   Illustration, Faces, Fix noise/blur/JPEG, Video (Labs)), plus Installed as the storage view
   with `remove_model`. Only checkpoints that passed the evidence gates in
   `docs/model-licenses.md` are listed. Below 920 px the sheet fills the window.
-- **One restoration stage before the upscaler.** The host runs a single preprocess stage, so
-  the noise/JPEG/blur chips are exclusive; Faces is an independent companion pass. Chaining
-  several 1× stages is a host change and stays out of scope here.
+- **Fixes before the model.** Noise, JPEG and blur are independent chips. Each one runs
+  as its own 1× stage before the upscaler, up to three, in an order the plan card can
+  change; a newly chosen fix takes its place in blur → JPEG → noise. In Restore the last fix
+  is the Restore model and the ones before it run first. An optional fix that turns unstable
+  is skipped with a note. Settings keep the ordered list as `fix_stages` (schema 2); each
+  fix's model is remembered per problem and quality in `preset_pins["fix/<problem>/<quality>"]`.
+  Faces is an independent companion pass; video runs no fixes.
 - **Rename.** The *Denoise* task is labelled *Restore* ("Noise, blur, JPEG"); its identifier
   stays `denoise` for settings, recipes, the CLI and the worker protocol.
 

@@ -87,6 +87,18 @@ application actions. `MediaQueue` renders the imported media and queue state;
 loading, and its observer lifetime. `AdvancedSettings` renders output and hardware
 settings and emits typed setting patches. Native persistence stays in the parent
 and Rust host. `BenchmarkStudio` draws real warm-up tiles for the selected CPU/GPU benchmark.
+`ComparePane` is the Compare mode of the main pane: the picked results as a slider or
+as up to four boxes sharing one zoom and pan. `OutputsList` lists a media item's outputs
+and collects the picks that `ComparePane` shows. `ModelLibrary` is the model sheet:
+installed and downloadable models with their fit and recipe choices.
+
+Video Compare reuses `ComparePane` geometry, slot labels and linked pan/zoom.
+`compare-video-sync.ts` owns the time-based transport without DOM or native access;
+`VideoTransport` is also used by single-video Preview. The pane owns frame callbacks,
+media listeners and source cleanup. `prepare_video_comparison` accepts a Compare
+slot and generation, resolves its unchanged host-owned path, and uses the same
+conversion gate, exact-file grants and Linux byte-range route as single Preview.
+Slots prepare serially because that gate has one active cancellation request.
 
 Completed-video playback authorizes the canonical original and completed output
 files individually for the app session. It never authorizes their directories.

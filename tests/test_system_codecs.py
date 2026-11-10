@@ -16,7 +16,9 @@ from test_hdr import make_hdr
 from test_video_timing import make_vfr, run_standard, timestamps
 
 from localsr.core import media_bridge, system_codecs
+from localsr.core.external_ffmpeg import ExternalFFmpegError
 from localsr.core.media_bridge import MediaBridge, decodable_source, load_media_bridge
+from localsr.core.media_codecs import audio_copy_allowed, muxer_format, validate_output
 from localsr.core.system_codecs import (
     FRAME_HEADER,
     STREAM_TAG,
@@ -476,3 +478,207 @@ def test_cancellation_stops_a_conversion(tmp_path, bridge):
 def test_frame_header_layout_is_stable():
     assert FRAME_HEADER.size == 16
     assert FRAME_HEADER.pack(-5, 7, 9) == struct.pack("<qiI", -5, 7, 9)
+
+
+def test_encode_frames_sends_scheduled_durations(monkeypatch, tmp_path):
+    import io
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from localsr.core.video_io import TimedVideoFrame
+
+    class Capture(io.BytesIO):
+        def close(self):
+            pass
+
+    output = Capture()
+    process = SimpleNamespace(stdin=output, returncode=0)
+
+    @contextmanager
+    def fake_process(self, arguments, *, stdin=False):
+        yield process
+
+    monkeypatch.setattr(SystemCodecs, "_process", fake_process)
+    monkeypatch.setattr(SystemCodecs, "_wait", lambda *args: None)
+    rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    frames = [
+        TimedVideoFrame(0, rgb, Fraction(0), Fraction(1, 96), Fraction(1, 96)),
+        TimedVideoFrame(1, rgb, Fraction(1, 96), Fraction(1, 24), Fraction(1, 96)),
+    ]
+    SystemCodecs("helper", 1).encode_frames(
+        frames, tmp_path / "out.mp4", fps=96, video_codec="hevc", container="mp4", crf=18
+    )
+    data = output.getvalue().split(b"\n", 1)[1]
+    pts, duration, length = FRAME_HEADER.unpack_from(data)
+    assert (pts, duration) == (0, 1)
+    pts, duration, _ = FRAME_HEADER.unpack_from(data, FRAME_HEADER.size + length)
+    assert (pts, duration) == (1, 4)
+
+
+def test_mov_codec_validation():
+    from localsr.core.media_codecs import validate_output
+
+    for codec in ("hevc", "prores"):
+        validate_output(codec, "mov")
+    for codec, container in (("h264", "mov"), ("av1", "mov"), ("prores", "mp4")):
+        with pytest.raises(ValueError):
+            validate_output(codec, container)
+    # A source whose audio only the system decodes is planned against the output container.
+    assert muxer_format("mov") == "mov" and audio_copy_allowed("aac", "mov")
+    helper = SystemCodecs("/nonexistent", 1)
+    assert helper.encoder_for("prores", container="mov")
+    with pytest.raises(SystemCodecsError):
+        helper.encoder_for("prores", container="mp4")
+
+
+def prores_or_skip(
+    helper: SystemCodecs, width: int = 48, height: int = 32, fps: float = 25
+) -> None:
+    if not helper.can_encode("prores", width, height, fps=fps):
+        pytest.skip(
+            f"this Mac (a virtual machine, perhaps) cannot encode Apple ProRes at {width}x{height}"
+        )
+
+
+@pytest.mark.parametrize("codec,fourcc", [("hevc", "hvc1"), ("prores", "apcn")])
+def test_mov_system_export_with_audio(tmp_path, bridge, codec, fourcc):
+    if codec == "prores":
+        prores_or_skip(bridge.system)
+    source = make_vfr(tmp_path / "source.mp4")
+    frames = source_frames(source)
+    tone = tmp_path / "tone.mkv"
+    make_tone(tone)
+    output = tmp_path / f"{codec}.mov"
+    encode_video(
+        iter(frames),
+        str(output),
+        fps=25,
+        width=48,
+        height=32,
+        video_codec=codec,
+        container_format="mov",
+        audio_source=str(tone),
+        external_ffmpeg=bridge,
+        stream_to_system=True,
+    )
+    info = bridge.system.probe(str(output))
+    assert info["video"]["codec"] == fourcc
+    assert info["audio"]["codec"] == "aac"
+    expected_duration = float(frames[-1].timestamp + frames[-1].duration - frames[0].timestamp)
+    assert info["video"]["duration"] == pytest.approx(expected_duration, abs=0.05)
+    with decodable_source(str(output), ffmpeg=bridge, temporary_directory=str(tmp_path)) as (
+        frame_path,
+        _,
+    ):
+        assert len(source_frames(Path(frame_path))) == len(frames)
+
+
+def test_mov_and_prores_exports_need_the_system_codecs(monkeypatch):
+    class FakeFFmpeg:
+        path = "/usr/bin/ffmpeg"
+        version = "7"
+
+        def encoder_for(self, codec, *, hdr=False):
+            return "libx265"
+
+    user_only = MediaBridge(user=FakeFFmpeg())
+    for codec in ("hevc", "prores"):
+        with pytest.raises(ValueError, match="codecs of macOS"):
+            media_bridge.validate_export(user_only, codec, "mov")
+        with pytest.raises(ValueError, match="codecs of macOS"):
+            media_bridge.validate_export(None, codec, "mov")
+    with pytest.raises(ValueError, match="codecs of macOS"):
+        media_bridge.validate_export(user_only, "prores", "mp4")
+    with pytest.raises(ExternalFFmpegError, match="codecs of macOS"):
+        user_only.export_provider("hevc", container="mov")
+    both = MediaBridge(system=SystemCodecs("/nonexistent", 1), user=FakeFFmpeg())
+    media_bridge.validate_export(both, "prores", "mov")
+    media_bridge.validate_export(both, "hevc", "mov")
+    assert isinstance(both.export_provider("hevc", container="mov"), SystemCodecs)
+    # An FFmpeg the user installed still writes HEVC into MKV, never ProRes or MOV.
+    assert both.export_provider("hevc", container="mkv") is both.user
+    with pytest.raises(ValueError, match="SDR"):
+        validate_output("prores", "mov", hdr=True)
+    fake = SystemCodecs("/fake", 1)
+    monkeypatch.setattr(media_bridge, "detect_system_codecs", lambda: fake)
+    monkeypatch.setattr(media_bridge, "implicit_user_ffmpeg", lambda: None)
+    report = media_bridge.media_capabilities()["system_codecs"]
+    assert "prores" in report["encode"] and "mov" in report["containers"]
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_prores_is_offered_only_when_the_system_can_encode_it(monkeypatch, available):
+    fake = SystemCodecs("/fake-prores-probe", 1)
+    monkeypatch.setattr(system_codecs, "_encode_probe", {})
+    monkeypatch.setattr(fake.__class__, "_run", lambda self, args, timeout: {"prores": available})
+    assert fake.can_encode("prores", 48, 32) is available
+    assert fake.can_encode("prores") is available
+    monkeypatch.setattr(media_bridge, "detect_system_codecs", lambda: fake)
+    monkeypatch.setattr(media_bridge, "implicit_user_ffmpeg", lambda: None)
+    encode = media_bridge.media_capabilities()["system_codecs"]["encode"]
+    assert ("prores" in encode) is available
+    assert {"h264", "hevc", "aac"} <= set(encode)
+
+
+def test_mov_export_through_the_lossless_master(tmp_path, bridge):
+    """Odd sizes cannot stream to the encoder: the FFV1 master route writes MOV as well."""
+    prores_or_skip(bridge.system)
+    source = make_vfr(tmp_path / "source.mp4")
+    frames = source_frames(source)
+    output = tmp_path / "master.mov"
+    encode_video(
+        iter(frames),
+        str(output),
+        fps=25,
+        width=48,
+        height=32,
+        video_codec="prores",
+        container_format="mov",
+        external_ffmpeg=bridge,
+        stream_to_system=False,
+    )
+    info = bridge.system.probe(str(output))
+    assert info["video"]["codec"] == "apcn"
+    assert output.read_bytes()[4:12] == b"ftypqt  "
+
+
+class _SidecarSystem:
+    """A stand-in helper that, like macOS, leaves a `.sb-` sibling of its output."""
+
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    def source_audio(self, *_args):
+        return None
+
+    def encode_frames(self, frames, final, **_options):
+        final.write_bytes(b"video")
+        final.with_name(final.name + ".sb-df5fe11b-AbCdEf").write_bytes(b"x" * 64)
+        if self.fail:
+            raise InterruptedError("video job cancelled")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_system_export_leaves_nothing_but_the_output(tmp_path, fail):
+    from localsr.core.video_io import _system_stream_export
+
+    keep = tmp_path / ".unrelated.sb-keep"
+    keep.write_bytes(b"mine")
+    destination = tmp_path / "out.mp4"
+    call = {
+        "system": _SidecarSystem(fail),
+        "video_codec": "hevc",
+        "container_format": "mp4",
+        "crf": 18,
+        "fps": 24.0,
+        "audio_source": None,
+        "cancel_event": None,
+        "temporary_directory": None,
+    }
+    if fail:
+        with pytest.raises(InterruptedError):
+            _system_stream_export(iter(()), destination, **call)
+    else:
+        _system_stream_export(iter(()), destination, **call)
+    expected = {keep.name} | (set() if fail else {destination.name})
+    assert {path.name for path in tmp_path.iterdir()} == expected

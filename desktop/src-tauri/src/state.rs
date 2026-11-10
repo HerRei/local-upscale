@@ -26,8 +26,19 @@ pub struct WorkerControl {
     pub sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub generation: AtomicU64,
     pub pid: AtomicU32,
+    /// Starts in a row after which the engine stopped by itself, before it ran long
+    /// enough or finished a job.
     pub restart_count: AtomicU32,
+    /// Whether the running engine has finished a job; with a long run it shows the
+    /// engine works, so its stopping later is not a failing start.
+    pub finished_job: AtomicBool,
     pub shutting_down: AtomicBool,
+    /// The process ID of an engine that ended on its own with a failure, for its
+    /// replacement: the engine then knows which GPU step crashed it.
+    pub crashed_engine: AtomicU32,
+    /// The queue was stopped because the disk is full; it ends when the next job is sent.
+    /// One stop covers every failure that follows it.
+    pub disk_stop: AtomicBool,
 }
 
 impl Default for WorkerControl {
@@ -38,7 +49,10 @@ impl Default for WorkerControl {
             generation: AtomicU64::new(0),
             pid: AtomicU32::new(0),
             restart_count: AtomicU32::new(0),
+            finished_job: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
+            crashed_engine: AtomicU32::new(0),
+            disk_stop: AtomicBool::new(false),
         }
     }
 }
@@ -61,11 +75,21 @@ pub struct AppState {
     pub edit_runtime: Mutex<String>,
     pub worker: WorkerControl,
     pub scheduler: Mutex<()>,
+    // One writer of the settings file at a time, from taking the copy to writing it, so an
+    // older copy can never land after a newer one.
+    pub settings_io: Mutex<()>,
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub launch_intents: Mutex<Vec<LaunchIntent>>,
     /// Set when no settings file existed at launch: the first device report
     /// then replaces the CPU default with the computer's GPU.
     pub choose_device: AtomicBool,
+    /// What the user has to be told once at start-up, for example that a damaged
+    /// queue file was moved aside. Shown and emptied by `take_startup_notices`.
+    startup_notices: Mutex<Vec<String>>,
+    /// The programs the user's choices and the host's own searches have named.
+    pub programs: crate::programs::GrantedPrograms,
+    /// The editing runtimes the user picked in the host's own file dialog.
+    pub edit_programs: crate::programs::GrantedPrograms,
 }
 
 impl AppState {
@@ -74,12 +98,37 @@ impl AppState {
     }
 
     pub(crate) fn from_paths(paths: AppPaths) -> AppResult<Self> {
-        crate::update_storage::before_version(&paths, &crate::distribution::profile_version())?;
-        let database = Database::open(&paths.database)?;
+        let mut notices = Vec::new();
+        // The safety copy is a convenience: a full disk or a damaged queue must not keep
+        // the app from starting. No update step depends on it.
+        if let Err(error) =
+            crate::update_storage::before_version(&paths, &crate::distribution::profile_version())
+        {
+            eprintln!("LocalSR could not copy its data before the new version: {error}");
+            notices.push(format!(
+                "LocalSR could not make its safety copy of your settings and queue ({error})."
+            ));
+        }
+        let (mut database, set_aside) = Database::open_or_set_aside(&paths.database)?;
+        let worker = WorkerControl::default();
+        for id in crate::cancellation::sweep_scratch(&database.take_interrupted_scratch(), &worker)
+        {
+            if let Err(error) = database.forget_scratch(&id) {
+                eprintln!("LocalSR could not update a job's scratch record: {error}");
+            }
+        }
+        if let Some(moved) = set_aside {
+            notices.push(format!(
+                "The queue and history file was damaged. LocalSR moved it to {} and started a new, empty queue. Your settings and models were not touched.",
+                moved.display()
+            ));
+        }
         let catalog = load_catalog(&paths)?;
         let first_run = !paths.settings.exists() && !paths.legacy_settings.exists();
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
+        let programs = crate::programs::GrantedPrograms::default();
+        programs.grant(&settings.external_ffmpeg_path);
         Ok(Self {
             video_preview: crate::video_preview::VideoPreviewControl::default(),
             updates: crate::updates::UpdateControl::default(),
@@ -95,12 +144,24 @@ impl AppState {
             runtime: Mutex::new(RuntimeStatus::default()),
             latest_benchmark: Mutex::new(latest_benchmark),
             edit_runtime: Mutex::new(String::new()),
-            worker: WorkerControl::default(),
+            worker,
             scheduler: Mutex::new(()),
+            settings_io: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
             launch_intents: Mutex::new(Vec::new()),
             choose_device: AtomicBool::new(first_run),
+            startup_notices: Mutex::new(notices),
+            programs,
+            edit_programs: crate::programs::GrantedPrograms::default(),
         })
+    }
+
+    /// The start-up notices, once: a second call returns nothing.
+    pub fn take_startup_notices(&self) -> Vec<String> {
+        self.startup_notices
+            .lock()
+            .map(|mut notices| std::mem::take(&mut *notices))
+            .unwrap_or_default()
     }
 
     pub fn snapshot(&self) -> AppResult<AppSnapshot> {
@@ -109,15 +170,28 @@ impl AppState {
         // temporary guards to the end of the statement and a non-reentrant
         // mutex would deadlock the first frontend bootstrap.
         let catalog = lock(&self.catalog)?.clone();
-        let (media, jobs) = {
+        let (media, mut jobs, runtime) = {
             let database = lock(&self.database)?;
-            (database.list_media()?, database.list_jobs()?)
+            let mut runtime = lock(&self.runtime)?;
+            crate::compare::refresh(&database, &mut runtime.compare)?;
+            (
+                database.list_media()?,
+                database.list_jobs()?,
+                runtime.clone(),
+            )
         };
+        let mut runtime = runtime;
+        runtime.cancel_grace_seconds = crate::cancellation::CANCEL_GRACE.as_secs();
+        // The queue row says which model runs ("Running SwinIR · 2 queued").
+        for job in &mut jobs {
+            if let Some(label) = crate::results::catalog_label(&catalog, &job.model_id) {
+                job.model_label = label;
+            }
+        }
         let settings = lock(&self.settings)?.clone();
         let recipes = lock(&self.recipes)?.clone();
         let capabilities = lock(&self.capabilities)?.clone();
         let engine = lock(&self.engine)?.clone();
-        let runtime = lock(&self.runtime)?.clone();
         let latest_benchmark = lock(&self.latest_benchmark)?.clone();
         let edit = crate::editing::EditSetup {
             models: crate::editing::catalog(&self.paths)?,
@@ -141,6 +215,12 @@ impl AppState {
     }
 
     pub fn persist_settings(&self) -> AppResult<()> {
+        let _io = lock(&self.settings_io)?;
+        self.write_settings()
+    }
+
+    /// Write the settings as they are now. The caller holds `settings_io`.
+    pub fn write_settings(&self) -> AppResult<()> {
         let ui = lock(&self.settings)?.clone();
         let recipes = lock(&self.recipes)?.clone();
         settings::save(&self.paths, &ui, &recipes)
@@ -168,6 +248,104 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_scratch_of_a_job_a_stopped_host_left_running_is_removed_at_the_next_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let output = directory.path().join("out").join("clip.mp4");
+        let scratch = directory
+            .path()
+            .join("out")
+            .join(format!(".localsr-job-{}", uuid::Uuid::new_v4()));
+        // Made by someone else beside the same output: never this profile's to delete.
+        let stranger = directory
+            .path()
+            .join("out")
+            .join(format!(".localsr-job-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&stranger).unwrap();
+        std::fs::write(stranger.join("file"), b"not ours").unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("frame"), b"partial").unwrap();
+        {
+            let state = AppState::from_paths(paths.clone()).unwrap();
+            let database = state.database.lock().unwrap();
+            database
+                .insert_media("m", "/in/clip.mov", "clip", "video")
+                .unwrap();
+            let request = serde_json::json!({"type": "video_job_request",
+                "data": {"output_video_path": output}});
+            database.insert_job("j", "m", &request.to_string()).unwrap();
+            database.set_job_status("j", "running").unwrap();
+            database.record_scratch("j", &scratch).unwrap();
+            // The host stops here without cleaning up.
+            assert!(scratch.is_dir());
+        }
+        let state = AppState::from_paths(paths).unwrap();
+        assert!(!scratch.exists());
+        assert!(stranger.join("file").is_file());
+        let jobs = state.database.lock().unwrap().list_jobs().unwrap();
+        assert_eq!(jobs[0].status, "interrupted");
+    }
+
+    #[test]
+    fn the_program_saved_by_an_earlier_run_is_known_at_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let saved = UiSettings {
+            external_ffmpeg_path: "/opt/tools/ffmpeg".into(),
+            ..UiSettings::default()
+        };
+        crate::settings::save(&paths, &saved, &[]).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        assert!(state.programs.check("/opt/tools/ffmpeg").is_ok());
+        assert!(state.programs.check("/opt/tools/other").is_err());
+    }
+
+    fn paths_with_queue(directory: &std::path::Path, content: &[u8]) -> AppPaths {
+        let paths = AppPaths::under(directory);
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        std::fs::write(&paths.database, content).unwrap();
+        paths
+    }
+
+    #[test]
+    fn a_damaged_queue_does_not_keep_the_app_from_starting() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths_with_queue(directory.path(), b"not a database\n");
+        std::fs::write(&paths.settings, r#"{"schema_version":2}"#).unwrap();
+        let state = AppState::from_paths(paths.clone()).unwrap();
+        assert!(state.snapshot().unwrap().media.is_empty());
+        let notices = state.take_startup_notices();
+        let moved = std::fs::read_dir(&paths.next_root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.to_string_lossy().contains("queue.damaged-"))
+            .unwrap();
+        assert_eq!(std::fs::read(&moved).unwrap(), b"not a database\n");
+        assert!(notices
+            .iter()
+            .any(|notice| notice.contains(moved.to_str().unwrap())));
+        assert!(state.take_startup_notices().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&paths.settings).unwrap(),
+            r#"{"schema_version":2}"#
+        );
+    }
+
+    #[test]
+    fn a_failed_safety_copy_is_reported_and_does_not_keep_the_app_from_starting() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        drop(crate::database::Database::open(&paths.database).unwrap());
+        std::fs::write(paths.next_root.join("data-version.json"), "0.0.1").unwrap();
+        std::fs::write(paths.next_root.join("backups"), b"a file, not a folder").unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        let notices = state.take_startup_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("safety copy"));
+    }
+
+    #[test]
     fn snapshot_reads_media_and_jobs_without_relocking_database() {
         let directory = tempfile::tempdir().unwrap();
         let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
@@ -177,5 +355,12 @@ mod tests {
         assert!(snapshot.media.is_empty());
         assert!(snapshot.jobs.is_empty());
         assert_eq!(snapshot.app_version, APP_VERSION);
+    }
+
+    #[test]
+    fn snapshot_tells_how_long_a_cancelled_job_may_take_to_stop() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        assert_eq!(state.snapshot().unwrap().runtime.cancel_grace_seconds, 8);
     }
 }

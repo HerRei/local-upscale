@@ -8,7 +8,9 @@
     { "$ref": "#/$defs/handshakeRequest" },
     { "$ref": "#/$defs/emptyRequest" },
     { "$ref": "#/$defs/pathRequest" },
+    { "$ref": "#/$defs/regionRequest" },
     { "$ref": "#/$defs/jobRequest" },
+    { "$ref": "#/$defs/imageBatchRequest" },
     { "$ref": "#/$defs/editJobRequest" },
     { "$ref": "#/$defs/videoJobRequest" },
     { "$ref": "#/$defs/benchmarkRequest" },
@@ -18,6 +20,23 @@
     { "$ref": "#/$defs/workerResponse" }
   ],
   "$defs": {
+    "imageBatchRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "image_batch_request" },
+          "data": {
+            "type": "object", "required": ["jobs"],
+            "properties": { "jobs": {
+              "type": "array", "minItems": 2, "maxItems": 64,
+              "description": "Queued photos sharing one model and every setting; each keeps its own job_id, paths and terminal message. Sent only to engines that list the image_batch_v1 feature.",
+              "items": { "$ref": "#/$defs/jobRequest/allOf/1/properties/data" }
+            }},
+            "additionalProperties": false
+          }
+        }}
+      ]
+    },
     "editJobRequest": {
       "allOf": [
         { "$ref": "#/$defs/envelope" },
@@ -81,10 +100,36 @@
         { "$ref": "#/$defs/envelope" },
         {
           "properties": {
-            "type": { "enum": ["capabilities_request", "shutdown_request"] },
+            "type": { "enum": ["capabilities_request", "shutdown_request", "region_clear"] },
             "data": { "type": "object", "maxProperties": 0 }
           }
         }
+      ]
+    },
+    "regionRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "region_request" },
+          "data": {
+            "type": "object",
+            "required": ["image_path", "slot", "generation", "target_id", "request_id", "x", "y", "width", "height", "target_width", "target_height"],
+            "properties": {
+              "image_path": { "type": "string", "minLength": 1 },
+              "slot": { "enum": ["slot1", "slot2", "slot3", "slot4"] },
+              "generation": { "type": "integer", "minimum": 1 },
+              "target_id": { "type": "string", "minLength": 1 },
+              "request_id": { "type": "integer", "minimum": 1 },
+              "x": { "type": "integer", "minimum": 0 },
+              "y": { "type": "integer", "minimum": 0 },
+              "width": { "type": "integer", "minimum": 1 },
+              "height": { "type": "integer", "minimum": 1 },
+              "target_width": { "type": "integer", "minimum": 1, "maximum": 2048 },
+              "target_height": { "type": "integer", "minimum": 1, "maximum": 2048 }
+            },
+            "additionalProperties": false
+          }
+        } }
       ]
     },
     "pathRequest": {
@@ -104,6 +149,9 @@
                 "image_path": { "type": "string" },
                 "media_path": { "type": "string" },
                 "comparison": { "type": "boolean" },
+                "slot": { "enum": ["showing", "against", "slot1", "slot2", "slot3", "slot4"] },
+                "generation": { "type": "integer", "minimum": 0 },
+                "target_id": { "type": "string" },
                 "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 },
                 "external_ffmpeg": { "type": "string" }
               },
@@ -193,7 +241,7 @@
                   "properties": {
                     "image_path": { "type": "string", "minLength": 1 },
                     "output_path": { "type": "string", "minLength": 1 },
-                    "output_format": { "enum": ["png", "jpg", "tif", "webp"] },
+                    "output_format": { "enum": ["png", "jpg", "tif", "webp", "heic"] },
                     "jpeg_quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                     "preserve_metadata": { "type": "boolean" },
                     "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
@@ -231,11 +279,12 @@
                   ],
                   "properties": {
                     "video_path": { "type": "string", "minLength": 1 },
-                    "hdr_mode": { "enum": ["reject", "tone_map"], "default": "reject" },
+                    "hdr_mode": { "enum": ["reject", "tone_map", "preserve"], "default": "reject" },
                     "output_video_path": { "type": "string", "minLength": 1 },
-                    "container": { "enum": ["mp4", "mkv"] },
-                    "video_codec": { "enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc"], "default": "av1" },
-                    "external_ffmpeg": { "type": "string" },
+                    "container": { "enum": ["mp4", "mkv", "mov"] },
+                    "video_codec": { "enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc", "prores"], "default": "av1" },
+                    "external_ffmpeg": { "type": ["string", "null"] },
+                    "video_low_memory": { "type": "boolean", "default": true },
                     "crf": { "type": "integer", "minimum": 0, "maximum": 51 },
                     "fps": { "type": ["number", "null"], "exclusiveMinimum": 0 },
                     "keyframe_interval": { "type": ["integer", "null"], "minimum": 1 },
@@ -248,7 +297,13 @@
                     "temporal_window": { "type": "integer", "minimum": 0 },
                     "temporal_overlap": { "type": "integer", "minimum": 0 },
                     "target_resolution": { "type": "integer", "minimum": 0 },
-                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 }
+                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+                    "interpolation": { "enum": ["off", "x2", "x4", "fps60", "fps120"], "default": "off" },
+                    "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
+                    "interpolation_model_id": { "type": ["string", "null"] },
+                    "interpolation_bundle_dir": { "type": ["string", "null"] },
+                    "video_model_id": { "type": ["string", "null"] },
+                    "temporary_directory": { "type": ["string", "null"] }
                   }
                 }
               ]
@@ -334,6 +389,8 @@
                 "capabilities_info",
                 "preview_ready",
                 "preview_failed",
+                "region_ready",
+                "region_failed",
                 "media_info",
                 "media_probe_failed",
                 "media_probe_progress",
