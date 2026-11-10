@@ -280,14 +280,31 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
     }
     validate_settings(&settings)?;
     state.programs.check(&settings.external_ffmpeg_path)?;
-    let mut settings = settings;
-    {
+    replace_settings(&state, settings)
+}
+
+/// Make `settings` the current ones and write them. When the write fails the
+/// previous settings stay, so the window never uses what the file does not hold.
+fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()> {
+    let previous = {
         // Read and replace under one guard, so a switch saved in between is kept.
         let mut current = lock(&state.settings)?;
         keep_update_switches(&current, &mut settings);
-        *current = settings;
+        std::mem::replace(&mut *current, settings)
+    };
+    persist_or_restore(state, |state| {
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
+/// Write the settings and recipes; on a failed write run `restore` to put the
+/// previous values back.
+fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppResult<()> {
+    let written = state.persist_settings();
+    if written.is_err() {
+        restore(state);
     }
-    state.persist_settings()
+    written
 }
 
 /// The update switches change only through set_update_switch. A full settings save
@@ -402,17 +419,7 @@ pub fn save_recipe(
         ));
     }
     validate_recipe_stages(&recipe)?;
-    let mut recipes = lock(&state.recipes)?;
-    if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
-        *existing = recipe;
-    } else {
-        if recipes.len() >= 100 {
-            return Err(AppError::Validation("recipe limit reached".into()));
-        }
-        recipes.push(recipe);
-    }
-    drop(recipes);
-    state.persist_settings()?;
+    store_recipe(&state, recipe)?;
     let switches = native_menu::switches(&*lock(&state.settings)?);
     native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
@@ -421,6 +428,39 @@ pub fn save_recipe(
     })?;
     emit_state_changed(&app);
     Ok(())
+}
+
+/// Add or replace a recipe and write it; a failed write leaves the recipes as they were.
+fn store_recipe(state: &AppState, recipe: Recipe) -> AppResult<()> {
+    let previous = {
+        let mut recipes = lock(&state.recipes)?;
+        let previous = recipes.clone();
+        if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
+            *existing = recipe;
+        } else {
+            if recipes.len() >= 100 {
+                return Err(AppError::Validation("recipe limit reached".into()));
+            }
+            recipes.push(recipe);
+        }
+        previous
+    };
+    persist_or_restore(state, |state| {
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
+}
+
+/// Remove a recipe and write the change; a failed write leaves the recipes as they were.
+fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
+    let previous = {
+        let mut recipes = lock(&state.recipes)?;
+        let previous = recipes.clone();
+        recipes.retain(|recipe| recipe.id != id);
+        previous
+    };
+    persist_or_restore(state, |state| {
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+    })
 }
 
 fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
@@ -504,8 +544,7 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
-    lock(&state.recipes)?.retain(|recipe| recipe.id != id);
-    state.persist_settings()?;
+    remove_recipe(&state, &id)?;
     let switches = native_menu::switches(&*lock(&state.settings)?);
     native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
@@ -4967,6 +5006,53 @@ mod tests {
             prepare_output_directory(&state, "  ").unwrap(),
             fs::canonicalize(&state.paths.default_output).unwrap()
         );
+    }
+
+    /// A settings file that cannot be read makes every write fail, as a file the user
+    /// has to recover first does.
+    fn state_that_cannot_save(directory: &Path) -> AppState {
+        let paths = AppPaths::under(directory);
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(&paths.settings, b"{ cut off").unwrap();
+        AppState::from_paths(paths).unwrap()
+    }
+
+    fn recipe_named(id: &str) -> Recipe {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "task": "upscale", "model_id": "m", "output_scale": 2,
+            "tile_size": 256, "halo": 16, "precision": "fp32", "safe_memory": false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_settings_and_recipes_as_they_were() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state_that_cannot_save(directory.path());
+        let before = lock(&state.settings).unwrap().tile_size;
+        let mut changed = lock(&state.settings).unwrap().clone();
+        changed.tile_size = if before == 64 { 128 } else { 64 };
+        assert!(replace_settings(&state, changed).is_err());
+        assert_eq!(lock(&state.settings).unwrap().tile_size, before);
+        assert!(store_recipe(&state, recipe_named("r1")).is_err());
+        assert!(lock(&state.recipes).unwrap().is_empty());
+        lock(&state.recipes).unwrap().push(recipe_named("kept"));
+        assert!(remove_recipe(&state, "kept").is_err());
+        assert_eq!(lock(&state.recipes).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_written_recipe_is_kept_replaced_and_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        store_recipe(&state, recipe_named("r1")).unwrap();
+        let mut renamed = recipe_named("r1");
+        renamed.name = "renamed".into();
+        store_recipe(&state, renamed).unwrap();
+        assert_eq!(lock(&state.recipes).unwrap().len(), 1);
+        assert_eq!(lock(&state.recipes).unwrap()[0].name, "renamed");
+        remove_recipe(&state, "r1").unwrap();
+        assert!(lock(&state.recipes).unwrap().is_empty());
     }
 
     #[test]
