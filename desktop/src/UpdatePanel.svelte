@@ -160,7 +160,8 @@
           >
         {:else if status.stage === 'downloading'}<button
             class="button"
-            on:click={() => api.cancelUpdate()}>Cancel download</button
+            on:click={() => api.cancelUpdate().catch((e) => updateError.set(String(e)))}
+            >Cancel download</button
           >
         {:else if status.stage === 'downloaded'}<button
             class="button"

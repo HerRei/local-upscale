@@ -114,21 +114,29 @@
   }
 
   async function findFFmpeg(): Promise<void> {
-    const found = await detectExternalFFmpeg();
-    if (found.length) {
-      updateSettings({ external_ffmpeg_path: found[0] });
-      ffmpegNote = found.length > 1 ? `Also found: ${found.slice(1).join(', ')}` : '';
-    } else {
-      ffmpegNote =
-        'No FFmpeg was found. Install it (for example with Homebrew, winget or your package manager), then choose it here.';
+    try {
+      const found = await detectExternalFFmpeg();
+      if (found.length) {
+        updateSettings({ external_ffmpeg_path: found[0] });
+        ffmpegNote = found.length > 1 ? `Also found: ${found.slice(1).join(', ')}` : '';
+      } else {
+        ffmpegNote =
+          'No FFmpeg was found. Install it (for example with Homebrew, winget or your package manager), then choose it here.';
+      }
+    } catch (error) {
+      ffmpegNote = String(error);
     }
   }
 
   async function pickFFmpeg(): Promise<void> {
-    const path = await chooseExternalFFmpeg(settings.external_ffmpeg_path ?? '');
-    if (path) {
-      updateSettings({ external_ffmpeg_path: path });
-      ffmpegNote = '';
+    try {
+      const path = await chooseExternalFFmpeg(settings.external_ffmpeg_path ?? '');
+      if (path) {
+        updateSettings({ external_ffmpeg_path: path });
+        ffmpegNote = '';
+      }
+    } catch (error) {
+      ffmpegNote = String(error);
     }
   }
 </script>

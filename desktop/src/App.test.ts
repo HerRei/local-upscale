@@ -3936,4 +3936,97 @@ describe('Dialogs and refused host calls', () => {
     await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('queue'));
     expect(screen.getByRole('dialog').textContent).toContain('Could not clear the list');
   });
+
+  describe('when the host refuses what the user asked for', () => {
+    const refusal = 'unsupported media file type';
+    const shown = async (title: string) => {
+      await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain(title));
+      expect(screen.getByRole('dialog').textContent).toContain(refusal);
+    };
+
+    it('says so for Add Media…', async () => {
+      const user = await mountWith(readySnapshot([image('first', true)]));
+      api.chooseMediaFiles.mockResolvedValueOnce(['/x/photo.heic']);
+      api.addMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getAllByRole('button', { name: 'Add Media…' })[0]);
+      await shown('Could not add files');
+    });
+
+    it('says so for Add Folder…', async () => {
+      const user = await mountWith(readySnapshot([image('first', true)]));
+      api.chooseMediaFolder.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await shown('Could not add the folder');
+      api.chooseMediaFolder.mockResolvedValueOnce({ paths: ['/x/a.png'], outputDirectory: '/x' });
+      api.addMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'OK' }));
+      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await shown('Could not add the folder');
+      expect(api.saveSettings).not.toHaveBeenCalledWith(
+        expect.objectContaining({ output_directory: '/x' }),
+      );
+    });
+
+    it('says so for clicking an item', async () => {
+      const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+      api.selectMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: /^second\.png/ }));
+      await shown('Could not select the item');
+    });
+
+    it('says so for Remove', async () => {
+      const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+      api.removeMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+      await shown('Could not remove the item');
+    });
+
+    it('says so for Open and Reveal on a result', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      snapshot.jobs = [
+        {
+          id: 'job-first',
+          media_id: 'first',
+          media_name: 'first.png',
+          media_kind: 'image',
+          status: 'completed',
+          progress: 100,
+          output_path: '/private/first-output.png',
+          error: '',
+          created_at: 1,
+        },
+      ];
+      snapshot.runtime.last_output_path = '/private/first-output.png';
+      const user = await mountWith(snapshot);
+      api.openResult.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Open' }));
+      await shown('Could not open the result');
+      await user.click(screen.getByRole('button', { name: 'OK' }));
+      api.revealResult.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Reveal' }));
+      await shown('Could not show the result');
+    });
+
+    it('says so for Delete on a saved recipe', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+      snapshot.recipes = [
+        {
+          id: 'jens67',
+          name: 'Jens67',
+          task: 'upscale',
+          model_id: model.model_id,
+          output_scale: 4,
+          tile_size: 256,
+          halo: 32,
+          precision: 'fp32',
+          safe_memory: true,
+        },
+      ];
+      const user = await mountWith(snapshot);
+      api.deleteRecipe.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await shown('Could not delete the recipe');
+    });
+  });
 });

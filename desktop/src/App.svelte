@@ -1526,7 +1526,12 @@
 
   async function selectQueueMedia(id: string): Promise<void> {
     if (settings.task === 'upscale' || settings.task === 'denoise') lastImageTask = settings.task;
-    await api.selectMedia(id);
+    try {
+      await api.selectMedia(id);
+    } catch (error) {
+      showModal('Could not select the item', String(error));
+      return;
+    }
     await refresh();
     ensureTaskMatchesSelection();
     page = 'preview';
@@ -1626,9 +1631,14 @@
       showModal('Desktop runtime required', 'Run “npm run tauri dev” to choose local media.');
       return;
     }
-    const paths = await api.chooseMediaFiles();
-    if (!paths.length) return;
-    await api.addMedia(paths, replace);
+    try {
+      const paths = await api.chooseMediaFiles();
+      if (!paths.length) return;
+      await api.addMedia(paths, replace);
+    } catch (error) {
+      showModal('Could not add files', String(error));
+      return;
+    }
     page = 'preview';
     await refresh();
     ensureTaskMatchesSelection();
@@ -1640,26 +1650,38 @@
   }
 
   async function addFolder(): Promise<void> {
-    const folder = await api.chooseMediaFolder();
-    if (!folder?.paths.length) return;
-    await api.addMedia(folder.paths, false);
-    await api.saveSettings({
-      ...settings,
-      batch_mode: true,
-      output_directory: folder.outputDirectory,
-    });
+    try {
+      const folder = await api.chooseMediaFolder();
+      if (!folder?.paths.length) return;
+      await api.addMedia(folder.paths, false);
+      await api.saveSettings({
+        ...settings,
+        batch_mode: true,
+        output_directory: folder.outputDirectory,
+      });
+    } catch (error) {
+      showModal('Could not add the folder', String(error));
+      return;
+    }
     page = 'preview';
     await refresh();
     ensureTaskMatchesSelection();
   }
 
   async function chooseOutput(): Promise<void> {
-    const path = await api.chooseOutputDirectory(settings.output_directory);
-    if (path) updateSettings({ output_directory: path });
+    try {
+      const path = await api.chooseOutputDirectory(settings.output_directory);
+      if (path) updateSettings({ output_directory: path });
+    } catch (error) {
+      showModal('Could not choose the folder', String(error));
+    }
   }
 
   async function chooseCustomModel(): Promise<void> {
-    const path = await api.chooseCustomModel();
+    const path = await api.chooseCustomModel().catch((error) => {
+      showModal('Could not choose the model', String(error));
+      return null;
+    });
     if (path) {
       updateSettings({
         selected_model_id: '__custom__',
@@ -1724,7 +1746,7 @@
   ): Promise<void> {
     if (!target) return;
     if (activeDownload === target.model_id) {
-      await api.cancelDownload(target.model_id);
+      await attempt('Could not cancel the download', () => api.cancelDownload(target.model_id));
       return;
     }
     accepted ??= Boolean(termsAccepted[target.model_id]);
@@ -1855,7 +1877,10 @@
   }
 
   async function chooseEditRuntime(): Promise<void> {
-    const path = await api.chooseEditRuntime();
+    const path = await api.chooseEditRuntime().catch((error) => {
+      showModal('Could not choose the editing runtime', String(error));
+      return null;
+    });
     if (path) editRuntimeOverride = path;
   }
 
@@ -1871,15 +1896,15 @@
   }
 
   function openAnyLicense(modelId: string): Promise<void> {
-    return isEditModelId(modelId)
-      ? api.openEditLink(modelId, 'license')
-      : api.openModelLicense(modelId);
+    return attempt('Could not open the link', () =>
+      isEditModelId(modelId) ? api.openEditLink(modelId, 'license') : api.openModelLicense(modelId),
+    );
   }
 
   function openAnySource(modelId: string): Promise<void> {
-    return isEditModelId(modelId)
-      ? api.openEditLink(modelId, 'source')
-      : api.openModelSource(modelId);
+    return attempt('Could not open the link', () =>
+      isEditModelId(modelId) ? api.openEditLink(modelId, 'source') : api.openModelSource(modelId),
+    );
   }
 
   // Only when it differs from Cancel queue, or names what a trial is doing.
@@ -1998,7 +2023,12 @@
           : []),
       ],
     };
-    await api.saveRecipe(recipe);
+    try {
+      await api.saveRecipe(recipe);
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return;
+    }
     recipeName = '';
     recipeEditorOpen = false;
     await refresh();
@@ -2679,10 +2709,11 @@
       {addFiles}
       {addFolder}
       locked={settingsLocked}
-      removeMedia={async (id) => {
-        await api.removeMedia(id);
-        await refresh();
-      }}
+      removeMedia={(id) =>
+        attempt('Could not remove the item', async () => {
+          await api.removeMedia(id);
+          await refresh();
+        })}
       clearMedia={askClearMedia}
     />
 
@@ -2950,10 +2981,11 @@
                         ></button
                       ><button
                         aria-label={`Delete ${recipe.name}`}
-                        on:click={async () => {
-                          await api.deleteRecipe(recipe.id);
-                          await refresh();
-                        }}
+                        on:click={() =>
+                          attempt('Could not delete the recipe', async () => {
+                            await api.deleteRecipe(recipe.id);
+                            await refresh();
+                          })}
                         ><svg
                           xmlns="http://www.w3.org/2000/svg"
                           width="16"
@@ -3229,8 +3261,8 @@
                       {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
                         <ModelCredit
                           model={stage.model}
-                          openLicense={() => api.openModelLicense(stage.model!.model_id)}
-                          openSource={() => api.openModelSource(stage.model!.model_id)}
+                          openLicense={() => openAnyLicense(stage.model!.model_id)}
+                          openSource={() => openAnySource(stage.model!.model_id)}
                         />
                       {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
                         <p class="model-description">
@@ -3481,7 +3513,8 @@
                 true}
               {updateSettings}
               {chooseOutput}
-              refreshCapabilities={api.refreshCapabilities}
+              refreshCapabilities={() =>
+                attempt('Could not refresh the hardware', () => api.refreshCapabilities())}
             />
           {/if}
         </fieldset>
@@ -3511,7 +3544,9 @@
             {#if hardwareHint.downloads}<button
                 class="link-button"
                 type="button"
-                on:click={() => void api.openDownloadPage()}>Download page</button
+                on:click={() =>
+                  attempt('Could not open the download page', () => api.openDownloadPage())}
+                >Download page</button
               >{/if}</span
           >{/if}
         {#if queueEta}<span
@@ -3541,11 +3576,15 @@
       {#if selectedOutputPath}<button
           class="button"
           title={`Show ${selectedOutputName} in its folder`}
-          on:click={() => api.revealResult(selectedOutputPath)}>Reveal</button
+          on:click={() =>
+            attempt('Could not show the result', () => api.revealResult(selectedOutputPath))}
+          >Reveal</button
         ><button
           class="button"
           title={`Open ${selectedOutputName}`}
-          on:click={() => api.openResult(selectedOutputPath)}>Open</button
+          on:click={() =>
+            attempt('Could not open the result', () => api.openResult(selectedOutputPath))}
+          >Open</button
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}
@@ -3701,7 +3740,10 @@
             >
             {#if benchmarkSetup === 'downloading' && activeDownload === 'span_photo_x4'}<button
                 class="button"
-                on:click={() => api.cancelDownload('span_photo_x4')}>Cancel download</button
+                on:click={() =>
+                  api
+                    .cancelDownload('span_photo_x4')
+                    .catch((error) => (benchmarkError = String(error)))}>Cancel download</button
               >{/if}
             {#if snapshot.latest_benchmark}<button
                 class="button"

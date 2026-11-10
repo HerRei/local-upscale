@@ -30,10 +30,14 @@
   let hintNote = '';
 
   onMount(async () => {
-    const hint = await ffmpegInstallHint();
-    if (hint) {
-      command = hint.command;
-      hintNote = hint.note;
+    try {
+      const hint = await ffmpegInstallHint();
+      if (hint) {
+        command = hint.command;
+        hintNote = hint.note;
+      }
+    } catch {
+      // Without a hint the notice keeps the generic command for this platform.
     }
   });
 
@@ -57,16 +61,22 @@
         note =
           'No FFmpeg was found yet. Install it, then try again, or choose the program yourself.';
       }
+    } catch (error) {
+      note = String(error);
     } finally {
       busy = false;
     }
   }
 
   async function choose(): Promise<void> {
-    const path = await chooseExternalFFmpeg('');
-    if (path) {
-      note = '';
-      await onSelected(path);
+    try {
+      const path = await chooseExternalFFmpeg('');
+      if (path) {
+        note = '';
+        await onSelected(path);
+      }
+    } catch (error) {
+      note = String(error);
     }
   }
 
@@ -152,7 +162,9 @@
       {#if isTauri()}
         <button class="button primary" on:click={runInTerminal}>Install in Terminal…</button>
       {:else}
-        <button class="button primary" on:click={() => void openFfmpegDownloadPage()}
+        <button
+          class="button primary"
+          on:click={() => openFfmpegDownloadPage().catch((error) => (note = String(error)))}
           >Install FFmpeg…</button
         >
       {/if}

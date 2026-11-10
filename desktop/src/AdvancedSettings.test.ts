@@ -7,6 +7,12 @@ import AdvancedSettings from './AdvancedSettings.svelte';
 import { demoSnapshot } from './lib/demo';
 import type { CapabilityInfo, UiSettings } from './lib/types';
 
+const api = vi.hoisted(() => ({
+  chooseExternalFFmpeg: vi.fn(),
+  detectExternalFFmpeg: vi.fn(),
+}));
+vi.mock('./lib/api', () => api);
+
 afterEach(cleanup);
 
 const base = demoSnapshot().capabilities;
@@ -86,5 +92,17 @@ describe('MOV video output', () => {
     await open({ task: 'video', video_container: 'mp4', video_codec: 'av1' }, base);
     expect(options('Container')).toEqual(['mp4', 'mkv']);
     expect(options('Video format')).not.toContain('prores');
+  });
+});
+
+describe('FFmpeg buttons', () => {
+  it('show the host message when looking for or choosing a program fails', async () => {
+    await open({ task: 'video', video_container: 'mp4', video_codec: 'h264' }, mac);
+    api.detectExternalFFmpeg.mockRejectedValueOnce('The search was refused.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Find installed FFmpeg' }));
+    expect(await screen.findByText(/The search was refused\./)).toBeTruthy();
+    api.chooseExternalFFmpeg.mockRejectedValueOnce('The file picker failed.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose…' }));
+    expect(await screen.findByText(/The file picker failed\./)).toBeTruthy();
   });
 });
