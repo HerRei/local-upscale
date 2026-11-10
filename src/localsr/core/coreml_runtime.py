@@ -44,8 +44,9 @@ NEURAL_ENGINE = "CPU_AND_NE"
 CORE_ML_GPU = "CPU_AND_GPU"
 
 # SPAN, RRDBNet and FBCNN map to the Neural Engine. RealPLKSR's 17x17
-# partial convolutions fall back to the CPU on the Neural Engine, so its
-# Core ML route uses the GPU.
+# partial convolutions fall back to the CPU on the Neural Engine, and the Neural
+# Engine's compiler did not finish loading the 400x400 program in over 10 minutes
+# (M1 Pro, macOS 27.2), so its Core ML route uses the GPU, which loads it in 3 s.
 # HAT, SwinIR and NAFNet produce broken fp16 output and SCUNet does not convert,
 # so every other architecture keeps PyTorch.
 COMPUTE_UNITS = {
