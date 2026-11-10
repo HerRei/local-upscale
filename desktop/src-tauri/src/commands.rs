@@ -1740,6 +1740,11 @@ fn import_verified_catalog_file(
 #[tauri::command]
 pub fn open_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
     let authorized = authorized_result(&state, &path)?;
+    if !is_openable_output(&authorized) {
+        return Err(AppError::Validation(
+            "this file type is not opened from LocalSR; use Reveal instead".into(),
+        ));
+    }
     open::that_detached(authorized)
         .map_err(|error| AppError::Config(format!("could not open the output: {error}")))
 }
@@ -2940,6 +2945,16 @@ fn canonical_directory(path: &str) -> AppResult<PathBuf> {
     Ok(canonical)
 }
 
+/// The file types LocalSR writes as results. Open hands the file to the system's
+/// default handler, so anything else (an executable, a script, a shortcut) must
+/// never be launched through it, whatever the history says.
+fn is_openable_output(path: &Path) -> bool {
+    const OUTPUT_EXTENSIONS: &[&str] = &[
+        "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "mp4", "mkv", "mov",
+    ];
+    extension(path).is_some_and(|extension| OUTPUT_EXTENSIONS.contains(&extension.as_str()))
+}
+
 /// Open and Reveal act on the selected item's result, which is often not the
 /// most recent output (a finished batch, or a result from an earlier session),
 /// so any completed job's output is allowed alongside the last one.
@@ -2948,6 +2963,13 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     let last_output = lock(&state.runtime)?.last_output_path.clone();
     if !recorded && last_output.is_empty() {
         return Err(AppError::Validation("there is no completed output".into()));
+    }
+    // A result is a file the engine wrote. One that has since become a link could
+    // lead anywhere, and canonicalizing would authorize its target.
+    if fs::symlink_metadata(requested)?.file_type().is_symlink() {
+        return Err(AppError::Validation(
+            "output path was not authorized".into(),
+        ));
     }
     let requested = fs::canonicalize(requested)?;
     let is_last_output = !last_output.is_empty()
@@ -3822,6 +3844,72 @@ mod tests {
         video.video_model_id = "frame_by_frame".into();
         let tiled = unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
         assert_eq!(tiled.file_name().unwrap(), "clip_video_4x.mp4");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_output_that_became_a_link_is_not_authorized() {
+        let directory = tempfile::tempdir().unwrap();
+        let state =
+            AppState::from_paths(crate::paths::AppPaths::under(&directory.path().join("app")))
+                .unwrap();
+        let output = directory.path().join("result.png");
+        let private = directory.path().join("private.png");
+        fs::write(&output, b"result").unwrap();
+        fs::write(&private, b"private").unwrap();
+        {
+            let database = lock(&state.database).unwrap();
+            database
+                .insert_media("m", "/in/photo.png", "photo.png", "image")
+                .unwrap();
+            database.insert_job("j", "m", "{}").unwrap();
+            database
+                .finish_job("j", "completed", &output.to_string_lossy(), "")
+                .unwrap();
+        }
+        let requested = output.to_string_lossy().into_owned();
+        assert_eq!(
+            authorized_result(&state, &requested).unwrap(),
+            fs::canonicalize(&output).unwrap()
+        );
+        fs::remove_file(&output).unwrap();
+        std::os::unix::fs::symlink(&private, &output).unwrap();
+        assert!(authorized_result(&state, &requested).is_err());
+    }
+
+    #[test]
+    fn open_launches_only_the_types_the_app_writes() {
+        for name in [
+            "result.png",
+            "result.JPG",
+            "result.tif",
+            "result.webp",
+            "result.heic",
+            "clip.mp4",
+            "clip.MKV",
+            "clip.mov",
+        ] {
+            assert!(is_openable_output(Path::new(name)), "{name}");
+        }
+        for name in [
+            "result.exe",
+            "result.bat",
+            "result.cmd",
+            "result.lnk",
+            "result.ps1",
+            "result.msi",
+            "result.scr",
+            "result.com",
+            "result.js",
+            "result.app",
+            "result.png.exe",
+            "result.exe.",
+            "result.exe ",
+            "result",
+            ".png",
+        ] {
+            assert!(!is_openable_output(Path::new(name)), "{name}");
+        }
     }
 
     #[test]
