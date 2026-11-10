@@ -1011,7 +1011,13 @@ def download_model(
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    required_disk = int(model.size_bytes * 1.15)
+    partial_path = destination.with_name(f"{destination.name}.part")
+    try:
+        # A resumed download only needs room for what is still missing.
+        kept = min(partial_path.stat().st_size, model.size_bytes) if partial_path.is_file() else 0
+    except OSError:
+        kept = 0
+    required_disk = int((model.size_bytes - kept) * 1.15)
     available_disk = shutil.disk_usage(destination.parent).free
     if available_disk < required_disk:
         raise ModelDownloadError(
@@ -1019,7 +1025,6 @@ def download_model(
             f"but only {available_disk / 1_000_000:.0f} MB is free."
         )
 
-    partial_path = destination.with_name(f"{destination.name}.part")
     open_request = opener or _open_download
     deadline = time.monotonic() + (
         max_seconds if max_seconds is not None else max(1800.0, model.size_bytes / 50_000)
