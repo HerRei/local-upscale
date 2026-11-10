@@ -47,6 +47,7 @@ class WorkerProcess:
             env=env,
         )
         self.messages: queue.Queue = queue.Queue()
+        self.seen: list[dict] = []
         threading.Thread(target=self._read, daemon=True).start()
         assert self.wait_for("worker_ready", 120) is not None
 
@@ -73,6 +74,7 @@ class WorkerProcess:
                 message = self.messages.get(timeout=max(0.05, deadline - time.monotonic()))
             except queue.Empty:
                 break
+            self.seen.append(message)
             if message["type"] in kinds:
                 return message
             if message["type"] == "process_exit":
@@ -255,3 +257,72 @@ def test_a_job_with_an_unhashable_id_does_not_block_later_jobs(worker, tmp_path)
     assert answer is not None
     assert answer["data"]["job_id"] == "next-job"
     assert answer["data"]["error_message"] != "A job is already running."
+
+
+def _terminal(worker, job_id, timeout=60):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        message = worker.wait_for({"job_failed", "job_completed", "job_cancelled"}, timeout)
+        if message is None or message["data"].get("job_id") == job_id:
+            return message
+    return None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "named"),
+    [
+        ({"tile_size": -5}, "tile_size"),
+        ({"halo": 100000}, "halo"),
+        ({"jpeg_quality": 500}, "jpeg_quality"),
+        ({"output_format": "pdf"}, "output_format"),
+        ({"output_scale": 0}, "output_scale"),
+    ],
+)
+def test_an_image_request_outside_the_schema_fails_before_any_work(
+    worker, tmp_path, overrides, named
+):
+    worker.send("job_request", _image_job(tmp_path, "bounded", **overrides))
+    answer = _terminal(worker, "bounded")
+    assert answer is not None and answer["type"] == "job_failed"
+    assert named in answer["data"]["error_message"]
+    assert not (tmp_path / "out.png").exists()
+
+
+def test_a_request_with_a_job_id_but_missing_fields_ends_in_job_failed(worker):
+    worker.send("job_request", {"job_id": "image-1"})
+    worker.send("video_job_request", {"job_id": "video-1"})
+    assert _terminal(worker, "image-1")["type"] == "job_failed"
+    assert _terminal(worker, "video-1")["type"] == "job_failed"
+
+
+def test_a_request_without_a_usable_job_id_is_logged_and_the_worker_serves_on(worker):
+    for data in ({}, "text", None, {"job_id": ""}, {"job_id": ["a"]}):
+        worker.send("job_request", data)
+        worker.send("video_job_request", data)
+    worker.send("handshake_request", "text")
+    assert worker.handshake_answered()
+    assert {message["type"] for message in worker.seen} <= {
+        "worker_ready",
+        "log",
+        "engine_info",
+    }, "a terminal event for an unnamed job"
+    refused = [m for m in worker.seen if "Protocol error" in m["data"].get("message", "")]
+    assert len(refused) == 11
+
+
+def test_a_media_probe_with_a_bad_dimension_ends_in_media_probe_failed(worker, tmp_path):
+    worker.send(
+        "media_probe_request", {"media_path": str(tmp_path / "a.png"), "max_dimension": "x"}
+    )
+    answer = worker.wait_for("media_probe_failed", 30)
+    assert answer is not None
+    assert "max_dimension" in answer["data"]["error_message"]
+
+
+def test_a_photo_batch_with_one_bad_photo_fails_every_photo_with_the_reason(worker, tmp_path):
+    jobs = [_image_job(tmp_path, "b1"), _image_job(tmp_path, "b2", tile_size=-5)]
+    worker.send("image_batch_request", {"jobs": jobs})
+    first, second = (_terminal(worker, job_id) for job_id in ("b1", "b2"))
+    for answer in (first, second):
+        assert answer["type"] == "job_failed"
+        assert "tile_size" in answer["data"]["error_message"]

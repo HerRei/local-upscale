@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from localsr.protocol.messages import PreviewFailed, PreviewReady
+from localsr.protocol.messages import JobRequest, PreviewFailed, PreviewReady
 from localsr.worker.result_preview import ResultPreviewService, render_result_preview
 
 
@@ -86,7 +86,21 @@ def test_result_preview_and_cancellation_arrive_while_inference_is_blocked(tmp_p
     Image.new("RGB", (200, 100), "red").save(path)
     worker.start()
     try:
-        requests.put({"type": "job_request", "data": {"job_id": "slow-model"}})
+        job = JobRequest(
+            job_id="slow-model",
+            image_path=str(path),
+            model_path="model.pth",
+            output_path=str(tmp_path / "out.png"),
+            output_format="png",
+            device="cpu",
+            tile_size=64,
+            halo=8,
+            precision="fp32",
+            jpeg_quality=90,
+            preserve_metadata=True,
+            safe_memory=True,
+        )
+        requests.put(json.loads(job.to_json()))
         assert entered.wait(5)
         requests.put(
             {

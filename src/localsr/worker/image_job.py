@@ -238,6 +238,11 @@ class ImageJobRunner:
             progress.emit_start(pipeline.primary_index + 1, face)
         self._log("Loading primary model...")
         info = self._inspect(primary.model_path, primary)
+        if int(data.get("output_scale") or 1) > info.scale:
+            raise PipelineStageError(
+                primary,
+                f"Output scale must be between 1 and the model's native {info.scale}× scale.",
+            )
         face_path = data.get("face_model_path")
         face_info = self._inspect(face_path, face or primary) if face_path else None
         if face_info is not None:

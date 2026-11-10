@@ -77,6 +77,14 @@ from localsr.protocol.messages import (
     WarningMessage,
     WorkerReady,
 )
+from localsr.worker.request_validation import (
+    PROBE_FIELDS,
+    InvalidRequest,
+    usable_job_id,
+    validate_fields,
+    validate_image_job,
+    validate_video_job,
+)
 from localsr.worker.result_preview import ResultPreviewService
 
 # Prevent interleaved JSON Lines from concurrent worker threads.
@@ -149,18 +157,22 @@ def _engine_features() -> list[str]:
 DEVICE_LOST_EXIT_CODE = 75
 
 
-def _has_job_id(data: dict) -> bool:
-    """Whether a job request names itself; no terminal message can address one that does not."""
-    job_id = data.get("job_id")
-    if isinstance(job_id, str) and job_id:
-        return True
-    send_message(
-        LogMessage(
-            level="error",
-            message="Protocol error: the job request has no text job_id, so it was dropped.",
-        )
-    )
-    return False
+def _accepts(data: object, validate) -> bool:
+    """Check a job request before anything is stored or loaded for it.
+
+    A refusal ends the job with job_failed when the request carries a text job id; one that
+    does not leaves nothing to address, so it is logged.
+    """
+    try:
+        validate(data)
+    except InvalidRequest as error:
+        job_id = usable_job_id(data)
+        if job_id:
+            send_message(JobFailed(job_id=job_id, error_message=str(error)))
+        else:
+            send_message(LogMessage(level="error", message=f"Protocol error: {error}"))
+        return False
+    return True
 
 
 def _device_lost(error: BaseException) -> bool:
@@ -372,7 +384,15 @@ class WorkerServer:
                     self.result_previews.submit(data)
 
                 elif req_type == "media_probe_request":
-                    media_path = str(data.get("media_path", ""))
+                    media_path = data.get("media_path")
+                    media_path = media_path if isinstance(media_path, str) else ""
+                    try:
+                        validate_fields(data, PROBE_FIELDS, "media probe request")
+                    except InvalidRequest as error:
+                        send_message(
+                            MediaProbeFailed(media_path=media_path, error_message=str(error))
+                        )
+                        continue
                     maximum = int(data.get("max_dimension", 1600))
 
                     def report_probe(stage, path=media_path):
@@ -443,7 +463,7 @@ class WorkerServer:
                     self._run_image_batch(data.get("jobs"))
 
                 elif req_type == "job_request":
-                    if not _has_job_id(data):
+                    if not _accepts(data, validate_image_job):
                         continue
                     if self.active_job_id is not None:
                         send_message(
@@ -481,7 +501,7 @@ class WorkerServer:
                         self._deactivate_job(job_id)
 
                 elif req_type == "video_job_request":
-                    if not _has_job_id(data):
+                    if not _accepts(data, validate_video_job):
                         continue
                     if self.active_job_id is not None:
                         send_message(
@@ -824,16 +844,26 @@ class WorkerServer:
         """
         from localsr.worker.image_batch import ImageBatchRunner
 
-        named = [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
-        ids = [str(job.get("job_id") or "") for job in named]
-        if len(ids) != len(jobs or ()) or not all(ids) or len(set(ids)) != len(ids):
+        jobs = jobs if isinstance(jobs, list) else []
+        named = [job for job in jobs if isinstance(job, dict)]
+        ids = [job_id for job in named if (job_id := usable_job_id(job))]
+        known = set(ids)
+        if len(ids) != len(jobs) or len(known) != len(ids):
             ids = []
         if not 2 <= len(ids) <= MAX_BATCH_PHOTOS:
-            for job_id in {str(job.get("job_id")) for job in named if job.get("job_id")}:
+            for job_id in known:
                 send_message(
                     JobFailed(job_id=job_id, error_message="The photo batch request is invalid.")
                 )
             return
+        for job in named:
+            try:
+                validate_image_job(job)
+            except InvalidRequest as error:
+                # The photos share one recipe, so one refusal ends every photo.
+                for job_id in ids:
+                    send_message(JobFailed(job_id=job_id, error_message=str(error)))
+                return
         terminal: set[str] = set()
         started: set[str] = set()
 

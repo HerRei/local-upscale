@@ -476,7 +476,23 @@ def _sent(capsys):
 
 
 def _batch_jobs(count):
-    return [{"job_id": f"photo-{index}", "image_path": f"{index}.png"} for index in range(count)]
+    return [
+        {
+            "job_id": f"photo-{index}",
+            "image_path": f"{index}.png",
+            "output_path": f"{index}-out.png",
+            "output_format": "png",
+            "jpeg_quality": 90,
+            "preserve_metadata": True,
+            "model_path": "model.pth",
+            "device": "cpu",
+            "tile_size": 64,
+            "halo": 8,
+            "precision": "fp32",
+            "safe_memory": True,
+        }
+        for index in range(count)
+    ]
 
 
 def test_cancelling_any_batch_member_cancels_the_whole_batch():
