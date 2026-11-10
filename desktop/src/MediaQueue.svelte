@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import OutputsList from './OutputsList.svelte';
   import { tabFromKey, type OutputGroup } from './lib/compareOutputs';
   import type { ComparePick } from './lib/types';
@@ -40,6 +41,16 @@
   export let addFolder: () => Promise<void>;
   export let removeMedia: (id: string) => Promise<void>;
   export let clearMedia: () => void;
+
+  /** The row that held the keyboard goes with the item; the focus moves to the row that takes its place. */
+  async function removeRow(id: string): Promise<void> {
+    const index = items.findIndex((item) => item.id === id);
+    await removeMedia(id);
+    await tick();
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const buttons = document.querySelectorAll<HTMLButtonElement>('.media-list .remove:enabled');
+    buttons[Math.min(index, buttons.length - 1)]?.focus();
+  }
 
   /** The item's newest job when it failed, so the row says it has no result and why (tooltip).
    *  A later run that finished clears it. */
@@ -200,7 +211,7 @@
             class="remove"
             disabled={Boolean(activeJobId)}
             aria-label={`Remove ${media.name}`}
-            on:click|stopPropagation={() => removeMedia(media.id)}
+            on:click|stopPropagation={() => removeRow(media.id)}
             ><svg
               xmlns="http://www.w3.org/2000/svg"
               width="16"

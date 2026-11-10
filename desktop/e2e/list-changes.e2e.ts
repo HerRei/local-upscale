@@ -36,3 +36,12 @@ test.describe('when images leave the list', () => {
     await expect(mainTabs.getByRole('tab', { name: /^Compare$/ })).toBeVisible();
   });
 });
+
+test('Remove by keyboard leaves the focus in the list', async ({ page }) => {
+  await openApp(page, { ...withOutputs, photos: 3 });
+  await showPane(page, 'media');
+  await page.getByRole('button', { name: 'Remove Alpine lake 2.jpg' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: /^Alpine lake 2\.jpg/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Remove Alpine lake 3.jpg' })).toBeFocused();
+});

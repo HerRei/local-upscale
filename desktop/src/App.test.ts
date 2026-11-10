@@ -4008,6 +4008,32 @@ describe('Dialogs and refused host calls', () => {
     expect(screen.getByRole('dialog').textContent).toContain('Could not clear the list');
   });
 
+  it('keeps the keyboard in the list when the focused Remove button goes with its row', async () => {
+    const current = readySnapshot([image('first', true), image('second'), image('third')]);
+    const user = await mountWith(current);
+    api.removeMedia.mockImplementationOnce(async () => {
+      current.media = current.media.filter((item) => item.id !== 'second');
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    screen.getByRole('button', { name: 'Remove second.png' }).focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove second.png' })).toBeNull(),
+    );
+    // The next row's Remove button takes over; after the last row it is the one before.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove third.png' })),
+    );
+    api.removeMedia.mockImplementationOnce(async () => {
+      current.media = current.media.filter((item) => item.id !== 'third');
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove first.png' })),
+    );
+  });
+
   describe('when the host refuses what the user asked for', () => {
     const refusal = 'unsupported media file type';
     const shown = async (title: string) => {
