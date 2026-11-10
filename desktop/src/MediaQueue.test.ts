@@ -172,6 +172,54 @@ describe('Inputs list while a batch runs', () => {
   });
 });
 
+describe('Removing while a batch runs', () => {
+  const sentence = 'Cannot remove while it is running. Cancel the run instead.';
+  const remove = (container: HTMLElement, n: number) =>
+    row(container, n).querySelector<HTMLButtonElement>('.remove')!;
+
+  it('keeps the running picture in the list, with the reason, and lets the others go', () => {
+    const jobs = [
+      job(1, { status: 'completed', progress: 100 }),
+      job(2, { status: 'running', progress: 38 }),
+      job(3),
+      job(4),
+    ];
+    const { container } = render(MediaQueue, props(jobs));
+    expect(remove(container, 2).disabled).toBe(true);
+    expect(remove(container, 2).getAttribute('title')).toBe(sentence);
+    expect(remove(container, 2).getAttribute('aria-description')).toBe(sentence);
+    for (const n of [1, 3, 4]) {
+      expect(remove(container, n).disabled).toBe(false);
+      expect(remove(container, n).hasAttribute('title')).toBe(false);
+    }
+  });
+
+  it('keeps both lanes and the queued photos the engine already holds', () => {
+    const jobs = [
+      job(1, { status: 'running', progress: 38 }),
+      job(2, { status: 'running', progress: 71 }),
+      job(3),
+      job(4),
+    ];
+    const { container } = render(MediaQueue, { ...props(jobs), engineJobIds: ['j1', 'j2', 'j3'] });
+    expect([1, 2, 3, 4].map((n) => remove(container, n).disabled)).toEqual([
+      true,
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it('keeps Clear unavailable with its reason while a queue runs', () => {
+    const { container } = render(MediaQueue, props([job(1, { status: 'running' })]));
+    const clear = [...container.querySelectorAll<HTMLButtonElement>('.media-actions button')].find(
+      (button) => button.textContent === 'Clear',
+    )!;
+    expect(clear.disabled).toBe(true);
+    expect(clear.getAttribute('title')).toBe('Cannot clear the list while a queue runs.');
+  });
+});
+
 describe('row styles', () => {
   it('stops the shine under reduced motion', async () => {
     const { readFileSync } = await import('node:fs');

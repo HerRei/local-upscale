@@ -70,3 +70,16 @@ export function rowRun(jobs: JobRecord[], mediaId: string, activeJobId: string):
 /** The list follows the work only while the user has left it alone. */
 export const followAllowed = (lastUserAt: number, now: number): boolean =>
   now - lastUserAt >= FOLLOW_IDLE_MS;
+
+export const CANNOT_REMOVE = 'Cannot remove while it is running. Cancel the run instead.';
+
+/** A picture the engine works on (or already holds in its batch) stays in the list until
+ *  its run is cancelled or done; the others can be removed while a queue runs. */
+export function beingWorkedOn(jobs: JobRecord[], mediaId: string, engineJobIds: string[]): boolean {
+  return jobs.some(
+    (job) =>
+      job.media_id === mediaId &&
+      (['starting', 'running', 'cancelling'].includes(job.status) ||
+        (engineJobIds.includes(job.id) && INFLIGHT.includes(job.status))),
+  );
+}

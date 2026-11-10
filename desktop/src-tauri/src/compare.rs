@@ -496,7 +496,7 @@ mod tests {
         assert!(compare.slots[1].preview_data_url.is_empty());
         apply(&db, &mut compare, &answer, false).unwrap();
         assert_eq!(compare.slots[1].status, CompareStatus::Missing);
-        db.remove_media("a").unwrap();
+        db.remove_media_guarded("a", &[]).unwrap();
         refresh(&db, &mut compare).unwrap();
         assert_eq!(compare.slots[0].status, CompareStatus::Missing);
     }

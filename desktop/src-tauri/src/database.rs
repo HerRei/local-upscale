@@ -325,19 +325,42 @@ impl Database {
         Ok(())
     }
 
-    pub fn remove_media(&self, id: &str) -> AppResult<()> {
-        let was_selected = self
-            .get_media(id)?
-            .map(|media| media.selected)
+    /// Remove a picture while a queue may run. In one transaction: a picture whose job is
+    /// starting, running or cancelling, or that is part of the batch the engine was sent
+    /// (`engine_job_ids`), is refused; any other job it has goes with it (its results on disk
+    /// stay). If it was selected, the picture being worked on becomes the selection.
+    pub fn remove_media_guarded(&self, id: &str, engine_job_ids: &[String]) -> AppResult<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let mut statement = transaction.prepare("SELECT id, status FROM jobs WHERE media_id=?1")?;
+        let jobs = statement
+            .query_map([id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let working = jobs.iter().any(|(job, status)| {
+            matches!(status.as_str(), "starting" | "running" | "cancelling")
+                || engine_job_ids.contains(job)
+        });
+        if working {
+            return Err(AppError::Validation(CANNOT_REMOVE_RUNNING.into()));
+        }
+        let was_selected = transaction
+            .query_row("SELECT selected FROM media WHERE id=?1", [id], |row| {
+                row.get::<_, bool>(0)
+            })
+            .optional()?
             .unwrap_or(false);
-        self.connection
-            .execute("DELETE FROM media WHERE id = ?1", [id])?;
+        transaction.execute("DELETE FROM media WHERE id = ?1", [id])?;
         if was_selected {
-            self.connection.execute(
-                "UPDATE media SET selected = 1 WHERE id = (SELECT id FROM media ORDER BY created_at, rowid LIMIT 1)",
+            transaction.execute(
+                "UPDATE media SET selected = 1 WHERE id = COALESCE(
+                   (SELECT media_id FROM jobs WHERE status IN ('starting','running','cancelling') ORDER BY rowid LIMIT 1),
+                   (SELECT id FROM media ORDER BY created_at, rowid LIMIT 1))",
                 [],
             )?;
         }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -978,6 +1001,10 @@ fn set_aside(path: &Path) -> AppResult<PathBuf> {
     }
     Ok(moved)
 }
+
+/// What the host and the window say when a running picture is asked to be removed.
+pub const CANNOT_REMOVE_RUNNING: &str =
+    "Cannot remove while it is running. Cancel the run instead.";
 
 fn now_millis() -> i64 {
     SystemTime::now()

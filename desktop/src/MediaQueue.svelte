@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tabFromKey } from './lib/keyboard';
-  import { followAllowed, rowRun } from './lib/rowRun';
+  import { beingWorkedOn, CANNOT_REMOVE, followAllowed, rowRun } from './lib/rowRun';
   import { tick } from 'svelte';
   import FileName from './FileName.svelte';
   import OutputsList from './OutputsList.svelte';
@@ -30,6 +30,8 @@
   export let items: MediaItem[];
   export let jobs: JobRecord[];
   export let activeJobId: string;
+  /** The jobs of the batch the engine was sent; they cannot be removed from under it. */
+  export let engineJobIds: string[] = [];
   export let compactHidden = false;
   export let scopeWarning: boolean;
   export let scopeHint: string;
@@ -223,8 +225,12 @@
           <button
             type="button"
             class="remove"
-            disabled={Boolean(activeJobId)}
+            disabled={beingWorkedOn(jobs, media.id, engineJobIds)}
+            title={beingWorkedOn(jobs, media.id, engineJobIds) ? CANNOT_REMOVE : undefined}
             aria-label={`Remove ${media.name}`}
+            {...beingWorkedOn(jobs, media.id, engineJobIds)
+              ? { 'aria-description': CANNOT_REMOVE }
+              : {}}
             on:click|stopPropagation={() => removeRow(media.id)}
             ><svg
               xmlns="http://www.w3.org/2000/svg"
@@ -264,7 +270,12 @@
         disabled={benchmarkRunning || Boolean(activeJobId)}
         on:click={addFolder}>Add Folder…</button
       >
-      <button class="button" disabled={Boolean(activeJobId)} on:click={clearMedia}>Clear</button>
+      <button
+        class="button"
+        disabled={Boolean(activeJobId)}
+        title={activeJobId ? 'Cannot clear the list while a queue runs.' : undefined}
+        on:click={clearMedia}>Clear</button
+      >
     </div>
   {/if}
 </aside>

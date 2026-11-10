@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp } from './app';
+import { hostCalls, refuse } from './fake-host';
 import { ready } from './fixtures';
 
 // A running picture is marked in the Inputs list: a progress line inside its row (the row keeps
@@ -101,4 +102,37 @@ test('one running job is cancelled with Cancel, a queue with Cancel queue', asyn
   const bar = page.locator('.status-bar');
   await expect(bar.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
   await expect(bar.getByRole('button', { name: 'Cancel queue' })).toHaveCount(0);
+});
+
+test.describe('removing while a queue runs', () => {
+  const sentence = 'Cannot remove while it is running. Cancel the run instead.';
+  const queue = { ...batch(1), settings: { ...ready.settings } };
+
+  test('the running picture keeps its remove button inactive, the others can go', async ({
+    page,
+  }) => {
+    await openApp(page, queue);
+    const running = page.getByRole('button', { name: 'Remove Alpine lake 2.jpg' });
+    await expect(running).toBeDisabled();
+    await expect(running).toHaveAttribute('title', sentence);
+    await expect(page.getByRole('button', { name: 'Remove Alpine lake 1.jpg' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Remove Alpine lake 5.jpg' })).toBeEnabled();
+    const clear = page.getByRole('button', { name: 'Clear' });
+    await expect(clear).toBeDisabled();
+    await expect(clear).toHaveAttribute('title', 'Cannot clear the list while a queue runs.');
+  });
+
+  test('removing a queued picture asks the host to remove it', async ({ page }) => {
+    await openApp(page, queue);
+    await page.getByRole('button', { name: 'Remove Alpine lake 5.jpg' }).click();
+    const calls = await hostCalls(page, 'remove_media');
+    expect(calls.at(-1)?.args).toMatchObject({ id: 'photo-5' });
+  });
+
+  test('a refusal from the host shows its sentence', async ({ page }) => {
+    await openApp(page, queue);
+    await refuse(page, 'remove_media', sentence);
+    await page.getByRole('button', { name: 'Remove Alpine lake 5.jpg' }).click();
+    await expect(page.getByRole('dialog')).toContainText(sentence);
+  });
 });

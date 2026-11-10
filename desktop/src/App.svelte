@@ -2716,6 +2716,7 @@
       items={snapshot.media}
       jobs={snapshot.jobs}
       activeJobId={snapshot.runtime.active_job_id}
+      engineJobIds={snapshot.runtime.active_batch_job_ids ?? []}
       compactHidden={page !== 'media'}
       scopeWarning={Boolean(selectedMedia) && !mediaMatchesTask}
       {scopeHint}
