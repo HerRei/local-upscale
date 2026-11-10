@@ -343,10 +343,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         // gzip can finish without another underlying read: explicitly reach EOF on
         // the compressed parts so the final part's digest is checked as well.
         io::copy(&mut decoded.into_inner(), &mut io::sink())?;
-        if count != manifest.file_count
-            || bytes != manifest.unpacked_bytes
-            || !(staging.join("localsr-worker.exe").is_file()
-                || staging.join("localsr-worker").is_file())
+        if count != manifest.file_count || bytes != manifest.unpacked_bytes || !has_worker(&staging)
         {
             return Err(invalid("engine archive is incomplete"));
         }

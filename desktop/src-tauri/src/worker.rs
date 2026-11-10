@@ -687,7 +687,7 @@ fn settle_stopped_jobs(
     // or the one it was decoding ahead, may have caused it: the started ones run
     // again alone, once (a batch never holds a photo marked to run alone), so a
     // repeat stop names the photo. A photo that stops the engine alone is
-    // interrupted, as before.
+    // interrupted.
     let batch = forced.is_empty() && active.len() > 1;
     for id in active {
         let _ = if batch {
@@ -791,9 +791,7 @@ fn handle_worker_envelope(
         emit_state_changed(app);
     }
 
-    // Generate the final full-image preview inside the native control plane.
-    // The previous frontend request raced the Rust completion update and could
-    // leave a successful job without a center preview until another refresh.
+    // Request the final full-image preview after updating native state.
     if let Some(request) = completion_preview_request(state, &envelope).filter(|_| !background) {
         if let Err(error) = send(state, &request) {
             if cfg!(debug_assertions) {
@@ -1305,7 +1303,6 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let mut runtime = lock(&state.runtime)?;
             runtime.status_detail = format!("{stage} stage complete.");
         }
-        "stage_progress" => {}
         "progress" => {
             let id = string(data, "job_id");
             let progress = percentage(data, "percentage");
@@ -1314,7 +1311,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             runtime.progress = progress;
             let editing = string(data, "unit") == "steps";
             // In a job of several stages the title keeps which one runs (two fixes can
-            // both be "Restoring"); a one-stage job reads "Enhancing" as before.
+            // both be "Restoring"); a one-stage job reads "Enhancing".
             let staged = runtime.status_title.contains(" · stage ")
                 && !runtime.status_title.ends_with(" 1/1");
             if editing {
@@ -1501,7 +1498,6 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
             }
         }
-        "live_preview_warning" => {}
         "benchmark_started" => {
             let mut runtime = lock(&state.runtime)?;
             runtime.begin_active_job(string(data, "job_id"));
@@ -1779,7 +1775,7 @@ pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<Pat
     Ok(resolve_worker_command(state, app)?.program)
 }
 
-fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
+fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
     #[cfg(debug_assertions)]
     {
         if let Some(path) =
@@ -1799,9 +1795,9 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
             ));
         }
     }
-    // An explicit development worker takes precedence over a cached installed
-    // engine; release builds still use the signed active engine as before.
-    if let Some(path) = crate::updates::active_engine(&_state.paths) {
+    // Prefer an installed engine after any explicit development worker; otherwise
+    // fall back to bundled resources or Python sources.
+    if let Some(path) = crate::updates::active_engine(&state.paths) {
         return Ok(WorkerCommand {
             program: path,
             arguments: Vec::new(),
@@ -1849,13 +1845,13 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
         }
         let python_candidates = if cfg!(windows) {
             vec![
-                _state
+                state
                     .paths
                     .repo_root
                     .join(".venv")
                     .join("Scripts")
                     .join("python.exe"),
-                _state
+                state
                     .paths
                     .repo_root
                     .join(".venv311")
@@ -1864,13 +1860,13 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
             ]
         } else {
             vec![
-                _state
+                state
                     .paths
                     .repo_root
                     .join(".venv")
                     .join("bin")
                     .join("python"),
-                _state
+                state
                     .paths
                     .repo_root
                     .join(".venv311")
@@ -1882,7 +1878,7 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
             .into_iter()
             .find(|path| path.is_file())
             .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
-        let source = _state.paths.repo_root.join("src");
+        let source = state.paths.repo_root.join("src");
         if !source.is_dir() {
             return Err(AppError::Worker(
                 "the bundled inference engine is missing; rebuild the desktop package".into(),
@@ -1891,7 +1887,7 @@ fn resolve_worker_command(_state: &AppState, app: &AppHandle) -> AppResult<Worke
         Ok(WorkerCommand {
             program,
             arguments: vec!["-u".into(), "-m".into(), "localsr.worker".into()],
-            working_directory: Some(_state.paths.repo_root.clone()),
+            working_directory: Some(state.paths.repo_root.clone()),
             python_path: Some(source),
         })
     }

@@ -78,7 +78,6 @@ pub fn parse_arguments(arguments: &[String], cwd: &Path) -> ParsedLaunch {
                         parsed.intent.recipe = Some(recipe.chars().take(60).collect());
                     }
                 }
-                value if value.starts_with("-psn_") => {}
                 value if value.starts_with('-') => {}
                 value => push_file(&mut parsed.intent, value, cwd),
             }

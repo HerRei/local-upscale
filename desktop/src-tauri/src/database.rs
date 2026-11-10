@@ -13,6 +13,8 @@ use crate::{
     types::{JobRecord, MediaItem},
 };
 
+const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning";
+
 /// A job that `admit_jobs` inserts. `ui_json` is host-only metadata.
 #[derive(Clone, Debug)]
 pub struct NewJob {
@@ -198,9 +200,9 @@ impl Database {
     }
 
     pub fn list_media(&self) -> AppResult<Vec<MediaItem>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning FROM media ORDER BY created_at, rowid",
-        )?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {MEDIA_COLUMNS} FROM media ORDER BY created_at, rowid"
+        ))?;
         let rows = statement.query_map([], media_from_row)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -209,7 +211,7 @@ impl Database {
         Ok(self
             .connection
             .query_row(
-                "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning FROM media WHERE id = ?1",
+                &format!("SELECT {MEDIA_COLUMNS} FROM media WHERE id = ?1"),
                 [id],
                 media_from_row,
             )
@@ -220,7 +222,7 @@ impl Database {
         Ok(self
             .connection
             .query_row(
-                "SELECT id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning FROM media WHERE path = ?1",
+                &format!("SELECT {MEDIA_COLUMNS} FROM media WHERE path = ?1"),
                 [path],
                 media_from_row,
             )

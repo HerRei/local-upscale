@@ -169,7 +169,7 @@ impl From<&DownloadFile> for StatedFile {
     }
 }
 
-/// What the Mac signs for each feed entry, format 2 (scripts/beta_update_signing.py,
+/// The signed release statement format 2 (scripts/beta_update_signing.py,
 /// release_statement_v2). Every field is required, except that `engine_manifest` may be
 /// left out where it would be null (an entry without an engine package); a statement
 /// lacking any other field is not format 2 and the client refuses the release.
@@ -1049,10 +1049,8 @@ pub fn active_engine(paths: &crate::paths::AppPaths) -> Option<PathBuf> {
 }
 /// The engine an in-app update installed, if this host was built for it.
 ///
-/// An update writes its engine and a host compiled with the same engine id. A
-/// host installed from a disk image over an updated copy has a different id
-/// and must use the engine bundled with it: otherwise 0.1.6 ran the 0.1.5
-/// engine that an earlier update had left active.
+/// A host with a compiled engine id selects only the matching installed engine.
+/// A host without one reads the active engine id from storage.
 fn active_engine_for_distribution(
     paths: &crate::paths::AppPaths,
     managed_by_store: bool,

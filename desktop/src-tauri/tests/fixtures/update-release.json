@@ -1,5 +1,5 @@
 {
-  "_comment": "Disposable deterministic test key. Independently generated tauri signer positive fixtures are also retained in update-signature.json and update-parts.json. statement_v2, split.statement_v2 and the signed but invalid rejected.* statements are release statements (format 2) signed with this key by scripts/beta_update_signing.py; tests/test_tauri_release_tools.py regenerates them and compares. statement_v2, split.statement_v2 and the signed but invalid rejected.* statements are release statements (format 2) signed with this key by scripts/beta_update_signing.py; tests/test_tauri_release_tools.py regenerates them and compares.",
+  "_comment": "Disposable deterministic test key. Independently generated tauri signer positive fixtures are also retained in update-signature.json and update-parts.json. statement_v2, split.statement_v2 and the signed but invalid rejected.* statements are release statements (format 2) signed with this key by scripts/beta_update_signing.py; tests/test_tauri_release_tools.py regenerates them and compares.",
   "public_key": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDNkY2MzYxNkM3MzcyMzEKUldSc2IyTmhiSE55TVlxSTQ5MTBDZkdWL1ZMYkxUeTZYWExLWndtL0haUVNHL04waUFHMEQyOWMK",
   "package": {
     "data": "LocalSR test package\n",

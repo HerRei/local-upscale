@@ -389,7 +389,7 @@ fn start_smoke_monitor(app: tauri::AppHandle, state: Arc<AppState>) {
                 "status_title": status_title,
                 "status_detail": status_detail,
             });
-            let _ = write_smoke_report(Path::new(&report_path), &report);
+            let _ = headless_smoke::write_report(Path::new(&report_path), &report);
         }
         app.exit(exit_code);
     });
@@ -404,13 +404,6 @@ fn smoke_terminal_exit_code(worker_status: &str) -> Option<i32> {
         // that recovery path instead of terminating the host first.
         _ => None,
     }
-}
-
-fn write_smoke_report(path: &Path, report: &serde_json::Value) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_vec_pretty(report).unwrap_or_default())
 }
 
 #[cfg(test)]

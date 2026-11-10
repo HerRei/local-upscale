@@ -414,7 +414,7 @@ fn append_stderr(error: String, stderr: &str) -> String {
     format!("{error}. Engine stderr: {tail}")
 }
 
-fn write_report(path: &Path, report: &Value) -> std::io::Result<()> {
+pub(crate) fn write_report(path: &Path, report: &Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
