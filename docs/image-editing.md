@@ -120,10 +120,12 @@ starting profiles.
   process's memory every 250 ms and names the reason when it stops an edit. On a
   Mac, compressing memory and some swapping are how macOS makes room, and
   "warning" pressure is routine while a model loads, so the edit stops only on
-  critical pressure (two samples in a row), when swap grows by more than 2 GiB,
-  when warning pressure lasts 30 s while swap grows by more than 512 MiB, or
-  when the process outgrows its limit. Beside a dedicated GPU it stops when free
-  host memory falls below the reserve, swap grows by more than 512 MiB, pressure
+  critical pressure (two samples in a row), when swap grows by more than the larger
+  of 4 GiB and half of physical memory (8 GiB on a 16 GB Mac), when swap is growing
+  while the system volume has less free space than the disk reserve (8 GB; swap
+  lives there), when warning pressure has lasted 90 s and swap grew by more than
+  2 GiB within that time, or when the process outgrows its limit. Beside a
+  dedicated GPU it stops when free host memory falls below the reserve, swap grows by more than 512 MiB, pressure
   reaches warning, or the process outgrows its limit. On a Mac the process is
   measured by its physical footprint, since the memory-mapped weights are clean
   pages the system can drop; elsewhere by RSS. The kernel figures are read
