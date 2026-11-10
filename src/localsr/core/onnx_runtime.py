@@ -106,8 +106,9 @@ _LARGE_GRAPH_BYTES = 256 * 1024**2
 # GPU preflight's limit.
 ONNX_PREPARE_SECONDS = 300.0
 ONNX_SLOT = "onnx"
-# NPU programs this process has seen compiled into the cache (by device, version, graph).
-_COMPILED: set[str] = set()
+# The cache files of each NPU program a child compiled in this process (by device, version,
+# graph). OpenVINO names them by its own hash, so the names are read off the cache.
+_PROGRAMS: dict[str, frozenset[str]] = {}
 # DXGI device-removed, hung, reset and internal-driver errors, and their usual texts.
 _DEVICE_LOST_FRAGMENTS = (
     "887a0005",
@@ -175,8 +176,9 @@ def _npu_cache_directory() -> Path:
     return gate_cache_directory() / "npu-cache"
 
 
-def _trim_npu_cache(directory: Path, limit: int | None = None) -> None:
-    """Delete the oldest compiled programs until the cache fits its limit."""
+def _trim_npu_cache(directory: Path, limit: int | None = None, keep=frozenset()) -> None:
+    """Delete the oldest compiled programs until the cache fits its limit; the files named
+    in ``keep`` belong to the session about to open and stay."""
     limit = NPU_CACHE_LIMIT if limit is None else limit
     try:
         blobs = sorted(
@@ -190,6 +192,8 @@ def _trim_npu_cache(directory: Path, limit: int | None = None) -> None:
     for _, size, path in blobs:
         if total <= limit:
             break
+        if path.name in keep:
+            continue
         try:
             path.unlink()
         except OSError:
@@ -197,11 +201,18 @@ def _trim_npu_cache(directory: Path, limit: int | None = None) -> None:
         total -= size
 
 
-def _provider_options(route, options: dict) -> dict:
+def _cache_files(directory: Path) -> frozenset[str]:
+    try:
+        return frozenset(path.name for path in directory.iterdir() if path.is_file())
+    except OSError:
+        return frozenset()
+
+
+def _provider_options(route, options: dict, keep=frozenset()) -> dict:
     if route.kind != "NPU":
         return dict(options)
     cache = _npu_cache_directory()
-    _trim_npu_cache(cache)
+    _trim_npu_cache(cache, keep=keep)
     return {**options, "load_config": json.dumps({"NPU": {"CACHE_DIR": str(cache)}})}
 
 
@@ -342,6 +353,8 @@ class _OnnxImage(torch.nn.Module):
         self.session_limit = 4
         # The one input shape an NPU route runs at, once the engine has said its tile size.
         self.fixed_shape: tuple[int, int] | None = None
+        # The NPU cache files of the program being opened, which the cache trim leaves alone.
+        self.programs: frozenset[str] = frozenset()
 
     def _check_cancelled(self):
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -453,7 +466,8 @@ class _OnnxImage(torch.nn.Module):
         try:
             if self.provider == "OpenVINOExecutionProvider":
                 options.add_provider_for_devices(
-                    [self.route.ep_device], _provider_options(self.route, provider_options)
+                    [self.route.ep_device],
+                    _provider_options(self.route, provider_options, self.programs),
                 )
                 session = ort.InferenceSession(graph, sess_options=options)
             else:
@@ -472,7 +486,7 @@ class _OnnxImage(torch.nn.Module):
             session.disable_fallback()
             if self.route.kind == "NPU":
                 # Compiling just wrote this model's program; keep the cache within its limit.
-                _trim_npu_cache(_npu_cache_directory())
+                _trim_npu_cache(_npu_cache_directory(), keep=self.programs)
             if self.provider not in session.get_providers():
                 raise RuntimeError(f"{self.provider} failed to initialize; select CPU explicitly.")
         except BaseException:
@@ -544,13 +558,17 @@ class _OnnxImage(torch.nn.Module):
         cache, so a compiler that hangs costs this wait and not the engine. The session
         the engine then builds finds the program in the cache."""
         key = self._compile_key(state["hash"])
+        cache = _npu_cache_directory()
+        self.programs = _PROGRAMS.get(key, frozenset())
         if (
             self.route.kind != "NPU"
             or not self.route.device
-            or key in _COMPILED
             or os.environ.get(gpu_guard.CHILD_ENV)
+            # The program must still be in the cache: a trimmed one would compile here.
+            or (self.programs and all((cache / name).is_file() for name in self.programs))
         ):
             return
+        before = _cache_files(cache)
         stop = threading.Event()
         try:
             outcome = self._prepare(
@@ -573,7 +591,9 @@ class _OnnxImage(torch.nn.Module):
             self.crash_cause = "preflight"
             raise self._rejected()
         if outcome == "done":
-            _COMPILED.add(key)
+            after = _cache_files(cache)
+            # A cached program leaves nothing new; the whole cache then stands for it.
+            _PROGRAMS[key] = self.programs = (after - before) or after
 
     def _rejected(self) -> GpuRouteRejected:
         if self.crash_cause == "compile-timeout":

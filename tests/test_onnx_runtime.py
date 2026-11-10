@@ -1550,7 +1550,7 @@ def npu_engine(monkeypatch, tmp_path, child):
     monkeypatch.setenv("LOCALSR_ONNX_GATE_CACHE", str(tmp_path))
     monkeypatch.delenv(gpu_guard.CHILD_ENV, raising=False)
     monkeypatch.setattr(gpu_guard, "COMPILE_TIMEOUTS", set())
-    monkeypatch.setattr(onnx_runtime, "_COMPILED", set())
+    monkeypatch.setattr(onnx_runtime, "_PROGRAMS", {})
     monkeypatch.setattr(onnx_runtime, "ONNX_PREPARE_SECONDS", 1.0)
     monkeypatch.setattr(onnx_runtime._OnnxImage, "_preflight", lambda self: None)
     monkeypatch.setattr(onnx_runtime, "_placement", lambda session, provider: None)
@@ -1621,11 +1621,39 @@ def test_cancelling_during_an_npu_compile_kills_the_child_at_once(monkeypatch, t
     assert children[0].poll() is not None
 
 
+def writing_child(tmp_path, name="program.blob"):
+    """A compile child that leaves one program file in the NPU cache."""
+    code = (
+        "import pathlib; d = pathlib.Path(r'%s') / 'npu-cache'; d.mkdir(exist_ok=True); "
+        "(d / '%s').write_bytes(b'x')" % (tmp_path, name)
+    )
+    return [sys.executable, "-c", code]
+
+
 def test_a_compiled_npu_program_is_not_compiled_again(monkeypatch, tmp_path):
-    npu, children, sessions = npu_engine(monkeypatch, tmp_path, [sys.executable, "-c", "pass"])
+    npu, children, sessions = npu_engine(monkeypatch, tmp_path, writing_child(tmp_path))
     image = torch.rand(1, 3, 8, 8)
     npu.model._session(image)
     assert len(children) == 1 and len(sessions) == 1
-    # Another engine for the same model and tile finds it compiled: no child.
+    # Another engine for the same model and tile finds it in the cache: no child.
     OnnxImageDescriptor(descriptor(), route=npu.model.route).model._session(image)
     assert len(children) == 1 and len(sessions) == 2
+
+
+def test_an_npu_program_that_left_the_cache_is_compiled_by_the_child_again(monkeypatch, tmp_path):
+    npu, children, sessions = npu_engine(monkeypatch, tmp_path, writing_child(tmp_path))
+    image = torch.rand(1, 3, 8, 8)
+    npu.model._session(image)
+    (tmp_path / "npu-cache" / "program.blob").unlink()  # trimmed, or deleted by hand
+    OnnxImageDescriptor(descriptor(), route=npu.model.route).model._session(image)
+    assert len(children) == 2 and len(sessions) == 2
+
+
+def test_the_cache_trim_spares_the_program_being_opened(tmp_path):
+    from localsr.core.onnx_runtime import _trim_npu_cache
+
+    for name in ("old.blob", "mine.blob"):
+        (tmp_path / name).write_bytes(b"x" * 100)
+    os.utime(tmp_path / "mine.blob", (1, 1))  # the oldest
+    _trim_npu_cache(tmp_path, limit=100, keep={"mine.blob"})
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["mine.blob"]
