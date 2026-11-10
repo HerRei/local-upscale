@@ -2321,13 +2321,10 @@ input[type='text'],
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.plan {
-  overflow: hidden;
-}
 .plan-row {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: 2px 10px;
   align-items: start;
   padding: 4px 0;
 }
@@ -2341,6 +2338,21 @@ input[type='text'],
 .plan-row .name {
   font-size: calc(13px * var(--ui-scale));
   font-weight: 500;
+  overflow-wrap: anywhere;
+}
+/* Under the model name: the library hint on the left, Try others on the right. */
+.plan-links {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.plan-links .link-button,
+.plan-links .try-others {
+  white-space: nowrap;
+}
+.plan-links .try-others {
+  margin-left: auto;
 }
 .plan-row .meta {
   margin-top: 2px;
@@ -2920,23 +2932,12 @@ input[type='text'],
 .main-area > .preview-pane {
   flex: 1;
 }
-.main-tabs {
-  display: flex;
-  gap: 18px;
-  padding: 0 16px;
+/* Preview | Compare: the heading row and switch the side panes use. */
+.main-heading {
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
 }
-.main-tabs button {
-  padding: 8px 0;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--secondary);
-}
-.main-tabs button.active {
-  color: var(--text);
-  border-bottom-color: var(--text);
+.main-switch {
+  width: min(220px, 100%);
 }
 .compare-request-error {
   color: var(--text);

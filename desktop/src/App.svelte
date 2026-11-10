@@ -2669,28 +2669,30 @@
     />
 
     <div class="main-area" class:compact-hidden={page !== 'preview'}>
-      <div
-        class="main-tabs"
-        role="tablist"
-        tabindex="-1"
-        aria-label="Main pane"
-        on:keydown={mainTabKey}
-      >
-        <button
-          role="tab"
-          aria-selected={mainTab === 'preview'}
-          tabindex={mainTab === 'preview' ? 0 : -1}
-          class:active={mainTab === 'preview'}
-          on:click={() => (mainTab = 'preview')}>Preview</button
+      <div class="pane-heading main-heading" data-tauri-drag-region>
+        <div
+          class="seg-inline main-switch"
+          role="tablist"
+          tabindex="-1"
+          aria-label="Main pane"
+          on:keydown={mainTabKey}
         >
-        <button
-          role="tab"
-          aria-selected={mainTab === 'compare'}
-          tabindex={mainTab === 'compare' ? 0 : -1}
-          class:active={mainTab === 'compare'}
-          on:click={() => (mainTab = 'compare')}
-          >Compare{comparePicks.length ? ` ${comparePicks.length}` : ''}</button
-        >
+          <button
+            role="tab"
+            aria-selected={mainTab === 'preview'}
+            tabindex={mainTab === 'preview' ? 0 : -1}
+            class:active={mainTab === 'preview'}
+            on:click={() => (mainTab = 'preview')}>Preview</button
+          >
+          <button
+            role="tab"
+            aria-selected={mainTab === 'compare'}
+            tabindex={mainTab === 'compare' ? 0 : -1}
+            class:active={mainTab === 'compare'}
+            on:click={() => (mainTab = 'compare')}
+            >Compare{comparePicks.length ? ` ${comparePicks.length}` : ''}</button
+          >
+        </div>
       </div>
       {#if mainTab === 'compare'}
         {#if compareRequestError}<div class="compare-request-error" role="alert">
@@ -3112,6 +3114,19 @@
                           ? 'edit'
                           : 'primary'
                         : undefined}
+                  {@const moreModelCount =
+                    changeSlot && settings.task !== 'edit'
+                      ? modelsAvailableBeyondSelection(
+                          libraryModelsForTask(
+                            snapshot.catalog.models,
+                            settings.task,
+                            settings.content,
+                            stage.fix,
+                          ),
+                          stage.model?.model_id ?? '',
+                        )
+                      : 0}
+                  {@const tryOthers = stage.role === 'primary' && canTryOthers}
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
                     <div class="plan-copy">
@@ -3276,26 +3291,6 @@
                                 : 'Change the upscaler'}
                           on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
                         >
-                        {@const compatibleModels =
-                          settings.task === 'edit'
-                            ? []
-                            : libraryModelsForTask(
-                                snapshot.catalog.models,
-                                settings.task,
-                                settings.content,
-                                stage.fix,
-                              )}
-                        {@const moreModelCount = modelsAvailableBeyondSelection(
-                          compatibleModels,
-                          stage.model?.model_id ?? '',
-                        )}
-                        {#if moreModelCount}<button
-                            class="link-button model-library-hint"
-                            type="button"
-                            on:click={() => openLibrary(changeSlot, stage.fix)}
-                            >{moreModelCount} more {moreModelCount === 1 ? 'model' : 'models'} in the
-                            library</button
-                          >{/if}
                       {/if}
                       {#if stage.fix && imageFixes.length > 1}
                         {@const index = imageFixes.findIndex(
@@ -3315,23 +3310,32 @@
                             on:click={() => void moveFix(stage.fix!, 1)}>Move later</button
                           >{/if}
                       {/if}
-                      {#if stage.role === 'primary' && canTryOthers}
-                        <span class="try-others"
-                          ><button
+                    </div>
+                    {#if moreModelCount || tryOthers}<div class="plan-links">
+                        {#if moreModelCount}<button
                             class="link-button"
                             type="button"
-                            aria-label={settings.task === 'denoise'
-                              ? 'Try other restoration models on this image'
-                              : 'Try other upscalers on this image'}
-                            disabled={!canOpenTrials}
-                            on:click={() => openLibrary('try', stage.fix)}>Try others…</button
-                          ><HelpTip
-                            label="Try others"
-                            text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
-                          /></span
-                        >
-                      {/if}
-                    </div>
+                            aria-label={`${moreModelCount} more ${moreModelCount === 1 ? 'model' : 'models'} in the library`}
+                            on:click={() => changeSlot && openLibrary(changeSlot, stage.fix)}
+                            >{moreModelCount} more {moreModelCount === 1
+                              ? 'model'
+                              : 'models'}</button
+                          >{/if}
+                        {#if tryOthers}<span class="try-others"
+                            ><button
+                              class="link-button"
+                              type="button"
+                              aria-label={settings.task === 'denoise'
+                                ? 'Try other restoration models on this image'
+                                : 'Try other upscalers on this image'}
+                              disabled={!canOpenTrials}
+                              on:click={() => openLibrary('try', stage.fix)}>Try others…</button
+                            ><HelpTip
+                              label="Try others"
+                              text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
+                            /></span
+                          >{/if}
+                      </div>{/if}
                   </div>
                 {/each}
               </div>

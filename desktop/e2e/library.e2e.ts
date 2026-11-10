@@ -217,6 +217,13 @@ test.describe('Help buttons', () => {
     await tip.focus();
     await expectShown(page, 'About Compare');
   });
+
+  test('the ? next to Try others shows its text below the Model card', async ({ page }) => {
+    await openApp(page, withOutputs);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'About Try others' }).click();
+    await expectShown(page, 'About Try others');
+  });
 });
 
 test.describe('Clear', () => {
