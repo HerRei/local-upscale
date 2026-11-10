@@ -1879,34 +1879,7 @@ pub fn uninstall_integrations() -> AppResult<integrations::IntegrationStatus> {
 /// until the user selects it, and never downloads or bundles FFmpeg.
 #[tauri::command]
 pub fn detect_external_ffmpeg(state: State<'_, Arc<AppState>>) -> Vec<String> {
-    let name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    let mut found: Vec<String> = Vec::new();
-    let mut consider = |path: PathBuf| {
-        if path.is_file() {
-            let text = path.to_string_lossy().into_owned();
-            if !found.contains(&text) {
-                found.push(text);
-            }
-        }
-    };
-    if let Some(paths) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&paths) {
-            consider(directory.join(name));
-        }
-    }
-    for directory in [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/snap/bin",
-        "C:\\ffmpeg\\bin",
-    ] {
-        consider(PathBuf::from(directory).join(name));
-    }
+    let found = crate::programs::find_ffmpeg();
     for path in &found {
         state.programs.grant(path);
     }
