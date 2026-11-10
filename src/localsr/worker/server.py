@@ -43,6 +43,11 @@ from localsr.core.model_catalog import (
     ModelStore,
 )
 from localsr.core.output_writer import cleanup_stale_work_files
+from localsr.core.preparation import (
+    PreparationTimeout,
+    abandoned_work_running,
+    bounded_preparation,
+)
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
@@ -127,6 +132,10 @@ def _video_engines() -> list[str]:
 
 # The most photos one batch request carries; the desktop sends at most this many.
 MAX_BATCH_PHOTOS = 64
+# Reading a model bundle (several GB for SeedVR2) is local disk work that cannot be
+# interrupted; the limits only catch a drive that stopped answering.
+BUNDLE_CHECK_SECONDS = 600.0
+BUNDLE_LOAD_SECONDS = 900.0
 
 
 def _engine_features() -> list[str]:
@@ -1129,8 +1138,15 @@ class WorkerServer:
             max(2, int(probe.height * resolution / min(probe.width, probe.height)) // 2 * 2),
             min(window, memory.latest.clip_frames),
         )
-        engine = engine_factory(
-            bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
+        engine = WorkerServer._prepare_bundle(
+            self,
+            job_id,
+            "Loading the video model",
+            BUNDLE_LOAD_SECONDS,
+            "bundle-load",
+            lambda: engine_factory(
+                bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
+            ),
         )
         window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
         overlap = min(overlap, window - 1)
@@ -1366,7 +1382,28 @@ class WorkerServer:
             )
         )
 
-    def _verify_temporal_bundle(self, data) -> None:
+    def _prepare_bundle(self, job_id, name, limit, slot, work):
+        """Run a bundle's hash check or load within its limit, cancellable, saying what it does.
+
+        The work cannot be stopped: at the limit or on a cancel it is left to finish on its
+        own thread and the job ends, so the worker stays responsive."""
+        try:
+            return bounded_preparation(
+                name,
+                limit,
+                work,
+                fallback="the job stops",
+                slot=slot,
+                cancel_event=self.cancel_event,
+                status=lambda message: send_message(EngineStatus(job_id=job_id, message=message)),
+            )
+        except PreparationTimeout as error:
+            raise RuntimeError(
+                f"{error}. LocalSR stopped the job; check that the drive holding the models "
+                "is connected, then try again."
+            ) from error
+
+    def _verify_temporal_bundle(self, data, job_id="") -> None:
         """Authenticate a catalog video bundle off the desktop UI thread."""
         model_id = str(data.get("video_model_id") or "")
         model = VIDEO_CATALOG_BY_ID.get(model_id)
@@ -1385,7 +1422,13 @@ class WorkerServer:
         send_message(
             LogMessage(level="info", message="Verifying the temporal model bundle integrity...")
         )
-        if not self.model_store.is_bundle_installed(model):
+        if not self._prepare_bundle(
+            job_id,
+            "Checking the video model files",
+            BUNDLE_CHECK_SECONDS,
+            "bundle-check",
+            lambda: self.model_store.is_bundle_installed(model),
+        ):
             raise ValueError(
                 f"{model.name} failed its catalog SHA-256 check. "
                 "LocalSR refused to load it; remove the bundle and download it again."
@@ -1408,7 +1451,13 @@ class WorkerServer:
         if supplied != expected:
             raise ValueError("The frame interpolation model path does not match the catalog.")
         send_message(VideoStageProgress(job_id=job_id, stage="loading_interpolation"))
-        if not self.model_store.is_bundle_installed(model):
+        if not self._prepare_bundle(
+            job_id,
+            "Checking the frame interpolation model",
+            BUNDLE_CHECK_SECONDS,
+            "bundle-check",
+            lambda: self.model_store.is_bundle_installed(model),
+        ):
             raise ValueError(
                 f"{model.name} failed its catalog SHA-256 check. "
                 "LocalSR refused to load it; remove it and download it again."
@@ -1416,11 +1465,17 @@ class WorkerServer:
         from localsr.video_models.rife.engine import RifeSynthesizer
 
         (checkpoint,) = model.files
-        return RifeSynthesizer(
-            self.model_store.bundle_file_path(model, checkpoint),
-            str(data["device"]),
-            status_callback=lambda message: send_message(
-                EngineStatus(job_id=job_id, message=message)
+        return self._prepare_bundle(
+            job_id,
+            "Loading the frame interpolation model",
+            BUNDLE_LOAD_SECONDS,
+            "bundle-load",
+            lambda: RifeSynthesizer(
+                self.model_store.bundle_file_path(model, checkpoint),
+                str(data["device"]),
+                status_callback=lambda message: send_message(
+                    EngineStatus(job_id=job_id, message=message)
+                ),
             ),
         )
 
@@ -1464,7 +1519,7 @@ class WorkerServer:
             if data.get("hdr_mode") == "preserve":
                 raise ValueError("HDR preservation requires the frame-by-frame HAT engine (Labs).")
             send_message(VideoStageProgress(job_id=job_id, stage="verifying_model"))
-            self._verify_temporal_bundle(data)
+            self._verify_temporal_bundle(data, job_id)
             if model_kind == "seedvr2":
                 from functools import partial
 
@@ -1480,11 +1535,16 @@ class WorkerServer:
 
         synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
-        info = self.model_adapter.inspect(data["model_path"])
         self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
         self.engine.status_callback = lambda message: send_message(
             EngineStatus(job_id=job_id, message=message)
         )
+        # The checkpoint read and a backend's preparation report and can be cancelled like
+        # an image job's; notes of earlier work are not this video's.
+        self.model_adapter.status_callback = self.engine.status_callback
+        self.model_adapter.cancel_event = self.cancel_event
+        self.engine.take_notes()
+        info = self.model_adapter.inspect(data["model_path"])
 
         face_info = None
         face_model_path = data.get("face_model_path")
@@ -1681,6 +1741,7 @@ class WorkerServer:
                 frames_processed=result.frames_processed,
                 elapsed_seconds=result.elapsed_seconds,
                 inference_seconds=result.inference_seconds,
+                notes=" ".join(self.engine.take_notes()),
             )
         )
 
@@ -1702,6 +1763,12 @@ def main():
         return
     server = WorkerServer()
     server.run()
+    if abandoned_work_running():
+        # A thread stuck in native code (an ONNX export, a driver compile) cannot be stopped,
+        # and Python aborts when it finalizes around one. Everything has been closed by now.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

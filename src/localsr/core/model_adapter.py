@@ -92,7 +92,7 @@ class ModelAdapter:
                 f"Reading {name}",
                 MODEL_READ_SECONDS,
                 lambda: (self._checkpoint_trust(path), self.loader.load_from_file(path)),
-                fallback="Stopping the job",
+                fallback="the job stops",
                 slot="model-read",
                 cancel_event=self.cancel_event,
                 status=self.status_callback,

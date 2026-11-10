@@ -12,6 +12,9 @@ TINY = SimpleNamespace(shape=(3, 8, 8))
 
 
 class DummyModelAdapter:
+    status_callback = None
+    cancel_event = None
+
     def inspect(self, path):
         from localsr.core.model_adapter import NormalizedModelInfo
 
@@ -412,6 +415,59 @@ def test_worker_hands_progressive_tiles_to_nonblocking_preview_encoder(monkeypat
     assert len(submitted) == 10
     assert submitted[-1]["force"] is True
     assert all(item["preview_kind"] == "tile" for item in submitted)
+
+
+def test_a_video_reports_its_preparation_and_carries_the_route_it_gave_up_in_its_notes(
+    monkeypatch, capsys
+):
+    from types import SimpleNamespace
+
+    import localsr.worker.server as server_module
+
+    server = WorkerServer()
+    adapter = DummyModelAdapter()
+    seen = {}
+    plain_inspect = adapter.inspect
+
+    def inspect(path):
+        # The checkpoint read is bounded: it must already say so and be cancellable.
+        seen["cancel"], seen["status"] = adapter.cancel_event, adapter.status_callback
+        return plain_inspect(path)
+
+    adapter.inspect = inspect
+    server.model_adapter = adapter
+    server.engine.add_note("left over from an earlier job")
+
+    def fake_video_job(**kwargs):
+        server.engine.add_note(
+            "Running on the standard path: the faster one was not ready in time."
+        )
+        return SimpleNamespace(
+            output_path="output.mp4", frames_processed=2, elapsed_seconds=1.0, inference_seconds=1.0
+        )
+
+    monkeypatch.setattr(server_module, "run_video_job", fake_video_job)
+    server._run_video_job(
+        "video-notes",
+        {
+            "video_path": "input.mp4",
+            "model_path": "model.pth",
+            "output_video_path": "output.mp4",
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 64,
+            "halo": 8,
+        },
+    )
+    assert seen["cancel"] is server.cancel_event
+    seen["status"]("Reading model.pth.")
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert {"job_id": "video-notes", "message": "Reading model.pth."} in [
+        item["data"] for item in messages if item["type"] == "engine_status"
+    ]
+    done = next(item["data"] for item in messages if item["type"] == "video_job_completed")
+    assert done["notes"] == "Running on the standard path: the faster one was not ready in time."
+    assert server.engine.notes == []
 
 
 def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatch, capsys):

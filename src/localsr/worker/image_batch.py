@@ -311,6 +311,7 @@ class ImageBatchRunner:
         self.lane_tile_counts: dict[str, int] = {}
         # What each saved photo's save left out, until its job_completed carries it.
         self.save_notes: dict[str, list[str]] = {}
+        self.lane_notes: list[str] = []
         self._announced: set[str] = set()
         self._focus = ""
         # The speed of all lanes together over the whole batch: a photo's remaining time is
@@ -332,10 +333,15 @@ class ImageBatchRunner:
     def run(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Report every photo the lanes finish, fail or cancel; return the others in order."""
         self.lane_tile_counts = {}
+        self.lane_notes = []
         if self.cancel_event.is_set():
             for data in jobs:
                 self.emit(JobCancelled(job_id=str(data["job_id"])))
             return []
+        # The checkpoint read is bounded and cancellable like a single job's. Its status
+        # waits for the first photo's start, and an earlier job's callback must not hear it.
+        self.model_adapter.cancel_event = self.cancel_event
+        self.model_adapter.status_callback = None
         info = self._plan(jobs)
         if info is None:
             return list(jobs)
@@ -351,6 +357,8 @@ class ImageBatchRunner:
             self.engine.status_callback = lambda message: self.emit(
                 EngineStatus(job_id=self._focus, message=message)
             )
+            self.model_adapter.status_callback = self.engine.status_callback
+            self._take_engine_notes()
             self.engine.release_models_except({data["model_path"]})
             self.engine.load_model(
                 data["model_path"],
@@ -373,6 +381,9 @@ class ImageBatchRunner:
             with torch.inference_mode():
                 runners = model.batch_lanes(sample, shape, gpu=True)
             del sample
+            # A route the lanes gave up is told on the result of every photo they finish; a
+            # photo handed back runs the normal path, which says it for itself.
+            self.lane_notes = self._take_engine_notes()
         except InterruptedError:
             for item in remaining:
                 self.emit(JobCancelled(job_id=str(item["job_id"])))
@@ -506,7 +517,9 @@ class ImageBatchRunner:
                     elapsed_seconds=elapsed,
                     inference_seconds=max(inference_seconds, 0.0),
                     output_path=item["output_path"],
-                    notes=" ".join(self.save_notes.pop(str(item["job_id"]), [])),
+                    notes=" ".join(
+                        [*self.lane_notes, *self.save_notes.pop(str(item["job_id"]), [])]
+                    ),
                 )
             )
 
@@ -553,6 +566,10 @@ class ImageBatchRunner:
         forget = getattr(model, "forget_batch_unit", None)
         if callable(forget):
             forget(lane.unit)
+
+    def _take_engine_notes(self) -> list[str]:
+        take = getattr(self.engine, "take_notes", None)
+        return take() if callable(take) else []
 
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():

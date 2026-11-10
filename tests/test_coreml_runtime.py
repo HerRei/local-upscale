@@ -882,6 +882,40 @@ def test_a_compile_that_never_returns_is_stored_and_the_next_job_skips_the_unit(
     assert fake_coreml.loads == []
 
 
+def test_a_job_that_skips_a_unit_for_a_stored_timeout_says_so_in_its_notes(fake_coreml):
+    FakeProgram.stores[("stored", (32, 32))] = {
+        NEURAL_ENGINE: coreml_runtime.timeout_verdict(120.0)
+    }
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE,), identity="stored"
+    )
+    messages, notes = [], []
+    converted.set_status_callback(messages.append)
+    converted.set_note_callback(notes.append)
+    output = run(converted)
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    assert fake_coreml.loads == []
+    expected = (
+        "Running on the standard path: the faster one was not ready in time for this model earlier."
+    )
+    # Only the result carries it: a video asks for every frame, and a status line would repeat.
+    assert notes == [expected] and messages == []
+    # The next job (or frame) looks at the stored timeout again.
+    run(converted)
+    assert notes == [expected, expected]
+
+
+def test_a_stored_timeout_is_not_a_fallback_when_another_unit_runs(fake_coreml):
+    FakeProgram.stores[("other", (32, 32))] = {NEURAL_ENGINE: coreml_runtime.timeout_verdict(120.0)}
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="other"
+    )
+    notes = []
+    converted.set_note_callback(notes.append)
+    run(converted)
+    assert converted.model.active_unit == CORE_ML_GPU and notes == []
+
+
 def test_the_budget_is_shared_by_every_unit_of_a_job(fake_coreml, short_budget):
     fake_coreml.behaviours.update({NEURAL_ENGINE: "hang", CORE_ML_GPU: "hang"})
     converted = CoreMLImageDescriptor(
@@ -979,7 +1013,7 @@ def test_a_compile_left_running_by_an_earlier_job_is_not_joined_by_a_second(
     # Not the program's fault, so nothing is stored for it.
     assert not FakeProgram.stores.get(("a2", (32, 32)))
     assert messages[-1] == (
-        "Continuing on the CPU: Core ML is still preparing an earlier model in the background."
+        "Running on the standard path: the faster one is still being prepared for an earlier model."
     )
 
 
@@ -990,14 +1024,14 @@ def test_the_wait_says_what_happens_and_when_the_route_is_given_up(fake_coreml, 
     converted.set_status_callback(messages.append)
     converted.set_note_callback(notes.append)
     run(converted)
-    waiting = [m for m in messages if m.startswith("Preparing SPAN")]
+    waiting = [m for m in messages if m.startswith("Preparing")]
     assert len(waiting) >= 3
     assert waiting[0] == (
-        "Preparing SPAN for the Neural Engine (first run of this model and tile size). "
-        "0 s so far. Continuing on the CPU in 0 s if it is not ready."
+        "Preparing the Neural Engine (once per model and tile size). "
+        "0 s so far; continues on the CPU in 0 s if it is not ready."
     )
     assert not any("can take a minute" in message for message in messages)
-    expected = "Continuing on the CPU: Core ML was not ready in time."
+    expected = "Running on the standard path: the faster one was not ready in time."
     assert messages[-1] == expected and notes == [expected]
 
 
@@ -1104,7 +1138,7 @@ def test_a_first_prediction_that_never_returns_is_bounded_like_the_load(fake_cor
     assert time.monotonic() - started < 2.0
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
     assert FakeProgram.stores[("fp", (32, 32))][NEURAL_ENGINE]["timed_out"]
-    assert notes == ["Continuing on the CPU: Core ML was not ready in time."]
+    assert notes == ["Running on the standard path: the faster one was not ready in time."]
     FakeRunner.release.set()
 
 
@@ -1117,6 +1151,6 @@ def test_elapsed_time_counts_from_the_start_of_the_whole_preparation(fake_coreml
     converted.model.prepare(16, 4)
     converted.model._bounded(CORE_ML_GPU, lambda: now.__setitem__(0, 140.0))
     converted.model._bounded(CORE_ML_GPU, lambda: None)
-    assert "Preparing SPAN for Core ML on the GPU" in seen[0]
+    assert "Preparing the faster path (once per model and tile size)" in seen[0]
     assert "0 s so far" in seen[0] and "40 s so far" in seen[1]
-    assert "Continuing on the CPU in 80 s" in seen[1]
+    assert "starts on the standard path in 80 s" in seen[1]

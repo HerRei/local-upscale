@@ -439,3 +439,80 @@ def test_progress_does_not_finish_before_synthesis(tmp_path):
         progress_cb=lambda done, total, elapsed, _remaining: progress.append((done, total)),
     )
     assert progress[-1][0] == progress[-1][1]
+
+
+# Preparation that reads whole model bundles stops on cancel and on its limit ---------
+
+
+@pytest.mark.timeout(20)
+def test_a_bundle_check_that_does_not_return_is_cancelled_and_reports_progress(
+    monkeypatch, tmp_path
+):
+    import threading
+    import time
+
+    from localsr.core import preparation
+
+    monkeypatch.setattr(preparation, "WAIT_SLICE_SECONDS", 0.02)
+    monkeypatch.setattr(preparation, "STATUS_INTERVAL_SECONDS", 0.05)
+    server, bundle, loaded, _ = patched_worker(monkeypatch, tmp_path)
+    release = threading.Event()
+    sent = []
+    import localsr.worker.server as server_module
+
+    monkeypatch.setattr(server_module, "send_message", sent.append)
+    server.model_store.is_bundle_installed = lambda model: release.wait()
+    threading.Timer(0.3, server.cancel_event.set).start()
+    started = time.monotonic()
+    with pytest.raises(InterruptedError):
+        server._run_video_job(
+            "stuck-hash",
+            worker_request(
+                tmp_path,
+                interpolation="x2",
+                interpolation_model_id="rife_4_26",
+                interpolation_bundle_dir=str(bundle),
+            ),
+        )
+    assert time.monotonic() - started < 2.0
+    assert loaded == []
+    waiting = [m.message for m in sent if type(m).__name__ == "EngineStatus"]
+    assert len(waiting) >= 3 and waiting[0].startswith("Checking the frame interpolation model. ")
+    release.set()
+
+
+@pytest.mark.timeout(20)
+def test_a_video_model_that_never_finishes_loading_stops_the_job_with_a_sentence(
+    monkeypatch, tmp_path
+):
+    import threading
+    import time
+
+    from localsr.core import preparation
+    from localsr.worker import server as server_module
+
+    monkeypatch.setattr(preparation, "WAIT_SLICE_SECONDS", 0.02)
+    monkeypatch.setattr(server_module, "BUNDLE_LOAD_SECONDS", 0.3)
+    monkeypatch.setattr(server_module, "send_message", lambda _message: None)
+    monkeypatch.setattr(server_module, "require_video_room", lambda *args, **kwargs: None)
+    release = threading.Event()
+    server = server_module.WorkerServer()
+    monkeypatch.setattr(
+        "localsr.core.video_io.probe_video",
+        lambda path: SimpleNamespace(width=64, height=64, fps=12.0, frame_count=4),
+    )
+    memory = SimpleNamespace(
+        phase=lambda stage: None,
+        configure=lambda *args: None,
+        latest=SimpleNamespace(clip_frames=5),
+    )
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"Loading the video model did not finish within"):
+        server._run_temporal_video_job_impl(
+            "stuck-load",
+            {"video_path": "in.mp4", "output_video_path": str(tmp_path / "o.mp4")},
+            lambda *args: release.wait(),
+            memory,
+        )
+    assert time.monotonic() - started < 2.0
+    release.set()

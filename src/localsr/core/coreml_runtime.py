@@ -93,7 +93,6 @@ CACHE_ENV = "LOCALSR_COREML_CACHE"
 DISABLE_ENV = "LOCALSR_DISABLE_COREML"
 
 UNIT_LABELS = {NEURAL_ENGINE: "the Neural Engine", CORE_ML_GPU: "the GPU (Core ML)"}
-PREPARE_TARGETS = {NEURAL_ENGINE: "the Neural Engine", CORE_ML_GPU: "Core ML on the GPU"}
 
 
 @functools.cache
@@ -595,9 +594,10 @@ class _CoreMLImage(torch.nn.Module):
             except Exception:  # noqa: BLE001
                 logger.debug("Core ML status callback failed", exc_info=True)
 
-    def _note(self, message: str) -> None:
-        """A sentence for the finished result as well as the status line."""
-        self._status(message)
+    def _note(self, message: str, *, status: bool = True) -> None:
+        """A sentence for the finished result, and for the status line unless ``status`` is off."""
+        if status:
+            self._status(message)
         if self.note_callback is not None:
             try:
                 self.note_callback(message)
@@ -663,10 +663,14 @@ class _CoreMLImage(torch.nn.Module):
             self.prepare_began = self.clock()
             self.deadline = self.prepare_began + PREPARE_BUDGET_SECONDS
         allowed = self.deadline - self.clock()
-        name = (
-            f"Preparing {self.architecture} for {PREPARE_TARGETS.get(unit, unit)} "
-            "(first run of this model and tile size)"
-        )
+        # The user chooses nothing here: Core ML is the faster path and PyTorch the standard
+        # one, on the same GPU. Only the Neural Engine is a different piece of hardware.
+        if unit == NEURAL_ENGINE:
+            name = "Preparing the Neural Engine (once per model and tile size)"
+            fallback = f"continues on {self._fallback_label()}"
+        else:
+            name = "Preparing the faster path (once per model and tile size)"
+            fallback = "starts on the standard path"
         if allowed <= 0:
             error = PreparationTimeout(name, PREPARE_BUDGET_SECONDS)
             error.allowed = 0.0
@@ -676,7 +680,7 @@ class _CoreMLImage(torch.nn.Module):
                 name,
                 PREPARE_BUDGET_SECONDS,
                 work,
-                fallback=f"Continuing on {self._fallback_label()}",
+                fallback=fallback,
                 slot=COREML_SLOT,
                 cancel_event=self.cancel_event,
                 status=self._status,
@@ -737,21 +741,23 @@ class _CoreMLImage(torch.nn.Module):
             for unit in units:
                 program.store_verdict(unit, timeout_verdict(allowed))
         reason = (
-            "Core ML is still preparing an earlier model in the background"
+            "the faster one is still being prepared for an earlier model"
             if error.busy
-            else "Core ML was not ready in time"
+            else "the faster one was not ready in time"
         )
-        logger.warning("%s for %s: %s", reason, self.architecture, error)
-        self._note(f"Continuing on {self._fallback_label()}: {reason}.")
+        logger.warning("Core ML: %s, for %s: %s", reason, self.architecture, error)
+        self._note(f"Running on the standard path: {reason}.")
 
     def _next_runner(self, state: dict) -> None:
         """Load the next candidate unit, honouring stored verdicts."""
         program: _Program = state["program"]
         state["runner"], state["unit"], state["pending"] = None, None, False
+        skipped_for_timeout = False
         while state["remaining"]:
             unit = state["remaining"].pop(0)
             verdict = program.verdict(unit)
             if verdict is not None and not verdict.get("accepted"):
+                skipped_for_timeout |= bool(verdict.get("timed_out"))
                 continue
             if not (program.compiled / "coremldata.bin").exists():
                 try:
@@ -790,6 +796,16 @@ class _CoreMLImage(torch.nn.Module):
             if not state["pending"]:
                 self._announce(unit)
             return
+        if skipped_for_timeout:
+            # Every later job looks again: the stored timeout may have expired or been lifted,
+            # and each result that ran without Core ML for this reason says so.
+            state["retry"] = True
+            # Not a status: a video asks again for every frame, and the line would repeat.
+            self._note(
+                "Running on the standard path: the faster one was not ready in time for this "
+                "model earlier.",
+                status=False,
+            )
 
     def batch_lanes(self, sample: torch.Tensor, shape: tuple[int, int], *, gpu: bool) -> list:
         """Two native runners per accepted unit at one fixed shape, for photo batches.

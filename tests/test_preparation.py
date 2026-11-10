@@ -21,7 +21,7 @@ def fast_waits(monkeypatch):
 
 def call(work, limit=1.0, slot="test", **options):
     return bounded_preparation(
-        "Preparing X", limit, work, fallback="Going on", slot=slot, **options
+        "Preparing X", limit, work, fallback="going on", slot=slot, **options
     )
 
 
@@ -95,8 +95,8 @@ def test_status_is_repeated_with_elapsed_time_and_the_way_out():
     threading.Timer(0.45, release.set).start()
     call(release.wait, limit=5.0, status=messages.append)
     assert len(messages) >= 4
-    assert messages[0] == "Preparing X. 0 s so far. Going on in 5 s if it is not ready."
-    assert all("Going on in" in message for message in messages)
+    assert messages[0] == "Preparing X. 0 s so far; going on in 5 s if it is not ready."
+    assert all("going on in" in message for message in messages)
 
 
 # The guard: nothing in the engine may wait without a bound ----------------------
@@ -168,7 +168,7 @@ def test_a_checkpoint_that_cannot_be_read_stops_the_job_with_a_sentence(monkeypa
     with pytest.raises(RuntimeError, match=r"Reading the model file model\.pth did not finish"):
         adapter.inspect(str(path))
     assert time.monotonic() - started < 2.0
-    assert messages and "Stopping the job in" in messages[0]
+    assert messages and "the job stops in" in messages[0]
     release.set()
     deadline = time.monotonic() + 2
     while preparation.busy_slot("model-read") and time.monotonic() < deadline:
@@ -191,3 +191,26 @@ def test_the_face_detector_download_before_a_job_has_a_short_limit(monkeypatch, 
     with pytest.raises(face_detection.FaceDetectionUnavailable, match="offline"):
         face_detection._detector_model_path(store=store, cancel_event=None, allow_download=True)
     assert seen["max_seconds"] == face_detection.DOWNLOAD_SECONDS <= 120
+
+
+def test_a_worker_that_ends_while_abandoned_work_still_runs_exits_without_finalizing(monkeypatch):
+    """A thread stuck in native code (an ONNX export, a compile) aborts the interpreter when
+    it finalizes around it, so the exit after the normal shutdown skips that."""
+    from localsr.worker import server as server_module
+
+    release = threading.Event()
+    with pytest.raises(PreparationTimeout):
+        call(release.wait, limit=0.1)
+    exits = []
+    monkeypatch.setattr(server_module, "WorkerServer", lambda: SimpleNamespace(run=lambda: None))
+    monkeypatch.setattr(server_module.os, "_exit", exits.append)
+    monkeypatch.setattr(server_module.sys, "argv", ["worker"])
+    server_module.main()
+    assert exits == [0]
+    release.set()
+    deadline = time.monotonic() + 2
+    while busy_slot("test") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    exits.clear()
+    server_module.main()
+    assert exits == []
