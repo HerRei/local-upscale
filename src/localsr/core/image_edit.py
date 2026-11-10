@@ -450,7 +450,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             with Image.open(result) as image:
                 image.verify()
             # Publish without overwriting an existing result, even in a filename race.
-            publish_output(result, output)
+            publish_output(result, output, cancel)
         finally:
             if process.stdin and not process.stdin.closed:
                 process.stdin.close()
