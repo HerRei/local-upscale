@@ -721,3 +721,36 @@ def test_an_image_job_refuses_heic_before_any_inference_without_macos(monkeypatc
     with pytest.raises(ValueError, match="needs macOS"):
         runner.run("job", {"output_format": "heic"})
     engine.release_models_except.assert_not_called()
+
+
+def _save_jpeg_with_source_tags(path, tags, fmt="jpg"):
+    manager = ImageManager()
+    manager.save_from_writer(
+        np.full((3, 8, 8), 120, dtype=np.uint8), str(path), fmt, 90, True, None, tags, 1
+    )
+    return manager
+
+
+def test_a_source_tag_too_long_for_a_jpeg_is_left_out_and_the_save_says_so(tmp_path):
+    tags = {315: "a" * 120_000, 33432: "(c) 2026 Someone", 306: "2026:11:10 09:00:00"}
+    manager = _save_jpeg_with_source_tags(tmp_path / "out.jpg", tags)
+    exif = Image.open(tmp_path / "out.jpg").getexif()
+    assert exif.get(315) is None
+    assert exif[33432] == "(c) 2026 Someone" and exif[306] == "2026:11:10 09:00:00"
+    assert exif[274] == 1
+    assert manager.notes == [
+        "The photo's artist text was too long to fit a JPEG file and was left out."
+    ]
+
+
+def test_the_same_long_tag_is_kept_where_the_format_has_room_for_it(tmp_path):
+    for fmt in ("png", "tif", "webp"):
+        manager = _save_jpeg_with_source_tags(tmp_path / f"out.{fmt}", {315: "a" * 120_000}, fmt)
+        assert Image.open(tmp_path / f"out.{fmt}").getexif().get(315) == "a" * 120_000
+        assert manager.notes == []
+
+
+def test_a_jpeg_with_small_tags_keeps_all_of_them_without_a_note(tmp_path):
+    manager = _save_jpeg_with_source_tags(tmp_path / "out.jpg", {315: "Artist"})
+    assert Image.open(tmp_path / "out.jpg").getexif()[315] == "Artist"
+    assert manager.notes == []

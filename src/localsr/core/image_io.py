@@ -50,6 +50,9 @@ def _is_decode_failure(error: BaseException) -> bool:
 
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
+# What a JPEG's single EXIF segment can hold, header included.
+JPEG_EXIF_LIMIT = 65_533
+_EXIF_TAG_NAMES = {306: "date", 315: "artist", 33432: "copyright"}
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
 # converts those to 8 bits by clipping, not scaling.
 WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
@@ -269,6 +272,8 @@ def _develop_raw(path: str) -> np.ndarray:
 class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
+        # What the last save left out or changed that the user should know about.
+        self.notes: list[str] = []
         self.alpha_channel = None
         # A grey source has no colour, so save() keeps only the luma a model returns.
         self.grayscale = False
@@ -463,6 +468,24 @@ class ImageManager:
             cancel_event=cancel_event,
         )
 
+    def _fit_jpeg_exif(self, exif: Image.Exif, copied: dict) -> None:
+        """Leave the largest copied tags out until the EXIF block fits a JPEG.
+
+        Encoding fails for a block over 64 KB, and a source tag can be that long. The
+        tags LocalSR generates are small, so only copied ones are dropped.
+        """
+        dropped = []
+        for tag in sorted(copied, key=lambda tag: len(str(copied[tag])), reverse=True):
+            if len(exif.tobytes()) <= JPEG_EXIF_LIMIT:
+                break
+            del exif[tag]
+            dropped.append(_EXIF_TAG_NAMES.get(tag, f"tag {tag}"))
+        if dropped:
+            self.notes.append(
+                f"The photo's {', '.join(dropped)} text was too long to fit a JPEG file and "
+                "was left out."
+            )
+
     def save_from_writer(
         self,
         writer_mmap: np.ndarray,
@@ -478,6 +501,7 @@ class ImageManager:
         cancel_event: threading.Event | None = None,
     ):
 
+        self.notes = []
         arr = np.transpose(writer_mmap, (1, 2, 0))
         out_img = Image.fromarray(arr, mode="RGB")
 
@@ -527,6 +551,8 @@ class ImageManager:
             exif[274] = 1
             exif[40962] = out_img.width
             exif[40963] = out_img.height
+            if format.lower() in ("jpg", "jpeg"):
+                self._fit_jpeg_exif(exif, safe_exif)
             kwargs["exif"] = exif
 
         fmt = format.lower()

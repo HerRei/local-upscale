@@ -44,8 +44,11 @@ def save_output(
     info: NormalizedModelInfo,
     data: Mapping[str, Any],
     cancel_event: threading.Event,
-) -> None:
-    """Write a finished image atomically in the job's format, as every image job does."""
+) -> list[str]:
+    """Write a finished image atomically in the job's format, as every image job does.
+
+    Returns what the save left out or changed, as sentences for the job's notes.
+    """
     manager.save(
         writer,
         data["output_path"],
@@ -59,6 +62,7 @@ def save_output(
         temporary_directory=data.get("output_temporary_directory"),
         cancel_event=cancel_event,
     )
+    return list(manager.notes)
 
 
 class ImageJobRunner:
@@ -135,7 +139,7 @@ class ImageJobRunner:
                 writer, info = self._primary(working_image, pipeline, data, progress, resources)
                 self._check_cancelled()
                 self._log("Writing final output...")
-                self._save(manager, writer, image, info, data)
+                notes.extend(self._save(manager, writer, image, info, data))
             completed_at = time.monotonic()
             self.emit(
                 JobCompleted(
@@ -359,8 +363,8 @@ class ImageJobRunner:
         image: dict[str, Any],
         info: NormalizedModelInfo,
         data: Mapping[str, Any],
-    ) -> None:
-        save_output(manager, writer, image, info, data, self.cancel_event)
+    ) -> list[str]:
+        return save_output(manager, writer, image, info, data, self.cancel_event)
 
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():
