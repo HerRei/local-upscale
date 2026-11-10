@@ -78,11 +78,10 @@ from localsr.protocol.messages import (
     WorkerReady,
 )
 from localsr.worker.request_validation import (
-    PROBE_FIELDS,
     InvalidRequest,
     usable_job_id,
-    validate_fields,
     validate_image_job,
+    validate_probe,
     validate_video_job,
 )
 from localsr.worker.result_preview import ResultPreviewService
@@ -387,7 +386,7 @@ class WorkerServer:
                     media_path = data.get("media_path")
                     media_path = media_path if isinstance(media_path, str) else ""
                     try:
-                        validate_fields(data, PROBE_FIELDS, "media probe request")
+                        validate_probe(data)
                     except InvalidRequest as error:
                         send_message(
                             MediaProbeFailed(media_path=media_path, error_message=str(error))

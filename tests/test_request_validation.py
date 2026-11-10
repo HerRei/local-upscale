@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from localsr.worker.request_validation import (
     InvalidRequest,
     usable_job_id,
     validate_image_job,
+    validate_probe,
     validate_video_job,
 )
 
@@ -211,3 +213,18 @@ def test_the_table_agrees_with_the_published_schema():
         video_fields["crf"].minimum,
         video_fields["crf"].maximum,
     )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_pipe_as_a_source_is_refused_before_it_is_opened(tmp_path):
+    pipe = tmp_path / "source"
+    os.mkfifo(pipe)
+    with pytest.raises(InvalidRequest, match="pipe, device or socket"):
+        validate_image_job(image_request(image_path=str(pipe)))
+    with pytest.raises(InvalidRequest, match="pipe, device or socket"):
+        validate_video_job(video_request(video_path=str(pipe)))
+    with pytest.raises(InvalidRequest, match="pipe, device or socket"):
+        validate_probe({"media_path": str(pipe)})
+    # A missing file or a folder keeps the reader's own message.
+    validate_image_job(image_request(image_path=str(tmp_path / "missing.png")))
+    validate_image_job(image_request(image_path=str(tmp_path)))

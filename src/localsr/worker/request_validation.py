@@ -12,6 +12,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from localsr.core.image_formats import require_ordinary_source
 from localsr.core.output_publish import require_output_name
 
 
@@ -171,21 +172,30 @@ def validate_fields(data: Any, fields: tuple[Field, ...], request: str) -> None:
             )
 
 
-def _check_output_name(path: str) -> None:
+def _check_paths(source: str, output: str) -> None:
     try:
-        require_output_name(path)
+        require_ordinary_source(source)
+        require_output_name(output)
     except ValueError as error:
         raise InvalidRequest(str(error)) from None
 
 
 def validate_image_job(data: Any) -> None:
     validate_fields(data, IMAGE_JOB_FIELDS, "image job request")
-    _check_output_name(data["output_path"])
+    _check_paths(data["image_path"], data["output_path"])
 
 
 def validate_video_job(data: Any) -> None:
     validate_fields(data, VIDEO_JOB_FIELDS, "video job request")
-    _check_output_name(data["output_video_path"])
+    _check_paths(data["video_path"], data["output_video_path"])
+
+
+def validate_probe(data: Any) -> None:
+    validate_fields(data, PROBE_FIELDS, "media probe request")
+    try:
+        require_ordinary_source(data["media_path"])
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from None
 
 
 def usable_job_id(data: Any) -> str | None:

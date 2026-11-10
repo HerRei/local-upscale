@@ -14,7 +14,11 @@ import numpy as np
 import torch
 from PIL import Image, ImageCms, ImageOps, TiffImagePlugin, UnidentifiedImageError
 
-from localsr.core.image_formats import is_raw_input, is_system_decoded
+from localsr.core.image_formats import (
+    is_raw_input,
+    is_system_decoded,
+    require_ordinary_source,
+)
 from localsr.core.output_publish import owned_temporary, publish_output
 
 # The most pixels a source image may have: what Pillow accepts before it refuses an image
@@ -296,6 +300,7 @@ class ImageManager:
             raise
 
     def _load(self, path: str) -> dict:
+        require_ordinary_source(path)
         self.alpha_channel = None
         self.grayscale = False
         is_raw = is_raw_input(path)

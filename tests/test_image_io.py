@@ -754,3 +754,30 @@ def test_a_jpeg_with_small_tags_keeps_all_of_them_without_a_note(tmp_path):
     manager = _save_jpeg_with_source_tags(tmp_path / "out.jpg", {315: "Artist"})
     assert Image.open(tmp_path / "out.jpg").getexif()[315] == "Artist"
     assert manager.notes == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_pipe_is_refused_as_a_source_instead_of_waiting_for_a_writer(tmp_path):
+    import threading
+
+    pipe = tmp_path / "source.png"
+    os.mkfifo(pipe)
+    outcome = []
+
+    def load():
+        try:
+            ImageManager().load(str(pipe))
+        except Exception as error:  # noqa: BLE001 - the test inspects it
+            outcome.append(error)
+
+    thread = threading.Thread(target=load, daemon=True)
+    thread.start()
+    thread.join(5)
+    try:
+        assert not thread.is_alive(), "load() is waiting for a writer on the pipe"
+        assert isinstance(outcome[0], ValueError) and "pipe, device or socket" in str(outcome[0])
+    finally:
+        if thread.is_alive():
+            # Release the blocked reader so the thread ends.
+            os.close(os.open(pipe, os.O_WRONLY))
+            thread.join(5)
