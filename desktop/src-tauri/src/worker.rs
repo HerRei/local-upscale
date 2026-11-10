@@ -589,16 +589,34 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
 }
 
 /// Send the next job or photo batch (batches only where `batches` holds: on a Mac);
-/// true when something was sent.
+/// true when something was sent or a job was failed, so the window needs to know.
 fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
+    let mut changed = false;
+    loop {
+        match dispatch_once(state, batches)? {
+            Dispatch::Sent => return Ok(true),
+            Dispatch::Idle => return Ok(changed),
+            // The job at the head of the queue failed; the next one is looked at.
+            Dispatch::Failed => changed = true,
+        }
+    }
+}
+
+enum Dispatch {
+    Sent,
+    Idle,
+    Failed,
+}
+
+fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     }
     let Some(pending) = lock(&state.database)?.next_queued_job()? else {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     };
     if lock(&state.runtime)?.worker != "ready" {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     }
     let paths = batch_model_paths(state, batches)?;
     let mut window = Vec::new();
@@ -610,10 +628,16 @@ fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
     }
     let Some((ids, mut message)) = next_dispatch(&window, |path| paths.iter().any(|p| p == path))?
     else {
-        return Ok(false);
+        return Ok(Dispatch::Idle);
     };
     let first = ids[0].clone();
-    lock(&state.worker.cancellation)?.prepare(&first, &mut message)?;
+    let prepared = lock(&state.worker.cancellation)?.prepare(&first, &mut message);
+    if let Err(error) = prepared {
+        // The first job's output folder cannot be used (an ejected drive, a folder
+        // that is read-only): that job fails on its own and must not hold up the queue.
+        lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
+        return Ok(Dispatch::Failed);
+    }
     // Preparing can end a batch early, before a photo whose folder cannot be used.
     let ids: Vec<String> = match message["data"]["jobs"].as_array() {
         Some(jobs) if message["type"] == "image_batch_request" => {
@@ -624,7 +648,10 @@ fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
     {
         let mut runtime = lock(&state.runtime)?;
         if runtime.worker != "ready" {
-            return Ok(false);
+            // The engine stopped meanwhile. Nothing was sent, so the folders made for it go.
+            drop(runtime);
+            lock(&state.worker.cancellation)?.finish()?;
+            return Ok(Dispatch::Idle);
         }
         runtime.begin_active_job(first.clone());
         runtime.active_batch_job_ids = if ids.len() > 1 { ids } else { Vec::new() };
@@ -643,7 +670,7 @@ fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
         runtime.active_batch_job_ids.clear();
         return Err(error);
     }
-    Ok(true)
+    Ok(Dispatch::Sent)
 }
 
 /// The rows of the jobs a stopped engine was running. A cancellation that had to
@@ -3152,6 +3179,44 @@ mod tests {
         );
         // The healthy photos run; the other waits for its own turn.
         assert_eq!(status(&state, "c2"), "queued");
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn a_job_whose_scratch_folder_cannot_be_made_fails_and_the_queue_goes_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            // The first job writes to a folder that no longer exists (an ejected drive).
+            let db = lock(&state.database).unwrap();
+            db.cancel_queued_jobs().unwrap();
+            for id in ["bad", "worse", "good"] {
+                db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                    .unwrap();
+                let mut job = photo_job(id);
+                let folder = if id == "good" { "out" } else { "gone" };
+                job["data"]["output_path"] =
+                    json!(directory.path().join(folder).join(format!("{id}.png")));
+                db.insert_job(id, id, &job.to_string()).unwrap();
+            }
+        }
+        ready_for_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["data"]["job_id"], "good");
+        for id in ["bad", "worse"] {
+            assert_eq!(status(&state, id), "failed");
+        }
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        assert!(jobs
+            .iter()
+            .find(|job| job.id == "bad")
+            .unwrap()
+            .error
+            .contains("No such file"));
+        assert_eq!(lock(&state.runtime).unwrap().active_job_id, "good");
         lock(&state.worker.cancellation).unwrap().finish().unwrap();
     }
 
