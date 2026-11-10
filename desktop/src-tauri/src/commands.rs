@@ -3912,6 +3912,45 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn importing_a_folder_follows_links_to_media_files_but_never_descends_into_links() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let chosen = directory.path().join("chosen");
+        let elsewhere = directory.path().join("elsewhere");
+        fs::create_dir_all(chosen.join("real-folder")).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(chosen.join("own.png"), b"own").unwrap();
+        fs::write(chosen.join("real-folder").join("inner.png"), b"inner").unwrap();
+        fs::write(elsewhere.join("linked.jpg"), b"linked").unwrap();
+        fs::write(elsewhere.join("nested.jpg"), b"nested").unwrap();
+        fs::write(elsewhere.join("notes.txt"), b"text").unwrap();
+        // A link to one media file is a layout users keep their photos in.
+        symlink(elsewhere.join("linked.jpg"), chosen.join("link.jpg")).unwrap();
+        // A link to a folder is not followed, a link that loops cannot hang the scan,
+        // and neither can a link named like media that points at something else.
+        symlink(&elsewhere, chosen.join("folder-link")).unwrap();
+        symlink(&chosen, chosen.join("loop")).unwrap();
+        symlink(elsewhere.join("notes.txt"), chosen.join("disguised.png")).unwrap();
+        symlink(
+            directory.path().join("missing.png"),
+            chosen.join("dangling.png"),
+        )
+        .unwrap();
+
+        let found = normalize_media_paths(vec![chosen.to_string_lossy().into_owned()]).unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["linked.jpg", "own.png"]);
+        let listed = scan_media_folder(chosen.to_string_lossy().into_owned()).unwrap();
+        assert!(listed.iter().all(|path| !path.contains("nested")
+            && !path.contains("inner")
+            && !path.contains("notes")));
+    }
+
     #[test]
     fn names_that_differ_only_by_case_are_one_name() {
         let directory = tempfile::tempdir().unwrap();
