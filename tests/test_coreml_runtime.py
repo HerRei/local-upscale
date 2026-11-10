@@ -1106,3 +1106,17 @@ def test_a_first_prediction_that_never_returns_is_bounded_like_the_load(fake_cor
     assert FakeProgram.stores[("fp", (32, 32))][NEURAL_ENGINE]["timed_out"]
     assert notes == ["Continuing on the CPU: Core ML was not ready in time."]
     FakeRunner.release.set()
+
+
+def test_elapsed_time_counts_from_the_start_of_the_whole_preparation(fake_coreml, monkeypatch):
+    seen = []
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(CORE_ML_GPU,), identity="clock")
+    converted.set_status_callback(seen.append)
+    now = [100.0]
+    converted.model.clock = lambda: now[0]
+    converted.model.prepare(16, 4)
+    converted.model._bounded(CORE_ML_GPU, lambda: now.__setitem__(0, 140.0))
+    converted.model._bounded(CORE_ML_GPU, lambda: None)
+    assert "Preparing SPAN for Core ML on the GPU" in seen[0]
+    assert "0 s so far" in seen[0] and "40 s so far" in seen[1]
+    assert "Continuing on the CPU in 80 s" in seen[1]

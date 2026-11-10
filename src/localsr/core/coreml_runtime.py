@@ -93,6 +93,7 @@ CACHE_ENV = "LOCALSR_COREML_CACHE"
 DISABLE_ENV = "LOCALSR_DISABLE_COREML"
 
 UNIT_LABELS = {NEURAL_ENGINE: "the Neural Engine", CORE_ML_GPU: "the GPU (Core ML)"}
+PREPARE_TARGETS = {NEURAL_ENGINE: "the Neural Engine", CORE_ML_GPU: "Core ML on the GPU"}
 
 
 @functools.cache
@@ -495,6 +496,7 @@ class _CoreMLImage(torch.nn.Module):
         self.note_callback: Callable[[str], None] | None = None
         # When this job's preparation budget ends (a monotonic time), once it started.
         self.deadline: float | None = None
+        self.prepare_began: float = 0.0
         self.clock: Callable[[], float] = time.monotonic
         # shape -> {"program", "runner", "unit", "pending", "remaining"}
         self.states: OrderedDict[tuple[int, int], dict] = OrderedDict()
@@ -658,10 +660,11 @@ class _CoreMLImage(torch.nn.Module):
         the budget runs out, and ``InterruptedError`` on cancellation.
         """
         if self.deadline is None:
-            self.deadline = self.clock() + PREPARE_BUDGET_SECONDS
+            self.prepare_began = self.clock()
+            self.deadline = self.prepare_began + PREPARE_BUDGET_SECONDS
         allowed = self.deadline - self.clock()
         name = (
-            f"Preparing {self.architecture} for {UNIT_LABELS.get(unit, unit)} "
+            f"Preparing {self.architecture} for {PREPARE_TARGETS.get(unit, unit)} "
             "(first run of this model and tile size)"
         )
         if allowed <= 0:
@@ -678,6 +681,7 @@ class _CoreMLImage(torch.nn.Module):
                 cancel_event=self.cancel_event,
                 status=self._status,
                 deadline=self.deadline,
+                since=self.prepare_began,
                 on_late=on_late,
                 clock=self.clock,
             )

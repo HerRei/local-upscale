@@ -70,11 +70,13 @@ def bounded_preparation(
     cancel_event: threading.Event | None = None,
     status: Callable[[str], None] | None = None,
     deadline: float | None = None,
+    since: float | None = None,
     on_late: Callable[[str, Any], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> Any:
     """Run ``work`` and wait at most ``limit`` seconds (or until ``deadline``, a
-    ``clock`` time shared by several phases of one job).
+    ``clock`` time shared by several phases of one job); ``since`` is when that
+    shared preparation began, for the elapsed time in the status message.
 
     Returns what ``work`` returns and re-raises what it raises. Raises
     ``InterruptedError`` when ``cancel_event`` is set, and ``PreparationTimeout``
@@ -91,6 +93,7 @@ def bounded_preparation(
         raise PreparationTimeout(name, limit, busy=True)
     started = clock()
     end = started + limit if deadline is None else min(started + limit, deadline)
+    shown_from = started if since is None else since
     box = _Box()
 
     def run() -> None:
@@ -124,7 +127,7 @@ def bounded_preparation(
             left = max(0, round(end - now))
             try:
                 status(
-                    f"{name}. {max(0, round(now - started))} s so far. "
+                    f"{name}. {max(0, round(now - shown_from))} s so far. "
                     f"{fallback} in {left} s if it is not ready."
                 )
             except Exception:  # noqa: BLE001
