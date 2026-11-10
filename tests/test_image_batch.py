@@ -73,6 +73,8 @@ class Setup:
     ):
         self.calls, self.messages, self.samples, self.order = [], [], [], []
         self.forgotten = []
+        self.engine_notes = []
+        self.lane_notes = []
         self.tmp_path = tmp_path
         self.cancel = threading.Event()
         test = self
@@ -83,6 +85,7 @@ class Setup:
 
             def batch_lanes(self, sample, shape, *, gpu):
                 test.samples.append((tuple(sample.shape), shape, gpu))
+                test.engine_notes.extend(test.lane_notes)
                 if not lanes:
                     return []
                 units = [NEURAL_ENGINE] * 2 + ([CORE_ML_GPU] * 2 if gpu else [])
@@ -100,9 +103,15 @@ class Setup:
             active_model=Model(),
             neural_engine_enabled=False,
             status_callback=None,
+            take_notes=lambda: [test.engine_notes[:], test.engine_notes.clear()][0],
         )
         info = NormalizedModelInfo(architecture, 2, 3, 3, True, True, 1, 1, "span.pth", [])
-        self.adapter = SimpleNamespace(inspect=lambda path: info)
+
+        def inspect(path):
+            test.order.append(("inspect", self.adapter.cancel_event, self.adapter.status_callback))
+            return info
+
+        self.adapter = SimpleNamespace(inspect=inspect, cancel_event=None, status_callback=None)
         self.power = PowerSource(read=ac if callable(ac) else (lambda: ac), interval=0)
 
         def emit(message):
@@ -194,6 +203,31 @@ def test_the_first_photo_is_announced_before_the_model_loads(tmp_path):
     assert setup.order.index("load") < setup.order.index(("started", "1"))
     assert ("release except", {"span.pth"}) in setup.order
     assert setup.engine.neural_engine_enabled is True
+
+
+def test_what_the_lanes_gave_up_is_in_the_notes_of_every_photo_they_finish(tmp_path):
+    setup = Setup(tmp_path)
+    note = "Continuing on the Apple GPU: Core ML was not ready in time."
+    setup.lane_notes = [note, "A second sentence."]
+    setup.engine_notes.append("left over from an earlier job")
+    assert setup.run([job(tmp_path, i) for i in range(3)]) == []
+    for i in range(3):
+        assert setup.of("job_completed", str(i))[0]["notes"] == f"{note} A second sentence."
+    # Handed over once: the engine keeps nothing for the next job to find.
+    assert setup.engine_notes == []
+
+
+def test_the_checkpoint_read_of_a_batch_can_be_cancelled_and_reports_to_the_batch(tmp_path):
+    setup = Setup(tmp_path)
+    setup.adapter.status_callback = lambda message: setup.order.append("stale job's callback")
+    setup.run([job(tmp_path, i) for i in range(2)])
+    read = next(entry for entry in setup.order if entry[0] == "inspect")
+    # Cancellable from the first read, and never reporting to an earlier job.
+    assert read[1] is setup.cancel and read[2] is None
+    assert "stale job's callback" not in setup.order
+    # Once the first photo is announced, the adapter reports on the batch's current photo.
+    assert setup.adapter.status_callback is setup.engine.status_callback
+    assert setup.adapter.status_callback is not None
 
 
 def test_battery_runs_the_neural_engine_lanes_only(tmp_path):
