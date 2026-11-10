@@ -61,3 +61,36 @@ test.describe('pane headers', () => {
     await inRow([tabs, header.locator('.compare-names'), views]);
   });
 });
+
+/** WCAG contrast of an element's text against its own background laid over its parent's. */
+const contrast = (locator: Locator) =>
+  locator.evaluate((element) => {
+    const rgba = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+    const own = rgba(getComputedStyle(element).backgroundColor);
+    const under = rgba(getComputedStyle(element.closest('.toolbar')!).backgroundColor);
+    const alpha = own[3] ?? 1;
+    const back = under.slice(0, 3).map((c, i) => own[i] * alpha + c * (1 - alpha));
+    const fore = rgba(getComputedStyle(element).color);
+    const lum = (rgb: number[]) =>
+      rgb
+        .map((c) => c / 255)
+        .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+        .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const [hi, lo] = [lum(fore), lum(back)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  });
+
+test('the narrow window switch is a row of words with a readable count', async ({ page }, info) => {
+  test.skip(info.project.use.viewport!.width >= 1280, 'the switch shows only in narrow windows');
+  await openApp(page, ready);
+  const nav = page.getByRole('navigation', { name: 'Workspace' });
+  await expect(nav.getByRole('button', { name: 'Viewer', exact: true })).toBeVisible();
+  await expect(nav.getByRole('button', { name: 'Preview' })).toHaveCount(0);
+  const boxed = await nav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return style.borderTopStyle !== 'none' || style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+  });
+  expect(boxed).toBe(false);
+  // The Media page button only shows below 920 px; its colours apply at every width.
+  expect(await contrast(nav.locator('button').first().locator('span'))).toBeGreaterThanOrEqual(4.5);
+});

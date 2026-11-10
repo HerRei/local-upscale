@@ -224,36 +224,24 @@ input:focus-visible {
   text-align: left;
 }
 
+/* Narrow windows: the panes become pages, chosen with pane tabs (view-switch words). */
 .compact-nav {
-  display: none;
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  height: 30px;
-  padding: 3px;
-  border-radius: var(--radius);
-  background: var(--recess);
-  border: 1px solid rgba(255, 255, 255, 0.06);
 }
-.compact-nav button {
-  min-width: 78px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
+.view-switch.compact-nav {
+  display: none;
 }
-.compact-nav button.active {
-  color: white;
-  background: var(--raised);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
-}
+/* The count takes the word's colour; on the faint border tint both stay above 4.5:1. */
 .compact-nav span {
   margin-left: 4px;
   padding: 1px 5px;
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.121);
-  color: var(--secondary);
+  background: var(--border);
+  color: inherit;
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 400;
 }
 
 .workspace {
@@ -2213,7 +2201,7 @@ input[type='text'],
     width: 360px;
     box-shadow: -22px 0 50px rgba(0, 0, 0, 0.38);
   }
-  .compact-nav {
+  .view-switch.compact-nav {
     display: flex;
   }
   .compact-nav button:first-child {

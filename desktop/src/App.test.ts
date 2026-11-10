@@ -635,6 +635,17 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
   });
 
+  it('names the narrow window pages Media, Viewer and Enhance, apart from the Preview tab', async () => {
+    await mountWith(readySnapshot([image('photo', true)]));
+    const pages = within(screen.getByRole('navigation', { name: 'Workspace' }));
+    expect(pages.getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
+      'Media 1',
+      'Viewer',
+      'Enhance',
+    ]);
+    expect(pages.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
   it('makes the real benchmark discoverable and starts it from the View menu', async () => {
     const user = await mountWith(readySnapshot());
 

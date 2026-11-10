@@ -2684,11 +2684,11 @@
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
   <header class="toolbar" data-tauri-drag-region>
-    <nav class="compact-nav" aria-label="Workspace">
+    <nav class="compact-nav view-switch pane-tabs" aria-label="Workspace">
       <button class:active={page === 'media'} on:click={() => (page = 'media')}
         >Media <span>{snapshot.media.length}</span></button
       >
-      <button class:active={page === 'preview'} on:click={() => (page = 'preview')}>Preview</button>
+      <button class:active={page === 'preview'} on:click={() => (page = 'preview')}>Viewer</button>
       <button class:active={page === 'enhance'} on:click={() => (page = 'enhance')}>Enhance</button>
     </nav>
   </header>

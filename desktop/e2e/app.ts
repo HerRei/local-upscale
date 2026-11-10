@@ -16,7 +16,7 @@ export async function openApp(page: Page, scenario: Scenario): Promise<void> {
 
 /** Below 1280 px the three panes become pages behind the Workspace navigation. */
 export async function showPane(page: Page, pane: Pane): Promise<void> {
-  const label = { media: 'Media', preview: 'Preview', enhance: 'Enhance' }[pane];
+  const label = { media: 'Media', preview: 'Viewer', enhance: 'Enhance' }[pane];
   const button = page
     .getByRole('navigation', { name: 'Workspace' })
     .getByRole('button', { name: label, exact: true });
