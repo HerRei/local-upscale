@@ -730,11 +730,7 @@ fn handle_worker_envelope(
     );
     // Once cancelling, late progress must not restore "Enhancing" or enable
     // controls. Measurements may still update while the GPU drains.
-    if cancellation.requested_at.is_some()
-        && cancellation.job_ids.contains(&job_id)
-        && !terminal
-        && envelope.message_type != "video_memory"
-    {
+    if cancellation.is_cancelling(&job_id) && !terminal && envelope.message_type != "video_memory" {
         return;
     }
     // A photo saved off screen needs no full preview: nothing would show it.
