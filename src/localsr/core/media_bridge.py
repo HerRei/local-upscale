@@ -48,14 +48,6 @@ class MediaBridge:
     system: SystemCodecs | None = None
     user: ExternalFFmpeg | None = None
 
-    def describe(self) -> str:
-        parts = []
-        if self.system is not None:
-            parts.append(self.system.name)
-        if self.user is not None:
-            parts.append(f"FFmpeg {self.user.version} at {self.user.path}")
-        return ", ".join(parts) or "none"
-
     def source_provider(self, path: str, *, audio_only: bool = False) -> Provider | None:
         """The program that can decode this file: the system first, then the user's FFmpeg."""
         if self.system is not None and self.system.readable(path, audio_only=audio_only):

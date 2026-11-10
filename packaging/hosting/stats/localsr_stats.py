@@ -367,7 +367,7 @@ def render(data: dict, now: float) -> str:
     t = data["totals"]
     warning = (
         "<p class=warn>No counted request in the last 7 days. Check <code>localsr-stats</code>, "
-        "the Caddy <code>log</code> block and Tailscale Funnel.</p>" if stale else ""
+        "the Caddy <code>log</code> block and its proxy.</p>" if stale else ""
     )
     return f"""<!doctype html><html lang=en><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>LocalSR stats</title>
@@ -388,7 +388,7 @@ td.bar{{position:relative;min-width:140px}}td.bar span{{position:absolute;inset:
 <div class=tiles>
 <div class=tile><b>{t['visitors']}</b>website visitors, all time<br><span class=mute>unique per day, summed</span></div>
 <div class=tile><b>{t['views']}</b>page views, all time</div>
-<div class=tile><b>{t['downloads']}</b>downloads, all time<br><span class=mute>Mac mini: per file, person and day · GitHub: every download</span></div>
+<div class=tile><b>{t['downloads']}</b>downloads, all time<br><span class=mute>Hosted files: per file, person and day · GitHub: every download</span></div>
 <div class=tile><b>{t['update_checks']}</b>app update checks, all time</div>
 </div>
 <h2>Last 30 days</h2><div class=wrap><table><thead><tr><th>Day</th><th>Visitors</th><th>Views</th>

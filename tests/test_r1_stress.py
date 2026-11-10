@@ -259,7 +259,7 @@ def test_output_writer_double_cleanup_idempotency():
     Verifies that calling OutputWriter.cleanup() multiple times is safe and idempotent.
     """
     writer = OutputWriter((3, 10, 10), dtype=np.uint8)
-    dat_path = writer.get_path()
+    dat_path = writer.temp_path
     assert os.path.exists(dat_path)
 
     # First cleanup
@@ -282,7 +282,7 @@ def test_worker_run_job_memmap_cleanup_normal_completion(tmp_path, monkeypatch):
 
     # Real OutputWriter creating a real .dat file on disk
     writer = OutputWriter((3, 20, 20), dtype=np.uint8)
-    dat_file_path = writer.get_path()
+    dat_file_path = writer.temp_path
 
     assert os.path.exists(dat_file_path), "Real memmap .dat file must exist initially"
 
@@ -334,7 +334,7 @@ def test_worker_run_job_memmap_cleanup_on_cancellation(tmp_path):
     server.model_adapter = StressDummyModelAdapter(scale=2)
 
     writer = OutputWriter((3, 20, 20), dtype=np.uint8)
-    dat_file_path = writer.get_path()
+    dat_file_path = writer.temp_path
     assert os.path.exists(dat_file_path)
 
     class CancellingEngine:
@@ -383,7 +383,7 @@ def test_worker_run_job_memmap_cleanup_on_forced_exception(tmp_path):
     server.model_adapter = StressDummyModelAdapter(scale=2)
 
     writer = OutputWriter((3, 20, 20), dtype=np.uint8)
-    dat_file_path = writer.get_path()
+    dat_file_path = writer.temp_path
     assert os.path.exists(dat_file_path)
 
     class FailingSaveEngine:

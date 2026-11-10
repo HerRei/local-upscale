@@ -4,9 +4,6 @@ import gzip
 import hashlib
 import io
 import json
-import os
-import shutil
-import subprocess
 import sys
 import tarfile
 import zipfile
@@ -18,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import backend_wheelhouse
 from prepare_engine_payload import prepare
 from release_targets import ROOT, targets, validate_manifest
-from tauri_public_assets import prepare_installer
 
 
 def test_engine_payload_streams_bounded_parts_with_exact_contents(tmp_path: Path):
@@ -44,35 +40,6 @@ def test_engine_payload_streams_bounded_parts_with_exact_contents(tmp_path: Path
     }
     assert manifest["file_count"] == 2
     assert manifest["unpacked_bytes"] == sum(map(len, contents.values()))
-
-
-def test_large_appimage_has_a_verified_reassembly_script(tmp_path: Path):
-    source = tmp_path / "LocalSR.AppImage"
-    source.write_bytes(b"linux-appimage" * 20)
-    output = tmp_path / "output"
-    output.mkdir()
-    records = prepare_installer(source, output, part_bytes=51)
-    assert all(item["size"] <= 51 for item in records[:-1])
-    script = output / records[-1]["filename"]
-    if sys.platform == "win32":
-        return  # The reassembly helper targets Linux, and Windows need not have Bash.
-    bash = shutil.which("bash")
-    assert bash
-    environment = os.environ.copy()
-    if sys.platform == "darwin":
-        # macOS's Perl shasum has the same check interface for this Linux helper.
-        shims = tmp_path / "shims"
-        shims.mkdir()
-        checksum = shims / "sha256sum"
-        checksum.write_text('#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n')
-        checksum.chmod(0o755)
-        environment["PATH"] = str(shims) + os.pathsep + environment["PATH"]
-    subprocess.run([bash, str(script)], check=True, env=environment)
-    assert (output / source.name).read_bytes() == source.read_bytes()
-    (output / source.name).unlink()
-    (output / records[0]["filename"]).write_bytes(b"corrupted")
-    assert subprocess.run([bash, str(script)], env=environment).returncode != 0
-    assert not (output / source.name).exists()
 
 
 def test_wheelhouse_reuse_verifies_files_and_invalidates_changed_locks(tmp_path: Path, monkeypatch):

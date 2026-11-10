@@ -1,6 +1,6 @@
 # Dependency updates, one grouped PR per ecosystem and week (docs/dependency-updates.md).
-# Ecosystems run on different days so their CI chains don't queue for the one Mac mini
-# slot at once. Only the "dev-tools" groups can merge themselves
+# Ecosystems run on different days to spread out their CI workloads.
+# Only the "dev-tools" groups can merge themselves
 # (.github/workflows/dependabot-automerge.yml); everything else waits for a review.
 version: 2
 updates:

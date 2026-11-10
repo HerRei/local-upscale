@@ -1,11 +1,10 @@
-"""Temporal video-engine scaffolding: windows, stitching, bundles, routing."""
+"""Video-engine bundles, routing, and downloads."""
 
 import hashlib
 import json
 import threading
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from localsr.core.model_catalog import (
@@ -13,7 +12,6 @@ from localsr.core.model_catalog import (
     ModelFile,
     ModelStore,
 )
-from localsr.core.temporal import clip_windows, crossfade_weights, stitch_clips
 from localsr.core.video_engines import (
     SPANDREL_IMAGE_KIND,
     TemporalEngineUnavailable,
@@ -61,77 +59,6 @@ def test_seedvr2_text_embeddings_use_validated_safetensors(monkeypatch):
     assert tuple(embeddings["texts_neg"][0].shape) == (64, 5120)
     assert embeddings["texts_pos"][0].dtype == torch.bfloat16
     assert embeddings["texts_neg"][0].dtype == torch.bfloat16
-
-
-def test_clip_windows_cover_every_frame_without_gaps():
-    for total, window, overlap in [
-        (1, 5, 2),
-        (5, 5, 2),
-        (6, 5, 2),
-        (100, 16, 4),
-        (17, 16, 15),
-    ]:
-        windows = clip_windows(total, window, overlap)
-        covered = set()
-        for start, end in windows:
-            assert 0 <= start <= end < total
-            covered.update(range(start, end + 1))
-        assert covered == set(range(total)), (total, window, overlap)
-        # Consecutive windows overlap or touch — never leave a gap.
-        for (_, prev_end), (next_start, _) in zip(windows, windows[1:], strict=False):
-            assert next_start <= prev_end + 1
-
-
-def test_clip_windows_share_exactly_the_requested_overlap_mid_sequence():
-    windows = clip_windows(100, 16, 4)
-    for (_, prev_end), (next_start, _) in zip(windows[:-2], windows[1:-1], strict=False):
-        assert prev_end - next_start + 1 == 4
-
-
-def test_clip_windows_reject_bad_parameters():
-    with pytest.raises(ValueError):
-        clip_windows(10, 0, 0)
-    with pytest.raises(ValueError):
-        clip_windows(10, 4, 4)
-
-
-def test_crossfade_weights_are_strictly_interior_and_rising():
-    weights = crossfade_weights(4)
-    assert weights.shape == (4,)
-    assert np.all(weights > 0) and np.all(weights < 1)
-    assert np.all(np.diff(weights) > 0)
-    assert crossfade_weights(0).shape == (0,)
-
-
-def test_stitch_clips_emits_each_frame_once_and_blends_boundaries():
-    total, window, overlap = 12, 5, 2
-    windows = clip_windows(total, window, overlap)
-
-    # Fake engine: each clip returns frames filled with (frame_index + clip_bias).
-    def clips():
-        for clip_index, (start, end) in enumerate(windows):
-            bias = 10 * clip_index
-            yield [
-                np.full((4, 4, 3), index + bias, dtype=np.uint8) for index in range(start, end + 1)
-            ]
-
-    stitched = list(stitch_clips(clips(), windows))
-    assert len(stitched) == total
-    # Frames outside overlaps are passed through untouched.
-    assert int(stitched[0][0, 0, 0]) == 0
-    # Frames inside an overlap mix both neighbours: value strictly between
-    # the outgoing clip's and the incoming clip's versions of that frame.
-    start_2 = windows[1][0]
-    outgoing = start_2  # clip 0 value for that frame
-    incoming = start_2 + 10  # clip 1 value
-    blended = int(stitched[start_2][0, 0, 0])
-    assert outgoing < blended < incoming
-
-
-def test_stitch_clips_rejects_wrong_clip_length():
-    windows = [(0, 4), (3, 7)]
-    with pytest.raises(ValueError):
-        list(stitch_clips(iter([[np.zeros((2, 2, 3))] * 3]), [windows[0]]))
 
 
 def _bundle_fixture(tmp_path, payloads):

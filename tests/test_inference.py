@@ -15,7 +15,7 @@ from localsr.core.inference import (
     _resolve_torch_device,
 )
 from localsr.core.model_adapter import NormalizedModelInfo
-from localsr.core.model_catalog import get_model_by_id
+from localsr.core.model_catalog import CATALOG_BY_ID
 
 
 class DummyModel(nn.Module):
@@ -161,7 +161,7 @@ def test_inference_dimensions():
 
 
 def test_catalog_native_x2_contract_covers_tiling_alpha_and_cancellation(tmp_path):
-    catalog_model = get_model_by_id("realesrgan_x2plus")
+    catalog_model = CATALOG_BY_ID.get("realesrgan_x2plus")
     assert catalog_model is not None
     assert catalog_model.native_scale == 2
 

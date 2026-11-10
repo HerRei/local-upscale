@@ -37,8 +37,6 @@ class NormalizedModelInfo:
     filename: str
     warnings: list[str]
     size_requirements_square: bool = False
-    parameter_count: int = 0
-    model_file_size: int = 0
 
 
 class _DirectMLDescriptor:
@@ -151,8 +149,6 @@ class ModelAdapter:
                 "explicitly enabled. Treat it as executable code."
             )
 
-        parameter_count = sum(parameter.numel() for parameter in self.parsed.model.parameters())
-
         return NormalizedModelInfo(
             architecture=arch,
             scale=scale,
@@ -165,8 +161,6 @@ class ModelAdapter:
             filename=os.path.basename(path),
             warnings=warnings,
             size_requirements_square=req_square,
-            parameter_count=parameter_count,
-            model_file_size=os.path.getsize(normalized_path),
         )
 
     def load(

@@ -3,7 +3,6 @@ import io
 
 import pytest
 
-from localsr.core.estimator import estimate_resources
 from localsr.core.model_catalog import (
     CATALOG_REVISION,
     MODEL_CATALOG,
@@ -105,88 +104,3 @@ def test_bad_model_checksum_removes_partial_download(tmp_path):
 
     assert not destination.exists()
     assert not (tmp_path / "test.pth.part").exists()
-
-
-def test_estimate_blocks_an_unsafe_device_configuration():
-    estimate = estimate_resources(
-        image_width=4000,
-        image_height=3000,
-        scale=4,
-        tile_size=512,
-        halo=64,
-        precision="fp32",
-        device_type="cuda",
-        available_device_memory=512 * 1024**2,
-        available_system_memory=16 * 1024**3,
-        available_disk=100 * 1024**3,
-        model_file_size=160 * 1024**2,
-        memory_factor=1.8,
-        time_factor=1.8,
-    )
-
-    assert estimate.blocking
-    assert estimate.tile_count > 0
-    assert any("smaller tile" in warning for warning in estimate.warnings)
-
-
-def test_mps_memory_pressure_warns_but_does_not_block():
-    estimate = estimate_resources(
-        image_width=4000,
-        image_height=3000,
-        scale=4,
-        tile_size=512,
-        halo=64,
-        precision="fp32",
-        device_type="mps",
-        available_device_memory=512 * 1024**2,
-        available_system_memory=512 * 1024**2,
-        available_disk=100 * 1024**3,
-        model_file_size=160 * 1024**2,
-        memory_factor=1.8,
-        time_factor=1.8,
-    )
-
-    assert not estimate.blocking
-    assert any("run is still allowed" in warning.lower() for warning in estimate.warnings)
-
-
-def test_measured_estimate_uses_a_narrower_calibrated_range():
-    common = {
-        "image_width": 1536,
-        "image_height": 1024,
-        "scale": 4,
-        "tile_size": 128,
-        "halo": 16,
-        "precision": "fp32",
-        "device_type": "mps",
-        "available_device_memory": 8 * 1024**3,
-        "available_system_memory": 8 * 1024**3,
-        "available_disk": 100 * 1024**3,
-        "model_file_size": 80 * 1024**2,
-    }
-    first_run = estimate_resources(**common)
-    calibrated = estimate_resources(**common, measured_seconds_per_megapixel=30.0)
-
-    assert not first_run.calibrated
-    assert calibrated.calibrated
-    assert calibrated.seconds_high / calibrated.seconds_low < 2
-    assert first_run.seconds_high / first_run.seconds_low > 4
-
-
-@pytest.mark.parametrize("free", [0, 1])
-def test_insufficient_disk_including_zero_blocks(free):
-    estimate = estimate_resources(
-        image_width=100,
-        image_height=100,
-        scale=2,
-        tile_size=32,
-        halo=0,
-        precision="fp32",
-        device_type="cpu",
-        available_device_memory=None,
-        available_system_memory=None,
-        available_disk=free,
-        model_file_size=100,
-    )
-    assert estimate.blocking
-    assert any("disk space" in warning for warning in estimate.warnings)

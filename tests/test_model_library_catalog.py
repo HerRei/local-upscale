@@ -6,7 +6,7 @@ import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
-from localsr.core.model_catalog import MODEL_CATALOG, CatalogModel, ModelPurpose, get_model_by_id
+from localsr.core.model_catalog import CATALOG_BY_ID, MODEL_CATALOG, CatalogModel, ModelPurpose
 from localsr.core.presets import PresetMode, rank_models_for_preset, select_model_for_preset
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,11 +30,11 @@ def test_every_catalog_model_has_a_role_and_a_stage() -> None:
 
 
 def test_fix_chips_map_to_the_expected_checkpoints() -> None:
-    assert get_model_by_id("fbcnn_color").fixes == ("jpeg",)
-    assert get_model_by_id("nafnet_gopro_deblur").fixes == ("blur",)
-    assert get_model_by_id("denoise_realplksr_1x").fixes == ("noise",)
-    assert get_model_by_id("nafnet_sidd_width64").fixes == ("noise",)
-    assert get_model_by_id("span_photo_x4").fixes == ()
+    assert CATALOG_BY_ID.get("fbcnn_color").fixes == ("jpeg",)
+    assert CATALOG_BY_ID.get("nafnet_gopro_deblur").fixes == ("blur",)
+    assert CATALOG_BY_ID.get("denoise_realplksr_1x").fixes == ("noise",)
+    assert CATALOG_BY_ID.get("nafnet_sidd_width64").fixes == ("noise",)
+    assert CATALOG_BY_ID.get("span_photo_x4").fixes == ()
 
 
 def test_rights_status_is_separate_from_support_tier() -> None:
@@ -76,16 +76,16 @@ def test_every_desktop_catalog_entry_has_a_source_and_license_name() -> None:
 
 
 def test_display_names_read_like_the_library_rows() -> None:
-    assert get_model_by_id("realplksr_nomoswebphoto_x4").display_name == (
+    assert CATALOG_BY_ID.get("realplksr_nomoswebphoto_x4").display_name == (
         "RealPLKSR ×4 NomosWebPhoto"
     )
-    assert get_model_by_id("span_photo_x4").display_name == "SPAN ×4 NomosUni"
-    assert get_model_by_id("hat_l_x4_imagenet").display_name == "HAT-L ×4 ImageNet"
-    assert get_model_by_id("fbcnn_color").display_name == "FBCNN Color"
+    assert CATALOG_BY_ID.get("span_photo_x4").display_name == "SPAN ×4 NomosUni"
+    assert CATALOG_BY_ID.get("hat_l_x4_imagenet").display_name == "HAT-L ×4 ImageNet"
+    assert CATALOG_BY_ID.get("fbcnn_color").display_name == "FBCNN Color"
 
 
 def test_presets_skip_checkpoints_with_unresolved_rights() -> None:
-    base = get_model_by_id("realplksr_nomoswebphoto_x4")
+    base = CATALOG_BY_ID.get("realplksr_nomoswebphoto_x4")
     assert base is not None
     tempting = replace(
         base,

@@ -92,7 +92,7 @@ def test_hat_odd_and_non_divisible_dimensions(hat_checkpoint_path, tmp_path, wid
         safe_memory=False,
     )
 
-    memmap_path = writer.get_path()
+    memmap_path = writer.temp_path
     assert os.path.exists(memmap_path), f"Memmap file {memmap_path} must exist before cleanup"
 
     arr = writer.get_array()
@@ -206,7 +206,7 @@ def test_hat_memmap_file_lifecycle_and_cancellation(hat_checkpoint_path, tmp_pat
         safe_memory=False,
     )
 
-    memmap_path = writer.get_path()
+    memmap_path = writer.temp_path
     assert os.path.exists(memmap_path), "Memmap file must exist during active processing"
     expected_bytes = 3 * (100 * 2) * (100 * 2)  # uint8 -> 1 byte per element
     assert os.path.getsize(memmap_path) == expected_bytes, (

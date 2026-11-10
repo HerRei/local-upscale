@@ -249,14 +249,14 @@ Reduce GPU memory is available for NVIDIA CUDA and AMD ROCm. Apple Metal and CPU
 ### RIFE checkpoint comparison
 
 On 2026-11-09 we compared the MIT-licensed Practical-RIFE 4.25, 4.26 and
-4.25 lite checkpoints on ddp's CPU (PyTorch 2.13 CPU, four threads). Each
+4.25 lite checkpoints on a CPU (PyTorch 2.13 CPU, four threads). Each
 640×360 synthetic 60 fps clip supplied six even-frame pairs; the intervening
 frames were held out. Scores are mean per-frame RGB PSNR (dB) and Gaussian
 11×11 RGB SSIM. The scene-cut guard was enabled. The 1080p times are median
 synthesis times for three frames after warm-up; they exclude decoding. Lite
 uses its upstream network dimensions and scales. No external footage was named
-in the research, and LPIPS was unavailable. The ddp container had CPU-only
-PyTorch and no `ddp-busy` command, so no GPU result was collected.
+in the research, and LPIPS was unavailable. The environment had CPU-only
+PyTorch, so no GPU result was collected.
 
 | Synthetic clip | 4.25 PSNR / SSIM | 4.26 PSNR / SSIM | 4.25 lite PSNR / SSIM |
 | --- | ---: | ---: | ---: |

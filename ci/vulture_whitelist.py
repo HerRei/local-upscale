@@ -1,9 +1,9 @@
 # ruff: noqa
-# Reviewed vulture allowlist for `vulture src scripts packaging ci/vulture_whitelist.py`.
+# Vulture allowlist for `vulture src scripts packaging ci/vulture_whitelist.py`.
 # Every name here is used in a way static analysis cannot see. Add a name only
 # after confirming that; delete code instead when it is genuinely unused.
 
-# Serialized dataclass fields: protocol messages, benchmark/estimate reports and
+# Serialized dataclass fields: protocol messages, benchmark reports and
 # catalog entries are emitted through dataclasses.asdict() or the catalog export.
 VIDEO  # ModelPurpose enum member used by catalog data and the desktop
 allow_unverified_checkpoint
@@ -13,9 +13,6 @@ completed_frames
 completed_tiles
 cpu_score
 cv_percent
-device_memory_bytes
-device_memory_remaining
-disk_remaining
 end_to_end_fps
 engine_kind
 engine_version
@@ -53,18 +50,14 @@ preview_height
 process_ram
 processed_megapixels_per_second
 processing_stage
-rationale
-requires_download
 restart_required
 scratch_directory
 shared_memory
 source_url
 supported_protocol_version
 system_compressed_memory
-system_memory_bytes
 system_memory_pressure_level
 system_memory_pressure_percent
-system_memory_remaining
 system_ram_available
 system_ram_total
 system_swap_total
@@ -77,7 +70,6 @@ video_low_memory
 video_model_id
 vram_estimate_mb
 warmup_count
-working_disk_bytes
 workload_version
 
 # Worker protocol request contracts exercised by tests and external hosts.
@@ -120,15 +112,9 @@ collect_runtime  # packaging/tauri_worker.spec
 filter_binaries  # packaging/tauri_worker.spec
 
 # Public helpers kept by decision and exercised by tests.
-get_model_by_id
-clip_windows  # core/temporal.py scaffolding
-stitch_clips
 _.size_megabytes
 _.file_size_bytes
 _.total_size_bytes
-_.get_path  # OutputWriter memmap path, used by tests
-get_preset_model  # reference preset behavior mirrored by the desktop
-resolve_settings_for_model
 
 # Threading server knobs read by the stdlib, never by our own code.
 daemon_threads  # socketserver.ThreadingMixIn, packaging/hosting/stats
@@ -140,9 +126,11 @@ EditJobRequest  # protocol/messages.py: the edit request shape, built by the des
 runtime_path  # EditJobRequest
 accepted_terms  # EditJobRequest
 
-# Public display helper on the codec bridge, kept by decision.
 
 # ctypes structure field written for Windows to read (core/gpu_guard.py job object).
 LimitFlags  # JOBOBJECT_BASIC_LIMIT_INFORMATION
 
 ImageBatchRequest  # protocol/messages.py: additive batch envelope built by the Rust host
+
+# Catalog field exported to the desktop catalog with asdict() and read by the host and the front end.
+time_factor
