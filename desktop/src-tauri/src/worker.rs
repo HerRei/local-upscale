@@ -18,6 +18,7 @@ use tauri_plugin_notification::NotificationExt;
 use crate::{
     error::{AppError, AppResult},
     pipe_lines::{read_frame, skip_line, Frame},
+    process_tree::{lead_own_group, ProcessTree},
     settings,
     state::{emit_state_changed, lock, AppState},
     types::{
@@ -171,6 +172,9 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The engine starts FFmpeg and the system media helper. Stopping the engine has
+    // to stop them too, so they stay in its process group (or Job Object).
+    lead_own_group(&mut command);
     if let Some(directory) = specification.working_directory {
         command.current_dir(directory);
     }
@@ -197,6 +201,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         ))
     })?;
     state.worker.pid.store(child.id(), Ordering::SeqCst);
+    let tree = ProcessTree::new(&child);
     let stdin = child
         .stdin
         .take()
@@ -315,12 +320,14 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             }
             if state.worker.shutting_down.load(Ordering::SeqCst) {
                 stopped_by_app = true;
+                tree.terminate();
                 let _ = child.kill();
                 break child.wait();
             }
             if overflowed.load(Ordering::SeqCst) {
                 // Not an app-requested stop: the engine failed, and the restart
                 // counter says so.
+                tree.terminate();
                 let _ = child.kill();
                 break child.wait();
             }
@@ -333,6 +340,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 // The engine asked for a restart but has not exited, for example because
                 // freeing a lost GPU hangs; the queue waits for its replacement.
                 stopped_by_app = true;
+                tree.terminate();
                 let _ = child.kill();
                 break child.wait();
             }
@@ -349,12 +357,16 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     }
                     emit_state_changed(&app);
                     stopped_by_app = true;
+                    tree.terminate();
                     let _ = child.kill();
                     break child.wait();
                 }
             }
             thread::sleep(Duration::from_millis(100));
         };
+        // Whatever ended the engine, nothing it started may outlive it: a helper
+        // would keep writing into scratch the host removes next.
+        tree.terminate();
         if !stopped_by_app && engine_crashed(&status) {
             state
                 .worker

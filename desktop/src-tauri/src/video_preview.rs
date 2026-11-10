@@ -14,6 +14,7 @@ use std::{
 use crate::{
     error::{AppError, AppResult},
     pipe_lines::{read_frame, Frame},
+    process_tree::{lead_own_group, ProcessTree},
     state::lock,
 };
 use sha2::{Digest, Sha256};
@@ -215,7 +216,11 @@ fn run_conversion(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The converter starts FFmpeg or the system media helper. They run in its group,
+    // so stopping the conversion stops them too.
+    lead_own_group(&mut command);
     let mut child = command.spawn()?;
+    let tree = ProcessTree::new(&child);
     let stdout = child.stdout.take().expect("piped converter stdout");
     let stderr = child.stderr.take().expect("piped converter stderr");
     let overflowed = Arc::new(AtomicBool::new(false));
@@ -259,6 +264,7 @@ fn run_conversion(
             None
         };
         if let Some(message) = problem {
+            tree.terminate();
             let _ = child.kill();
             let _ = child.wait();
             break Err(AppError::Validation(message.into()));
@@ -273,12 +279,16 @@ fn run_conversion(
             }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(error) => {
+                tree.terminate();
                 let _ = child.kill();
                 let _ = child.wait();
                 break Err(error.into());
             }
         }
     };
+    // Whatever ended the converter, nothing it started may keep the pipes or the
+    // work folder.
+    tree.terminate();
     let _ = progress.join();
     let message = errors.join().unwrap_or_default();
     match result {
@@ -372,6 +382,83 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("too long"));
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    fn wait_until_stopped(pid: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while crate::process_tree::process_is_running(pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        !crate::process_tree::process_is_running(pid)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_a_conversion_ends_the_helpers_it_started() {
+        let work = tempfile::tempdir().unwrap();
+        let pids = tempfile::tempdir().unwrap();
+        let pid_file = pids.path().join("helper.pid");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancel);
+        let started = Instant::now();
+        let mut command = Command::new("/bin/sh");
+        // Like FFmpeg under the Python converter: a helper that outlives a kill of
+        // its parent unless the whole tree is ended.
+        command
+            .arg("-c")
+            .arg("sleep 60 & echo $! > \"$1\"; echo '{\"frame\":1}'; wait")
+            .arg("sh")
+            .arg(&pid_file);
+        let result = run_conversion(
+            command,
+            work.path(),
+            cancel,
+            move |_| signal.store(true, Ordering::SeqCst),
+            Duration::from_secs(20),
+            1 << 30,
+        );
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        // The helper holds the converter's output pipe; ending it frees the reader.
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let helper: u32 = fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(wait_until_stopped(helper), "the helper still runs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_way_a_conversion_ends_ends_its_helpers() {
+        let pids = tempfile::tempdir().unwrap();
+        for (index, how) in ["exit 0", "exit 1", "sleep 30"].into_iter().enumerate() {
+            let work = tempfile::tempdir().unwrap();
+            let pid_file = pids.path().join(format!("helper-{index}.pid"));
+            let mut command = Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg(format!(
+                    "sleep 60 > /dev/null 2>&1 & echo $! > \"$1\"; {how}"
+                ))
+                .arg("sh")
+                .arg(&pid_file);
+            let _ = run_conversion(
+                command,
+                work.path(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+                Duration::from_millis(1500),
+                1 << 30,
+            );
+            let helper: u32 = fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(wait_until_stopped(helper), "{how}: the helper still runs");
+        }
     }
 
     #[cfg(unix)]

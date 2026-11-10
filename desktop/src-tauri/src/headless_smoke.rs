@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::{
     pipe_lines::{read_frame, Frame},
+    process_tree::{lead_own_group, ProcessTree},
     types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
     worker::MAX_ENGINE_LINE_BYTES,
 };
@@ -174,6 +175,8 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PYTHONUNBUFFERED", "1");
+    // Whatever the engine starts ends with it.
+    lead_own_group(&mut command);
 
     let mut child = command.spawn().map_err(|error| {
         format!(
@@ -181,6 +184,7 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
             path.display()
         )
     })?;
+    let tree = ProcessTree::new(&child);
     let mut stdin = child
         .stdin
         .take()
@@ -242,7 +246,8 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
     let handshake = wait_for_handshake(&mut child, &mut stdin, &receiver, timeout);
     let shutdown = send_message(&mut stdin, &json!({"type": "shutdown_request", "data": {}}));
     drop(stdin);
-    let exit_status = wait_for_exit(&mut child, shutdown_timeout(timeout));
+    let exit_status = wait_for_exit(&mut child, &tree, shutdown_timeout(timeout));
+    tree.terminate();
     let _ = stdout_thread.join();
     let stderr = stderr_thread.join().unwrap_or_default();
 
@@ -366,7 +371,11 @@ fn send_message(stdin: &mut ChildStdin, message: &Value) -> Result<(), String> {
         .map_err(|error| format!("could not write to the bundled inference engine: {error}"))
 }
 
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<ExitStatus, String> {
+fn wait_for_exit(
+    child: &mut Child,
+    tree: &ProcessTree,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child
@@ -376,6 +385,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<ExitStatus, Str
             return Ok(status);
         }
         if Instant::now() >= deadline {
+            tree.terminate();
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!(
