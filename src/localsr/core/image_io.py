@@ -351,6 +351,20 @@ def _develop_raw(path: str) -> np.ndarray:
         raise
 
 
+def _picture_of_planes(planes: np.ndarray) -> Image.Image:
+    """An RGB picture of a (3, H, W) result, copied in strips.
+
+    Handing Pillow the whole transposed array first copies it to a contiguous one: with
+    the picture itself, two full-size copies of a result that can be 600 MB.
+    """
+    _, height, width = planes.shape
+    picture = Image.new("RGB", (width, height))
+    for top in range(0, height, 256):
+        strip = np.ascontiguousarray(np.transpose(planes[:, top : top + 256, :], (1, 2, 0)))
+        picture.paste(Image.fromarray(strip, mode="RGB"), (0, top))
+    return picture
+
+
 class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
@@ -601,8 +615,7 @@ class ImageManager:
         cancel_event: threading.Event | None = None,
     ):
 
-        arr = np.transpose(writer_mmap, (1, 2, 0))
-        out_img = Image.fromarray(arr, mode="RGB")
+        out_img = _picture_of_planes(writer_mmap)
 
         final_scale = scale if output_scale is None else int(output_scale)
         if final_scale < 1 or final_scale > scale:

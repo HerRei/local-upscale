@@ -406,3 +406,36 @@ def test_the_desktop_host_mirror_agrees_with_the_shared_cases():
         assert got == case["bytes"]
     for case in cases["sizes"]:
         assert disk_space.format_size(case["bytes"]) == case["text"]
+
+
+def test_saving_a_result_never_copies_it_whole_into_one_array(tmp_path, monkeypatch):
+    """A transposed array handed to Pillow is first copied to a contiguous one, whole: a
+    second full-size copy of a result that can be 600 MB, beside the picture itself."""
+    from localsr.core.image_io import ImageManager
+    from localsr.core.output_writer import OutputWriter
+
+    handed = []
+    real = Image.fromarray
+    monkeypatch.setattr(
+        Image,
+        "fromarray",
+        lambda array, *a, **k: handed.append(array.nbytes) or real(array, *a, **k),
+    )
+    with OutputWriter((3, 1200, 900), temporary_directory=tmp_path) as writer:
+        writer.mmap[0] = 200
+        writer.mmap[1] = 100
+        writer.mmap[2] = 50
+        ImageManager().save(
+            writer,
+            str(tmp_path / "out.png"),
+            format="png",
+            scale=4,
+            output_scale=4,
+            temporary_directory=tmp_path,
+        )
+        whole = writer.mmap.nbytes
+    assert handed and max(handed) <= whole // 4
+    with Image.open(tmp_path / "out.png") as saved:
+        assert saved.size == (900, 1200)
+        assert saved.getpixel((0, 0)) == (200, 100, 50)
+        assert saved.getpixel((899, 1199)) == (200, 100, 50)
