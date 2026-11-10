@@ -36,6 +36,16 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// The name an archive entry is known by when unpacked: its components in lower case,
+/// so `d//f`, `d/./f` and `D/F` are one file and a later entry cannot replace an
+/// earlier one under another spelling.
+fn entry_key(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn safe_relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && path
@@ -287,7 +297,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             let relative = entry.path()?.into_owned();
             if !safe_relative(&relative)
                 || !entry.header().entry_type().is_file()
-                || !paths.insert(relative.to_string_lossy().to_lowercase())
+                || !paths.insert(entry_key(&relative))
             {
                 return Err(invalid(
                     "unsafe, duplicate, or non-file engine archive entry",
@@ -1105,6 +1115,16 @@ mod tests {
             "{why}"
         );
         assert_eq!(engine_leftovers(root), Vec::<String>::new(), "{why}");
+    }
+
+    #[test]
+    fn entries_with_the_same_components_are_one_file_whatever_the_spelling() {
+        let key = |name: &str| entry_key(Path::new(name));
+        assert_eq!(key("d/f"), key("d//f"));
+        assert_eq!(key("d/f"), key("d/./f"));
+        assert_eq!(key("d/f"), key("D/F"));
+        assert_ne!(key("d/f"), key("d/g"));
+        assert_ne!(key("d/f"), key("df"));
     }
 
     /// A part whose size is right but whose bytes are not the ones the manifest names.
