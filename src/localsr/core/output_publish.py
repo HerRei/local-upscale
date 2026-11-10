@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -28,13 +29,18 @@ def publish_output(
 ) -> None:
     """Give a finished temporary file its final name, failing if that name is taken.
 
-    A hard link is atomic and refuses an existing name on APFS, NTFS and ext4;
-    the temporary is removed afterwards. Where the file system has no hard
-    links (exFAT/FAT sticks, some network shares), the file is copied into an
-    exclusively created destination instead. That never replaces a file either,
-    but it is not atomic: another program can see the name while it is still
-    being filled, and a crash mid-copy leaves a partial file. A copy that fails
-    is removed again.
+    The temporary lies in the destination's own folder, so no step copies bytes.
+    Each step refuses an existing name and leaves that file untouched:
+
+    1. A hard link (APFS, NTFS, ext4) is atomic; the temporary is removed afterwards.
+    2. Where the file system has no hard links (exFAT/FAT sticks, some network
+       shares), an atomic rename that refuses to replace: ``os.rename`` on
+       Windows, ``renameat2`` on Linux, ``renamex_np`` on macOS. The final name
+       is either absent or complete.
+    3. Where that is not available either, the name is claimed with an empty
+       file and the temporary is renamed over it. The final name never holds
+       partial content, but if the process dies between the two operations it
+       holds an empty file while the complete result stays in the temporary.
 
     Raises ``OutputExistsError`` when the name is taken. The temporary stays in
     place for the caller to remove on any failure.
@@ -47,7 +53,9 @@ def publish_output(
     except FileExistsError:
         raise OutputExistsError(destination) from None
     except OSError:
-        _copy_exclusively(temporary, destination)
+        if not _rename_without_replacing(temporary, destination):
+            _claim_then_replace(temporary, destination)
+        return
     # The callers remove the temporary again if this fails.
     try:
         temporary.unlink()
@@ -55,20 +63,70 @@ def publish_output(
         pass
 
 
-def _copy_exclusively(temporary: Path, destination: Path) -> None:
+# "Not supported here" answers of the no-replace rename calls; anything else is a real error.
+_UNSUPPORTED = {
+    code
+    for code in (
+        getattr(errno, name, None) for name in ("ENOSYS", "EINVAL", "ENOTSUP", "EOPNOTSUPP")
+    )
+    if code is not None
+}
+
+
+def _rename_without_replacing(temporary: Path, destination: Path) -> bool:
+    """Step 2. False when this system or file system cannot do it."""
     try:
-        target = open(destination, "xb")
+        if sys.platform == "win32":
+            os.rename(temporary, destination)  # fails when the destination exists
+            return True
+        return _native_rename_noreplace(temporary, destination)
     except FileExistsError:
         raise OutputExistsError(destination) from None
+    except OSError as error:
+        if error.errno in _UNSUPPORTED:
+            return False
+        raise
+
+
+def _native_rename_noreplace(temporary: Path, destination: Path) -> bool:
+    """``renameat2(RENAME_NOREPLACE)`` or ``renamex_np(RENAME_EXCL)``; False when missing."""
     try:
-        with target, open(temporary, "rb") as source:
-            shutil.copyfileobj(source, target, 1024 * 1024)
-            target.flush()
-            os.fsync(target.fileno())
+        library = ctypes.CDLL(None, use_errno=True)
+        old, new = os.fsencode(temporary), os.fsencode(destination)
+        if sys.platform == "darwin":
+            call, arguments = library.renamex_np, (old, new, 0x4)  # RENAME_EXCL
+        elif sys.platform.startswith("linux"):
+            # AT_FDCWD is -100; RENAME_NOREPLACE is 1.
+            call, arguments = library.renameat2, (-100, old, -100, new, 1)
+        else:
+            return False
+    except (AttributeError, OSError):
+        return False
+    ctypes.set_errno(0)
+    if call(*arguments) == 0:
+        return True
+    code = ctypes.get_errno()
+    if code == errno.EEXIST:
+        raise FileExistsError(code, os.strerror(code))
+    raise OSError(code, os.strerror(code))
+
+
+def _claim_then_replace(temporary: Path, destination: Path) -> None:
+    """Step 3: an empty file this call created holds the name until the result replaces it."""
+    try:
+        claim = open(destination, "xb")
+    except FileExistsError:
+        raise OutputExistsError(destination) from None
+    with claim:
+        made = os.fstat(claim.fileno())
+    try:
+        os.replace(temporary, destination)
     except BaseException:
-        # Only this call created the file, so it may remove it.
+        # Remove the placeholder only while it is still the empty file created above.
         try:
-            destination.unlink()
+            now = os.stat(destination)
+            if (now.st_ino, now.st_dev) == (made.st_ino, made.st_dev) and now.st_size == 0:
+                destination.unlink()
         except OSError:
             pass
         raise

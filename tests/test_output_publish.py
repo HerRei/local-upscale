@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import localsr.core.output_publish as output_publish
 import localsr.core.video_io as video_io
 from localsr.core.image_io import ImageManager
 from localsr.core.output_publish import (
@@ -49,8 +51,17 @@ def _save_image(destination: Path, scratch: Path | None = None, cancel_event=Non
     )
 
 
+def _names(directory: Path) -> list[str]:
+    # exFAT volumes mounted on macOS get "._" companion files for extended attributes.
+    return sorted(path.name for path in directory.iterdir() if not path.name.startswith("._"))
+
+
 def _no_temporaries(directory: Path) -> bool:
-    return not [path for path in directory.rglob("*") if path.name.endswith(".tmp")]
+    return not [
+        path
+        for path in directory.rglob("*")
+        if path.name.endswith(".tmp") and not path.name.startswith("._")
+    ]
 
 
 def test_image_published_over_a_file_that_appeared_during_the_job_is_refused(tmp_path, monkeypatch):
@@ -76,7 +87,7 @@ def test_image_case_only_name_collision_keeps_the_first_result(tmp_path):
     with pytest.raises(OutputExistsError, match="Nothing was replaced"):
         _save_image(tmp_path / "a.png")
     assert (tmp_path / "A.png").read_bytes() == first
-    assert len(list(tmp_path.iterdir())) == 1
+    assert len(_names(tmp_path)) == 1
     assert _no_temporaries(tmp_path)
 
 
@@ -239,38 +250,210 @@ def _without_hard_links(monkeypatch, code=errno.EPERM):
     monkeypatch.setattr(os, "link", refuse)
 
 
-@pytest.mark.parametrize("code", [errno.EPERM, errno.ENOTSUP, errno.EINVAL, errno.EXDEV])
-def test_publish_without_hard_links_creates_the_file_exclusively(tmp_path, monkeypatch, code):
-    _without_hard_links(monkeypatch, code)
+def _without_no_replace_rename(monkeypatch):
+    monkeypatch.setattr(output_publish, "_rename_without_replacing", lambda *_args: False)
+
+
+def _force_step(monkeypatch, step):
+    if step >= 2:
+        _without_hard_links(monkeypatch)
+    if step >= 3:
+        _without_no_replace_rename(monkeypatch)
+
+
+def _native_rename_works(tmp_path) -> bool:
+    source, target = tmp_path / ".probe-a", tmp_path / ".probe-b"
+    source.write_bytes(b"")
+    try:
+        return output_publish._native_rename_noreplace(source, target)
+    except OSError:
+        return False
+    finally:
+        for path in (source, target):
+            path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("step", [1, 2, 3])
+def test_each_publish_step_moves_the_file_to_a_new_name(tmp_path, monkeypatch, step):
+    _force_step(monkeypatch, step)
     temporary = tmp_path / ".x.tmp"
     temporary.write_bytes(b"payload" * 100_000)
     publish_output(temporary, tmp_path / "x.bin")
     assert (tmp_path / "x.bin").read_bytes() == b"payload" * 100_000
     assert not temporary.exists()
+    assert _names(tmp_path) == ["x.bin"]
 
 
-def test_publish_without_hard_links_never_replaces_an_existing_file(tmp_path, monkeypatch):
-    _without_hard_links(monkeypatch)
+@pytest.mark.parametrize("code", [errno.EPERM, errno.ENOTSUP, errno.EINVAL, errno.EXDEV])
+def test_publish_without_hard_links_still_publishes(tmp_path, monkeypatch, code):
+    _without_hard_links(monkeypatch, code)
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+    publish_output(temporary, tmp_path / "x.bin")
+    assert (tmp_path / "x.bin").read_bytes() == b"payload"
+    assert not temporary.exists()
+
+
+@pytest.mark.parametrize("step", [1, 2, 3])
+def test_each_publish_step_refuses_an_existing_name_and_keeps_both_files(
+    tmp_path, monkeypatch, step
+):
+    _force_step(monkeypatch, step)
     temporary = tmp_path / ".x.tmp"
     temporary.write_bytes(b"payload")
     (tmp_path / "x.bin").write_bytes(EXISTING)
-    with pytest.raises(OutputExistsError):
+    with pytest.raises(OutputExistsError, match="x.bin"):
         publish_output(temporary, tmp_path / "x.bin")
     assert (tmp_path / "x.bin").read_bytes() == EXISTING
+    assert temporary.read_bytes() == b"payload"
+    assert _names(tmp_path) == [".x.tmp", "x.bin"]
 
 
-def test_failed_copy_without_hard_links_leaves_no_partial_output(tmp_path, monkeypatch):
-    _without_hard_links(monkeypatch)
+def test_the_native_no_replace_rename_works_and_refuses_an_existing_name(tmp_path):
+    if not _native_rename_works(tmp_path):
+        pytest.skip("renameat2/renamex_np is not available on this system or file system")
     temporary = tmp_path / ".x.tmp"
     temporary.write_bytes(b"payload")
+    assert output_publish._native_rename_noreplace(temporary, tmp_path / "x.bin")
+    assert (tmp_path / "x.bin").read_bytes() == b"payload" and not temporary.exists()
+    temporary.write_bytes(b"second")
+    with pytest.raises(FileExistsError):
+        output_publish._native_rename_noreplace(temporary, tmp_path / "x.bin")
+    assert (tmp_path / "x.bin").read_bytes() == b"payload"
+    assert temporary.read_bytes() == b"second"
 
-    def disk_full(*_args, **_kwargs):
-        raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr("localsr.core.output_publish.shutil.copyfileobj", disk_full)
-    with pytest.raises(OSError, match="No space"):
+def test_publish_through_the_native_rename_when_hard_links_are_refused(tmp_path, monkeypatch):
+    if sys.platform == "win32" or not _native_rename_works(tmp_path):
+        pytest.skip("renameat2/renamex_np is not available on this system or file system")
+    _without_hard_links(monkeypatch)
+
+    def no_claim(*_args, **_kwargs):
+        raise AssertionError("step 3 must not run when step 2 works")
+
+    monkeypatch.setattr(output_publish, "_claim_then_replace", no_claim)
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+    publish_output(temporary, tmp_path / "x.bin")
+    assert (tmp_path / "x.bin").read_bytes() == b"payload"
+
+
+@pytest.mark.parametrize("code", [errno.ENOSYS, errno.EINVAL, errno.ENOTSUP])
+def test_a_native_rename_that_is_not_supported_falls_through_to_the_claim(
+    tmp_path, monkeypatch, code
+):
+    _without_hard_links(monkeypatch)
+
+    def unsupported(*_args):
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(output_publish, "_native_rename_noreplace", unsupported)
+    monkeypatch.setattr(output_publish.sys, "platform", "linux")
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+    publish_output(temporary, tmp_path / "x.bin")
+    assert (tmp_path / "x.bin").read_bytes() == b"payload"
+
+
+def test_a_missing_native_rename_symbol_falls_through(tmp_path, monkeypatch):
+    class Library:
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    monkeypatch.setattr(output_publish.ctypes, "CDLL", lambda *_args, **_kwargs: Library())
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+    assert output_publish._native_rename_noreplace(temporary, tmp_path / "x.bin") is False
+
+
+def test_a_real_rename_error_is_not_mistaken_for_missing_support(tmp_path, monkeypatch):
+    _without_hard_links(monkeypatch)
+
+    def denied(*_args):
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(output_publish, "_native_rename_noreplace", denied)
+    monkeypatch.setattr(output_publish.sys, "platform", "linux")
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+    with pytest.raises(PermissionError):
         publish_output(temporary, tmp_path / "x.bin")
     assert not (tmp_path / "x.bin").exists()
+
+
+def test_windows_uses_a_plain_rename_that_refuses_an_existing_name(tmp_path, monkeypatch):
+    _without_hard_links(monkeypatch)
+    monkeypatch.setattr(output_publish.sys, "platform", "win32")
+    calls = []
+
+    def rename(source, target):
+        calls.append((source, target))
+        raise FileExistsError(errno.EEXIST, "exists")
+
+    monkeypatch.setattr(os, "rename", rename)
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+    with pytest.raises(OutputExistsError):
+        publish_output(temporary, tmp_path / "x.bin")
+    assert calls == [(temporary, tmp_path / "x.bin")]
+
+
+def _complete_empty_or_absent(destination: Path, payload: bytes) -> bool:
+    return not destination.exists() or destination.read_bytes() in (b"", payload)
+
+
+@pytest.mark.parametrize("step", [2, 3])
+def test_no_publish_step_ever_shows_partial_content_under_the_final_name(
+    tmp_path, monkeypatch, step
+):
+    _force_step(monkeypatch, step)
+    destination, payload = tmp_path / "x.bin", b"payload" * 1000
+    temporary = tmp_path / ".x.tmp"
+    temporary.write_bytes(payload)
+    seen = []
+    real_replace = os.replace
+
+    def replace(source, target):
+        seen.append(_complete_empty_or_absent(destination, payload))
+        real_replace(source, target)
+        seen.append(_complete_empty_or_absent(destination, payload))
+
+    monkeypatch.setattr(os, "replace", replace)
+    publish_output(temporary, destination)
+    assert all(seen)
+    assert destination.read_bytes() == payload
+
+
+def test_a_failure_between_claim_and_replace_removes_only_the_placeholder(tmp_path, monkeypatch):
+    _force_step(monkeypatch, 3)
+    destination, temporary = tmp_path / "x.bin", tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+
+    def fail(_source, _target):
+        assert destination.read_bytes() == b""
+        raise OSError(errno.EIO, "disk error")
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.raises(OSError, match="disk error"):
+        publish_output(temporary, destination)
+    assert not destination.exists()
+    assert temporary.read_bytes() == b"payload"
+
+
+def test_a_failure_after_someone_else_took_the_placeholder_removes_nothing(tmp_path, monkeypatch):
+    _force_step(monkeypatch, 3)
+    destination, temporary = tmp_path / "x.bin", tmp_path / ".x.tmp"
+    temporary.write_bytes(b"payload")
+
+    def fail_after_a_foreign_file_took_the_name(_source, _target):
+        destination.unlink()
+        destination.write_bytes(EXISTING)
+        raise OSError(errno.EIO, "disk error")
+
+    monkeypatch.setattr(os, "replace", fail_after_a_foreign_file_took_the_name)
+    with pytest.raises(OSError, match="disk error"):
+        publish_output(temporary, destination)
+    assert destination.read_bytes() == EXISTING
     assert temporary.read_bytes() == b"payload"
 
 
@@ -288,13 +471,13 @@ def _longest_name(directory: Path, extension: str) -> str:
 def test_an_image_output_name_at_the_file_system_limit_is_written(tmp_path, shorter_by):
     name = _longest_name(tmp_path, "png")[shorter_by:]
     _save_image(tmp_path / name)
-    assert [path.name for path in tmp_path.iterdir()] == [name]
+    assert _names(tmp_path) == [name]
 
 
 def test_a_video_output_name_at_the_file_system_limit_is_written(tmp_path):
     name = _longest_name(tmp_path, "mp4")
     encode_video(_frames(), str(tmp_path / name), fps=5.0, width=64, height=64)
-    assert [path.name for path in tmp_path.iterdir()] == [name]
+    assert _names(tmp_path) == [name]
 
 
 def test_a_temporary_name_is_short_and_does_not_contain_the_destination_name(tmp_path):
@@ -354,11 +537,11 @@ def test_a_system_encoded_export_through_the_master_leaves_only_its_output(
     )
     if outcome == "success":
         video_io._external_export(iter(()), destination, **arguments)
-        assert [path.name for path in tmp_path.iterdir()] == ["out.mp4"]
+        assert _names(tmp_path) == ["out.mp4"]
     else:
         with pytest.raises((video_io.VideoStageError, InterruptedError)):
             video_io._external_export(iter(()), destination, **arguments)
-        assert list(tmp_path.iterdir()) == []
+        assert _names(tmp_path) == []
 
 
 def test_an_output_path_that_is_the_source_leaves_the_source_unchanged(tmp_path):
