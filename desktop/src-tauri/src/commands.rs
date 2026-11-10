@@ -2919,12 +2919,27 @@ fn unique_output_path(
         } else {
             format!("_{counter}")
         };
-        let candidate = directory.join(format!("{stem}{suffix}{numbered}.{extension}"));
+        let ending = format!("{suffix}{numbered}.{extension}");
+        let stem = fit_stem(stem, MAX_FILE_NAME_BYTES.saturating_sub(ending.len()));
+        let candidate = directory.join(format!("{stem}{ending}"));
         if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
         }
         counter = counter.saturating_add(1);
     }
+}
+
+/// The longest file name file systems accept (APFS, ext4, NTFS and exFAT all allow 255
+/// bytes or characters). A name in UTF-8 that fits is short enough for each.
+const MAX_FILE_NAME_BYTES: usize = 255;
+
+/// `stem` cut to at most `limit` bytes, on a character boundary.
+fn fit_stem(stem: &str, limit: usize) -> &str {
+    let mut end = limit.min(stem.len());
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    &stem[..end]
 }
 
 fn model_slug(id: &str) -> String {
@@ -4835,6 +4850,58 @@ mod tests {
         assert!(validate_start(&input, &state).is_err());
         state.programs.grant("/tmp/planted-tool");
         assert!(validate_start(&input, &state).is_ok());
+    }
+
+    #[test]
+    fn a_long_source_name_is_shortened_so_the_result_name_fits_the_file_system() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut video = input("video");
+        video.video_container = "mkv".into();
+        let mut named = input("upscale");
+        named.name_by_model = true;
+        for (stem, task) in [
+            ("a".repeat(300), input("upscale")),
+            ("写".repeat(200), input("upscale")),
+            ("🎞".repeat(120), input("denoise")),
+            ("é".repeat(127) + "x", named),
+            ("v".repeat(255), video),
+        ] {
+            let source = format!("/in/{stem}.png");
+            let mut reserved = ReservedOutputs::default();
+            let mut names = Vec::new();
+            for _ in 0..3 {
+                let path = unique_output_path(directory.path(), &source, &task, &mut reserved);
+                names.push(path.file_name().unwrap().to_str().unwrap().to_owned());
+            }
+            let ending = match task.task.as_str() {
+                "denoise" => "_denoised",
+                "video" => "_video_4x",
+                _ => "_upscaled_4x",
+            };
+            for (index, name) in names.iter().enumerate() {
+                assert!(name.len() <= 255, "{} bytes: {name}", name.len());
+                assert!(name.contains(ending));
+                let extension = if task.task == "video" { ".mkv" } else { ".png" };
+                assert!(name.ends_with(extension), "{name}");
+                if index > 0 {
+                    assert!(name[..name.len() - extension.len()].ends_with(&format!("_{index}")));
+                }
+            }
+            assert_eq!(names.iter().collect::<HashSet<_>>().len(), 3);
+        }
+    }
+
+    #[test]
+    fn a_name_that_already_fits_is_left_as_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut reserved = ReservedOutputs::default();
+        let path = unique_output_path(
+            directory.path(),
+            "/in/holiday.png",
+            &input("upscale"),
+            &mut reserved,
+        );
+        assert_eq!(path.file_name().unwrap(), "holiday_upscaled_4x.png");
     }
 
     #[test]
