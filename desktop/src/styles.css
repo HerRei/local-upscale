@@ -296,6 +296,22 @@ input:focus-visible {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
 }
+/* Under the Enhance header while a queue runs; the header already says it is locked. */
+.settings-lock {
+  flex: none;
+  margin: -12px 16px 0;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .icon-button {
   width: 28px;
   height: 28px;

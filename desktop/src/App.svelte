@@ -798,6 +798,9 @@
         : selectedMedia && !mediaMatchesTask
           ? `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`
           : '';
+  $: lockReason = cancelling
+    ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
+    : `${startingJob ? 'Starting your job…' : 'Settings locked.'} Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.`;
   // Start from the menu with nothing to explain still answers with what Start would take.
   $: scopeSummary = settings.batch_mode
     ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
@@ -2854,26 +2857,21 @@
                 : 'Choose a task'}</span
         >
       </div>
+      <!-- Locked: one quiet line instead of a block above Task, so the controls barely move.
+           Screen readers hear the full explanation, which also describes the settings. -->
+      {#if settingsLocked}<p class="settings-lock" role="status">
+          <span aria-hidden="true">Finish or cancel the queue to change settings.</span><span
+            id="settings-lock-reason"
+            class="visually-hidden">{lockReason}</span
+          >
+        </p>{/if}
       <div
         bind:this={inspectorScroll}
         class="inspector-scroll"
         role="region"
         aria-label="Enhancement settings"
+        aria-describedby={settingsLocked ? 'settings-lock-reason' : undefined}
       >
-        {#if settingsLocked}<div class="settings-lock" role="status">
-            <strong
-              >{cancelling
-                ? 'Stopping your queue…'
-                : startingJob
-                  ? 'Starting your job…'
-                  : 'Settings locked'}</strong
-            >
-            <p>
-              {cancelling
-                ? 'Controls unlock when processing has stopped and temporary output is removed.'
-                : 'Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.'}
-            </p>
-          </div>{/if}
         <fieldset
           class="processing-settings"
           disabled={settingsLocked}
