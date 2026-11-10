@@ -66,3 +66,29 @@ test('two rows can run at once, each with its own line', async ({ page }) => {
   await expect(page.getByRole('progressbar').nth(1)).toHaveAttribute('aria-valuenow', '71');
   await look(page, 'two-lanes');
 });
+
+test.describe('adding to a running queue', () => {
+  const queue = {
+    ...ready,
+    settings: { ...ready.settings, batch_mode: true },
+    running: true,
+    rows: {
+      1: { status: 'completed', progress: 100 },
+      2: { status: 'completed', progress: 100 },
+      3: { status: 'completed', progress: 100 },
+      4: { status: 'running', progress: 38 },
+    },
+  };
+  const add = (page: Page) => page.getByRole('button', { name: /^Add (selected|\d+) to queue$/ });
+
+  test('offers nothing while every input has a job in this run', async ({ page }) => {
+    await openApp(page, { ...queue, photos: 7 });
+    await expect(page.getByRole('button', { name: 'Cancel queue' })).toBeVisible();
+    await expect(add(page)).toHaveCount(0);
+  });
+
+  test('offers the inputs added after the queue started, only those', async ({ page }) => {
+    await openApp(page, { ...queue, photos: 9, jobPhotos: 7 });
+    await expect(add(page)).toHaveText('Add 2 to queue');
+  });
+});

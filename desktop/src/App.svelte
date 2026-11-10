@@ -30,6 +30,7 @@
   } from './lib/results';
   import { queueTiming } from './lib/queue-timing';
   import MediaQueue from './MediaQueue.svelte';
+  import { mediaInRun, queueRunSince } from './lib/queueRun';
   import AdvancedSettings from './AdvancedSettings.svelte';
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
@@ -427,10 +428,20 @@
     ? snapshot.media.filter((media) => (settings.task === 'video') === (media.kind === 'video'))
     : [];
   $: queueableMedia = runnableMedia.filter((media) => !inflightMediaIds.has(media.id));
+  // While a queue runs only new input can be added: a picture with any job in this run
+  // (waiting, running, finished, failed or cancelled) is not offered again.
+  let runSince: number | null = null;
+  $: runSince = queueRunSince(snapshot.jobs, runSince);
+  $: runMedia = mediaInRun(snapshot.jobs, runSince);
+  $: newMedia = runnableMedia.filter((media) => !runMedia.has(media.id));
   $: queueSelection =
     settings.batch_mode && settings.task !== 'edit'
-      ? queueableMedia
-      : selectedMedia && mediaMatchesTask && !inflightMediaIds.has(selectedMedia.id)
+      ? snapshot.runtime.active_job_id
+        ? newMedia
+        : queueableMedia
+      : selectedMedia &&
+          mediaMatchesTask &&
+          !(snapshot.runtime.active_job_id ? runMedia : inflightMediaIds).has(selectedMedia.id)
         ? [selectedMedia]
         : [];
   // Everything a start needs except which items it takes.
@@ -3591,7 +3602,7 @@
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <!-- A count of 0 means there is nothing to add or start: no button, and no room kept. -->
-        {#if !batchLabel || queueSelection.length}<button
+        {#if queueSelection.length}<button
             class="button queue-more"
             disabled={!canAppendToQueue}
             on:click={() => start()}

@@ -1440,9 +1440,8 @@ describe('LocalSR desktop interface', () => {
       true,
     );
     expect(screen.getByRole('button', { name: 'Add Media…' }).matches(':disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(
-      true,
-    );
+    // The selected video cannot join an upscale queue: no button, not a disabled one.
+    expect(screen.queryByRole('button', { name: 'Add selected to queue' })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
@@ -2287,6 +2286,102 @@ describe('LocalSR desktop interface', () => {
     snapshot.jobs = [queued('first', 'queued'), queued('second', 'queued')];
     await mountWith(snapshot);
     expect(screen.queryByRole('button', { name: /^Start \d+ items?$/ })).toBeNull();
+  });
+
+  describe('adding to a running queue', () => {
+    const job = (n: number, status: JobRecord['status']): JobRecord => ({
+      id: `job-${n}`,
+      media_id: `p${n}`,
+      media_name: `p${n}.png`,
+      media_kind: 'image',
+      status,
+      progress: status === 'running' ? 40 : 0,
+      output_path: '',
+      error: status === 'failed' ? 'broke' : '',
+      created_at: 1_000, // one enqueue: the jobs of a batch are created together
+    });
+    // p1-p3 finished, p4 runs, p5-p7 wait: the queue of one run.
+    const running = (extra: MediaItem[] = [], selected = 'p4', batch = true) => {
+      const media = [1, 2, 3, 4, 5, 6, 7].map((n) => image(`p${n}`, `p${n}` === selected));
+      const snapshot = readySnapshot([...media, ...extra]);
+      for (const item of snapshot.media) item.selected = item.id === selected;
+      snapshot.settings.batch_mode = batch;
+      snapshot.settings.task = 'upscale';
+      snapshot.runtime.active_job_id = 'job-4';
+      snapshot.jobs = [
+        job(7, 'queued'),
+        job(6, 'queued'),
+        job(5, 'queued'),
+        job(4, 'running'),
+        job(3, 'completed'),
+        job(2, 'completed'),
+        job(1, 'completed'),
+      ];
+      return snapshot;
+    };
+    const addButton = () => screen.queryByRole('button', { name: /^Add (selected|\d+) to queue$/ });
+
+    it('offers nothing while every input has a job in this run', async () => {
+      await mountWith(running());
+      expect(addButton()).toBeNull();
+    });
+
+    it('counts only the inputs added after the queue started', async () => {
+      await mountWith(running([image('n1'), image('n2')]));
+      expect(addButton()?.textContent).toBe('Add 2 to queue');
+    });
+
+    it('does not count an input whose job in this run failed or was cancelled', async () => {
+      const snapshot = running([image('n1'), image('n2')]);
+      snapshot.jobs[6] = job(1, 'failed');
+      snapshot.jobs[5] = job(2, 'cancelled');
+      await mountWith(snapshot);
+      expect(addButton()?.textContent).toBe('Add 2 to queue');
+    });
+
+    it('counts a finished picture from an earlier run as old, but not as new input once it ran', async () => {
+      const snapshot = running([image('n1')]);
+      snapshot.jobs.push({ ...job(8, 'completed'), media_id: 'n1', created_at: 10 });
+      await mountWith(snapshot);
+      // The earlier run's job is not part of this run, so the picture is still offered.
+      expect(addButton()?.textContent).toBe('Add 1 to queue');
+    });
+
+    it('offers Add selected to queue only for a selected input that is new', async () => {
+      await mountWith(running([image('n1')], 'p2', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'p4', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'p6', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'n1', false));
+      expect(addButton()?.textContent).toBe('Add selected to queue');
+    });
+
+    it('shows the button when new inputs arrive while the queue runs', async () => {
+      const current = running();
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+      await screen.findByRole('button', { name: 'Cancel queue' });
+      expect(addButton()).toBeNull();
+      current.media.push(image('n1'), image('n2'));
+      await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+      (api.listenForStateChange.mock.calls[0][0] as () => void)();
+      await waitFor(() => expect(addButton()?.textContent).toBe('Add 2 to queue'));
+    });
+
+    it('leaves the idle counts alone once the queue has ended', async () => {
+      const snapshot = running();
+      snapshot.runtime.active_job_id = '';
+      snapshot.jobs = snapshot.jobs.map((entry) => ({ ...entry, status: 'completed' }));
+      await mountWith(snapshot);
+      expect(screen.getByRole('button', { name: 'Only this one' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /all 7/i })).toBeTruthy();
+    });
   });
 
   it('has no Process line and keeps the scope buttons out of the Media pane', async () => {
