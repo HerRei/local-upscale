@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -62,3 +63,28 @@ def test_steps_that_can_run_under_pwsh_do_not_hide_a_failing_command():
         if len(native_lines(script)) > 1 and not CHECKED.search(script)
     ]
     assert not unchecked
+
+
+def load(path: str):
+    spec = importlib.util.spec_from_file_location("_wf_" + Path(path).stem, ROOT / path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_preview_isolation_check_reads_code_not_comments():
+    architecture = load("scripts/check_desktop_architecture.py")
+    preview = (
+        "# retention-days: 7\n"
+        "on:\n  workflow_dispatch:\n"
+        "jobs:\n  b:\n    if: github.event_name == 'workflow_dispatch' && inputs.build_packages\n"
+        "    steps:\n      - uses: actions/upload-artifact@v7\n        with:\n"
+        "          retention-days: 90\n"
+    )
+    violations = architecture.workflow_isolation_violations(preview)
+    assert any("seven-day" in violation for violation in violations)
+
+    commented = preview.replace("retention-days: 90", "retention-days: 7")
+    commented += "          # a gh release would belong in the release workflows\n"
+    assert architecture.workflow_isolation_violations(commented) == []

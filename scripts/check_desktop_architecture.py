@@ -150,6 +150,7 @@ def workflow_isolation_violations(preview: str) -> list[str]:
     """Return violations that couple preview packaging to public releases."""
 
     violations: list[str] = []
+    preview = _code(preview)
     preview_lower = preview.lower()
     if "contents: write" in preview_lower:
         violations.append("the preview workflow must not have release-write permission")
