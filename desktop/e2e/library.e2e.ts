@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { empty, upscale, withOutputs } from './fixtures';
+import { empty, upscale, withEdits, withOutputs } from './fixtures';
 import { hostCalls } from './fake-host';
 
 const mediaTabs = (page: Page) => page.getByRole('tablist', { name: 'Media' });
@@ -34,6 +34,28 @@ test.describe('Inputs and Outputs tabs', () => {
 
     await mediaTabs(page).getByRole('tab', { name: 'Inputs' }).click();
     await expect(page.getByRole('button', { name: /^Alpine lake 1\.jpg/ })).toBeVisible();
+  });
+
+  test('Edit results are listed under their input like the upscales and can be compared', async ({
+    page,
+  }) => {
+    await openApp(page, withEdits);
+    await mediaTabs(page).getByRole('tab', { name: 'Outputs 3' }).click();
+    const outputs = page.getByRole('group', { name: 'Outputs' });
+    await expect(outputs.getByText('3 outputs')).toBeVisible();
+    const edits = tick(page, 'FLUX.2 klein 4B, Alpine lake 1.jpg');
+    await expect(edits).toHaveCount(2);
+    await expect(outputs.getByText('512 × 320 · 1:01')).toBeVisible();
+    await expect(outputs.getByText('512 × 320 · 48s')).toBeVisible();
+    await expect(outputs.getByText('Quick · 4× · 31s')).toBeVisible();
+    await expect(edits.first()).toHaveAttribute('title', 'Make it dusk');
+    await tick(page, 'Original, Alpine lake 1.jpg').check();
+    await edits.first().check();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    await expect(
+      page.getByRole('list', { name: 'Compared items' }).getByRole('listitem'),
+    ).toHaveCount(2);
+    await expect(page.getByRole('alert')).toHaveCount(0);
   });
 
   test('both tabs have an empty state', async ({ page }) => {

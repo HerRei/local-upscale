@@ -1,8 +1,9 @@
 <script lang="ts">
   import FileName from './FileName.svelte';
   import { MAX_SLOTS, pickKey, type OutputGroup } from './lib/compareOutputs';
+  import { editDimensions } from './lib/editing';
   import { formatDuration } from './lib/format';
-  import type { ComparePick } from './lib/types';
+  import type { ComparePick, MediaItem, ResultSummary } from './lib/types';
   export let groups: OutputGroup[];
   export let picks: ComparePick[];
   export let togglePick: (pick: ComparePick) => void;
@@ -19,6 +20,29 @@
   }
   $: slot = (pick: ComparePick) => picks.findIndex((entry) => pickKey(entry) === pickKey(pick)) + 1;
   const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+  /** What a result row says under its model: settings for an upscale, the edit size for an Edit. */
+  function detail(result: ResultSummary, source: MediaItem): string {
+    const [width, height] =
+      result.kind === 'edit' && result.max_dimension
+        ? editDimensions(source.width, source.height, result.max_dimension)
+        : [0, 0];
+    return [
+      capitalize(result.ui?.quality ?? ''),
+      result.scale ? `${result.scale}×` : '',
+      width ? `${width} × ${height}` : '',
+      result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
+      result.available ? '' : 'File missing',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  /** The instruction of an Edit as the row's tooltip, cut at a length a tooltip can show. */
+  const promptTip = (result: ResultSummary | null) =>
+    result?.prompt
+      ? result.prompt.length > 120
+        ? `${result.prompt.slice(0, 120)}…`
+        : result.prompt
+      : undefined;
 </script>
 
 {#if error}<div class="empty-card" role="alert">Could not load outputs: {error}</div>
@@ -51,6 +75,7 @@
               class="media-select"
               type="button"
               role="checkbox"
+              title={promptTip(entry.result)}
               aria-checked={n > 0}
               aria-label={`${entry.result?.model_label ?? 'Original'}, ${group.media.name}`}
               disabled={!n && (picks.length >= MAX_SLOTS || entry.result?.available === false)}
@@ -66,16 +91,7 @@
                 <strong>{entry.result?.model_label || 'Original'}</strong>
                 <span
                   >{entry.result
-                    ? [
-                        capitalize(entry.result.ui?.quality ?? ''),
-                        entry.result.scale ? `${entry.result.scale}×` : '',
-                        entry.result.elapsed_seconds
-                          ? formatDuration(entry.result.elapsed_seconds)
-                          : '',
-                        entry.result.available ? '' : 'File missing',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')
+                    ? detail(entry.result, group.media)
                     : `${group.media.width} × ${group.media.height}`}</span
                 >
               </div>

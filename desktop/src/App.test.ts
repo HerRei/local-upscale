@@ -35,6 +35,8 @@ function row(id: string, overrides: Partial<ResultSummary> = {}): ResultSummary 
     model_id: id,
     model_label: id,
     scale: 4,
+    prompt: '',
+    max_dimension: 0,
     stages: [],
     notes: '',
     elapsed_seconds: 12,

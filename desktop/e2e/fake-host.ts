@@ -257,6 +257,8 @@ function hostScript(scenario: Scenario): void {
         model_id: entry.id,
         model_label: entry.label,
         scale: entry.edit ? 0 : 4,
+        prompt: entry.edit ? 'Make it dusk' : '',
+        max_dimension: entry.edit ? Math.max(entry.edit.width, entry.edit.height) : 0,
         stages: [],
         notes: '',
         elapsed_seconds: entry.seconds ?? 12,

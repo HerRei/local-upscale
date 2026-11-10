@@ -573,6 +573,10 @@ export interface ResultSummary {
   model_id: string;
   model_label: string;
   scale: number;
+  /** The written instruction of an Edit; empty for other kinds. */
+  prompt: string;
+  /** The longest output edge an Edit was asked for; 0 for other kinds. */
+  max_dimension: number;
   stages: ResultStage[];
   notes: string;
   /** Run time including loading and saving; 0 when unknown. */

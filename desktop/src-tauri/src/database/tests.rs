@@ -941,3 +941,28 @@ fn removal_never_leaves_a_job_for_a_missing_picture_and_selects_the_running_one(
         .collect();
     assert_eq!(selected, ["m2"]);
 }
+
+#[test]
+fn a_finished_edit_is_listed_with_the_results_of_its_image() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+    let output = directory.path().join("m_localsr_edit_1234abcd.png");
+    std::fs::write(&output, "pixels").unwrap();
+    let request = serde_json::json!({"type": "edit_job_request", "data": {
+        "job_id": "edit", "image_path": "/tmp/m.png", "output_path": output,
+        "model_id": "flux2_klein_4b", "prompt": "make it dusk", "max_dimension": 512}});
+    db.insert_job("edit", "m", &request.to_string()).unwrap();
+    db.finish_job("edit", "completed", output.to_str().unwrap(), "")
+        .unwrap();
+    db.record_job_duration("edit", 48.0).unwrap();
+    let groups = db.list_all_media_results().unwrap();
+    let group = groups.iter().find(|g| g.media_id == "m").unwrap();
+    assert_eq!(group.results.len(), 1);
+    assert_eq!(group.results[0].kind, "edit");
+    assert_eq!(group.results[0].prompt, "make it dusk");
+    assert_eq!(group.results[0].max_dimension, 512);
+    assert_eq!(group.results[0].elapsed_seconds, 48.0);
+    assert_eq!(group.completed_count, 1);
+    assert_eq!(group.available_count, 1);
+}

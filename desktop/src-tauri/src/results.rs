@@ -66,6 +66,10 @@ pub struct ResultSummary {
     pub model_label: String,
     /// The recorded output scale; 0 when the request has none (Edit).
     pub scale: u64,
+    /// The written instruction of an Edit; empty for other kinds.
+    pub prompt: String,
+    /// The longest output edge an Edit was asked for; 0 for other kinds.
+    pub max_dimension: u64,
     /// Every recorded stage, the primary model included.
     pub stages: Vec<ResultStage>,
     /// Completion notes (such as a skipped fix) or the failure reason.
@@ -193,6 +197,14 @@ pub fn label_summary(catalog: &CatalogManifest, summary: &mut ResultSummary) {
     }
 }
 
+/// A field only an Edit request carries; the default for any other kind.
+fn edit_field<T: Default>(request: &Value, name: &str, read: impl Fn(&Value) -> Option<T>) -> T {
+    if request_kind(request) != "edit" {
+        return T::default();
+    }
+    read(&request["data"][name]).unwrap_or_default()
+}
+
 pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSummary> {
     let request: Value = serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default();
     let data = &request["data"];
@@ -217,6 +229,10 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
         model_id,
         model_label,
         scale: data["output_scale"].as_u64().unwrap_or(0),
+        prompt: edit_field(&request, "prompt", |value| {
+            value.as_str().map(str::to_owned)
+        }),
+        max_dimension: edit_field(&request, "max_dimension", Value::as_u64),
         stages: data["stages"]
             .as_array()
             .into_iter()
