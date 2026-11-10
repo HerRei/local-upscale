@@ -2128,16 +2128,16 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         system: true,
     }));
     let refused = refuse_when_disk_is_short(&input("upscale"), &selection, &photo, folder);
-    // 25 GB must stay free on this volume; one photo at 4x needs 1.2 GB more.
+    // 8 GB must stay free on this volume; one photo at 4x needs 1.2 GB more.
     match refused {
         Err(AppError::Validation(text)) => assert_eq!(
             text,
-            "Not enough free disk space in \"/Users/a/Desktop\": about 1.2 GB is needed, but only 4.7 GB is free, and 25.0 GB must stay free so the computer keeps working."
+            "Not enough free disk space in \"/Users/a/Desktop\": about 1.2 GB is needed, but only 4.7 GB is free, and 8.0 GB must stay free so the computer keeps working."
         ),
         other => panic!("not refused: {other:?}"),
     }
     crate::disk_room::set_test_volume(Some(crate::disk_room::Volume {
-        free: 1_173_856_576 + 25_000_000_000,
+        free: 1_173_856_576 + 8_000_000_000,
         total: 500_000_000_000,
         system: true,
     }));

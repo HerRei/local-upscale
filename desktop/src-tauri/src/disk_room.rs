@@ -12,8 +12,8 @@ use serde_json::Value;
 
 use crate::types::MediaItem;
 
-/// The system volume keeps the larger of this and 5 % of its size free; others keep less.
-const SYSTEM_RESERVE_FLOOR: u64 = 8_000_000_000;
+/// The system volume keeps this much free, other volumes less: swap can grow by that much.
+const SYSTEM_RESERVE: u64 = 8_000_000_000;
 const OTHER_RESERVE: u64 = 1_000_000_000;
 /// Headers, an ICC profile and EXIF around the pixels.
 const SLACK: u64 = 1 << 20;
@@ -33,7 +33,7 @@ pub struct Volume {
 
 pub fn reserve(volume: &Volume) -> u64 {
     if volume.system {
-        SYSTEM_RESERVE_FLOOR.max(volume.total / 20)
+        SYSTEM_RESERVE
     } else {
         OTHER_RESERVE
     }
@@ -346,8 +346,8 @@ mod tests {
             total: 500_000_000_000,
             system: true,
         };
-        assert!(refusal(Path::new("/out"), need, &system(need + 25_000_000_000)).is_none());
-        assert!(refusal(Path::new("/out"), need, &system(need + 25_000_000_000 - 1)).is_some());
+        assert!(refusal(Path::new("/out"), need, &system(need + 8_000_000_000)).is_none());
+        assert!(refusal(Path::new("/out"), need, &system(need + 8_000_000_000 - 1)).is_some());
         let other = Volume {
             free: need + 1_000_000_000,
             total: 4_000_000_000_000,
@@ -367,7 +367,7 @@ mod tests {
             Path::new("/Users/a/Pictures/.localsr-job-0b8b2b39-6c1f-4d54-8f0e-5a5f2e2b8c11");
         assert_eq!(
             refusal(folder, 1_173_856_576, &volume).unwrap(),
-            "Not enough free disk space in \"/Users/a/Pictures\": about 1.2 GB is needed, but only 4.7 GB is free, and 25.0 GB must stay free so the computer keeps working."
+            "Not enough free disk space in \"/Users/a/Pictures\": about 1.2 GB is needed, but only 4.7 GB is free, and 8.0 GB must stay free so the computer keeps working."
         );
     }
 }
