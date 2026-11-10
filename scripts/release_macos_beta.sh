@@ -17,7 +17,7 @@ PROFILE=LocalSR-Z2TU844D84-notary
 OUT="$PWD/build/release-$VERSION"
 mkdir -p "$OUT"
 APP_NAME="LocalSR.app"
-# Public downloads come from GitHub Releases. The Mac mini keeps a copy.
+# Public downloads come from GitHub Releases.
 HOST_BASE="https://github.com/HerRei/local-upscale/releases/download/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 

@@ -89,20 +89,6 @@ export function editFitFor(
   return editModelFits(model, capabilities, device) ? 'runs' : 'too_heavy';
 }
 
-/** The largest bundle of a family that fits, or its smallest one so a plan always exists. */
-export function recommendEditModel(
-  models: EditModel[],
-  family: string,
-  capabilities: CapabilityInfo,
-  device?: DeviceInfo,
-): EditModel | undefined {
-  return (
-    models
-      .filter((model) => model.family === family && editModelFits(model, capabilities, device))
-      .at(-1) ?? models.find((model) => model.family === family)
-  );
-}
-
 /** Share of a Mac's unified memory the default editing model plans to use. */
 export const MAC_DEFAULT_EDIT_SHARE = 0.35;
 

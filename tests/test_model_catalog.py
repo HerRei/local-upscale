@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from localsr.core.model_catalog import (
+    CATALOG_BY_ID,
     FACE_DETECTOR_MODEL,
     MODEL_CATALOG,
     CatalogModel,
@@ -21,7 +22,6 @@ from localsr.core.model_catalog import (
     SpeedTier,
     default_model_directory,
     download_model,
-    get_model_by_id,
 )
 
 
@@ -153,27 +153,27 @@ def test_catalog_attributes_and_integrity():
         assert model.commercial_use_status in {"allowed", "not-allowed", "unclear"}
 
     for model_id in ("hat_s_x4_face", "hat_l_x4_face"):
-        face_model = get_model_by_id(model_id)
+        face_model = CATALOG_BY_ID.get(model_id)
         assert face_model is not None
         assert face_model.commercial_use_status == "unclear"
         assert face_model.license_name == "Checkpoint rights unverified"
         assert "user-supplied" in face_model.description
 
     for model_id in ("realplksr_hfa2k_anime_x4", "realplksr_nomoswebphoto_x4"):
-        model = get_model_by_id(model_id)
+        model = CATALOG_BY_ID.get(model_id)
         assert model is not None
         assert model.commercial_use_status == "allowed"
         assert model.license_name == "CC BY 4.0"
         assert model.source_url.startswith("https://huggingface.co/Phips/")
 
-    native_x2 = get_model_by_id("realesrgan_x2plus")
+    native_x2 = CATALOG_BY_ID.get("realesrgan_x2plus")
     assert native_x2 is not None
     assert native_x2.native_scale == 2
     assert native_x2.architecture == "RealESRGAN"
     assert native_x2.license_name == "BSD-3-Clause"
     assert native_x2.sha256 == "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb"
 
-    deblock = get_model_by_id("fbcnn_color")
+    deblock = CATALOG_BY_ID.get("fbcnn_color")
     assert deblock is not None
     assert deblock.native_scale == 1
     assert deblock.purposes == (ModelPurpose.RESTORATION, ModelPurpose.PHOTO)
@@ -183,7 +183,7 @@ def test_catalog_attributes_and_integrity():
 
 def test_spandrel_compatible_models_metadata():
     # 1. RealPLKSR Anime
-    anime = get_model_by_id("realplksr_hfa2k_anime_x4")
+    anime = CATALOG_BY_ID.get("realplksr_hfa2k_anime_x4")
     assert anime is not None
     assert anime.name == "RealPLKSR 4x HFA2k — Anime"
     assert anime.architecture == "RealPLKSR"
@@ -200,7 +200,7 @@ def test_spandrel_compatible_models_metadata():
     assert not anime.preset_eligible
 
     # 2. SPAN Photo
-    span_photo = get_model_by_id("span_photo_x4")
+    span_photo = CATALOG_BY_ID.get("span_photo_x4")
     assert span_photo is not None
     assert span_photo.name == "SPAN 4x NomosUni — Quick"
     assert span_photo.architecture == "SPAN"
@@ -213,7 +213,7 @@ def test_spandrel_compatible_models_metadata():
     assert "Quick Start preset" in span_photo.description
 
     # 3. RealPLKSR NomosWebPhoto
-    realplksr = get_model_by_id("realplksr_nomoswebphoto_x4")
+    realplksr = CATALOG_BY_ID.get("realplksr_nomoswebphoto_x4")
     assert realplksr is not None
     assert realplksr.name == "RealPLKSR 4x NomosWebPhoto — Best"
     assert realplksr.architecture == "RealPLKSR"
@@ -226,7 +226,7 @@ def test_spandrel_compatible_models_metadata():
     assert "Best Quality preset" in realplksr.description
 
     # 4. NAFNet Deblur
-    nafnet_deblur = get_model_by_id("nafnet_gopro_deblur")
+    nafnet_deblur = CATALOG_BY_ID.get("nafnet_gopro_deblur")
     assert nafnet_deblur is not None
     assert nafnet_deblur.name == "NAFNet GoPro Deblur"
     assert nafnet_deblur.architecture == "NAFNet"
@@ -252,14 +252,8 @@ def test_model_purpose_enum():
     assert ModelPurpose.VIDEO == "video"
 
 
-def test_get_model_by_id():
-    assert get_model_by_id("realplksr_hfa2k_anime_x4") is not None
-    assert get_model_by_id("realplksr_hfa2k_anime_x4").model_id == "realplksr_hfa2k_anime_x4"
-    assert get_model_by_id("non_existent_id") is None
-
-
 def test_catalog_model_properties_and_immutability():
-    model = get_model_by_id("realplksr_hfa2k_anime_x4")
+    model = CATALOG_BY_ID.get("realplksr_hfa2k_anime_x4")
     assert model is not None
     assert model.scale == 4
     assert model.file_size_bytes == model.size_bytes

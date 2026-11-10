@@ -114,7 +114,7 @@ def test_r1_output_saving_atomic_rename(tmp_path, monkeypatch):
             )
 
         # 2. Test OutputWriter memmap cleanup in finally block
-        temp_dat_path = writer.get_path()
+        temp_dat_path = writer.temp_path
         assert os.path.exists(temp_dat_path), "Memmap file must exist after creation."
 
         try:

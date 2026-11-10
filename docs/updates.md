@@ -78,7 +78,7 @@ After a successful check, direct builds send one request to
 `https://macmini-ci.tail34a4e0.ts.net/ping/update-check?v=<version>&t=<platform key>&c=<channel>`,
 for example `v=0.1.6-beta&t=darwin-aarch64-mps-native&c=beta` or
 `t=windows-x86_64-cuda-native`. It carries no install or user ID and no cookies,
-times out after five seconds and never affects the check. The Mac mini counts active
+times out after five seconds and never affects the check. The usage counter counts active
 installs per day without storing the IP address (see `packaging/hosting/stats/`).
 Turn it off with **Send Anonymous Update Count** (LocalSR menu on macOS, Help menu
 on Windows and Linux) or **Send an anonymous update-check count** in the update

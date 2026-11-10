@@ -712,11 +712,6 @@ CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}
 CATALOG_BY_FILENAME = {model.filename: model for model in MODEL_CATALOG}
 
 
-def get_model_by_id(model_id: str) -> CatalogModel | None:
-    """Look up a single-image catalog model by its unique ID."""
-    return CATALOG_BY_ID.get(model_id)
-
-
 def default_model_directory() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "LocalSR" / "models"
@@ -850,11 +845,11 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}
 
 # Frame interpolation models: optional stages of a video job, never video engines.
-# LocalSR selected RIFE 4.26 after synthetic held-out-frame comparisons; the
+# RIFE 4.26 was selected using synthetic held-out-frame comparisons; the
 # Practical-RIFE README places its model links under the project's MIT license. The official copy sits in a
 # Google Drive archive that cannot serve pinned downloads; HolyWu/vs-rife (MIT) publishes
 # the same bytes as a release asset, and the size and SHA-256 below are those of
-# train_log/flownet.pkl in the official archive (checked 2026-11-09).
+# train_log/flownet.pkl in the official archive.
 INTERPOLATION_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     CatalogVideoModel(
         model_id="rife_4_26",

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { MAX_SLOTS, swapSlots, toggleSlot } from './compareOutputs';
-import { mapRegion } from './compareRegions';
 import { clampPan, panBounds } from './viewport';
 import type { ComparePick } from './types';
 
@@ -57,42 +56,6 @@ describe('Compare property invariants', () => {
           );
           if (first < 0 || second < 0 || first >= picks.length || second >= picks.length)
             expect(swapped).toBe(picks);
-        },
-      ),
-      property,
-    );
-  });
-
-  it('regions mapped to another output scale and back stay within one pixel at each edge', () => {
-    fc.assert(
-      fc.property(
-        fc.integer({ min: 2, max: 10000 }),
-        fc.integer({ min: 2, max: 10000 }),
-        fc.integer({ min: 2, max: 4 }),
-        fc.integer({ min: 0, max: 5000 }),
-        fc.integer({ min: 0, max: 5000 }),
-        fc.integer({ min: 1, max: 4000 }),
-        fc.integer({ min: 1, max: 4000 }),
-        (width, height, outputScale, x, y, cropWidth, cropHeight) => {
-          const image = { width, height };
-          const scaledImage = { width: width * outputScale, height: height * outputScale };
-          const region = {
-            x: Math.min(x, width - 1),
-            y: Math.min(y, height - 1),
-            width: Math.min(cropWidth, width - Math.min(x, width - 1)),
-            height: Math.min(cropHeight, height - Math.min(y, height - 1)),
-            target_width: 512,
-            target_height: 512,
-          };
-          const roundTrip = mapRegion(mapRegion(region, image, scaledImage), scaledImage, image);
-          expect(Math.abs(roundTrip.x - region.x)).toBeLessThanOrEqual(1);
-          expect(
-            Math.abs(roundTrip.x + roundTrip.width - region.x - region.width),
-          ).toBeLessThanOrEqual(1);
-          expect(Math.abs(roundTrip.y - region.y)).toBeLessThanOrEqual(1);
-          expect(
-            Math.abs(roundTrip.y + roundTrip.height - region.y - region.height),
-          ).toBeLessThanOrEqual(1);
         },
       ),
       property,

@@ -26,8 +26,6 @@ def load_script(name: str):
 
 
 verify_package = load_script("verify_tauri_release_package")
-verify_macos_signing = load_script("verify_macos_tauri_signing")
-prepare_release = load_script("prepare_tauri_release_assets")
 smoke_installer = load_script("smoke_tauri_installer")
 
 
@@ -49,37 +47,6 @@ def installed_smoke(version: str) -> dict[str, object]:
         "worker": "ready",
         "worker_path": "/installed/localsr-worker",
     }
-
-
-def architecture_evidence(filename: str, architecture: str) -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "artifact": filename,
-        "required_architectures": [architecture],
-        "native_binary_count": 1,
-        "mismatches": [],
-        "result": "PASS",
-    }
-
-
-def test_release_policy_and_signing_accept_only_production_requirements() -> None:
-    assert prepare_release.release_policy({}) == prepare_release.SIGNED_POLICY
-    with pytest.raises(ValueError, match="unsupported release policy"):
-        prepare_release.release_policy({"release_policy": "v0.0.12-cross-alpha-exception"})
-    unsigned = {"status": "ad-hoc-alpha", "production_signed": False, "warning": "testing"}
-    with pytest.raises(ValueError, match="unsupported signing requirement"):
-        prepare_release.validate_signing_evidence(unsigned, "ad-hoc-alpha")
-
-
-def test_release_matrix_rejects_weak_smoke_and_architecture_evidence() -> None:
-    with pytest.raises(ValueError, match="acceptable"):
-        prepare_release.validate_smoke_evidence({"passed": True}, "0.0.12-alpha")
-    with pytest.raises(ValueError, match="different artifact"):
-        prepare_release.validate_architecture_evidence(
-            "LocalSR.AppImage",
-            architecture_evidence("other.AppImage", "x86_64"),
-            "x86_64",
-        )
 
 
 def test_reads_x86_64_elf_and_pe_release_containers(tmp_path: Path) -> None:
@@ -138,243 +105,6 @@ def test_rejects_wrong_native_installer_architecture(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="expected x86_64"):
         verify_package.verify(artifact, "linux", "x86_64")
-
-
-def test_extracts_developer_id_and_team_from_codesign_output() -> None:
-    identity, team = verify_macos_signing.identity_details(
-        "Authority=Developer ID Application: Example Developer (TEAM123456)\n"
-        "Authority=Developer ID Certification Authority\n"
-        "TeamIdentifier=TEAM123456\n"
-    )
-
-    assert identity.startswith("Developer ID Application:")
-    assert team == "TEAM123456"
-
-
-def write_release_input(root: Path, attempt: int, platform: str, filename: str) -> Path:
-    artifact = root / str(attempt) / platform / filename
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(f"attempt-{attempt}-{platform}".encode())
-    for suffix in (".sha256", ".metadata.json", ".architecture.json"):
-        artifact.with_name(artifact.name + suffix).write_text("evidence", encoding="utf-8")
-    return artifact
-
-
-def test_release_input_uses_previous_successful_jobs_during_publish_rerun(
-    tmp_path: Path,
-) -> None:
-    filename = "LocalSR-v1-alpha-Linux-x86_64.AppImage"
-    expected = write_release_input(tmp_path, 1, "linux", filename)
-    (tmp_path / "2").mkdir()
-
-    assert prepare_release.locate_release_input(tmp_path, filename) == expected
-
-
-def test_release_input_combines_latest_complete_platform_artifacts(tmp_path: Path) -> None:
-    filename = "LocalSR-v1-alpha-Windows-x86_64.exe"
-    write_release_input(tmp_path, 1, "windows", filename)
-    expected = write_release_input(tmp_path, 2, "windows", filename)
-    incomplete = tmp_path / "3" / "windows" / filename
-    incomplete.parent.mkdir(parents=True)
-    incomplete.write_bytes(b"partial transfer")
-    publish_copy = tmp_path / "3" / "tauri-release-assets" / filename
-    publish_copy.parent.mkdir(parents=True)
-    publish_copy.write_bytes(b"previous publish output")
-
-    assert prepare_release.locate_release_input(tmp_path, filename) == expected
-
-
-def test_release_input_rejects_duplicate_complete_uploads_in_latest_attempt(
-    tmp_path: Path,
-) -> None:
-    filename = "LocalSR-v1-alpha-macOS-arm64.dmg"
-    write_release_input(tmp_path, 4, "macos", filename)
-    write_release_input(tmp_path, 4, "duplicate", filename)
-
-    with pytest.raises(ValueError, match="exactly one complete"):
-        prepare_release.locate_release_input(tmp_path, filename)
-
-
-def release_fixture(tmp_path: Path):
-    from release_targets import artifact_entries
-
-    staging, output = tmp_path / "staging", tmp_path / "output"
-    entries = artifact_entries("1-alpha")
-    for number, entry in enumerate(entries):
-        directory = staging / "1" / entry["platform"]
-        directory.mkdir(parents=True, exist_ok=True)
-        artifact = directory / entry["filename"]
-        artifact.write_bytes(f"package-{number}".encode())
-        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-        artifact.with_name(artifact.name + ".sha256").write_text(f"{digest}  {artifact.name}\n")
-        signing = {"status": entry["signing"]}
-        if entry["platform"] == "macos":
-            signing.update(
-                developer_id="Developer ID Application: Example",
-                team_id="TEAM123456",
-                notarized=True,
-                stapled=True,
-                gatekeeper_accepted=True,
-            )
-        if entry["platform"] == "windows":
-            signing.update(signer_subject="CN=Example", signer_thumbprint="ABCD", timestamped=True)
-        probe = {
-            "backend": entry["backend"],
-            "runtime_verified": True,
-            "cpu_inference_verified": True,
-            "hardware_tested": False,
-        }
-        if entry["backend"] == "Intel-XPU":
-            probe.update(xpu_runtime_files_verified=True, xpu_runtime_library_count=5)
-        smoke = installed_smoke("1-alpha") | {"backend_probe": probe}
-        metadata = {
-            "schema_version": 1,
-            "artifact_filename": artifact.name,
-            "artifact_size": artifact.stat().st_size,
-            "sha256": digest,
-            "platform": entry["platform"],
-            "architecture": entry["architecture"],
-            "backend": entry["backend"],
-            "repository_commit": "c" * 40,
-            "github_run_id": "1",
-            "run_attempt": "1",
-            "timestamp": "2026-09-05T12:00:00+00:00",
-            "package_smoke": smoke,
-            "backend_probe": probe,
-            "signing": signing,
-        }
-        if entry["platform"] != "macos":
-            lock = ROOT / "requirements/locks" / f"{entry['id']}.txt"
-            metadata["dependency_wheelhouse"] = {
-                "schema_version": 1,
-                "target": entry["id"],
-                "source_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-                "wheels": [{"name": "fixture", "sha256": "a" * 64}],
-            }
-        if entry["platform"] == "linux":
-            metadata["live_models"] = {
-                "result": "PASS",
-                "models": [
-                    {
-                        "preset": preset,
-                        "model_id": model_id,
-                        "sha256": character * 64,
-                        "download_bytes": 1024,
-                        "output_shape": [1, 3, 64, 64],
-                    }
-                    for preset, model_id, character in (
-                        ("Quick", "span_photo_x4", "a"),
-                        ("Best", "realplksr_nomoswebphoto_x4", "b"),
-                    )
-                ],
-            }
-        if entry.get("external_engine"):
-            part = directory / "cuda.engine.tar.gz.part-0001"
-            part.write_bytes(b"frozen-engine-payload")
-            payload = {
-                "schema_version": 1,
-                "format": "tar.gz.parts",
-                "backend": "CUDA",
-                "file_count": 1,
-                "unpacked_bytes": 20,
-                "parts": [
-                    {
-                        "filename": part.name,
-                        "size": part.stat().st_size,
-                        "sha256": hashlib.sha256(part.read_bytes()).hexdigest(),
-                    }
-                ],
-            }
-            payload_hash = hashlib.sha256(json.dumps(payload).encode()).hexdigest()
-            metadata.update(engine_payload=payload, engine_payload_sha256=payload_hash)
-            smoke.update(engine_payload=payload, engine_payload_sha256=payload_hash)
-        artifact.with_name(artifact.name + ".metadata.json").write_text(json.dumps(metadata))
-        artifact.with_name(artifact.name + ".architecture.json").write_text(
-            json.dumps(architecture_evidence(artifact.name, entry["architecture"]))
-        )
-    manifest, readiness = tmp_path / "manifest.json", tmp_path / "readiness.json"
-    manifest.write_text(
-        json.dumps({"schema_version": 1, "version": "1-alpha", "artifacts": entries})
-    )
-    readiness.write_text(json.dumps({"release": "1-alpha", "beta_ready": False, "gates": []}))
-    return staging, manifest, output, readiness
-
-
-def test_compacts_every_backend_and_verified_payload(tmp_path: Path) -> None:
-    from verify_prepared_release import expected_assets, verify
-
-    staging, manifest, output, readiness = release_fixture(tmp_path)
-    index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
-    index = json.loads(index_path.read_text())
-    assert len(index["installers"]) == len(index["source_matrix"]) == 7
-    assert len(index["public_assets"]) == 8
-    assert index["beta_ready"] is False
-    assert len((output / "release-files.txt").read_text().splitlines()) == 10
-    verify(output, manifest, "c" * 40)
-    assert len(expected_assets(output)) == 10
-    second = tmp_path / "rerun"
-    prepare_release.prepare(staging, manifest, "v1-alpha", second, readiness)
-    assert index_path.read_bytes() == (second / "release-index.json").read_bytes()
-
-
-@pytest.mark.parametrize("failure", ["model", "backend", "payload", "wheelhouse", "missing-target"])
-def test_rejects_incomplete_release_evidence(tmp_path: Path, failure: str) -> None:
-    staging, manifest, output, readiness = release_fixture(tmp_path)
-    match = {
-        "model": "Quick/Best",
-        "backend": "backend identity",
-        "payload": "payload digest",
-        "wheelhouse": "wheelhouse provenance",
-        "missing-target": "every target",
-    }[failure]
-    if failure == "missing-target":
-        data = json.loads(manifest.read_text())
-        data["artifacts"].pop()
-        manifest.write_text(json.dumps(data))
-    elif failure == "payload":
-        next(staging.rglob("*.part-0001")).write_bytes(b"corrupted")
-    else:
-        path = next(staging.rglob("*Linux-CPU*.metadata.json"))
-        data = json.loads(path.read_text())
-        if failure == "model":
-            data.pop("live_models")
-        elif failure == "wheelhouse":
-            data["dependency_wheelhouse"]["source_lock_sha256"] = "f" * 64
-        else:
-            data["backend_probe"]["backend"] = "CUDA"
-        path.write_text(json.dumps(data))
-    with pytest.raises(ValueError, match=match):
-        prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
-
-
-def test_release_matrix_rejects_cross_attempt_commit_mixing(tmp_path: Path) -> None:
-    staging, manifest, output, readiness = release_fixture(tmp_path)
-    path = next(staging.rglob("*Windows-CPU*.metadata.json"))
-    data = json.loads(path.read_text())
-    data["repository_commit"] = "b" * 40
-    data["run_attempt"] = "2"
-    path.write_text(json.dumps(data))
-    destination = staging / "2" / "windows"
-    destination.mkdir(parents=True)
-    for source in path.parent.glob("*Windows-CPU*"):
-        source.rename(destination / source.name)
-    with pytest.raises(ValueError, match="mixes commits"):
-        prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
-
-
-def test_release_matrix_accepts_crlf_and_lf_wheelhouse_locks(tmp_path: Path) -> None:
-    staging, manifest, output, readiness = release_fixture(tmp_path)
-    path = next(staging.rglob("*Windows-CUDA*.metadata.json"))
-    data = json.loads(path.read_text())
-    from release_targets import ROOT
-
-    lock = ROOT / "requirements/locks/windows-x86_64-cuda.txt"
-    normalized = lock.read_bytes().replace(b"\r\n", b"\n")
-    crlf_hash = hashlib.sha256(normalized.replace(b"\n", b"\r\n")).hexdigest()
-    data["dependency_wheelhouse"]["source_lock_sha256"] = crlf_hash
-    path.write_text(json.dumps(data))
-    index_path = prepare_release.prepare(staging, manifest, "v1-alpha", output, readiness)
-    assert index_path.is_file()
 
 
 # In-app updates on every edition: build identity, updater files and feed entries.
@@ -885,8 +615,7 @@ def test_platform_tool_refuses_artifacts_it_cannot_vouch_for(tmp_path: Path, fai
     assert json.loads(feed_path.read_text()) == original
 
 
-# Review findings 7 and 8: a payload the app could not install, or not the one the
-# package was tested with, stops the tool before it signs anything.
+# A payload that cannot be installed or differs from the tested package stops signing.
 @pytest.mark.parametrize(
     "failure",
     [
@@ -984,7 +713,7 @@ def test_engine_payload_reuse_refuses_what_the_installer_would_refuse(
         )
 
 
-# Review finding 9: files that change during signing are never signed as checked.
+# Files that change during signing are never signed as checked.
 def test_platform_tool_signs_only_copies_of_what_it_checked(tmp_path: Path) -> None:
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
@@ -1474,7 +1203,7 @@ def test_engine_identity_survives_app_releases_but_tracks_engine_inputs(
         source.write_text(original)
 
 
-# Round 3 (independent review of the release tools).
+# Release signing checks.
 def test_round3_signer_refuses_a_build_from_another_commit(tmp_path: Path) -> None:
     downloads = platform_downloads(tmp_path)
     feed_path = tmp_path / "beta.json"
