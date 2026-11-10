@@ -543,3 +543,20 @@ def test_an_unreadable_power_source_counts_as_battery(monkeypatch):
 
     monkeypatch.setattr(image_batch.subprocess, "run", fail)
     assert read_ac_power() is False
+
+
+def test_a_photo_saved_without_a_tag_that_was_too_big_for_a_jpeg_says_so(tmp_path):
+    source = tmp_path / "0.png"
+    image = Image.fromarray(np.random.default_rng(0).integers(0, 256, (17, 19, 3), dtype=np.uint8))
+    exif = image.getexif()
+    exif[315] = "x" * 120_000
+    image.save(source, exif=exif)
+    photos = [job(tmp_path, index) for index in range(4)]
+    for photo in photos:
+        photo.update(output_format="jpg", output_path=str(tmp_path / f"out-{photo['job_id']}.jpg"))
+    setup = Setup(tmp_path)
+    assert setup.run(photos) == []
+    done = {m["data"]["job_id"]: m["data"] for m in setup.messages if m["type"] == "job_completed"}
+    assert "artist text was too long to fit a JPEG" in done["0"]["notes"]
+    assert all(done[str(index)]["notes"] == "" for index in (1, 2, 3))
+    assert Image.open(tmp_path / "out-0.jpg").getexif().get(315) is None

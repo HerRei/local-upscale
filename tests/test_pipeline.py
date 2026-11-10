@@ -218,6 +218,53 @@ def test_worker_failure_names_the_actual_pipeline_stage(tmp_path, monkeypatch):
         server._run_job("pipeline-job", _job_data(tmp_path))
 
 
+def test_worker_refuses_an_output_scale_above_the_model_scale_before_inference(
+    tmp_path, monkeypatch
+):
+    from localsr.core.image_io import ImageManager
+
+    data = _job_data(tmp_path)
+    data["stages"] = None
+    data["output_scale"] = 4
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+
+    with pytest.raises(RuntimeError, match=r"native 2× scale"):
+        server._run_job("pipeline-job", data)
+    assert engine.calls == []
+
+
+def test_job_completed_says_which_source_tag_a_jpeg_could_not_hold(tmp_path, monkeypatch, capsys):
+    from localsr.core.image_io import ImageManager
+
+    data = _job_data(tmp_path)
+    data.update(stages=None, output_format="jpg", output_path=str(tmp_path / "output.jpg"))
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    server.engine = _PipelineEngine()
+    monkeypatch.setattr(
+        ImageManager,
+        "load",
+        lambda *_: {
+            "tensor": torch.zeros((3, 5, 7)),
+            "safe_exif": {315: "x" * 120_000},
+            "icc_profile": None,
+        },
+    )
+    server._run_job("pipeline-job", data)
+    completed = [
+        json.loads(line)["data"]
+        for line in capsys.readouterr().out.splitlines()
+        if '"job_completed"' in line
+    ]
+    assert len(completed) == 1
+    assert "artist text was too long to fit a JPEG" in completed[0]["notes"]
+    assert (tmp_path / "output.jpg").is_file()
+
+
 def test_worker_rejects_incompatible_face_companion_before_primary_inference(tmp_path, monkeypatch):
     from localsr.core.image_io import ImageManager
 

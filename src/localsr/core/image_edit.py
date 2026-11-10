@@ -20,7 +20,7 @@ from PIL import Image, ImageOps
 
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
 from localsr.core.image_io import open_photo
-from localsr.core.output_publish import publish_output
+from localsr.core.output_publish import publish_output, require_output_name
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
 from localsr.worker.edit_guard import native_environment, stop_process
 
@@ -310,6 +310,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     plan = plan_edit(model, initial, data.get("max_dimension", 512))
     if cancel.is_set():
         raise InterruptedError("Editing cancelled.")
+    require_output_name(data["output_path"])
     runtime = check_runtime(str(data.get("runtime_path", "")))
     job_id = str(data["job_id"])
     emit(StageStarted(job_id, 0, 1, "edit", model["name"]))

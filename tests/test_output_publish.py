@@ -13,7 +13,13 @@ from PIL import Image
 
 import localsr.core.video_io as video_io
 from localsr.core.image_io import ImageManager
-from localsr.core.output_publish import OutputExistsError, publish_output
+from localsr.core.output_publish import (
+    OutputExistsError,
+    output_name_length,
+    output_name_limit,
+    owned_temporary,
+    publish_output,
+)
 from localsr.core.video_io import encode_video
 
 EXISTING = b"a file the user put here"
@@ -266,3 +272,100 @@ def test_failed_copy_without_hard_links_leaves_no_partial_output(tmp_path, monke
         publish_output(temporary, tmp_path / "x.bin")
     assert not (tmp_path / "x.bin").exists()
     assert temporary.read_bytes() == b"payload"
+
+
+def _longest_name(directory: Path, extension: str) -> str:
+    name = "y" * (output_name_limit(directory) - len(extension) - 1) + "." + extension
+    try:
+        (directory / name).touch()
+    except OSError:
+        pytest.skip("this file system does not allow a name of that length")
+    (directory / name).unlink()
+    return name
+
+
+@pytest.mark.parametrize("shorter_by", [0, 1, 27, 60])
+def test_an_image_output_name_at_the_file_system_limit_is_written(tmp_path, shorter_by):
+    name = _longest_name(tmp_path, "png")[shorter_by:]
+    _save_image(tmp_path / name)
+    assert [path.name for path in tmp_path.iterdir()] == [name]
+
+
+def test_a_video_output_name_at_the_file_system_limit_is_written(tmp_path):
+    name = _longest_name(tmp_path, "mp4")
+    encode_video(_frames(), str(tmp_path / name), fps=5.0, width=64, height=64)
+    assert [path.name for path in tmp_path.iterdir()] == [name]
+
+
+def test_a_temporary_name_is_short_and_does_not_contain_the_destination_name(tmp_path):
+    first, second = owned_temporary(tmp_path, "image"), owned_temporary(tmp_path, "image")
+    assert first != second and first.parent == tmp_path
+    assert first.name.startswith(".localsr-image-") and len(first.name) < 40
+
+
+def test_name_length_counts_what_the_file_system_counts(monkeypatch):
+    monkeypatch.setattr("localsr.core.output_publish.sys.platform", "darwin")
+    assert output_name_length("a\U0001f600") == 3
+    monkeypatch.setattr("localsr.core.output_publish.sys.platform", "linux")
+    assert output_name_length("a\U0001f600") == 5
+
+
+def test_the_name_limit_falls_back_when_the_folder_cannot_be_asked(tmp_path):
+    assert output_name_limit(tmp_path / "missing") == 255
+    assert output_name_limit(tmp_path) >= 143
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+def test_a_system_encoded_export_through_the_master_leaves_only_its_output(
+    tmp_path, monkeypatch, outcome
+):
+    import localsr.core.media_bridge as media_bridge
+    from localsr.core.external_ffmpeg import ExternalFFmpegError
+
+    destination = tmp_path / "out.mp4"
+
+    def master(_frames, target, **_options):
+        Path(target).write_bytes(b"master")
+        return target
+
+    def transcode(_bridge, _master, final, **_kwargs):
+        # macOS keeps a hidden copy of a file the system encoder wrote beside it.
+        Path(final).write_bytes(b"video")
+        Path(final).with_name(Path(final).name + ".sb-df5fe11b-AbCdEf").write_bytes(b"x" * 64)
+        if outcome == "failure":
+            raise ExternalFFmpegError("the encoder stopped")
+        if outcome == "cancel":
+            raise InterruptedError("video job cancelled")
+
+    monkeypatch.setattr(video_io, "encode_video", master)
+    monkeypatch.setattr(media_bridge, "transcode_output", transcode)
+    arguments = dict(
+        video_codec="hevc",
+        container_format="mp4",
+        crf=18,
+        external_ffmpeg=object(),
+        stage_callback=None,
+        hdr_format="",
+        width=64,
+        height=64,
+        fps=10.0,
+        cancel_event=None,
+        temporary_directory=None,
+    )
+    if outcome == "success":
+        video_io._external_export(iter(()), destination, **arguments)
+        assert [path.name for path in tmp_path.iterdir()] == ["out.mp4"]
+    else:
+        with pytest.raises((video_io.VideoStageError, InterruptedError)):
+            video_io._external_export(iter(()), destination, **arguments)
+        assert list(tmp_path.iterdir()) == []
+
+
+def test_an_output_path_that_is_the_source_leaves_the_source_unchanged(tmp_path):
+    source = tmp_path / "photo.png"
+    Image.new("RGB", (8, 8), (10, 200, 30)).save(source)
+    before = source.read_bytes()
+    with pytest.raises(OutputExistsError):
+        _save_image(source)
+    assert source.read_bytes() == before
+    assert _no_temporaries(tmp_path)

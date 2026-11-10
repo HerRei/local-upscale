@@ -738,7 +738,7 @@ class InferenceEngine:
         if float_output:
             return out_core.clamp(0, 1).numpy()
         out_core = torch.clamp(out_core, 0, 1) * 255.0
-        return out_core.byte().numpy()
+        return out_core.round().byte().numpy()
 
     def process_frame(
         self,
@@ -920,15 +920,14 @@ class InferenceEngine:
         _, h, w = img_tensor.shape
         scale = model_info.scale
 
+        current_tile_size = tile_size
+        min_tile_size = min(tile_size, 64) if safe_memory else 4
+
         writer = OutputWriter(
             (model_info.out_channels, h * scale, w * scale),
             dtype=np.uint8,
             temporary_directory=temporary_directory,
         )
-
-        current_tile_size = tile_size
-
-        min_tile_size = min(tile_size, 64) if safe_memory else 4
         try:
             while current_tile_size >= min_tile_size:
                 try:

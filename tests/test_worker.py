@@ -476,7 +476,23 @@ def _sent(capsys):
 
 
 def _batch_jobs(count):
-    return [{"job_id": f"photo-{index}", "image_path": f"{index}.png"} for index in range(count)]
+    return [
+        {
+            "job_id": f"photo-{index}",
+            "image_path": f"{index}.png",
+            "output_path": f"{index}-out.png",
+            "output_format": "png",
+            "jpeg_quality": 90,
+            "preserve_metadata": True,
+            "model_path": "model.pth",
+            "device": "cpu",
+            "tile_size": 64,
+            "halo": 8,
+            "precision": "fp32",
+            "safe_memory": True,
+        }
+        for index in range(count)
+    ]
 
 
 def test_cancelling_any_batch_member_cancels_the_whole_batch():
@@ -534,6 +550,27 @@ def test_photos_the_lanes_hand_back_run_as_normal_jobs_in_order(monkeypatch, cap
     ]
     assert server.active_job_id is None and not server.active_batch_job_ids
     assert not server.cancel_event.is_set()
+
+
+def test_a_photo_that_fell_back_after_it_was_announced_is_not_started_twice(monkeypatch, capsys):
+    import localsr.worker.image_batch as batch_module
+    import localsr.worker.server as server_module
+    from localsr.protocol.messages import JobCompleted
+
+    server = WorkerServer()
+
+    def lanes(runner, items):
+        runner.announce(items[0])  # the photo started on the lanes, then fell back
+        return items
+
+    def run_job(job_id, data):
+        server_module.send_message(JobCompleted(job_id=job_id, elapsed_seconds=1.0))
+
+    monkeypatch.setattr(batch_module.ImageBatchRunner, "run", lanes)
+    monkeypatch.setattr(server, "_run_job", run_job)
+    server._run_image_batch(_batch_jobs(2))
+    started = [m["data"]["job_id"] for m in _sent(capsys) if m["type"] == "job_started"]
+    assert started == ["photo-0", "photo-1"]
 
 
 def test_cancelling_a_batch_also_cancels_the_photos_left_for_the_normal_path(monkeypatch, capsys):

@@ -429,6 +429,28 @@ def test_worker_releases_restoration_caches_before_edit_and_clears_active_job(mo
         server.result_previews.close()
 
 
+def test_edit_refuses_an_output_name_the_file_system_cannot_hold_before_any_work(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        image_edit, "check_runtime", lambda _: pytest.fail("Runtime must not start")
+    )
+    request = {
+        "job_id": "long-name",
+        "model_id": model()["model_id"],
+        "prompt": "Change the background.",
+        "device": "mps",
+        "output_path": str(tmp_path / ("y" * 252 + ".png")),
+    }
+    with pytest.raises(ValueError, match="allows at most"):
+        image_edit.run_edit_job(
+            request,
+            threading.Event(),
+            lambda _message: None,
+            sampler=lambda _: EditMemory(64 * GIB, 60 * GIB, unified=True),
+        )
+
+
 def test_catalog_offers_only_openly_licensed_bundles():
     assert {m["license_name"] for m in image_edit.edit_catalog()} == {"Apache-2.0"}
     assert not any(m["terms_acceptance_required"] for m in image_edit.edit_catalog())

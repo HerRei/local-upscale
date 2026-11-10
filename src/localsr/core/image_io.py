@@ -1,21 +1,65 @@
 import io
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import warnings
+import zlib
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image, ImageCms, ImageOps
+from PIL import Image, ImageCms, ImageOps, TiffImagePlugin, UnidentifiedImageError
 
-from localsr.core.image_formats import is_raw_input, is_system_decoded
-from localsr.core.output_publish import publish_output
+from localsr.core.image_formats import (
+    is_raw_input,
+    is_system_decoded,
+    require_ordinary_source,
+)
+from localsr.core.output_publish import owned_temporary, publish_output
+
+# The most pixels a source image may have: what Pillow accepts before it refuses an image
+# as a decompression bomb (twice its 89 megapixel warning threshold). Everything up to
+# here opens, medium-format and stitched files included; the warning for the upper half
+# is silenced because accepting that range is intended.
+MAX_INPUT_PIXELS = 2 * 89_478_485
+TOO_LARGE_MESSAGE = (
+    f"This image has more than {round(MAX_INPUT_PIXELS / 1_000_000)} megapixels, which is more "
+    "than LocalSR opens. Reduce its size first."
+)
+
+
+class UnreadableImageError(OSError):
+    """A source LocalSR cannot read; the message is a sentence for the person who added it."""
+
+
+def _unreadable(path: str | Path) -> UnreadableImageError:
+    return UnreadableImageError(
+        f"{Path(path).name} is damaged or is not a picture format LocalSR can read."
+    )
+
+
+def _is_decode_failure(error: BaseException) -> bool:
+    """Whether a library raised ``error`` for bytes it could not make sense of.
+
+    A real input/output failure (no permission, no such file, a full disk) carries an
+    errno and keeps its own message; the libraries' decode failures carry none.
+    """
+    if isinstance(error, OSError):
+        return error.errno is None and not isinstance(error, UnreadableImageError)
+    return isinstance(error, (SyntaxError, EOFError, zlib.error, struct.error))
+
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
+# Formats whose extra frames are animation frames or pages, not another view of the picture
+# (a phone's JPEG also lists its depth map or gain map as a second frame).
+ANIMATED_OR_PAGED_FORMATS = frozenset({"GIF", "WEBP", "PNG", "TIFF"})
+# What a JPEG's single EXIF segment can hold, header included.
+JPEG_EXIF_LIMIT = 65_533
+_EXIF_TAG_NAMES = {306: "date", 315: "artist", 33432: "copyright"}
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
 # converts those to 8 bits by clipping, not scaling.
 WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
@@ -36,6 +80,106 @@ def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
     narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
     narrowed.info.update(image.info)
     return narrowed
+
+
+_PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+# Adam7 passes: first column, first row, column step, row step.
+_ADAM7 = (
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+)
+
+
+def _png_scanline_bytes(path: str | Path) -> tuple[int, int] | None:
+    """The bytes of scanline data a PNG's header promises, and what its IDAT chunks hold.
+
+    Pillow reads a PNG whose compressed data ends after too few rows without an error and
+    leaves the missing rows black. Returns None when the file is not one this can follow;
+    the decoder then reports its own problem.
+    """
+    try:
+        with open(path, "rb") as file:
+            if file.read(8) != b"\x89PNG\r\n\x1a\n":
+                return None
+            length, kind = struct.unpack(">I4s", file.read(8))
+            if kind != b"IHDR" or length < 13:
+                return None
+            width, height, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", file.read(13))
+            file.seek(length - 13 + 4, os.SEEK_CUR)
+            channels = _PNG_CHANNELS.get(colour)
+            if channels is None or interlace not in (0, 1):
+                return None
+            bits = channels * depth
+            passes = _ADAM7 if interlace else ((0, 0, 1, 1),)
+            expected = 0
+            for x0, y0, dx, dy in passes:
+                columns, rows = -(-(width - x0) // dx), -(-(height - y0) // dy)
+                if columns > 0 and rows > 0:
+                    expected += rows * (1 + -(-columns * bits // 8))
+            inflated, decoder = 0, zlib.decompressobj()
+            while inflated < expected:
+                header = file.read(8)
+                if len(header) < 8:
+                    break
+                length, kind = struct.unpack(">I4s", header)
+                if kind == b"IEND":
+                    break
+                if kind != b"IDAT":
+                    file.seek(length + 4, os.SEEK_CUR)
+                    continue
+                pending = file.read(length)
+                file.seek(4, os.SEEK_CUR)
+                while pending and inflated < expected:
+                    inflated += len(decoder.decompress(pending, 1 << 20))
+                    pending = decoder.unconsumed_tail
+            return expected, inflated
+    except (OSError, zlib.error, struct.error):
+        return None
+
+
+def require_pixel_budget(width: int, height: int) -> None:
+    """Refuse an image that has more pixels than LocalSR reads, before decoding any."""
+    if width * height > MAX_INPUT_PIXELS:
+        raise ValueError(TOO_LARGE_MESSAGE)
+
+
+def _float_grey_to_16_bit(image: Image.Image) -> Image.Image:
+    """Take a 32-bit float grey image, whose pixels run from 0 to 1, to 16 bits.
+
+    Pillow's own conversion keeps float values as they are and clips them to 0..255, so
+    every pixel of a 0..1 image became black. Values above 1 (HDR, or floats that hold
+    0..255) have no certain meaning, so they are refused rather than guessed.
+    """
+    values = np.asarray(image, dtype=np.float32)
+    if not np.isfinite(values).all() or values.max() > 1.001:
+        raise ValueError(
+            "This floating-point image holds values above 1 or not-a-number values. "
+            "Only floating-point images whose values run from 0 to 1 are supported; "
+            "save an 8-bit or 16-bit copy first."
+        )
+    wide = Image.fromarray(np.rint(np.clip(values, 0.0, 1.0) * 65535.0).astype(np.uint16))
+    wide.info.update(image.info)
+    return wide
+
+
+def _is_float_tiff(path: str | Path) -> bool:
+    """Whether a file Pillow cannot identify is a TIFF with floating-point samples."""
+    try:
+        with open(path, "rb") as file:
+            header = file.read(8)
+            if header[:4] not in (b"II*\x00", b"MM\x00*"):
+                return False
+            directory = TiffImagePlugin.ImageFileDirectory_v2(header)
+            file.seek(directory.next)
+            directory.load(file)
+        return 3 in tuple(directory.get(339) or ())  # SampleFormat: IEEE floating point
+    except (OSError, SyntaxError, ValueError, TypeError, EOFError):
+        return False
 
 
 def _to_srgb(
@@ -82,15 +226,28 @@ def _decode_with_macos(path: str) -> Image.Image:
                 timeout=300,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise OSError(f"macOS could not decode {Path(path).name}: {error}") from error
+            raise UnreadableImageError(
+                f"macOS could not decode {Path(path).name}: {error}"
+            ) from error
         if result.returncode != 0 or not target.is_file():
-            detail = (result.stderr or result.stdout).strip().splitlines()
-            raise OSError(
+            # sips ends an error with a pointer to its manual, which says nothing.
+            detail = [
+                line
+                for line in (result.stderr or result.stdout).strip().splitlines()
+                if not line.startswith("Try '")
+            ]
+            raise UnreadableImageError(
                 f"macOS could not decode {Path(path).name}"
                 + (f": {detail[-1][:200]}" if detail else ".")
             )
-        image = Image.open(io.BytesIO(target.read_bytes()))
-        image.load()
+        try:
+            image = Image.open(io.BytesIO(target.read_bytes()))
+            image.load()
+        except (OSError, SyntaxError, EOFError, ValueError) as error:
+            # sips reports success for some truncated files and writes a broken TIFF.
+            raise UnreadableImageError(
+                f"macOS could not decode {Path(path).name}: the file looks damaged."
+            ) from error
     if image.mode == "RGBA" and image.getchannel("A").getextrema() == (255, 255):
         # sips always writes an alpha channel; an opaque one is not transparency.
         icc, exif = image.info.get("icc_profile"), image.getexif()
@@ -164,18 +321,26 @@ def _develop_raw(path: str) -> np.ndarray:
     # isolated worker for real jobs, and the import occurs only for RAW input.
     import rawpy
 
-    with rawpy.imread(path) as raw:
-        return raw.postprocess(
-            use_camera_wb=True,
-            use_auto_wb=False,
-            output_color=rawpy.ColorSpace.sRGB,
-            output_bps=8,
-        )
+    try:
+        with rawpy.imread(path) as raw:
+            return raw.postprocess(
+                use_camera_wb=True,
+                use_auto_wb=False,
+                output_color=rawpy.ColorSpace.sRGB,
+                output_bps=8,
+            )
+    except Exception as error:
+        # LibRaw's own errors are bytes such as b'Input/output error'.
+        if isinstance(error, getattr(rawpy, "LibRawError", ())):
+            raise _unreadable(path) from error
+        raise
 
 
 class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
+        # What loading and saving left out or changed that the user should know about.
+        self.notes: list[str] = []
         self.alpha_channel = None
         # A grey source has no colour, so save() keeps only the luma a model returns.
         self.grayscale = False
@@ -187,7 +352,19 @@ class ImageManager:
         - Checks ICC profile. If present, converts to sRGB.
         - If RGBA, extracts alpha channel.
         - Returns a dict containing the tensor and metadata.
+        A file that cannot be decoded raises UnreadableImageError, whatever library it came
+        from; the library's own message stays as the chained cause.
         """
+        try:
+            return self._load(path)
+        except Exception as error:
+            if _is_decode_failure(error):
+                raise _unreadable(path) from error
+            raise
+
+    def _load(self, path: str) -> dict:
+        require_ordinary_source(path)
+        self.notes = []
         self.alpha_channel = None
         self.grayscale = False
         is_raw = is_raw_input(path)
@@ -197,9 +374,21 @@ class ImageManager:
         # separate from the LibRaw pixel decode below.
         metadata_img = None
         try:
-            metadata_img = open_image(path)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+                metadata_img = open_image(path)
+            # The size comes from the header; nothing has been decoded yet.
+            if not is_raw:
+                require_pixel_budget(metadata_img.width, metadata_img.height)
+        except Image.DecompressionBombError as error:
+            raise ValueError(TOO_LARGE_MESSAGE) from error
         except (OSError, SyntaxError, ValueError) as error:
             if not is_raw:
+                if isinstance(error, UnidentifiedImageError) and _is_float_tiff(path):
+                    raise UnreadableImageError(
+                        f"{Path(path).name} is a floating-point colour TIFF, which LocalSR cannot "
+                        "read. Save an 8-bit or 16-bit copy and add that instead."
+                    ) from error
                 raise
             # Pillow reads DNG's TIFF structure but not most other RAW containers;
             # their pixels still come from LibRaw below.
@@ -207,6 +396,17 @@ class ImageManager:
                 f"Could not read RAW metadata: {error}",
                 RuntimeWarning,
                 stacklevel=2,
+            )
+
+        if metadata_img is not None and metadata_img.format == "PNG":
+            counted = _png_scanline_bytes(path)
+            if counted is not None and counted[1] < counted[0]:
+                raise _unreadable(path)
+
+        frames = getattr(metadata_img, "n_frames", 1)
+        if frames > 1 and metadata_img.format in ANIMATED_OR_PAGED_FORMATS:
+            self.notes.append(
+                f"{Path(path).name} has {frames} frames or pages; only the first one was used."
             )
 
         # Copy a deliberately small privacy allow-list. In particular, GPS,
@@ -249,6 +449,8 @@ class ImageManager:
             if metadata_img is None:  # pragma: no cover - guarded by the exception above
                 raise OSError(f"Could not open image: {path}")
             img = ImageOps.exif_transpose(metadata_img)
+            if img.mode == "F":
+                img = _float_grey_to_16_bit(img)
             converted_icc = None
 
         self.original_mode = img.mode
@@ -346,6 +548,24 @@ class ImageManager:
             cancel_event=cancel_event,
         )
 
+    def _fit_jpeg_exif(self, exif: Image.Exif, copied: dict) -> None:
+        """Leave the largest copied tags out until the EXIF block fits a JPEG.
+
+        Encoding fails for a block over 64 KB, and a source tag can be that long. The
+        tags LocalSR generates are small, so only copied ones are dropped.
+        """
+        dropped = []
+        for tag in sorted(copied, key=lambda tag: len(str(copied[tag])), reverse=True):
+            if len(exif.tobytes()) <= JPEG_EXIF_LIMIT:
+                break
+            del exif[tag]
+            dropped.append(_EXIF_TAG_NAMES.get(tag, f"tag {tag}"))
+        if dropped:
+            self.notes.append(
+                f"The photo's {', '.join(dropped)} text was too long to fit a JPEG file and "
+                "was left out."
+            )
+
     def save_from_writer(
         self,
         writer_mmap: np.ndarray,
@@ -410,21 +630,17 @@ class ImageManager:
             exif[274] = 1
             exif[40962] = out_img.width
             exif[40963] = out_img.height
+            if format.lower() in ("jpg", "jpeg"):
+                self._fit_jpeg_exif(exif, safe_exif)
             kwargs["exif"] = exif
 
         fmt = format.lower()
         destination = Path(destination_path)
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError("Cancelled before image export.")
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.localsr-image-",
-            suffix=".tmp",
-            # The native host provides a per-job directory on the output's
-            # filesystem, so even a force-stopped encode can be cleaned up.
-            dir=temporary_directory or destination.parent,
-        )
-        os.close(descriptor)
-        tmp_path = Path(temporary_name)
+        # The native host provides a per-job directory on the output's
+        # filesystem, so even a force-stopped encode can be cleaned up.
+        tmp_path = owned_temporary(temporary_directory or destination.parent, "image")
         try:
             if fmt in ["jpg", "jpeg"]:
                 if out_img.mode == "RGBA":

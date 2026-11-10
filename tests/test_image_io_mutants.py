@@ -264,8 +264,7 @@ def test_a_raw_file_whose_metadata_cannot_be_read_is_still_developed(tmp_path, m
     path.write_bytes(b"not a TIFF")
     raw = SimpleNamespace(
         postprocess=lambda **_kw: np.full((4, 6, 3), 90, dtype=np.uint8),
-        __enter__=lambda self: self,
-        __exit__=lambda *_a: False,
+        sizes=SimpleNamespace(width=6, height=4, flip=0),
     )
 
     class Raw:
@@ -290,7 +289,7 @@ def test_a_raw_file_whose_metadata_cannot_be_read_is_still_developed(tmp_path, m
 def test_a_file_that_is_not_an_image_is_an_error_and_not_a_blank_photo(tmp_path):
     path = tmp_path / "broken.png"
     path.write_bytes(b"not an image")
-    with pytest.raises(OSError, match="cannot identify image file"):
+    with pytest.raises(OSError, match="broken.png is damaged or is not a picture format"):
         ImageManager().load(str(path))
 
 

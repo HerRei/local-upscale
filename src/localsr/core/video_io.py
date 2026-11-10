@@ -38,7 +38,7 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
-from .output_publish import OutputExistsError, publish_output
+from .output_publish import OutputExistsError, owned_temporary, publish_output
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -465,13 +465,20 @@ def _system_stream_export(
             final.unlink()
         except FileNotFoundError:
             pass
-        # macOS keeps a `<name>.sb-...` sibling of a file the system encoder wrote
-        # (a full extra copy for ProRes). Only the ones of this job's own file go.
-        for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
-            try:
-                sidecar.unlink()
-            except OSError:
-                pass
+        _remove_system_sidecars(final)
+
+
+def _remove_system_sidecars(final: Path) -> None:
+    """Remove the copy macOS keeps beside a file the system encoder wrote.
+
+    It is named `<name>.sb-...` and, for ProRes, is a full extra copy. Only the ones
+    of this job's own file go.
+    """
+    for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
 
 
 def _external_export(
@@ -577,6 +584,7 @@ def _external_export(
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+        _remove_system_sidecars(final)
 
 
 def encode_video(
@@ -794,13 +802,7 @@ def encode_video(
 
 def _owned_output_temporary(destination: Path, phase: str, directory: str | None = None) -> Path:
     """Reserve one unique LocalSR-owned sibling for an atomic final replace."""
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{destination.name}.localsr-{phase}-",
-        suffix=".tmp",
-        dir=directory or destination.parent,
-    )
-    os.close(descriptor)
-    return Path(name)
+    return owned_temporary(directory or destination.parent, phase)
 
 
 def _packet_time(packet: av.Packet) -> float:

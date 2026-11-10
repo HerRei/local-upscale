@@ -186,7 +186,7 @@ class _Lane:
             if self.info.architecture == "SPAN" and _span_output_is_unstable(core):
                 raise PhotoFallback("SPAN produced extreme pixel values.")
             self.tiles += 1
-            return core.clamp(0, 1).mul_(255).byte().numpy()
+            return core.clamp(0, 1).mul_(255).round_().byte().numpy()
 
 
 class _Photo:
@@ -256,9 +256,11 @@ class _Photo:
 
     def encode(self) -> float:
         """Save atomically; returns the seconds from the first tile to the saved file."""
-        save_output(
+        notes = save_output(
             self.manager, self.writer, self.image, self.info, self.data, self.batch.cancel_event
         )
+        if notes:
+            self.batch.save_notes[str(self.data["job_id"])] = notes
         started = self.progress.inference_started_at
         return self.batch.clock() - (started if started is not None else self.batch.clock())
 
@@ -293,6 +295,8 @@ class ImageBatchRunner:
         self.memory_budget = memory_budget or default_memory_budget()
         self.clock = clock
         self.lane_tile_counts: dict[str, int] = {}
+        # What each saved photo's save left out, until its job_completed carries it.
+        self.save_notes: dict[str, list[str]] = {}
         self._announced: set[str] = set()
         self._focus = ""
 
@@ -435,6 +439,7 @@ class ImageBatchRunner:
                     elapsed_seconds=elapsed,
                     inference_seconds=max(inference_seconds, 0.0),
                     output_path=item["output_path"],
+                    notes=" ".join(self.save_notes.pop(str(item["job_id"]), [])),
                 )
             )
 

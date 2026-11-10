@@ -468,13 +468,22 @@ def _watch(
     device: str,
     *,
     clock: Callable[[], float] = time.monotonic,
-    sleeper: Callable[[float], None] = time.sleep,
+    sleeper: Callable[[float], None] | None = None,
 ) -> int:
+    # A signal sets the cancel event; waiting on it ends the poll pause at once, where
+    # time.sleep would resume and finish the whole pause.
+    sleeper = sleeper or runner.cancel_event.wait
     input_directory = args.folder.resolve(strict=True)
     if not input_directory.is_dir():
         raise AutomationError(f"Watch path is not a directory: {input_directory}")
     args.output.mkdir(parents=True, exist_ok=True)
     output_directory = args.output.resolve(strict=True)
+    # LocalSR's own output is never watched, so such a folder would hide every input.
+    if output_directory == input_directory or output_directory in input_directory.parents:
+        raise AutomationError(
+            "The output folder must not be the watched folder or a folder that holds it. "
+            "Choose another folder, or one inside the watched folder."
+        )
     state_file = args.state_file or output_directory / ".localsr-watch-state.json"
     ledger = WatchLedger(state_file)
     observations: dict[Path, StableObservation] = {}
@@ -611,12 +620,12 @@ def _validate_automation_args(args: argparse.Namespace) -> None:
         if not system_codecs_available():
             raise AutomationError(MACOS_ONLY_MESSAGE)
     elif args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
-        from localsr.core.media_bridge import system_codecs_available
+        from localsr.core.media_bridge import implicit_user_ffmpeg, system_codecs_available
 
-        if not system_codecs_available():
+        if not system_codecs_available() and implicit_user_ffmpeg() is None:
             raise AutomationError(
-                "H.264/HEVC export uses the system codecs (macOS) or the FFmpeg installed on "
-                "this computer; pass --external-ffmpeg."
+                "No FFmpeg was found on this computer for H.264/HEVC export. Install FFmpeg, "
+                "or pass --external-ffmpeg with the path of one."
             )
     if args.command == "watch":
         if (

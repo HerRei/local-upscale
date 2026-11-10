@@ -77,6 +77,13 @@ from localsr.protocol.messages import (
     WarningMessage,
     WorkerReady,
 )
+from localsr.worker.request_validation import (
+    InvalidRequest,
+    usable_job_id,
+    validate_image_job,
+    validate_probe,
+    validate_video_job,
+)
 from localsr.worker.result_preview import ResultPreviewService
 
 # Prevent interleaved JSON Lines from concurrent worker threads.
@@ -149,6 +156,24 @@ def _engine_features() -> list[str]:
 DEVICE_LOST_EXIT_CODE = 75
 
 
+def _accepts(data: object, validate) -> bool:
+    """Check a job request before anything is stored or loaded for it.
+
+    A refusal ends the job with job_failed when the request carries a text job id; one that
+    does not leaves nothing to address, so it is logged.
+    """
+    try:
+        validate(data)
+    except InvalidRequest as error:
+        job_id = usable_job_id(data)
+        if job_id:
+            send_message(JobFailed(job_id=job_id, error_message=str(error)))
+        else:
+            send_message(LogMessage(level="error", message=f"Protocol error: {error}"))
+        return False
+    return True
+
+
 def _device_lost(error: BaseException) -> bool:
     """Whether a job failed because the graphics driver removed or reset the GPU."""
     from localsr.core.onnx_runtime import GpuDeviceLost, _is_device_lost
@@ -199,8 +224,9 @@ class WorkerServer:
 
     def _activate_job(self, job_id: str) -> None:
         with self.state_lock:
+            cancelled = job_id in self.pending_cancel_job_ids
             self.active_job_id = job_id
-            if job_id in self.pending_cancel_job_ids:
+            if cancelled:
                 self.cancel_event.set()
             else:
                 self.cancel_event.clear()
@@ -228,42 +254,60 @@ class WorkerServer:
             self.cancel_event.clear()
 
     def reader_thread_func(self):
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError as error:
-                send_message(
-                    LogMessage(level="error", message=f"JSON parse error in worker: {error}")
-                )
-                continue
+        try:
+            # Requests are UTF-8 whatever the console's code page, and a byte that is not
+            # UTF-8 must not end the reader.
+            reconfigure = getattr(sys.stdin, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(encoding="utf-8", errors="replace")
+            for line in sys.stdin:
+                try:
+                    self._read_line(line)
+                # One bad line, whatever it raises (RecursionError and a
+                # 5000-digit number included), is reported and then dropped.
+                except Exception as error:  # noqa: BLE001
+                    send_message(
+                        LogMessage(
+                            level="error",
+                            message=f"Protocol error: a request line was refused ({error}).",
+                        )
+                    )
+        finally:
+            # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
+            self.cancel_event.set()
+            self.message_queue.put({"type": "shutdown_request"})
 
-            if not isinstance(msg, dict):
-                send_message(LogMessage(level="error", message="Worker request must be an object."))
-                continue
+    def _read_line(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as error:
+            send_message(LogMessage(level="error", message=f"JSON parse error in worker: {error}"))
+            return
 
-            request_type = msg.get("type")
-            if request_type == "region_request":
-                self.compare_regions.submit(msg.get("data", {}))
-                continue
-            if request_type == "region_clear":
-                self.compare_regions.clear()
-                continue
-            if request_type == "preview_request":
-                self.result_previews.submit(msg.get("data", {}))
-                continue
-            self.message_queue.put(msg)
-            if request_type == "shutdown_request":
-                self.cancel_event.set()
-            elif request_type == "cancel_request":
-                requested_job_id = str(msg.get("data", {}).get("job_id") or "")
-                self._request_cancel(requested_job_id)
+        if not isinstance(msg, dict):
+            send_message(LogMessage(level="error", message="Worker request must be an object."))
+            return
 
-        # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
-        self.cancel_event.set()
-        self.message_queue.put({"type": "shutdown_request"})
+        request_type = msg.get("type")
+        data = msg.get("data", {})
+        if request_type == "region_request":
+            self.compare_regions.submit(data)
+            return
+        if request_type == "region_clear":
+            self.compare_regions.clear()
+            return
+        if request_type == "preview_request":
+            self.result_previews.submit(data)
+            return
+        self.message_queue.put(msg)
+        if request_type == "shutdown_request":
+            self.cancel_event.set()
+        elif request_type == "cancel_request":
+            requested_job_id = data.get("job_id") if isinstance(data, dict) else None
+            self._request_cancel(requested_job_id if isinstance(requested_job_id, str) else "")
 
     def _restart_if_required(self) -> None:
         """After a lost device, exit as soon as the failure is reported. Freeing the sessions
@@ -297,7 +341,16 @@ class WorkerServer:
                     self.running = False
                     break
 
-                elif req_type == "handshake_request":
+                if not isinstance(data, dict):
+                    send_message(
+                        LogMessage(
+                            level="error",
+                            message=f"Protocol error: the {req_type} request has no data object.",
+                        )
+                    )
+                    continue
+
+                if req_type == "handshake_request":
                     requested_version = int(data.get("protocol_version", 0))
                     if not MIN_PROTOCOL_VERSION <= requested_version <= PROTOCOL_VERSION:
                         send_message(
@@ -331,7 +384,15 @@ class WorkerServer:
                     self.result_previews.submit(data)
 
                 elif req_type == "media_probe_request":
-                    media_path = str(data.get("media_path", ""))
+                    media_path = data.get("media_path")
+                    media_path = media_path if isinstance(media_path, str) else ""
+                    try:
+                        validate_probe(data)
+                    except InvalidRequest as error:
+                        send_message(
+                            MediaProbeFailed(media_path=media_path, error_message=str(error))
+                        )
+                        continue
                     maximum = int(data.get("max_dimension", 1600))
 
                     def report_probe(stage, path=media_path):
@@ -402,6 +463,8 @@ class WorkerServer:
                     self._run_image_batch(data.get("jobs"))
 
                 elif req_type == "job_request":
+                    if not _accepts(data, validate_image_job):
+                        continue
                     if self.active_job_id is not None:
                         send_message(
                             JobFailed(
@@ -438,6 +501,8 @@ class WorkerServer:
                         self._deactivate_job(job_id)
 
                 elif req_type == "video_job_request":
+                    if not _accepts(data, validate_video_job):
+                        continue
                     if self.active_job_id is not None:
                         send_message(
                             JobFailed(
@@ -447,7 +512,6 @@ class WorkerServer:
                         continue
 
                     job_id = data["job_id"]
-                    self._activate_job(job_id)
                     previous_checkpoint_policy = getattr(
                         self.model_adapter, "allow_unverified_checkpoints", False
                     )
@@ -459,6 +523,7 @@ class WorkerServer:
                     )
 
                     try:
+                        self._activate_job(job_id)
                         send_message(JobStarted(job_id=job_id))
                         self._run_video_job(job_id, data)
                     except Exception as e:  # noqa: BLE001
@@ -731,10 +796,11 @@ class WorkerServer:
         result = aggregate_v2(device_results, time.monotonic() - started_at)
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
-    def _run_image_job(self, data) -> None:
-        """One image job: its own activation, checkpoint policy and failure boundary."""
+    def _run_image_job(self, data, announced: bool = False) -> None:
+        """One image job: its own activation, checkpoint policy and failure boundary.
+
+        ``announced`` is set for a photo whose job_started a batch already sent."""
         job_id = data["job_id"]
-        self._activate_job(job_id)
         previous_checkpoint_policy = getattr(
             self.model_adapter, "allow_unverified_checkpoints", False
         )
@@ -746,7 +812,9 @@ class WorkerServer:
         )
 
         try:
-            send_message(JobStarted(job_id=job_id))
+            self._activate_job(job_id)
+            if not announced:
+                send_message(JobStarted(job_id=job_id))
             self._run_job(job_id, data)
         # The process boundary must turn any inference/I/O failure
         # into a job_failed message instead of killing the worker.
@@ -779,16 +847,26 @@ class WorkerServer:
         """
         from localsr.worker.image_batch import ImageBatchRunner
 
-        named = [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
-        ids = [str(job.get("job_id") or "") for job in named]
-        if len(ids) != len(jobs or ()) or not all(ids) or len(set(ids)) != len(ids):
+        jobs = jobs if isinstance(jobs, list) else []
+        named = [job for job in jobs if isinstance(job, dict)]
+        ids = [job_id for job in named if (job_id := usable_job_id(job))]
+        known = set(ids)
+        if len(ids) != len(jobs) or len(known) != len(ids):
             ids = []
         if not 2 <= len(ids) <= MAX_BATCH_PHOTOS:
-            for job_id in {str(job.get("job_id")) for job in named if job.get("job_id")}:
+            for job_id in known:
                 send_message(
                     JobFailed(job_id=job_id, error_message="The photo batch request is invalid.")
                 )
             return
+        for job in named:
+            try:
+                validate_image_job(job)
+            except InvalidRequest as error:
+                # The photos share one recipe, so one refusal ends every photo.
+                for job_id in ids:
+                    send_message(JobFailed(job_id=job_id, error_message=str(error)))
+                return
         terminal: set[str] = set()
         started: set[str] = set()
 
@@ -838,7 +916,7 @@ class WorkerServer:
         try:
             self._restart_if_required()
             for data in returned:
-                self._run_image_job(data)
+                self._run_image_job(data, announced=str(data["job_id"]) in started)
         finally:
             self._deactivate_batch(ids)
 

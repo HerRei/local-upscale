@@ -11,7 +11,9 @@ profile is embedded in JPEG, PNG, TIFF, WebP, and (on macOS) HEIC outputs when t
 are developed through LibRaw into sRGB; LocalSR does not claim to preserve the original RAW camera
 profile or full DNG metadata. Invalid ICC data produces a warning rather than being copied.
 Grey and CMYK profiles convert to sRGB the same way. 16-bit grey PNG and TIFF files are scaled
-to 8 bits, the precision LocalSR works in.
+to 8 bits, the precision LocalSR works in. A 32-bit floating-point grey TIFF whose values run
+from 0 to 1 is scaled the same way; floating-point images with larger values, and floating-point
+colour TIFFs, are refused with a message.
 
 A grey source (a grey, black-and-white or grey-palette file, or an RGB file whose channels are
 all equal) has no colour, so LocalSR saves only the luma of the model's result: models trained
@@ -21,7 +23,8 @@ shows the model output before this save-time adjustment.
 Other camera RAW formats are developed the same way; their EXIF is not read, so nothing from
 them is preserved. HEIC/HEIF and JPEG XL are decoded by macOS, which applies the orientation and
 keeps the colour profile and the allow-listed tags. GIF, HEIC and other multi-image files use
-their first image.
+their first image; the job's notes say so for an animated or multi-page file. A JPEG holds at
+most 64 KB of EXIF: a copied tag too long for that is left out and the job's notes say so.
 
 PNG, TIFF, WebP, and HEIC preserve and resize an input alpha channel. JPEG cannot carry alpha and is
 written as RGB. EXIF fields unsupported by an output encoder are not claimed as preserved. Turning

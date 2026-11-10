@@ -1,6 +1,7 @@
 import io
 import os
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -169,7 +170,7 @@ def test_image_manager_save_delegation(tmp_path):
 
     assert os.path.exists(out_path)
     assert unrelated.read_text(encoding="utf-8") == "belongs to the user"
-    assert not list(tmp_path.glob(".out_save.png.localsr-image-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-image-*.tmp"))
     out_img = Image.open(out_path)
     assert out_img.size == (10, 10)
 
@@ -188,7 +189,7 @@ def test_atomic_save_error_cleanup(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Disk error during publish"):
         manager.save_from_writer(out_mmap, out_path, "png", 98, False, None, {}, 1)
 
-    assert not list(tmp_path.glob(".out_fail.png.localsr-image-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-image-*.tmp"))
     assert not os.path.exists(out_path)
 
 
@@ -436,6 +437,210 @@ def test_twelve_bit_tiff_uses_declared_sample_depth(tmp_path):
     assert pixels == [128, 255]
 
 
+def _float_rgb_tiff(path, pixels):
+    """A baseline 32-bit float RGB TIFF; Pillow cannot read or write one."""
+    height, width, _ = pixels.shape
+    data = pixels.astype("<f4").tobytes()
+    bits_at = 8 + len(data)
+    formats_at = bits_at + 6
+    directory_at = formats_at + 6
+    entries = [
+        (256, 4, 1, width),
+        (257, 4, 1, height),
+        (258, 3, 3, bits_at),
+        (259, 3, 1, 1),
+        (262, 3, 1, 2),
+        (273, 4, 1, 8),
+        (277, 3, 1, 3),
+        (278, 4, 1, height),
+        (279, 4, 1, len(data)),
+        (284, 3, 1, 1),
+        (339, 3, 3, formats_at),
+    ]
+    path.write_bytes(
+        b"II"
+        + struct.pack("<HI", 42, directory_at)
+        + data
+        + struct.pack("<3H", 32, 32, 32)
+        + struct.pack("<3H", 3, 3, 3)
+        + struct.pack("<H", len(entries))
+        + b"".join(struct.pack("<HHII", *entry) for entry in entries)
+        + struct.pack("<I", 0)
+    )
+
+
+def test_float_grey_tiff_spans_the_full_range_instead_of_turning_black(tmp_path):
+    ramp = np.tile(np.linspace(0.0, 1.0, 64, dtype=np.float32), (4, 1))
+    path = tmp_path / "grey_float.tif"
+    Image.fromarray(ramp).save(path)
+    assert Image.open(path).mode == "F"
+    pixels = ImageManager().load(str(path))["tensor"][0, 0].mul(255).round().numpy()
+    assert pixels[0] == 0 and pixels[-1] == 255
+    assert abs(pixels[32] - 32 * 255 / 63) <= 1
+
+
+def test_float_grey_tiff_above_one_is_refused_instead_of_clipped_to_white(tmp_path):
+    path = tmp_path / "grey_hdr.tif"
+    Image.fromarray(np.linspace(0.0, 200.0, 64, dtype=np.float32)[None, :]).save(path)
+    with pytest.raises(ValueError, match="floating-point"):
+        ImageManager().load(str(path))
+
+
+def test_float_rgb_tiff_says_it_is_not_supported(tmp_path):
+    path = tmp_path / "rgb_float.tif"
+    _float_rgb_tiff(path, np.random.default_rng(1).random((8, 8, 3)))
+    with pytest.raises(OSError, match="floating-point colour TIFF"):
+        ImageManager().load(str(path))
+
+
+def _png_claiming(path, width, height):
+    """A few bytes of PNG whose header claims a huge size; its pixels are not there."""
+    import zlib
+
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00" * 16))
+        + chunk(b"IEND", b"")
+    )
+
+
+@pytest.mark.parametrize(("width", "height"), [(14_000, 14_000), (90_000, 90_000)])
+def test_an_image_beyond_the_decompression_limit_is_refused_with_one_sentence(
+    tmp_path, monkeypatch, width, height
+):
+    path = tmp_path / "claims.png"
+    _png_claiming(path, width, height)
+
+    def never(*_args, **_kwargs):
+        raise AssertionError("pixels were decoded")
+
+    monkeypatch.setattr(Image.Image, "load", never)
+    with pytest.raises(ValueError, match="more than 179 megapixels"):
+        ImageManager().load(str(path))
+
+
+def test_an_image_in_the_range_pillow_only_warns_about_is_not_refused_for_its_size(
+    tmp_path, recwarn
+):
+    from localsr.core.image_io import MAX_INPUT_PIXELS, require_pixel_budget
+
+    assert MAX_INPUT_PIXELS == 2 * Image.MAX_IMAGE_PIXELS
+    require_pixel_budget(11_648, 8_736)  # a 102 megapixel medium-format frame
+    require_pixel_budget(13_377, 13_377)  # the last square size inside the limit
+    with pytest.raises(ValueError, match="megapixels"):
+        require_pixel_budget(13_378, 13_378)
+    path = tmp_path / "claims.png"
+    _png_claiming(path, 12_000, 10_000)
+    # Its data is not there, so the load stops as damaged; the size alone does not stop it
+    # and Pillow's warning is not raised.
+    with pytest.raises(OSError, match="claims.png is damaged"):
+        ImageManager().load(str(path))
+    assert not [w for w in recwarn if issubclass(w.category, Image.DecompressionBombWarning)]
+
+
+def _damaged_files(tmp_path):
+    from PIL import ImageDraw
+
+    picture = Image.new("RGB", (96, 64), (10, 20, 30))
+    ImageDraw.Draw(picture).ellipse((10, 10, 80, 50), fill=(200, 90, 40))
+    files = {"zero.png": b"", "text.jpg": b"this is not a picture", "garbage.tif": os.urandom(300)}
+    for name, (fmt, options) in {
+        "cut.png": ("PNG", {}),
+        "cut.jpg": ("JPEG", {"quality": 95}),
+        "cut.tif": ("TIFF", {}),
+        "cut.webp": ("WEBP", {}),
+        "cut.bmp": ("BMP", {}),
+        "cut.gif": ("GIF", {}),
+    }.items():
+        buffer = io.BytesIO()
+        picture.save(buffer, format=fmt, **options)
+        files[name] = buffer.getvalue()[: len(buffer.getvalue()) * 6 // 10]
+    paths = []
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+        paths.append(tmp_path / name)
+    return paths
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+def test_every_damaged_file_gives_one_plain_sentence_and_keeps_the_library_text_as_cause(
+    tmp_path,
+):
+    for path in _damaged_files(tmp_path):
+        with pytest.raises(OSError) as raised:
+            ImageManager().load(str(path))
+        assert str(raised.value) == (
+            f"{path.name} is damaged or is not a picture format LocalSR can read."
+        ), path.name
+        if path.name != "cut.png":  # the PNG row check finds that one before any decoder does
+            assert raised.value.__cause__ is not None, path.name
+
+
+def test_a_real_input_output_failure_keeps_its_own_message(tmp_path):
+    with pytest.raises(FileNotFoundError, match="missing.png"):
+        ImageManager().load(str(tmp_path / "missing.png"))
+    with pytest.raises(OSError, match="Is a directory"):
+        ImageManager().load(str(tmp_path))
+
+
+def test_a_camera_raw_file_libraw_cannot_read_gives_the_same_sentence(tmp_path, monkeypatch):
+    path = tmp_path / "broken.NEF"
+    path.write_bytes(b"not raw")
+
+    class LibRawFileUnsupportedError(Exception):
+        pass
+
+    def imread(_path):
+        raise LibRawFileUnsupportedError(b"Unsupported file format or not RAW file")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "rawpy",
+        SimpleNamespace(
+            imread=imread,
+            LibRawError=LibRawFileUnsupportedError,
+            ColorSpace=SimpleNamespace(sRGB=object()),
+        ),
+    )
+    with pytest.warns(RuntimeWarning), pytest.raises(OSError) as raised:
+        ImageManager().load(str(path))
+    assert str(raised.value) == "broken.NEF is damaged or is not a picture format LocalSR can read."
+    assert isinstance(raised.value.__cause__, LibRawFileUnsupportedError)
+
+
+@pytest.mark.filterwarnings("ignore:Corrupt EXIF data")
+def test_the_macos_decoder_drops_the_manual_pointer_and_a_broken_tiff_is_damage(
+    tmp_path, monkeypatch
+):
+    from localsr.core import image_io
+
+    source = tmp_path / "x.heic"
+    source.write_bytes(b"x")
+
+    def failing(_argv, **_kwargs):
+        return subprocess.CompletedProcess([], 1, "", "Error 4: no such image\nTry 'sips --help'")
+
+    monkeypatch.setattr(image_io.subprocess, "run", failing)
+    with pytest.raises(OSError) as raised:
+        image_io._decode_with_macos(str(source))
+    assert str(raised.value) == "macOS could not decode x.heic: Error 4: no such image"
+
+    def broken_tiff(argv, **_kwargs):
+        Path(argv[argv.index("--out") + 1]).write_bytes(b"II*\x00broken")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(image_io.subprocess, "run", broken_tiff)
+    with pytest.raises(OSError, match="the file looks damaged") as raised:
+        image_io._decode_with_macos(str(source))
+    assert "BytesIO" not in str(raised.value)
+
+
 def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
     path = tmp_path / "linear16.png"
     Image.fromarray(np.array([[0, 128, 256]], dtype=np.uint16)).save(
@@ -517,3 +722,149 @@ def test_an_image_job_refuses_heic_before_any_inference_without_macos(monkeypatc
     with pytest.raises(ValueError, match="needs macOS"):
         runner.run("job", {"output_format": "heic"})
     engine.release_models_except.assert_not_called()
+
+
+def _save_jpeg_with_source_tags(path, tags, fmt="jpg"):
+    manager = ImageManager()
+    manager.save_from_writer(
+        np.full((3, 8, 8), 120, dtype=np.uint8), str(path), fmt, 90, True, None, tags, 1
+    )
+    return manager
+
+
+def test_a_source_tag_too_long_for_a_jpeg_is_left_out_and_the_save_says_so(tmp_path):
+    tags = {315: "a" * 120_000, 33432: "(c) 2026 Someone", 306: "2026:11:10 09:00:00"}
+    manager = _save_jpeg_with_source_tags(tmp_path / "out.jpg", tags)
+    exif = Image.open(tmp_path / "out.jpg").getexif()
+    assert exif.get(315) is None
+    assert exif[33432] == "(c) 2026 Someone" and exif[306] == "2026:11:10 09:00:00"
+    assert exif[274] == 1
+    assert manager.notes == [
+        "The photo's artist text was too long to fit a JPEG file and was left out."
+    ]
+
+
+def test_the_same_long_tag_is_kept_where_the_format_has_room_for_it(tmp_path):
+    for fmt in ("png", "tif", "webp"):
+        manager = _save_jpeg_with_source_tags(tmp_path / f"out.{fmt}", {315: "a" * 120_000}, fmt)
+        assert Image.open(tmp_path / f"out.{fmt}").getexif().get(315) == "a" * 120_000
+        assert manager.notes == []
+
+
+def test_a_jpeg_with_small_tags_keeps_all_of_them_without_a_note(tmp_path):
+    manager = _save_jpeg_with_source_tags(tmp_path / "out.jpg", {315: "Artist"})
+    assert Image.open(tmp_path / "out.jpg").getexif()[315] == "Artist"
+    assert manager.notes == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_pipe_is_refused_as_a_source_instead_of_waiting_for_a_writer(tmp_path):
+    import threading
+
+    pipe = tmp_path / "source.png"
+    os.mkfifo(pipe)
+    outcome = []
+
+    def load():
+        try:
+            ImageManager().load(str(pipe))
+        except Exception as error:  # noqa: BLE001 - the test inspects it
+            outcome.append(error)
+
+    thread = threading.Thread(target=load, daemon=True)
+    thread.start()
+    thread.join(5)
+    try:
+        assert not thread.is_alive(), "load() is waiting for a writer on the pipe"
+        assert isinstance(outcome[0], ValueError) and "pipe, device or socket" in str(outcome[0])
+    finally:
+        if thread.is_alive():
+            # Release the blocked reader so the thread ends.
+            os.close(os.open(pipe, os.O_WRONLY))
+            thread.join(5)
+
+
+@pytest.mark.parametrize("name", ["anim.gif", "anim.webp", "anim.png", "pages.tif"])
+def test_a_file_with_several_frames_uses_the_first_and_says_so(tmp_path, name):
+    first = Image.new("RGB", (16, 12), (255, 0, 0))
+    second = Image.new("RGB", (16, 12), (0, 0, 255))
+    path = tmp_path / name
+    first.save(path, save_all=True, append_images=[second], lossless=True)
+    manager = ImageManager()
+    data = manager.load(str(path))
+    assert data["tensor"][:, 0, 0].mul(255).round().tolist()[0] > 200
+    assert manager.notes == [f"{name} has 2 frames or pages; only the first one was used."]
+
+
+def test_a_single_picture_gets_no_frame_note(tmp_path):
+    path = tmp_path / "one.png"
+    Image.new("RGB", (4, 4)).save(path)
+    manager = ImageManager()
+    manager.load(str(path))
+    assert manager.notes == []
+
+
+def _png_with_rows(path, width, height, rows_present, interlace=False):
+    """A grey 8-bit PNG whose compressed data is complete but holds only some of its rows."""
+    import zlib
+
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    passes = (
+        (
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        )
+        if interlace
+        else ((0, 0, 1, 1),)
+    )
+    rows = []
+    for x0, y0, dx, dy in passes:
+        columns, count = -(-(width - x0) // dx), -(-(height - y0) // dy)
+        if columns > 0 and count > 0:
+            rows += [b"\x00" + bytes([200]) * columns] * count
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, int(interlace)))
+        + chunk(b"IDAT", zlib.compress(b"".join(rows[:rows_present])))
+        + chunk(b"IEND", b"")
+    )
+    return len(rows)
+
+
+@pytest.mark.parametrize("interlace", [False, True])
+def test_a_png_that_ends_before_its_last_rows_is_refused_not_filled_with_black(tmp_path, interlace):
+    path = tmp_path / "short.png"
+    total = _png_with_rows(path, 37, 29, 1_000, interlace)
+    assert ImageManager().load(str(path))["tensor"].shape == (3, 29, 37)
+    _png_with_rows(path, 37, 29, total - 1, interlace)
+    with pytest.raises(OSError, match="short.png is damaged"):
+        ImageManager().load(str(path))
+    _png_with_rows(path, 37, 29, 2, interlace)
+    with pytest.raises(OSError, match="short.png is damaged"):
+        ImageManager().load(str(path))
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])
+@pytest.mark.parametrize("size", [(1, 1), (7, 5), (33, 17), (64, 64)])
+def test_the_png_rows_check_accepts_every_png_pillow_writes(tmp_path, mode, size):
+    rng = np.random.default_rng(3)
+    channels = {"1": 1, "L": 1, "LA": 2, "P": 1, "RGB": 3, "RGBA": 4, "I;16": 1}[mode]
+    shape = (size[1], size[0]) if channels == 1 else (size[1], size[0], channels)
+    if mode == "I;16":
+        image = Image.fromarray(rng.integers(0, 65535, shape, dtype=np.uint16))
+    elif mode in ("L", "LA", "RGB", "RGBA"):
+        image = Image.fromarray(rng.integers(0, 255, shape, dtype=np.uint8))
+    else:
+        image = Image.fromarray(rng.integers(0, 255, shape, dtype=np.uint8)).convert(mode)
+    path = tmp_path / "ok.png"
+    image.save(path)
+    assert ImageManager().load(str(path))["tensor"].shape == (3, size[1], size[0])

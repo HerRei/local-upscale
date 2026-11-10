@@ -503,6 +503,38 @@ def test_model_download_insufficient_disk_space(tmp_path: Path):
             download_model(model, destination)
 
 
+def test_model_download_resume_needs_room_only_for_what_is_still_missing(tmp_path: Path):
+    full_content = b"0123456789ABCDEF" * 1024  # 16 KB
+    model = _synthetic_test_model(content=full_content)
+    destination = tmp_path / model.filename
+    kept = len(full_content) * 3 // 4
+    (tmp_path / f"{model.filename}.part").write_bytes(full_content[:kept])
+
+    class Response206(io.BytesIO):
+        status = 206
+
+    # Room for the last quarter but not for the whole file: the first 12 KB already sit
+    # on the disk.
+    room = (len(full_content) - kept) * 2
+    with patch.object(
+        shutil, "disk_usage", return_value=shutil._ntuple_diskusage(10**6, 10**6 - room, room)
+    ):
+        download_model(
+            model,
+            destination,
+            opener=lambda request, timeout: Response206(full_content[kept:]),
+            chunk_size=1024,
+        )
+    assert destination.read_bytes() == full_content
+    # Starting afresh with that little room is still refused.
+    destination.unlink()
+    with patch.object(
+        shutil, "disk_usage", return_value=shutil._ntuple_diskusage(10**6, 10**6 - room, room)
+    ):
+        with pytest.raises(ModelDownloadError, match="Not enough disk space"):
+            download_model(model, destination)
+
+
 def test_model_store_is_installed(tmp_path: Path):
     store = ModelStore(tmp_path)
     model = _synthetic_test_model(content=b"model payload")

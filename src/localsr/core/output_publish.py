@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -70,3 +72,46 @@ def _copy_exclusively(temporary: Path, destination: Path) -> None:
         except OSError:
             pass
         raise
+
+
+def owned_temporary(directory: str | os.PathLike, phase: str) -> Path:
+    """Create an empty, hidden temporary file that LocalSR owns, next to the output.
+
+    The name is short and never contains the destination's name, so an output name the
+    file system accepts is not made unusable by the temporary beside it. The same
+    directory keeps the final publication on one volume.
+    """
+    descriptor, name = tempfile.mkstemp(prefix=f".localsr-{phase}-", suffix=".tmp", dir=directory)
+    os.close(descriptor)
+    return Path(name)
+
+
+# What most file systems allow for one name when the folder does not say otherwise.
+DEFAULT_NAME_LIMIT = 255
+
+
+def output_name_length(name: str) -> int:
+    """The length the file system counts: UTF-16 units on APFS and NTFS, bytes on Linux."""
+    if sys.platform in ("darwin", "win32"):
+        return len(name.encode("utf-16-le")) // 2
+    return len(os.fsencode(name))
+
+
+def output_name_limit(directory: str | os.PathLike) -> int:
+    """The longest file name ``directory`` can hold; the usual 255 where it cannot be asked."""
+    try:
+        return int(os.pathconf(directory, "PC_NAME_MAX"))
+    except (AttributeError, ValueError, OSError):
+        return DEFAULT_NAME_LIMIT
+
+
+def require_output_name(path: str | os.PathLike) -> None:
+    """Refuse an output name the file system cannot hold, before any work is done."""
+    name = Path(path).name
+    length, limit = output_name_length(name), output_name_limit(Path(path).parent)
+    if length > limit:
+        shown = name if len(name) <= 40 else name[:37] + "..."
+        raise ValueError(
+            f'The output file name "{shown}" is {length} characters long, but this folder '
+            f"allows at most {limit}. Shorten the name and try again."
+        )
