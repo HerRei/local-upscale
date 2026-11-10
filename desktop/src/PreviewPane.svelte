@@ -1171,6 +1171,10 @@
     font-size: calc(11px * var(--ui-scale));
     pointer-events: none;
   }
+  /* Above the Original's label chip at the same corner. */
+  .canvas-well:has(:global(.divider-labels)) .comparison-note {
+    bottom: calc(max(12px, var(--notice-room, 0px)) + 11px * var(--ui-scale) * 1.3 + 10px + 8px);
+  }
   @keyframes tile-pulse {
     50% {
       border-color: #e0e0e0;
