@@ -23,6 +23,8 @@ from pathlib import Path
 
 import av
 
+from .child_processes import start as start_child
+from .child_processes import stop as stop_child
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     UNDECODABLE_VIDEO_MESSAGE,
@@ -154,7 +156,7 @@ def _run(
         *arguments,
     ]
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
-        process = subprocess.Popen(
+        process = start_child(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -177,14 +179,18 @@ def _run(
                 time.sleep(0.1)
 
         watcher = threading.Thread(target=watch_cancel, daemon=True)
-        watcher.start()
-        for line in stdout:
-            if progress is not None and line.startswith("frame="):
-                try:
-                    progress(int(line.split("=", 1)[1]))
-                except ValueError:
-                    pass
-        code = process.wait()
+        try:
+            watcher.start()
+            for line in stdout:
+                if progress is not None and line.startswith("frame="):
+                    try:
+                        progress(int(line.split("=", 1)[1]))
+                    except ValueError:
+                        pass
+            code = process.wait()
+        finally:
+            # Whatever ended this call, FFmpeg must not keep converting on its own.
+            stop_child(process)
         watcher.join(timeout=1)
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError("video job cancelled")

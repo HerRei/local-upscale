@@ -29,6 +29,7 @@ from pathlib import Path
 import av
 import numpy as np
 
+from .child_processes import start as start_child
 from .external_ffmpeg import ExternalFFmpegError
 from .media_codecs import MOV_CODECS, encode_spec
 
@@ -436,7 +437,7 @@ class SystemCodecs:
     @contextmanager
     def _process(self, arguments: list[str], *, stdin: bool = False) -> Iterator[subprocess.Popen]:
         with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
-            process = subprocess.Popen(
+            process = start_child(
                 [self.path, *arguments],
                 stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
