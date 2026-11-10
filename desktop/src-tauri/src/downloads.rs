@@ -70,6 +70,7 @@ pub async fn download_model(
         }
         downloads.insert(model_id.clone(), cancellation.clone());
     }
+    let slot = DownloadSlot::new(&state, &model_id);
     {
         let mut runtime = lock(&state.runtime)?;
         runtime.download_model_id = model_id.clone();
@@ -83,7 +84,7 @@ pub async fn download_model(
     let result = target
         .download(&state, &app, &model_id, cancellation.as_ref())
         .await;
-    lock(&state.downloads)?.remove(&model_id);
+    drop(slot);
     {
         let mut runtime = lock(&state.runtime)?;
         runtime.download_model_id.clear();
@@ -120,6 +121,29 @@ pub async fn download_model(
     }
     emit_state_changed(&app);
     result
+}
+
+/// A model's place among the running downloads. Dropping it frees the place however
+/// the download ended, so a failure or a panic never blocks the next download.
+struct DownloadSlot<'a> {
+    state: &'a AppState,
+    model_id: &'a str,
+}
+
+impl<'a> DownloadSlot<'a> {
+    fn new(state: &'a AppState, model_id: &'a str) -> Self {
+        Self { state, model_id }
+    }
+}
+
+impl Drop for DownloadSlot<'_> {
+    fn drop(&mut self) {
+        self.state
+            .downloads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(self.model_id);
+    }
 }
 
 pub fn cancel_download(state: &AppState, model_id: &str) -> AppResult<()> {
@@ -420,7 +444,7 @@ async fn download_attempt(
     if offset > 0 {
         request = request.header(header::RANGE, format!("bytes={offset}-"));
     }
-    let response = request.send().await?;
+    let response = until_data(request.send(), cancellation, STALL_LIMIT).await??;
     if response.url().scheme() != "https" {
         return Err(AppError::Download("model redirect left HTTPS".into()));
     }
@@ -455,8 +479,7 @@ async fn download_attempt(
         fs::File::create(partial).await?
     };
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        check_cancel(cancellation)?;
+    while let Some(chunk) = until_data(stream.next(), cancellation, STALL_LIMIT).await? {
         let chunk = chunk?;
         downloaded = downloaded.saturating_add(chunk.len() as u64);
         if downloaded > expected_size {
@@ -636,6 +659,37 @@ fn emit_download_event(app: &AppHandle, message_type: &str, data: serde_json::Va
     );
 }
 
+/// How long a server may stay silent, before it answers and between two pieces of the
+/// file, before the attempt is given up. The attempt can resume from the partial file.
+const STALL_LIMIT: Duration = Duration::from_secs(45);
+/// How often a wait for the server looks at the cancel flag.
+const CANCEL_POLL: Duration = Duration::from_millis(250);
+
+/// Wait for `data`, but end the wait when the user cancels or the server has been
+/// silent for `stall_limit`. A dead connection never answers, so without this a
+/// cancel would be seen only after the next piece of data.
+async fn until_data<T>(
+    data: impl std::future::Future<Output = T>,
+    cancellation: &AtomicBool,
+    stall_limit: Duration,
+) -> AppResult<T> {
+    let mut data = std::pin::pin!(data);
+    let started = tokio::time::Instant::now();
+    loop {
+        check_cancel(cancellation)?;
+        let silent = started.elapsed();
+        if silent >= stall_limit {
+            return Err(AppError::Download(
+                "the model server stopped sending data".into(),
+            ));
+        }
+        let wait = CANCEL_POLL.min(stall_limit - silent);
+        if let Ok(value) = tokio::time::timeout(wait, data.as_mut()).await {
+            return Ok(value);
+        }
+    }
+}
+
 fn check_cancel(cancellation: &AtomicBool) -> AppResult<()> {
     if cancellation.load(Ordering::SeqCst) {
         Err(AppError::Download("download cancelled".into()))
@@ -647,6 +701,86 @@ fn check_cancel(cancellation: &AtomicBool) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn current_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_silent_server_ends_the_wait_after_the_stall_limit() {
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let outcome = current_thread_runtime().block_on(until_data(
+            std::future::pending::<()>(),
+            &cancel,
+            Duration::from_millis(300),
+        ));
+        assert!(
+            matches!(outcome, Err(AppError::Download(message)) if message.contains("stopped sending"))
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_cancel_ends_the_wait_for_a_silent_server_within_a_second() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let outcome = current_thread_runtime().block_on(until_data(
+            std::future::pending::<()>(),
+            cancel.as_ref(),
+            Duration::from_secs(600),
+        ));
+        assert!(
+            matches!(outcome, Err(AppError::Download(message)) if message == "download cancelled")
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn data_that_arrives_in_time_is_returned_unchanged() {
+        let cancel = AtomicBool::new(false);
+        let outcome = current_thread_runtime().block_on(until_data(
+            async {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                7
+            },
+            &cancel,
+            Duration::from_secs(5),
+        ));
+        assert_eq!(outcome.unwrap(), 7);
+    }
+
+    #[test]
+    fn a_download_gives_up_its_place_on_every_way_out() {
+        let directory = tempfile::tempdir().unwrap();
+        let state =
+            crate::state::AppState::from_paths(crate::paths::AppPaths::under(directory.path()))
+                .unwrap();
+        let register = |id: &str| {
+            state
+                .downloads
+                .lock()
+                .unwrap()
+                .insert(id.into(), Arc::new(AtomicBool::new(false)));
+        };
+        register("finished");
+        drop(DownloadSlot::new(&state, "finished"));
+        register("panicked");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _slot = DownloadSlot::new(&state, "panicked");
+            panic!("the download task failed");
+        }));
+        assert!(outcome.is_err());
+        assert!(state.downloads.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn a_complete_partial_is_installed_when_sound_and_downloaded_again_when_corrupt() {
