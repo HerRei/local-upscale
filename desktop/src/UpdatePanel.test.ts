@@ -132,3 +132,22 @@ it('shows no update switches in a build without its own update feed', async () =
   await screen.findByText('Software Update');
   expect(screen.queryByLabelText('Check for updates when LocalSR starts')).toBeNull();
 });
+it('shows the host message when cancelling the download is refused', async () => {
+  api.updateStatus.mockResolvedValue({
+    configured: true,
+    channel: 'beta',
+    target: 'linux-x86_64-rocm-portable',
+    stage: 'downloading',
+    version: '0.0.13-beta.2',
+    notes: '',
+    size: 1024,
+    downloaded: 100,
+    message: '',
+    settings_recovery: false,
+  });
+  api.cancelUpdate.mockRejectedValueOnce('The update could not be cancelled.');
+  const user = userEvent.setup();
+  render(UpdatePanel);
+  await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('could not be cancelled');
+});

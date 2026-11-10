@@ -10,6 +10,7 @@
     openTerminalWithInstallCommand,
   } from './lib/api';
   import { INSTALL_COMMANDS, detectPlatform, type FfmpegPlatform } from './lib/ffmpeg';
+  import { modal } from './lib/modal';
 
   /** Why the notice opened: a video LocalSR cannot decode, or an H.264/HEVC export. */
   export let context: 'open' | 'export' = 'open';
@@ -30,10 +31,14 @@
   let hintNote = '';
 
   onMount(async () => {
-    const hint = await ffmpegInstallHint();
-    if (hint) {
-      command = hint.command;
-      hintNote = hint.note;
+    try {
+      const hint = await ffmpegInstallHint();
+      if (hint) {
+        command = hint.command;
+        hintNote = hint.note;
+      }
+    } catch {
+      // Without a hint the notice keeps the generic command for this platform.
     }
   });
 
@@ -57,16 +62,22 @@
         note =
           'No FFmpeg was found yet. Install it, then try again, or choose the program yourself.';
       }
+    } catch (error) {
+      note = String(error);
     } finally {
       busy = false;
     }
   }
 
   async function choose(): Promise<void> {
-    const path = await chooseExternalFFmpeg('');
-    if (path) {
-      note = '';
-      await onSelected(path);
+    try {
+      const path = await chooseExternalFFmpeg('');
+      if (path) {
+        note = '';
+        await onSelected(path);
+      }
+    } catch (error) {
+      note = String(error);
     }
   }
 
@@ -93,13 +104,7 @@
   function closeFromBackdrop(event: MouseEvent): void {
     if (event.target === event.currentTarget) onClose();
   }
-
-  function onKey(event: KeyboardEvent): void {
-    if (event.key === 'Escape') onClose();
-  }
 </script>
-
-<svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
 <div class="modal-backdrop" role="presentation" on:click={closeFromBackdrop}>
@@ -109,6 +114,7 @@
     aria-modal="true"
     aria-labelledby="ffmpeg-notice-title"
     tabindex="-1"
+    use:modal={onClose}
   >
     <h2 id="ffmpeg-notice-title">{title}</h2>
     {#if mediaNames.length}<p class="ffmpeg-files">{mediaNames.join(', ')}</p>{/if}
@@ -152,7 +158,9 @@
       {#if isTauri()}
         <button class="button primary" on:click={runInTerminal}>Install in Terminal…</button>
       {:else}
-        <button class="button primary" on:click={() => void openFfmpegDownloadPage()}
+        <button
+          class="button primary"
+          on:click={() => openFfmpegDownloadPage().catch((error) => (note = String(error)))}
           >Install FFmpeg…</button
         >
       {/if}

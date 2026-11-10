@@ -983,13 +983,23 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.download_model_id = '';
       break;
   }
+  // A bar is drawn from these as a percentage of its track.
+  next.runtime.progress = clampPercent(next.runtime.progress);
+  next.runtime.download_progress = clampPercent(next.runtime.download_progress);
   return next;
+}
+
+function clampPercent(value: number): number {
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
 }
 
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const index = Math.min(
+    units.length - 1,
+    Math.max(0, Math.floor(Math.log(bytes) / Math.log(1024))),
+  );
   return `${(bytes / 1024 ** index).toFixed(index >= 3 ? 1 : 0)} ${units[index]}`;
 }
 

@@ -79,7 +79,8 @@
     toggleFixStage,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
-  import { engineLabel, hardwarePatch } from './lib/neuralEngine';
+  import { modal } from './lib/modal';
+  import { engineLabel, hardwarePatch, withListedDevice } from './lib/neuralEngine';
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
@@ -190,6 +191,11 @@
       if (request === bulkRequest) bulkHistoryError = String(error);
     }
   }
+  // A pick whose image left the list (Remove, Clear) has nothing to show and no way to be unticked.
+  $: if (comparePicks.some((pick) => !snapshot.media.some((media) => media.id === pick.media_id)))
+    setComparePicks(
+      comparePicks.filter((pick) => snapshot.media.some((media) => media.id === pick.media_id)),
+    );
   function setComparePicks(picks: ComparePick[]): void {
     if (picks.length >= 3 && comparePicks.length < 3) compareLayout = 'boxes';
     comparePicks = picks;
@@ -232,8 +238,19 @@
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
   let modalTitle = '';
   let modalMessage = '';
+  let modalElement: HTMLElement | undefined;
   /** Set for a yes/no question: the modal then offers Cancel and the destructive action. */
-  let modalConfirm: { label: string; run: () => Promise<void> } | null = null;
+  let modalConfirm: {
+    label: string;
+    run: () => Promise<void>;
+    /** Words the question for the list as it is now. */
+    titleFor?: (count: number) => string;
+  } | null = null;
+  // The Clear question counts the list as it is when answered, not as it was when asked.
+  $: if (modalConfirm?.titleFor) {
+    if (snapshot.media.length) modalTitle = modalConfirm.titleFor(snapshot.media.length);
+    else closeModal();
+  }
   // The FFmpeg notice: once per batch of videos LocalSR cannot decode, and
   // before an H.264/HEVC export starts without a selected FFmpeg.
   let ffmpegNotice: { context: 'open' | 'export'; paths: string[] } | null = null;
@@ -257,7 +274,12 @@
   } = { slot: 'browse' };
   let startingJob = false;
   let requestingCancel = false;
-  $: settingsLocked = startingJob || Boolean(snapshot.runtime.active_job_id);
+  // Between two jobs of a queue the host already runs the next one while the window still
+  // shows none: its row is queued or starting until the next refresh brings it up.
+  $: settingsLocked =
+    startingJob ||
+    Boolean(snapshot.runtime.active_job_id) ||
+    snapshot.jobs.some((job) => job.status === 'queued' || job.status === 'starting');
   $: cancelling =
     requestingCancel ||
     snapshot.runtime.status_title === 'Cancelling' ||
@@ -265,7 +287,7 @@
       (job) => job.id === snapshot.runtime.active_job_id && job.status === 'cancelling',
     );
 
-  $: settings = snapshot.settings;
+  $: settings = withListedDevice(snapshot.settings, snapshot.capabilities);
   // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
@@ -1526,7 +1548,12 @@
 
   async function selectQueueMedia(id: string): Promise<void> {
     if (settings.task === 'upscale' || settings.task === 'denoise') lastImageTask = settings.task;
-    await api.selectMedia(id);
+    try {
+      await api.selectMedia(id);
+    } catch (error) {
+      showModal('Could not select the item', String(error));
+      return;
+    }
     await refresh();
     ensureTaskMatchesSelection();
     page = 'preview';
@@ -1626,9 +1653,14 @@
       showModal('Desktop runtime required', 'Run “npm run tauri dev” to choose local media.');
       return;
     }
-    const paths = await api.chooseMediaFiles();
-    if (!paths.length) return;
-    await api.addMedia(paths, replace);
+    try {
+      const paths = await api.chooseMediaFiles();
+      if (!paths.length) return;
+      await api.addMedia(paths, replace);
+    } catch (error) {
+      showModal('Could not add files', String(error));
+      return;
+    }
     page = 'preview';
     await refresh();
     ensureTaskMatchesSelection();
@@ -1640,26 +1672,38 @@
   }
 
   async function addFolder(): Promise<void> {
-    const folder = await api.chooseMediaFolder();
-    if (!folder?.paths.length) return;
-    await api.addMedia(folder.paths, false);
-    await api.saveSettings({
-      ...settings,
-      batch_mode: true,
-      output_directory: folder.outputDirectory,
-    });
+    try {
+      const folder = await api.chooseMediaFolder();
+      if (!folder?.paths.length) return;
+      await api.addMedia(folder.paths, false);
+      await api.saveSettings({
+        ...snapshot.settings,
+        batch_mode: true,
+        output_directory: folder.outputDirectory,
+      });
+    } catch (error) {
+      showModal('Could not add the folder', String(error));
+      return;
+    }
     page = 'preview';
     await refresh();
     ensureTaskMatchesSelection();
   }
 
   async function chooseOutput(): Promise<void> {
-    const path = await api.chooseOutputDirectory(settings.output_directory);
-    if (path) updateSettings({ output_directory: path });
+    try {
+      const path = await api.chooseOutputDirectory(settings.output_directory);
+      if (path) updateSettings({ output_directory: path });
+    } catch (error) {
+      showModal('Could not choose the folder', String(error));
+    }
   }
 
   async function chooseCustomModel(): Promise<void> {
-    const path = await api.chooseCustomModel();
+    const path = await api.chooseCustomModel().catch((error) => {
+      showModal('Could not choose the model', String(error));
+      return null;
+    });
     if (path) {
       updateSettings({
         selected_model_id: '__custom__',
@@ -1724,7 +1768,7 @@
   ): Promise<void> {
     if (!target) return;
     if (activeDownload === target.model_id) {
-      await api.cancelDownload(target.model_id);
+      await attempt('Could not cancel the download', () => api.cancelDownload(target.model_id));
       return;
     }
     accepted ??= Boolean(termsAccepted[target.model_id]);
@@ -1855,7 +1899,10 @@
   }
 
   async function chooseEditRuntime(): Promise<void> {
-    const path = await api.chooseEditRuntime();
+    const path = await api.chooseEditRuntime().catch((error) => {
+      showModal('Could not choose the editing runtime', String(error));
+      return null;
+    });
     if (path) editRuntimeOverride = path;
   }
 
@@ -1871,15 +1918,15 @@
   }
 
   function openAnyLicense(modelId: string): Promise<void> {
-    return isEditModelId(modelId)
-      ? api.openEditLink(modelId, 'license')
-      : api.openModelLicense(modelId);
+    return attempt('Could not open the link', () =>
+      isEditModelId(modelId) ? api.openEditLink(modelId, 'license') : api.openModelLicense(modelId),
+    );
   }
 
   function openAnySource(modelId: string): Promise<void> {
-    return isEditModelId(modelId)
-      ? api.openEditLink(modelId, 'source')
-      : api.openModelSource(modelId);
+    return attempt('Could not open the link', () =>
+      isEditModelId(modelId) ? api.openEditLink(modelId, 'source') : api.openModelSource(modelId),
+    );
   }
 
   // Only when it differs from Cancel queue, or names what a trial is doing.
@@ -1998,7 +2045,12 @@
           : []),
       ],
     };
-    await api.saveRecipe(recipe);
+    try {
+      await api.saveRecipe(recipe);
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return;
+    }
     recipeName = '';
     recipeEditorOpen = false;
     await refresh();
@@ -2302,6 +2354,12 @@
   }
 
   async function handleNativeMenuAction(action: string): Promise<void> {
+    // A dialog takes the input until it is answered; only Cancel, which ends work, still acts.
+    if (
+      (modalTitle || libraryOpen || ffmpegNotice || $updateDialogOpen) &&
+      action !== 'file.cancel'
+    )
+      return;
     try {
       if (action.startsWith('preset.recipe.')) {
         const id = action.slice('preset.recipe.'.length);
@@ -2539,6 +2597,22 @@
     modalTitle = title;
     modalMessage = message;
     modalKind = kind;
+    // A new dialog replaces a question that was open, answers included.
+    modalConfirm = null;
+    // The button that had the keyboard may go with the dialog it replaces.
+    void tick().then(() => {
+      if (modalElement && !modalElement.contains(document.activeElement))
+        (modalElement.querySelector<HTMLElement>('[data-autofocus]') ?? modalElement).focus();
+    });
+  }
+
+  /** Runs a host call the user asked for; a refusal opens the dialog the drop and menu paths use. */
+  async function attempt(title: string, run: () => Promise<unknown>): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      showModal(title, String(error));
+    }
   }
 
   function closeModal(): void {
@@ -2554,16 +2628,19 @@
   function askClearMedia(): void {
     const count = snapshot.media.length;
     if (count === 0 || snapshot.runtime.active_job_id) return;
+    const titleFor = (n: number) => `Clear all ${n} ${n === 1 ? 'item' : 'items'} from the list?`;
     showModal(
-      `Clear all ${count} ${count === 1 ? 'item' : 'items'} from the list?`,
+      titleFor(count),
       'This removes them from the Inputs and Outputs lists and clears the current preview. The files on disk, including saved outputs, are not deleted.',
     );
     modalConfirm = {
       label: 'Clear',
-      run: async () => {
-        await api.clearMedia();
-        await refresh();
-      },
+      titleFor,
+      run: () =>
+        attempt('Could not clear the list', async () => {
+          await api.clearMedia();
+          await refresh();
+        }),
     };
   }
 
@@ -2571,10 +2648,6 @@
     const confirm = modalConfirm;
     closeModal();
     await confirm?.run();
-  }
-
-  function modalKey(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && modalConfirm) closeModal();
   }
 
   function closeFromBackdrop(event: MouseEvent): void {
@@ -2594,8 +2667,6 @@
     previewPane?.queueProgressiveTile(message, snapshot.runtime.active_job_id);
   }
 </script>
-
-<svelte:window on:keydown={modalKey} />
 
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
@@ -2661,10 +2732,11 @@
       {addFiles}
       {addFolder}
       locked={settingsLocked}
-      removeMedia={async (id) => {
-        await api.removeMedia(id);
-        await refresh();
-      }}
+      removeMedia={(id) =>
+        attempt('Could not remove the item', async () => {
+          await api.removeMedia(id);
+          await refresh();
+        })}
       clearMedia={askClearMedia}
     />
 
@@ -2932,10 +3004,11 @@
                         ></button
                       ><button
                         aria-label={`Delete ${recipe.name}`}
-                        on:click={async () => {
-                          await api.deleteRecipe(recipe.id);
-                          await refresh();
-                        }}
+                        on:click={() =>
+                          attempt('Could not delete the recipe', async () => {
+                            await api.deleteRecipe(recipe.id);
+                            await refresh();
+                          })}
                         ><svg
                           xmlns="http://www.w3.org/2000/svg"
                           width="16"
@@ -3211,8 +3284,8 @@
                       {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
                         <ModelCredit
                           model={stage.model}
-                          openLicense={() => api.openModelLicense(stage.model!.model_id)}
-                          openSource={() => api.openModelSource(stage.model!.model_id)}
+                          openLicense={() => openAnyLicense(stage.model!.model_id)}
+                          openSource={() => openAnySource(stage.model!.model_id)}
                         />
                       {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
                         <p class="model-description">
@@ -3463,7 +3536,8 @@
                 true}
               {updateSettings}
               {chooseOutput}
-              refreshCapabilities={api.refreshCapabilities}
+              refreshCapabilities={() =>
+                attempt('Could not refresh the hardware', () => api.refreshCapabilities())}
             />
           {/if}
         </fieldset>
@@ -3493,7 +3567,9 @@
             {#if hardwareHint.downloads}<button
                 class="link-button"
                 type="button"
-                on:click={() => void api.openDownloadPage()}>Download page</button
+                on:click={() =>
+                  attempt('Could not open the download page', () => api.openDownloadPage())}
+                >Download page</button
               >{/if}</span
           >{/if}
         {#if queueEta}<span
@@ -3523,11 +3599,15 @@
       {#if selectedOutputPath}<button
           class="button"
           title={`Show ${selectedOutputName} in its folder`}
-          on:click={() => api.revealResult(selectedOutputPath)}>Reveal</button
+          on:click={() =>
+            attempt('Could not show the result', () => api.revealResult(selectedOutputPath))}
+          >Reveal</button
         ><button
           class="button"
           title={`Open ${selectedOutputName}`}
-          on:click={() => api.openResult(selectedOutputPath)}>Open</button
+          on:click={() =>
+            attempt('Could not open the result', () => api.openResult(selectedOutputPath))}
+          >Open</button
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}
@@ -3623,6 +3703,8 @@
       aria-modal="true"
       aria-labelledby="modal-title"
       tabindex="-1"
+      bind:this={modalElement}
+      use:modal={closeModal}
     >
       <h2 id="modal-title">{modalTitle}</h2>
       <p class="modal-message">{modalMessage}</p>
@@ -3683,7 +3765,10 @@
             >
             {#if benchmarkSetup === 'downloading' && activeDownload === 'span_photo_x4'}<button
                 class="button"
-                on:click={() => api.cancelDownload('span_photo_x4')}>Cancel download</button
+                on:click={() =>
+                  api
+                    .cancelDownload('span_photo_x4')
+                    .catch((error) => (benchmarkError = String(error)))}>Cancel download</button
               >{/if}
             {#if snapshot.latest_benchmark}<button
                 class="button"
@@ -4103,10 +4188,14 @@
             >{integration.installed ? 'Remove integrations' : 'Install integrations'}</button
           >{/if}
         {#if modalConfirm}
-          <button class="button" on:click={closeModal}>Cancel</button>
+          <button class="button" data-autofocus on:click={closeModal}>Cancel</button>
           <button class="button danger" on:click={confirmModal}>{modalConfirm.label}</button>
         {:else}
-          <button class="button primary" on:click={closeModal}>OK</button>
+          <button
+            class="button primary"
+            data-autofocus={modalKind === 'message' ? '' : undefined}
+            on:click={closeModal}>OK</button
+          >
         {/if}
       </div>
     </div>

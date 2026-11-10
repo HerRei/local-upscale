@@ -14,6 +14,7 @@
     rememberedFixModel,
     rightsAllowPreset,
   } from './lib/state';
+  import { modal } from './lib/modal';
   import { acceleratorFor } from './lib/neuralEngine';
   import { estimateModelTrials } from './lib/api';
   import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/results';
@@ -338,14 +339,17 @@
       ? `about ${(model.vram_estimate_mb / 1000).toFixed(model.vram_estimate_mb % 1000 ? 1 : 0)} GB`
       : `about ${model.vram_estimate_mb} MB`;
   }
-
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close();
-  }
 </script>
 
-<div class="modal-backdrop library-backdrop" role="presentation" on:keydown={onKeydown}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="library-title" tabindex="-1">
+<div class="modal-backdrop library-backdrop" role="presentation">
+  <div
+    class="sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="library-title"
+    tabindex="-1"
+    use:modal={close}
+  >
     <div class="sheet-head">
       <h2 id="library-title">Model library</h2>
       {#if context.slot === 'try'}

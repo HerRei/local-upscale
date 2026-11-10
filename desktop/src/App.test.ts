@@ -157,7 +157,11 @@ const api = vi.hoisted(() => ({
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async (_handler: (action: string) => void) => () => undefined),
   listenForLaunchIntent: vi.fn(async () => () => undefined),
-  listenForFileDrops: vi.fn(async () => () => undefined),
+  listenForFileDrops: vi.fn(
+    async (_handlers: { hover: (active: boolean) => void; drop: (paths: string[]) => void }) =>
+      () =>
+        undefined,
+  ),
 }));
 
 vi.mock('./lib/api', () => api);
@@ -1303,7 +1307,10 @@ describe('LocalSR desktop interface', () => {
       snapshot.settings.task = 'video';
       snapshot.settings.selected_video_model_id = 'seedvr2_3b';
       if (backend === 'incompatible-runtime') snapshot.engine!.video_engines = ['spandrel_image'];
-      else snapshot.settings.device_id = backend;
+      else {
+        snapshot.settings.device_id = backend;
+        snapshot.capabilities.devices.push(gpu(backend, backend.split(':')[0], 'Test GPU'));
+      }
       snapshot.catalog.video_models.forEach((model) => {
         model.installed = false;
       });
@@ -1532,6 +1539,23 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
     expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('shows the CPU and starts on it when the saved GPU is no longer listed', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'cuda:7';
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(hardware.selectedOptions[0]?.textContent).toBe('CPU');
+    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({ device: 'cpu' }));
+    // The saved choice stays until the user makes another: the GPU may be plugged in again.
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ device_id: 'cuda:7' }),
+    );
   });
 
   function gpu(id: string, type: string, name: string): DeviceInfo {
@@ -2053,6 +2077,32 @@ describe('LocalSR desktop interface', () => {
       expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false),
     );
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the settings locked while the next queued job has not shown up yet', async () => {
+    const current = readySnapshot([image('first', true), image('second')]);
+    current.settings.task = 'upscale';
+    const queued = (id: string, media: string, status: 'running' | 'queued') => ({
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 1,
+    });
+    current.runtime.active_job_id = 'job-1';
+    current.jobs = [queued('job-1', 'first', 'running'), queued('job-2', 'second', 'queued')];
+    await mountWith(current);
+    const listener = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    // job-1 ends; the host already runs job-2, but the window learns of it with its next refresh.
+    listener({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out/first.png' } });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Complete/),
+    );
+    expect(screen.getByRole('button', { name: /^Best/ }).matches(':disabled')).toBe(true);
   });
 
   it('asks before Clear: Cancel keeps the list, confirming clears it', async () => {
@@ -3814,6 +3864,35 @@ describe('Comparing saved results', () => {
     expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
   });
 
+  it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {
+    const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
+    snapshot.jobs = [completedJob('a1', 'first'), completedJob('b1', 'second')];
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('first', [row('a1')]),
+      historyOf('second', [row('b1')]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'b1, second.png' }));
+    expect(screen.getByRole('tab', { name: 'Compare 2' })).toBeTruthy();
+    api.removeMedia.mockImplementationOnce(async () => {
+      const left = structuredClone(snapshot);
+      left.media = left.media.filter((item) => item.id === 'first');
+      left.jobs = left.jobs.filter((job) => job.media_id === 'first');
+      api.refreshSnapshot.mockResolvedValue(left);
+      api.listAllMediaResults.mockResolvedValue([historyOf('first', [row('a1')])]);
+    });
+    await user.click(screen.getByRole('tab', { name: 'Inputs' }));
+    await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Compare 1' })).toBeTruthy());
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([
+        { kind: 'original', media_id: 'first' },
+      ]),
+    );
+  });
+
   it('drops a late history answer that belongs to another image', async () => {
     const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
     snapshot.jobs = [completedJob('a1', 'first'), completedJob('a2', 'first')];
@@ -3885,5 +3964,237 @@ describe('Comparing saved results', () => {
       ui: expect.objectContaining({ content: expect.any(String) }),
     });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  });
+});
+
+/** Files dropped on the window, as the native drop listener reports them. */
+function dropFiles(paths: string[]): void {
+  api.listenForFileDrops.mock.calls[0][0].drop(paths);
+}
+
+describe('Dialogs and refused host calls', () => {
+  it('a dialog opened over the Clear question replaces it, buttons included', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    api.addMedia.mockRejectedValueOnce('The file type is not supported.');
+    dropFiles(['/x/bad.xyz']);
+    await waitFor(() =>
+      expect(screen.getByRole('dialog').textContent).toContain('Could not add dropped files'),
+    );
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.queryByRole('button', { name: 'Clear' })).toBeNull();
+    expect(dialog.getByRole('button', { name: 'OK' })).toBeTruthy();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+  });
+
+  it('gives an error dialog the keyboard: Tab stays in, Escape closes, focus returns', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseTask(user, /^Upscale$/);
+    api.startJobs.mockRejectedValueOnce('No GPU.');
+    const start = screen.getByRole('button', { name: 'Upscale selected' });
+    start.focus();
+    await user.keyboard('{Enter}');
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    for (let step = 0; step < 4; step++) {
+      await user.tab();
+      expect(dialog.contains(document.activeElement), `Tab ${step + 1}`).toBe(true);
+    }
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(start);
+  });
+
+  it('answers the Clear question with Cancel on Escape, and puts Cancel first', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+  });
+
+  it('closes the model library on Escape and gives it the keyboard', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    const library = await screen.findByRole('dialog', { name: 'Model library' });
+    expect(library.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
+  });
+
+  it('closes the update panel on Escape', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('app.updates');
+    const panel = await screen.findByRole('dialog', { name: 'Software Update' });
+    expect(panel.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps the count in the Clear question true while the list changes', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    const more = readySnapshot([
+      image('first', true),
+      image('second'),
+      image('third'),
+      image('fourth'),
+      image('fifth'),
+    ]);
+    api.refreshSnapshot.mockResolvedValue(structuredClone(more));
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(screen.getByRole('dialog').textContent).toContain('Clear all 5 items'),
+    );
+    // Nothing left to clear: the question goes away.
+    api.refreshSnapshot.mockResolvedValue(structuredClone(readySnapshot([])));
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('ignores menu actions while a question is open, so a job cannot start behind it', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await chooseMenuItem('file.start');
+    await chooseMenuItem('file.add-media');
+    expect(api.startJobs).not.toHaveBeenCalled();
+    expect(api.chooseMediaFiles).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    // Cancel is never held back: it ends work instead of starting any.
+    await chooseMenuItem('file.cancel');
+    expect(api.cancelJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the user when the host refuses a confirmed Clear', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    api.clearMedia.mockRejectedValueOnce(
+      'wait for the current queue to finish or cancel it before changing media',
+    );
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('queue'));
+    expect(screen.getByRole('dialog').textContent).toContain('Could not clear the list');
+  });
+
+  it('keeps the keyboard in the list when the focused Remove button goes with its row', async () => {
+    const current = readySnapshot([image('first', true), image('second'), image('third')]);
+    const user = await mountWith(current);
+    api.removeMedia.mockImplementationOnce(async () => {
+      current.media = current.media.filter((item) => item.id !== 'second');
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    screen.getByRole('button', { name: 'Remove second.png' }).focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove second.png' })).toBeNull(),
+    );
+    // The next row's Remove button takes over; after the last row it is the one before.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove third.png' })),
+    );
+    api.removeMedia.mockImplementationOnce(async () => {
+      current.media = current.media.filter((item) => item.id !== 'third');
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove first.png' })),
+    );
+  });
+
+  describe('when the host refuses what the user asked for', () => {
+    const refusal = 'unsupported media file type';
+    const shown = async (title: string) => {
+      await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain(title));
+      expect(screen.getByRole('dialog').textContent).toContain(refusal);
+    };
+
+    it('says so for Add Media…', async () => {
+      const user = await mountWith(readySnapshot([image('first', true)]));
+      api.chooseMediaFiles.mockResolvedValueOnce(['/x/photo.heic']);
+      api.addMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getAllByRole('button', { name: 'Add Media…' })[0]);
+      await shown('Could not add files');
+    });
+
+    it('says so for Add Folder…', async () => {
+      const user = await mountWith(readySnapshot([image('first', true)]));
+      api.chooseMediaFolder.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await shown('Could not add the folder');
+      api.chooseMediaFolder.mockResolvedValueOnce({ paths: ['/x/a.png'], outputDirectory: '/x' });
+      api.addMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'OK' }));
+      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await shown('Could not add the folder');
+      expect(api.saveSettings).not.toHaveBeenCalledWith(
+        expect.objectContaining({ output_directory: '/x' }),
+      );
+    });
+
+    it('says so for clicking an item', async () => {
+      const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+      api.selectMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: /^second\.png/ }));
+      await shown('Could not select the item');
+    });
+
+    it('says so for Remove', async () => {
+      const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+      api.removeMedia.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+      await shown('Could not remove the item');
+    });
+
+    it('says so for Open and Reveal on a result', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      snapshot.jobs = [
+        {
+          id: 'job-first',
+          media_id: 'first',
+          media_name: 'first.png',
+          media_kind: 'image',
+          status: 'completed',
+          progress: 100,
+          output_path: '/private/first-output.png',
+          error: '',
+          created_at: 1,
+        },
+      ];
+      snapshot.runtime.last_output_path = '/private/first-output.png';
+      const user = await mountWith(snapshot);
+      api.openResult.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Open' }));
+      await shown('Could not open the result');
+      await user.click(screen.getByRole('button', { name: 'OK' }));
+      api.revealResult.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Reveal' }));
+      await shown('Could not show the result');
+    });
+
+    it('says so for Delete on a saved recipe', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+      snapshot.recipes = [
+        {
+          id: 'jens67',
+          name: 'Jens67',
+          task: 'upscale',
+          model_id: model.model_id,
+          output_scale: 4,
+          tile_size: 256,
+          halo: 32,
+          precision: 'fp32',
+          safe_memory: true,
+        },
+      ];
+      const user = await mountWith(snapshot);
+      api.deleteRecipe.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await shown('Could not delete the recipe');
+    });
   });
 });

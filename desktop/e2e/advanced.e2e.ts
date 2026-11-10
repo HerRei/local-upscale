@@ -25,6 +25,19 @@ test.describe('Advanced settings: hardware', () => {
     await expect(page.locator('#device optgroup')).toHaveCount(0);
   });
 
+  test('a saved GPU that is gone shows as the CPU, and Start sends the CPU', async ({ page }) => {
+    await openApp(page, {
+      ...upscale,
+      worker: 'ready',
+      settings: { ...upscale.settings, device_id: 'cuda:7' },
+    });
+    await openAdvanced(page);
+    await expect(page.locator('#device')).toHaveValue('cpu');
+    await page.getByRole('button', { name: 'Upscale selected' }).click();
+    const start = (await hostCalls(page, 'start_jobs')).at(-1);
+    expect((start?.args as { input: { device: string } }).input.device).toBe('cpu');
+  });
+
   test('one GPU reached by two routes is grouped under its name', async ({ page }) => {
     await openApp(page, windows);
     await openAdvanced(page);
