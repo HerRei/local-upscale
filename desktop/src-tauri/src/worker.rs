@@ -315,7 +315,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         let engine_started = Instant::now();
         let mut stopped_by_app = false;
         let status = loop {
-            match child.try_wait() {
+            match tree.try_wait(&mut child) {
                 Ok(Some(status)) => break Ok(status),
                 Err(error) => break Err(error),
                 Ok(None) => {}
@@ -324,14 +324,14 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 stopped_by_app = true;
                 tree.terminate();
                 let _ = child.kill();
-                break child.wait();
+                break tree.wait(&mut child);
             }
             if overflowed.load(Ordering::SeqCst) {
                 // Not an app-requested stop: the engine failed, and the restart
                 // counter says so.
                 tree.terminate();
                 let _ = child.kill();
-                break child.wait();
+                break tree.wait(&mut child);
             }
             let restarting = state
                 .runtime
@@ -344,7 +344,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 stopped_by_app = true;
                 tree.terminate();
                 let _ = child.kill();
-                break child.wait();
+                break tree.wait(&mut child);
             }
             if let Ok(mut cancellation) = state.worker.cancellation.lock() {
                 if cancellation.expired(Instant::now()) {
@@ -361,7 +361,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     stopped_by_app = true;
                     tree.terminate();
                     let _ = child.kill();
-                    break child.wait();
+                    break tree.wait(&mut child);
                 }
             }
             thread::sleep(Duration::from_millis(100));

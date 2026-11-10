@@ -243,7 +243,7 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
         String::from_utf8_lossy(&output).into_owned()
     });
 
-    let handshake = wait_for_handshake(&mut child, &mut stdin, &receiver, timeout);
+    let handshake = wait_for_handshake(&mut child, &tree, &mut stdin, &receiver, timeout);
     let shutdown = send_message(&mut stdin, &json!({"type": "shutdown_request", "data": {}}));
     drop(stdin);
     let exit_status = wait_for_exit(&mut child, &tree, shutdown_timeout(timeout));
@@ -278,6 +278,7 @@ fn shutdown_timeout(smoke_timeout: Duration) -> Duration {
 
 fn wait_for_handshake(
     child: &mut Child,
+    tree: &ProcessTree,
     stdin: &mut ChildStdin,
     receiver: &mpsc::Receiver<Result<WorkerEnvelope, String>>,
     timeout: Duration,
@@ -285,8 +286,8 @@ fn wait_for_handshake(
     let deadline = Instant::now() + timeout;
     let mut requested_handshake = false;
     loop {
-        if let Some(status) = child
-            .try_wait()
+        if let Some(status) = tree
+            .try_wait(child)
             .map_err(|error| format!("could not inspect the inference engine: {error}"))?
         {
             return Err(format!(
@@ -378,8 +379,8 @@ fn wait_for_exit(
 ) -> Result<ExitStatus, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(status) = child
-            .try_wait()
+        if let Some(status) = tree
+            .try_wait(child)
             .map_err(|error| format!("could not inspect the inference engine: {error}"))?
         {
             return Ok(status);
@@ -387,7 +388,7 @@ fn wait_for_exit(
         if Instant::now() >= deadline {
             tree.terminate();
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.wait(child);
             return Err(format!(
                 "the bundled inference engine did not stop within {} seconds",
                 timeout.as_secs()

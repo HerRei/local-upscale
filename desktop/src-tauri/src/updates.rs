@@ -1558,7 +1558,7 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
     let tree = crate::process_tree::ProcessTree::new(&child);
     let start = std::time::Instant::now();
     loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = tree.try_wait(&mut child)? {
             if !status.success() {
                 return Err(invalid("Could not read the installed application version"));
             }
@@ -1567,7 +1567,7 @@ fn require_newer_executable(executable: &Path, candidate: &str) -> AppResult<()>
         if start.elapsed() >= Duration::from_secs(10) {
             tree.terminate();
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.wait(&mut child);
             return Err(invalid("The installed application version check timed out"));
         }
         std::thread::sleep(Duration::from_millis(20));
