@@ -1021,9 +1021,13 @@ def main() -> int:
     bundles = cargo_target / ("debug" if args.debug else "release") / "bundle"
     if bundles.exists():
         shutil.rmtree(bundles)
-    linuxdeploy_symlinks = _symlink_engine_libs_for_linuxdeploy()
-    linuxdeploy_backup = _wrap_linuxdeploy_for_appimage() if args.bundles == "appimage" else None
+    linuxdeploy_symlinks: list[Path] = []
+    linuxdeploy_backup = None
     try:
+        # Inside the try: a failed wrapper setup must still remove the links already made.
+        linuxdeploy_symlinks = _symlink_engine_libs_for_linuxdeploy()
+        if args.bundles == "appimage":
+            linuxdeploy_backup = _wrap_linuxdeploy_for_appimage()
         run(command, cwd=DESKTOP, env=environment)
         if args.bundles == "appimage":
             _repack_linux_appimages_with_system_mksquashfs(bundles)
