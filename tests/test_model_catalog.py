@@ -429,6 +429,74 @@ def test_model_download_stops_when_the_server_trickles_past_the_time_limit(tmp_p
     assert partial.exists() and partial.stat().st_size < model.size_bytes
 
 
+def test_a_buffered_read_that_blocks_for_a_large_request_does_not_hold_the_download(
+    tmp_path: Path,
+):
+    import time
+
+    model = _synthetic_test_model(content=b"x" * 100_000)
+    reads = []
+
+    class BlocksOnLargeReads:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, size=-1):
+            # A buffered read waits until the whole request is filled: hours at a trickle.
+            raise AssertionError("read() would block until its full size arrived")
+
+        def read1(self, size=-1):
+            assert size <= 1024 * 1024
+            reads.append(size)
+            time.sleep(0.01)
+            return b"y"
+
+    started = time.monotonic()
+    with pytest.raises(ModelDownloadError, match="took too long"):
+        download_model(
+            model,
+            tmp_path / model.filename,
+            opener=lambda _request, timeout: BlocksOnLargeReads(),
+            max_seconds=0.2,
+        )
+    assert time.monotonic() - started < 5
+    assert reads
+
+
+def test_each_wait_for_download_bytes_is_limited_by_the_remaining_time(tmp_path: Path):
+    model = _synthetic_test_model(content=b"x" * 100_000)
+    timeouts = []
+
+    class Socket:
+        def settimeout(self, seconds):
+            timeouts.append(seconds)
+
+    class Response:
+        fp = type("Fp", (), {"raw": type("Raw", (), {"_sock": Socket()})()})()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read1(self, size=-1):
+            return b""
+
+    with pytest.raises(ModelDownloadError):
+        download_model(
+            model,
+            tmp_path / model.filename,
+            opener=lambda _request, timeout: Response(),
+            max_seconds=3.0,
+            max_attempts=1,
+        )
+    assert timeouts and all(0 < seconds <= 3.0 for seconds in timeouts)
+
+
 def test_model_download_cancellation_preserves_partial(tmp_path: Path):
     content = b"a" * 1024 * 1024  # 1MB
     model = _synthetic_test_model(content=content)
@@ -436,9 +504,9 @@ def test_model_download_cancellation_preserves_partial(tmp_path: Path):
     cancel_event = threading.Event()
 
     class ChunkingStream(io.BytesIO):
-        def read(self, size=-1):
+        def read1(self, size=-1):
             cancel_event.set()
-            return super().read(size)
+            return super().read1(size)
 
     def cancel_opener(_request, timeout: float):
         return ChunkingStream(content)
