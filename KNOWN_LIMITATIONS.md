@@ -62,6 +62,10 @@ These apply to v0.3.0-beta. Please read them before starting a long job.
 - Memory use depends on the model, the output size and the clip. 16 GB of GPU
   memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
   but the working memory is not. Try a short clip at a modest output size first.
+- A source image may have at most 178,956,970 pixels (about 179 megapixels), the size
+  Pillow still accepts; a larger one is refused before it is decoded. The output has 16
+  times as many pixels at ×4, so a source far below that limit can already be too large
+  for the memory of the computer.
 - Frame interpolation adds processing and memory costs. Interpolating before the
   upscale requires upscaling more frames; after the upscale runs interpolation at
   the larger output size. 1080p and 4K Mac performance and memory use have not

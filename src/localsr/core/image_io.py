@@ -15,6 +15,16 @@ from PIL import Image, ImageCms, ImageOps, TiffImagePlugin, UnidentifiedImageErr
 from localsr.core.image_formats import is_raw_input, is_system_decoded
 from localsr.core.output_publish import owned_temporary, publish_output
 
+# The most pixels a source image may have: what Pillow accepts before it refuses an image
+# as a decompression bomb (twice its 89 megapixel warning threshold). Everything up to
+# here opens, medium-format and stitched files included; the warning for the upper half
+# is silenced because accepting that range is intended.
+MAX_INPUT_PIXELS = 2 * 89_478_485
+TOO_LARGE_MESSAGE = (
+    f"This image has more than {round(MAX_INPUT_PIXELS / 1_000_000)} megapixels, which is more "
+    "than LocalSR opens. Reduce its size first."
+)
+
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
 # converts those to 8 bits by clipping, not scaling.
@@ -36,6 +46,12 @@ def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
     narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
     narrowed.info.update(image.info)
     return narrowed
+
+
+def require_pixel_budget(width: int, height: int) -> None:
+    """Refuse an image that has more pixels than LocalSR reads, before decoding any."""
+    if width * height > MAX_INPUT_PIXELS:
+        raise ValueError(TOO_LARGE_MESSAGE)
 
 
 def _float_grey_to_16_bit(image: Image.Image) -> Image.Image:
@@ -231,7 +247,14 @@ class ImageManager:
         # separate from the LibRaw pixel decode below.
         metadata_img = None
         try:
-            metadata_img = open_image(path)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+                metadata_img = open_image(path)
+            # The size comes from the header; nothing has been decoded yet.
+            if not is_raw:
+                require_pixel_budget(metadata_img.width, metadata_img.height)
+        except Image.DecompressionBombError as error:
+            raise ValueError(TOO_LARGE_MESSAGE) from error
         except (OSError, SyntaxError, ValueError) as error:
             if not is_raw:
                 if isinstance(error, UnidentifiedImageError) and _is_float_tiff(path):

@@ -492,6 +492,57 @@ def test_float_rgb_tiff_says_it_is_not_supported(tmp_path):
         ImageManager().load(str(path))
 
 
+def _png_claiming(path, width, height):
+    """A few bytes of PNG whose header claims a huge size; its pixels are not there."""
+    import zlib
+
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00" * 16))
+        + chunk(b"IEND", b"")
+    )
+
+
+@pytest.mark.parametrize(("width", "height"), [(14_000, 14_000), (90_000, 90_000)])
+def test_an_image_beyond_the_decompression_limit_is_refused_with_one_sentence(
+    tmp_path, monkeypatch, width, height
+):
+    path = tmp_path / "claims.png"
+    _png_claiming(path, width, height)
+
+    def never(*_args, **_kwargs):
+        raise AssertionError("pixels were decoded")
+
+    monkeypatch.setattr(Image.Image, "load", never)
+    with pytest.raises(ValueError, match="more than 179 megapixels"):
+        ImageManager().load(str(path))
+
+
+def test_an_image_in_the_range_pillow_only_warns_about_is_not_refused_for_its_size(
+    tmp_path, recwarn
+):
+    from localsr.core.image_io import MAX_INPUT_PIXELS, require_pixel_budget
+
+    assert MAX_INPUT_PIXELS == 2 * Image.MAX_IMAGE_PIXELS
+    require_pixel_budget(11_648, 8_736)  # a 102 megapixel medium-format frame
+    require_pixel_budget(13_377, 13_377)  # the last square size inside the limit
+    with pytest.raises(ValueError, match="megapixels"):
+        require_pixel_budget(13_378, 13_378)
+    path = tmp_path / "claims.png"
+    _png_claiming(path, 12_000, 10_000)
+    # Its data is not there, so the load stops as damaged; the size alone does not stop it
+    # and Pillow's warning is not raised.
+    with pytest.raises(OSError, match="claims.png is damaged"):
+        ImageManager().load(str(path))
+    assert not [w for w in recwarn if issubclass(w.category, Image.DecompressionBombWarning)]
+
+
 def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
     path = tmp_path / "linear16.png"
     Image.fromarray(np.array([[0, 128, 256]], dtype=np.uint16)).save(
