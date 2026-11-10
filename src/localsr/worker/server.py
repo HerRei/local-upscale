@@ -149,6 +149,20 @@ def _engine_features() -> list[str]:
 DEVICE_LOST_EXIT_CODE = 75
 
 
+def _has_job_id(data: dict) -> bool:
+    """Whether a job request names itself; no terminal message can address one that does not."""
+    job_id = data.get("job_id")
+    if isinstance(job_id, str) and job_id:
+        return True
+    send_message(
+        LogMessage(
+            level="error",
+            message="Protocol error: the job request has no text job_id, so it was dropped.",
+        )
+    )
+    return False
+
+
 def _device_lost(error: BaseException) -> bool:
     """Whether a job failed because the graphics driver removed or reset the GPU."""
     from localsr.core.onnx_runtime import GpuDeviceLost, _is_device_lost
@@ -199,8 +213,9 @@ class WorkerServer:
 
     def _activate_job(self, job_id: str) -> None:
         with self.state_lock:
+            cancelled = job_id in self.pending_cancel_job_ids
             self.active_job_id = job_id
-            if job_id in self.pending_cancel_job_ids:
+            if cancelled:
                 self.cancel_event.set()
             else:
                 self.cancel_event.clear()
@@ -228,42 +243,59 @@ class WorkerServer:
             self.cancel_event.clear()
 
     def reader_thread_func(self):
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError as error:
-                send_message(
-                    LogMessage(level="error", message=f"JSON parse error in worker: {error}")
-                )
-                continue
+        try:
+            # A byte that is not UTF-8 must not end the reader.
+            reconfigure = getattr(sys.stdin, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(errors="replace")
+            for line in sys.stdin:
+                try:
+                    self._read_line(line)
+                # One bad line, whatever it raises (RecursionError and a
+                # 5000-digit number included), is reported and then dropped.
+                except Exception as error:  # noqa: BLE001
+                    send_message(
+                        LogMessage(
+                            level="error",
+                            message=f"Protocol error: a request line was refused ({error}).",
+                        )
+                    )
+        finally:
+            # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
+            self.cancel_event.set()
+            self.message_queue.put({"type": "shutdown_request"})
 
-            if not isinstance(msg, dict):
-                send_message(LogMessage(level="error", message="Worker request must be an object."))
-                continue
+    def _read_line(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as error:
+            send_message(LogMessage(level="error", message=f"JSON parse error in worker: {error}"))
+            return
 
-            request_type = msg.get("type")
-            if request_type == "region_request":
-                self.compare_regions.submit(msg.get("data", {}))
-                continue
-            if request_type == "region_clear":
-                self.compare_regions.clear()
-                continue
-            if request_type == "preview_request":
-                self.result_previews.submit(msg.get("data", {}))
-                continue
-            self.message_queue.put(msg)
-            if request_type == "shutdown_request":
-                self.cancel_event.set()
-            elif request_type == "cancel_request":
-                requested_job_id = str(msg.get("data", {}).get("job_id") or "")
-                self._request_cancel(requested_job_id)
+        if not isinstance(msg, dict):
+            send_message(LogMessage(level="error", message="Worker request must be an object."))
+            return
 
-        # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
-        self.cancel_event.set()
-        self.message_queue.put({"type": "shutdown_request"})
+        request_type = msg.get("type")
+        data = msg.get("data", {})
+        if request_type == "region_request":
+            self.compare_regions.submit(data)
+            return
+        if request_type == "region_clear":
+            self.compare_regions.clear()
+            return
+        if request_type == "preview_request":
+            self.result_previews.submit(data)
+            return
+        self.message_queue.put(msg)
+        if request_type == "shutdown_request":
+            self.cancel_event.set()
+        elif request_type == "cancel_request":
+            requested_job_id = data.get("job_id") if isinstance(data, dict) else None
+            self._request_cancel(requested_job_id if isinstance(requested_job_id, str) else "")
 
     def _restart_if_required(self) -> None:
         """After a lost device, exit as soon as the failure is reported. Freeing the sessions
@@ -297,7 +329,16 @@ class WorkerServer:
                     self.running = False
                     break
 
-                elif req_type == "handshake_request":
+                if not isinstance(data, dict):
+                    send_message(
+                        LogMessage(
+                            level="error",
+                            message=f"Protocol error: the {req_type} request has no data object.",
+                        )
+                    )
+                    continue
+
+                if req_type == "handshake_request":
                     requested_version = int(data.get("protocol_version", 0))
                     if not MIN_PROTOCOL_VERSION <= requested_version <= PROTOCOL_VERSION:
                         send_message(
@@ -402,6 +443,8 @@ class WorkerServer:
                     self._run_image_batch(data.get("jobs"))
 
                 elif req_type == "job_request":
+                    if not _has_job_id(data):
+                        continue
                     if self.active_job_id is not None:
                         send_message(
                             JobFailed(
@@ -438,6 +481,8 @@ class WorkerServer:
                         self._deactivate_job(job_id)
 
                 elif req_type == "video_job_request":
+                    if not _has_job_id(data):
+                        continue
                     if self.active_job_id is not None:
                         send_message(
                             JobFailed(
@@ -447,7 +492,6 @@ class WorkerServer:
                         continue
 
                     job_id = data["job_id"]
-                    self._activate_job(job_id)
                     previous_checkpoint_policy = getattr(
                         self.model_adapter, "allow_unverified_checkpoints", False
                     )
@@ -459,6 +503,7 @@ class WorkerServer:
                     )
 
                     try:
+                        self._activate_job(job_id)
                         send_message(JobStarted(job_id=job_id))
                         self._run_video_job(job_id, data)
                     except Exception as e:  # noqa: BLE001
@@ -734,7 +779,6 @@ class WorkerServer:
     def _run_image_job(self, data) -> None:
         """One image job: its own activation, checkpoint policy and failure boundary."""
         job_id = data["job_id"]
-        self._activate_job(job_id)
         previous_checkpoint_policy = getattr(
             self.model_adapter, "allow_unverified_checkpoints", False
         )
@@ -746,6 +790,7 @@ class WorkerServer:
         )
 
         try:
+            self._activate_job(job_id)
             send_message(JobStarted(job_id=job_id))
             self._run_job(job_id, data)
         # The process boundary must turn any inference/I/O failure
