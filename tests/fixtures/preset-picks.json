@@ -1,0 +1,199 @@
+{
+  "models": [
+    {
+      "model_id": "span_photo_x4",
+      "purposes": [
+        "photo",
+        "general"
+      ],
+      "native_scale": 4,
+      "quality_tier": 1,
+      "speed_tier": 3,
+      "speed_factor": 1.2,
+      "memory_factor": 0.5,
+      "size_bytes": 2000000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "realplksr_nomoswebphoto_x4",
+      "purposes": [
+        "photo",
+        "general"
+      ],
+      "native_scale": 4,
+      "quality_tier": 3,
+      "speed_tier": 2,
+      "speed_factor": 0.8,
+      "memory_factor": 1.5,
+      "size_bytes": 60000000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "general_x4",
+      "purposes": [
+        "general"
+      ],
+      "native_scale": 4,
+      "quality_tier": 2,
+      "speed_tier": 2,
+      "speed_factor": 1.0,
+      "memory_factor": 1.0,
+      "size_bytes": 30000000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "anime_x4",
+      "purposes": [
+        "anime"
+      ],
+      "native_scale": 4,
+      "quality_tier": 3,
+      "speed_tier": 2,
+      "speed_factor": 0.9,
+      "memory_factor": 1.2,
+      "size_bytes": 40000000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "illustration_fast_x4",
+      "purposes": [
+        "illustration"
+      ],
+      "native_scale": 4,
+      "quality_tier": 1,
+      "speed_tier": 3,
+      "speed_factor": 1.5,
+      "memory_factor": 0.4,
+      "size_bytes": 1000000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "fast_noncommercial_x4",
+      "purposes": [
+        "photo"
+      ],
+      "native_scale": 4,
+      "quality_tier": 1,
+      "speed_tier": 3,
+      "speed_factor": 3.0,
+      "memory_factor": 0.1,
+      "size_bytes": 500000,
+      "commercial_use_allowed": false,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "slow_specialist_x4",
+      "purposes": [
+        "photo"
+      ],
+      "native_scale": 4,
+      "quality_tier": 4,
+      "speed_tier": 1,
+      "speed_factor": 0.1,
+      "memory_factor": 3.0,
+      "size_bytes": 900000000,
+      "commercial_use_allowed": true,
+      "preset_eligible": false
+    },
+    {
+      "model_id": "face_only_x2",
+      "purposes": [
+        "face"
+      ],
+      "native_scale": 2,
+      "quality_tier": 4,
+      "speed_tier": 3,
+      "speed_factor": 2.0,
+      "memory_factor": 0.2,
+      "size_bytes": 400000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "denoise_x1",
+      "purposes": [
+        "photo"
+      ],
+      "native_scale": 1,
+      "quality_tier": 4,
+      "speed_tier": 3,
+      "speed_factor": 2.0,
+      "memory_factor": 0.2,
+      "size_bytes": 300000,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    }
+  ],
+  "cases": [
+    {
+      "content": "photo",
+      "quality": "quick",
+      "without": [],
+      "expected": "span_photo_x4"
+    },
+    {
+      "content": "photo",
+      "quality": "best",
+      "without": [],
+      "expected": "realplksr_nomoswebphoto_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "quick",
+      "without": [],
+      "expected": "span_photo_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "best",
+      "without": [],
+      "expected": "realplksr_nomoswebphoto_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "quick",
+      "without": [
+        "span_photo_x4"
+      ],
+      "expected": "illustration_fast_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "best",
+      "without": [
+        "realplksr_nomoswebphoto_x4"
+      ],
+      "expected": "anime_x4"
+    },
+    {
+      "content": "photo",
+      "quality": "quick",
+      "without": [
+        "span_photo_x4"
+      ],
+      "expected": "realplksr_nomoswebphoto_x4"
+    },
+    {
+      "content": "photo",
+      "quality": "best",
+      "without": [
+        "realplksr_nomoswebphoto_x4"
+      ],
+      "expected": "span_photo_x4"
+    },
+    {
+      "content": "photo",
+      "quality": "best",
+      "without": [
+        "realplksr_nomoswebphoto_x4",
+        "span_photo_x4"
+      ],
+      "expected": "general_x4"
+    }
+  ]
+}

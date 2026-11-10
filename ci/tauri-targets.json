@@ -100,7 +100,6 @@
       }
     }
   ],
-  "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets.",
   "withheld_targets": [
     {
       "id": "linux-x86_64-xpu",

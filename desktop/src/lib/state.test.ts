@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import presetPicks from '../../../tests/fixtures/preset-picks.json';
 import { demoSnapshot } from './demo';
 import type { AppSnapshot } from './types';
 import {
@@ -118,6 +119,27 @@ describe('desktop state', () => {
     expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
       'realplksr_nomoswebphoto_x4',
     );
+  });
+
+  it('picks what the shared fixture expects, as presets.py does', () => {
+    // tests/test_preset_picks_fixture.py asserts the same file against the Python ranking.
+    const template = demoSnapshot().catalog.models[0];
+    for (const pick of presetPicks.cases) {
+      const base = demoSnapshot();
+      const models = presetPicks.models
+        .filter((model) => !pick.without.includes(model.model_id))
+        .map((model) => ({ ...template, ...model }));
+      const snapshot = { ...base, catalog: { ...base.catalog, models } };
+      expect(
+        choosePresetModel(
+          snapshot,
+          'upscale',
+          pick.quality as 'quick' | 'best',
+          pick.content as 'photo' | 'illustration',
+        )?.model_id,
+        JSON.stringify(pick),
+      ).toBe(pick.expected);
+    }
   });
 
   it('never lets a slow specialist become a preset, however it ranks', () => {

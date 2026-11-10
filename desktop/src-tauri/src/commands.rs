@@ -27,7 +27,6 @@ use crate::{
     worker,
 };
 
-// Keep in step with src/localsr/core/image_formats.py.
 const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "gif", "avif", "jp2", "j2k",
     // Camera RAW, developed by LibRaw.
