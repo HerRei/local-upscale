@@ -22,6 +22,7 @@
   import { queueTiming } from './lib/queue-timing';
   import MediaQueue from './MediaQueue.svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
+  import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import FFmpegNotice from './FFmpegNotice.svelte';
   import {
@@ -3947,7 +3948,7 @@
                       <div class="benchmark-device-heading">
                         <div>
                           <span>{device.device_type === 'cpu' ? 'CPU' : 'GPU'}</span><strong
-                            >{device.device_name}</strong
+                            ><FileName name={device.device_name} /></strong
                           >
                         </div>
                         <div class="benchmark-device-score">

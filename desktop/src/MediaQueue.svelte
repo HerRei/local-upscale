@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import FileName from './FileName.svelte';
   import OutputsList from './OutputsList.svelte';
   import { tabFromKey, type OutputGroup } from './lib/compareOutputs';
   import type { ComparePick } from './lib/types';
@@ -180,7 +181,7 @@
               {#if media.kind === 'video'}<b>▶</b>{/if}
             </div>
             <div class="media-copy">
-              <strong>{media.name}</strong>
+              <strong><FileName name={media.name} /></strong>
               <span
                 >{media.probe_status === 'pending'
                   ? 'Preparing preview…'

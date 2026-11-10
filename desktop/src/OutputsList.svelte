@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileName from './FileName.svelte';
   import { MAX_SLOTS, pickKey, type OutputGroup } from './lib/compareOutputs';
   import { formatDuration } from './lib/state';
   import type { ComparePick } from './lib/types';
@@ -36,7 +37,7 @@
           on:click={() => fold(group.media.id)}>{folded.has(group.media.id) ? '▸' : '▾'}</button
         >
         <button class="group-select" on:click={() => selectMedia(group.media.id)}
-          ><strong>{group.media.name}</strong><span
+          ><strong><FileName name={group.media.name} /></strong><span
             >{group.outputs.length} {group.outputs.length === 1 ? 'output' : 'outputs'}</span
           ></button
         >

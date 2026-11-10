@@ -1827,14 +1827,14 @@ input[type='text'],
 .benchmark-device-heading > div:first-child {
   min-width: 0;
 }
-.benchmark-device-heading > div:first-child span {
+.benchmark-device-heading > div:first-child > span {
   display: block;
   margin-bottom: 3px;
   color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
   font-weight: 600;
 }
-.benchmark-device.cpu .benchmark-device-heading > div:first-child span {
+.benchmark-device.cpu .benchmark-device-heading > div:first-child > span {
   color: var(--tertiary);
 }
 .benchmark-device-heading > div:first-child strong {
@@ -2715,6 +2715,15 @@ input[type='text'],
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* A long author shrinks and keeps its end; the link words always show. */
+.kv dd .link-button {
+  display: inline-flex;
+  max-width: 100%;
+}
+.kv dd .source-link {
+  flex: none;
+  white-space: pre;
 }
 .fit {
   display: flex;

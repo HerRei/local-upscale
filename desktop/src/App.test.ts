@@ -877,6 +877,9 @@ describe('LocalSR desktop interface', () => {
       within(dialog).getByRole('article', { name: 'Apple GPU (Metal) benchmark result' }),
     ).toBeTruthy();
     expect(within(dialog).getByRole('article', { name: 'CPU benchmark result' })).toBeTruthy();
+    expect(
+      dialog.querySelector('.benchmark-device .file-name[title="Apple GPU (Metal)"]'),
+    ).toBeTruthy();
     expect(within(dialog).getByText('Hardware results')).toBeTruthy();
   });
 
@@ -2907,6 +2910,10 @@ describe('LocalSR desktop interface', () => {
     ).not.toMatch(/Neural Engine/);
     await user.click(within(library).getByRole('button', { name: /SPAN ×4/ }));
     expect(within(library).getByText('Runs on')).toBeTruthy();
+    // The file and the author keep their ends when the details column is narrow.
+    const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
+    expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
+    expect(library.querySelector(`.kv .file-name[title="${file.author}"]`)).toBeTruthy();
     cleanup();
 
     const pc = readySnapshot([image('photo', true)]);
@@ -3862,6 +3869,20 @@ describe('Comparing saved results', () => {
     const tabs = screen.getByRole('tablist', { name: 'Main pane' });
     await fireEvent.keyDown(tabs, { key: 'ArrowLeft' });
     expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('keeps the end of a long file name in the list, the header and Outputs, with the full name on hover', async () => {
+    const name = 'IMG_490C1E18-B4D1-47E5-AC62-FD97F5A26811.jpeg';
+    const snapshot = pairHost(readySnapshot([{ ...image('photo', true), name }]));
+    snapshot.jobs = [completedJob('saved')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('saved')])]);
+    const user = await mountWith(snapshot);
+    const named = (scope: string) =>
+      document.querySelector(`${scope} .file-name[title="${name}"] .file-name-tail`)?.textContent;
+    expect(named('.media-row')).toBe('26811.jpeg');
+    expect(named('.preview-header')).toBe('26811.jpeg');
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await waitFor(() => expect(named('.group-head')).toBe('26811.jpeg'));
   });
 
   it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {

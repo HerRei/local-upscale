@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
   import EmptyStage from './EmptyStage.svelte';
+  import FileName from './FileName.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
   import SplitComparison from './SplitComparison.svelte';
@@ -860,7 +861,9 @@
 <section class="preview-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header" data-tauri-drag-region>
     <div data-tauri-drag-region>
-      <strong data-tauri-drag-region>{selectedMedia?.name ?? 'Preview'}</strong>
+      <strong data-tauri-drag-region
+        >{#if selectedMedia}<FileName name={selectedMedia.name} />{:else}Preview{/if}</strong
+      >
       <span
         >{selectedMedia
           ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`

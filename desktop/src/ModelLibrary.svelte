@@ -14,6 +14,7 @@
     rememberedFixModel,
     rightsAllowPreset,
   } from './lib/state';
+  import FileName from './FileName.svelte';
   import { modal } from './lib/modal';
   import { acceleratorFor } from './lib/neuralEngine';
   import { estimateModelTrials } from './lib/api';
@@ -924,8 +925,11 @@
                   class="link-button"
                   type="button"
                   title={selected.source_url}
+                  aria-label={`${selected.author} · model source`}
                   on:click={() => void openSource(selected.model_id)}
-                  >{selected.author} · model source ↗</button
+                  ><FileName name={selected.author} /><span class="source-link"
+                    >{' · model source ↗'}</span
+                  ></button
                 >
               </dd>
             </div>
@@ -935,7 +939,7 @@
             </div>
             <div>
               <dt>File</dt>
-              <dd title={selected.filename}>{selected.filename}</dd>
+              <dd><FileName name={selected.filename} /></dd>
             </div>
             <div>
               <dt>Integrity</dt>

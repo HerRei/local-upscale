@@ -5,6 +5,7 @@
    */
   import { onDestroy, onMount, tick } from 'svelte';
   import { visibleRegion, type Region } from './lib/compareRegions';
+  import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import { boxColumns, sliderBlock, type CompareItem } from './lib/compareOutputs';
@@ -336,7 +337,9 @@
       <strong data-tauri-drag-region>Compare</strong>
       <span class="compare-names"
         ><span class="names"
-          >{inputs.length > 2 ? `${inputs.length} images` : inputs.join(' and ')}</span
+          >{#if inputs.length > 2}{inputs.length} images{:else}{#each inputs as name, index (name)}{#if index}<span
+                  class="names-and">and</span
+                >{/if}<FileName {name} />{/each}{/if}</span
         ><HelpTip
           label="Compare"
           text="The slider holds slot 1 against slot 2; boxes show every slot with one zoom and pan. Zoom enlarges the preview."
@@ -387,7 +390,9 @@
                 : item.error || 'Preview unavailable'}</span
           >{/if}
         {#if shownLayout !== 'boxes'}<span class="slot-meta"
-            >{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span
+            >{item.meta}{#if inputs.length > 1}{item.meta ? ' · ' : ''}<FileName
+                name={item.media_name}
+              />{/if}</span
           >{/if}
         {#if index > 1}<button
             class="slot-remove"
@@ -618,9 +623,9 @@
     min-width: 0;
   }
   .compare-names .names {
+    display: flex;
+    gap: 4px;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .compare-header :global(.help-tip) {
@@ -691,6 +696,8 @@
     white-space: nowrap;
   }
   .slot-meta {
+    display: inline-flex;
+    min-width: 0;
     color: var(--secondary);
     font-size: calc(11px * var(--ui-scale));
     white-space: nowrap;
