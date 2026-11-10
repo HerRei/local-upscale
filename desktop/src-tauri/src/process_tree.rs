@@ -7,7 +7,7 @@
 //! terminated or when the host's last handle to it closes, which includes the
 //! host crashing. A child must keep its helpers in the same group (no new session
 //! or group, no breakaway from the job), or the host cannot reach them.
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 
 /// Make the process `command` starts the leader of a new process group. Call it
 /// before `spawn`; `ProcessTree::new` then owns the group.
@@ -28,6 +28,10 @@ pub fn lead_own_group(command: &mut Command) {
 pub struct ProcessTree {
     #[cfg(unix)]
     group: i32,
+    /// Set once the leader has been reaped: its number may then belong to another
+    /// process, so the group is never signalled again.
+    #[cfg(unix)]
+    spent: std::sync::atomic::AtomicBool,
     #[cfg(windows)]
     job: Option<job::Job>,
 }
@@ -39,6 +43,7 @@ impl ProcessTree {
         {
             Self {
                 group: i32::try_from(child.id()).unwrap_or(-1),
+                spent: std::sync::atomic::AtomicBool::new(false),
             }
         }
         #[cfg(windows)]
@@ -49,20 +54,41 @@ impl ProcessTree {
         }
     }
 
-    /// End every process of the tree at once. Safe to call again and after the
-    /// leader has exited: it then ends what the leader left behind.
+    /// The tree of a child that stays in the caller's own group (`lead_own_group` was not
+    /// called): there is no group of its own to signal, so `terminate` ends nothing on
+    /// Unix and the caller ends the child itself.
+    pub fn without_group(child: &Child) -> Self {
+        #[cfg(unix)]
+        {
+            let _ = child;
+            Self {
+                group: -1,
+                spent: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+        #[cfg(windows)]
+        {
+            Self::new(child)
+        }
+    }
+
+    /// End every process of the tree at once. Safe to call again. On Unix it works
+    /// only while the leader is unreaped (a zombie still holds the group's number); once
+    /// the child was reaped through `wait` or `try_wait` it does nothing.
     pub fn terminate(&self) {
         #[cfg(unix)]
         {
+            use std::sync::atomic::Ordering;
+
             extern "C" {
                 fn killpg(group: i32, signal: i32) -> i32;
             }
             const SIGKILL: i32 = 9;
             // A group of 0 or below would mean the caller's own group or every
             // process; only a real child group is ever signalled.
-            if self.group > 1 {
-                // SAFETY: killpg only sends a signal; a group that no longer exists
-                // makes it fail with ESRCH, which is the wanted outcome.
+            if self.group > 1 && !self.spent.load(Ordering::SeqCst) {
+                // SAFETY: killpg only sends a signal; the leader has not been
+                // reaped, so the group number still belongs to this tree.
                 unsafe {
                     killpg(self.group, SIGKILL);
                 }
@@ -71,6 +97,103 @@ impl ProcessTree {
         #[cfg(windows)]
         if let Some(job) = &self.job {
             job.terminate();
+        }
+    }
+
+    /// Wait for the child to exit and reap it. Whatever it left behind ends first,
+    /// while the exited leader still holds the group's number. Use this and
+    /// `try_wait`, not the child's own, for a child this tree owns.
+    pub fn wait(&self, child: &mut Child) -> std::io::Result<ExitStatus> {
+        #[cfg(unix)]
+        if !self.spent.load(std::sync::atomic::Ordering::SeqCst) {
+            // Blocks until the exit without reaping. An error means there is nothing
+            // to wait for (already reaped): no group is signalled then.
+            if let Ok(true) = exit_without_reaping(child.id(), true) {
+                self.terminate();
+            }
+        }
+        let status = child.wait()?;
+        self.mark_spent();
+        // The job outlives the process: what the child left behind ends with it.
+        #[cfg(windows)]
+        self.terminate();
+        Ok(status)
+    }
+
+    /// Like `wait` without blocking: None while the child still runs.
+    pub fn try_wait(&self, child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
+        #[cfg(unix)]
+        if !self.spent.load(std::sync::atomic::Ordering::SeqCst) {
+            match exit_without_reaping(child.id(), false) {
+                Ok(false) => return Ok(None),
+                Ok(true) => self.terminate(),
+                Err(_) => {}
+            }
+        }
+        let status = child.try_wait()?;
+        if status.is_some() {
+            self.mark_spent();
+            #[cfg(windows)]
+            self.terminate();
+        }
+        Ok(status)
+    }
+
+    fn mark_spent(&self) {
+        #[cfg(unix)]
+        self.spent.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The line to log when a child could not be put under a Job Object, only the first
+/// time: the app goes on without tree ownership, so the first failure is what a
+/// diagnosis needs and later ones would only repeat it.
+#[cfg(any(windows, test))]
+fn first_job_failure(
+    reported: &std::sync::atomic::AtomicBool,
+    step: &str,
+    code: Option<i32>,
+) -> Option<String> {
+    if reported.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let code = code.map_or_else(|| "unknown".to_owned(), |code| code.to_string());
+    Some(format!(
+        "LocalSR could not {step} (Windows error {code}); cancelling will end only the engine itself, not the programs it started."
+    ))
+}
+
+/// Whether the child has exited, seen without reaping it (`waitid` with `WNOWAIT`):
+/// the exited child stays a zombie, which keeps its process and group number from
+/// being handed to another process. With `block` it waits for the exit.
+#[cfg(unix)]
+fn exit_without_reaping(pid: u32, block: bool) -> std::io::Result<bool> {
+    // Large enough for `siginfo_t` on Linux and macOS, aligned like it.
+    #[repr(C, align(8))]
+    struct Info([i32; 32]);
+    extern "C" {
+        fn waitid(kind: i32, id: u32, info: *mut Info, options: i32) -> i32;
+    }
+    const P_PID: i32 = 1;
+    const WNOHANG: i32 = 1;
+    const WEXITED: i32 = 4;
+    const WNOWAIT: i32 = if cfg!(target_os = "linux") {
+        0x0100_0000
+    } else {
+        0x20
+    };
+    loop {
+        // Zeroed, so that "no child has changed state" leaves `si_signo` at 0.
+        let mut info = Info([0; 32]);
+        let options = WEXITED | WNOWAIT | if block { 0 } else { WNOHANG };
+        // SAFETY: `info` is a writable buffer at least as large as `siginfo_t`.
+        let result = unsafe { waitid(P_PID, pid, &raw mut info, options) };
+        if result == 0 {
+            return Ok(info.0[0] != 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
         }
     }
 }
@@ -125,6 +248,17 @@ mod job {
         fn CloseHandle(handle: Handle) -> i32;
     }
 
+    /// Log a failed step with the error Windows gave, the first time only. The caller
+    /// carries on without a job: failing closed would stop the app from starting its
+    /// engine on a computer where assignment is refused.
+    fn report(step: &str) {
+        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let code = std::io::Error::last_os_error().raw_os_error();
+        if let Some(line) = super::first_job_failure(&REPORTED, step, code) {
+            eprintln!("{line}");
+        }
+    }
+
     /// The handle's closing, with the host's exit or crash, kills what is left.
     pub struct Job(Handle);
 
@@ -133,16 +267,17 @@ mod job {
     unsafe impl Sync for Job {}
 
     impl Job {
-        /// A kill-on-close job holding `child`. None when Windows refuses; the
-        /// caller then still ends the child itself. A helper the child started
-        /// before this call ran stays outside the job: the engine starts none
-        /// before it reads its first request.
+        /// A kill-on-close job holding `child`. None when Windows refuses (logged once);
+        /// the caller then still ends the child itself. The child runs until this call
+        /// assigns it, and a helper it started in that time stays outside the job: the
+        /// engine starts none before it reads its first request.
         pub fn around(child: &Child) -> Option<Self> {
             // SAFETY: plain Win32 calls on handles this function owns or that
             // `child` keeps open for its lifetime.
             unsafe {
                 let handle = CreateJobObjectW(ptr::null_mut(), ptr::null());
                 if handle.is_null() {
+                    report("create a Job Object");
                     return None;
                 }
                 let job = Self(handle);
@@ -154,7 +289,12 @@ mod job {
                     (&raw const limits).cast(),
                     std::mem::size_of::<ExtendedLimits>() as u32,
                 );
-                if configured == 0 || AssignProcessToJobObject(handle, child.as_raw_handle()) == 0 {
+                if configured == 0 {
+                    report("set the limits of a Job Object");
+                    return None;
+                }
+                if AssignProcessToJobObject(handle, child.as_raw_handle()) == 0 {
+                    report("assign the engine to a Job Object");
                     return None;
                 }
                 Some(job)
@@ -197,6 +337,28 @@ pub(crate) fn process_is_running(pid: u32) -> bool {
             let state = String::from_utf8_lossy(&out.stdout);
             !state.trim().is_empty() && !state.trim().starts_with('Z')
         })
+}
+
+#[cfg(test)]
+mod job_failure_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_job_object_is_reported_once_with_the_os_error_code() {
+        let reported = std::sync::atomic::AtomicBool::new(false);
+        let line = first_job_failure(&reported, "assign the engine to a Job Object", Some(5))
+            .expect("the first failure is reported");
+        assert!(line.contains("assign the engine to a Job Object"), "{line}");
+        assert!(line.contains("error 5"), "{line}");
+        assert_eq!(
+            first_job_failure(&reported, "create a Job Object", Some(6)),
+            None
+        );
+        let reported = std::sync::atomic::AtomicBool::new(false);
+        assert!(first_job_failure(&reported, "create a Job Object", None)
+            .unwrap()
+            .contains("error unknown"));
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -242,14 +404,13 @@ mod tests {
         assert!(process_is_running(helper));
         tree.terminate();
         let _ = child.kill();
-        child.wait().unwrap();
+        tree.wait(&mut child).unwrap();
         assert!(wait_until(|| !process_is_running(helper)));
     }
 
-    #[test]
-    fn what_a_finished_leader_left_behind_is_ended_too() {
-        let directory = tempfile::tempdir().unwrap();
-        let pid_file = directory.path().join("helper.pid");
+    /// A shell that starts a helper in its group and exits at once.
+    fn leader_that_leaves_a_helper(directory: &std::path::Path) -> (Child, ProcessTree, u32) {
+        let pid_file = directory.join("helper.pid");
         let mut command = Command::new("/bin/sh");
         command
             .arg("-c")
@@ -258,17 +419,57 @@ mod tests {
             .arg(&pid_file)
             .stdin(Stdio::null());
         lead_own_group(&mut command);
-        let mut child = command.spawn().unwrap();
+        let child = command.spawn().unwrap();
         let tree = ProcessTree::new(&child);
-        child.wait().unwrap();
+        assert!(wait_until(|| std::fs::read_to_string(&pid_file)
+            .is_ok_and(|text| text.trim().parse::<u32>().is_ok())));
         let helper: u32 = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
             .parse()
             .unwrap();
         assert!(process_is_running(helper));
-        tree.terminate();
+        (child, tree, helper)
+    }
+
+    #[test]
+    fn what_a_finished_leader_left_behind_is_ended_before_it_is_reaped() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut child, tree, helper) = leader_that_leaves_a_helper(directory.path());
+        tree.wait(&mut child).unwrap();
         assert!(wait_until(|| !process_is_running(helper)));
+    }
+
+    #[test]
+    fn noticing_the_exit_of_the_leader_ends_what_it_left_behind() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut child, tree, helper) = leader_that_leaves_a_helper(directory.path());
+        assert!(wait_until(|| tree.try_wait(&mut child).unwrap().is_some()));
+        assert!(wait_until(|| !process_is_running(helper)));
+    }
+
+    #[test]
+    fn a_tree_whose_leader_was_reaped_signals_nothing() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]).stdin(Stdio::null());
+        lead_own_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let mut tree = ProcessTree::new(&child);
+        tree.wait(&mut child).unwrap();
+        // The leader's number could belong to anything now: stand in for that with a
+        // group of an unrelated process.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]).stdin(Stdio::null());
+        lead_own_group(&mut command);
+        let mut bystander = command.spawn().unwrap();
+        tree.group = i32::try_from(bystander.id()).unwrap();
+        tree.terminate();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(bystander.try_wait().unwrap().is_none());
+        // A tree that has not been spent still ends its group.
+        let live = ProcessTree::new(&bystander);
+        live.terminate();
+        assert!(wait_until(|| bystander.try_wait().unwrap().is_some()));
     }
 
     #[test]

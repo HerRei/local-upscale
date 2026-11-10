@@ -126,3 +126,27 @@ test('chooses an external FFmpeg through the host and displays a read-only path'
     .poll(async () => (await lastSaved(page)).external_ffmpeg_path)
     .toBe('/chosen/ffmpeg');
 });
+
+test('chooses the editing runtime through the host and sends that path to Start Edit', async ({
+  page,
+}) => {
+  await openApp(page, {
+    ...upscale,
+    task: 'edit',
+    worker: 'ready',
+    features: ['image_edit'],
+    settings: { edit_model_id: 'flux2_klein_4b_q4_0' },
+    installed: ['flux2_klein_4b_q4_0'],
+  });
+  await showPane(page, 'enhance');
+  await answer(page, 'choose_edit_runtime', '/chosen/sd-cli');
+  await page.getByRole('button', { name: 'Choose runtime…' }).click();
+  await expect(page.getByRole('button', { name: 'Choose runtime…' })).toHaveCount(0);
+  expect((await hostCalls(page, 'choose_edit_runtime')).length).toBe(1);
+  await page.getByLabel('What to change').fill('Add snow');
+  await page.getByRole('button', { name: 'Edit selected' }).click();
+  const start = (await hostCalls(page, 'start_edit')).at(-1);
+  expect((start?.args as { input: { runtime_path: string } }).input.runtime_path).toBe(
+    '/chosen/sd-cli',
+  );
+});

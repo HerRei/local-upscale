@@ -266,10 +266,10 @@ fn run_conversion(
         if let Some(message) = problem {
             tree.terminate();
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.wait(&mut child);
             break Err(AppError::Validation(message.into()));
         }
-        match child.try_wait() {
+        match tree.try_wait(&mut child) {
             Ok(Some(status)) => {
                 break if status.success() {
                     Ok(())
@@ -281,7 +281,7 @@ fn run_conversion(
             Err(error) => {
                 tree.terminate();
                 let _ = child.kill();
-                let _ = child.wait();
+                let _ = tree.wait(&mut child);
                 break Err(error.into());
             }
         }

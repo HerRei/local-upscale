@@ -156,14 +156,10 @@ export const startJobs = (input: StartBatchInput): Promise<void> => invoke('star
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
   invoke('open_edit_link', { modelId, link });
+/** The host's own file dialog for the editing runtime; the host remembers the pick. */
 export async function chooseEditRuntime(): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: false,
-    title: 'Choose the sd-cli image editing runtime',
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_edit_runtime');
 }
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>

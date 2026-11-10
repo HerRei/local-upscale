@@ -1478,6 +1478,61 @@ fn a_completion_must_name_the_output_the_host_requested() {
 }
 
 #[test]
+fn a_completion_with_the_wrong_output_fails_its_job_and_the_engine_restarts() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    let wrong = directory.path().join("a.png");
+    let done = |id: &str, path: &std::path::Path| {
+        envelope(
+            "job_completed",
+            json!({"job_id": id, "output_path": path.to_string_lossy()}),
+        )
+    };
+    // Messages about jobs that were never dispatched stay ignored.
+    assert!(refuse_wrong_result(&state, &done("ghost", &wrong))
+        .unwrap()
+        .is_none());
+    // A correct completion is not touched.
+    let own = directory.path().join("out").join("a.png");
+    assert!(refuse_wrong_result(&state, &done("a", &own))
+        .unwrap()
+        .is_none());
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+    let failure = refuse_wrong_result(&state, &done("a", &wrong))
+        .unwrap()
+        .expect("the active job must fail");
+    assert_eq!(failure.message_type, "job_failed");
+    assert_eq!(failure.data["job_id"], "a");
+    assert_eq!(failure.data["restart_required"], true);
+    assert!(accept_envelope(&state, &failure).unwrap());
+    let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+    let job = jobs.iter().find(|job| job.id == "a").unwrap();
+    assert_eq!(job.status, "failed");
+    assert_eq!(
+        job.error,
+        "The engine reported a result the app did not ask for."
+    );
+    assert!(job.output_path.is_empty());
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_ne!(runtime.active_job_id, "a");
+        assert!(runtime.last_output_path.is_empty());
+        assert_eq!(runtime.worker, "restarting");
+    }
+    // The failed job has ended: a second report about it is ignored.
+    assert!(refuse_wrong_result(&state, &done("a", &wrong))
+        .unwrap()
+        .is_none());
+    // An off-screen batch photo fails the same way and the batch goes on.
+    let failure = refuse_wrong_result(&state, &done("c", &own))
+        .unwrap()
+        .expect("a batch member must fail");
+    assert!(accept_envelope(&state, &failure).unwrap());
+    assert_eq!(status(&state, "c"), "failed");
+    assert_eq!(status(&state, "b"), "queued");
+}
+
+#[test]
 fn a_batch_photo_completes_only_with_its_own_output() {
     let directory = tempfile::tempdir().unwrap();
     let state = running_batch(directory.path());
@@ -1735,4 +1790,72 @@ fn a_crash_while_cancelling_a_batch_never_leaves_a_photo_cancelling() {
     }
     assert_eq!(status(&state, "a"), "interrupted");
     assert_eq!(status(&state, "b"), "queued");
+}
+
+#[test]
+fn the_scratch_folders_made_for_a_dispatch_are_recorded_with_their_jobs() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    let mut message = json!({"type": "image_batch_request", "data": {"jobs": [
+        photo_job("a")["data"].clone(), photo_job("b")["data"].clone()]}});
+    for (index, id) in ["a", "b"].iter().enumerate() {
+        message["data"]["jobs"][index]["job_id"] = json!(id);
+        message["data"]["jobs"][index]["output_path"] =
+            json!(directory.path().join("out").join(format!("{id}.png")));
+    }
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .prepare("a", &mut message)
+        .unwrap();
+    record_scratch_folders(&state).unwrap();
+    // A later start reads them back for the jobs the stopped host left.
+    let mut database = crate::database::Database::open(&state.paths.database).unwrap();
+    let mut found: Vec<(String, std::path::PathBuf)> = database
+        .take_interrupted_scratch()
+        .into_iter()
+        .map(|record| (record.id, record.scratch))
+        .collect();
+    found.sort();
+    let made: Vec<std::path::PathBuf> = message["data"]["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|job| std::path::PathBuf::from(job["scratch_directory"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("a".to_owned(), made[0].clone()),
+            ("b".to_owned(), made[1].clone())
+        ]
+    );
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_result_that_is_a_link_gets_no_automatic_preview() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("private.png");
+    std::fs::write(&private, b"private").unwrap();
+    let link = directory.path().join("result.png");
+    std::os::unix::fs::symlink(&private, &link).unwrap();
+    for kind in ["job_completed", "video_job_completed"] {
+        let done = envelope(
+            kind,
+            json!({"job_id": "a", "output_path": link.to_string_lossy()}),
+        );
+        assert_eq!(
+            completion_preview_request(&idle_state(), &done),
+            None,
+            "{kind}"
+        );
+    }
+    let plain = directory.path().join("plain.png");
+    std::fs::write(&plain, b"result").unwrap();
+    let done = envelope(
+        "job_completed",
+        json!({"job_id": "a", "output_path": plain.to_string_lossy()}),
+    );
+    assert!(completion_preview_request(&idle_state(), &done).is_some());
 }

@@ -84,6 +84,8 @@ pub struct AppState {
     startup_notices: Mutex<Vec<String>>,
     /// The programs the user's choices and the host's own searches have named.
     pub programs: crate::programs::GrantedPrograms,
+    /// The editing runtimes the user picked in the host's own file dialog.
+    pub edit_programs: crate::programs::GrantedPrograms,
 }
 
 impl AppState {
@@ -104,7 +106,13 @@ impl AppState {
             ));
         }
         let (mut database, set_aside) = Database::open_or_set_aside(&paths.database)?;
-        crate::cancellation::sweep_scratch(&database.take_interrupted_outputs());
+        let worker = WorkerControl::default();
+        for id in crate::cancellation::sweep_scratch(&database.take_interrupted_scratch(), &worker)
+        {
+            if let Err(error) = database.forget_scratch(&id) {
+                eprintln!("LocalSR could not update a job's scratch record: {error}");
+            }
+        }
         if let Some(moved) = set_aside {
             notices.push(format!(
                 "The queue and history file was damaged. LocalSR moved it to {} and started a new, empty queue. Your settings and models were not touched.",
@@ -132,7 +140,7 @@ impl AppState {
             runtime: Mutex::new(RuntimeStatus::default()),
             latest_benchmark: Mutex::new(latest_benchmark),
             edit_runtime: Mutex::new(String::new()),
-            worker: WorkerControl::default(),
+            worker,
             scheduler: Mutex::new(()),
             settings_io: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
@@ -140,6 +148,7 @@ impl AppState {
             choose_device: AtomicBool::new(first_run),
             startup_notices: Mutex::new(notices),
             programs,
+            edit_programs: crate::programs::GrantedPrograms::default(),
         })
     }
 
@@ -241,6 +250,13 @@ mod tests {
             .path()
             .join("out")
             .join(format!(".localsr-job-{}", uuid::Uuid::new_v4()));
+        // Made by someone else beside the same output: never this profile's to delete.
+        let stranger = directory
+            .path()
+            .join("out")
+            .join(format!(".localsr-job-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&stranger).unwrap();
+        std::fs::write(stranger.join("file"), b"not ours").unwrap();
         std::fs::create_dir_all(&scratch).unwrap();
         std::fs::write(scratch.join("frame"), b"partial").unwrap();
         {
@@ -253,11 +269,13 @@ mod tests {
                 "data": {"output_video_path": output}});
             database.insert_job("j", "m", &request.to_string()).unwrap();
             database.set_job_status("j", "running").unwrap();
+            database.record_scratch("j", &scratch).unwrap();
             // The host stops here without cleaning up.
             assert!(scratch.is_dir());
         }
         let state = AppState::from_paths(paths).unwrap();
         assert!(!scratch.exists());
+        assert!(stranger.join("file").is_file());
         let jobs = state.database.lock().unwrap().list_jobs().unwrap();
         assert_eq!(jobs[0].status, "interrupted");
     }

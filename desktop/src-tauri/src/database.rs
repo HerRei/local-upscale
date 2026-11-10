@@ -30,10 +30,19 @@ pub struct PendingJob {
     pub request_json: String,
 }
 
+/// A scratch folder an earlier run made for a job and recorded with it, and the
+/// output that job was asked to write.
+#[derive(Clone, Debug)]
+pub struct ScratchRecord {
+    pub id: String,
+    pub output: PathBuf,
+    pub scratch: PathBuf,
+}
+
 pub struct Database {
     connection: Connection,
-    /// Where the jobs that were running when the host last stopped wrote their output.
-    interrupted_outputs: Vec<PathBuf>,
+    /// The scratch folders of the jobs that were unfinished when the host last stopped.
+    interrupted_scratch: Vec<ScratchRecord>,
 }
 
 /// The final states of a job.
@@ -153,6 +162,17 @@ impl Database {
                 [],
             )?;
         }
+        let has_scratch: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='scratch_path')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_scratch {
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN scratch_path TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
         // Result history of one media, newest first (see list_media_results).
         connection.execute(
             "CREATE INDEX IF NOT EXISTS jobs_media_results_idx ON jobs(media_id, updated_at)",
@@ -160,9 +180,9 @@ impl Database {
         )?;
         let mut database = Self {
             connection,
-            interrupted_outputs: Vec::new(),
+            interrupted_scratch: Vec::new(),
         };
-        database.interrupted_outputs = database.interrupt_stale_jobs()?;
+        database.interrupted_scratch = database.interrupt_stale_jobs()?;
         Ok(database)
     }
 
@@ -174,29 +194,60 @@ impl Database {
         Ok(())
     }
 
-    /// Mark the jobs a stopped host left running as interrupted; the output paths they
-    /// were asked to write come back.
-    fn interrupt_stale_jobs(&self) -> AppResult<Vec<PathBuf>> {
+    /// Mark the jobs a stopped host left running as interrupted. The scratch folders
+    /// recorded for the jobs that are not finished come back: those the stopped host
+    /// made and no engine of this run can be using.
+    fn interrupt_stale_jobs(&self) -> AppResult<Vec<ScratchRecord>> {
         let mut statement = self.connection.prepare(
-            "SELECT request_json FROM jobs WHERE status IN ('starting', 'running', 'cancelling')",
+            "SELECT id, request_json, scratch_path FROM jobs WHERE scratch_path != ''
+             AND status IN ('queued', 'starting', 'running', 'cancelling', 'interrupted')",
         )?;
-        let outputs = statement
-            .query_map([], |row| row.get::<_, String>(0))?
+        let records = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
             .filter_map(Result::ok)
-            .filter_map(|request| serde_json::from_str::<serde_json::Value>(&request).ok())
-            .filter_map(|request| request_output(&request).map(PathBuf::from))
+            .filter_map(|(id, request, scratch)| {
+                let request = serde_json::from_str::<serde_json::Value>(&request).ok()?;
+                Some(ScratchRecord {
+                    id,
+                    output: PathBuf::from(request_output(&request)?),
+                    scratch: PathBuf::from(scratch),
+                })
+            })
             .collect();
         drop(statement);
         self.connection.execute(
             "UPDATE jobs SET status = 'interrupted', error = 'The desktop host stopped before the job finished.', updated_at = ?1 WHERE status IN ('starting', 'running', 'cancelling')",
             [now_millis()],
         )?;
-        Ok(outputs)
+        Ok(records)
     }
 
-    /// The outputs of the jobs the last stop interrupted, once.
-    pub fn take_interrupted_outputs(&mut self) -> Vec<PathBuf> {
-        std::mem::take(&mut self.interrupted_outputs)
+    /// The scratch folders of the jobs the last stop left unfinished, once.
+    pub fn take_interrupted_scratch(&mut self) -> Vec<ScratchRecord> {
+        std::mem::take(&mut self.interrupted_scratch)
+    }
+
+    /// Remember the scratch folder made for a job, so a later run removes that folder
+    /// and no other.
+    pub fn record_scratch(&self, id: &str, scratch: &Path) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE jobs SET scratch_path=?2 WHERE id=?1",
+            params![id, scratch.to_string_lossy()],
+        )?;
+        Ok(())
+    }
+
+    /// The recorded folder is gone or removed; it needs no more attention.
+    pub fn forget_scratch(&self, id: &str) -> AppResult<()> {
+        self.connection
+            .execute("UPDATE jobs SET scratch_path='' WHERE id=?1", [id])?;
+        Ok(())
     }
 
     pub fn list_media(&self) -> AppResult<Vec<MediaItem>> {

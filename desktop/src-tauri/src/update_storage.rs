@@ -110,8 +110,7 @@ pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
     let tree = ProcessTree::new(&child);
     let start = Instant::now();
     loop {
-        if let Some(status) = child.try_wait()? {
-            tree.terminate();
+        if let Some(status) = tree.try_wait(&mut child)? {
             return if status.success() {
                 Ok(())
             } else {
@@ -123,7 +122,7 @@ pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
         if start.elapsed() >= timeout {
             tree.terminate();
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.wait(&mut child);
             return Err(AppError::Worker(
                 "The new version's startup check timed out".into(),
             ));

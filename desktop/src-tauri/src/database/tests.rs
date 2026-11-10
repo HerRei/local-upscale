@@ -787,3 +787,68 @@ fn queued_jobs_carry_the_typical_speed_of_their_comparable_runs() {
         0.0
     );
 }
+
+#[test]
+fn only_the_scratch_folders_recorded_for_unfinished_jobs_come_back_after_a_stop() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("queue.db");
+    let request = |name: &str| {
+        format!(r#"{{"type":"job_request","data":{{"output_path":"/out/{name}.png"}}}}"#)
+    };
+    {
+        let db = Database::open(&path).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        for id in ["running", "unrecorded", "done", "waiting"] {
+            db.insert_job(id, "m", &request(id)).unwrap();
+        }
+        db.set_job_status("running", "running").unwrap();
+        db.set_job_status("unrecorded", "running").unwrap();
+        db.record_scratch("running", Path::new("/out/.localsr-job-1"))
+            .unwrap();
+        db.record_scratch("done", Path::new("/out/.localsr-job-2"))
+            .unwrap();
+        db.record_scratch("waiting", Path::new("/out/.localsr-job-3"))
+            .unwrap();
+        db.finish_job("done", "completed", "/out/done.png", "")
+            .unwrap();
+        // The host stops here.
+    }
+    let mut db = Database::open(&path).unwrap();
+    let mut found: Vec<(String, String, String)> = db
+        .take_interrupted_scratch()
+        .into_iter()
+        .map(|record| {
+            (
+                record.id,
+                record.output.to_string_lossy().into_owned(),
+                record.scratch.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (
+                "running".into(),
+                "/out/running.png".into(),
+                "/out/.localsr-job-1".into()
+            ),
+            (
+                "waiting".into(),
+                "/out/waiting.png".into(),
+                "/out/.localsr-job-3".into()
+            ),
+        ]
+    );
+    assert!(db.take_interrupted_scratch().is_empty());
+    db.forget_scratch("running").unwrap();
+    drop(db);
+    let mut db = Database::open(&path).unwrap();
+    let ids: Vec<String> = db
+        .take_interrupted_scratch()
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+    assert_eq!(ids, ["waiting"]);
+}

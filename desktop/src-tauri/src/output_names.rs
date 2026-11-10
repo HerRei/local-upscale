@@ -1,5 +1,6 @@
-//! Output names reserved by queued work, compared the way a case-insensitive file
-//! system compares them: two names that differ only by letter case are one name.
+//! Output names reserved by queued work, compared the way a case- and
+//! normalisation-insensitive file system compares them: two names that differ only by letter case or by the
+//! Unicode form of an accented letter are one name.
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -10,9 +11,9 @@ use std::{
 /// network share), and a needless numbered suffix costs nothing.
 ///
 /// Unicode normalisation forms (an "é" stored as one character or as "e" plus an
-/// accent) are not folded: Rust's standard library has no normalisation tables.
-/// A file that already exists is found by the file system itself, which compares
-/// them as its own rules say; the final publication refuses to replace one.
+/// accent) are folded too, as a normalisation-insensitive volume (APFS) treats them
+/// as one name. A file that already exists is found by the file system itself; the
+/// final publication refuses to replace one.
 #[derive(Default)]
 pub struct ReservedOutputs(HashSet<String>);
 
@@ -39,15 +40,24 @@ impl FromIterator<PathBuf> for ReservedOutputs {
     }
 }
 
-/// Upper then lower case: the first step maps characters such as "ß" and the final
-/// sigma to the form a case-insensitive file system also treats as equal.
+/// Canonical decomposition, then upper and lower case: the first step makes an "é" in
+/// one character and in "e" plus an accent one name, as APFS and HFS+ treat them; the
+/// case steps map characters such as "ß" and the final sigma to the form a
+/// case-insensitive file system also treats as equal. Composing at the end keeps
+/// names the case mapping split apart in step.
 fn fold(path: &Path) -> String {
+    use unicode_normalization::UnicodeNormalization;
+
     path.components()
         .map(|part| {
             part.as_os_str()
                 .to_string_lossy()
+                .nfd()
+                .collect::<String>()
                 .to_uppercase()
                 .to_lowercase()
+                .nfc()
+                .collect::<String>()
         })
         .collect::<Vec<_>>()
         .join("/")
@@ -77,6 +87,21 @@ mod tests {
         assert!(!reserved.insert(Path::new("/out/STRASSE.png")));
         assert!(reserved.insert(Path::new("/out/Σίσυφος.png")));
         assert!(!reserved.insert(Path::new("/out/ΣΊΣΥΦΟς.png")));
+    }
+
+    #[test]
+    fn composed_and_decomposed_spellings_are_one_name() {
+        let mut reserved = ReservedOutputs::default();
+        assert!(reserved.insert(Path::new("/out/\u{e9}.jpg")));
+        assert!(!reserved.insert(Path::new("/out/e\u{301}.jpg")));
+        assert!(!reserved.insert(Path::new("/out/E\u{301}.JPG")));
+        assert!(reserved.insert(Path::new("/out/\u{e8}.jpg")));
+        // A folder in the path counts too.
+        assert!(reserved.insert(Path::new("/out/Zo\u{eb}/a.png")));
+        assert!(!reserved.insert(Path::new("/out/Zoe\u{308}/a.png")));
+        // Hangul syllables and their jamo are the same name.
+        assert!(reserved.insert(Path::new("/out/\u{d55c}.png")));
+        assert!(!reserved.insert(Path::new("/out/\u{1112}\u{1161}\u{11ab}.png")));
     }
 
     #[test]

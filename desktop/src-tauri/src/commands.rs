@@ -132,27 +132,31 @@ pub fn start_edit(
     Ok(())
 }
 
-/// The editing program to run: the one the host found at start-up. The web view
-/// may repeat that path but cannot name another.
+/// The editing program to run: the one the host found at start-up or one the user
+/// picked in the host's own file dialog. The web view may repeat such a path but
+/// cannot name another.
 fn edit_runtime(state: &AppState, requested: &str) -> AppResult<PathBuf> {
+    let missing = || AppError::Validation("Choose the native editing runtime.".into());
     let found = lock(&state.edit_runtime)?.clone();
-    if found.is_empty() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
+    let found = if found.is_empty() {
+        None
+    } else {
+        fs::canonicalize(found).ok().filter(|path| path.is_file())
+    };
+    if requested.is_empty() {
+        return found.ok_or_else(missing);
     }
-    let found = fs::canonicalize(found)?;
-    if !found.is_file() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
+    let requested_real = fs::canonicalize(requested)
+        .ok()
+        .filter(|path| path.is_file());
+    match requested_real {
+        Some(real) if found.as_ref() == Some(&real) || state.edit_programs.check(requested).is_ok() => {
+            Ok(real)
+        }
+        _ => Err(AppError::Validation(
+            "Only an editing runtime LocalSR found itself or that you chose in its file dialog can be used.".into(),
+        )),
     }
-    if !requested.is_empty() && fs::canonicalize(requested).ok().as_ref() != Some(&found) {
-        return Err(AppError::Validation(
-            "Only the editing runtime LocalSR found itself can be used.".into(),
-        ));
-    }
-    Ok(found)
 }
 
 #[tauri::command]
@@ -607,6 +611,7 @@ pub fn start_jobs(
     // never in this latency-sensitive command.
 
     let output_directory = prepare_output_directory(&state, &input.output_directory)?;
+    check_output_room(&output_directory, &input, platform_path_limit())?;
     let selection = resolve_model_selection(&state, &input)?;
     let media = {
         let database = lock(&state.database)?;
@@ -923,6 +928,7 @@ fn admit_model_trials(
     }
     let candidates = trial_candidates(state, media_id, model_ids, base)?;
     let directory = prepare_output_directory(state, &base.output_directory)?;
+    check_output_room(&directory, base, platform_path_limit())?;
     let database = lock(&state.database)?;
     let media = database
         .get_media(media_id)?
@@ -1434,6 +1440,7 @@ fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()
             .latest_completed_output_for_media(&media_id)?
             .ok_or_else(|| AppError::Validation("this image has no completed output".into()))?
     };
+    crate::results::ensure_not_linked(Path::new(&output))?;
     if !Path::new(&output).is_file() {
         return Err(AppError::Validation(
             "the completed image is no longer available".into(),
@@ -1488,6 +1495,13 @@ pub async fn prepare_video_comparison(
     .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
 }
 
+/// A completed video result: the real path of a file the engine wrote, never what a
+/// link left in its place points to.
+fn canonical_result_video(path: PathBuf) -> AppResult<PathBuf> {
+    crate::results::ensure_not_linked(&path)?;
+    canonical_video(path)
+}
+
 /// The real path of a video file, or the message that it is gone (a deleted or moved
 /// file) instead of the system's own error text.
 fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
@@ -1522,7 +1536,7 @@ fn video_comparison_sources(
         (PathBuf::from(media.path), output.map(PathBuf::from))
     };
     let original = canonical_video(original)?;
-    let enhanced = enhanced.map(canonical_video).transpose()?;
+    let enhanced = enhanced.map(canonical_result_video).transpose()?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
@@ -1875,34 +1889,7 @@ pub fn uninstall_integrations() -> AppResult<integrations::IntegrationStatus> {
 /// until the user selects it, and never downloads or bundles FFmpeg.
 #[tauri::command]
 pub fn detect_external_ffmpeg(state: State<'_, Arc<AppState>>) -> Vec<String> {
-    let name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    let mut found: Vec<String> = Vec::new();
-    let mut consider = |path: PathBuf| {
-        if path.is_file() {
-            let text = path.to_string_lossy().into_owned();
-            if !found.contains(&text) {
-                found.push(text);
-            }
-        }
-    };
-    if let Some(paths) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&paths) {
-            consider(directory.join(name));
-        }
-    }
-    for directory in [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/snap/bin",
-        "C:\\ffmpeg\\bin",
-    ] {
-        consider(PathBuf::from(directory).join(name));
-    }
+    let found = crate::programs::find_ffmpeg();
     for path in &found {
         state.programs.grant(path);
     }
@@ -1917,16 +1904,35 @@ pub async fn choose_external_ffmpeg(
     state: State<'_, Arc<AppState>>,
     current: String,
 ) -> AppResult<Option<String>> {
+    let title = "Select the FFmpeg program installed on this computer";
+    let picked = pick_program(app, title, &current).await?;
+    if let Some(path) = &picked {
+        state.programs.grant(path);
+    }
+    Ok(picked)
+}
+
+/// Let the user pick the native editing runtime (sd-cli) in the host's own file
+/// dialog. Start Edit runs only the runtime the host found or one picked here.
+#[tauri::command]
+pub async fn choose_edit_runtime(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Option<String>> {
+    let picked = pick_program(app, "Choose the sd-cli image editing runtime", "").await?;
+    if let Some(path) = &picked {
+        state.edit_programs.grant(path);
+    }
+    Ok(picked)
+}
+
+/// The host's own file dialog for one program, opened beside `current` when that
+/// names a file in an existing folder.
+async fn pick_program(app: AppHandle, title: &str, current: &str) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
 
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_title("Select the FFmpeg program installed on this computer");
-    if let Some(folder) = Path::new(&current)
-        .parent()
-        .filter(|folder| folder.is_dir())
-    {
+    let mut dialog = app.dialog().file().set_title(title);
+    if let Some(folder) = Path::new(current).parent().filter(|folder| folder.is_dir()) {
         dialog = dialog.set_directory(folder);
     }
     let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
@@ -1940,7 +1946,6 @@ pub async fn choose_external_ffmpeg(
         .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?
         .to_string_lossy()
         .into_owned();
-    state.programs.grant(&path);
     Ok(Some(path))
 }
 
@@ -2962,10 +2967,17 @@ fn unique_output_path(
     input: &StartBatchInput,
     reserved: &mut ReservedOutputs,
 ) -> PathBuf {
-    let stem = Path::new(input_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("output");
+    unique_output_path_within(
+        directory,
+        input_path,
+        input,
+        reserved,
+        platform_path_limit(),
+    )
+}
+
+/// The name and extension a result of `input` ends with, before any counter.
+fn output_ending(input: &StartBatchInput) -> (String, &str) {
     let mut suffix = match input.task.as_str() {
         "denoise" => "_denoised".to_owned(),
         "video"
@@ -2985,6 +2997,23 @@ fn unique_output_path(
     } else {
         input.output_format.as_str()
     };
+    (suffix, extension)
+}
+
+/// `unique_output_path` for a given limit on the whole path (see `path_room`).
+fn unique_output_path_within(
+    directory: &Path,
+    input_path: &str,
+    input: &StartBatchInput,
+    reserved: &mut ReservedOutputs,
+    path_limit: Option<usize>,
+) -> PathBuf {
+    let stem = Path::new(input_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let (suffix, extension) = output_ending(input);
+    let room = path_limit.map(|limit| path_room(directory, limit));
     let mut counter = 0_u32;
     loop {
         let numbered = if counter == 0 {
@@ -2994,6 +3023,10 @@ fn unique_output_path(
         };
         let ending = format!("{suffix}{numbered}.{extension}");
         let stem = fit_stem(stem, MAX_FILE_NAME_BYTES.saturating_sub(ending.len()));
+        let stem = match room {
+            Some(room) => fit_stem_units(stem, room.saturating_sub(ending.encode_utf16().count())),
+            None => stem,
+        };
         let candidate = directory.join(format!("{stem}{ending}"));
         if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
@@ -3013,6 +3046,78 @@ fn fit_stem(stem: &str, limit: usize) -> &str {
         end -= 1;
     }
     &stem[..end]
+}
+
+/// `stem` cut to at most `limit` UTF-16 units, on a character boundary.
+fn fit_stem_units(stem: &str, limit: usize) -> &str {
+    let mut units = 0;
+    for (index, character) in stem.char_indices() {
+        units += character.len_utf16();
+        if units > limit {
+            return &stem[..index];
+        }
+    }
+    stem
+}
+
+/// How long a full path may be where long paths are off: Windows' MAX_PATH, which counts
+/// the terminating NUL. The engine and the tools it starts do not all use the extended
+/// form that lifts it.
+const WINDOWS_PATH_LIMIT: usize = 260;
+
+fn platform_path_limit() -> Option<usize> {
+    cfg!(windows).then_some(WINDOWS_PATH_LIMIT)
+}
+
+/// What the engine makes below the output folder: its scratch folder
+/// (`.localsr-job-` and a 36-character id), a separator and its longest temporary name
+/// (`.localsr-external-` and 8 characters and `.tmp`).
+const ENGINE_PATH_BELOW_FOLDER: usize = 49 + 1 + 30;
+
+/// The fewest characters of the source's name worth keeping in the result's.
+const MIN_STEM_UNITS: usize = 16;
+
+/// The length of `directory` the way another tool sees it: the extended-length prefix
+/// (`\\?\`, `\\?\UNC\`) that `canonicalize` adds on Windows is not part of it.
+fn path_units_without_prefix(directory: &Path) -> usize {
+    let text = directory.to_string_lossy();
+    let units = text.encode_utf16().count();
+    if text.starts_with("\\\\?\\UNC\\") {
+        units - "\\\\?\\UNC\\".len() + 2
+    } else if text.starts_with("\\\\?\\") {
+        units - "\\\\?\\".len()
+    } else {
+        units
+    }
+}
+
+/// How many UTF-16 units a file name in `directory` may have so that the whole path
+/// stays under `limit`: the terminating NUL, the folder and a separator come off.
+fn path_room(directory: &Path, limit: usize) -> usize {
+    limit.saturating_sub(path_units_without_prefix(directory) + 2)
+}
+
+/// Refuse a folder whose path leaves no room for a sensible result name and for what the
+/// engine makes below it, instead of failing after the work is done.
+fn check_output_room(
+    directory: &Path,
+    input: &StartBatchInput,
+    path_limit: Option<usize>,
+) -> AppResult<()> {
+    let Some(limit) = path_limit else {
+        return Ok(());
+    };
+    let (suffix, extension) = output_ending(input);
+    // The ending, a counter such as `_12`, and a stem worth reading.
+    let name = MIN_STEM_UNITS + suffix.len() + 1 + extension.len() + 4;
+    if path_room(directory, limit) < name.max(ENGINE_PATH_BELOW_FOLDER) {
+        return Err(AppError::Validation(format!(
+            "The folder {} has too long a path for LocalSR to save results in it: Windows limits a full path to {} characters. Choose a shorter output folder.",
+            directory.display(),
+            limit - 1
+        )));
+    }
+    Ok(())
 }
 
 fn model_slug(id: &str) -> String {
@@ -3136,13 +3241,8 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     if !recorded && last_output.is_empty() {
         return Err(AppError::Validation("there is no completed output".into()));
     }
-    // A result is a file the engine wrote. One that has since become a link could
-    // lead anywhere, and canonicalizing would authorize its target.
-    if fs::symlink_metadata(requested)?.file_type().is_symlink() {
-        return Err(AppError::Validation(
-            "output path was not authorized".into(),
-        ));
-    }
+    fs::symlink_metadata(requested)?;
+    crate::results::ensure_not_linked(Path::new(requested))?;
     let requested = fs::canonicalize(requested)?;
     let is_last_output = !last_output.is_empty()
         && fs::canonicalize(last_output)

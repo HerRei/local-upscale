@@ -315,7 +315,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         let engine_started = Instant::now();
         let mut stopped_by_app = false;
         let status = loop {
-            match child.try_wait() {
+            match tree.try_wait(&mut child) {
                 Ok(Some(status)) => break Ok(status),
                 Err(error) => break Err(error),
                 Ok(None) => {}
@@ -324,14 +324,14 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 stopped_by_app = true;
                 tree.terminate();
                 let _ = child.kill();
-                break child.wait();
+                break tree.wait(&mut child);
             }
             if overflowed.load(Ordering::SeqCst) {
                 // Not an app-requested stop: the engine failed, and the restart
                 // counter says so.
                 tree.terminate();
                 let _ = child.kill();
-                break child.wait();
+                break tree.wait(&mut child);
             }
             let restarting = state
                 .runtime
@@ -344,7 +344,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 stopped_by_app = true;
                 tree.terminate();
                 let _ = child.kill();
-                break child.wait();
+                break tree.wait(&mut child);
             }
             if let Ok(mut cancellation) = state.worker.cancellation.lock() {
                 if cancellation.expired(Instant::now()) {
@@ -361,7 +361,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     stopped_by_app = true;
                     tree.terminate();
                     let _ = child.kill();
-                    break child.wait();
+                    break tree.wait(&mut child);
                 }
             }
             thread::sleep(Duration::from_millis(100));
@@ -638,6 +638,12 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
         return Ok(Dispatch::Failed);
     }
+    if let Err(error) = record_scratch_folders(state) {
+        // Without the record a crash would leave the folder behind for good.
+        lock(&state.worker.cancellation)?.finish()?;
+        lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
+        return Ok(Dispatch::Failed);
+    }
     // Preparing can end a batch early, before a photo whose folder cannot be used.
     let ids: Vec<String> = match message["data"]["jobs"].as_array() {
         Some(jobs) if message["type"] == "image_batch_request" => {
@@ -671,6 +677,17 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         return Err(error);
     }
     Ok(Dispatch::Sent)
+}
+
+/// Record the folders just made for this dispatch with their jobs, before the engine
+/// can write into them: a later start removes exactly these after a crash.
+fn record_scratch_folders(state: &AppState) -> AppResult<()> {
+    let folders = lock(&state.worker.cancellation)?.scratch_folders();
+    let database = lock(&state.database)?;
+    for (id, folder) in folders {
+        database.record_scratch(&id, &folder)?;
+    }
+    Ok(())
 }
 
 /// The rows of the jobs a stopped engine was running. A cancellation that had to
@@ -766,6 +783,13 @@ fn handle_worker_envelope(
         .lock()
         .map(|runtime| is_background_photo(&runtime, &job_id))
         .unwrap_or(false);
+    let envelope = match refuse_wrong_result(state, &envelope) {
+        Ok(Some(failure)) => {
+            eprintln!("LocalSR failed a job: the engine reported a result the app did not ask for");
+            failure
+        }
+        _ => envelope,
+    };
     let result = accept_envelope(state, &envelope);
     if matches!(result, Ok(false)) {
         return;
@@ -968,6 +992,27 @@ fn accept_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResul
     Ok(true)
 }
 
+/// The failure that settles a completion naming a job the host dispatched, still
+/// active, with a result path the host did not ask for. Left alone the job would stay
+/// active and hold up the queue; the engine's state can no longer be trusted, so it is
+/// restarted. Messages about unknown or ended jobs get None and stay ignored.
+fn refuse_wrong_result(
+    state: &AppState,
+    envelope: &WorkerEnvelope,
+) -> AppResult<Option<WorkerEnvelope>> {
+    if stale_reason(state, envelope)?.is_some() || wrong_output(state, envelope)?.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(WorkerEnvelope {
+        message_type: "job_failed".into(),
+        data: json!({
+            "job_id": string(&envelope.data, "job_id"),
+            "error_message": "The engine reported a result the app did not ask for.",
+            "restart_required": true,
+        }),
+    }))
+}
+
 /// Messages that report on one job or benchmark. The engine only ever sends them
 /// for work the host sent it.
 fn is_job_scoped(message_type: &str) -> bool {
@@ -1008,6 +1053,14 @@ fn is_job_scoped(message_type: &str) -> bool {
 /// what the host records, previews and later lets the user open, so neither is
 /// taken from the engine's word alone.
 fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
+    match stale_reason(state, envelope)? {
+        Some(reason) => Ok(Some(reason)),
+        None => wrong_output(state, envelope),
+    }
+}
+
+/// A job-scoped message that names no job the host dispatched, or one that ended.
+fn stale_reason(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
     let kind = envelope.message_type.as_str();
     if !is_job_scoped(kind) {
         return Ok(None);
@@ -1030,18 +1083,26 @@ fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<St
             "{kind} for job {shown:?}, which already ended"
         )));
     }
-    if matches!(kind, "job_completed" | "video_job_completed") {
-        let reported = string(&envelope.data, "output_path");
-        let requested = lock(&state.database)?.requested_output(&id)?;
-        // The engine writes the file the request names and reports that same path.
-        if requested.as_deref().map(Path::new) != Some(Path::new(&reported)) {
-            let shown: String = reported.chars().take(256).collect();
-            return Ok(Some(format!(
-                "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
-            )));
-        }
-    }
     Ok(None)
+}
+
+/// A completion that reports another file than the output the host requested.
+fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
+    let kind = envelope.message_type.as_str();
+    if !matches!(kind, "job_completed" | "video_job_completed") {
+        return Ok(None);
+    }
+    let id = string(&envelope.data, "job_id");
+    let reported = string(&envelope.data, "output_path");
+    let requested = lock(&state.database)?.requested_output(&id)?;
+    // The engine writes the file the request names and reports that same path.
+    if requested.as_deref().map(Path::new) == Some(Path::new(&reported)) {
+        return Ok(None);
+    }
+    let shown: String = reported.chars().take(256).collect();
+    Ok(Some(format!(
+        "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
+    )))
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -2045,7 +2106,10 @@ fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
 /// so it cannot race the completion state applied above.
 fn completion_preview_request(state: &AppState, envelope: &WorkerEnvelope) -> Option<Value> {
     let output_path = string(&envelope.data, "output_path");
-    if output_path.is_empty() {
+    // A result that is a link could show another file's pixels.
+    if output_path.is_empty()
+        || crate::results::ensure_not_linked(std::path::Path::new(&output_path)).is_err()
+    {
         return None;
     }
     match envelope.message_type.as_str() {

@@ -21,14 +21,19 @@ fn previous_copy(paths: &AppPaths) -> std::path::PathBuf {
     paths.settings.with_extension("json.previous")
 }
 
+/// The file the settings come from: the settings file, or, when a save stopped between
+/// its renames and left none, the previous copy. Whatever this names is protected: it is
+/// never replaced while it cannot be read.
+fn effective_document_path(paths: &AppPaths) -> Option<std::path::PathBuf> {
+    [paths.settings.clone(), previous_copy(paths)]
+        .into_iter()
+        .find(|path| path.exists())
+}
+
 pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
     // A save that stopped between its two renames leaves no settings file but the
     // previous copy, which holds the last complete settings.
-    let document = read_document(&paths.settings).or_else(|| {
-        (!paths.settings.exists())
-            .then(|| read_document(&previous_copy(paths)))
-            .flatten()
-    });
+    let document = effective_document_path(paths).and_then(|path| read_document(&path));
     if let Some(mut document) = document {
         adopt_automatic_video_format(&mut document.ui);
         return (document.ui, document.recipes);
@@ -209,7 +214,7 @@ fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
 pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppResult<()> {
     // Never overwrite an unreadable or future-version document with defaults. A version-1
     // file is kept by the profile backup taken when this version first started.
-    if paths.settings.exists() && read_document(&paths.settings).is_none() {
+    if needs_recovery(paths) {
         return Err(AppError::Config("Settings need recovery. The original file has been preserved; open Check for Updates… and press Recover settings before saving changes.".into()));
     }
     fs::create_dir_all(&paths.next_root)?;
@@ -226,17 +231,17 @@ pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppR
 }
 
 pub fn needs_recovery(paths: &AppPaths) -> bool {
-    paths.settings.exists() && read_document(&paths.settings).is_none()
+    effective_document_path(paths).is_some_and(|path| read_document(&path).is_none())
 }
 
 pub fn recover_defaults(paths: &AppPaths) -> AppResult<()> {
-    if !needs_recovery(paths) {
+    let Some(unreadable) = effective_document_path(paths).filter(|_| needs_recovery(paths)) else {
         return Ok(());
-    }
+    };
     let backup = paths
         .next_root
         .join(format!("settings.recovery-{}.json", uuid::Uuid::new_v4()));
-    fs::rename(&paths.settings, backup)?;
+    fs::rename(unreadable, backup)?;
     Ok(())
 }
 
@@ -548,5 +553,41 @@ mod recovery_tests {
             .collect();
         assert_eq!(copies.len(), 1);
         assert_eq!(fs::read(copies[0].path()).unwrap(), b"{broken recipes");
+    }
+
+    #[test]
+    fn an_unreadable_previous_copy_is_protected_like_an_unreadable_settings_file() {
+        for original in [
+            &br#"{broken"#[..],
+            &br#"{"schema_version":3,"ui":{},"recipes":[]}"#[..],
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let paths = AppPaths::under(root.path());
+            fs::create_dir_all(&paths.next_root).unwrap();
+            // A save stopped between its renames and the only copy cannot be read.
+            fs::write(previous_copy(&paths), original).unwrap();
+            assert!(!paths.settings.exists());
+            assert!(needs_recovery(&paths));
+            let (settings, recipes) = load(&paths);
+            assert!(save(&paths, &settings, &recipes).is_err());
+            assert_eq!(fs::read(previous_copy(&paths)).unwrap(), original);
+            assert!(!paths.settings.exists());
+            // Recovery sets it aside instead of deleting it, and saving works again.
+            recover_defaults(&paths).unwrap();
+            assert!(!previous_copy(&paths).exists());
+            assert!(!needs_recovery(&paths));
+            save(&paths, &settings, &recipes).unwrap();
+            let copies: Vec<_> = fs::read_dir(&paths.next_root)
+                .unwrap()
+                .flatten()
+                .filter(|p| {
+                    p.file_name()
+                        .to_string_lossy()
+                        .starts_with("settings.recovery-")
+                })
+                .collect();
+            assert_eq!(copies.len(), 1);
+            assert_eq!(fs::read(copies[0].path()).unwrap(), original);
+        }
     }
 }
