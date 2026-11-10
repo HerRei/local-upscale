@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit } from './fake-host';
-import { ready, video, windows, withOutputs } from './fixtures';
+import { ready, upscale, video, windows, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
 // centre header keeps its tabs, file name and view options in a single row.
@@ -318,6 +318,72 @@ test.describe('overflow and alignment', () => {
     const tip = page.getByRole('tooltip').filter({ visible: true });
     const sizes = await tip.evaluate((node) => [node.scrollWidth, node.clientWidth]);
     expect(sizes[0]).toBeLessThanOrEqual(sizes[1]);
+  });
+
+  const advancedScenarios = {
+    'Upscale on a Mac': { ...ready, settings: { ...ready.settings, output_format: 'heic' } },
+    'Upscale on Windows': { ...windows, worker: 'ready' as const },
+    Video: video,
+    Edit: {
+      ...upscale,
+      task: 'edit',
+      worker: 'ready' as const,
+      features: ['image_edit'],
+      settings: { edit_model_id: 'flux2_klein_4b_q4_0' },
+      installed: ['flux2_klein_4b_q4_0'],
+    },
+  };
+
+  for (const [name, scenario] of Object.entries(advancedScenarios)) {
+    test(`Advanced, ${name}: every tip wraps inside its box and the window`, async ({ page }) => {
+      await page.setViewportSize({ width: 880, height: 640 });
+      await openApp(page, scenario);
+      await showPane(page, 'enhance');
+      await page.getByRole('button', { name: /^Advanced/ }).click();
+      const column = await box(page.locator('.inspector-scroll'));
+      const tips = page.locator('.advanced-controls .help-tip');
+      const count = await tips.count();
+      expect(count).toBeGreaterThan(5);
+      for (let index = 0; index < count; index++) {
+        const tip = tips.nth(index);
+        await tip.scrollIntoViewIfNeeded();
+        const target = await box(tip);
+        expect(
+          Math.min(target.width, target.height),
+          await tip.getAttribute('aria-label'),
+        ).toBeGreaterThanOrEqual(24);
+        await tip.click();
+        const text = page.getByRole('tooltip').filter({ visible: true });
+        await expect(text).toHaveCount(1);
+        const label = await tip.getAttribute('aria-label');
+        const [scroll, client] = await text.evaluate((node) => [
+          node.scrollWidth,
+          node.clientWidth,
+        ]);
+        expect(scroll, label).toBeLessThanOrEqual(client);
+        const shown = await box(text);
+        expect(shown.x, label).toBeGreaterThanOrEqual(column.x);
+        expect(shown.x + shown.width, label).toBeLessThanOrEqual(column.x + column.width);
+        expect(shown.y, label).toBeGreaterThanOrEqual(0);
+        expect(shown.y + shown.height, label).toBeLessThanOrEqual(640);
+        await page.keyboard.press('Escape');
+      }
+    });
+  }
+
+  test('Advanced: a tip beside a label leaves the select column and the Steps and Seed pair where they were', async ({
+    page,
+  }) => {
+    await openApp(page, advancedScenarios.Edit);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    const select = await box(page.locator('#edit-size'));
+    expect(Math.abs((await left(page.locator('#device'))) - select.x)).toBeLessThan(0.5);
+    const steps = await box(page.locator('#edit-steps'));
+    const seed = await box(page.locator('#edit-seed'));
+    expect(Math.abs(steps.y - seed.y)).toBeLessThan(0.5);
+    expect(seed.x).toBeGreaterThan(steps.x + steps.width);
+    expect(Math.abs(seed.x - select.x)).toBeLessThan(0.5);
   });
 
   test('Advanced: three selects share the select column; Find installed FFmpeg is one line', async ({

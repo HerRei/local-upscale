@@ -1000,7 +1000,7 @@ input[type='number'],
   font-size: calc(11px * var(--ui-scale));
 }
 .download-track,
-.hardware-card > i {
+.meter-clip > i {
   display: block;
   height: 3px;
   margin-top: 6px;
@@ -1009,14 +1009,14 @@ input[type='number'],
   background: #111113;
 }
 .download-track i,
-.hardware-card > i {
+.meter-clip > i {
   display: block;
   height: 100%;
   background: var(--accent-hi);
 }
 /* Memory pressure is information, not an action: grey, so terracotta stays on Start and
    progress. */
-.hardware-card > i {
+.meter-clip > i {
   background: var(--tertiary);
 }
 .inline-warning {
@@ -1070,13 +1070,18 @@ input[type='number'],
   gap: 8px;
 }
 .field-row label,
-.range-row label {
+.range-row label,
+.range-head {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.range-row label {
+.range-row {
+  position: relative;
+}
+.range-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 5px;
 }
 .range-row input {
@@ -1084,6 +1089,7 @@ input[type='number'],
   accent-color: #cfcfcf;
 }
 .directory-field {
+  position: relative;
   width: 100%;
   min-height: 46px;
   padding: 7px 9px;
@@ -1096,8 +1102,19 @@ input[type='number'],
   background: var(--recess);
   text-align: left;
 }
-.directory-field span {
+/* The whole card picks the folder; the "?" sits above this layer. */
+.directory-hit {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+.directory-text {
   min-width: 0;
+}
+.directory-path {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1131,7 +1148,6 @@ input[type='number'],
 }
 .hardware-card {
   position: relative;
-  overflow: hidden;
   min-height: 38px;
   padding: 8px;
   display: flex;
@@ -1149,7 +1165,16 @@ input[type='number'],
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
 }
-.hardware-card > i {
+/* Clips the meter to the card's rounded corners; the card itself must not clip, or its help
+   tip would be cut off. */
+.meter-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.meter-clip > i {
   position: absolute;
   left: 0;
   bottom: 0;
@@ -2840,6 +2865,7 @@ input[type='number'],
   /* A 24 px target around the 14 px circle; the negative margins keep the layout of the
      14 px button. */
   width: calc(14px * var(--ui-scale) + 10px);
+  flex: none;
   min-width: 0;
   height: calc(14px * var(--ui-scale) + 10px);
   min-height: 0;

@@ -58,7 +58,7 @@ describe('HEIC image output', () => {
   it('is offered with a quality slider where the engine announces it', async () => {
     const update = await open({ task: 'upscale', output_format: 'heic' }, mac);
     expect(options('Format')).toEqual(['png', 'jpg', 'tif', 'webp', 'heic']);
-    const slider = screen.getByLabelText(/HEIC quality/);
+    const slider = screen.getByLabelText(/^HEIC quality/);
     await fireEvent.change(slider, { target: { value: '85' } });
     expect(update).toHaveBeenCalledWith({ jpeg_quality: 85 });
   });
