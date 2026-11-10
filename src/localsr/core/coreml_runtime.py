@@ -595,9 +595,10 @@ class _CoreMLImage(torch.nn.Module):
             except Exception:  # noqa: BLE001
                 logger.debug("Core ML status callback failed", exc_info=True)
 
-    def _note(self, message: str) -> None:
-        """A sentence for the finished result as well as the status line."""
-        self._status(message)
+    def _note(self, message: str, *, status: bool = True) -> None:
+        """A sentence for the finished result, and for the status line unless ``status`` is off."""
+        if status:
+            self._status(message)
         if self.note_callback is not None:
             try:
                 self.note_callback(message)
@@ -796,9 +797,11 @@ class _CoreMLImage(torch.nn.Module):
             # Every later job looks again: the stored timeout may have expired or been lifted,
             # and each result that ran without Core ML for this reason says so.
             state["retry"] = True
+            # Not a status: a video asks again for every frame, and the line would repeat.
             self._note(
                 f"Continuing on {self._fallback_label()}: "
-                "Core ML was not ready in time for this model earlier."
+                "Core ML was not ready in time for this model earlier.",
+                status=False,
             )
 
     def batch_lanes(self, sample: torch.Tensor, shape: tuple[int, int], *, gpu: bool) -> list:

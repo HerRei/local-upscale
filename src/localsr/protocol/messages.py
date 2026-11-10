@@ -687,6 +687,8 @@ class VideoJobCompleted:
     frames_processed: int
     elapsed_seconds: float = 0.0
     inference_seconds: float = 0.0
+    # What the user should know about a video that finished, such as a route that was given up.
+    notes: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})

@@ -896,10 +896,9 @@ def test_a_job_that_skips_a_unit_for_a_stored_timeout_says_so_in_its_notes(fake_
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
     assert fake_coreml.loads == []
     expected = "Continuing on the CPU: Core ML was not ready in time for this model earlier."
-    assert notes == [expected] and messages[-1] == expected
-    # Once per job, not per tile; the next job looks at the stored timeout again.
-    converted(image(20, 20)[None])
-    assert notes == [expected]
+    # Only the result carries it: a video asks for every frame, and a status line would repeat.
+    assert notes == [expected] and messages == []
+    # The next job (or frame) looks at the stored timeout again.
     run(converted)
     assert notes == [expected, expected]
 
