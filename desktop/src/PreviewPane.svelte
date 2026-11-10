@@ -54,11 +54,9 @@
   export let comparisonNote = '';
   export let completedVideoOutput: string;
   export let compactHidden = false;
-  export let modelLabel = '';
-  export let activityLabel = '';
-  // Editing names its phase and reports an overall percentage; tiles do not exist.
-  export let activityDetail = '';
-  export let activityProgress = 0;
+  // The status bar reports the job; the pane only says which live frame it shows.
+  export let liveFrame = -1;
+  $: liveFrame = progressiveFrame;
   export let editing = false;
   export let processing = false;
   export let activeTileSize = 0;
@@ -906,22 +904,6 @@
         </p>{/if}
       {#if processing}
         {#if editing}<div class="edit-sweep" aria-hidden="true"></div>{/if}
-        <div class="model-activity" class:with-progress={editing} role="status">
-          <i></i><span
-            >{modelLabel} · {activityLabel
-              ? `${activityLabel}${progressiveFrame >= 0 ? ` · Frame ${progressiveFrame + 1}` : ''}`
-              : progressiveFrame >= 0
-                ? `Frame ${progressiveFrame + 1} · live tiles`
-                : 'Preparing model output…'}{selectedMedia.hdr_format
-              ? ' · SDR display preview'
-              : ''}</span
-          >
-          {#if editing}<small
-              >{activityDetail || 'Starting…'} · {Math.round(activityProgress)}%</small
-            ><b class="activity-track"
-              ><em style={`width:${Math.max(2, Math.min(100, activityProgress))}%`}></em></b
-            >{/if}
-        </div>
       {/if}
       {#if videoComparison}
         {#key videoComparisonKey}
@@ -1132,63 +1114,6 @@
     background: #351918;
     color: #ffc6bd;
   }
-  .model-activity {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 8;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    max-width: calc(100% - 24px);
-    padding: 8px 10px;
-    background: #1e1e1eed;
-    color: #d1d1d1;
-    border: 1px solid #6b6b6b;
-    border-radius: var(--radius);
-    font-size: 11px;
-    pointer-events: none;
-  }
-  .model-activity i {
-    flex: 0 0 auto;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 2px solid #bfbfbf40;
-    border-top-color: #cccccc;
-    animation: model-spin 1s linear infinite;
-  }
-  .model-activity.with-progress {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    row-gap: 6px;
-    min-width: 260px;
-  }
-  .model-activity small {
-    grid-column: 2;
-    color: #b2b2b2;
-    font-size: 11px;
-  }
-  .activity-track {
-    grid-column: 1 / -1;
-    position: relative;
-    display: block;
-    height: 4px;
-    overflow: hidden;
-    border-radius: 2px;
-    background: #353535;
-  }
-  .activity-track em {
-    position: relative;
-    display: block;
-    height: 100%;
-    overflow: hidden;
-    border-radius: 2px;
-    background: var(--accent-hi);
-    transition: width 0.5s ease;
-  }
-  .activity-track em::after,
   .edit-sweep {
     content: '';
     position: absolute;
@@ -1248,11 +1173,6 @@
     font-size: calc(11px * var(--ui-scale));
     pointer-events: none;
   }
-  @keyframes model-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
   @keyframes tile-pulse {
     50% {
       border-color: #e0e0e0;
@@ -1260,9 +1180,7 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .model-activity i,
     .active-tile,
-    .activity-track em::after,
     .edit-sweep {
       animation: none;
     }

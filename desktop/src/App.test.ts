@@ -532,6 +532,61 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Job activity', () => {
+  const mountRunning = async (snapshot: AppSnapshot) => {
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel queue' });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Editing/),
+    );
+  };
+  const running = () => {
+    const snapshot = editSnapshot(26);
+    snapshot.settings.task = 'edit';
+    snapshot.settings.edit_model_id = 'flux2_klein_4b_q4_0';
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.status_title = 'Editing';
+    snapshot.runtime.status_detail = 'Loading the model';
+    snapshot.runtime.progress = 5;
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 5,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  };
+
+  it('has one progress display for a running edit and names the model in the status bar', async () => {
+    await mountRunning(running());
+    expect(document.querySelector('.model-activity')).toBeNull();
+    const bars = screen.getAllByRole('progressbar').filter((bar) => !bar.closest('.media-list'));
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute('aria-valuenow')).toBe('5');
+    const bar = document.querySelector('.status-bar')!;
+    expect(bar.querySelector('strong')?.textContent).toBe('Editing · 5%');
+    const detail = bar.querySelector('.status-detail')!;
+    expect(detail.textContent).toMatch(/^FLUX\.2 klein 4B.* · Loading the model$/);
+    expect(detail.getAttribute('title')).toBe(detail.textContent);
+    expect(detail.getAttribute('role')).toBe('status');
+    expect(screen.getAllByRole('status').filter((node) => bar.contains(node))).toHaveLength(1);
+  });
+
+  it('offers no Add to queue button while the running picture is the selected one', async () => {
+    await mountRunning(running());
+    expect(screen.queryByRole('button', { name: /to queue$/ })).toBeNull();
+  });
+});
+
 describe('LocalSR desktop interface', () => {
   it('puts an imported folder batch in a LocalSR Results subfolder', async () => {
     const snapshot = readySnapshot();

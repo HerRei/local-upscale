@@ -434,6 +434,27 @@
   $: runSince = queueRunSince(snapshot.jobs, runSince);
   $: runMedia = mediaInRun(snapshot.jobs, runSince);
   $: newMedia = runnableMedia.filter((media) => !runMedia.has(media.id));
+  // What the status bar adds to the engine's phase text while a picture is processed: the model,
+  // the live frame and a note for an HDR source shown as SDR.
+  let liveFrame = -1;
+  $: activityModel =
+    settings.task === 'edit'
+      ? (editModel?.name ?? 'Editing model')
+      : usingTemporalVideo
+        ? (selectedVideoModel?.name ?? 'Video model')
+        : (selectedModel?.name ?? 'Model');
+  $: activityDetail = activeJobMediaId
+    ? [
+        activityModel,
+        snapshot.runtime.status_detail,
+        liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
+        selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
+          ? 'SDR display preview'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
   $: queueSelection =
     settings.batch_mode && settings.task !== 'edit'
       ? snapshot.runtime.active_job_id
@@ -2754,14 +2775,7 @@
       {:else}
         <PreviewPane
           bind:this={previewPane}
-          modelLabel={settings.task === 'edit'
-            ? (editModel?.name ?? 'Editing model')
-            : usingTemporalVideo
-              ? (selectedVideoModel?.name ?? 'Video model')
-              : (selectedModel?.name ?? 'Model')}
-          activityLabel={snapshot.runtime.status_title}
-          activityDetail={settings.task === 'edit' ? snapshot.runtime.status_detail : ''}
-          activityProgress={snapshot.runtime.progress}
+          bind:liveFrame
           editing={settings.task === 'edit'}
           processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
           activeTileSize={snapshot.runtime.active_tile_size}
@@ -3541,10 +3555,13 @@
             : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
           class="status-detail"
-          title={booting ? undefined : idleSummary || snapshot.runtime.status_detail}
+          role={activityDetail ? 'status' : undefined}
+          title={booting
+            ? undefined
+            : activityDetail || idleSummary || snapshot.runtime.status_detail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : idleSummary || snapshot.runtime.status_detail}</span
+            : activityDetail || idleSummary || snapshot.runtime.status_detail}</span
         >
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
@@ -3577,7 +3594,14 @@
     {#if livePreviewWarning}<span class="inline-warning preview-warning" role="status"
         >Preview warning: {livePreviewWarning} Processing continues normally.</span
       >{/if}
-    {#if snapshot.runtime.active_job_id}<div class="progress">
+    {#if snapshot.runtime.active_job_id}<div
+        class="progress"
+        role="progressbar"
+        aria-label="Job progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(snapshot.runtime.progress)}
+      >
         <i style={`width:${snapshot.runtime.progress}%`}></i>
       </div>{/if}
     <div class="status-actions">
