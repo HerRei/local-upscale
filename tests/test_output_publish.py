@@ -313,3 +313,49 @@ def test_name_length_counts_what_the_file_system_counts(monkeypatch):
 def test_the_name_limit_falls_back_when_the_folder_cannot_be_asked(tmp_path):
     assert output_name_limit(tmp_path / "missing") == 255
     assert output_name_limit(tmp_path) >= 143
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+def test_a_system_encoded_export_through_the_master_leaves_only_its_output(
+    tmp_path, monkeypatch, outcome
+):
+    import localsr.core.media_bridge as media_bridge
+    from localsr.core.external_ffmpeg import ExternalFFmpegError
+
+    destination = tmp_path / "out.mp4"
+
+    def master(_frames, target, **_options):
+        Path(target).write_bytes(b"master")
+        return target
+
+    def transcode(_bridge, _master, final, **_kwargs):
+        # macOS keeps a hidden copy of a file the system encoder wrote beside it.
+        Path(final).write_bytes(b"video")
+        Path(final).with_name(Path(final).name + ".sb-df5fe11b-AbCdEf").write_bytes(b"x" * 64)
+        if outcome == "failure":
+            raise ExternalFFmpegError("the encoder stopped")
+        if outcome == "cancel":
+            raise InterruptedError("video job cancelled")
+
+    monkeypatch.setattr(video_io, "encode_video", master)
+    monkeypatch.setattr(media_bridge, "transcode_output", transcode)
+    arguments = dict(
+        video_codec="hevc",
+        container_format="mp4",
+        crf=18,
+        external_ffmpeg=object(),
+        stage_callback=None,
+        hdr_format="",
+        width=64,
+        height=64,
+        fps=10.0,
+        cancel_event=None,
+        temporary_directory=None,
+    )
+    if outcome == "success":
+        video_io._external_export(iter(()), destination, **arguments)
+        assert [path.name for path in tmp_path.iterdir()] == ["out.mp4"]
+    else:
+        with pytest.raises((video_io.VideoStageError, InterruptedError)):
+            video_io._external_export(iter(()), destination, **arguments)
+        assert list(tmp_path.iterdir()) == []

@@ -465,13 +465,20 @@ def _system_stream_export(
             final.unlink()
         except FileNotFoundError:
             pass
-        # macOS keeps a `<name>.sb-...` sibling of a file the system encoder wrote
-        # (a full extra copy for ProRes). Only the ones of this job's own file go.
-        for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
-            try:
-                sidecar.unlink()
-            except OSError:
-                pass
+        _remove_system_sidecars(final)
+
+
+def _remove_system_sidecars(final: Path) -> None:
+    """Remove the copy macOS keeps beside a file the system encoder wrote.
+
+    It is named `<name>.sb-...` and, for ProRes, is a full extra copy. Only the ones
+    of this job's own file go.
+    """
+    for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
 
 
 def _external_export(
@@ -577,6 +584,7 @@ def _external_export(
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+        _remove_system_sidecars(final)
 
 
 def encode_video(
