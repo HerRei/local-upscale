@@ -176,6 +176,8 @@ export interface JobRecord {
   work_key?: string;
   work_units?: number;
   elapsed_seconds?: number;
+  /** What one work unit typically took in comparable earlier runs; 0 or missing until two ran. */
+  seconds_per_unit?: number;
 }
 
 export interface DeviceInfo {

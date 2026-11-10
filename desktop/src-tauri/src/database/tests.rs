@@ -466,9 +466,17 @@ fn trials_estimate_only_measured_matching_requests() {
     db.insert_job("j", "m", request).unwrap();
     db.finish_job("j", "completed", "out.png", "").unwrap();
     db.record_job_duration("j", 12.0).unwrap();
+    // One run may have loaded the model: no estimate from it alone.
+    assert!(db
+        .estimate_request_seconds(request, &media)
+        .unwrap()
+        .is_none());
+    db.insert_job("k", "m", request).unwrap();
+    db.finish_job("k", "completed", "out2.png", "").unwrap();
+    db.record_job_duration("k", 4.0).unwrap();
     assert_eq!(
         db.estimate_request_seconds(request, &media).unwrap(),
-        Some(12.0)
+        Some(4.0)
     );
     assert!(db
         .estimate_request_seconds(&request.replace("cpu", "mps"), &media)
@@ -744,6 +752,38 @@ fn queue_timings_migrate_and_large_batches_keep_all_pending_and_owned_results() 
             .find(|job| job.id == "pending-0")
             .unwrap()
             .elapsed_seconds,
+        0.0
+    );
+}
+
+#[test]
+fn queued_jobs_carry_the_typical_speed_of_their_comparable_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    db.insert_media("m", "/tmp/a.png", "a.png", "image")
+        .unwrap();
+    db.update_media_probe("/tmp/a.png", "image", 512, 512, 1, 0.0, 0.0, "", "", "")
+        .unwrap();
+    let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
+    // The first run loaded the model (340 s for 4 tiles), the others are warm.
+    for (id, seconds) in [("first", 340.0), ("second", 4.0), ("third", 4.4)] {
+        db.insert_job(id, "m", request).unwrap();
+        db.finish_job(id, "completed", &format!("{id}.png"), "")
+            .unwrap();
+        db.record_job_duration(id, seconds).unwrap();
+    }
+    db.insert_job("next", "m", request).unwrap();
+    let jobs = db.list_jobs().unwrap();
+    let next = jobs.iter().find(|job| job.id == "next").unwrap();
+    assert!((next.seconds_per_unit - 1.0).abs() < 0.11);
+    let other = request.replace("cpu", "mps");
+    db.insert_job("other", "m", &other).unwrap();
+    let jobs = db.list_jobs().unwrap();
+    assert_eq!(
+        jobs.iter()
+            .find(|job| job.id == "other")
+            .unwrap()
+            .seconds_per_unit,
         0.0
     );
 }

@@ -4,7 +4,8 @@ const positive = (value: number | undefined): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 /** Estimates use real timings for the same saved workflow/device, never the
- * inspector's currently selected model or an unrelated benchmark score. */
+ * inspector's currently selected model or an unrelated benchmark score. The engine owns
+ * the running job's remaining time; this only scales a typical speed to the queued jobs. */
 export function queueTiming(snapshot: AppSnapshot) {
   const active = snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id);
   if (
@@ -19,39 +20,29 @@ export function queueTiming(snapshot: AppSnapshot) {
     .reverse();
   if (!queued.length) return null;
   const rates = new Map<string, number>();
-  // Snapshot order is newest first. Use the latest completed comparable job.
+  // The host works out each workload's typical speed from its recent runs (never the latest
+  // alone, never a different model, device or settings).
   for (const job of snapshot.jobs) {
-    if (
-      job.status === 'completed' &&
-      job.work_key &&
-      positive(job.work_units) &&
-      positive(job.elapsed_seconds) &&
-      !rates.has(job.work_key)
-    ) {
-      rates.set(job.work_key, job.elapsed_seconds / job.work_units);
-    }
+    if (job.work_key && positive(job.seconds_per_unit) && !rates.has(job.work_key))
+      rates.set(job.work_key, job.seconds_per_unit);
   }
   const liveRemaining = snapshot.runtime.estimated_remaining_seconds;
-  const fraction = snapshot.runtime.progress / 100;
-  if (
-    active.work_key &&
-    positive(active.work_units) &&
-    positive(liveRemaining) &&
-    fraction > 0 &&
-    fraction < 1
-  ) {
-    rates.set(active.work_key, liveRemaining / (1 - fraction) / active.work_units);
+  const elapsed = Math.max(0, snapshot.runtime.elapsed_seconds);
+  if (active.work_key && positive(active.work_units) && positive(liveRemaining)) {
+    // The engine's estimate covers the whole job, so what has run plus what remains is its
+    // length, whatever the stages weigh. A quarter of the job is the least that tells more
+    // about the speed now than earlier runs do.
+    if (!rates.has(active.work_key) || snapshot.runtime.progress >= 25)
+      rates.set(active.work_key, (elapsed + liveRemaining) / active.work_units);
   }
   const estimate = (job: JobRecord): number | null => {
     const rate = job.work_key ? rates.get(job.work_key) : undefined;
     return positive(rate) && positive(job.work_units) ? rate * job.work_units : null;
   };
   const activeEstimate = estimate(active);
-  const currentSeconds = positive(liveRemaining)
-    ? liveRemaining
-    : activeEstimate === null
-      ? null
-      : Math.max(0, activeEstimate - snapshot.runtime.elapsed_seconds);
+  // An estimate that the running job has already used up is no estimate.
+  const left = activeEstimate === null ? 0 : activeEstimate - elapsed;
+  const currentSeconds = positive(liveRemaining) ? liveRemaining : left > 0 ? left : null;
   const durations = queued.map(estimate);
   const unknownItems =
     durations.filter((value) => value === null).length + Number(currentSeconds === null);

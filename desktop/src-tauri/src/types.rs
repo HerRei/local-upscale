@@ -152,6 +152,10 @@ pub struct JobRecord {
     pub work_units: f64,
     #[serde(default)]
     pub elapsed_seconds: f64,
+    /// What one work unit typically took in earlier runs of this workload; 0 until two
+    /// comparable runs were measured.
+    #[serde(default)]
+    pub seconds_per_unit: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

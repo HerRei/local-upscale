@@ -63,9 +63,67 @@ describe('whole queue timing', () => {
       unknownItems: 2,
     });
     s.jobs.push({ ...job('previous', 'completed', 6), elapsed_seconds: 30 });
+    // One earlier run may have loaded the model or waited for the Mac to wake: not a speed.
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: null, nextSeconds: null });
+    s.jobs[0].seconds_per_unit = 5;
     expect(queueTiming(s)).toMatchObject({ currentSeconds: 30, nextSeconds: 60, queueSeconds: 90 });
     s.jobs[0].status = 'cancelled';
     expect(queueTiming(s)).toBeNull();
+  });
+
+  it('takes the speed from the typical run, never from the latest one alone', () => {
+    const s = demoSnapshot();
+    s.jobs = [
+      job('next', 'queued', 10),
+      job('active', 'running', 10),
+      // The newest run waited three minutes for the Mac to wake.
+      { ...job('slow', 'completed', 10), elapsed_seconds: 200 },
+      { ...job('fast', 'completed', 10), elapsed_seconds: 20 },
+    ];
+    s.jobs.forEach((j) => (j.seconds_per_unit = 2));
+    s.runtime.active_job_id = 'active';
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: 20, nextSeconds: 20, queueSeconds: 40 });
+  });
+
+  it('measures a staged job by its whole elapsed time, not by its stage-weighted percentage', () => {
+    const s = demoSnapshot();
+    s.jobs = [job('next', 'queued', 10), job('active', 'running', 10)];
+    // A fix that took 10 s is done and the upscale is half through: the bar reads 75 %, the
+    // job has run 60 s and the engine says 40 s remain, so it takes 100 s in all.
+    Object.assign(s.runtime, {
+      active_job_id: 'active',
+      progress: 75,
+      elapsed_seconds: 60,
+      estimated_remaining_seconds: 40,
+    });
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: 40, nextSeconds: 100 });
+  });
+
+  it('keeps an earlier typical speed until the running job has shown enough of its own', () => {
+    const s = demoSnapshot();
+    s.jobs = [
+      { ...job('next', 'queued', 10), seconds_per_unit: 2 },
+      { ...job('active', 'running', 10), seconds_per_unit: 2 },
+    ];
+    Object.assign(s.runtime, {
+      active_job_id: 'active',
+      progress: 5,
+      elapsed_seconds: 45,
+      estimated_remaining_seconds: 300,
+    });
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: 300, nextSeconds: 20 });
+    s.runtime.progress = 40;
+    expect(queueTiming(s)?.nextSeconds).toBeCloseTo(345);
+  });
+
+  it('says nothing, not "≈ —", once the earlier estimate for the running job is used up', () => {
+    const s = demoSnapshot();
+    s.jobs = [
+      { ...job('next', 'queued', 10), seconds_per_unit: 2 },
+      { ...job('active', 'running', 10), seconds_per_unit: 2 },
+    ];
+    Object.assign(s.runtime, { active_job_id: 'active', progress: 99, elapsed_seconds: 25 });
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: null, nextSeconds: 20 });
   });
 
   it('names the model of the next run when the queue runs one image more than once', () => {
