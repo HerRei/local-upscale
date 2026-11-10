@@ -796,8 +796,10 @@ class WorkerServer:
         result = aggregate_v2(device_results, time.monotonic() - started_at)
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
-    def _run_image_job(self, data) -> None:
-        """One image job: its own activation, checkpoint policy and failure boundary."""
+    def _run_image_job(self, data, announced: bool = False) -> None:
+        """One image job: its own activation, checkpoint policy and failure boundary.
+
+        ``announced`` is set for a photo whose job_started a batch already sent."""
         job_id = data["job_id"]
         previous_checkpoint_policy = getattr(
             self.model_adapter, "allow_unverified_checkpoints", False
@@ -811,7 +813,8 @@ class WorkerServer:
 
         try:
             self._activate_job(job_id)
-            send_message(JobStarted(job_id=job_id))
+            if not announced:
+                send_message(JobStarted(job_id=job_id))
             self._run_job(job_id, data)
         # The process boundary must turn any inference/I/O failure
         # into a job_failed message instead of killing the worker.
@@ -913,7 +916,7 @@ class WorkerServer:
         try:
             self._restart_if_required()
             for data in returned:
-                self._run_image_job(data)
+                self._run_image_job(data, announced=str(data["job_id"]) in started)
         finally:
             self._deactivate_batch(ids)
 
