@@ -60,6 +60,12 @@ def busy_slot(slot: str) -> bool:
         return thread is not None
 
 
+def abandoned_work_running() -> bool:
+    """Whether any slot still has a thread left behind by a timeout or a cancellation."""
+    with _lock:
+        return any(thread.is_alive() for thread in _abandoned.values())
+
+
 def bounded_preparation(
     name: str,
     limit: float,

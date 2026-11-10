@@ -43,7 +43,11 @@ from localsr.core.model_catalog import (
     ModelStore,
 )
 from localsr.core.output_writer import cleanup_stale_work_files
-from localsr.core.preparation import PreparationTimeout, bounded_preparation
+from localsr.core.preparation import (
+    PreparationTimeout,
+    abandoned_work_running,
+    bounded_preparation,
+)
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
@@ -1759,6 +1763,12 @@ def main():
         return
     server = WorkerServer()
     server.run()
+    if abandoned_work_running():
+        # A thread stuck in native code (an ONNX export, a driver compile) cannot be stopped,
+        # and Python aborts when it finalizes around one. Everything has been closed by now.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

@@ -191,3 +191,26 @@ def test_the_face_detector_download_before_a_job_has_a_short_limit(monkeypatch, 
     with pytest.raises(face_detection.FaceDetectionUnavailable, match="offline"):
         face_detection._detector_model_path(store=store, cancel_event=None, allow_download=True)
     assert seen["max_seconds"] == face_detection.DOWNLOAD_SECONDS <= 120
+
+
+def test_a_worker_that_ends_while_abandoned_work_still_runs_exits_without_finalizing(monkeypatch):
+    """A thread stuck in native code (an ONNX export, a compile) aborts the interpreter when
+    it finalizes around it, so the exit after the normal shutdown skips that."""
+    from localsr.worker import server as server_module
+
+    release = threading.Event()
+    with pytest.raises(PreparationTimeout):
+        call(release.wait, limit=0.1)
+    exits = []
+    monkeypatch.setattr(server_module, "WorkerServer", lambda: SimpleNamespace(run=lambda: None))
+    monkeypatch.setattr(server_module.os, "_exit", exits.append)
+    monkeypatch.setattr(server_module.sys, "argv", ["worker"])
+    server_module.main()
+    assert exits == [0]
+    release.set()
+    deadline = time.monotonic() + 2
+    while busy_slot("test") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    exits.clear()
+    server_module.main()
+    assert exits == []
