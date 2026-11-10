@@ -4004,34 +4004,93 @@ describe('Comparing saved results', () => {
     expect(
       screen.getByRole('checkbox', { name: 'new, photo.png' }).querySelector('.slot-number'),
     ).toBeNull();
+    // Picking never changes the centre: no tabs, no Compare, until the button is pressed.
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    expect(screen.queryByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(screen.queryByRole('button', { name: /^Compare these|^Comparing/ })).toBeNull();
     expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
     expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
+    expect(
+      within(screen.getByRole('tablist', { name: 'Main pane' }))
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual(['Preview', 'Compare']);
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
-    // The tab names the mode only: how many are picked shows in the chips and in Outputs.
-    await user.click(screen.getByRole('tab', { name: 'Compare' }));
+    // Back in the preview the tabs are gone, the picks stay and the button is offered again.
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
     await fireEvent.keyDown(screen.getByRole('tablist', { name: 'Main pane' }), {
       key: 'ArrowLeft',
     });
-    const preview = screen.getByRole('tab', { name: 'Preview' });
-    expect(preview.getAttribute('aria-selected')).toBe('true');
-    await waitFor(() => expect(document.activeElement).toBe(preview));
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
   });
 
-  it('shows the centre tabs, the file name with its size and the view options in one row', async () => {
+  async function openCompareOfTwo() {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('new'), completedJob('old')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('new'), row('old')])]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+    const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
+    await user.click(original);
+    await user.click(output);
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    return { user, original, output, snapshot };
+  }
+
+  it('leaves Compare for the preview on Escape, but not while a dialog is open', async () => {
+    const { user } = await openCompareOfTwo();
+    await user.click(screen.getByRole('tab', { name: /^Inputs/ }));
+    await user.click(screen.getByRole('button', { name: /^Clear$/ }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+  });
+
+  it('asks the host to compare once per change of picks, however often the state refreshes', async () => {
+    let changed: () => void = () => {};
+    api.listenForStateChange.mockImplementation(async (handler) => {
+      changed = handler;
+      return () => undefined;
+    });
+    const { snapshot } = await openCompareOfTwo();
+    expect(api.requestCompare).toHaveBeenCalledTimes(2);
+    for (let round = 0; round < 4; round++) {
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      changed();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    expect(api.requestCompare).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes Compare by itself when fewer than two picks remain', async () => {
+    const { user, output } = await openCompareOfTwo();
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(output);
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
+    await user.click(output);
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    await user.click(screen.getByRole('button', { name: 'Remove old from the compare' }));
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+  });
+
+  it('shows the file name with its size and the view options in one row, with no tabs', async () => {
     const snapshot = pairHost(readySnapshot([image('photo', true)]));
     snapshot.jobs = [completedJob('saved')];
     api.listMediaResults.mockResolvedValue(historyOf('photo', [row('saved')]));
     await mountWith(snapshot);
     const header = document.querySelector<HTMLElement>('.preview-header')!;
-    const tabs = within(header).getByRole('tablist', { name: 'Main pane' });
-    expect(
-      within(tabs)
-        .getAllByRole('tab')
-        .map((tab) => tab.textContent),
-    ).toEqual(['Preview', 'Compare']);
+    expect(within(header).queryByRole('tablist')).toBeNull();
+    expect(header.firstElementChild?.classList.contains('header-file')).toBe(true);
     expect(header.querySelector('.file-name')?.getAttribute('title')).toBe('photo.png');
     expect(within(header).getByText('640 × 480')).toBeTruthy();
     expect(await within(header).findByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
