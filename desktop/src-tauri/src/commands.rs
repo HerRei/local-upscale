@@ -102,12 +102,7 @@ pub fn start_edit(
             "The selected editing GPU is unavailable.".into(),
         ));
     }
-    let runtime = fs::canonicalize(&input.runtime_path)?;
-    if !runtime.is_file() {
-        return Err(AppError::Validation(
-            "Choose the native editing runtime.".into(),
-        ));
-    }
+    let runtime = edit_runtime(&state, &input.runtime_path)?;
     let media = lock(&state.database)?
         .get_media(&input.media_id)?
         .ok_or_else(|| AppError::Validation("Choose an image to edit.".into()))?;
@@ -135,6 +130,29 @@ pub fn start_edit(
     worker::dispatch_next_locked(&state, &app)?;
     emit_state_changed(&app);
     Ok(())
+}
+
+/// The editing program to run: the one the host found at start-up. The web view
+/// may repeat that path but cannot name another.
+fn edit_runtime(state: &AppState, requested: &str) -> AppResult<PathBuf> {
+    let found = lock(&state.edit_runtime)?.clone();
+    if found.is_empty() {
+        return Err(AppError::Validation(
+            "Choose the native editing runtime.".into(),
+        ));
+    }
+    let found = fs::canonicalize(found)?;
+    if !found.is_file() {
+        return Err(AppError::Validation(
+            "Choose the native editing runtime.".into(),
+        ));
+    }
+    if !requested.is_empty() && fs::canonicalize(requested).ok().as_ref() != Some(&found) {
+        return Err(AppError::Validation(
+            "Only the editing runtime LocalSR found itself can be used.".into(),
+        ));
+    }
+    Ok(found)
 }
 
 #[tauri::command]
@@ -261,6 +279,7 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
         ));
     }
     validate_settings(&settings)?;
+    state.programs.check(&settings.external_ffmpeg_path)?;
     let mut settings = settings;
     {
         // Read and replace under one guard, so a switch saved in between is kept.
@@ -1784,7 +1803,7 @@ pub fn uninstall_integrations() -> AppResult<integrations::IntegrationStatus> {
 /// Suggest FFmpeg executables the user installed. LocalSR never runs one
 /// until the user selects it, and never downloads or bundles FFmpeg.
 #[tauri::command]
-pub fn detect_external_ffmpeg() -> Vec<String> {
+pub fn detect_external_ffmpeg(state: State<'_, Arc<AppState>>) -> Vec<String> {
     let name = if cfg!(windows) {
         "ffmpeg.exe"
     } else {
@@ -1813,7 +1832,45 @@ pub fn detect_external_ffmpeg() -> Vec<String> {
     ] {
         consider(PathBuf::from(directory).join(name));
     }
+    for path in &found {
+        state.programs.grant(path);
+    }
     found
+}
+
+/// Let the user pick the FFmpeg program in the host's own file dialog. The host
+/// remembers the choice: only programs it found or was shown this way are run.
+#[tauri::command]
+pub async fn choose_external_ffmpeg(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    current: String,
+) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Select the FFmpeg program installed on this computer");
+    if let Some(folder) = Path::new(&current)
+        .parent()
+        .filter(|folder| folder.is_dir())
+    {
+        dialog = dialog.set_directory(folder);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?
+        .to_string_lossy()
+        .into_owned();
+    state.programs.grant(&path);
+    Ok(Some(path))
 }
 
 pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";
@@ -2132,6 +2189,7 @@ fn validate_system_outputs(input: &StartBatchInput, media: &Value) -> AppResult<
 
 fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
     validate_start_input(input, external_codecs_available(state))?;
+    state.programs.check(&input.external_ffmpeg_path)?;
     let media = state
         .capabilities
         .lock()
@@ -3012,6 +3070,7 @@ pub fn open_model_license(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::AppPaths;
     use crate::types::RecipeStage;
 
     #[test]
@@ -4670,6 +4729,41 @@ mod tests {
         assert!(error.to_string().contains("HDR"));
         options.video_hdr_mode = "tone_map".into();
         assert!(build_job_message("tone", &hdr, output, work, &options, &selection).is_ok());
+    }
+
+    #[test]
+    fn the_editing_runtime_is_the_one_the_host_found() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let found = directory.path().join("sd-cli");
+        let planted = directory.path().join("planted-tool");
+        fs::write(&found, b"found").unwrap();
+        fs::write(&planted, b"planted").unwrap();
+        // Nothing found at start-up: no program can be named.
+        assert!(edit_runtime(&state, planted.to_str().unwrap()).is_err());
+        *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+        assert_eq!(
+            edit_runtime(&state, "").unwrap(),
+            fs::canonicalize(&found).unwrap()
+        );
+        assert_eq!(
+            edit_runtime(&state, found.to_str().unwrap()).unwrap(),
+            fs::canonicalize(&found).unwrap()
+        );
+        assert!(edit_runtime(&state, planted.to_str().unwrap()).is_err());
+        assert!(edit_runtime(&state, "/nonexistent/sd-cli").is_err());
+    }
+
+    #[test]
+    fn a_batch_names_only_an_ffmpeg_the_host_obtained() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let mut input = input("upscale");
+        assert!(validate_start(&input, &state).is_ok());
+        input.external_ffmpeg_path = "/tmp/planted-tool".into();
+        assert!(validate_start(&input, &state).is_err());
+        state.programs.grant("/tmp/planted-tool");
+        assert!(validate_start(&input, &state).is_ok());
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod output_names;
 mod paths;
 mod pipe_lines;
 mod process_tree;
+mod programs;
 mod queue_timing;
 mod results;
 mod settings;
@@ -193,6 +194,7 @@ pub fn run() {
             commands::reveal_result,
             commands::open_output_directory,
             commands::detect_external_ffmpeg,
+            commands::choose_external_ffmpeg,
             commands::open_ffmpeg_download_page,
             commands::ffmpeg_install_hint,
             commands::open_terminal_with_install_command,

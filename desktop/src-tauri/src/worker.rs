@@ -1161,6 +1161,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     }
                 }
             }
+            state.programs.grant_reported(&capabilities.media);
             *lock(&state.capabilities)? = capabilities;
         }
         "media_info" => {

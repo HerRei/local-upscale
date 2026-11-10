@@ -82,6 +82,8 @@ pub struct AppState {
     /// What the user has to be told once at start-up, for example that a damaged
     /// queue file was moved aside. Shown and emptied by `take_startup_notices`.
     startup_notices: Mutex<Vec<String>>,
+    /// The programs the user's choices and the host's own searches have named.
+    pub programs: crate::programs::GrantedPrograms,
 }
 
 impl AppState {
@@ -112,6 +114,8 @@ impl AppState {
         let first_run = !paths.settings.exists() && !paths.legacy_settings.exists();
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
+        let programs = crate::programs::GrantedPrograms::default();
+        programs.grant(&settings.external_ffmpeg_path);
         Ok(Self {
             video_preview: crate::video_preview::VideoPreviewControl::default(),
             updates: crate::updates::UpdateControl::default(),
@@ -134,6 +138,7 @@ impl AppState {
             launch_intents: Mutex::new(Vec::new()),
             choose_device: AtomicBool::new(first_run),
             startup_notices: Mutex::new(notices),
+            programs,
         })
     }
 
@@ -225,6 +230,20 @@ pub fn emit_state_changed(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_program_saved_by_an_earlier_run_is_known_at_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let saved = UiSettings {
+            external_ffmpeg_path: "/opt/tools/ffmpeg".into(),
+            ..UiSettings::default()
+        };
+        crate::settings::save(&paths, &saved, &[]).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        assert!(state.programs.check("/opt/tools/ffmpeg").is_ok());
+        assert!(state.programs.check("/opt/tools/other").is_err());
+    }
 
     fn paths_with_queue(directory: &std::path::Path, content: &[u8]) -> AppPaths {
         let paths = AppPaths::under(directory);
