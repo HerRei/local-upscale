@@ -224,6 +224,7 @@ test.describe('status bar start buttons', () => {
         const buttons = bar.locator('.status-actions button');
         await expect(buttons.getByText('Only this one')).toBeVisible();
         await expect(bar.getByRole('button', { name: 'Reveal' })).toBeVisible();
+        await expect(bar.getByRole('button', { name: 'Use as input' })).toBeVisible();
         const barBox = await box(bar);
         const text = await box(bar.locator('.status-copy'));
         const rects = [];
@@ -240,6 +241,10 @@ test.describe('status bar start buttons', () => {
           // The status text ends before the first button starts.
           expect(text.x + text.width).toBeLessThanOrEqual(rects[0].x + 0.5);
         }
+        // Use as input follows Open in the same group.
+        const open2 = await box(bar.getByRole('button', { name: 'Open', exact: true }));
+        const use = await box(bar.getByRole('button', { name: 'Use as input' }));
+        expect(use.x).toBeGreaterThanOrEqual(open2.x + open2.width);
         // One row of equal height; the primary is the rightmost.
         expect(new Set(rects.map((rect) => Math.round(rect.height))).size).toBe(1);
         const last = await buttons.last().textContent();

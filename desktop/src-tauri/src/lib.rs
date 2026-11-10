@@ -195,6 +195,7 @@ pub fn run() {
             commands::open_user_guide,
             commands::open_download_page,
             commands::reveal_result,
+            commands::use_result_as_input,
             commands::open_output_directory,
             commands::detect_external_ffmpeg,
             commands::choose_external_ffmpeg,

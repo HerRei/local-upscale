@@ -365,6 +365,17 @@ function hostScript(scenario: Scenario): void {
       case 'remove_media':
         snapshot.media = snapshot.media.filter((media: Json) => media.id !== args.id);
         return null;
+      case 'use_result_as_input': {
+        const path = String(args.path);
+        let media = snapshot.media.find((item: Json) => item.path === path);
+        if (!media) {
+          media = photo(snapshot.media.length + 1);
+          Object.assign(media, { path, name: path.split('/').pop() });
+          snapshot.media.push(media);
+        }
+        for (const item of snapshot.media) item.selected = item.id === media.id;
+        return media.id;
+      }
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;

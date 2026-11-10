@@ -129,6 +129,7 @@
 
   let page: 'media' | 'preview' | 'enhance' = 'preview';
   let mainTab: 'preview' | 'compare' = 'preview';
+  let mediaQueue: MediaQueue | undefined;
   let compareLayout: 'slider' | 'boxes' = 'slider';
   let comparePicks: ComparePick[] = [];
   let bulkHistories: MediaResults[] = [];
@@ -2738,6 +2739,21 @@
     }
   }
 
+  /** The result on screen becomes an input: it is added (or found) on the host and selected here. */
+  async function useResultAsInput(): Promise<void> {
+    let id: string;
+    try {
+      id = await api.useResultAsInput(selectedOutputPath);
+    } catch (error) {
+      showModal('Could not use the result as input', String(error));
+      return;
+    }
+    await refresh();
+    ensureTaskMatchesSelection();
+    mainTab = 'preview';
+    await mediaQueue?.showInput(id);
+  }
+
   async function retryEngine(): Promise<void> {
     retryingEngine = true;
     try {
@@ -2861,6 +2877,7 @@
 
   <main class="workspace">
     <MediaQueue
+      bind:this={mediaQueue}
       groups={compareGroups}
       picks={comparePicks}
       togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
@@ -3791,6 +3808,10 @@
           on:click={() =>
             attempt('Could not open the result', () => api.openResult(selectedOutputPath))}
           >Open</button
+        ><button
+          class="button"
+          title="Add this result to Inputs so it can be processed again"
+          on:click={() => void useResultAsInput()}>Use as input</button
         >{/if}
       {#if snapshot.runtime.active_job_id}
         <!-- A count of 0 means there is nothing to add or start: no button, and no room kept. -->

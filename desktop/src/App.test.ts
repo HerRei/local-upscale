@@ -139,6 +139,7 @@ const api = vi.hoisted(() => ({
   openModelSource: vi.fn(async () => undefined),
   openResult: vi.fn(async () => undefined),
   openUserGuide: vi.fn(async () => undefined),
+  useResultAsInput: vi.fn(async (): Promise<string> => 'new-input'),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
   openOutputDirectory: vi.fn(async () => undefined),
@@ -4654,6 +4655,52 @@ describe('Comparing saved results', () => {
       expect(document.querySelector('.comparison-note')?.textContent).toContain(
         'has a different framing from the original',
       );
+    });
+  });
+
+  describe('Use as input', () => {
+    const useButton = () => screen.queryByRole('button', { name: 'Use as input' });
+
+    it('is offered only while a finished result is on screen', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      await mountWith(snapshot);
+      expect(useButton()).toBeNull();
+      cleanup();
+      const finished = pairHost(readySnapshot([image('photo', true)]));
+      finished.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      await mountWith(finished);
+      expect(await screen.findByRole('button', { name: 'Use as input' })).toBeTruthy();
+      expect(useButton()?.getAttribute('title')).toBe(
+        'Add this result to Inputs so it can be processed again',
+      );
+    });
+
+    it('asks the host for the shown result, then shows the Inputs tab', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('a1')])]);
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await user.click(await screen.findByRole('button', { name: 'Use as input' }));
+      expect(api.useResultAsInput).toHaveBeenCalledWith('/out/a1.png');
+      expect(screen.getByRole('tab', { name: /^Inputs/ }).getAttribute('aria-selected')).toBe(
+        'true',
+      );
+    });
+
+    it('shows the host sentence when the result cannot be used', async () => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1')];
+      api.listMediaResults.mockResolvedValue(historyOf('photo', [row('a1')]));
+      api.useResultAsInput.mockRejectedValueOnce('output path was not authorized');
+      const user = await mountWith(snapshot);
+      await user.click(await screen.findByRole('button', { name: 'Use as input' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Could not use the result as input')).toBeTruthy();
+      expect(within(dialog).getByText(/output path was not authorized/)).toBeTruthy();
     });
   });
 

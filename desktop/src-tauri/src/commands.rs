@@ -243,6 +243,51 @@ pub fn add_media(
     Ok(())
 }
 
+/// Adds a finished result as a new input and selects it. The result is named the way Reveal
+/// and Open name it (a recorded, completed output that still exists and is no link), so the
+/// window never passes a path of its own choosing. A file already in the list is only selected.
+/// Returns the input's id and, when it is new, the path the engine has to probe.
+fn add_result_as_input(state: &AppState, requested: &str) -> AppResult<(String, Option<String>)> {
+    let authorized = authorized_result(state, requested)?;
+    let kind = media_kind(&authorized)
+        .ok_or_else(|| AppError::Validation("this file type cannot be used as an input".into()))?;
+    let encoded = authorized.to_string_lossy().into_owned();
+    let database = lock(&state.database)?;
+    let (id, to_probe) = match database.get_media_by_path(&encoded)? {
+        Some(existing) => (existing.id, None),
+        None => {
+            let id = Uuid::new_v4().to_string();
+            let name = authorized
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Media")
+                .to_owned();
+            database.insert_media(&id, &encoded, &name, kind)?;
+            (id, Some(encoded))
+        }
+    };
+    database.select_media(&id)?;
+    Ok((id, to_probe))
+}
+
+#[tauri::command]
+pub fn use_result_as_input(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    path: String,
+) -> AppResult<String> {
+    native_menu::set_comparison_labels(&app, false);
+    crate::updates::ensure_not_installing(&state)?;
+    let _scheduler = lock(&state.scheduler)?;
+    crate::updates::ensure_not_installing(&state)?;
+    let (id, to_probe) = add_result_as_input(&state, &path)?;
+    if let Some(encoded) = to_probe {
+        let _ = worker::send(&state, &worker::media_probe_request(&state, &encoded));
+    }
+    emit_state_changed(&app);
+    Ok(id)
+}
+
 #[tauri::command]
 pub fn select_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
     native_menu::set_comparison_labels(&app, false);

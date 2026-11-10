@@ -288,6 +288,9 @@ export const saveRecipe = (recipe: Recipe): Promise<void> => invoke('save_recipe
 export const deleteRecipe = (id: string): Promise<void> => invoke('delete_recipe', { id });
 export const openResult = (path: string): Promise<void> => invoke('open_result', { path });
 export const revealResult = (path: string): Promise<void> => invoke('reveal_result', { path });
+/** Adds a finished result as an input and selects it; the host checks the path like Reveal does. */
+export const useResultAsInput = (path: string): Promise<string> =>
+  invoke('use_result_as_input', { path });
 export const diagnosticSummary = (): Promise<string> => invoke('diagnostic_summary');
 export const openOutputDirectory = (): Promise<void> => invoke('open_output_directory');
 export const takeLaunchIntents = (): Promise<LaunchIntent[]> => invoke('take_launch_intents');
