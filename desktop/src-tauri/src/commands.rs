@@ -177,8 +177,13 @@ pub fn scan_media_folder(path: String) -> AppResult<Vec<String>> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
+        // A name that is not valid text cannot be sent to the window and back: its
+        // lossy copy would name another file or none.
+        let Some(text) = path.to_str() else {
+            continue;
+        };
         if path.is_file() && media_kind(&path).is_some() {
-            paths.push(path.to_string_lossy().into_owned());
+            paths.push(text.to_owned());
             if paths.len() >= MAX_MEDIA_ITEMS {
                 break;
             }
@@ -3056,7 +3061,7 @@ fn normalize_media_paths(paths: Vec<String>) -> AppResult<Vec<(PathBuf, &'static
         let mut children = fs::read_dir(&canonical)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.is_file() && media_kind(path).is_some())
+            .filter(|path| path.to_str().is_some() && path.is_file() && media_kind(path).is_some())
             .collect::<Vec<_>>();
         children.sort_by_key(|path| path.to_string_lossy().to_lowercase());
         for child in children {
@@ -5053,6 +5058,25 @@ mod tests {
         assert_eq!(lock(&state.recipes).unwrap()[0].name, "renamed");
         remove_recipe(&state, "r1").unwrap();
         assert!(lock(&state.recipes).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_whose_name_is_not_valid_text_is_left_out_of_a_folder() {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("good.png"), b"x").unwrap();
+        let odd = directory
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"holiday-\xff.png"));
+        fs::write(odd, b"x").unwrap();
+        let folder = directory.path().to_string_lossy().into_owned();
+        let scanned = scan_media_folder(folder.clone()).unwrap();
+        assert_eq!(scanned.len(), 1);
+        assert!(scanned[0].ends_with("good.png"));
+        let normalized = normalize_media_paths(vec![folder]).unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert!(Path::new(&scanned[0]).exists());
     }
 
     #[test]
