@@ -1017,19 +1017,46 @@ def test_a_compile_left_running_by_an_earlier_job_is_not_joined_by_a_second(
     )
 
 
-def test_the_wait_says_what_happens_and_when_the_route_is_given_up(fake_coreml, short_budget):
+def test_the_wait_says_what_happens_and_when_the_route_is_given_up(fake_coreml, monkeypatch):
+    now = [0.0]
+    load_started = threading.Event()
+    load = coreml_runtime._load_compiled
+
+    def signal_load(*args):
+        load_started.set()
+        return load(*args)
+
+    monkeypatch.setattr(coreml_runtime, "_load_compiled", signal_load)
+    monkeypatch.setattr(coreml_runtime, "PREPARE_BUDGET_SECONDS", 4.0)
+    monkeypatch.setattr(preparation, "WAIT_SLICE_SECONDS", 1.0)
+    monkeypatch.setattr(preparation, "STATUS_INTERVAL_SECONDS", 1.0)
+    box_type = preparation._Box
+
+    def box_with_fake_wait():
+        box = box_type()
+
+        def wait(seconds):
+            assert load_started.wait(5)
+            now[0] += seconds
+            return False
+
+        box.done.wait = wait
+        return box
+
+    monkeypatch.setattr(preparation, "_Box", box_with_fake_wait)
     fake_coreml.behaviours[NEURAL_ENGINE] = "hang"
     converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="msg")
+    converted.model.clock = lambda: now[0]
     messages, notes = [], []
     converted.set_status_callback(messages.append)
     converted.set_note_callback(notes.append)
     run(converted)
     waiting = [m for m in messages if m.startswith("Preparing")]
-    assert len(waiting) >= 3
-    assert waiting[0] == (
+    assert waiting == [
         "Preparing the Neural Engine (once per model and tile size). "
-        "0 s so far; continues on the CPU in 0 s if it is not ready."
-    )
+        f"{elapsed} s so far; continues on the CPU in {4 - elapsed} s if it is not ready."
+        for elapsed in range(4)
+    ]
     assert not any("can take a minute" in message for message in messages)
     expected = "Running on the standard path: the faster one was not ready in time."
     assert messages[-1] == expected and notes == [expected]

@@ -193,6 +193,12 @@ def test_the_engine_answers_a_capabilities_request_with_its_hardware():
     import sys
     import threading
 
+    import pytest
+
+    # The preview tooling job does not install the worker's inference runtime.
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    pytest.importorskip("torch")
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"), PYTHONUNBUFFERED="1")
     engine = subprocess.Popen(
         [sys.executable, "-m", "localsr.worker"],
