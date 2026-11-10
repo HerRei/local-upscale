@@ -7,10 +7,8 @@
 # catalog entries are emitted through dataclasses.asdict() or the catalog export.
 VIDEO  # ModelPurpose enum member used by catalog data and the desktop
 allow_unverified_checkpoint
-author
 client_name
 client_version
-code
 completed_frames
 completed_tiles
 cpu_score
@@ -19,10 +17,8 @@ device_memory_bytes
 device_memory_remaining
 disk_remaining
 end_to_end_fps
-engine_id
 engine_kind
 engine_version
-error_message
 estimated_remaining_seconds
 gpu_suggestion
 image_path
@@ -41,7 +37,6 @@ model_formats
 mps_driver_allocated_memory
 mps_recommended_max_memory
 mps_tensor_allocated_memory
-neural_engine
 npu_hint
 oom
 output_temporary_directory
@@ -55,11 +50,9 @@ preview_max_fps
 # Result preview fields serialized by asdict() and consumed by the Rust host.
 preview_width
 preview_height
-target_id
 process_ram
 processed_megapixels_per_second
 processing_stage
-protocol_version
 rationale
 requires_download
 restart_required
@@ -79,7 +72,6 @@ system_swap_used
 target_resolution
 temporal_window
 thermal_state
-used_bytes
 video_engines
 video_low_memory
 vram_estimate_mb
@@ -99,18 +91,13 @@ png_base64
 
 # Framework callbacks and third-party object attributes.
 _.MAX_IMAGE_PIXELS  # Pillow reads this only in the isolated export-preview child
-_.forward  # torch.nn.Module
 _.do_GET  # http.server handler
-_.do_POST  # http.server handler
 _.log_message  # http.server handler
 exc_type  # __exit__ protocol
 exc_val  # __exit__ protocol
 exc_tb  # __exit__ protocol
-_.pix_fmt  # PyAV stream
-_.codec_tag  # PyAV stream
 _.bit_rate  # PyAV stream
 _.thread_type  # PyAV codec context
-_.threads  # PyAV codec context
 _.execution_mode  # onnxruntime.SessionOptions
 _.enable_mem_pattern  # onnxruntime.SessionOptions
 _.intra_op_num_threads  # onnxruntime.SessionOptions
@@ -123,7 +110,6 @@ _.gname  # tarfile.TarInfo
 _.mtime  # tarfile.TarInfo
 _.uname  # tarfile.TarInfo
 _._model  # spandrel descriptor internals
-cached_model  # tuple unpacking
 
 # PyInstaller hooks and spec-file imports.
 hiddenimports
@@ -154,7 +140,6 @@ runtime_path  # EditJobRequest
 accepted_terms  # EditJobRequest
 
 # Public display helper on the codec bridge, kept by decision.
-_.describe  # core/media_bridge.py MediaBridge
 
 # ctypes structure field written for Windows to read (core/gpu_guard.py job object).
 LimitFlags  # JOBOBJECT_BASIC_LIMIT_INFORMATION
