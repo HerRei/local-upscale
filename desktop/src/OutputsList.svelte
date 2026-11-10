@@ -83,6 +83,8 @@
 {#if error}<div class="empty-card" role="alert">Could not load outputs: {error}</div>
 {:else if groups.length === 0}<p class="outputs-empty">Results appear here as they finish.</p>
 {:else}
+  <!-- The list only notes that the user is working in it; every action is on a button. -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="media-list outputs-list"
     role="group"

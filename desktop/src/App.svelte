@@ -736,20 +736,6 @@
         ? ['faces']
         : ['noise', 'jpeg', 'blur', 'faces']
   ) as FixKind[];
-  $: illustrationFallback =
-    settings.task !== 'denoise' &&
-    settings.content === 'illustration' &&
-    activeQuality !== 'custom' &&
-    selectedModel &&
-    !(selectedModel.purposes.includes('illustration') || selectedModel.purposes.includes('anime'))
-      ? {
-          model: snapshot.catalog.models.find(
-            (model) =>
-              model.native_scale > 1 &&
-              (model.purposes.includes('illustration') || model.purposes.includes('anime')),
-          ),
-        }
-      : undefined;
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
@@ -3125,17 +3111,6 @@
                     >
                   {/each}
                 </div>
-                {#if illustrationFallback}
-                  <p class="inline-warning" role="status">
-                    No fully verified illustration model yet, so the photo model is used.
-                    {#if illustrationFallback.model}<button
-                        class="link-button"
-                        type="button"
-                        on:click={() => useModelForJob(illustrationFallback.model)}
-                        >Use {displayName(illustrationFallback.model)} (Labs) for this job</button
-                      >{/if}
-                  </p>
-                {/if}
               </section>
             {/if}
 

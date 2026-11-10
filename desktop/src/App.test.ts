@@ -3210,6 +3210,9 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     expect(screen.getByText('Quick · Illustration')).toBeTruthy();
+    // The photo model stands in without a note about it.
+    expect(screen.queryByText(/fully verified illustration/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
