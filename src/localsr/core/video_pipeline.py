@@ -460,7 +460,9 @@ def _run_video_job(
                             **float_options,
                         )
                     else:
-                        # No faces detected — use the general model.
+                        # No faces detected — use the general model. The face model was
+                        # loaded last, and a frame with faces leaves either one active.
+                        engine.switch_model(config.model_path)
                         out_chw = engine.process_frame(
                             img_tensor=tensor,
                             model_info=model_info,
