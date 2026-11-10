@@ -11,6 +11,8 @@ def test_importing_the_seedvr2_engine_keeps_the_vendored_optimisation_report_off
     # optimisation report at import time unless its once-per-process flag is set.
     env = {k: v for k, v in os.environ.items() if k != "SEEDVR2_OPTIMIZATIONS_LOGGED"}
     env["PYTHONPATH"] = str(ROOT / "src")
+    # The desktop host starts the worker in UTF-8 mode; the vendored module prints emoji.
+    env["PYTHONUTF8"] = "1"
     result = subprocess.run(
         [
             sys.executable,
@@ -20,6 +22,7 @@ def test_importing_the_seedvr2_engine_keeps_the_vendored_optimisation_report_off
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=env,
         timeout=300,
     )

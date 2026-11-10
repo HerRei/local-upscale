@@ -1041,6 +1041,14 @@ def download_model(
                 "Check the connection and try again; the part already received is kept."
             )
 
+    def limit_wait(response) -> None:
+        """Keep the next socket wait within the time left (best effort on the raw socket)."""
+        remaining = max(deadline - time.monotonic(), 0.05)
+        try:
+            response.fp.raw._sock.settimeout(min(15.0, remaining))
+        except AttributeError:
+            pass
+
     attempts = 0
     last_error: Exception | None = None
     restarted_after_416 = False
@@ -1094,7 +1102,11 @@ def download_model(
                 while True:
                     check_cancel()
                     check_time()
-                    chunk = response.read(chunk_size)
+                    # read1 returns what one socket wait delivers; read(n) would wait for n
+                    # bytes in total, so a trickle could hold it far past the deadline.
+                    limit_wait(response)
+                    reader = getattr(response, "read1", None) or response.read
+                    chunk = reader(chunk_size)
                     if not chunk:
                         break
                     if downloaded + len(chunk) > model.size_bytes:

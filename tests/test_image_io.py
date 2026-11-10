@@ -479,9 +479,29 @@ def test_float_grey_tiff_spans_the_full_range_instead_of_turning_black(tmp_path)
     assert abs(pixels[32] - 32 * 255 / 63) <= 1
 
 
-def test_float_grey_tiff_above_one_is_refused_instead_of_clipped_to_white(tmp_path):
-    path = tmp_path / "grey_hdr.tif"
-    Image.fromarray(np.linspace(0.0, 200.0, 64, dtype=np.float32)[None, :]).save(path)
+@pytest.mark.parametrize(
+    "peak,range_end", [(1.0, None), (255.0, 255), (254.0, 255), (65535.0, 65535), (1000.0, 65535)]
+)
+def test_float_grey_tiff_ranges_are_told_apart_by_their_largest_value(tmp_path, peak, range_end):
+    path = tmp_path / "grey_float.tif"
+    Image.fromarray(np.linspace(0.0, peak, 64, dtype=np.float32)[None, :]).save(path)
+    manager = ImageManager()
+    pixels = manager.load(str(path))["tensor"][0, 0].mul(255).round().numpy()
+    assert pixels[0] == 0
+    assert abs(pixels[-1] - 255 * peak / (range_end or 1)) <= 1
+    notes = [note for note in manager.notes if "floating-point" in note]
+    if range_end is None:
+        assert not notes
+    else:
+        assert len(notes) == 1 and f"from 0 to {range_end}" in notes[0]
+
+
+@pytest.mark.parametrize("bad", [65536.0 * 2, -5.0, float("nan"), float("inf")])
+def test_float_grey_tiff_outside_every_range_is_refused(tmp_path, bad):
+    path = tmp_path / "grey_bad.tif"
+    values = np.linspace(0.0, 1.0, 64, dtype=np.float32)[None, :]
+    values[0, 10] = bad
+    Image.fromarray(values).save(path)
     with pytest.raises(ValueError, match="floating-point"):
         ImageManager().load(str(path))
 
@@ -585,7 +605,9 @@ def test_every_damaged_file_gives_one_plain_sentence_and_keeps_the_library_text_
 def test_a_real_input_output_failure_keeps_its_own_message(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing.png"):
         ImageManager().load(str(tmp_path / "missing.png"))
-    with pytest.raises(OSError, match="Is a directory"):
+    # Windows reports a folder given to open() as a permission error.
+    reported = "Permission denied" if sys.platform == "win32" else "Is a directory"
+    with pytest.raises(OSError, match=reported):
         ImageManager().load(str(tmp_path))
 
 
@@ -851,6 +873,69 @@ def test_a_png_that_ends_before_its_last_rows_is_refused_not_filled_with_black(t
     _png_with_rows(path, 37, 29, 2, interlace)
     with pytest.raises(OSError, match="short.png is damaged"):
         ImageManager().load(str(path))
+
+
+def _record_png_reads(monkeypatch):
+    import builtins
+
+    from localsr.core import image_io
+
+    sizes = []
+
+    class Recording:
+        def __init__(self, file):
+            self._file = file
+
+        def read(self, size=-1):
+            sizes.append(size)
+            return self._file.read(size)
+
+        def __getattr__(self, name):
+            return getattr(self._file, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self._file.close()
+
+    monkeypatch.setattr(
+        image_io, "open", lambda *a, **k: Recording(builtins.open(*a, **k)), raising=False
+    )
+    return image_io, sizes
+
+
+def test_a_png_that_declares_a_gigantic_idat_chunk_is_read_in_bounded_pieces(tmp_path, monkeypatch):
+    import zlib
+
+    path = tmp_path / "huge.png"
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + header
+        + struct.pack(">I", zlib.crc32(b"IHDR" + header))
+        + struct.pack(">I", 2**31 - 1)
+        + b"IDAT"
+        + zlib.compress(b"\x00\x07")
+    )
+    image_io, sizes = _record_png_reads(monkeypatch)
+    expected, inflated = image_io._png_scanline_bytes(path)
+    assert inflated < expected, "a chunk longer than the file cannot complete the image"
+    assert max(sizes) <= 1024 * 1024
+    with pytest.raises(OSError, match="huge.png is damaged"):
+        ImageManager().load(str(path))
+
+
+def test_a_png_check_stops_reading_once_it_has_the_rows_it_needs(tmp_path, monkeypatch):
+    path = tmp_path / "big.png"
+    rng = np.random.default_rng(1)
+    Image.fromarray(rng.integers(0, 255, (1500, 1500), dtype=np.uint8)).save(path)
+    image_io, sizes = _record_png_reads(monkeypatch)
+    expected, inflated = image_io._png_scanline_bytes(path)
+    assert inflated == expected
+    assert max(sizes) <= 1024 * 1024
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])

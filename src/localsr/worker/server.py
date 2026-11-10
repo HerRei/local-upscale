@@ -223,6 +223,8 @@ class WorkerServer:
         cleanup_stale_work_files()
         self.message_queue = queue.Queue()
         self.cancel_event = threading.Event()
+        # Set once stdin closed or a shutdown was requested; job activation never clears it.
+        self.shutdown_event = threading.Event()
         self.state_lock = threading.Lock()
         self.running = True
         self.active_job_id = None
@@ -256,21 +258,27 @@ class WorkerServer:
         with self.state_lock:
             cancelled = job_id in self.pending_cancel_job_ids
             self.active_job_id = job_id
-            if cancelled:
+            if cancelled or self.shutdown_event.is_set():
                 self.cancel_event.set()
             else:
                 self.cancel_event.clear()
+
+    def _clear_cancel_unless_shutting_down(self) -> None:
+        if not self.shutdown_event.is_set():
+            self.cancel_event.clear()
 
     def _deactivate_job(self, job_id: str) -> None:
         with self.state_lock:
             self.active_job_id = None
             self.pending_cancel_job_ids.discard(job_id)
-            self.cancel_event.clear()
+            self._clear_cancel_unless_shutting_down()
 
     def _activate_batch(self, job_ids: list[str]) -> None:
         with self.state_lock:
             self.active_batch_job_ids = set(job_ids)
-            if self.active_batch_job_ids & self.pending_cancel_job_ids:
+            if self.shutdown_event.is_set():
+                self.cancel_event.set()
+            elif self.active_batch_job_ids & self.pending_cancel_job_ids:
                 self.pending_cancel_job_ids |= self.active_batch_job_ids
                 self.cancel_event.set()
             else:
@@ -281,7 +289,7 @@ class WorkerServer:
             self.active_job_id = None
             self.active_batch_job_ids = set()
             self.pending_cancel_job_ids.difference_update(job_ids)
-            self.cancel_event.clear()
+            self._clear_cancel_unless_shutting_down()
 
     def reader_thread_func(self):
         try:
@@ -304,6 +312,7 @@ class WorkerServer:
                     )
         finally:
             # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
+            self.shutdown_event.set()
             self.cancel_event.set()
             self.message_queue.put({"type": "shutdown_request"})
 
@@ -334,6 +343,7 @@ class WorkerServer:
             return
         self.message_queue.put(msg)
         if request_type == "shutdown_request":
+            self.shutdown_event.set()
             self.cancel_event.set()
         elif request_type == "cancel_request":
             requested_job_id = data.get("job_id") if isinstance(data, dict) else None
