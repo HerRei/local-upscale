@@ -75,6 +75,7 @@ const api = vi.hoisted(() => ({
   setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
+  retryEngine: vi.fn(async (): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
   exportBenchmark: vi.fn(async () => true),
   cancelVideoComparison: vi.fn(async () => {}),
@@ -515,6 +516,7 @@ beforeEach(() => {
   api.startModelTrials.mockReset().mockResolvedValue([]);
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
+  api.retryEngine.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
@@ -1867,6 +1869,77 @@ describe('LocalSR desktop interface', () => {
     // Advanced is open: the Hardware menu that now says CPU takes it.
     await waitFor(() => expect(document.activeElement?.id).toBe('device'));
     expect((document.activeElement as HTMLSelectElement).value).toBe('cpu');
+  });
+
+  describe('Try again for an engine the host gave up on', () => {
+    async function mountStatus(snapshot: AppSnapshot): Promise<ReturnType<typeof userEvent.setup>> {
+      api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      render(App);
+      await waitFor(() =>
+        expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+          snapshot.runtime.status_title,
+        ),
+      );
+      return userEvent.setup();
+    }
+
+    function givenUp(): AppSnapshot {
+      const snapshot = readySnapshot([image('photo', true)]);
+      Object.assign(snapshot.runtime, {
+        worker: 'failed',
+        status_title: 'Engine unavailable',
+        status_detail: 'The inference engine repeatedly stopped. Try again, or restart LocalSR.',
+        engine_retry: true,
+      });
+      return snapshot;
+    }
+
+    it('offers one button beside the disabled primary action and calls the command', async () => {
+      const user = await mountStatus(givenUp());
+      const bar = within(document.querySelector('footer.status-bar') as HTMLElement);
+      expect(bar.getByText(/Try again, or restart LocalSR\./)).toBeTruthy();
+      expect(
+        (bar.getByRole('button', { name: /^Upscale selected/ }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      const button = bar.getByRole('button', { name: 'Try again' }) as HTMLButtonElement;
+      expect(button.className).toBe('button');
+      let finish: () => void = () => {};
+      api.retryEngine.mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+      await user.click(button);
+      expect(api.retryEngine).toHaveBeenCalledTimes(1);
+      expect(button.disabled).toBe(true);
+      finish();
+      await waitFor(() => expect(button.disabled).toBe(false));
+    });
+
+    it('is not offered for any other failed or stopped engine', async () => {
+      for (const [worker, title] of [
+        ['failed', 'Engine incompatible'],
+        ['failed', 'Engine unavailable'],
+        ['unavailable', 'Engine stopped'],
+        ['starting', 'Starting engine'],
+      ]) {
+        const snapshot = givenUp();
+        Object.assign(snapshot.runtime, { worker, status_title: title, engine_retry: false });
+        await mountStatus(snapshot);
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        cleanup();
+      }
+      await mountWith(readySnapshot([image('photo', true)]));
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    });
+
+    it("shows the host's refusal in the dialog", async () => {
+      const user = await mountStatus(givenUp());
+      api.retryEngine.mockRejectedValueOnce(
+        'the inference engine is not waiting to be tried again',
+      );
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Could not restart the engine')).toBeTruthy();
+      expect(within(dialog).getByText(/not waiting to be tried again/)).toBeTruthy();
+    });
   });
 
   it('shows the CPU hint only for a task the CPU runs, with the engine ready', async () => {

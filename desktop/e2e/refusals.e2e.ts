@@ -41,3 +41,24 @@ test.describe('a refused host call', () => {
     await expect(page.getByRole('button', { name: /^Alpine lake 3\.jpg/ })).toBeVisible();
   });
 });
+
+test.describe('an engine the host gave up on', () => {
+  test.beforeEach(async ({ page }) => {
+    await openApp(page, { engineGivenUp: true });
+    await expect(page.locator('footer.status-bar')).toContainText('Try again, or restart LocalSR.');
+  });
+
+  test('Try again starts the engine and the button goes away', async ({ page }) => {
+    const bar = page.locator('footer.status-bar');
+    await bar.getByRole('button', { name: 'Try again' }).click();
+    await expect(bar).toContainText('Starting engine');
+    await expect(bar.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+  });
+
+  test('a refusal is shown in a dialog', async ({ page }) => {
+    await refuse(page, 'retry_engine', 'the inference engine is not waiting to be tried again');
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect(page.getByRole('dialog')).toContainText('Could not restart the engine');
+    await expect(page.getByRole('dialog')).toContainText('not waiting to be tried again');
+  });
+});

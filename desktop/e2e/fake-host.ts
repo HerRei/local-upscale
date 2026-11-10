@@ -15,6 +15,8 @@ export interface Scenario {
   installed?: string[];
   settings?: Record<string, unknown>;
   worker?: 'ready' | 'unavailable';
+  /** The host gave up restarting the engine and offers Try again. */
+  engineGivenUp?: boolean;
   features?: string[];
   /** Finished outputs per photo number (1-based); each entry is one model result. */
   outputs?: Record<number, { id: string; label: string; quality?: string; seconds?: number }[]>;
@@ -85,16 +87,12 @@ function hostScript(scenario: Scenario): void {
   const failures: Record<string, string> = {};
   const answers: Record<string, unknown> = {};
   const listeners: Record<string, number[]> = {};
-  win.__fakeHost = {
-    calls,
-    failures,
-    answers,
-    emit: (event: string, payload: unknown) => {
-      for (const id of listeners[event] ?? []) {
-        (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload });
-      }
-    },
+  const emit = (event: string, payload: unknown) => {
+    for (const id of listeners[event] ?? []) {
+      (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload });
+    }
   };
+  win.__fakeHost = { calls, failures, answers, emit };
 
   async function build(): Promise<Json> {
     const demo = (await import(
@@ -159,6 +157,14 @@ function hostScript(scenario: Scenario): void {
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
     s.runtime.worker = scenario.worker ?? 'unavailable';
+    if (scenario.engineGivenUp) {
+      Object.assign(s.runtime, {
+        worker: 'failed',
+        status_title: 'Engine unavailable',
+        status_detail: 'The inference engine repeatedly stopped. Try again, or restart LocalSR.',
+        engine_retry: true,
+      });
+    }
     if (scenario.features) {
       s.engine = {
         protocol_version: 1,
@@ -281,6 +287,15 @@ function hostScript(scenario: Scenario): void {
           message: '',
           settings_recovery: false,
         };
+      case 'retry_engine':
+        Object.assign(snapshot.runtime, {
+          worker: 'starting',
+          status_title: 'Starting engine',
+          status_detail: 'The inference process is loading.',
+          engine_retry: false,
+        });
+        emit('state-changed', null);
+        return null;
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';
       case 'plugin:event|listen':

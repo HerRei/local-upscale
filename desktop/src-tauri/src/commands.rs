@@ -706,6 +706,12 @@ pub fn start_jobs(
     Ok(())
 }
 
+/// "Try again" after the host gave up restarting the inference engine.
+#[tauri::command]
+pub fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    worker::retry_engine(&state, &app)
+}
+
 #[tauri::command]
 pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;

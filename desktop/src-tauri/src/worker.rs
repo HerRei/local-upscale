@@ -226,6 +226,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         runtime.status_detail = "The inference process is loading.".into();
         // A new engine has run nothing yet.
         runtime.hardware_note.clear();
+        runtime.engine_retry = false;
     }
     emit_state_changed(&app);
 
@@ -457,13 +458,13 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         ) {
             thread::sleep(delay);
             if let Err(error) = start_worker(state.clone(), app.clone()) {
-                set_worker_failure(&state, &app, error.to_string());
+                give_up_on_engine(&state, &app, error.to_string());
             }
         } else {
-            set_worker_failure(
+            give_up_on_engine(
                 &state,
                 &app,
-                "The inference engine repeatedly stopped. Restart LocalSR to try again.".into(),
+                "The inference engine repeatedly stopped. Try again, or restart LocalSR.".into(),
             );
         }
     });
@@ -1964,8 +1965,46 @@ fn set_worker_failure(state: &AppState, app: &AppHandle, detail: String) {
         runtime.worker = "failed".into();
         runtime.status_title = "Engine unavailable".into();
         runtime.status_detail = detail;
+        runtime.engine_retry = false;
     }
     emit_state_changed(app);
+}
+
+/// The restart limit is reached: the failure stays, and the user may try again.
+fn give_up_on_engine(state: &AppState, app: &AppHandle, detail: String) {
+    if let Ok(mut runtime) = state.runtime.lock() {
+        runtime.worker = "failed".into();
+        runtime.status_title = "Engine unavailable".into();
+        runtime.status_detail = detail;
+        runtime.engine_retry = true;
+    }
+    emit_state_changed(app);
+}
+
+/// Accepts a retry only after the host gave up restarting the engine: resets the
+/// restart count and takes the offer back, so a second call is refused until it
+/// gives up again.
+fn begin_engine_retry(state: &AppState) -> AppResult<()> {
+    let mut runtime = lock(&state.runtime)?;
+    if runtime.worker != "failed" || !runtime.engine_retry {
+        return Err(AppError::Worker(
+            "the inference engine is not waiting to be tried again".into(),
+        ));
+    }
+    runtime.engine_retry = false;
+    state.worker.restart_count.store(0, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Starts the engine again after the host gave up on it. It runs through the normal
+/// start, so a new failure takes the usual attempts and ends here again.
+pub fn retry_engine(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    begin_engine_retry(state)?;
+    if let Err(error) = start_worker(state.clone(), app.clone()) {
+        give_up_on_engine(state, app, error.to_string());
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn string(value: &Value, key: &str) -> String {

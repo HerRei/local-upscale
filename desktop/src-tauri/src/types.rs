@@ -500,6 +500,10 @@ pub struct RuntimeStatus {
     /// `status_detail`; this stays until the job ends.
     #[serde(default)]
     pub hardware_note: String,
+    /// The engine stopped too often and the host gave up restarting it; `retry_engine`
+    /// may start it again. A protocol mismatch or any other failure never sets this.
+    #[serde(default)]
+    pub engine_retry: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -660,6 +664,7 @@ impl Default for RuntimeStatus {
             live_memory_pressure_percent: 0.0,
             thermal_status: "Not exposed by this backend".into(),
             hardware_note: String::new(),
+            engine_retry: false,
         }
     }
 }
