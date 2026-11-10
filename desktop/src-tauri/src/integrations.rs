@@ -422,7 +422,9 @@ fn desktop_exec_quote(path: &Path) -> String {
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('`', "\\`")
-        .replace('$', "\\$");
+        .replace('$', "\\$")
+        // A field code starts with a percent sign, also inside quotes.
+        .replace('%', "%%");
     format!("\"{escaped}\"")
 }
 
@@ -753,6 +755,10 @@ mod tests {
         assert_eq!(
             desktop_exec_quote(Path::new("/tmp/Local $SR\\preview")),
             "\"/tmp/Local \\$SR\\\\preview\""
+        );
+        assert_eq!(
+            desktop_exec_quote(Path::new("/tmp/LocalSR%20dir/app.AppImage")),
+            "\"/tmp/LocalSR%%20dir/app.AppImage\""
         );
     }
 
