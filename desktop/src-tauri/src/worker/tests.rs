@@ -1277,6 +1277,29 @@ fn running_batch(directory: &std::path::Path) -> Arc<AppState> {
 }
 
 #[test]
+fn the_next_photo_of_a_batch_does_not_inherit_the_last_one_s_timing() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    let apply = |kind: &str, data: Value| apply_worker_envelope(&state, &envelope(kind, data));
+    apply("job_started", json!({"job_id": "a"})).unwrap();
+    apply(
+        "progress",
+        json!({"job_id": "a", "percentage": 90.0, "elapsed_seconds": 40.0,
+               "estimated_remaining_seconds": 5.0, "completed_tiles": 9, "total_tiles": 10}),
+    )
+    .unwrap();
+    apply(
+        "job_completed",
+        json!({"job_id": "a", "output_path": "/out/a.png", "elapsed_seconds": 41.0}),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.active_job_id, "b");
+    assert_eq!(runtime.elapsed_seconds, 0.0);
+    assert_eq!(runtime.estimated_remaining_seconds, 0.0);
+}
+
+#[test]
 fn a_batch_shows_one_photo_while_the_others_finish_in_the_background() {
     let directory = tempfile::tempdir().unwrap();
     let state = running_batch(directory.path());

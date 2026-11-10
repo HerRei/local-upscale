@@ -606,6 +606,7 @@ function leaveBatch(runtime: AppSnapshot['runtime'], id: string, failed: boolean
   if (!remaining.length || (runtime.active_job_id && runtime.active_job_id !== id)) return;
   runtime.active_job_id = remaining[0];
   runtime.progress = 0;
+  runtime.elapsed_seconds = 0;
   runtime.estimated_remaining_seconds = 0;
   runtime.result_preview_data_url = '';
   // A failure stays on the status line until the next photo starts.

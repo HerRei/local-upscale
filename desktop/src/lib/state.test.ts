@@ -996,6 +996,21 @@ describe('photo batches', () => {
     });
   });
 
+  it('starts the next photo without the finished one’s elapsed time', () => {
+    let snapshot = applyWorkerEnvelope(batch(), { type: 'job_started', data: { job_id: 'a' } });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: { job_id: 'a', percentage: 90, elapsed_seconds: 40, estimated_remaining_seconds: 5 },
+    });
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'a', output_path: '/out/a.png', elapsed_seconds: 41 },
+    });
+    expect(snapshot.runtime.active_job_id).toBe('b');
+    expect(snapshot.runtime.elapsed_seconds).toBe(0);
+    expect(snapshot.runtime.estimated_remaining_seconds).toBe(0);
+  });
+
   it('stays busy when the shown photo ends before the next one starts', () => {
     let snapshot = applyWorkerEnvelope(batch(), { type: 'job_started', data: { job_id: 'a' } });
     snapshot = applyWorkerEnvelope(snapshot, {

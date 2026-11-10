@@ -1116,7 +1116,9 @@ fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) {
     }
     runtime.active_job_id = next;
     runtime.progress = 0.0;
+    runtime.elapsed_seconds = 0.0;
     runtime.estimated_remaining_seconds = 0.0;
+    runtime.throughput = 0.0;
     runtime.result_preview_data_url.clear();
     // A failure stays on the status line until the next photo starts.
     if runtime.worker != "restarting" && !failed {
