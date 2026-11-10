@@ -1109,6 +1109,7 @@ class WorkerServer:
 
         started_at = _time.monotonic()
         state = {"done": 0, "remaining": 0.0}
+        export_notes: list[str] = []
         # Whole chunks are the unit of work. The first one carries the model's loading and
         # warm-up, so the speed comes from the chunks after it; one measured chunk is
         # enough because a chunk is many frames.
@@ -1325,6 +1326,8 @@ class WorkerServer:
                 fps=float(fps),
                 container_format=str(data.get("container", "mp4")),
                 video_codec=str(data.get("video_codec", "av1")),
+                automatic_codec=bool(data.get("_automatic_codec", False)),
+                note_callback=export_notes.append,
                 crf=int(data.get("crf", 18)),
                 width=int(out_width),
                 height=int(out_height),
@@ -1379,6 +1382,7 @@ class WorkerServer:
                 frames_processed=state["done"],
                 elapsed_seconds=float(elapsed),
                 inference_seconds=float(elapsed),
+                notes=" ".join(export_notes),
             )
         )
 
@@ -1494,7 +1498,7 @@ class WorkerServer:
                 str(data.get("container", "mp4")),
                 str(data.get("hdr_mode", "reject")),
             )
-            data = {**data, "video_codec": codec}
+            data = {**data, "video_codec": codec, "_automatic_codec": True}
             send_message(LogMessage(level="info", message=f"Automatic video format: {codec}"))
         model_kind = str(data.get("model_kind", "spandrel_image"))
         interpolating = str(data.get("interpolation") or "off") != "off"
@@ -1572,6 +1576,7 @@ class WorkerServer:
             temporary_directory=data.get("temporary_directory"),
             container=str(data.get("container", "mp4")),
             video_codec=str(data.get("video_codec", "av1")),
+            automatic_codec=bool(data.get("_automatic_codec", False)),
             crf=int(data.get("crf", 18)),
             start_frame=data.get("start_frame"),
             end_frame=data.get("end_frame"),

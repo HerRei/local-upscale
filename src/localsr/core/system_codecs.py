@@ -437,13 +437,18 @@ class SystemCodecs:
     @contextmanager
     def _process(self, arguments: list[str], *, stdin: bool = False) -> Iterator[subprocess.Popen]:
         with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
-            process = start_child(
-                [self.path, *arguments],
-                stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=errors,
-                creationflags=_creation_flags(),
-            )
+            try:
+                process = start_child(
+                    [self.path, *arguments],
+                    stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=errors,
+                    creationflags=_creation_flags(),
+                )
+            except OSError as error:
+                raise SystemCodecsError(
+                    f"Could not start the system codec helper: {error}"
+                ) from error
             process.error_log = errors  # type: ignore[attr-defined]
             try:
                 yield process

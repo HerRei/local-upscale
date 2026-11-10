@@ -590,6 +590,55 @@ def encode_video(
     frames,
     destination_path: str,
     *,
+    video_codec: str = "av1",
+    automatic_codec: bool = False,
+    note_callback: Callable[[str], None] | None = None,
+    **options,
+) -> str:
+    """Export video, retaining Automatic's HEVC → AV1 recovery intent."""
+    from .media_bridge import automatic_video_codec
+    from .video_codec_recovery import automatic_export, system_export_failure
+
+    if video_codec == "auto":
+        automatic_codec = True
+        video_codec = automatic_video_codec(
+            options.get("external_ffmpeg"),
+            options.get("container_format", "mp4"),
+            "preserve" if options.get("hdr_format") else "reject",
+        )
+    if (
+        automatic_codec
+        and video_codec == "hevc"
+        and options.get("container_format", "mp4") == "mp4"
+    ):
+        return automatic_export(
+            frames,
+            destination_path,
+            export=lambda replay, codec: _encode_video(
+                replay, destination_path, video_codec=codec, **options
+            ),
+            cancel_event=options.get("cancel_event"),
+            temporary_directory=options.get("temporary_directory"),
+            note_callback=note_callback,
+            warning_callback=options.get("warning_callback"),
+        )
+    try:
+        return _encode_video(frames, destination_path, video_codec=video_codec, **options)
+    except Exception as error:
+        if video_codec in {"h264", "hevc"} and system_export_failure(error):
+            from .system_codecs import SystemCodecsError
+
+            message = f"{error}. Choose Automatic or AV1 under Advanced > Video format."
+            if isinstance(error, SystemCodecsError):
+                raise SystemCodecsError(message) from error
+            raise VideoStageError("encode", message) from error
+        raise
+
+
+def _encode_video(
+    frames,
+    destination_path: str,
+    *,
     fps: float,
     container_format: str = "mp4",
     video_codec: str = "av1",

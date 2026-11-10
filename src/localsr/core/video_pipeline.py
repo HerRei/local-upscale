@@ -192,6 +192,8 @@ class VideoJobConfig:
     # "fps60" or "fps120", run before or after the upscale.
     interpolation: str = "off"
     interpolation_order: str = "after_upscale"
+    # The worker resolves the initial codec before inference; retain retry intent.
+    automatic_codec: bool = False
 
 
 @dataclass
@@ -230,7 +232,16 @@ def run_video_job(
     """
     from dataclasses import replace
 
-    from .media_bridge import decodable_source, validate_export
+    from .media_bridge import automatic_video_codec, decodable_source, validate_export
+
+    if config.video_codec == "auto":
+        config = replace(
+            config,
+            automatic_codec=True,
+            video_codec=automatic_video_codec(
+                config.external_ffmpeg, config.container, config.hdr_mode
+            ),
+        )
 
     validate_output(config.video_codec, config.container)
     validate_export(config.external_ffmpeg, config.video_codec, config.container)
@@ -592,6 +603,8 @@ def _run_video_job(
         fps=fps,
         container_format=config.container,
         video_codec=config.video_codec,
+        automatic_codec=config.automatic_codec,
+        note_callback=getattr(engine, "add_note", None),
         crf=config.crf,
         width=output_width,
         height=output_height,
