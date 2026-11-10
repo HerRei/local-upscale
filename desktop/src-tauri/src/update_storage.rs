@@ -295,6 +295,13 @@ fn link_backup(current: &Path, backup: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 thread_local! {
+    /// Runs once in `recover_swap`, after it took the folder lock: a test removes the
+    /// journal here, as a rival start that finished first would.
+    static AFTER_JOURNAL_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
     static FAIL_SYNC_AFTER_RENAME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -568,6 +575,12 @@ pub fn recover_swap(journal: &Path) -> AppResult<Option<PathBuf>> {
     // A crash while the journal was rewritten (the second write) leaves its temporary
     // file beside the old journal; no writer runs while this lock is held.
     remove_stale_temporaries(journal);
+    #[cfg(test)]
+    AFTER_JOURNAL_LOCK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
     let metadata = match fs::symlink_metadata(journal) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1252,5 +1265,322 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         assert_eq!(names.len(), 2, "no temporary file stays behind: {names:?}");
+    }
+
+    /// A gzip-compressed tar with the given entries (name, type, content, link target);
+    /// a name is written into the header bytes as it is, so `../x` and the like survive.
+    fn portable_archive(
+        folder: &Path,
+        entries: &[(&str, tar::EntryType, &[u8], Option<&str>)],
+    ) -> PathBuf {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (name, kind, content, link) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_mode(0o755);
+            header.set_size(content.len() as u64);
+            if let Some(link) = link {
+                header.set_link_name(link).unwrap();
+            }
+            header.as_mut_bytes()[..100].fill(0);
+            header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_cksum();
+            builder.append(&header, *content).unwrap();
+        }
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gzip, &builder.into_inner().unwrap()).unwrap();
+        let path = folder.join("update.tar.gz");
+        fs::write(&path, gzip.finish().unwrap()).unwrap();
+        path
+    }
+
+    fn message(result: AppResult<()>) -> String {
+        result.expect_err("expected a refusal").to_string()
+    }
+
+    #[test]
+    fn a_portable_update_with_files_and_folders_is_unpacked() {
+        use tar::EntryType::{Directory, Regular};
+        let root = tempfile::tempdir().unwrap();
+        let archive = portable_archive(
+            root.path(),
+            &[
+                ("localsr-next", Regular, b"exe", None),
+                ("lib/", Directory, b"", None),
+                ("lib/data.bin", Regular, b"data", None),
+            ],
+        );
+        let unpacked = root.path().join("unpacked");
+        extract_portable(&archive, &unpacked, 7).unwrap();
+        assert_eq!(fs::read(unpacked.join("localsr-next")).unwrap(), b"exe");
+        assert_eq!(fs::read(unpacked.join("lib/data.bin")).unwrap(), b"data");
+    }
+
+    #[test]
+    fn a_portable_update_with_an_unsafe_path_writes_nothing_outside() {
+        use tar::EntryType::Regular;
+        for name in [
+            "../outside",
+            "a\\b",
+            "a:b",
+            "/absolute",
+            "lib/../../outside",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let archive = portable_archive(
+                root.path(),
+                &[
+                    ("localsr-next", Regular, b"exe", None),
+                    (name, Regular, b"x", None),
+                ],
+            );
+            let unpacked = root.path().join("unpacked");
+            let text = message(extract_portable(&archive, &unpacked, 100));
+            assert!(text.contains("Unsafe path"), "{name}: {text}");
+            for stray in ["outside", "absolute"] {
+                assert!(!root.path().join(stray).exists(), "{name}");
+            }
+            assert!(!unpacked.join("a\\b").exists() && !unpacked.join("a:b").exists());
+        }
+    }
+
+    #[test]
+    fn a_portable_update_refuses_links_and_special_files() {
+        use tar::EntryType::{Char, Fifo, Link, Symlink};
+        for kind in [Symlink, Link, Fifo, Char] {
+            let root = tempfile::tempdir().unwrap();
+            let archive = portable_archive(
+                root.path(),
+                &[
+                    ("localsr-next", tar::EntryType::Regular, b"exe", None),
+                    ("odd", kind, b"", Some("localsr-next")),
+                ],
+            );
+            let unpacked = root.path().join("unpacked");
+            let text = message(extract_portable(&archive, &unpacked, 100));
+            assert!(text.contains("Links and special files"), "{kind:?}: {text}");
+            assert!(
+                fs::symlink_metadata(unpacked.join("odd")).is_err(),
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// The declared size is the most an update may unpack to: exactly that is fine, one
+    /// byte more is refused before it is unpacked.
+    #[test]
+    fn a_portable_update_may_unpack_to_its_declared_size_and_not_beyond() {
+        use tar::EntryType::Regular;
+        let root = tempfile::tempdir().unwrap();
+        let archive = portable_archive(
+            root.path(),
+            &[
+                ("localsr-next", Regular, b"abc", None),
+                ("data", Regular, b"def", None),
+            ],
+        );
+        extract_portable(&archive, &root.path().join("exact"), 6).unwrap();
+        for maximum in [5, 3, 0] {
+            let unpacked = root.path().join(format!("over-{maximum}"));
+            let text = message(extract_portable(&archive, &unpacked, maximum));
+            assert!(text.contains("exceeds its declared"), "{maximum}: {text}");
+        }
+        // Refused while unpacking, not afterwards: the second file never reached the disk.
+        assert!(!root.path().join("over-5/data").exists());
+    }
+
+    #[test]
+    fn a_portable_update_needs_its_executable() {
+        use tar::EntryType::Regular;
+        let root = tempfile::tempdir().unwrap();
+        let archive = portable_archive(root.path(), &[("other", Regular, b"x", None)]);
+        let text = message(extract_portable(
+            &archive,
+            &root.path().join("unpacked"),
+            10,
+        ));
+        assert!(text.contains("no LocalSR executable"), "{text}");
+        // A folder of that name is not the executable.
+        let archive = portable_archive(
+            root.path(),
+            &[("localsr-next/", tar::EntryType::Directory, b"", None)],
+        );
+        let text = message(extract_portable(&archive, &root.path().join("second"), 10));
+        assert!(text.contains("no LocalSR executable"), "{text}");
+    }
+
+    /// An executable file that runs `body` with `sh`; the spawn is retried while another
+    /// test thread's fork still holds the file open for writing.
+    #[cfg(unix)]
+    fn script(folder: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = folder.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    fn smoke_retrying(executable: &Path, timeout: Duration) -> (AppResult<()>, Duration) {
+        let start = Instant::now();
+        loop {
+            let result = smoke(executable, timeout);
+            let busy = matches!(&result, Err(error) if error.to_string().contains("busy"));
+            if !busy || start.elapsed() > Duration::from_secs(20) {
+                return (result, start.elapsed());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_check_accepts_success_refuses_failure_and_stops_a_hang() {
+        let root = tempfile::tempdir().unwrap();
+        // Success inside a long deadline: not cut short, and not left waiting for it.
+        let good = script(root.path(), "good", "[ \"$1\" = --headless-smoke-test ]");
+        let (result, took) = smoke_retrying(&good, Duration::from_secs(30));
+        result.unwrap();
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        // A failing check is a failure, not a timeout.
+        let bad = script(root.path(), "bad", "exit 3");
+        let (result, _) = smoke_retrying(&bad, Duration::from_secs(30));
+        let text = message(result);
+        assert!(text.contains("failed its startup check"), "{text}");
+        // A hang is killed once the deadline has passed, and not before.
+        let pid_file = root.path().join("pid");
+        let hang = script(
+            root.path(),
+            "hang",
+            &format!("echo $$ > '{}'\nexec sleep 60", pid_file.display()),
+        );
+        let timeout = Duration::from_millis(700);
+        let (result, took) = smoke_retrying(&hang, timeout);
+        let text = message(result);
+        assert!(text.contains("timed out"), "{text}");
+        assert!(
+            took >= timeout,
+            "stopped after {took:?}, before {timeout:?}"
+        );
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        let pid = fs::read_to_string(&pid_file).unwrap();
+        let alive = Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "the hung check is still running");
+    }
+
+    /// A journal as an unfinished swap writes it, with the names given.
+    #[cfg(unix)]
+    fn write_crafted_journal(journal: &Path, current: &Path, backup: &Path, staged: &Path) {
+        fs::write(
+            journal,
+            serde_json::to_vec(&serde_json::json!({
+                "current": current, "backup": backup, "staged": staged,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Recovery moves only the files a swap names beside the executable: a journal that
+    /// points elsewhere, or at other names, never replaces the working executable.
+    #[cfg(unix)]
+    #[test]
+    fn recovery_refuses_a_journal_that_names_files_it_does_not_own() {
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("app-folder");
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        let current = app.join("app");
+        let journal = root.path().join("journal");
+        let good_backup = app.join(".app.before-update-1");
+        let good_staged = app.join(".app.update-1");
+        // (backup, staged): one wrong name at a time.
+        let cases = [
+            (elsewhere.join(".app.before-update-1"), good_staged.clone()),
+            (good_backup.clone(), elsewhere.join(".app.update-1")),
+            (app.join(".other.before-update-1"), good_staged.clone()),
+            (good_backup.clone(), app.join(".other.update-1")),
+            (app.join(".app.update-1"), app.join(".app.update-2")),
+            (good_backup.clone(), app.join(".app.before-update-2")),
+            (app.join("app"), good_staged.clone()),
+            (good_backup.clone(), app.join("app")),
+        ];
+        for (backup, staged) in cases {
+            let why = format!("{} / {}", backup.display(), staged.display());
+            fs::write(&current, b"working").unwrap();
+            for path in [&backup, &staged] {
+                if path.as_path() != current.as_path() {
+                    fs::write(path, b"other").unwrap();
+                }
+            }
+            write_crafted_journal(&journal, &current, &backup, &staged);
+            let text = message(recover_swap(&journal).map(|_| ()));
+            assert!(text.contains("outside its folder"), "{why}: {text}");
+            assert_eq!(fs::read(&current).unwrap(), b"working", "{why}");
+            for path in [&backup, &staged] {
+                if path.as_path() != current.as_path() {
+                    assert_eq!(fs::read(path).unwrap(), b"other", "{why}");
+                    fs::remove_file(path).unwrap();
+                }
+            }
+            fs::remove_file(&journal).unwrap();
+        }
+        // The same journal with the right names does restore.
+        fs::write(&good_backup, b"previous").unwrap();
+        write_crafted_journal(&journal, &current, &good_backup, &good_staged);
+        assert_eq!(recover_swap(&journal).unwrap(), Some(current.clone()));
+        assert_eq!(fs::read(&current).unwrap(), b"previous");
+    }
+
+    /// Only a missing journal means "nothing to roll back"; a journal that cannot be
+    /// looked at is an error, and the start must not go on as if there were none.
+    #[test]
+    fn an_unreadable_journal_location_is_an_error_and_a_missing_one_is_not() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("not-a-folder");
+        fs::write(&file, b"x").unwrap();
+        assert!(recover_swap(&file.join("journal")).is_err());
+        assert_eq!(recover_swap(&root.path().join("journal")).unwrap(), None);
+    }
+
+    /// A rival start that finishes the rollback between this one's first look and its
+    /// lock leaves nothing to do.
+    #[cfg(unix)]
+    #[test]
+    fn a_journal_removed_by_a_rival_start_is_not_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = root.path().join("journal");
+        fs::write(&journal, b"{}").unwrap();
+        let path = journal.clone();
+        AFTER_JOURNAL_LOCK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || fs::remove_file(path).unwrap()))
+        });
+        assert_eq!(recover_swap(&journal).unwrap(), None);
+    }
+
+    /// A journal that cannot be looked at once the lock is held is an error, not a
+    /// missing journal: the start does not go on as if no swap had been interrupted.
+    #[cfg(unix)]
+    #[test]
+    fn a_journal_that_becomes_unreadable_under_the_lock_is_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("profile");
+        fs::create_dir(&folder).unwrap();
+        let journal = folder.join("journal");
+        fs::write(&journal, b"{}").unwrap();
+        let (moved, folder_again) = (root.path().join("moved"), folder.clone());
+        AFTER_JOURNAL_LOCK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                fs::rename(&folder_again, &moved).unwrap();
+                fs::write(&folder_again, b"a file now").unwrap();
+            }))
+        });
+        assert!(recover_swap(&journal).is_err());
     }
 }

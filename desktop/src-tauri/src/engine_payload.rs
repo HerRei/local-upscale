@@ -111,6 +111,20 @@ thread_local! {
     static AFTER_PART_VERIFICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Pretend the engine's volume has this much free space.
+    static FREE_SPACE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+fn free_space(folder: &Path) -> io::Result<u64> {
+    #[cfg(test)]
+    if let Some(bytes) = FREE_SPACE.with(|bytes| bytes.get()) {
+        return Ok(bytes);
+    }
+    fs2::available_space(folder)
+}
+
 /// Whether `name` is `<prefix><process id>`, a folder an installation names.
 fn installation_folder(name: &str, kind: &str) -> bool {
     name.strip_prefix(&format!("engine.{kind}-"))
@@ -206,7 +220,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
     if destination.file_name().is_none_or(|name| name != "engine") {
         return Err(invalid("engine destination must be an engine directory"));
     }
-    if fs2::available_space(parent)? < manifest.unpacked_bytes + 16 * 1024 * 1024 {
+    if free_space(parent)? < manifest.unpacked_bytes + 16 * 1024 * 1024 {
         return Err(invalid(
             "not enough free space to install the inference engine",
         ));
@@ -845,5 +859,420 @@ mod tests {
         fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(install(&manifest, root.path(), &root.path().join("engine")).is_err());
         assert!(!root.path().join("engine").exists());
+    }
+
+    /// A payload of one part (or `chunk`-byte parts) made from raw tar bytes, with a
+    /// manifest that declares `count` files and `bytes` unpacked bytes.
+    fn payload_from_tar(
+        root: &Path,
+        tar_bytes: &[u8],
+        count: u64,
+        bytes: u64,
+        chunk: usize,
+    ) -> std::path::PathBuf {
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::fast());
+        gzip.write_all(tar_bytes).unwrap();
+        let compressed = gzip.finish().unwrap();
+        let mut parts = Vec::new();
+        for (index, part) in compressed.chunks(chunk).enumerate() {
+            let filename = format!("cuda.part-{index:04}");
+            fs::write(root.join(&filename), part).unwrap();
+            let digest: String = Sha256::digest(part)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            parts.push(
+                serde_json::json!({"filename": filename, "size": part.len(), "sha256": digest}),
+            );
+        }
+        let manifest = root.join("engine-payload.json");
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1, "format": "tar.gz.parts", "backend": "CUDA",
+                "file_count": count, "unpacked_bytes": bytes, "parts": parts,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        manifest
+    }
+
+    type Entry<'a> = (&'a str, tar::EntryType, &'a [u8]);
+
+    /// Tar bytes of the given entries; a name is written into the header as it is.
+    fn tar_of(entries: &[Entry]) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        for (name, kind, content) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_mode(0o755);
+            header.set_size(content.len() as u64);
+            if matches!(kind, tar::EntryType::Link | tar::EntryType::Symlink) {
+                header.set_link_name("localsr-worker.exe").unwrap();
+            }
+            header.as_mut_bytes()[..100].fill(0);
+            header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_cksum();
+            archive.append(&header, *content).unwrap();
+        }
+        archive.into_inner().unwrap()
+    }
+
+    /// An engine folder holding the previous engine, to see that a refusal leaves it be.
+    fn previous_engine(root: &Path) -> std::path::PathBuf {
+        let destination = root.join("engine");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("old.exe"), b"keep").unwrap();
+        destination
+    }
+
+    /// The install fails with a message containing `expected`, and the previous engine
+    /// is as it was, with nothing else left in the folder.
+    fn assert_refused(manifest: &Path, root: &Path, expected: &str) {
+        let destination = previous_engine(root);
+        let error = format!(
+            "{:?}",
+            install(manifest, root, &destination)
+                .expect_err("the install should have been refused")
+        );
+        assert!(error.contains(expected), "{error:?} lacks {expected:?}");
+        assert_eq!(fs::read(destination.join("old.exe")).unwrap(), b"keep");
+        assert_eq!(engine_leftovers(root), Vec::<String>::new());
+    }
+
+    #[test]
+    fn only_plain_relative_paths_are_safe() {
+        for good in ["a", "a/b", "localsr-worker.exe", "lib/data.bin", "a b"] {
+            assert!(safe_relative(Path::new(good)), "{good}");
+        }
+        for bad in [
+            "", "..", "../x", "a/../b", "/abs", "a\\b", "c:x", "a:b", "a/b:c",
+        ] {
+            assert!(!safe_relative(Path::new(bad)), "{bad:?}");
+        }
+    }
+
+    /// Each manifest field breaks one rule at a time; the message says it was the
+    /// manifest, so a rule that is missing is not hidden by a later failure.
+    #[test]
+    fn a_manifest_that_breaks_one_rule_is_refused_before_anything_is_touched() {
+        const MANIFEST: &str = "unsupported or invalid engine payload manifest";
+        let part = |index: usize| {
+            serde_json::json!({
+                "filename": format!("cuda.part-{index:04}"), "size": 10, "sha256": "0".repeat(64),
+            })
+        };
+        let many = |count: usize| (0..count).map(part).collect::<Vec<_>>();
+        let gib = 1024u64.pow(3);
+        let breaks: Vec<(&str, serde_json::Value, bool)> = vec![
+            ("schema_version", 2.into(), true),
+            ("schema_version", 0.into(), true),
+            ("format", "zip".into(), true),
+            ("backend", "XPU".into(), true),
+            ("backend", "cuda".into(), true),
+            ("parts", serde_json::json!([]), true),
+            ("parts", many(65).into(), true),
+            ("file_count", 0.into(), true),
+            ("file_count", 100_001.into(), true),
+            ("unpacked_bytes", 0.into(), true),
+            ("unpacked_bytes", (100 * gib + 1).into(), true),
+            // The limits themselves are allowed by the manifest rules.
+            ("parts", many(64).into(), false),
+            ("file_count", 100_000.into(), false),
+            ("unpacked_bytes", (100 * gib).into(), false),
+        ];
+        for (field, value, refused) in breaks {
+            let root = tempfile::tempdir().unwrap();
+            let manifest = payload(root.path(), false, false);
+            let mut json: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+            json[field] = value.clone();
+            fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+            let destination = previous_engine(root.path());
+            let error = install(&manifest, root.path(), &destination)
+                .expect_err("only well-formed payloads install")
+                .to_string();
+            assert_eq!(
+                error.contains(MANIFEST),
+                refused,
+                "{field}={value}: {error}"
+            );
+            assert_eq!(fs::read(destination.join("old.exe")).unwrap(), b"keep");
+        }
+    }
+
+    /// The free space needed is the unpacked size plus 16 MiB: one byte less is refused
+    /// before anything is unpacked, exactly that much or more goes on.
+    #[test]
+    fn the_install_needs_its_free_space_margin() {
+        const SPACE: &str = "not enough free space";
+        let margin = 16 * 1024 * 1024u64;
+        for (free, refused) in [
+            (0, true),
+            (3, true),
+            (3 + margin - 1, true),
+            (3 + margin, false),
+            (3 + margin + 1, false),
+            (u64::MAX, false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let manifest = payload(root.path(), false, false);
+            let destination = previous_engine(root.path());
+            FREE_SPACE.with(|bytes| bytes.set(Some(free)));
+            let result = install(&manifest, root.path(), &destination);
+            FREE_SPACE.with(|bytes| bytes.set(None));
+            if refused {
+                let error = result.expect_err("too little space").to_string();
+                assert!(error.contains(SPACE), "{free}: {error}");
+                assert_eq!(fs::read(destination.join("old.exe")).unwrap(), b"keep");
+                assert_eq!(engine_leftovers(root.path()), Vec::<String>::new());
+            } else {
+                result.unwrap_or_else(|error| panic!("{free}: {error}"));
+                assert_eq!(
+                    fs::read(destination.join("localsr-worker.exe")).unwrap(),
+                    b"exe"
+                );
+            }
+        }
+    }
+
+    /// One field of one part at a time is wrong.
+    #[test]
+    fn a_part_with_invalid_metadata_is_refused() {
+        const PART: &str = "invalid or duplicate engine payload part";
+        let sha = "ab".repeat(32);
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("filename", "dir/cuda.part-0000".into()),
+            ("filename", "../cuda.part-0000".into()),
+            ("filename", "cuda\\part".into()),
+            ("filename", "c:part".into()),
+            ("filename", "".into()),
+            ("size", 0.into()),
+            ("size", (2 * 1024u64.pow(3)).into()),
+            ("size", (2 * 1024u64.pow(3) + 1).into()),
+            ("sha256", sha[..63].into()),
+            ("sha256", format!("{sha}a").into()),
+            ("sha256", "".into()),
+            ("sha256", sha.to_uppercase().into()),
+            ("sha256", format!("{}A", &sha[..63]).into()),
+            ("sha256", format!("{}g", &sha[..63]).into()),
+            ("sha256", format!("{}-", &sha[..63]).into()),
+        ];
+        for (field, value) in cases {
+            let root = tempfile::tempdir().unwrap();
+            let manifest = payload(root.path(), false, false);
+            let mut json: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+            json["parts"][0][field] = value.clone();
+            fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+            assert_refused_with(&manifest, root.path(), PART, &format!("{field}={value}"));
+        }
+        // The same name twice.
+        let root = tempfile::tempdir().unwrap();
+        let manifest = payload(root.path(), false, false);
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        let first = json["parts"][0].clone();
+        json["parts"] = serde_json::json!([first, first]);
+        fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_refused_with(&manifest, root.path(), PART, "duplicate");
+    }
+
+    fn assert_refused_with(manifest: &Path, root: &Path, expected: &str, why: &str) {
+        let destination = previous_engine(root);
+        let error = format!(
+            "{:?}",
+            install(manifest, root, &destination).expect_err(why)
+        );
+        assert!(error.contains(expected), "{why}: {error:?}");
+        assert_eq!(
+            fs::read(destination.join("old.exe")).unwrap(),
+            b"keep",
+            "{why}"
+        );
+        assert_eq!(engine_leftovers(root), Vec::<String>::new(), "{why}");
+    }
+
+    /// A part whose size is right but whose bytes are not the ones the manifest names.
+    #[test]
+    fn a_part_with_the_right_size_and_the_wrong_checksum_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = payload(root.path(), false, false);
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        json["parts"][0]["sha256"] = "0".repeat(64).into();
+        fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_refused(&manifest, root.path(), "checksum mismatch");
+    }
+
+    /// A part that grows after its size was checked is refused as exceeding the manifest.
+    #[test]
+    fn a_part_that_grows_while_it_is_read_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = payload(root.path(), false, false);
+        let last = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.to_string_lossy().contains("cuda.part-"))
+            .max()
+            .unwrap();
+        AFTER_PART_VERIFICATION.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let mut file = fs::OpenOptions::new().append(true).open(last).unwrap();
+                file.write_all(b"extra").unwrap();
+            }))
+        });
+        assert_refused(&manifest, root.path(), "exceeds its manifest");
+    }
+
+    /// Entries an engine archive may not contain, each beside a good worker.
+    #[test]
+    fn an_archive_entry_that_is_not_a_plain_new_file_is_refused() {
+        use tar::EntryType::{Directory, Fifo, Link, Regular, Symlink};
+        const ENTRY: &str = "unsafe, duplicate, or non-file engine archive entry";
+        let worker = ("localsr-worker.exe", Regular, &b"exe"[..]);
+        let cases: Vec<(&str, Vec<Entry>)> = vec![
+            ("hard link", vec![worker, ("link", Link, b"")]),
+            ("symlink", vec![worker, ("link", Symlink, b"")]),
+            ("folder", vec![worker, ("folder/", Directory, b"")]),
+            ("fifo", vec![worker, ("fifo", Fifo, b"")]),
+            ("same name twice", vec![worker, worker]),
+            (
+                "names that differ in case",
+                vec![worker, ("LocalSR-Worker.EXE", Regular, b"exe")],
+            ),
+            ("backslash", vec![worker, ("a\\b", Regular, b"x")]),
+            ("colon", vec![worker, ("a:b", Regular, b"x")]),
+            ("traversal", vec![worker, ("../escaped", Regular, b"x")]),
+            ("absolute", vec![worker, ("/escaped", Regular, b"x")]),
+        ];
+        for (why, entries) in cases {
+            let root = tempfile::tempdir().unwrap();
+            let bytes: u64 = entries.iter().map(|(_, _, c)| c.len() as u64).sum();
+            let manifest = payload_from_tar(
+                root.path(),
+                &tar_of(&entries),
+                entries.len() as u64,
+                bytes,
+                4096,
+            );
+            assert_refused_with(&manifest, root.path(), ENTRY, why);
+            assert!(!root.path().join("escaped").exists(), "{why}");
+        }
+    }
+
+    /// More files or more bytes than the manifest declares stop the unpacking; fewer, or
+    /// no worker, is an incomplete engine. Each rule on its own.
+    #[test]
+    fn an_archive_that_does_not_match_its_manifest_is_refused() {
+        use tar::EntryType::Regular;
+        let worker = ("localsr-worker.exe", Regular, &b"exe"[..]);
+        let extra = ("z.dll", Regular, &b"zz"[..]);
+        // (entries, declared files, declared bytes, message)
+        let cases: Vec<(Vec<Entry>, u64, u64, &str)> = vec![
+            (vec![worker, extra], 1, 5, "exceeds its manifest"),
+            (vec![worker, extra], 2, 4, "exceeds its manifest"),
+            (vec![worker, extra], 3, 5, "incomplete"),
+            (vec![worker, extra], 2, 6, "incomplete"),
+            (vec![extra], 1, 2, "incomplete"),
+            (
+                vec![("localsr-worker.exe/", tar::EntryType::Directory, b"")],
+                1,
+                1,
+                "unsafe",
+            ),
+        ];
+        for (index, (entries, count, bytes, expected)) in cases.into_iter().enumerate() {
+            let root = tempfile::tempdir().unwrap();
+            let manifest = payload_from_tar(root.path(), &tar_of(&entries), count, bytes, 4096);
+            assert_refused_with(&manifest, root.path(), expected, &format!("case {index}"));
+        }
+        // Either spelling of the worker completes an engine.
+        for name in ["localsr-worker", "localsr-worker.exe"] {
+            let root = tempfile::tempdir().unwrap();
+            let manifest =
+                payload_from_tar(root.path(), &tar_of(&[(name, Regular, b"exe")]), 1, 3, 4096);
+            let destination = root.path().join("engine");
+            install(&manifest, root.path(), &destination).unwrap();
+            assert_eq!(fs::read(destination.join(name)).unwrap(), b"exe");
+        }
+    }
+
+    /// A gzip stream may end in up to 1 MiB of padding after the last entry, and not one
+    /// byte more.
+    #[test]
+    fn trailing_archive_padding_is_allowed_up_to_one_mebibyte() {
+        let tar = tar_of(&[("localsr-worker.exe", tar::EntryType::Regular, b"exe")]);
+        // The tar reader stops after the first of the two zero blocks that end an archive,
+        // so one block of them is already part of the tail.
+        let limit = 1024 * 1024 - 512;
+        for (padding, accepted) in [
+            (0, true),
+            (limit / 2, true),
+            (limit - 1, true),
+            (limit, true),
+            (limit + 1, false),
+            (2 * limit, false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut bytes = tar.clone();
+            bytes.resize(bytes.len() + padding, 0);
+            let manifest = payload_from_tar(root.path(), &bytes, 1, 3, 1 << 20);
+            let destination = root.path().join("engine");
+            let result = install(&manifest, root.path(), &destination);
+            if accepted {
+                result.unwrap_or_else(|error| panic!("{padding}: {error}"));
+                assert_eq!(
+                    fs::read(destination.join("localsr-worker.exe")).unwrap(),
+                    b"exe"
+                );
+            } else {
+                let error = result.expect_err("too much padding").to_string();
+                assert!(error.contains("excess trailing"), "{padding}: {error}");
+                assert!(!destination.exists(), "{padding}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_install_command_checks_its_arguments() {
+        use std::ffi::OsString;
+        let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(run_arguments(&[]), None);
+        assert_eq!(run_arguments(&args(&["app"])), None);
+        assert_eq!(
+            run_arguments(&args(&["app", "--other", "a", "b", "c"])),
+            None
+        );
+        assert_eq!(
+            run_arguments(&args(&["app", "install-engine", "a", "b", "c"])),
+            None
+        );
+        // Too few or too many arguments are an error, not a panic and not an install.
+        let root = tempfile::tempdir().unwrap();
+        let manifest = payload(root.path(), false, false);
+        let destination = root.path().join("engine");
+        let m = manifest.to_string_lossy().into_owned();
+        let r = root.path().to_string_lossy().into_owned();
+        let d = destination.to_string_lossy().into_owned();
+        for list in [
+            vec!["app", "--install-engine"],
+            vec!["app", "--install-engine", &m],
+            vec!["app", "--install-engine", &m, &r],
+            vec!["app", "--install-engine", &m, &r, &d, "extra"],
+        ] {
+            assert_eq!(run_arguments(&args(&list)), Some(1), "{list:?}");
+            assert!(!destination.exists(), "{list:?}");
+        }
+        // The complete command installs.
+        assert_eq!(
+            run_arguments(&args(&["app", "--install-engine", &m, &r, &d])),
+            Some(0)
+        );
+        assert_eq!(
+            fs::read(destination.join("localsr-worker.exe")).unwrap(),
+            b"exe"
+        );
     }
 }
