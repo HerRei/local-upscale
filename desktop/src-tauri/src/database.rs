@@ -382,9 +382,12 @@ impl Database {
                 work_key,
                 work_units,
                 elapsed_seconds: row.get(14)?,
+                seconds_per_unit: 0.0,
             })
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let mut jobs = rows.collect::<Result<Vec<_>, _>>()?;
+        crate::queue_timing::attach_typical_speeds(&mut jobs);
+        Ok(jobs)
     }
 
     /// Queue jobs in one transaction, with the check that none of their media
@@ -576,8 +579,9 @@ impl Database {
         Ok(active)
     }
 
-    /// A measured run time for a request that is not queued yet: the latest
-    /// completed job with the same work profile, scaled to this media.
+    /// A run time for a request that is not queued yet: the typical speed of recent
+    /// completed jobs with the same work profile, scaled to this media. None until two
+    /// such jobs were measured.
     pub fn estimate_request_seconds(
         &self,
         request: &str,
@@ -600,6 +604,7 @@ impl Database {
               ORDER BY jobs.updated_at DESC, jobs.rowid DESC",
         )?;
         let mut rows = statement.query([])?;
+        let mut runs = Vec::new();
         while let Some(row) = rows.next()? {
             let (candidate, measured_units) = crate::queue_timing::work_profile(
                 &row.get::<_, String>(0)?,
@@ -609,11 +614,10 @@ impl Database {
                 &row.get::<_, String>(4)?,
             );
             if candidate == key && measured_units > 0.0 {
-                let seconds: f64 = row.get(5)?;
-                return Ok(Some(seconds / measured_units * units));
+                runs.push((measured_units, row.get::<_, f64>(5)?));
             }
         }
-        Ok(None)
+        Ok(crate::queue_timing::typical_seconds_per_unit(&runs).map(|speed| speed * units))
     }
 
     pub fn latest_completed_output_for_media(&self, media_id: &str) -> AppResult<Option<String>> {

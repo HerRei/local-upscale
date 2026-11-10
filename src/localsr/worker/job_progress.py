@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from localsr.core.eta import RemainingTime
 from localsr.core.hardware import get_memory_snapshot
 from localsr.core.live_preview import LatestPreviewEncoder
 from localsr.core.pipeline import ImagePipeline, PipelineStage
@@ -42,11 +43,19 @@ class ImageJobProgress:
         self.inference_started_at: float | None = None
         self.last_memory_sample_at = 0.0
         self.memory_snapshot: dict[str, Any] = {}
+        # The running stage's work in output pixels: tiles differ in size (edges, a smaller
+        # tile size after a memory back-off), so tile counts do not measure work.
+        self.stage_pixels_done = 0
+        self.stage_pixels_total = 0
+        self.remaining_time: RemainingTime | None = None
 
     def start(self, index: int, stage: PipelineStage, *, span: int = 1) -> None:
         self.active_index = index
         self.active_stage = stage
         self.active_span = span
+        self.stage_pixels_done = 0
+        self.stage_pixels_total = 0
+        self.remaining_time = None
         self.emit_start(index, stage)
 
     def emit_start(self, index: int, stage: PipelineStage) -> None:
@@ -72,18 +81,15 @@ class ImageJobProgress:
 
     def update(self, completed: int, total: int, active_tile_size: int) -> None:
         now = self.clock()
-        elapsed = now - (
-            self.inference_started_at if self.inference_started_at is not None else now
+        elapsed = max(
+            0.0,
+            now - (self.inference_started_at if self.inference_started_at is not None else now),
         )
         stage_count = len(self.pipeline.stages)
         fraction = max(0.0, min(1.0, completed / max(total, 1)))
         completed_weight = self.active_index + fraction * self.active_span
         percentage = completed_weight / max(stage_count, 1) * 100.0
-        remaining = (
-            elapsed / completed_weight * max(0.0, stage_count - completed_weight)
-            if completed_weight > 0
-            else 0.0
-        )
+        remaining = self._remaining(now, completed, total)
         if now - self.last_memory_sample_at >= 1.0 or completed == total:
             try:
                 self.memory_snapshot = get_memory_snapshot(self.device)
@@ -129,6 +135,23 @@ class ImageJobProgress:
             )
         )
 
+    def _remaining(self, now: float, completed: int, total: int) -> float:
+        """Seconds the whole job still needs, or 0 while that cannot be said.
+
+        Only the last pass has a measured speed of its own; the stages after an earlier one
+        have not run yet, so its remaining time would stand for the whole job wrongly.
+        """
+        if self.stage_pixels_total > 0:
+            done, work = self.stage_pixels_done, self.stage_pixels_total
+        else:
+            done, work = completed, max(total, 1)
+        if self.remaining_time is None:
+            self.remaining_time = RemainingTime(work)
+        self.remaining_time.update(now, done)
+        last_pass = self.active_index + self.active_span >= len(self.pipeline.stages)
+        seconds = self.remaining_time.remaining()
+        return seconds if last_pass and seconds is not None else 0.0
+
     def tile(
         self,
         phase: str,
@@ -141,8 +164,17 @@ class ImageJobProgress:
         active_tile_size: int,
     ) -> None:
         if phase == "started" and self.inference_started_at is None:
-            # Model loading must not inflate the ETA for every remaining tile.
+            # Model loading must not count as time spent on the first tile.
             self.inference_started_at = self.clock()
+        if output_width > 0 and output_height > 0:
+            self.stage_pixels_total = int(output_width) * int(output_height)
+        if phase == "reset":
+            # Tiles start over at a smaller size; the speed in pixels per second still holds.
+            self.stage_pixels_done = 0
+            if self.remaining_time is not None:
+                self.remaining_time.restart(self.clock(), self.stage_pixels_total)
+        elif phase == "completed" and tile is not None:
+            self.stage_pixels_done += int(tile.out_w) * int(tile.out_h)
         if phase == "completed" and tile_data is not None:
             self.preview.submit(
                 job_id=self.job_id,

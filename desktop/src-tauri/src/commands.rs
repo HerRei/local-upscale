@@ -785,7 +785,7 @@ struct TrialCandidate {
     selection: ModelSelection,
 }
 
-/// Problems a 1× checkpoint fixes; mirrors `fixesOf` in desktop/src/lib/state.ts.
+/// Problems a 1× checkpoint fixes; mirrors `fixesOf` in desktop/src/lib/plan.ts.
 fn model_fixes(model: &CatalogModel) -> Vec<String> {
     if !model.fixes.is_empty() {
         return model.fixes.clone();
@@ -2651,7 +2651,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             ));
         }
         preprocess.push(ResolvedImageStage {
-            // As the plan card names it (state.ts resolvePlan).
+            // As the plan card names it (plan.ts resolvePlan).
             kind: if model.stage == "deblock" || selection.fix == "jpeg" {
                 "deblock"
             } else {

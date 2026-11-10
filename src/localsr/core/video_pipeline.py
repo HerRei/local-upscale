@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .eta import RemainingTime
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
 from .frame_interpolation import ORDERS, InterpolationTarget, interpolate_frames
@@ -207,7 +208,7 @@ def run_video_job(
     frame_started_cb: Callable[[int, int], None] | None = None,
     frame_completed_cb: Callable[[int, int, str], None] | None = None,
     enhanced_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
-    progress_cb: Callable[[int, int, float], None] | None = None,
+    progress_cb: Callable[[int, int, float, float | None], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
     tile_progress_cb: Callable[..., None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
@@ -219,8 +220,8 @@ def run_video_job(
 
     frame_started_cb(frame_index, total_frames) and
     frame_completed_cb(frame_index, total_frames, jpeg_b64) are called
-    per frame. progress_cb(frames_done, total_frames, elapsed_seconds)
-    is called after each frame. All callbacks are optional. With
+    per frame. progress_cb(frames_done, total_frames, elapsed_seconds, remaining_seconds)
+    is called after each frame; the remaining time is None until the speed is measured. All callbacks are optional. With
     ``config.interpolation`` set, ``synthesizer`` makes the in-between frames.
 
     Sources in a format LocalSR does not include are first converted to a
@@ -310,6 +311,9 @@ def _run_video_job(
     total_frames = selected_frame_count(probe.frame_count, config.start_frame, config.end_frame)
     if before_upscale and interpolation is not None:
         total_frames = interpolation.expected_frames(total_frames, fps)
+    # One estimate for the tile and the frame reports. Model loading and the first tile,
+    # which compiles and warms up, are not part of the speed it measures.
+    remaining_time = RemainingTime(total_frames) if total_frames > 0 else None
 
     model_info = config.model_info
     native_scale = int(getattr(model_info, "scale", 1))
@@ -397,17 +401,12 @@ def _run_video_job(
                 *,
                 frame_index=output_frame_index,
                 source_rgb=rgb,
-                inference_start=inference_started_at,
             ):
+                if phase == "completed" and remaining_time is not None and count:
+                    remaining_time.update(time.perf_counter(), frame_index + done / count)
                 if tile_progress_cb is not None:
-                    fraction = frame_index + (done / count if count else 0)
                     elapsed = time.perf_counter() - job_started_at
-                    measured = time.perf_counter() - (inference_start or job_started_at)
-                    remaining = (
-                        measured / fraction * max(0, total_frames - fraction)
-                        if fraction > 0 and total_frames > 0
-                        else None
-                    )
+                    remaining = remaining_time.remaining() if remaining_time else None
                     tile_progress_cb(
                         frame_index, total_frames, done, count, elapsed, remaining, size
                     )
@@ -525,13 +524,16 @@ def _run_video_job(
                 frame_completed_cb(output_frame_index, total_frames, "")
 
             if progress_cb is not None:
-                elapsed = time.perf_counter() - job_started_at
+                now = time.perf_counter()
+                if remaining_time is not None:
+                    remaining_time.update(now, frames_processed)
                 progress_cb(
                     min(frames_processed, max(0, total_frames - 1))
                     if interpolation is not None and not before_upscale and total_frames > 0
                     else frames_processed,
                     total_frames,
-                    elapsed,
+                    now - job_started_at,
+                    remaining_time.remaining() if remaining_time else None,
                 )
 
             yield source_frame.with_pixels(out_rgb)
@@ -552,7 +554,10 @@ def _run_video_job(
                 def report_interpolation_done(frames):
                     yield from frames
                     progress_cb(
-                        frames_processed, total_frames, time.perf_counter() - job_started_at
+                        frames_processed,
+                        total_frames,
+                        time.perf_counter() - job_started_at,
+                        remaining_time.remaining() if remaining_time else None,
                     )
 
                 output_frames = report_interpolation_done(output_frames)

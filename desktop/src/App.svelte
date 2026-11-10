@@ -1,4 +1,14 @@
 <script lang="ts">
+  import { detectPlatform } from './lib/platform';
+
+  import { tabFromKey } from './lib/keyboard';
+  import { recipeFixStages, recipeMatches } from './lib/recipes';
+  import { benchmarkDeviceBarWidth, benchmarkSceneLabel } from './lib/benchmark';
+  import { without, mediaNamesFor as mediaNamesForPaths } from './lib/collections';
+  import {
+    presetDownload,
+    supportsHdrPreservation as catalogSupportsHdrPreservation,
+  } from './lib/plan';
   import { onMount, tick } from 'svelte';
   import PreviewPane from './PreviewPane.svelte';
   import ComparePane from './ComparePane.svelte';
@@ -7,7 +17,6 @@
     pickKey,
     toggleSlot,
     swapSlots,
-    tabFromKey,
     type CompareItem,
   } from './lib/compareOutputs';
   import {
@@ -25,12 +34,7 @@
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import FFmpegNotice from './FFmpegNotice.svelte';
-  import {
-    detectPlatform,
-    exportNeedsExternalFFmpeg,
-    probeNeedsExternalFFmpeg,
-    systemCodecs,
-  } from './lib/ffmpeg';
+  import { exportNeedsExternalFFmpeg, probeNeedsExternalFFmpeg, systemCodecs } from './lib/ffmpeg';
   import VideoMemory from './VideoMemory.svelte';
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
@@ -55,30 +59,30 @@
   import {
     FIT_LABELS,
     FIX_LABELS,
-    UNSTABLE_FIX_MODELS,
-    applyWorkerEnvelope,
-    chooseFixModel,
     choosePresetModel,
     displayName,
     fitFor,
-    fitsFix,
-    fixQuality,
-    fixSlot,
-    fixStageKind,
     fixesOf,
-    formatBytes,
-    formatDuration,
     frameRateChange,
     libraryModelsForTask,
     modelsAvailableBeyondSelection,
     modelsForTask,
-    moveFixStage,
     pendingDownloads,
     presetSlot,
     resolvePlan,
-    resultPreviewForSelectedMedia,
+  } from './lib/plan';
+  import {
+    UNSTABLE_FIX_MODELS,
+    chooseFixModel,
+    fitsFix,
+    fixQuality,
+    fixSlot,
+    fixStageKind,
+    moveFixStage,
     toggleFixStage,
-  } from './lib/state';
+  } from './lib/fixStages';
+  import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
+  import { formatBytes, formatDuration } from './lib/format';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import { engineLabel, hardwarePatch, withListedDevice } from './lib/neuralEngine';
@@ -320,7 +324,6 @@
       Boolean(editModel?.installed) &&
       editPrompt.trim().length > 0 &&
       editPrompt.length <= 4000 &&
-      settings.edit_max_dimension <= editSizeAllowed &&
       (!editModel?.terms_acceptance_required || termsAccepted[editModel.model_id]));
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
   $: compatibleModels = modelsForTask(snapshot, settings.task);
@@ -645,7 +648,6 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  $: firstRun = !snapshot.catalog.models.some((model) => model.installed);
   // Video runs no fixes yet; its frames can still get Faces.
   $: fixChips = (
     settings.task === 'denoise'
@@ -803,12 +805,20 @@
   $: lockReason = cancelling
     ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
     : `${startingJob ? 'Starting your job…' : 'Settings locked.'} Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.`;
-  // Start from the menu with nothing to explain still answers with what Start would take.
-  $: scopeSummary = settings.batch_mode
-    ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
-    : selectedMedia
-      ? `Only “${selectedMedia.name}” is processed.`
-      : 'Only the selected item is processed.';
+  $: startBlockReason = snapshot.runtime.active_job_id
+    ? 'Wait for the current job to finish.'
+    : snapshot.runtime.worker !== 'ready'
+      ? 'The processing engine is not ready yet.'
+      : !settings.task
+        ? 'Choose a task before starting.'
+        : !queueSelection.length
+          ? 'Select a compatible item before starting.'
+          : unreadyMedia
+            ? scopeHint
+            : editBlockReason ||
+              (!modelReady || !faceReady || !fixesReady || !interpolationReady
+                ? 'Choose or download the required models before starting.'
+                : 'The current settings are not ready to start.');
 
   onMount(() => {
     const unlisteners: (() => void)[] = [];
@@ -1113,32 +1123,6 @@
     if (settings.task === 'video')
       return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
-  }
-
-  /** What choosing Quick or Best would still download, every fix included once. */
-  function presetDownload(quality: 'quick' | 'best', current: AppSnapshot, ui: UiSettings): string {
-    const task = ui.task;
-    if (!task || task === 'edit') return '';
-    const fixes = (task === 'upscale' || task === 'denoise' ? ui.fix_stages : []).map((selection) =>
-      chooseFixModel(current, selection.fix, quality, ui.preset_pins),
-    );
-    // Restore's model is its last fix; without one it is the preset's own choice.
-    const primary =
-      task === 'denoise'
-        ? fixes.length
-          ? undefined
-          : choosePresetModel(current, task, quality)
-        : choosePresetModel(current, task, quality, ui.content, ui.preset_pins);
-    const models = new Map(
-      [primary, ...fixes]
-        .filter((model): model is CatalogModel => model !== undefined)
-        .map((model) => [model.model_id, model]),
-    );
-    const bytes = [...models.values()].reduce(
-      (total, model) => total + (model.installed ? 0 : model.size_bytes),
-      0,
-    );
-    return bytes ? `${formatBytes(bytes)} download` : '';
   }
 
   /**
@@ -1457,22 +1441,16 @@
     if (canStart) await start();
   }
 
-  function supportsHdrPreservation(candidate: UiSettings): boolean {
-    return (
-      candidate.selected_video_model_id === 'frame_by_frame' &&
-      (candidate.selected_model_id === '__custom__' ||
-        snapshot.catalog.models.some(
-          (model) => model.model_id === candidate.selected_model_id && model.architecture === 'HAT',
-        ))
-    );
-  }
-
   /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
    *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
   async function useTheCpu(): Promise<void> {
     updateSettings(hardwarePatch('cpu'));
     await tick();
     (document.getElementById('device') ?? failureNote)?.focus();
+  }
+
+  function supportsHdrPreservation(candidate: UiSettings): boolean {
+    return catalogSupportsHdrPreservation(candidate, snapshot.catalog);
   }
 
   function updateSettings(patch: Partial<UiSettings>): void {
@@ -1616,12 +1594,6 @@
     } catch (error) {
       if (key === pairKey) pairError = String(error);
     }
-  }
-
-  function without<T>(record: Record<string, T>, key: string): Record<string, T> {
-    const copy = { ...record };
-    delete copy[key];
-    return copy;
   }
 
   /** A manual choice pins the pair of this image until a new run starts. */
@@ -1772,7 +1744,7 @@
 
   function applyPreset(kind: 'quick' | 'best'): void {
     if (!settings.task || settings.task === 'edit') {
-      showModal('Choose a task', 'Select Upscale or Restore before applying a preset.');
+      showModal('Choose a task', 'Select Upscale, Restore or Video before applying a preset.');
       return;
     }
     resolveRecipe({ quality: kind });
@@ -2078,91 +2050,6 @@
     inspectorScroll?.querySelector<HTMLInputElement>('.recipe-input input')?.focus();
   }
 
-  /**
-   * The fixes a recipe runs, in order. Newer recipes name the fix on each stage. Older
-   * ones ran one fix at most and name it only in their chips: before an upscale the fix
-   * stage's problem is the chip it fixes, else its model's own; in Restore the model was
-   * the fix only while a chip it fixes was on.
-   */
-  function recipeFixStages(recipe: Recipe): FixStageSelection[] {
-    if (recipe.task !== 'upscale' && recipe.task !== 'denoise') return [];
-    const stages = recipe.stages ?? [];
-    const chip = recipe.fixes?.find((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces');
-    const primary =
-      recipe.task === 'denoise'
-        ? stages.length - 1
-        : stages.findIndex((stage) => stage.kind === 'upscale');
-    const result: FixStageSelection[] = [];
-    stages.forEach((stage, index) => {
-      if (stage.kind !== 'restore' && stage.kind !== 'deblock') return;
-      if (index > primary) return;
-      const model = snapshot.catalog.models.find((entry) => entry.model_id === stage.model_id);
-      const fixes = model
-        ? fixesOf(model).filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
-        : [];
-      const fix =
-        stage.fix ??
-        (index === primary
-          ? chip && fixes.includes(chip)
-            ? chip
-            : undefined
-          : chip && (!model || fixes.includes(chip))
-            ? chip
-            : fixes[0]);
-      if (fix && !result.some((selection) => selection.fix === fix))
-        result.push({ fix, model_id: stage.model_id });
-    });
-    return result;
-  }
-
-  function sameFixStages(left: FixStageSelection[], right: FixStageSelection[]): boolean {
-    return (
-      left.length === right.length &&
-      left.every(
-        (selection, index) =>
-          selection.fix === right[index].fix && selection.model_id === right[index].model_id,
-      )
-    );
-  }
-
-  /** A saved recipe is selected while the current settings still match what it applies. */
-  function recipeMatches(
-    recipe: Recipe,
-    current: UiSettings,
-    catalog: AppSnapshot['catalog'],
-  ): boolean {
-    if (current.task !== recipe.task) return false;
-    if (
-      recipe.task === 'video' &&
-      (recipe.video_model_id || 'frame_by_frame') !== current.selected_video_model_id
-    )
-      return false;
-    const recipeModel = catalog.models.find((model) => model.model_id === recipe.model_id);
-    const scale =
-      recipe.task === 'denoise'
-        ? 1
-        : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale);
-    const fixes = recipeFixStages(recipe);
-    const face =
-      Boolean(recipe.stages?.some((stage) => stage.kind === 'face_restore')) ||
-      (recipe.enable_face_model ?? false);
-    return (
-      current.selected_model_id === recipe.model_id &&
-      current.output_scale === scale &&
-      current.precision === recipe.precision &&
-      current.tile_size === recipe.tile_size &&
-      current.halo === recipe.halo &&
-      current.safe_memory === recipe.safe_memory &&
-      sameFixStages(current.fix_stages, fixes) &&
-      current.enable_face_model === face &&
-      (current.quality || 'custom') === (recipe.quality || 'custom') &&
-      (recipe.task !== 'video' ||
-        ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
-          (current.video_interpolation_order || 'after_upscale') ===
-            (recipe.video_interpolation_order || 'after_upscale')))
-    );
-  }
-
   $: activeRecipeIds = new Set(
     snapshot.recipes
       .filter((recipe) => recipeMatches(recipe, settings, snapshot.catalog))
@@ -2178,7 +2065,7 @@
       return;
     }
     if (recipe.task !== 'video') lastImageTask = recipe.task;
-    const fix_stages = recipeFixStages(recipe);
+    const fix_stages = recipeFixStages(recipe, snapshot.catalog);
     const recipeFace = recipe.stages?.find((stage) => stage.kind === 'face_restore');
     const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
     updateSettings({
@@ -2251,8 +2138,11 @@
       await refresh();
     }
     const added = snapshot.media.filter((media) => !previousIds.has(media.id));
-    if (added.length) {
-      await api.selectMedia(added[0].id);
+    const requested = intent.files.length
+      ? snapshot.media.filter((media) => intent.files.includes(media.path))
+      : added;
+    if (requested.length) {
+      await api.selectMedia(requested[0].id);
       await refresh();
     }
 
@@ -2276,8 +2166,8 @@
     await api.saveSettings(snapshot.settings);
 
     if (!intent.auto_start) return;
-    const candidates = added.length
-      ? added
+    const candidates = intent.files.length
+      ? requested
       : settings.batch_mode
         ? runnableMedia
         : selectedMedia
@@ -2310,7 +2200,7 @@
     // Debouncing collects them into one native queue transaction.
     autoStartTimer = setTimeout(() => {
       autoStartTimer = undefined;
-      pendingAutoStartIds = [...stagedAutoStartIds];
+      pendingAutoStartIds = [...new Set([...pendingAutoStartIds, ...stagedAutoStartIds])];
       stagedAutoStartIds = [];
       void maybeAutoStart();
     }, 300);
@@ -2319,6 +2209,11 @@
   async function maybeAutoStart(): Promise<void> {
     await tick();
     if (!pendingAutoStartIds.length) return;
+    if (
+      snapshot.capabilities.system_ram_total === 0 &&
+      !snapshot.capabilities.devices.some((device) => device.id === snapshot.settings.device_id)
+    )
+      return;
     const media = snapshot.media.filter((item) => pendingAutoStartIds.includes(item.id));
     if (media.length !== pendingAutoStartIds.length) return;
     if (media.some((item) => item.probe_status === 'pending')) return;
@@ -2356,7 +2251,8 @@
       modelReady &&
       hdrModelCompatible &&
       faceReady &&
-      fixesReady;
+      fixesReady &&
+      interpolationReady;
     if (!ready) return;
     const mediaIds = [...pendingAutoStartIds];
     pendingAutoStartIds = [];
@@ -2399,7 +2295,7 @@
         case 'file.start':
           if (canStart) await start();
           else if (canPrepare) await prepareAndStart();
-          else showModal('Cannot start yet', scopeHint || scopeSummary);
+          else showModal('Cannot start yet', startBlockReason);
           break;
         case 'file.cancel':
           if (preparing) await cancelPreparation();
@@ -2463,24 +2359,6 @@
       'Live values come from the isolated inference worker. Temperature is shown only when a supported backend reports it.',
       'performance',
     );
-  }
-
-  function benchmarkDeviceBarWidth(score: number, devices: BenchmarkDeviceResult[]): number {
-    const fastest = Math.max(1, ...devices.map((device) => device.score));
-    return Math.max(5, Math.min(100, (score / fastest) * 100));
-  }
-
-  function benchmarkSceneLabel(sceneId: string): string {
-    switch (sceneId) {
-      case 's1-classroom':
-        return 'Classroom';
-      case 's2-gallery':
-        return 'Gallery · tiled';
-      case 's3-gallery-encode':
-        return 'Gallery · encode';
-      default:
-        return sceneId;
-    }
   }
 
   async function showIntegrations(): Promise<void> {
@@ -2597,12 +2475,7 @@
   }
 
   function mediaNamesFor(paths: string[]): string[] {
-    return paths.map(
-      (path) =>
-        snapshot.media.find((media) => media.path === path)?.name ??
-        path.split(/[\\/]/).pop() ??
-        path,
-    );
+    return mediaNamesForPaths(paths, snapshot.media);
   }
 
   function showModal(
@@ -2824,7 +2697,7 @@
           referenceLabel={referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original'}
           referenceState={againstSide?.state ?? 'ready'}
           referenceError={againstSide?.error ?? ''}
-          showingLabel={''}
+          showingLabel={showingSide?.label ?? ''}
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
           {singleFrame}

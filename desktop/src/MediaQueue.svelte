@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { tabFromKey } from './lib/keyboard';
+  import { queueModelState } from './lib/queue-timing';
   import { tick } from 'svelte';
   import FileName from './FileName.svelte';
   import OutputsList from './OutputsList.svelte';
-  import { tabFromKey, type OutputGroup } from './lib/compareOutputs';
+  import { type OutputGroup } from './lib/compareOutputs';
   import type { ComparePick } from './lib/types';
-  import { formatDuration } from './lib/state';
-  import { queueModelState } from './lib/results';
+  import { formatDuration } from './lib/format';
   import type { JobRecord, MediaItem } from './lib/types';
 
   export let groups: OutputGroup[];

@@ -1,5 +1,5 @@
 import type { CapabilityInfo, DeviceInfo } from './types';
-import type { FfmpegPlatform } from './ffmpeg';
+import type { FfmpegPlatform } from './platform';
 
 /** How ONNX Runtime reaches a GPU; the worker names it in the device label (hardware.py). */
 export type GpuRoute = 'DirectML' | 'OpenVINO';

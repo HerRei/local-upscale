@@ -182,7 +182,8 @@ def test_progress_accounts_for_fused_stages_and_excludes_initial_model_loading(m
     updates = [message["data"] for message in envelopes if message["type"] == "progress"]
     assert [item["percentage"] for item in updates] == pytest.approx([0, 100 / 3, 200 / 3, 100])
     assert [item["elapsed_seconds"] for item in updates] == [0, 2, 4, 6]
-    assert [item["estimated_remaining_seconds"] for item in updates] == [0, 4, 2, 0]
+    # Two tiles per stage are too little to measure a speed; the job says nothing.
+    assert [item["estimated_remaining_seconds"] for item in updates] == [0, 0, 0, 0]
     stages = [message["data"] for message in envelopes if message["type"] == "stage_progress"]
     assert [(item["stage_kind"], item["percentage"]) for item in stages[-2:]] == [
         ("upscale", 100),

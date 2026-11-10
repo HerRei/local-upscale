@@ -34,7 +34,7 @@ describe('Outputs list histories', () => {
   });
 });
 
-import { pickKey, toggleSlot, swapSlots, sliderBlock, tabFromKey } from './compareOutputs';
+import { pickKey, toggleSlot, swapSlots, sliderBlock } from './compareOutputs';
 
 describe('Compare controls', () => {
   const picks = [
@@ -60,13 +60,6 @@ describe('Compare controls', () => {
     expect(sliderBlock(picks.slice(0, 2))).toBe('');
     expect(sliderBlock([picks[0], picks[2]])).toContain('same image');
     expect(sliderBlock([picks[0]])).toContain('two');
-  });
-  it('supports arrow, Home and End navigation between tabs', () => {
-    expect(tabFromKey('ArrowRight', 0, 2)).toBe(1);
-    expect(tabFromKey('ArrowLeft', 0, 2)).toBe(1);
-    expect(tabFromKey('Home', 1, 2)).toBe(0);
-    expect(tabFromKey('End', 0, 2)).toBe(1);
-    expect(tabFromKey('Enter', 0, 2)).toBeNull();
   });
 });
 

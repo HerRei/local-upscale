@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { hostCalls } from './fake-host';
+import { answer, hostCalls } from './fake-host';
 import { upscale, video, windows } from './fixtures';
 
 async function openAdvanced(page: Page): Promise<void> {
@@ -104,4 +104,25 @@ test.describe('Advanced settings: frame interpolation', () => {
     await openAdvanced(page);
     await expect(page.locator('#frame-rate')).toBeDisabled();
   });
+});
+
+test('chooses an external FFmpeg through the host and displays a read-only path', async ({
+  page,
+}) => {
+  await openApp(page, {
+    ...video,
+    settings: { ...video.settings, external_ffmpeg_path: '/old/ffmpeg' },
+  });
+  await openAdvanced(page);
+  await answer(page, 'choose_external_ffmpeg', '/chosen/ffmpeg');
+  const field = page.getByLabel('External FFmpeg');
+  await expect(field).toHaveAttribute('readonly', '');
+  await page.getByRole('button', { name: 'Choose…', exact: true }).click();
+  await expect(field).toHaveValue('/chosen/ffmpeg');
+  expect((await hostCalls(page, 'choose_external_ffmpeg')).at(-1)?.args).toEqual({
+    current: '/old/ffmpeg',
+  });
+  await expect
+    .poll(async () => (await lastSaved(page)).external_ffmpeg_path)
+    .toBe('/chosen/ffmpeg');
 });

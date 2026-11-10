@@ -229,7 +229,9 @@ def test_run_video_job_upscales_every_frame(synthetic_video, tmp_path):
         cancel_event=threading.Event(),
         frame_started_cb=lambda idx, total: started.append((idx, total)),
         frame_completed_cb=lambda idx, total, b64: completed.append((idx, total, b64)),
-        progress_cb=lambda done, total, elapsed: progress_events.append((done, total, elapsed)),
+        progress_cb=lambda done, total, elapsed, _remaining: progress_events.append(
+            (done, total, elapsed)
+        ),
     )
 
     assert result.frames_processed == FRAME_COUNT

@@ -394,7 +394,7 @@ def test_every_python_response_type_is_in_the_schema_response_enum_and_back():
 
 
 # Response types the worker sends that neither the Rust host (worker.rs) nor the
-# reducer (state.ts) acts on. `log` carries the worker's own diagnostics, such as
+# reducer (workerEvents.ts) acts on. `log` carries the worker's own diagnostics, such as
 # a malformed request or a lost GPU; the host drops them today.
 RESPONSES_NOBODY_HANDLES = {"log"}
 
@@ -403,7 +403,7 @@ def test_every_response_type_has_a_host_or_ui_handler_except_the_listed_ones():
     schema = _schema()
     response = _schema_properties(schema, schema["$defs"]["workerResponse"])["type"]["enum"]
     host = (ROOT / "desktop" / "src-tauri" / "src" / "worker.rs").read_text(encoding="utf-8")
-    reducer = (ROOT / "desktop" / "src" / "lib" / "state.ts").read_text(encoding="utf-8")
+    reducer = (ROOT / "desktop" / "src" / "lib" / "workerEvents.ts").read_text(encoding="utf-8")
     unhandled = {
         name for name in response if f'"{name}"' not in host and f"'{name}'" not in reducer
     }

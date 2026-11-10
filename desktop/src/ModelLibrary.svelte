@@ -1,24 +1,22 @@
 <script lang="ts">
+  import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
   import {
     FIT_LABELS,
     FIX_LABELS,
-    chooseFixModel,
     choosePresetModel,
     displayName,
     fitFor,
-    fixQuality,
     fixesOf,
-    formatBytes,
     libraryModelsForTask,
     modelsForTask,
-    rememberedFixModel,
     rightsAllowPreset,
-  } from './lib/state';
+  } from './lib/plan';
+  import { chooseFixModel, fixQuality, rememberedFixModel } from './lib/fixStages';
+  import { formatBytes } from './lib/format';
   import FileName from './FileName.svelte';
   import { modal } from './lib/modal';
   import { acceleratorFor } from './lib/neuralEngine';
   import { estimateModelTrials } from './lib/api';
-  import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/results';
   import {
     EDIT_FAMILIES,
     EDIT_FIT_LABELS,
@@ -621,7 +619,7 @@
                   <div class="meter">
                     Speed<span class="dots"
                       >{#each [1, 2, 3, 4] as tier}<i
-                          class:f={model.speed_tier >= (tier === 4 ? 3 : tier) && tier <= 3}
+                          class:f={model.speed_tier >= tier && tier <= 3}
                         ></i>{/each}</span
                     >
                   </div>
@@ -1055,7 +1053,7 @@
               {/if}
             {/if}
           </div>
-        {:else}
+        {:else if group !== 'own'}
           <p class="model-description">
             Select a model to see what it is for and where it comes from.
           </p>

@@ -106,3 +106,12 @@ describe('FFmpeg buttons', () => {
     expect(await screen.findByText(/The file picker failed\./)).toBeTruthy();
   });
 });
+
+it('shows the chosen FFmpeg path in a read-only field', async () => {
+  const update = await open({ task: 'video', external_ffmpeg_path: '/usr/bin/ffmpeg' }, mac);
+  const input = screen.getByLabelText('External FFmpeg') as HTMLInputElement;
+  expect(input.value).toBe('/usr/bin/ffmpeg');
+  expect(input.readOnly).toBe(true);
+  await fireEvent.change(input, { target: { value: '/other' } });
+  expect(update).not.toHaveBeenCalled();
+});

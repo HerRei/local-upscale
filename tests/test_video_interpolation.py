@@ -436,6 +436,6 @@ def test_progress_does_not_finish_before_synthesis(tmp_path):
         CountingEngine(),
         threading.Event(),
         synthesizer=CheckingSynthesizer(),
-        progress_cb=lambda done, total, elapsed: progress.append((done, total)),
+        progress_cb=lambda done, total, elapsed, _remaining: progress.append((done, total)),
     )
     assert progress[-1][0] == progress[-1][1]

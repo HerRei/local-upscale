@@ -261,6 +261,8 @@ function hostScript(scenario: Scenario): void {
       case 'clear_media':
         snapshot.media = [];
         return null;
+      case 'choose_external_ffmpeg':
+        return null;
       case 'take_launch_intents':
         return [];
       case 'update_status':

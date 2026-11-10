@@ -115,8 +115,9 @@ def test_float_h_at_pipeline_preserves_timing_audio_colour_and_reports_first_fra
     )
     assert result.frames_processed == 3
     assert all(frame.dtype == np.float32 for frame in previews)
-    assert any(e[0] == 0 and 0 < e[2] < e[3] and e[5] > 0 for e in events)
-    assert events[0][5] is None
+    # The first frame warms the model up, so it reports tiles but no remaining time yet.
+    assert any(e[0] == 0 and 0 < e[2] < e[3] for e in events)
+    assert all(e[5] is None for e in events if e[0] == 0)
     decoded_source = list(decode_timed_frames(str(source), hdr_mode="preserve"))
     assert [
         float(f.timestamp) for f in decode_timed_frames(str(output), hdr_mode="preserve")
