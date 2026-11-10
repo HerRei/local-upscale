@@ -40,10 +40,9 @@ logger = logging.getLogger(__name__)
 NEURAL_ENGINE = "CPU_AND_NE"
 CORE_ML_GPU = "CPU_AND_GPU"
 
-# Measured on an M1 Pro (2026-10-24): every operation of SPAN, RRDBNet and FBCNN
-# maps to the Neural Engine, which ran them 2-3x faster than MPS fp32 with a
-# fraction of the energy. RealPLKSR's 17x17 partial convolutions fall back to
-# the CPU on the Neural Engine, but its Core ML GPU program still beats MPS.
+# SPAN, RRDBNet and FBCNN map to the Neural Engine. RealPLKSR's 17x17
+# partial convolutions fall back to the CPU on the Neural Engine, so its
+# Core ML route uses the GPU.
 # HAT, SwinIR and NAFNet produce broken fp16 output and SCUNet does not convert,
 # so every other architecture keeps PyTorch.
 COMPUTE_UNITS = {
@@ -56,21 +55,17 @@ COMPUTE_UNITS = {
 # PyTorch path is clearly faster on this Mac (newer GPUs can be).
 NEURAL_ENGINE_SPEED_MARGIN = 1.3
 MINIMUM_PSNR = 45.0
-# A gate tile needs this much detail (standard deviation of its input). On a blank tile
-# even an FP16 program that overflows on real content matches PyTorch: RealPLKSR HFA2k
-# in FP16 matched FP32 at 64-76 dB on flat tiles and failed on manga pages (#97).
+# A gate tile needs this much input detail: a blank tile can hide FP16
+# overflow that occurs on detailed content.
 MINIMUM_GATE_DETAIL = 4 / 255
-# Converting large shapes exhausted 16 GB of memory for RRDBNet (768 px failed,
-# 512 px was measured), so larger user tiles keep PyTorch. SPAN is small enough
-# to convert whole video frames.
+# Limit conversion size to bound memory use. SPAN can convert whole video frames.
 MAXIMUM_PIXELS = 576 * 576
 MAXIMUM_PIXELS_BY_ARCHITECTURE = {"ESRGAN": 544 * 544, "SPAN": 2_400_000}
 # Every frame of a video has the same size, so these run one call per frame
-# instead of overlapping tiles: fewer pixels and calls (SPAN on an M1 Pro: 1.4-2.2x).
+# instead of overlapping tiles, reducing pixels and calls.
 WHOLE_FRAME_ARCHITECTURES = {"SPAN"}
-# Compiling a 1920x1080 SPAN program used ~6.6 GB of temporary space for a while
-# (measured on macOS), so a whole-frame program is only compiled when this much
-# is free: bytes per input pixel, plus room the Mac needs to stay usable.
+# Compile whole-frame programs only when enough temporary space is free:
+# bytes per input pixel, plus headroom for the system.
 COMPILE_BYTES_PER_PIXEL = 1600
 COMPILE_FREE_HEADROOM = 3 * 1024**3
 SIDE_ALIGNMENT = 16

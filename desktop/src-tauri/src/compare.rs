@@ -225,18 +225,24 @@ pub fn refresh(db: &Database, compare: &mut CompareState) -> AppResult<()> {
     Ok(())
 }
 
+fn parse_slot_index(data: &Value) -> Option<usize> {
+    match data["slot"].as_str() {
+        Some("slot1") => Some(0),
+        Some("slot2") => Some(1),
+        Some("slot3") => Some(2),
+        Some("slot4") => Some(3),
+        _ => None,
+    }
+}
+
 pub fn apply(
     db: &Database,
     compare: &mut CompareState,
     data: &Value,
     failed: bool,
 ) -> AppResult<()> {
-    let index = match data["slot"].as_str() {
-        Some("slot1") => 0,
-        Some("slot2") => 1,
-        Some("slot3") => 2,
-        Some("slot4") => 3,
-        _ => return Ok(()),
+    let Some(index) = parse_slot_index(data) else {
+        return Ok(());
     };
     if data["generation"].as_u64() != Some(compare.generation) || compare.generation == 0 {
         return Ok(());
@@ -330,12 +336,8 @@ pub fn apply_region(
     data: &Value,
     failed: bool,
 ) -> AppResult<()> {
-    let index = match data["slot"].as_str() {
-        Some("slot1") => 0,
-        Some("slot2") => 1,
-        Some("slot3") => 2,
-        Some("slot4") => 3,
-        _ => return Ok(()),
+    let Some(index) = parse_slot_index(data) else {
+        return Ok(());
     };
     if data["generation"].as_u64() != Some(compare.generation)
         || data["request_id"].as_u64() != Some(compare.region_request_id)

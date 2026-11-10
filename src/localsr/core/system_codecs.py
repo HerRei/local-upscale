@@ -429,7 +429,7 @@ class SystemCodecs:
             raise SystemCodecsError("Apple ProRes is written into MOV. Choose the MOV container.")
         elif container != "mp4":
             raise SystemCodecsError(
-                f"{self.name} write H.264/HEVC into MP4 or MOV. Choose MP4, or select an "
+                f"{self.name} write H.264 into MP4 and HEVC into MP4 or MOV. Choose MP4, or select an "
                 "FFmpeg you installed for MKV."
             )
         return SYSTEM_ENCODERS[video_codec]

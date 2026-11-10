@@ -267,13 +267,15 @@ async fn download_bundle(
             completed += file.size_bytes;
             continue;
         }
-        download_video_file(
+        download_one(
             client,
             app,
             state,
             model_id,
-            file,
+            &file.download_url,
             &destination,
+            file.size_bytes,
+            &file.sha256,
             completed,
             total,
             cancellation,
@@ -282,34 +284,6 @@ async fn download_bundle(
         completed += file.size_bytes;
     }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn download_video_file(
-    client: &Client,
-    app: &AppHandle,
-    state: &Arc<AppState>,
-    model_id: &str,
-    file: &ModelFile,
-    destination: &Path,
-    completed: u64,
-    total: u64,
-    cancellation: &AtomicBool,
-) -> AppResult<()> {
-    download_one(
-        client,
-        app,
-        state,
-        model_id,
-        &file.download_url,
-        destination,
-        file.size_bytes,
-        &file.sha256,
-        completed,
-        total,
-        cancellation,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]

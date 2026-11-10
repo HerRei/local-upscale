@@ -287,9 +287,8 @@ def collect_violations(root: Path = ROOT) -> list[str]:
         violations.append("preview packaging must use the worker-only PyInstaller specification")
 
     worker_spec = _read(root, "packaging/tauri_worker.spec")
-    for excluded_ui in ('"PySide6"',):
-        if excluded_ui not in worker_spec:
-            violations.append(f"worker package must continue to exclude {excluded_ui}")
+    if '"PySide6"' not in worker_spec:
+        violations.append('worker package must continue to exclude "PySide6"')
 
     paths = _read(root, "desktop/src-tauri/src/paths.rs")
     if 'shared_root.join("next")' not in paths:

@@ -325,7 +325,7 @@ class ImageJobRunner:
         rgb = tensor.permute(1, 2, 0).clamp(0, 1).mul(255).byte().numpy()
         mask = detect_faces(rgb, cancel_event=self.cancel_event)
         if not mask.has_faces:
-            self._log("No faces detected; the primary model completed unchanged.")
+            self._log("No faces detected; proceeding with the primary model.")
             return None
         self._log(
             f"Detected {len(mask.boxes)} face(s); applying fidelity-controlled face restoration."

@@ -18,11 +18,11 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from localsr.core.child_processes import native_environment, stop_process
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
 from localsr.core.image_io import open_photo
 from localsr.core.output_publish import publish_output, require_output_name
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
-from localsr.worker.edit_guard import native_environment, stop_process
 
 CATALOG_PATH = Path(__file__).with_name("edit_catalog.json")
 REQUIRED_FLAGS = ("--max-vram", "--mmap", "--model-args", "--backend", "--vae-tiling")
@@ -105,10 +105,8 @@ def validate_request(data: dict) -> dict:
 class EditProgress:
     """Turns the native runtime's log into a phase label and a moving percentage.
 
-    Measured with FLUX.2 klein 4B at 512 px on a 16 GB M1 Pro (127 s): the photo
-    and the instruction take about 20 s each without a counter, the four
-    sampling steps 35 s, and the tiled decode 48 s in six parts. Phases without a
-    counter creep forward with time so the bar never stands still.
+    Phase weights allocate progress to loading, sampling and decoding. Phases
+    without a counter creep forward with time so the bar never stands still.
     """
 
     PHASES = (

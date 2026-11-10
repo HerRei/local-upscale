@@ -48,6 +48,15 @@ def _introduced_periodic_signal(output: torch.Tensor, source: torch.Tensor) -> t
     return (phases(output) - phases(source)).amax()
 
 
+def _clear_device_cache(device: torch.device) -> None:
+    if device.type == "mps":
+        torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "xpu":
+        torch.xpu.empty_cache()
+
+
 def _resolve_torch_device(device_str: str) -> torch.device:
     if device_str.startswith("directml:"):
         try:
@@ -847,12 +856,7 @@ class InferenceEngine:
                     progress_callback(i + 1, total_tiles, current_tile_size)
 
                     if safe_memory:
-                        if device.type == "mps":
-                            torch.mps.empty_cache()
-                        elif device.type == "cuda":
-                            torch.cuda.empty_cache()
-                        elif device.type == "xpu":
-                            torch.xpu.empty_cache()
+                        _clear_device_cache(device)
                         gc.collect()
 
                 return out_array
@@ -864,12 +868,7 @@ class InferenceEngine:
                     or "not enough memory" in err_str
                     or "allocate" in err_str
                 ):
-                    if device.type == "mps":
-                        torch.mps.empty_cache()
-                    elif device.type == "cuda":
-                        torch.cuda.empty_cache()
-                    elif device.type == "xpu":
-                        torch.xpu.empty_cache()
+                    _clear_device_cache(device)
                     gc.collect()
 
                     current_tile_size = current_tile_size // 2
@@ -980,12 +979,7 @@ class InferenceEngine:
                         progress_callback(i + 1, total_tiles, current_tile_size)
 
                         if safe_memory:
-                            if device.type == "mps":
-                                torch.mps.empty_cache()
-                            elif device.type == "cuda":
-                                torch.cuda.empty_cache()
-                            elif device.type == "xpu":
-                                torch.xpu.empty_cache()
+                            _clear_device_cache(device)
                             gc.collect()
 
                     return writer
@@ -997,12 +991,7 @@ class InferenceEngine:
                         or "not enough memory" in err_str
                         or "allocate" in err_str
                     ):
-                        if device.type == "mps":
-                            torch.mps.empty_cache()
-                        elif device.type == "cuda":
-                            torch.cuda.empty_cache()
-                        elif device.type == "xpu":
-                            torch.xpu.empty_cache()
+                        _clear_device_cache(device)
                         gc.collect()
 
                         current_tile_size = current_tile_size // 2

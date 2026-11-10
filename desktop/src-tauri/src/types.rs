@@ -52,9 +52,7 @@ pub struct CatalogModel {
     pub terms_acceptance_required: bool,
     pub engine_id: String,
     pub support_tier: String,
-    // Model-library fields (catalog schema 2). Defaults keep an older
-    // manifest loadable; `support_tier` stays the validation axis while
-    // `rights_status` says what the checkpoint's terms allow.
+    // `support_tier` controls validation; `rights_status` describes checkpoint terms.
     #[serde(default)]
     pub rights_status: String,
     #[serde(default)]
@@ -255,7 +253,7 @@ pub struct Recipe {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
-    #[serde(default = "default_low_memory")]
+    #[serde(default = "default_true")]
     pub video_low_memory: bool,
     #[serde(default)]
     pub video_crf: Option<u32>,
@@ -332,7 +330,7 @@ pub struct UiSettings {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
-    #[serde(default = "default_low_memory")]
+    #[serde(default = "default_true")]
     pub video_low_memory: bool,
     pub video_crf: u32,
     // Optional frame interpolation: off, x2, x4, fps60 or fps120, before or after the upscale.
@@ -341,13 +339,13 @@ pub struct UiSettings {
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
     // Apple silicon: run supported models through Core ML on the Neural Engine.
-    #[serde(default = "default_neural_engine")]
+    #[serde(default = "default_true")]
     pub neural_engine: bool,
     // Direct builds send version, platform and channel after an update check.
-    #[serde(default = "default_anonymous_update_count")]
+    #[serde(default = "default_true")]
     pub anonymous_update_count: bool,
     // Direct builds look for an update once at launch, silently.
-    #[serde(default = "default_check_updates_at_launch")]
+    #[serde(default = "default_true")]
     pub check_updates_at_launch: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
@@ -372,11 +370,7 @@ pub struct UiSettings {
     pub edit_seed: u32,
 }
 
-fn default_anonymous_update_count() -> bool {
-    true
-}
-
-fn default_check_updates_at_launch() -> bool {
+fn default_true() -> bool {
     true
 }
 
@@ -390,14 +384,6 @@ fn default_edit_steps() -> u32 {
 
 fn default_edit_seed() -> u32 {
     42
-}
-
-fn default_low_memory() -> bool {
-    true
-}
-
-fn default_neural_engine() -> bool {
-    true
 }
 
 fn default_hdr_mode() -> String {
@@ -770,10 +756,10 @@ pub struct StartBatchInput {
     pub video_hdr_mode: String,
     #[serde(default)]
     pub video_target_resolution: u32,
-    #[serde(default = "default_low_memory")]
+    #[serde(default = "default_true")]
     pub video_low_memory: bool,
     pub video_crf: u32,
-    #[serde(default = "default_neural_engine")]
+    #[serde(default = "default_true")]
     pub neural_engine: bool,
     pub enable_face_model: bool,
     pub face_fidelity: u32,

@@ -13,6 +13,7 @@ import atexit
 import os
 import signal
 import subprocess
+import sys
 import threading
 import weakref
 
@@ -68,3 +69,25 @@ def stop_children_on_termination() -> None:
 
         signal.signal(signal.SIGTERM, handler)
         signal.signal(signal.SIGHUP, handler)
+
+
+def native_environment() -> dict:
+    environment = os.environ.copy()
+    if getattr(sys, "frozen", False):
+        for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+            original = environment.get(key + "_ORIG", "")
+            if original:
+                environment[key] = original
+            else:
+                environment.pop(key, None)
+    return environment
+
+
+def stop_process(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
