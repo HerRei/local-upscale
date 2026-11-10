@@ -54,10 +54,40 @@ function hostScript(scenario: Scenario): void {
     );
 
   type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+  const photo = (n: number): Json => ({
+    id: `photo-${n}`,
+    path: `/fixture/alpine-lake-${n}.jpg`,
+    name: `Alpine lake ${n}.jpg`,
+    kind: 'image',
+    width: 1600,
+    height: 1067,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: picture(190 + n * 25),
+    probe_status: 'ready',
+    error: '',
+    selected: n === 1,
+  });
   let snapshot: Json | null = null;
   let compareGeneration = 0;
   const calls: { command: string; args: unknown }[] = [];
-  win.__fakeHost = { calls };
+  // Tests make the host refuse a command (failures), answer one with a fixed value
+  // (answers), or deliver an event the way Tauri does (emit).
+  const failures: Record<string, string> = {};
+  const answers: Record<string, unknown> = {};
+  const listeners: Record<string, number[]> = {};
+  win.__fakeHost = {
+    calls,
+    failures,
+    answers,
+    emit: (event: string, payload: unknown) => {
+      for (const id of listeners[event] ?? []) {
+        (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload });
+      }
+    },
+  };
 
   async function build(): Promise<Json> {
     const demo = (await import(
@@ -105,21 +135,6 @@ function hostScript(scenario: Scenario): void {
       if (!model) throw new Error(`Fixture model ${id} is not in the catalog`);
       model.installed = true;
     }
-    const photo = (n: number): Json => ({
-      id: `photo-${n}`,
-      path: `/fixture/alpine-lake-${n}.jpg`,
-      name: `Alpine lake ${n}.jpg`,
-      kind: 'image',
-      width: 1600,
-      height: 1067,
-      frame_count: 1,
-      fps: 0,
-      duration_seconds: 0,
-      preview_data_url: picture(190 + n * 25),
-      probe_status: 'ready',
-      error: '',
-      selected: n === 1,
-    });
     s.media = Array.from({ length: scenario.photos ?? 0 }, (_, i) => photo(i + 1));
     if (scenario.video) {
       s.media.push({
@@ -219,6 +234,20 @@ function hostScript(scenario: Scenario): void {
           slots: compareSlots(args.picks),
         };
         return null;
+      case 'add_media': {
+        const known = new Set(snapshot.media.map((media: Json) => media.path));
+        let next = snapshot.media.length;
+        for (const path of args.paths as string[]) {
+          if (known.has(path)) continue;
+          const media = photo(++next);
+          Object.assign(media, { path, name: path.split('/').pop(), selected: next === 1 });
+          snapshot.media.push(media);
+        }
+        return null;
+      }
+      case 'remove_media':
+        snapshot.media = snapshot.media.filter((media: Json) => media.id !== args.id);
+        return null;
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;
@@ -245,6 +274,7 @@ function hostScript(scenario: Scenario): void {
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';
       case 'plugin:event|listen':
+        (listeners[args.event] ??= []).push(args.handler);
         return Math.floor(Math.random() * 1e9);
       case 'plugin:path|join':
         return (args.paths as string[]).join('/');
@@ -270,6 +300,8 @@ function hostScript(scenario: Scenario): void {
     convertFileSrc: (path: string) => path,
     invoke: async (command: string, args: Json = {}) => {
       calls.push({ command, args: structuredClone(args) });
+      if (command in failures) throw failures[command];
+      if (command in answers) return answers[command];
       return handle(command, args);
     },
   };
@@ -286,3 +318,40 @@ export async function hostCalls(page: Page, command: string): Promise<HostCall[]
   );
   return calls.filter((call) => call.command === command);
 }
+
+type FakeHostControls = {
+  failures: Record<string, string>;
+  answers: Record<string, unknown>;
+  emit: (event: string, payload: unknown) => void;
+};
+/** From now on the host refuses `command` with this message. */
+export async function refuse(page: Page, command: string, message: string): Promise<void> {
+  await page.evaluate(
+    ([name, text]) =>
+      ((window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.failures[name] = text),
+    [command, message],
+  );
+}
+
+/** From now on the host answers `command` with this value, whatever the arguments. */
+export async function answer(page: Page, command: string, value: unknown): Promise<void> {
+  await page.evaluate(
+    ([name, result]) =>
+      ((window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.answers[name as string] =
+        result),
+    [command, value] as const,
+  );
+}
+
+/** Deliver a Tauri event to the window's listeners. */
+export async function emit(page: Page, event: string, payload: unknown): Promise<void> {
+  await page.evaluate(
+    ([name, data]) =>
+      (window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.emit(name as string, data),
+    [event, payload] as const,
+  );
+}
+
+/** Files dropped on the window, as the operating system delivers them. */
+export const dropFiles = (page: Page, paths: string[]): Promise<void> =>
+  emit(page, 'tauri://drag-drop', { paths, position: { x: 5, y: 5 } });

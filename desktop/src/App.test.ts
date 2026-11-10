@@ -157,7 +157,11 @@ const api = vi.hoisted(() => ({
   listenForStateChange: vi.fn(async (_callback: () => void) => () => undefined),
   listenForNativeMenu: vi.fn(async (_handler: (action: string) => void) => () => undefined),
   listenForLaunchIntent: vi.fn(async () => () => undefined),
-  listenForFileDrops: vi.fn(async () => () => undefined),
+  listenForFileDrops: vi.fn(
+    async (_handlers: { hover: (active: boolean) => void; drop: (paths: string[]) => void }) =>
+      () =>
+        undefined,
+  ),
 }));
 
 vi.mock('./lib/api', () => api);
@@ -3885,5 +3889,27 @@ describe('Comparing saved results', () => {
       ui: expect.objectContaining({ content: expect.any(String) }),
     });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  });
+});
+
+/** Files dropped on the window, as the native drop listener reports them. */
+function dropFiles(paths: string[]): void {
+  api.listenForFileDrops.mock.calls[0][0].drop(paths);
+}
+
+describe('Dialogs and refused host calls', () => {
+  it('a dialog opened over the Clear question replaces it, buttons included', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    api.addMedia.mockRejectedValueOnce('The file type is not supported.');
+    dropFiles(['/x/bad.xyz']);
+    await waitFor(() =>
+      expect(screen.getByRole('dialog').textContent).toContain('Could not add dropped files'),
+    );
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.queryByRole('button', { name: 'Clear' })).toBeNull();
+    expect(dialog.getByRole('button', { name: 'OK' })).toBeTruthy();
+    expect(api.clearMedia).not.toHaveBeenCalled();
   });
 });

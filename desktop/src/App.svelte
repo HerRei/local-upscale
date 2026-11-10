@@ -2539,6 +2539,8 @@
     modalTitle = title;
     modalMessage = message;
     modalKind = kind;
+    // A new dialog replaces a question that was open, answers included.
+    modalConfirm = null;
   }
 
   function closeModal(): void {
