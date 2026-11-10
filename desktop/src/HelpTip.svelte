@@ -44,7 +44,11 @@
   on:blur={() => (open = false)}
   on:click={show}
   on:keydown={(event) => {
-    if (event.key === 'Escape') open = false;
+    // An open tip takes the Escape; a pane that closes on Escape then stays.
+    if (event.key === 'Escape' && open) {
+      open = false;
+      event.preventDefault();
+    }
   }}>?</button
 ><span bind:this={tip} class="help-tip-text" class:above role="tooltip" {id} hidden={!open}
   >{text}</span

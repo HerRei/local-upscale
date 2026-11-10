@@ -182,6 +182,28 @@ fn a_host_from_another_release_ignores_the_engine_an_update_left_active() {
 }
 
 #[test]
+fn a_host_without_an_engine_id_runs_the_engine_it_ships_before_an_installed_one() {
+    let shipped = Some(PathBuf::from("/app/engine/localsr-worker"));
+    let installed = Some(PathBuf::from("/data/engines/old/engine/localsr-worker"));
+    assert_eq!(
+        choose_engine("", shipped.clone(), installed.clone()),
+        shipped
+    );
+    assert_eq!(choose_engine("", None, installed.clone()), installed);
+    assert_eq!(choose_engine("", shipped.clone(), None), shipped);
+    assert_eq!(choose_engine("", None, None), None);
+    // A host built for an engine id keeps running the installed engine of that id.
+    assert_eq!(
+        choose_engine("macos-arm64-mps-new", shipped.clone(), installed.clone()),
+        installed
+    );
+    assert_eq!(
+        choose_engine("macos-arm64-mps-new", shipped.clone(), None),
+        shipped
+    );
+}
+
+#[test]
 fn usage_ping_carries_only_valid_version_target_and_channel() {
     let url = super::usage_ping_url(
         "https://stats.example/ping/update-check?old=1",

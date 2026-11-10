@@ -67,18 +67,35 @@ test.describe('Compare', () => {
       .click();
   }
 
-  test('without two picks the tab shows its empty state', async ({ page }) => {
-    await openApp(page, withOutputs);
-    await mainTabs(page).getByRole('tab', { name: 'Compare' }).click();
-    await expect(page.getByRole('heading', { name: 'Pick two outputs' })).toBeVisible();
+  test('picking never opens Compare, and with fewer than two picks there is nothing to open', async ({
+    page,
+  }) => {
+    await openOutputs(page);
+    await expect(mainTabs(page)).toHaveCount(0);
+    await tick(page, span).check();
+    await expect(slots(page)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Compare these/ })).toHaveCount(0);
+    await tick(page, hat).check();
+    await expect(page.getByText('2 of 4 chosen')).toBeVisible();
+    // Two picks offer the button, and the centre stays on the preview with no tabs.
+    await expect(page.getByRole('button', { name: 'Compare these 2' })).toBeVisible();
+    await expect(mainTabs(page)).toHaveCount(0);
     await expect(page.getByRole('slider')).toHaveCount(0);
 
-    await mediaTabs(page)
-      .getByRole('tab', { name: /^Outputs/ })
-      .click();
-    await tick(page, span).check();
-    await expect(slots(page)).toHaveCount(1);
-    await expect(page.getByRole('heading', { name: 'Pick two outputs' })).toBeVisible();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    await expect(mainTabs(page).getByRole('tab', { name: 'Compare' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Compare these/ })).toHaveCount(0);
+    await mainTabs(page).getByRole('tab', { name: 'Preview' }).click();
+    await expect(mainTabs(page)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Compare these 2' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    await page.keyboard.press('Escape');
+    await expect(mainTabs(page)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    await tick(page, hat).uncheck();
+    await expect(mainTabs(page)).toHaveCount(0);
+    await expect(page.getByText('1 of 4 chosen')).toBeVisible();
   });
 
   test('two picks use the slider, in slot order, and can be swapped', async ({ page }) => {
@@ -140,7 +157,7 @@ test.describe('Compare', () => {
     await expect(slots(page)).toHaveCount(4);
   });
 
-  test('removing a slot drops back to the empty state below two', async ({ page }) => {
+  test('removing a slot closes Compare below two', async ({ page }) => {
     await openOutputs(page);
     for (const label of [original, span, hat]) await tick(page, label).check();
     await page.getByRole('button', { name: 'Compare these 3' }).click();
@@ -148,14 +165,12 @@ test.describe('Compare', () => {
     await page.getByRole('button', { name: 'Remove SPAN ×4 from the compare' }).click();
     await expect(slots(page)).toHaveCount(2);
     await page.getByRole('button', { name: 'Remove HAT-S ×4 from the compare' }).click();
-    await expect(page.getByRole('heading', { name: 'Pick two outputs' })).toBeVisible();
-
-    await page.getByRole('button', { name: 'Remove Original from the compare' }).click();
-    await expect(mainTabs(page).getByRole('tab', { name: 'Compare', exact: true })).toBeVisible();
+    await expect(mainTabs(page)).toHaveCount(0);
+    await expect(slots(page)).toHaveCount(0);
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
-    await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
+    await expect(page.getByText('1 of 4 chosen')).toBeVisible();
   });
 });
 

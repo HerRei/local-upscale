@@ -83,11 +83,6 @@ pub fn run() -> i32 {
 }
 
 fn packaged_worker_path() -> Result<PathBuf, String> {
-    if let Ok(paths) = crate::paths::AppPaths::discover() {
-        if let Some(path) = crate::updates::active_engine(&paths) {
-            return Ok(path);
-        }
-    }
     let executable = env::current_exe()
         .map_err(|error| format!("could not locate the installed desktop host: {error}"))?;
     let worker_name = if cfg!(windows) {
@@ -100,12 +95,15 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
     // names. Use the same compiled configuration as Tauri's resource resolver.
     let context = crate::compiled_context();
     let product_name = &context.package_info().name;
-    worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
+    let bundled = worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
         .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            "the installed desktop host is missing its bundled inference engine".to_owned()
-        })
+        .find(|path| path.is_file());
+    let installed = crate::paths::AppPaths::discover()
+        .ok()
+        .and_then(|paths| crate::updates::active_engine(&paths));
+    crate::updates::choose_host_engine(bundled, installed).ok_or_else(|| {
+        "the installed desktop host is missing its bundled inference engine".to_owned()
+    })
 }
 
 fn trusted_appimage_dir(executable: &Path) -> Option<PathBuf> {

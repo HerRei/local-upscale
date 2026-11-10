@@ -1075,8 +1075,15 @@ pub fn request_compare(
         let mut runtime = lock(&state.runtime)?;
         crate::compare::plan(&database, &mut runtime.compare, &picks)?
     };
+    let shortfall = lock(&state.engine)?
+        .as_ref()
+        .and_then(|engine| crate::compare::engine_shortfall(&engine.features));
     for request in requests {
-        if let Err(error) = worker::send(&state, &request) {
+        let sent = match shortfall {
+            Some(reason) => Err(AppError::Worker(reason.into())),
+            None => worker::send(&state, &request),
+        };
+        if let Err(error) = sent {
             let mut failure = request["data"].clone();
             failure["error_message"] = json!(error.to_string());
             let database = lock(&state.database)?;

@@ -204,6 +204,8 @@
     setComparePicks(
       comparePicks.filter((pick) => snapshot.media.some((media) => media.id === pick.media_id)),
     );
+  // Compare is open only while there is something to compare.
+  $: if (mainTab === 'compare' && comparePicks.length < 2) mainTab = 'preview';
   function setComparePicks(picks: ComparePick[]): void {
     if (picks.length >= 3 && comparePicks.length < 3) compareLayout = 'boxes';
     comparePicks = picks;
@@ -2599,6 +2601,7 @@
       togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
       clearPicks={() => setComparePicks([])}
       openCompare={() => {
+        if (comparePicks.length < 2) return;
         mainTab = 'compare';
         page = 'preview';
       }}
@@ -2708,9 +2711,7 @@
           compactHidden={page !== 'preview'}
           addFiles={() => void addFiles()}
           dropping={filesDragging}
-        >
-          <svelte:fragment slot="tabs">{@render paneTabs()}</svelte:fragment>
-        </PreviewPane>
+        />
       {/if}
     </div>
 

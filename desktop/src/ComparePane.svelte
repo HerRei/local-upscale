@@ -322,7 +322,7 @@
   }
 
   function windowKey(event: KeyboardEvent): void {
-    if (asTab || event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[aria-modal="true"], [role="listbox"]')) return;
     close();

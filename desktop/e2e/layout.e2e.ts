@@ -19,18 +19,18 @@ const box = async (locator: Locator) => (await locator.boundingBox())!;
 async function centreHeader(page: Page) {
   const header = page.locator('.preview-header');
   const tabs = header.getByRole('tablist', { name: 'Main pane' });
-  return { header, tabs, preview: tabs.getByRole('tab', { name: 'Preview' }) };
+  return { header, tabs, name: header.locator('.header-file') };
 }
 
 test.describe('pane headers', () => {
   test('share one height and one text line in the wide layout', async ({ page }, info) => {
     test.skip(info.project.use.viewport!.width < 1280, 'only the wide layout shows all three');
     await openApp(page, ready);
-    const { header, preview } = await centreHeader(page);
+    const { header, name } = await centreHeader(page);
     const enhance = page.getByRole('heading', { name: 'Enhance' });
     const enhanceRow = page.locator('.enhance-pane > .pane-heading');
     expect((await box(header)).height).toBe((await box(enhanceRow)).height);
-    expect(Math.abs((await textBottom(preview)) - (await textBottom(enhance)))).toBeLessThan(1);
+    expect(Math.abs((await textBottom(name)) - (await textBottom(enhance)))).toBeLessThan(1);
     // On a Mac the Media tabs get a row below the first one (tested apart).
     if (await page.evaluate(() => /Mac/.test(navigator.platform))) return;
     const inputs = page
@@ -99,12 +99,27 @@ test.describe('pane headers', () => {
     expect(add.y + add.height).toBeLessThanOrEqual(row.y + 52);
   });
 
-  test('keep the centre tabs, name and view options on one row', async ({ page }) => {
+  test('keep the centre name and view options on one row, with no tabs and no gap before the name', async ({
+    page,
+  }) => {
     await openApp(page, withOutputs);
-    const { header, tabs } = await centreHeader(page);
+    const { header, tabs, name } = await centreHeader(page);
+    await expect(tabs).toHaveCount(0);
+    const row = await box(header);
+    expect(row.height).toBe(52);
+    // The name starts at the header's own left padding.
+    expect(Math.round((await box(name)).x - row.x)).toBe(8);
+
+    await page
+      .getByRole('tablist', { name: 'Media' })
+      .getByRole('tab', { name: /^Outputs/ })
+      .click();
+    for (const label of ['Original', 'HAT-S ×4'])
+      await page.getByRole('checkbox', { name: `${label}, Alpine lake 1.jpg` }).check();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    const views = header.getByRole('radiogroup', { name: 'Compare layout' });
+    await expect(views).toBeVisible();
     const inRow = async (parts: Locator[]) => {
-      const row = await box(header);
-      expect(row.height).toBe(52);
       let left = row.x;
       for (const part of parts) {
         const { x, y, height } = await box(part);
@@ -114,17 +129,6 @@ test.describe('pane headers', () => {
         left = x;
       }
     };
-    await inRow([tabs, header.locator('.file-name')]);
-
-    await page
-      .getByRole('tablist', { name: 'Media' })
-      .getByRole('tab', { name: /^Outputs/ })
-      .click();
-    for (const label of ['Original', 'HAT-S ×4'])
-      await page.getByRole('checkbox', { name: `${label}, Alpine lake 1.jpg` }).check();
-    await tabs.getByRole('tab', { name: 'Compare' }).click();
-    const views = header.getByRole('radiogroup', { name: 'Compare layout' });
-    await expect(views).toBeVisible();
     await inRow([tabs, header.locator('.compare-names'), views]);
   });
 });

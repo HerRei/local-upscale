@@ -22,10 +22,7 @@ test.describe('keyboard navigation', () => {
     await openApp(page, withOutputs);
   });
 
-  for (const [name, first, second] of [
-    ['Media', 'Inputs', 'Outputs'],
-    ['Main pane', 'Preview', 'Compare'],
-  ]) {
+  for (const [name, first, second] of [['Media', 'Inputs', 'Outputs']]) {
     test(`${name} tabs follow the arrow keys, Home and End`, async ({ page }) => {
       const list = tabsNamed(page, name);
       await list.getByRole('tab', { name: first }).focus();
@@ -58,9 +55,22 @@ test.describe('keyboard navigation', () => {
     await tabsNamed(page, 'Media').getByRole('tab', { name: 'Inputs' }).focus();
     await page.keyboard.press('ArrowRight');
     await expect(page.getByRole('group', { name: 'Outputs' })).toBeVisible();
-    await tabsNamed(page, 'Main pane').getByRole('tab', { name: 'Preview' }).focus();
+  });
+
+  test('the Main pane tabs exist only in Compare, where an arrow key returns to the preview', async ({
+    page,
+  }) => {
+    await expect(tabsNamed(page, 'Main pane')).toHaveCount(0);
+    await tabsNamed(page, 'Media').getByRole('tab', { name: 'Inputs' }).focus();
     await page.keyboard.press('ArrowRight');
-    await expect(page.getByRole('heading', { name: 'Pick two outputs' })).toBeVisible();
+    for (const label of ['Original, Alpine lake 1.jpg', 'HAT-S ×4, Alpine lake 1.jpg'])
+      await page.getByRole('checkbox', { name: label }).check();
+    await expect(tabsNamed(page, 'Main pane')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    const list = tabsNamed(page, 'Main pane');
+    await list.getByRole('tab', { name: 'Compare' }).focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(list).toHaveCount(0);
   });
 
   test('Tab reaches the checkboxes and buttons of Outputs with a visible focus ring', async ({
