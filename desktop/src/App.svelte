@@ -2302,6 +2302,12 @@
   }
 
   async function handleNativeMenuAction(action: string): Promise<void> {
+    // A dialog takes the input until it is answered; only Cancel, which ends work, still acts.
+    if (
+      (modalTitle || libraryOpen || ffmpegNotice || $updateDialogOpen) &&
+      action !== 'file.cancel'
+    )
+      return;
     try {
       if (action.startsWith('preset.recipe.')) {
         const id = action.slice('preset.recipe.'.length);
@@ -2543,6 +2549,15 @@
     modalConfirm = null;
   }
 
+  /** Runs a host call the user asked for; a refusal opens the dialog the drop and menu paths use. */
+  async function attempt(title: string, run: () => Promise<unknown>): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      showModal(title, String(error));
+    }
+  }
+
   function closeModal(): void {
     modalTitle = '';
     modalMessage = '';
@@ -2562,10 +2577,11 @@
     );
     modalConfirm = {
       label: 'Clear',
-      run: async () => {
-        await api.clearMedia();
-        await refresh();
-      },
+      run: () =>
+        attempt('Could not clear the list', async () => {
+          await api.clearMedia();
+          await refresh();
+        }),
     };
   }
 

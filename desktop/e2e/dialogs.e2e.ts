@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { dropFiles, hostCalls, refuse } from './fake-host';
+import { dropFiles, emit, hostCalls, refuse } from './fake-host';
 import { withOutputs } from './fixtures';
 
 const dialogOf = (page: Page) => page.getByRole('dialog');
@@ -20,5 +20,27 @@ test.describe('a dialog opened over the Clear question', () => {
     await expect(clearButton(dialog)).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: 'OK' })).toBeVisible();
     expect(await hostCalls(page, 'clear_media')).toHaveLength(0);
+  });
+});
+
+test.describe('the Clear question', () => {
+  test('is not bypassed by a menu shortcut: nothing starts behind it', async ({ page }) => {
+    await openApp(page, { ...withOutputs, worker: 'ready' });
+    await showPane(page, 'media');
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(dialogOf(page)).toContainText('Clear all 2 items');
+    await emit(page, 'native-menu-action', 'file.start');
+    await page.waitForTimeout(300);
+    expect(await hostCalls(page, 'start_jobs')).toHaveLength(0);
+  });
+
+  test('tells the user when the host refuses it after the answer', async ({ page }) => {
+    await openApp(page, withOutputs);
+    await showPane(page, 'media');
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await refuse(page, 'clear_media', 'wait for the current queue to finish before changing media');
+    await clearButton(dialogOf(page)).click();
+    await expect(dialogOf(page)).toContainText('Could not clear the list');
+    await expect(dialogOf(page)).toContainText('wait for the current queue');
   });
 });

@@ -3912,4 +3912,28 @@ describe('Dialogs and refused host calls', () => {
     expect(dialog.getByRole('button', { name: 'OK' })).toBeTruthy();
     expect(api.clearMedia).not.toHaveBeenCalled();
   });
+
+  it('ignores menu actions while a question is open, so a job cannot start behind it', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await chooseMenuItem('file.start');
+    await chooseMenuItem('file.add-media');
+    expect(api.startJobs).not.toHaveBeenCalled();
+    expect(api.chooseMediaFiles).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    // Cancel is never held back: it ends work instead of starting any.
+    await chooseMenuItem('file.cancel');
+    expect(api.cancelJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the user when the host refuses a confirmed Clear', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    api.clearMedia.mockRejectedValueOnce(
+      'wait for the current queue to finish or cancel it before changing media',
+    );
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('queue'));
+    expect(screen.getByRole('dialog').textContent).toContain('Could not clear the list');
+  });
 });
