@@ -3962,6 +3962,28 @@ describe('Dialogs and refused host calls', () => {
     expect(api.clearMedia).not.toHaveBeenCalled();
   });
 
+  it('keeps the count in the Clear question true while the list changes', async () => {
+    const user = await mountWith(readySnapshot([image('first', true), image('second')]));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items');
+    const more = readySnapshot([
+      image('first', true),
+      image('second'),
+      image('third'),
+      image('fourth'),
+      image('fifth'),
+    ]);
+    api.refreshSnapshot.mockResolvedValue(structuredClone(more));
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(screen.getByRole('dialog').textContent).toContain('Clear all 5 items'),
+    );
+    // Nothing left to clear: the question goes away.
+    api.refreshSnapshot.mockResolvedValue(structuredClone(readySnapshot([])));
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
   it('ignores menu actions while a question is open, so a job cannot start behind it', async () => {
     const user = await mountWith(readySnapshot([image('first', true), image('second')]));
     await user.click(screen.getByRole('button', { name: 'Clear' }));

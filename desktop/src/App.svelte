@@ -238,7 +238,17 @@
   let modalTitle = '';
   let modalMessage = '';
   /** Set for a yes/no question: the modal then offers Cancel and the destructive action. */
-  let modalConfirm: { label: string; run: () => Promise<void> } | null = null;
+  let modalConfirm: {
+    label: string;
+    run: () => Promise<void>;
+    /** Words the question for the list as it is now. */
+    titleFor?: (count: number) => string;
+  } | null = null;
+  // The Clear question counts the list as it is when answered, not as it was when asked.
+  $: if (modalConfirm?.titleFor) {
+    if (snapshot.media.length) modalTitle = modalConfirm.titleFor(snapshot.media.length);
+    else closeModal();
+  }
   // The FFmpeg notice: once per batch of videos LocalSR cannot decode, and
   // before an H.264/HEVC export starts without a selected FFmpeg.
   let ffmpegNotice: { context: 'open' | 'export'; paths: string[] } | null = null;
@@ -2606,12 +2616,14 @@
   function askClearMedia(): void {
     const count = snapshot.media.length;
     if (count === 0 || snapshot.runtime.active_job_id) return;
+    const titleFor = (n: number) => `Clear all ${n} ${n === 1 ? 'item' : 'items'} from the list?`;
     showModal(
-      `Clear all ${count} ${count === 1 ? 'item' : 'items'} from the list?`,
+      titleFor(count),
       'This removes them from the Inputs and Outputs lists and clears the current preview. The files on disk, including saved outputs, are not deleted.',
     );
     modalConfirm = {
       label: 'Clear',
+      titleFor,
       run: () =>
         attempt('Could not clear the list', async () => {
           await api.clearMedia();

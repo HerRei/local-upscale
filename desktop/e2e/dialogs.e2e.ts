@@ -43,4 +43,13 @@ test.describe('the Clear question', () => {
     await expect(dialogOf(page)).toContainText('Could not clear the list');
     await expect(dialogOf(page)).toContainText('wait for the current queue');
   });
+
+  test('counts the list as it is when answered', async ({ page }) => {
+    await openApp(page, withOutputs);
+    await showPane(page, 'media');
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(dialogOf(page)).toContainText('Clear all 2 items');
+    await dropFiles(page, ['/fixture/a.jpg', '/fixture/b.jpg', '/fixture/c.jpg']);
+    await expect(dialogOf(page)).toContainText('Clear all 5 items');
+  });
 });
