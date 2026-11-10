@@ -965,6 +965,12 @@ fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<St
             "{kind} for job {shown:?}, which the host has not dispatched or has already ended"
         )));
     }
+    if lock(&state.database)?.job_has_ended(&id)? {
+        let shown: String = id.chars().take(64).collect();
+        return Ok(Some(format!(
+            "{kind} for job {shown:?}, which already ended"
+        )));
+    }
     if matches!(kind, "job_completed" | "video_job_completed") {
         let reported = string(&envelope.data, "output_path");
         let requested = lock(&state.database)?.requested_output(&id)?;
@@ -3059,6 +3065,69 @@ mod tests {
         let runtime = lock(&state.runtime).unwrap();
         assert!(runtime.last_output_path.is_empty());
         assert!(runtime.active_job_id.is_empty());
+    }
+
+    #[test]
+    fn a_finished_job_ignores_every_later_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        let own = directory.path().join("out").join("a.png");
+        let done = envelope(
+            "job_completed",
+            json!({"job_id": "a", "output_path": own.to_string_lossy()}),
+        );
+        assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+        assert!(accept_envelope(&state, &done).unwrap());
+        for (kind, data) in [
+            ("progress", json!({"job_id": "a", "percentage": 10.0})),
+            ("job_started", json!({"job_id": "a"})),
+            (
+                "job_failed",
+                json!({"job_id": "a", "error_message": "late"}),
+            ),
+            ("job_cancelled", json!({"job_id": "a"})),
+        ] {
+            assert!(
+                !accept_envelope(&state, &envelope(kind, data)).unwrap(),
+                "{kind}"
+            );
+        }
+        assert!(!accept_envelope(&state, &done).unwrap());
+        assert_eq!(status(&state, "a"), "completed");
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        let job = jobs.iter().find(|job| job.id == "a").unwrap();
+        assert_eq!(job.output_path, own.to_string_lossy());
+    }
+
+    #[test]
+    fn a_job_that_ended_in_the_queue_keeps_that_state_when_the_engine_reports_later() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        // The user cancelled the third photo before the engine reached it.
+        lock(&state.database)
+            .unwrap()
+            .finish_job("c", "cancelled", "", "Cancelled by the user.")
+            .unwrap();
+        let own = directory.path().join("out").join("c.png");
+        for (kind, data) in [
+            ("job_started", json!({"job_id": "c"})),
+            ("progress", json!({"job_id": "c", "percentage": 50.0})),
+            (
+                "job_completed",
+                json!({"job_id": "c", "output_path": own.to_string_lossy()}),
+            ),
+            (
+                "job_failed",
+                json!({"job_id": "c", "error_message": "late"}),
+            ),
+        ] {
+            assert!(
+                !accept_envelope(&state, &envelope(kind, data)).unwrap(),
+                "{kind}"
+            );
+        }
+        assert_eq!(status(&state, "c"), "cancelled");
+        assert!(lock(&state.runtime).unwrap().last_output_path.is_empty());
     }
 
     #[test]

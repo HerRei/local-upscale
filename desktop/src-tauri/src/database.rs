@@ -32,6 +32,9 @@ pub struct Database {
     connection: Connection,
 }
 
+/// The final states of a job.
+const ENDED_STATES: [&str; 4] = ["completed", "failed", "cancelled", "interrupted"];
+
 /// How many set-aside copies of damaged queue files are kept; older ones are removed.
 const KEPT_DAMAGED_FILES: usize = 3;
 
@@ -716,9 +719,24 @@ impl Database {
         Ok(())
     }
 
+    /// Whether the job has reached a final state, after which nothing may change it.
+    pub fn job_has_ended(&self, id: &str) -> AppResult<bool> {
+        let status: Option<String> = self
+            .connection
+            .query_row("SELECT status FROM jobs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(status.is_some_and(|status| ENDED_STATES.contains(&status.as_str())))
+    }
+
+    /// A job that ended stays as it ended, and one that is being cancelled stays so
+    /// when a late start message arrives.
     pub fn set_job_status(&self, id: &str, status: &str) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE jobs SET status=?2, updated_at=?3 WHERE id=?1",
+            "UPDATE jobs SET status=?2, updated_at=?3 WHERE id=?1
+             AND status NOT IN ('completed','failed','cancelled','interrupted')
+             AND NOT (status='cancelling' AND ?2 IN ('starting','running'))",
             params![id, status, now_millis()],
         )?;
         Ok(())
@@ -726,7 +744,9 @@ impl Database {
 
     pub fn update_job_progress(&self, id: &str, progress: f64) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE jobs SET status='running', progress=?2, updated_at=?3 WHERE id=?1",
+            "UPDATE jobs SET status=CASE WHEN status='cancelling' THEN status ELSE 'running' END,
+             progress=?2, updated_at=?3 WHERE id=?1
+             AND status NOT IN ('completed','failed','cancelled','interrupted')",
             params![id, progress.clamp(0.0, 100.0), now_millis()],
         )?;
         Ok(())
@@ -735,7 +755,8 @@ impl Database {
     pub fn finish_job(&self, id: &str, status: &str, output: &str, error: &str) -> AppResult<()> {
         let progress = if status == "completed" { 100.0 } else { 0.0 };
         self.connection.execute(
-            "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1",
+            "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1
+             AND status NOT IN ('completed','failed','cancelled','interrupted')",
             params![id, status, progress, output, error, now_millis()],
         )?;
         Ok(())
@@ -876,6 +897,56 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_job_that_has_ended_cannot_be_changed_by_later_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        for (id, status) in [
+            ("done", "completed"),
+            ("broken", "failed"),
+            ("stopped", "cancelled"),
+        ] {
+            db.insert_job(id, "m", "{}").unwrap();
+            db.finish_job(id, status, "/out/first.png", "first")
+                .unwrap();
+            db.set_job_status(id, "running").unwrap();
+            db.update_job_progress(id, 40.0).unwrap();
+            db.finish_job(id, "failed", "/out/second.png", "second")
+                .unwrap();
+            let job = db
+                .list_jobs()
+                .unwrap()
+                .into_iter()
+                .find(|job| job.id == id)
+                .unwrap();
+            assert_eq!(job.status, status);
+            assert_eq!(job.output_path, "/out/first.png");
+            assert_eq!(job.error, "first");
+        }
+        assert!(db.job_has_ended("done").unwrap());
+        db.insert_job("open", "m", "{}").unwrap();
+        assert!(!db.job_has_ended("open").unwrap());
+        assert!(!db.job_has_ended("unknown").unwrap());
+    }
+
+    #[test]
+    fn a_job_that_is_being_cancelled_stays_so_when_a_late_start_or_progress_arrives() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        db.insert_job("j", "m", "{}").unwrap();
+        db.set_job_status("j", "running").unwrap();
+        db.mark_cancelling("j").unwrap();
+        db.set_job_status("j", "running").unwrap();
+        db.update_job_progress("j", 30.0).unwrap();
+        let job = db.list_jobs().unwrap().remove(0);
+        assert_eq!(job.status, "cancelling");
+        db.finish_job("j", "cancelled", "", "Cancelled by the user.")
+            .unwrap();
+        assert_eq!(db.list_jobs().unwrap().remove(0).status, "cancelled");
+    }
 
     #[test]
     fn a_file_that_is_not_a_database_is_moved_aside_and_a_new_queue_made() {
