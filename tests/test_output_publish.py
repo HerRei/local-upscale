@@ -6,7 +6,7 @@ import errno
 import os
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 import pytest
@@ -462,22 +462,110 @@ def _longest_name(directory: Path, extension: str) -> str:
     try:
         (directory / name).touch()
     except OSError:
+        if sys.platform == "win32" and not _fits_windows(directory / name):
+            return name  # the callers expect the early refusal instead
         pytest.skip("this file system does not allow a name of that length")
     (directory / name).unlink()
     return name
 
 
+def _fits_windows(path: Path) -> bool:
+    try:
+        output_publish.require_output_path_fits(
+            os.path.abspath(path), "win32", output_publish.windows_path_limit()
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _refused_early_on_windows(path: Path) -> bool:
+    """On Windows a name whose full path is too long is refused before any work is done."""
+    if sys.platform != "win32" or _fits_windows(path):
+        return False
+    with pytest.raises(ValueError, match="shorter folder or file name"):
+        output_publish.require_output_name(path)
+    return True
+
+
 @pytest.mark.parametrize("shorter_by", [0, 1, 27, 60])
 def test_an_image_output_name_at_the_file_system_limit_is_written(tmp_path, shorter_by):
     name = _longest_name(tmp_path, "png")[shorter_by:]
+    if _refused_early_on_windows(tmp_path / name):
+        return
     _save_image(tmp_path / name)
     assert _names(tmp_path) == [name]
 
 
 def test_a_video_output_name_at_the_file_system_limit_is_written(tmp_path):
     name = _longest_name(tmp_path, "mp4")
+    if _refused_early_on_windows(tmp_path / name):
+        return
     encode_video(_frames(), str(tmp_path / name), fps=5.0, width=64, height=64)
     assert _names(tmp_path) == [name]
+
+
+FOLDER = "C:\\Users\\someone\\Pictures\\Upscaled"  # 31 characters
+
+
+def _windows_path(name_length: int) -> str:
+    return FOLDER + "\\" + "n" * (name_length - 4) + ".png"
+
+
+def test_a_windows_path_that_fits_is_accepted_and_one_unit_more_is_refused():
+    # 259 characters plus the terminating NUL is the most the classic limit allows.
+    fits = _windows_path(259 - len(FOLDER) - 1)
+    assert len(fits) == 259
+    output_publish.require_output_path_fits(fits, "win32", 260)
+    with pytest.raises(ValueError, match="allows 259 characters"):
+        output_publish.require_output_path_fits(_windows_path(260 - len(FOLDER)), "win32", 260)
+
+
+def test_the_temporary_name_beside_the_result_counts_against_the_windows_limit():
+    # The result's own path fits (250), but the hidden temporary in the same folder does not.
+    folder = "C:\\" + "f" * 230
+    path = folder + "\\" + "a.png"
+    output_publish.require_output_path_fits(path, "win32", 280)
+    with pytest.raises(ValueError, match="shorter folder or file name"):
+        output_publish.require_output_path_fits(path, "win32", 260)
+
+
+def test_the_early_windows_refusal_names_the_limit_and_the_remedy():
+    with pytest.raises(ValueError) as caught:
+        output_publish.require_output_path_fits(_windows_path(240), "win32", 260)
+    assert "259 characters" in str(caught.value)
+    assert "Choose a shorter folder or file name." in str(caught.value)
+
+
+def test_other_platforms_and_long_path_prefixes_are_not_limited_by_the_windows_rule():
+    long = _windows_path(240)
+    output_publish.require_output_path_fits(long, "linux", 260)
+    output_publish.require_output_path_fits("\\\\?\\" + long, "win32", 260)
+    output_publish.require_output_path_fits(long, "win32", output_publish.WINDOWS_LONG_PATH_LIMIT)
+
+
+def test_utf16_units_count_for_the_windows_path_limit():
+    folder = "C:\\" + "\U0001f600" * 70  # 140 units
+    with pytest.raises(ValueError):
+        output_publish.require_output_path_fits(folder + "\\" + "a" * 130 + ".png", "win32", 260)
+    output_publish.require_output_path_fits(folder + "\\" + "a" * 60 + ".png", "win32", 260)
+
+
+def test_require_output_name_applies_the_windows_path_rule_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(output_publish.sys, "platform", "win32")
+    monkeypatch.setattr(output_publish, "windows_path_limit", lambda: 260)
+    monkeypatch.setattr(output_publish.os.path, "abspath", lambda path: str(path))
+    monkeypatch.setattr(output_publish, "Path", PureWindowsPath)
+    monkeypatch.setattr(output_publish, "output_name_limit", lambda _directory: 255)
+    with pytest.raises(ValueError, match="shorter folder or file name"):
+        output_publish.require_output_name(_windows_path(240))
+    output_publish.require_output_name(_windows_path(100))
+
+
+def test_the_windows_path_limit_is_the_classic_one_when_long_paths_cannot_be_confirmed():
+    assert output_publish.windows_path_limit() in (260, output_publish.WINDOWS_LONG_PATH_LIMIT)
+    if sys.platform != "win32":
+        assert output_publish.windows_path_limit() == 260
 
 
 def test_a_temporary_name_is_short_and_does_not_contain_the_destination_name(tmp_path):

@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 import threading
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 class OutputExistsError(FileExistsError):
@@ -163,6 +163,55 @@ def output_name_limit(directory: str | os.PathLike) -> int:
         return DEFAULT_NAME_LIMIT
 
 
+# Windows counts the whole path, with its terminating NUL, against this unless long paths work.
+WINDOWS_PATH_LIMIT = 260
+WINDOWS_LONG_PATH_LIMIT = 32767
+# The longest hidden temporary name ``owned_temporary`` makes: ".localsr-" + phase + "-" + 8 + ".tmp".
+LONGEST_TEMPORARY_NAME = 40
+
+
+def windows_path_limit() -> int:
+    """The path length (with NUL) Windows accepts for this process.
+
+    The larger limit needs the registry switch and a long-path-aware process; if either
+    cannot be established, the classic 260 applies.
+    """
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\FileSystem"
+        ) as key:
+            enabled = winreg.QueryValueEx(key, "LongPathsEnabled")[0] == 1
+        if enabled and ctypes.windll.ntdll.RtlAreLongPathsEnabled():
+            return WINDOWS_LONG_PATH_LIMIT
+    except (ImportError, OSError, AttributeError):
+        pass
+    return WINDOWS_PATH_LIMIT
+
+
+def require_output_path_fits(path: str, platform: str, limit: int) -> None:
+    """Refuse a destination, or the temporary beside it, whose full path Windows cannot open.
+
+    ``limit`` counts UTF-16 units including the terminating NUL. Other platforms are
+    limited by the name only, which ``require_output_name`` checks.
+    """
+    if platform != "win32" or path.startswith("\\\\?\\"):
+        return
+    folder = str(PureWindowsPath(path).parent).rstrip("\\")
+    longest = max(
+        len(path.encode("utf-16-le")) // 2,
+        len(folder.encode("utf-16-le")) // 2 + 1 + LONGEST_TEMPORARY_NAME,
+    )
+    if longest + 1 > limit:
+        shown = path if len(path) <= 60 else path[:28] + "..." + path[-29:]
+        raise ValueError(
+            f'The output path "{shown}" is too long for Windows, which allows '
+            f"{limit - 1} characters for a full path (and the temporary file beside the "
+            "result needs room too). Choose a shorter folder or file name."
+        )
+
+
 def require_output_name(path: str | os.PathLike) -> None:
     """Refuse an output name the file system cannot hold, before any work is done."""
     name = Path(path).name
@@ -173,3 +222,5 @@ def require_output_name(path: str | os.PathLike) -> None:
             f'The output file name "{shown}" is {length} characters long, but this folder '
             f"allows at most {limit}. Shorten the name and try again."
         )
+    if sys.platform == "win32":
+        require_output_path_fits(os.path.abspath(path), sys.platform, windows_path_limit())
