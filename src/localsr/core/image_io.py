@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image, ImageCms, ImageOps
+from PIL import Image, ImageCms, ImageOps, TiffImagePlugin, UnidentifiedImageError
 
 from localsr.core.image_formats import is_raw_input, is_system_decoded
 from localsr.core.output_publish import publish_output
@@ -36,6 +36,40 @@ def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
     narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
     narrowed.info.update(image.info)
     return narrowed
+
+
+def _float_grey_to_16_bit(image: Image.Image) -> Image.Image:
+    """Take a 32-bit float grey image, whose pixels run from 0 to 1, to 16 bits.
+
+    Pillow's own conversion keeps float values as they are and clips them to 0..255, so
+    every pixel of a 0..1 image became black. Values above 1 (HDR, or floats that hold
+    0..255) have no certain meaning, so they are refused rather than guessed.
+    """
+    values = np.asarray(image, dtype=np.float32)
+    if not np.isfinite(values).all() or values.max() > 1.001:
+        raise ValueError(
+            "This floating-point image holds values above 1 or not-a-number values. "
+            "Only floating-point images whose values run from 0 to 1 are supported; "
+            "save an 8-bit or 16-bit copy first."
+        )
+    wide = Image.fromarray(np.rint(np.clip(values, 0.0, 1.0) * 65535.0).astype(np.uint16))
+    wide.info.update(image.info)
+    return wide
+
+
+def _is_float_tiff(path: str | Path) -> bool:
+    """Whether a file Pillow cannot identify is a TIFF with floating-point samples."""
+    try:
+        with open(path, "rb") as file:
+            header = file.read(8)
+            if header[:4] not in (b"II*\x00", b"MM\x00*"):
+                return False
+            directory = TiffImagePlugin.ImageFileDirectory_v2(header)
+            file.seek(directory.next)
+            directory.load(file)
+        return 3 in tuple(directory.get(339) or ())  # SampleFormat: IEEE floating point
+    except (OSError, SyntaxError, ValueError, TypeError, EOFError):
+        return False
 
 
 def _to_srgb(
@@ -200,6 +234,11 @@ class ImageManager:
             metadata_img = open_image(path)
         except (OSError, SyntaxError, ValueError) as error:
             if not is_raw:
+                if isinstance(error, UnidentifiedImageError) and _is_float_tiff(path):
+                    raise OSError(
+                        f"{Path(path).name} is a floating-point colour TIFF, which LocalSR cannot "
+                        "read. Save an 8-bit or 16-bit copy and add that instead."
+                    ) from error
                 raise
             # Pillow reads DNG's TIFF structure but not most other RAW containers;
             # their pixels still come from LibRaw below.
@@ -249,6 +288,8 @@ class ImageManager:
             if metadata_img is None:  # pragma: no cover - guarded by the exception above
                 raise OSError(f"Could not open image: {path}")
             img = ImageOps.exif_transpose(metadata_img)
+            if img.mode == "F":
+                img = _float_grey_to_16_bit(img)
             converted_icc = None
 
         self.original_mode = img.mode

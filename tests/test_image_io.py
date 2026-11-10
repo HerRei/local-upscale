@@ -436,6 +436,62 @@ def test_twelve_bit_tiff_uses_declared_sample_depth(tmp_path):
     assert pixels == [128, 255]
 
 
+def _float_rgb_tiff(path, pixels):
+    """A baseline 32-bit float RGB TIFF; Pillow cannot read or write one."""
+    height, width, _ = pixels.shape
+    data = pixels.astype("<f4").tobytes()
+    bits_at = 8 + len(data)
+    formats_at = bits_at + 6
+    directory_at = formats_at + 6
+    entries = [
+        (256, 4, 1, width),
+        (257, 4, 1, height),
+        (258, 3, 3, bits_at),
+        (259, 3, 1, 1),
+        (262, 3, 1, 2),
+        (273, 4, 1, 8),
+        (277, 3, 1, 3),
+        (278, 4, 1, height),
+        (279, 4, 1, len(data)),
+        (284, 3, 1, 1),
+        (339, 3, 3, formats_at),
+    ]
+    path.write_bytes(
+        b"II"
+        + struct.pack("<HI", 42, directory_at)
+        + data
+        + struct.pack("<3H", 32, 32, 32)
+        + struct.pack("<3H", 3, 3, 3)
+        + struct.pack("<H", len(entries))
+        + b"".join(struct.pack("<HHII", *entry) for entry in entries)
+        + struct.pack("<I", 0)
+    )
+
+
+def test_float_grey_tiff_spans_the_full_range_instead_of_turning_black(tmp_path):
+    ramp = np.tile(np.linspace(0.0, 1.0, 64, dtype=np.float32), (4, 1))
+    path = tmp_path / "grey_float.tif"
+    Image.fromarray(ramp).save(path)
+    assert Image.open(path).mode == "F"
+    pixels = ImageManager().load(str(path))["tensor"][0, 0].mul(255).round().numpy()
+    assert pixels[0] == 0 and pixels[-1] == 255
+    assert abs(pixels[32] - 32 * 255 / 63) <= 1
+
+
+def test_float_grey_tiff_above_one_is_refused_instead_of_clipped_to_white(tmp_path):
+    path = tmp_path / "grey_hdr.tif"
+    Image.fromarray(np.linspace(0.0, 200.0, 64, dtype=np.float32)[None, :]).save(path)
+    with pytest.raises(ValueError, match="floating-point"):
+        ImageManager().load(str(path))
+
+
+def test_float_rgb_tiff_says_it_is_not_supported(tmp_path):
+    path = tmp_path / "rgb_float.tif"
+    _float_rgb_tiff(path, np.random.default_rng(1).random((8, 8, 3)))
+    with pytest.raises(OSError, match="floating-point colour TIFF"):
+        ImageManager().load(str(path))
+
+
 def test_sixteen_bit_grey_profile_preserves_shadow_detail(tmp_path):
     path = tmp_path / "linear16.png"
     Image.fromarray(np.array([[0, 128, 256]], dtype=np.uint16)).save(
