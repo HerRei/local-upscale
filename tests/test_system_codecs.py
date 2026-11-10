@@ -531,8 +531,10 @@ def test_mov_codec_validation():
         helper.encoder_for("prores", container="mp4")
 
 
-def prores_or_skip(helper: SystemCodecs, width: int = 48, height: int = 32) -> None:
-    if not helper.can_encode("prores", width, height):
+def prores_or_skip(
+    helper: SystemCodecs, width: int = 48, height: int = 32, fps: float = 25
+) -> None:
+    if not helper.can_encode("prores", width, height, fps=fps):
         pytest.skip(
             f"this Mac (a virtual machine, perhaps) cannot encode Apple ProRes at {width}x{height}"
         )

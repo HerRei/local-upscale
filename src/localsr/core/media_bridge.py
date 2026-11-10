@@ -199,6 +199,8 @@ def validate_export(
     *,
     hdr: bool = False,
     size: tuple[int, int] | None = None,
+    fps: float = 0.0,
+    color: str = "",
 ) -> None:
     """Fail before inference when nothing can write an H.264/HEVC, MOV or ProRes export."""
     container = normalize_container(container)
@@ -218,7 +220,7 @@ def validate_export(
     except ExternalFFmpegError as error:
         raise ValueError(str(error)) from error
     if size is not None and bridge.system is not None and video_codec == "prores":
-        if not bridge.system.can_encode(video_codec, *size):
+        if not bridge.system.can_encode(video_codec, *size, fps=fps, color=color):
             raise ValueError(
                 f"This Mac cannot encode Apple ProRes at {size[0]}x{size[1]}. Choose HEVC or H.264."
             )
