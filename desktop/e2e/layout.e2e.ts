@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit } from './fake-host';
-import { ready, video, withOutputs } from './fixtures';
+import { ready, video, windows, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
 // centre header keeps its tabs, file name and view options in a single row.
@@ -31,6 +31,8 @@ test.describe('pane headers', () => {
     const enhanceRow = page.locator('.enhance-pane > .pane-heading');
     expect((await box(header)).height).toBe((await box(enhanceRow)).height);
     expect(Math.abs((await textBottom(preview)) - (await textBottom(enhance)))).toBeLessThan(1);
+    // On a Mac the Media tabs get a row below the first one (tested apart).
+    if (await page.evaluate(() => /Mac/.test(navigator.platform))) return;
     const inputs = page
       .getByRole('tablist', { name: 'Media' })
       .getByRole('tab', { name: /^Inputs/ });
@@ -39,9 +41,9 @@ test.describe('pane headers', () => {
     expect(Math.abs((await textBottom(inputs)) - (await textBottom(enhance)))).toBeLessThan(1);
   });
 
-  test('start the Media tabs where its title was, after the window buttons on a Mac', async ({
+  test('start the Media tabs where its title was, level with the list content', async ({
     page,
-  }, info) => {
+  }) => {
     await openApp(page, ready);
     const inputs = page
       .getByRole('tablist', { name: 'Media' })
@@ -51,9 +53,50 @@ test.describe('pane headers', () => {
       range.selectNodeContents(element);
       return range.getBoundingClientRect().left;
     });
-    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
-    const wide = info.project.use.viewport!.width >= 1280;
-    expect(Math.round(left)).toBe(mac && wide ? 84 : 16);
+    expect(Math.round(left)).toBe(16);
+  });
+
+  test('on a Mac in the wide layout the first row holds only the add button, the tabs sit below', async ({
+    page,
+  }, info) => {
+    test.skip(info.project.use.viewport!.width < 1280, 'the wide layout only');
+    await openApp(page, ready);
+    test.skip(!(await page.evaluate(() => /Mac/.test(navigator.platform))), 'a Mac only');
+    const row = await box(page.locator('.media-pane > .pane-heading'));
+    const strip = await box(page.locator('.preview-header'));
+    const add = await box(page.getByRole('button', { name: 'Add Media…' }));
+    expect(add.y).toBeGreaterThanOrEqual(row.y);
+    expect(add.y + add.height).toBeLessThanOrEqual(row.y + strip.height);
+    const tabs = await box(page.getByRole('tablist', { name: 'Media' }));
+    expect(tabs.y).toBeGreaterThanOrEqual(row.y + strip.height);
+    const inputs = page
+      .getByRole('tablist', { name: 'Media' })
+      .getByRole('tab', { name: /^Inputs/ });
+    const textLeft = await inputs.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return range.getBoundingClientRect().left;
+    });
+    const listLeft = await page
+      .locator('.media-row .thumb')
+      .first()
+      .evaluate((element) => element.getBoundingClientRect().left);
+    expect(Math.round(textLeft)).toBe(Math.round(listLeft));
+  });
+
+  test('on Windows in the wide layout the tabs and the add button share one row', async ({
+    page,
+  }, info) => {
+    test.skip(info.project.use.viewport!.width < 1280, 'the wide layout only');
+    await openApp(page, windows);
+    const row = await box(page.locator('.media-pane > .pane-heading'));
+    expect(row.height).toBe(52);
+    const tabs = await box(page.getByRole('tablist', { name: 'Media' }));
+    const add = await box(page.getByRole('button', { name: 'Add Media…' }));
+    expect(tabs.y).toBeGreaterThanOrEqual(row.y);
+    expect(tabs.y + tabs.height).toBeLessThanOrEqual(row.y + 52);
+    expect(add.y).toBeGreaterThanOrEqual(row.y);
+    expect(add.y + add.height).toBeLessThanOrEqual(row.y + 52);
   });
 
   test('keep the centre tabs, name and view options on one row', async ({ page }) => {

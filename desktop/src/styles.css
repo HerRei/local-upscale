@@ -155,14 +155,34 @@ input:focus-visible {
 .mac .toolbar {
   padding-left: 84px;
 }
-/* Wide windows have no bar: the pane headings form the title row and the
-   window buttons sit at the start of the Media heading (its tab words carry 8 px). */
-.mac .media-pane .pane-heading {
-  padding-left: 76px;
-}
-@media (max-width: 1279px) {
+/* Wide windows have no bar and the window buttons sit over the Media pane's top-left.
+   The first row is a clear strip with only the add button (and a line like the centre
+   header's); the tabs follow in a row of their own, level with the list content. */
+@media (min-width: 1280px) {
   .mac .media-pane .pane-heading {
-    padding-left: 8px;
+    flex: none;
+    display: grid;
+    grid-template-rows: 52px auto;
+    justify-content: stretch;
+    align-items: center;
+    padding-block: 0 4px;
+  }
+  .mac .media-pane .pane-heading::before {
+    content: '';
+    grid-area: 1 / 1;
+    align-self: stretch;
+    margin-inline: -8px -16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    pointer-events: none;
+  }
+  .mac .media-pane .pane-heading .add-media {
+    grid-area: 1 / 1;
+    justify-self: end;
+  }
+  .mac .media-pane .pane-heading .pane-tabs {
+    grid-area: 2 / 1;
+    justify-self: start;
+    margin-top: 8px;
   }
 }
 .installed-row {
