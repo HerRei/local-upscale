@@ -81,8 +81,8 @@ def bounded_preparation(
     Returns what ``work`` returns and re-raises what it raises. Raises
     ``InterruptedError`` when ``cancel_event`` is set, and ``PreparationTimeout``
     at the limit or when the slot's earlier thread still runs. ``name`` says what
-    is being prepared and ``fallback`` what happens at the limit ("Continuing on
-    the Apple GPU"); both appear in the status message, which is sent at the start
+    is being prepared and ``fallback`` what happens at the limit, as a clause
+    ("starts on the standard path", "the job stops"); both appear in the status message, which is sent at the start
     and then every ``STATUS_INTERVAL_SECONDS``. ``on_late(kind, value)`` runs on
     the helper thread if the work finishes after the caller gave up; ``kind`` is
     "ok" or "error".
@@ -127,7 +127,7 @@ def bounded_preparation(
             left = max(0, round(end - now))
             try:
                 status(
-                    f"{name}. {max(0, round(now - shown_from))} s so far. "
+                    f"{name}. {max(0, round(now - shown_from))} s so far; "
                     f"{fallback} in {left} s if it is not ready."
                 )
             except Exception:  # noqa: BLE001

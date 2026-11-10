@@ -444,7 +444,7 @@ def test_saving_a_result_never_copies_it_whole_into_one_array(tmp_path, monkeypa
 def test_a_route_the_engine_gave_up_is_a_note_on_the_finished_result(tmp_path):
     emitted = []
     runner = _runner(tmp_path, emitted, process_image=lambda **_: pytest.fail("not reached"))
-    note = "Continuing on the Apple GPU: Core ML was not ready in time."
+    note = "Running on the standard path: the faster one was not ready in time."
     runner.engine.take_notes = lambda: [note]
     notes = runner._take_engine_notes()
     assert notes == [note]

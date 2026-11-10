@@ -1388,7 +1388,7 @@ class WorkerServer:
                 name,
                 limit,
                 work,
-                fallback="Stopping the job",
+                fallback="the job stops",
                 slot=slot,
                 cancel_event=self.cancel_event,
                 status=lambda message: send_message(EngineStatus(job_id=job_id, message=message)),

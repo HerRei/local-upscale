@@ -93,7 +93,6 @@ CACHE_ENV = "LOCALSR_COREML_CACHE"
 DISABLE_ENV = "LOCALSR_DISABLE_COREML"
 
 UNIT_LABELS = {NEURAL_ENGINE: "the Neural Engine", CORE_ML_GPU: "the GPU (Core ML)"}
-PREPARE_TARGETS = {NEURAL_ENGINE: "the Neural Engine", CORE_ML_GPU: "Core ML on the GPU"}
 
 
 @functools.cache
@@ -664,10 +663,14 @@ class _CoreMLImage(torch.nn.Module):
             self.prepare_began = self.clock()
             self.deadline = self.prepare_began + PREPARE_BUDGET_SECONDS
         allowed = self.deadline - self.clock()
-        name = (
-            f"Preparing {self.architecture} for {PREPARE_TARGETS.get(unit, unit)} "
-            "(first run of this model and tile size)"
-        )
+        # The user chooses nothing here: Core ML is the faster path and PyTorch the standard
+        # one, on the same GPU. Only the Neural Engine is a different piece of hardware.
+        if unit == NEURAL_ENGINE:
+            name = "Preparing the Neural Engine (once per model and tile size)"
+            fallback = f"continues on {self._fallback_label()}"
+        else:
+            name = "Preparing the faster path (once per model and tile size)"
+            fallback = "starts on the standard path"
         if allowed <= 0:
             error = PreparationTimeout(name, PREPARE_BUDGET_SECONDS)
             error.allowed = 0.0
@@ -677,7 +680,7 @@ class _CoreMLImage(torch.nn.Module):
                 name,
                 PREPARE_BUDGET_SECONDS,
                 work,
-                fallback=f"Continuing on {self._fallback_label()}",
+                fallback=fallback,
                 slot=COREML_SLOT,
                 cancel_event=self.cancel_event,
                 status=self._status,
@@ -738,12 +741,12 @@ class _CoreMLImage(torch.nn.Module):
             for unit in units:
                 program.store_verdict(unit, timeout_verdict(allowed))
         reason = (
-            "Core ML is still preparing an earlier model in the background"
+            "the faster one is still being prepared for an earlier model"
             if error.busy
-            else "Core ML was not ready in time"
+            else "the faster one was not ready in time"
         )
-        logger.warning("%s for %s: %s", reason, self.architecture, error)
-        self._note(f"Continuing on {self._fallback_label()}: {reason}.")
+        logger.warning("Core ML: %s, for %s: %s", reason, self.architecture, error)
+        self._note(f"Running on the standard path: {reason}.")
 
     def _next_runner(self, state: dict) -> None:
         """Load the next candidate unit, honouring stored verdicts."""
@@ -799,8 +802,8 @@ class _CoreMLImage(torch.nn.Module):
             state["retry"] = True
             # Not a status: a video asks again for every frame, and the line would repeat.
             self._note(
-                f"Continuing on {self._fallback_label()}: "
-                "Core ML was not ready in time for this model earlier.",
+                "Running on the standard path: the faster one was not ready in time for this "
+                "model earlier.",
                 status=False,
             )
 

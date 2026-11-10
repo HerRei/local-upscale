@@ -346,7 +346,7 @@ class _OnnxImage(torch.nn.Module):
                 f"{what} for {self._label()}",
                 ONNX_PREPARE_SECONDS,
                 work,
-                fallback="Stopping the job",
+                fallback="the job stops",
                 slot=ONNX_SLOT,
                 cancel_event=self.cancel_event,
                 status=self._status,
@@ -488,15 +488,15 @@ class _OnnxImage(torch.nn.Module):
         ):
             return None
         self._status(
-            f"Testing {self._label()} in a separate process before its first use. This "
-            "happens once per graphics driver."
+            f"Testing {self._label()} in a separate process before its first use (once per "
+            "graphics driver)."
         )
         outcome = gpu_guard.run(
             self.route.device,
             self.cancel_event,
             lambda elapsed, left: self._status(
-                f"Testing {self._label()} in a separate process before its first use. "
-                f"{elapsed} s so far. The job stops in {left} s if the test is not finished."
+                f"Testing {self._label()} in a separate process before its first use (once per "
+                f"graphics driver). {elapsed} s so far; the job stops in {left} s if the test is not finished."
             ),
         )
         gpu_guard._PREFLIGHT_TRIED.add(key)
@@ -548,7 +548,7 @@ class _OnnxImage(torch.nn.Module):
         # at the retained cache size.
         if len(self.sessions) >= self.session_limit:
             self.sessions.popitem(last=False)
-        graph = self._prepare(f"Exporting {self.architecture}", lambda: self._export(image))
+        graph = self._prepare("Converting the model", lambda: self._export(image))
         if len(graph) > _LARGE_GRAPH_BYTES:
             self.session_limit = 2
             while len(self.sessions) >= self.session_limit:
@@ -570,13 +570,13 @@ class _OnnxImage(torch.nn.Module):
             config, pending = state["candidates"].pop(0)
             if pending:
                 self._status(
-                    f"Checking that {self._label()} gives the same result as the CPU for "
-                    f"{self.architecture}. This happens once per model and tile shape."
+                    f"Checking that {self._label()} gives the same result as the CPU "
+                    "(once per model and tile size)."
                 )
             try:
                 with self._watch():
                     session, trace = self._prepare(
-                        f"Preparing {self.architecture}",
+                        "Preparing the model",
                         lambda config=config: self._create(state["graph"], config),
                         self._discard_late_session,
                     )

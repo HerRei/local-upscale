@@ -1483,7 +1483,14 @@ def test_a_session_that_never_opens_stops_the_job_with_a_sentence_and_stores_not
     assert time.monotonic() - started < 2.0
     # The second configuration is not tried, and no rejection is stored.
     assert not (tmp_path / "verdicts.json").exists()
-    assert any("Stopping the job in" in status for status in statuses)
+    assert any("the job stops in" in status for status in statuses)
+    # What is prepared, for how long, and that the job (not a fallback) ends at the limit.
+    assert any(
+        status.startswith("Preparing the model for ")
+        and " s so far; the job stops in " in status
+        and status.endswith(" s if it is not ready.")
+        for status in statuses
+    )
     release.set()
     deadline = time.monotonic() + 2
     while preparation.busy_slot("onnx") and time.monotonic() < deadline:

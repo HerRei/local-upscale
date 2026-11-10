@@ -439,7 +439,9 @@ def test_a_video_reports_its_preparation_and_carries_the_route_it_gave_up_in_its
     server.engine.add_note("left over from an earlier job")
 
     def fake_video_job(**kwargs):
-        server.engine.add_note("Continuing on the Apple GPU: Core ML was not ready in time.")
+        server.engine.add_note(
+            "Running on the standard path: the faster one was not ready in time."
+        )
         return SimpleNamespace(
             output_path="output.mp4", frames_processed=2, elapsed_seconds=1.0, inference_seconds=1.0
         )
@@ -464,7 +466,7 @@ def test_a_video_reports_its_preparation_and_carries_the_route_it_gave_up_in_its
         item["data"] for item in messages if item["type"] == "engine_status"
     ]
     done = next(item["data"] for item in messages if item["type"] == "video_job_completed")
-    assert done["notes"] == "Continuing on the Apple GPU: Core ML was not ready in time."
+    assert done["notes"] == "Running on the standard path: the faster one was not ready in time."
     assert server.engine.notes == []
 
 

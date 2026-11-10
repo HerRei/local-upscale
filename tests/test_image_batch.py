@@ -207,7 +207,7 @@ def test_the_first_photo_is_announced_before_the_model_loads(tmp_path):
 
 def test_what_the_lanes_gave_up_is_in_the_notes_of_every_photo_they_finish(tmp_path):
     setup = Setup(tmp_path)
-    note = "Continuing on the Apple GPU: Core ML was not ready in time."
+    note = "Running on the standard path: the faster one was not ready in time."
     setup.lane_notes = [note, "A second sentence."]
     setup.engine_notes.append("left over from an earlier job")
     assert setup.run([job(tmp_path, i) for i in range(3)]) == []

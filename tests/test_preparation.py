@@ -21,7 +21,7 @@ def fast_waits(monkeypatch):
 
 def call(work, limit=1.0, slot="test", **options):
     return bounded_preparation(
-        "Preparing X", limit, work, fallback="Going on", slot=slot, **options
+        "Preparing X", limit, work, fallback="going on", slot=slot, **options
     )
 
 
@@ -95,8 +95,8 @@ def test_status_is_repeated_with_elapsed_time_and_the_way_out():
     threading.Timer(0.45, release.set).start()
     call(release.wait, limit=5.0, status=messages.append)
     assert len(messages) >= 4
-    assert messages[0] == "Preparing X. 0 s so far. Going on in 5 s if it is not ready."
-    assert all("Going on in" in message for message in messages)
+    assert messages[0] == "Preparing X. 0 s so far; going on in 5 s if it is not ready."
+    assert all("going on in" in message for message in messages)
 
 
 # The guard: nothing in the engine may wait without a bound ----------------------
@@ -168,7 +168,7 @@ def test_a_checkpoint_that_cannot_be_read_stops_the_job_with_a_sentence(monkeypa
     with pytest.raises(RuntimeError, match=r"Reading the model file model\.pth did not finish"):
         adapter.inspect(str(path))
     assert time.monotonic() - started < 2.0
-    assert messages and "Stopping the job in" in messages[0]
+    assert messages and "the job stops in" in messages[0]
     release.set()
     deadline = time.monotonic() + 2
     while preparation.busy_slot("model-read") and time.monotonic() < deadline:
