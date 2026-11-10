@@ -817,7 +817,7 @@ fn trial_candidates(
     model_ids: &[String],
     base: &StartBatchInput,
 ) -> AppResult<Vec<TrialCandidate>> {
-    if model_ids.is_empty()
+    if model_ids.len() < 2
         || model_ids.len() > 4
         || model_ids.iter().collect::<HashSet<_>>().len() != model_ids.len()
     {
@@ -837,6 +837,7 @@ fn trial_candidates(
     resolved.device = resolve_device(state, &base.device)?;
     let base = &resolved;
     validate_start(base, state)?;
+    validate_fix_engine(base, lock(&state.engine)?.as_ref())?;
     // The Restore model is the fix: each candidate must fix the active problem.
     // With several fixes it is the last one: the fixes before it keep their models.
     let active_fix = base.fix_stages.last().map(|stage| stage.fix.clone());
@@ -1117,7 +1118,7 @@ pub fn request_compare_regions(
 }
 
 #[tauri::command]
-pub fn clear_compare_regions(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+pub fn clear_compare_regions(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     {
         let database = lock(&state.database)?;
@@ -1132,6 +1133,7 @@ pub fn clear_compare_regions(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     }) {
         let _ = worker::send(&state, &json!({"type":"region_clear", "data":{}}));
     }
+    emit_state_changed(&app);
     Ok(())
 }
 
@@ -3889,6 +3891,30 @@ mod tests {
         assert!(candidates
             .iter()
             .all(|candidate| candidate.input.device == "cpu"));
+    }
+
+    #[test]
+    fn try_others_needs_two_to_four_models_and_an_engine_that_runs_the_fixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 2, upscaler);
+        let base = input("upscale");
+        let error = trial_candidates(&state, "media", &ids[..1], &base)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("2 to 4"));
+        // Two fixes need an engine that runs several; this one is not known to.
+        let mut several = base.clone();
+        several.fix_stages = ["blur", "jpeg"]
+            .iter()
+            .map(|fix| crate::types::FixStageSelection {
+                fix: (*fix).into(),
+                model_id: ids[0].clone(),
+            })
+            .collect();
+        let error = trial_candidates(&state, "media", &ids, &several)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("one fix at a time"));
     }
 
     #[test]
