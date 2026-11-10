@@ -14,7 +14,10 @@ mod launch;
 #[cfg(any(target_os = "linux", test))]
 mod media_server;
 mod native_menu;
+mod output_names;
 mod paths;
+mod pipe_lines;
+mod process_tree;
 mod queue_timing;
 mod results;
 mod settings;

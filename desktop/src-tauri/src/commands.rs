@@ -18,6 +18,7 @@ use crate::{
     integrations,
     launch::LaunchIntent,
     native_menu,
+    output_names::ReservedOutputs,
     results::{MediaResults, ResultUi},
     state::{emit_state_changed, lock, AppState},
     types::{
@@ -1738,6 +1739,11 @@ fn import_verified_catalog_file(
 #[tauri::command]
 pub fn open_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
     let authorized = authorized_result(&state, &path)?;
+    if !is_openable_output(&authorized) {
+        return Err(AppError::Validation(
+            "this file type is not opened from LocalSR; use Reveal instead".into(),
+        ));
+    }
     open::that_detached(authorized)
         .map_err(|error| AppError::Config(format!("could not open the output: {error}")))
 }
@@ -2796,7 +2802,7 @@ fn unique_output_path(
     directory: &Path,
     input_path: &str,
     input: &StartBatchInput,
-    reserved: &mut HashSet<PathBuf>,
+    reserved: &mut ReservedOutputs,
 ) -> PathBuf {
     let stem = Path::new(input_path)
         .file_stem()
@@ -2829,7 +2835,7 @@ fn unique_output_path(
             format!("_{counter}")
         };
         let candidate = directory.join(format!("{stem}{suffix}{numbered}.{extension}"));
-        if !candidate.exists() && reserved.insert(candidate.clone()) {
+        if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
         }
         counter = counter.saturating_add(1);
@@ -2938,6 +2944,16 @@ fn canonical_directory(path: &str) -> AppResult<PathBuf> {
     Ok(canonical)
 }
 
+/// The file types LocalSR writes as results. Open hands the file to the system's
+/// default handler, so anything else (an executable, a script, a shortcut) must
+/// never be launched through it, whatever the history says.
+fn is_openable_output(path: &Path) -> bool {
+    const OUTPUT_EXTENSIONS: &[&str] = &[
+        "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "mp4", "mkv", "mov",
+    ];
+    extension(path).is_some_and(|extension| OUTPUT_EXTENSIONS.contains(&extension.as_str()))
+}
+
 /// Open and Reveal act on the selected item's result, which is often not the
 /// most recent output (a finished batch, or a result from an earlier session),
 /// so any completed job's output is allowed alongside the last one.
@@ -2946,6 +2962,13 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     let last_output = lock(&state.runtime)?.last_output_path.clone();
     if !recorded && last_output.is_empty() {
         return Err(AppError::Validation("there is no completed output".into()));
+    }
+    // A result is a file the engine wrote. One that has since become a link could
+    // lead anywhere, and canonicalizing would authorize its target.
+    if fs::symlink_metadata(requested)?.file_type().is_symlink() {
+        return Err(AppError::Validation(
+            "output path was not authorized".into(),
+        ));
     }
     let requested = fs::canonicalize(requested)?;
     let is_last_output = !last_output.is_empty()
@@ -3750,7 +3773,7 @@ mod tests {
         let mut base = input("upscale");
         base.name_by_model = true;
         base.model_id = "../SwinIR_M///".into();
-        let mut reserved = HashSet::new();
+        let mut reserved = ReservedOutputs::default();
         let first = unique_output_path(directory.path(), "/photo.png", &base, &mut reserved);
         assert_eq!(first.file_name().unwrap(), "photo_upscaled_4x_swinir-m.png");
         let second = unique_output_path(directory.path(), "/photo.png", &base, &mut reserved);
@@ -3773,7 +3796,7 @@ mod tests {
             directory.path(),
             "/first/photo.png",
             &options,
-            &mut HashSet::new(),
+            &mut ReservedOutputs::default(),
         );
         db.insert_job(
             "j",
@@ -3796,7 +3819,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let options = input("upscale");
         fs::write(directory.path().join("photo_upscaled_4x.png"), b"old").unwrap();
-        let mut reserved = HashSet::new();
+        let mut reserved = ReservedOutputs::default();
         let first = unique_output_path(
             directory.path(),
             "/media/photo.png",
@@ -3820,6 +3843,128 @@ mod tests {
         video.video_model_id = "frame_by_frame".into();
         let tiled = unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
         assert_eq!(tiled.file_name().unwrap(), "clip_video_4x.mp4");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_output_that_became_a_link_is_not_authorized() {
+        let directory = tempfile::tempdir().unwrap();
+        let state =
+            AppState::from_paths(crate::paths::AppPaths::under(&directory.path().join("app")))
+                .unwrap();
+        let output = directory.path().join("result.png");
+        let private = directory.path().join("private.png");
+        fs::write(&output, b"result").unwrap();
+        fs::write(&private, b"private").unwrap();
+        {
+            let database = lock(&state.database).unwrap();
+            database
+                .insert_media("m", "/in/photo.png", "photo.png", "image")
+                .unwrap();
+            database.insert_job("j", "m", "{}").unwrap();
+            database
+                .finish_job("j", "completed", &output.to_string_lossy(), "")
+                .unwrap();
+        }
+        let requested = output.to_string_lossy().into_owned();
+        assert_eq!(
+            authorized_result(&state, &requested).unwrap(),
+            fs::canonicalize(&output).unwrap()
+        );
+        fs::remove_file(&output).unwrap();
+        std::os::unix::fs::symlink(&private, &output).unwrap();
+        assert!(authorized_result(&state, &requested).is_err());
+    }
+
+    #[test]
+    fn open_launches_only_the_types_the_app_writes() {
+        for name in [
+            "result.png",
+            "result.JPG",
+            "result.tif",
+            "result.webp",
+            "result.heic",
+            "clip.mp4",
+            "clip.MKV",
+            "clip.mov",
+        ] {
+            assert!(is_openable_output(Path::new(name)), "{name}");
+        }
+        for name in [
+            "result.exe",
+            "result.bat",
+            "result.cmd",
+            "result.lnk",
+            "result.ps1",
+            "result.msi",
+            "result.scr",
+            "result.com",
+            "result.js",
+            "result.app",
+            "result.png.exe",
+            "result.exe.",
+            "result.exe ",
+            "result",
+            ".png",
+        ] {
+            assert!(!is_openable_output(Path::new(name)), "{name}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn importing_a_folder_follows_links_to_media_files_but_never_descends_into_links() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let chosen = directory.path().join("chosen");
+        let elsewhere = directory.path().join("elsewhere");
+        fs::create_dir_all(chosen.join("real-folder")).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(chosen.join("own.png"), b"own").unwrap();
+        fs::write(chosen.join("real-folder").join("inner.png"), b"inner").unwrap();
+        fs::write(elsewhere.join("linked.jpg"), b"linked").unwrap();
+        fs::write(elsewhere.join("nested.jpg"), b"nested").unwrap();
+        fs::write(elsewhere.join("notes.txt"), b"text").unwrap();
+        // A link to one media file is a layout users keep their photos in.
+        symlink(elsewhere.join("linked.jpg"), chosen.join("link.jpg")).unwrap();
+        // A link to a folder is not followed, a link that loops cannot hang the scan,
+        // and neither can a link named like media that points at something else.
+        symlink(&elsewhere, chosen.join("folder-link")).unwrap();
+        symlink(&chosen, chosen.join("loop")).unwrap();
+        symlink(elsewhere.join("notes.txt"), chosen.join("disguised.png")).unwrap();
+        symlink(
+            directory.path().join("missing.png"),
+            chosen.join("dangling.png"),
+        )
+        .unwrap();
+
+        let found = normalize_media_paths(vec![chosen.to_string_lossy().into_owned()]).unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["linked.jpg", "own.png"]);
+        let listed = scan_media_folder(chosen.to_string_lossy().into_owned()).unwrap();
+        assert!(listed.iter().all(|path| !path.contains("nested")
+            && !path.contains("inner")
+            && !path.contains("notes")));
+    }
+
+    #[test]
+    fn names_that_differ_only_by_case_are_one_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = input("upscale");
+        let mut reserved = ReservedOutputs::default();
+        let first = unique_output_path(directory.path(), "/day1/A.jpg", &options, &mut reserved);
+        let second = unique_output_path(directory.path(), "/day2/a.jpg", &options, &mut reserved);
+        let third = unique_output_path(directory.path(), "/day3/Ä.jpg", &options, &mut reserved);
+        let fourth = unique_output_path(directory.path(), "/day4/ä.jpg", &options, &mut reserved);
+        let names: Vec<String> = [&first, &second, &third, &fourth]
+            .iter()
+            .map(|path| path.to_string_lossy().to_uppercase().to_lowercase())
+            .collect();
+        let distinct: HashSet<&String> = names.iter().collect();
+        assert_eq!(distinct.len(), 4, "{names:?}");
     }
 
     #[test]
@@ -4226,7 +4371,7 @@ mod tests {
 
     #[test]
     fn exports_take_the_extension_of_the_chosen_format() {
-        let mut reserved = HashSet::new();
+        let mut reserved = ReservedOutputs::default();
         let directory = tempfile::tempdir().unwrap();
         let mut photo = input("upscale");
         photo.output_format = "heic".into();

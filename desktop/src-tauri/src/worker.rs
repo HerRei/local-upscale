@@ -1,7 +1,7 @@
 use std::{
     env,
-    io::{BufRead, BufReader, Write},
-    path::PathBuf,
+    io::{BufReader, Write},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,6 +17,8 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{
     error::{AppError, AppResult},
+    pipe_lines::{read_frame, skip_line, Frame},
+    process_tree::{lead_own_group, ProcessTree},
     settings,
     state::{emit_state_changed, lock, AppState},
     types::{
@@ -170,6 +172,9 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The engine starts FFmpeg and the system media helper. Stopping the engine has
+    // to stop them too, so they stay in its process group (or Job Object).
+    lead_own_group(&mut command);
     if let Some(directory) = specification.working_directory {
         command.current_dir(directory);
     }
@@ -196,6 +201,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         ))
     })?;
     state.worker.pid.store(child.id(), Ordering::SeqCst);
+    let tree = ProcessTree::new(&child);
     let stdin = child
         .stdin
         .take()
@@ -238,13 +244,25 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     let reader_app = app.clone();
     let drained = Arc::new(AtomicBool::new(false));
     let reader_drained = drained.clone();
+    let overflowed = Arc::new(AtomicBool::new(false));
+    let reader_overflowed = overflowed.clone();
     thread::spawn(move || {
         let mut event_gate = WorkerEventGate::default();
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            match serde_json::from_str::<WorkerEnvelope>(&line) {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            match read_frame(&mut reader, MAX_ENGINE_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => {}
+                Ok(Frame::End) | Err(_) => break,
+                Ok(Frame::TooLong) => {
+                    // An engine that sends a message this long is faulty. The
+                    // supervisor stops it and the usual restart takes over.
+                    eprintln!("LocalSR stopped the inference engine: a message passed {MAX_ENGINE_LINE_BYTES} bytes");
+                    reader_overflowed.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+            match serde_json::from_slice::<WorkerEnvelope>(&line) {
                 Ok(envelope) => {
                     if reader_state.worker.generation.load(Ordering::SeqCst) != generation {
                         break;
@@ -261,14 +279,29 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     let _ = reader_app.emit("worker-message", warning);
                 }
             }
+            // One large preview must not keep its buffer for the rest of the session.
+            line.shrink_to(READ_BUFFER_KEEP_BYTES);
         }
         reader_drained.store(true, Ordering::SeqCst);
     });
 
     thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let mut reader = BufReader::new(stderr);
+        let mut line = Vec::new();
+        loop {
+            match read_frame(&mut reader, MAX_ENGINE_STDERR_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => {}
+                Ok(Frame::End) | Err(_) => break,
+                // Only the start of a long line is kept; the rest is read and dropped
+                // so the engine never blocks on a full pipe.
+                Ok(Frame::TooLong) => {
+                    if skip_line(&mut reader).is_err() {
+                        break;
+                    }
+                }
+            }
             if cfg!(debug_assertions) {
-                eprintln!("LocalSR engine: {line}");
+                eprintln!("LocalSR engine: {}", String::from_utf8_lossy(&line));
             }
         }
     });
@@ -287,6 +320,14 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             }
             if state.worker.shutting_down.load(Ordering::SeqCst) {
                 stopped_by_app = true;
+                tree.terminate();
+                let _ = child.kill();
+                break child.wait();
+            }
+            if overflowed.load(Ordering::SeqCst) {
+                // Not an app-requested stop: the engine failed, and the restart
+                // counter says so.
+                tree.terminate();
                 let _ = child.kill();
                 break child.wait();
             }
@@ -299,6 +340,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 // The engine asked for a restart but has not exited, for example because
                 // freeing a lost GPU hangs; the queue waits for its replacement.
                 stopped_by_app = true;
+                tree.terminate();
                 let _ = child.kill();
                 break child.wait();
             }
@@ -315,12 +357,16 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     }
                     emit_state_changed(&app);
                     stopped_by_app = true;
+                    tree.terminate();
                     let _ = child.kill();
                     break child.wait();
                 }
             }
             thread::sleep(Duration::from_millis(100));
         };
+        // Whatever ended the engine, nothing it started may outlive it: a helper
+        // would keep writing into scratch the host removes next.
+        tree.terminate();
         if !stopped_by_app && engine_crashed(&status) {
             state
                 .worker
@@ -693,7 +739,11 @@ fn handle_worker_envelope(
         .lock()
         .map(|runtime| is_background_photo(&runtime, &job_id))
         .unwrap_or(false);
-    let result = apply_worker_envelope(state, &envelope);
+    let result = accept_envelope(state, &envelope);
+    if matches!(result, Ok(false)) {
+        return;
+    }
+    let result = result.map(|_| ());
     if terminal && cancellation.job_ids.contains(&job_id) {
         if let Err(error) = cancellation.finish_member(&job_id) {
             if let Ok(mut runtime) = state.runtime.lock() {
@@ -782,6 +832,20 @@ fn mark_exited(runtime: &mut RuntimeStatus) {
     }
 }
 
+/// The longest line the engine may send. A line must fit the largest message, a
+/// Compare crop: a PNG of at most 2048 x 2048 pixels (12.6 MB when the pixels are
+/// noise), in base64 (16.8 MB), inside its JSON. Previews, thumbnails and tiles are
+/// JPEGs of at most 2048 pixels on the long side and stay far below that. The limit
+/// leaves about twice the largest message and still keeps the host's memory bounded.
+pub(crate) const MAX_ENGINE_LINE_BYTES: usize = 32 * 1024 * 1024;
+
+/// The longest engine stderr line kept. Stderr is a diagnostic stream: the start of a
+/// line is enough, and the rest is dropped as it arrives.
+const MAX_ENGINE_STDERR_LINE_BYTES: usize = 64 * 1024;
+
+/// What the line buffer keeps between messages; a larger one is released.
+const READ_BUFFER_KEEP_BYTES: usize = 1024 * 1024;
+
 /// How long the app reads an exited engine's remaining output before moving on.
 const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 
@@ -832,6 +896,87 @@ fn is_background_photo(runtime: &RuntimeStatus, id: &str) -> bool {
     !id.is_empty()
         && id != runtime.active_job_id
         && runtime.active_batch_job_ids.iter().any(|m| m == id)
+}
+
+/// Apply an engine message, unless it reports on work the host never sent. False
+/// when it was ignored: nothing more may be done with it.
+fn accept_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<bool> {
+    if let Some(reason) = rejection(state, envelope)? {
+        eprintln!("LocalSR ignored an engine message: {reason}");
+        return Ok(false);
+    }
+    apply_worker_envelope(state, envelope)?;
+    Ok(true)
+}
+
+/// Messages that report on one job or benchmark. The engine only ever sends them
+/// for work the host sent it.
+fn is_job_scoped(message_type: &str) -> bool {
+    matches!(
+        message_type,
+        "job_started"
+            | "stage_started"
+            | "stage_progress"
+            | "stage_completed"
+            | "progress"
+            | "tile_update"
+            | "live_preview_frame"
+            | "live_preview_warning"
+            | "engine_status"
+            | "job_completed"
+            | "video_job_completed"
+            | "job_cancelled"
+            | "job_failed"
+            | "video_memory"
+            | "video_stage_progress"
+            | "video_frame_started"
+            | "video_frame_completed"
+            | "video_tile_progress"
+            | "benchmark_started"
+            | "benchmark_stage_started"
+            | "benchmark_stage_progress"
+            | "benchmark_stage_completed"
+            | "benchmark_progress"
+            | "benchmark_completed"
+            | "benchmark_cancelled"
+            | "benchmark_failed"
+    )
+}
+
+/// Why a message must be ignored, or None when the host may act on it: it has to
+/// name a job the host dispatched and that has not ended, and a completion has to
+/// report the output file the host asked for. A job's id and result path decide
+/// what the host records, previews and later lets the user open, so neither is
+/// taken from the engine's word alone.
+fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
+    let kind = envelope.message_type.as_str();
+    if !is_job_scoped(kind) {
+        return Ok(None);
+    }
+    let id = string(&envelope.data, "job_id");
+    let dispatched = {
+        let runtime = lock(&state.runtime)?;
+        !id.is_empty()
+            && (runtime.active_job_id == id || runtime.active_batch_job_ids.contains(&id))
+    };
+    if !dispatched {
+        let shown: String = id.chars().take(64).collect();
+        return Ok(Some(format!(
+            "{kind} for job {shown:?}, which the host has not dispatched or has already ended"
+        )));
+    }
+    if matches!(kind, "job_completed" | "video_job_completed") {
+        let reported = string(&envelope.data, "output_path");
+        let requested = lock(&state.database)?.requested_output(&id)?;
+        // The engine writes the file the request names and reports that same path.
+        if requested.as_deref().map(Path::new) != Some(Path::new(&reported)) {
+            let shown: String = reported.chars().take(256).collect();
+            return Ok(Some(format!(
+                "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
+            )));
+        }
+    }
+    Ok(None)
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -2881,6 +3026,150 @@ mod tests {
         assert!(runtime.active_job_id.is_empty() && runtime.active_batch_job_ids.is_empty());
         assert_eq!(runtime.status_title, "Complete");
         assert_eq!(runtime.last_output_path, "/out/b.png");
+    }
+
+    #[test]
+    fn messages_about_work_the_host_never_sent_change_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        for (kind, data) in [
+            (
+                "job_completed",
+                json!({"job_id": "ghost", "output_path": "/etc/hosts"}),
+            ),
+            (
+                "video_job_completed",
+                json!({"job_id": "ghost", "output_path": "/etc/hosts"}),
+            ),
+            ("job_completed", json!({"output_path": "/etc/hosts"})),
+            ("job_started", json!({"job_id": "ghost"})),
+            ("progress", json!({"job_id": "ghost", "percentage": 5.0})),
+            (
+                "benchmark_started",
+                json!({"job_id": "ghost", "workload_version": "v2"}),
+            ),
+        ] {
+            assert!(
+                !accept_envelope(&state, &envelope(kind, data)).unwrap(),
+                "{kind}"
+            );
+        }
+        let runtime = lock(&state.runtime).unwrap();
+        assert!(runtime.last_output_path.is_empty());
+        assert!(runtime.active_job_id.is_empty());
+    }
+
+    #[test]
+    fn a_completion_must_name_the_output_the_host_requested() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        let requested = directory.path().join("out").join("a.png");
+        let done = |path: &std::path::Path| {
+            envelope(
+                "job_completed",
+                json!({"job_id": "a", "output_path": path.to_string_lossy()}),
+            )
+        };
+        assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+        // Another file the engine can read, and a sibling that was never requested.
+        for forged in [
+            std::path::Path::new("/etc/hosts"),
+            &directory.path().join("out").join("b.png"),
+            &directory.path().join("out").join("A.png"),
+            &directory.path().join("a.png"),
+        ] {
+            assert!(!accept_envelope(&state, &done(forged)).unwrap());
+        }
+        {
+            let runtime = lock(&state.runtime).unwrap();
+            assert!(runtime.last_output_path.is_empty());
+            assert_eq!(runtime.active_job_id, "a");
+        }
+        assert_eq!(status(&state, "a"), "running");
+        assert!(accept_envelope(&state, &done(&requested)).unwrap());
+        assert_eq!(status(&state, "a"), "completed");
+        assert_eq!(
+            lock(&state.runtime).unwrap().last_output_path,
+            requested.to_string_lossy()
+        );
+        // The same completion again is a message about a job that has ended.
+        assert!(!accept_envelope(&state, &done(&requested)).unwrap());
+    }
+
+    #[test]
+    fn a_batch_photo_completes_only_with_its_own_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        let own = |id: &str| directory.path().join("out").join(format!("{id}.png"));
+        let done = |id: &str, path: &std::path::Path| {
+            envelope(
+                "job_completed",
+                json!({"job_id": id, "output_path": path.to_string_lossy()}),
+            )
+        };
+        // c off screen reports the file of a.
+        assert!(!accept_envelope(&state, &done("c", &own("a"))).unwrap());
+        assert_eq!(status(&state, "c"), "queued");
+        assert!(lock(&state.runtime).unwrap().last_output_path.is_empty());
+        assert!(accept_envelope(&state, &done("c", &own("c"))).unwrap());
+        assert_eq!(status(&state, "c"), "completed");
+        assert_eq!(
+            lock(&state.runtime).unwrap().last_output_path,
+            own("c").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn a_video_completion_must_name_the_requested_video() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        let output = directory.path().join("clip_video_4x.mp4");
+        {
+            let database = lock(&state.database).unwrap();
+            database
+                .insert_media("m", "/in/clip.mp4", "clip.mp4", "video")
+                .unwrap();
+            let request = json!({"type": "video_job_request", "data": {
+                "job_id": "v", "output_video_path": output.to_string_lossy()}});
+            database.insert_job("v", "m", &request.to_string()).unwrap();
+        }
+        lock(&state.runtime).unwrap().begin_active_job("v".into());
+        let done = |path: &str| {
+            envelope(
+                "video_job_completed",
+                json!({"job_id": "v", "output_path": path, "frames_processed": 3}),
+            )
+        };
+        assert!(!accept_envelope(&state, &done("/etc/hosts")).unwrap());
+        assert!(accept_envelope(&state, &done(&output.to_string_lossy())).unwrap());
+        assert_eq!(status(&state, "v"), "completed");
+    }
+
+    #[test]
+    fn a_failed_item_keeps_the_engines_reason_in_the_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = running_batch(directory.path());
+        let reason = "The output file appeared while the photo was processed; it was not replaced.";
+        assert!(accept_envelope(
+            &state,
+            &envelope(
+                "job_failed",
+                json!({"job_id": "b", "error_message": reason})
+            )
+        )
+        .unwrap());
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        let job = jobs.iter().find(|job| job.id == "b").unwrap();
+        assert_eq!(
+            (job.status.as_str(), job.error.as_str()),
+            ("failed", reason)
+        );
+        assert!(job.output_path.is_empty());
+        assert_eq!(lock(&state.runtime).unwrap().active_job_id, "a");
     }
 
     #[test]

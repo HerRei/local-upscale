@@ -1,6 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
+    collections::HashMap,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     error::{AppError, AppResult},
+    output_names::ReservedOutputs,
     results::{summary_from_row, MediaResults},
     types::{JobRecord, MediaItem},
 };
@@ -328,7 +329,7 @@ impl Database {
     /// returns the jobs to insert; nothing is written if it fails.
     pub fn admit_jobs<F>(&self, media_ids: &[&str], build: F) -> AppResult<()>
     where
-        F: FnOnce(&mut HashSet<PathBuf>) -> AppResult<Vec<NewJob>>,
+        F: FnOnce(&mut ReservedOutputs) -> AppResult<Vec<NewJob>>,
     {
         let transaction = self.connection.unchecked_transaction()?;
         for media_id in media_ids {
@@ -343,7 +344,7 @@ impl Database {
                 ));
             }
         }
-        let mut reserved: HashSet<PathBuf> = self.unfinished_output_paths()?.into_iter().collect();
+        let mut reserved: ReservedOutputs = self.unfinished_output_paths()?.into_iter().collect();
         let jobs = build(&mut reserved)?;
         let now = now_millis();
         for job in &jobs {
@@ -476,7 +477,10 @@ impl Database {
         let path = path.ok_or_else(|| {
             AppError::Validation("choose a completed result of this image".into())
         })?;
-        if !Path::new(&path).is_file() {
+        // A result that was replaced by a link would put its target on screen.
+        let replaced = std::fs::symlink_metadata(&path)
+            .map_or(true, |metadata| metadata.file_type().is_symlink());
+        if replaced || !Path::new(&path).is_file() {
             return Err(AppError::Validation(
                 "this result's file is no longer available".into(),
             ));
@@ -587,14 +591,23 @@ impl Database {
         Ok(self
             .unfinished_requests()?
             .iter()
-            .filter_map(|request| {
-                request["data"]["output_path"]
-                    .as_str()
-                    .or_else(|| request["data"]["output_video_path"].as_str())
-                    .filter(|path| !path.is_empty())
-                    .map(std::path::PathBuf::from)
-            })
+            .filter_map(request_output)
+            .map(std::path::PathBuf::from)
             .collect())
+    }
+
+    /// The output file the saved request of a job names, which is the only file the
+    /// engine may report as that job's result. None for a job that was never queued.
+    pub fn requested_output(&self, id: &str) -> AppResult<Option<String>> {
+        let request: Option<String> = self
+            .connection
+            .query_row("SELECT request_json FROM jobs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(request
+            .and_then(|request| serde_json::from_str::<serde_json::Value>(&request).ok())
+            .and_then(|request| request_output(&request).map(str::to_owned)))
     }
 
     pub fn unfinished_job_needs_model(&self, path: &Path) -> AppResult<bool> {
@@ -718,6 +731,14 @@ impl Database {
     }
 }
 
+/// Where a saved job request writes its result: an image or edit output, or a video.
+fn request_output(request: &serde_json::Value) -> Option<&str> {
+    request["data"]["output_path"]
+        .as_str()
+        .or_else(|| request["data"]["output_video_path"].as_str())
+        .filter(|path| !path.is_empty())
+}
+
 fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     Ok(MediaItem {
         id: row.get(0)?,
@@ -796,6 +817,25 @@ mod tests {
             assert!(db.media_result_output(media, job).is_err(), "{media}/{job}");
         }
         std::fs::remove_file(path).unwrap();
+        assert!(db.media_result_output("m", "done").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_result_replaced_by_a_link_is_no_longer_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Database::open(&directory.path().join("queue.db")).unwrap();
+        let output = directory.path().join("output.png");
+        let private = directory.path().join("private.png");
+        std::fs::write(&output, "result").unwrap();
+        std::fs::write(&private, "private").unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        db.insert_job("done", "m", "{}").unwrap();
+        db.finish_job("done", "completed", output.to_str().unwrap(), "")
+            .unwrap();
+        assert!(db.media_result_output("m", "done").is_ok());
+        std::fs::remove_file(&output).unwrap();
+        std::os::unix::fs::symlink(&private, &output).unwrap();
         assert!(db.media_result_output("m", "done").is_err());
     }
 

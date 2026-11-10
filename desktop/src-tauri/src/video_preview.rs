@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -13,6 +13,8 @@ use std::{
 
 use crate::{
     error::{AppError, AppResult},
+    pipe_lines::{read_frame, Frame},
+    process_tree::{lead_own_group, ProcessTree},
     state::lock,
 };
 use sha2::{Digest, Sha256};
@@ -20,6 +22,9 @@ use tempfile::TempDir;
 
 const COPY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 const CACHE_LIMIT: u64 = 6 * 1024 * 1024 * 1024;
+/// The converter prints one small JSON progress object per line; a line this long is a
+/// fault, not progress.
+const MAX_CONVERTER_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 pub struct VideoPreviewControl {
@@ -175,6 +180,30 @@ fn cache_key(source: &Path) -> AppResult<String> {
     Ok(format!("{hex}.webm"))
 }
 
+/// The size of every file below `work`, however deep the converter put it. Links are
+/// not followed: a link to a large file or to a folder above is not data the
+/// conversion wrote, and a link back up cannot make the count run for ever.
+fn tree_bytes(work: &Path) -> u64 {
+    let mut total = 0_u64;
+    let mut folders = vec![work.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                folders.push(entry.path());
+            } else if kind.is_file() {
+                total = total.saturating_add(entry.metadata().map_or(0, |m| m.len()));
+            }
+        }
+    }
+    total
+}
+
 fn run_conversion(
     mut command: Command,
     work: &Path,
@@ -187,12 +216,28 @@ fn run_conversion(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The converter starts FFmpeg or the system media helper. They run in its group,
+    // so stopping the conversion stops them too.
+    lead_own_group(&mut command);
     let mut child = command.spawn()?;
+    let tree = ProcessTree::new(&child);
     let stdout = child.stdout.take().expect("piped converter stdout");
     let stderr = child.stderr.take().expect("piped converter stderr");
+    let overflowed = Arc::new(AtomicBool::new(false));
+    let progress_overflowed = Arc::clone(&overflowed);
     let progress = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(value) = serde_json::from_str(&line) {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            match read_frame(&mut reader, MAX_CONVERTER_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => {}
+                Ok(Frame::End) | Err(_) => break,
+                Ok(Frame::TooLong) => {
+                    progress_overflowed.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+            if let Ok(value) = serde_json::from_slice(&line) {
                 report(value);
             }
         }
@@ -206,23 +251,20 @@ fn run_conversion(
     });
     let started = Instant::now();
     let result = loop {
-        let bytes = fs::read_dir(work)
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .filter_map(|e| e.metadata().ok())
-            .map(|m| m.len())
-            .sum::<u64>();
+        let bytes = tree_bytes(work);
         let problem = if cancel.load(Ordering::SeqCst) {
             Some("Playback conversion cancelled.")
         } else if started.elapsed() > timeout {
             Some("Playback conversion exceeded 30 minutes. Open the saved video in an external player.")
+        } else if overflowed.load(Ordering::SeqCst) {
+            Some("The playback converter sent a message that is too long.")
         } else if bytes > size_limit {
             Some("Playback copy exceeded its disk budget. Open the saved video in an external player.")
         } else {
             None
         };
         if let Some(message) = problem {
+            tree.terminate();
             let _ = child.kill();
             let _ = child.wait();
             break Err(AppError::Validation(message.into()));
@@ -237,12 +279,16 @@ fn run_conversion(
             }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(error) => {
+                tree.terminate();
                 let _ = child.kill();
                 let _ = child.wait();
                 break Err(error.into());
             }
         }
     };
+    // Whatever ended the converter, nothing it started may keep the pipes or the
+    // work folder.
+    tree.terminate();
     let _ = progress.join();
     let message = errors.join().unwrap_or_default();
     match result {
@@ -317,6 +363,148 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("cancelled"));
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_line_that_never_ends_stops_the_converter() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec tr '\\0' x < /dev/zero"]);
+        let started = Instant::now();
+        let result = run_conversion(
+            command,
+            directory.path(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            Duration::from_secs(20),
+            1024,
+        );
+        assert!(result.unwrap_err().to_string().contains("too long"));
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    fn wait_until_stopped(pid: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while crate::process_tree::process_is_running(pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        !crate::process_tree::process_is_running(pid)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_a_conversion_ends_the_helpers_it_started() {
+        let work = tempfile::tempdir().unwrap();
+        let pids = tempfile::tempdir().unwrap();
+        let pid_file = pids.path().join("helper.pid");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancel);
+        let started = Instant::now();
+        let mut command = Command::new("/bin/sh");
+        // Like FFmpeg under the Python converter: a helper that outlives a kill of
+        // its parent unless the whole tree is ended.
+        command
+            .arg("-c")
+            .arg("sleep 60 & echo $! > \"$1\"; echo '{\"frame\":1}'; wait")
+            .arg("sh")
+            .arg(&pid_file);
+        let result = run_conversion(
+            command,
+            work.path(),
+            cancel,
+            move |_| signal.store(true, Ordering::SeqCst),
+            Duration::from_secs(20),
+            1 << 30,
+        );
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        // The helper holds the converter's output pipe; ending it frees the reader.
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let helper: u32 = fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(wait_until_stopped(helper), "the helper still runs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_way_a_conversion_ends_ends_its_helpers() {
+        let pids = tempfile::tempdir().unwrap();
+        for (index, how) in ["exit 0", "exit 1", "sleep 30"].into_iter().enumerate() {
+            let work = tempfile::tempdir().unwrap();
+            let pid_file = pids.path().join(format!("helper-{index}.pid"));
+            let mut command = Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg(format!(
+                    "sleep 60 > /dev/null 2>&1 & echo $! > \"$1\"; {how}"
+                ))
+                .arg("sh")
+                .arg(&pid_file);
+            let _ = run_conversion(
+                command,
+                work.path(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+                Duration::from_millis(1500),
+                1 << 30,
+            );
+            let helper: u32 = fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(wait_until_stopped(helper), "{how}: the helper still runs");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn intermediates_in_subfolders_count_against_the_disk_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.current_dir(directory.path()).args([
+            "-c",
+            "mkdir -p deep/er; printf 'sixteen bytes...' > deep/er/partial.tmp; exec sleep 30",
+        ]);
+        let started = Instant::now();
+        let result = run_conversion(
+            command,
+            directory.path(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            Duration::from_secs(5),
+            8,
+        );
+        assert!(result.unwrap_err().to_string().contains("disk budget"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_disk_budget_counts_files_and_never_follows_links() {
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("big.bin"), vec![0_u8; 4096]).unwrap();
+        fs::create_dir(outside.path().join("folder")).unwrap();
+        fs::write(
+            outside.path().join("folder").join("big.bin"),
+            vec![0_u8; 4096],
+        )
+        .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("big.bin"), work.path().join("file"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path().join("folder"), work.path().join("folder"))
+            .unwrap();
+        // A loop must not make the count run for ever.
+        std::os::unix::fs::symlink(work.path(), work.path().join("loop")).unwrap();
+        fs::create_dir_all(work.path().join("a").join("b")).unwrap();
+        fs::write(work.path().join("a").join("b").join("one"), vec![0_u8; 100]).unwrap();
+        fs::write(work.path().join("two"), vec![0_u8; 50]).unwrap();
+        assert_eq!(tree_bytes(work.path()), 150);
     }
 
     #[cfg(unix)]
