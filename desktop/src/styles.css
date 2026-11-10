@@ -2951,6 +2951,19 @@ input[type='text'],
 .main-area > .preview-pane {
   flex: 1;
 }
+/* A Compare slot's number: on the chips, the image labels and the picked Outputs rows. */
+.slot-number {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--base);
+  font-size: 10px;
+  font-weight: 600;
+}
 .compare-request-error {
   color: var(--text);
   background: var(--panel);

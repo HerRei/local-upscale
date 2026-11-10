@@ -79,21 +79,20 @@
                     : `${group.media.width} × ${group.media.height}`}</span
                 >
               </div>
+              {#if n}<b class="slot-number">{n}</b>{/if}
             </button>
           </div>
         {/each}
       {/if}
     {/each}
   </div>
-  <div class="media-actions compare-bar">
-    <button class="button" disabled={picks.length < 2 || compareActive} on:click={openCompare}
-      >{compareActive ? 'Comparing' : 'Show in Compare'}{picks.length
-        ? ` ${picks.length}`
-        : ''}</button
-    ><button class="button" disabled={!picks.length} on:click={clearPicks}>Clear</button><span
-      >{picks.length} of 4 slots</span
-    >
-  </div>
+  {#if picks.length}<div class="media-actions compare-bar">
+      {#if picks.length >= 2 && !compareActive}<button class="button" on:click={openCompare}
+          >Compare these {picks.length}</button
+        >{/if}<button class="button" on:click={clearPicks}>Clear</button><span
+        >{picks.length} of 4 chosen</span
+      >
+    </div>{/if}
 {/if}
 
 <style>
@@ -139,6 +138,9 @@
     font-size: calc(12px * var(--ui-scale));
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+  .media-select .slot-number {
+    margin-left: auto;
   }
   .media-select:disabled {
     opacity: 0.45;

@@ -376,7 +376,7 @@
         role="listitem"
         class:resting={shownLayout === 'slider' && index > 1}
       >
-        <b>{index + 1}</b>
+        <b class="slot-number">{index + 1}</b>
         <span class="slot-label">{item.label}</span>
         {#if (items.length < 2 || (shownLayout === 'slider' && index > 1)) && item.status !== 'ready'}<span
             class="slot-meta"
@@ -513,19 +513,19 @@
       <span
         class="original-chip side"
         style={`left:${geometry.left + 10}px;top:${geometry.top + 10}px`}
-        ><b>1</b>{items[0].label}</span
+        ><b class="slot-number">1</b>{items[0].label}</span
       >
       <span
         class="original-chip side right"
         style={`right:${canvasWidth - geometry.right + 10}px;top:${geometry.top + 10}px`}
-        ><b>2</b>{items[1].label}</span
+        ><b class="slot-number">2</b>{items[1].label}</span
       >
     {:else}
       <div class="boxes" style={`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`}>
         {#each boxes as item, index (item.key)}
           <div class="box">
             <div class="box-bar">
-              <b>{index + 1}</b>
+              <b class="slot-number">{index + 1}</b>
               <strong>{item.label}</strong>
               <span>{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span>
             </div>
@@ -671,20 +671,6 @@
   }
   .compare-slot.resting {
     color: var(--tertiary);
-  }
-  .compare-slot b,
-  .box-bar b,
-  .original-chip.side b {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius);
-    background: var(--text);
-    color: var(--base);
-    font-size: 10px;
-    font-weight: 600;
   }
   .compare-slot.resting b {
     background: var(--tertiary);

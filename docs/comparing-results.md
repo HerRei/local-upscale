@@ -2,10 +2,10 @@
 
 Every run of an image saves its own file. To compare finished results, open
 **Outputs** in the left pane and tick two to four items. Results are grouped by
-input image, with its **Original** first. The numbers show their slots in the
-order picked. Choose **Show in Compare** or open the **Compare** tab above the
-main area. Switch back to **Preview** to work there; the picks stay in Compare
-for the session.
+input image, with its **Original** first. A picked row shows its slot number,
+in the order picked. Choose **Compare these** (it names how many are picked) or
+open the **Compare** tab above the main area. Switch back to **Preview** to work
+there; the picks stay in Compare for the session.
 
 The list shows finished outputs, their model and, when recorded, quality,
 scale and run time. A result whose file was moved or deleted is marked **File

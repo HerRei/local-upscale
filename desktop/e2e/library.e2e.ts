@@ -23,8 +23,9 @@ test.describe('Inputs and Outputs tabs', () => {
     await expect(outputs.getByText('3 outputs')).toBeVisible();
     await expect(outputs.getByText('1 output', { exact: true })).toBeVisible();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).not.toBeChecked();
-    await expect(page.getByText('0 of 4 slots')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Show in Compare/ })).toBeDisabled();
+    // Nothing picked: no Compare bar at all.
+    await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Compare these/ })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Fold Alpine lake 1.jpg' }).click();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).toHaveCount(0);
@@ -84,8 +85,8 @@ test.describe('Compare', () => {
     await openOutputs(page);
     await tick(page, original).check();
     await tick(page, hat).check();
-    await expect(page.getByText('2 of 4 slots')).toBeVisible();
-    await page.getByRole('button', { name: 'Show in Compare 2' }).click();
+    await expect(page.getByText('2 of 4 chosen')).toBeVisible();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
 
     await expect(mainTabs(page).getByRole('tab', { name: 'Compare' })).toHaveAttribute(
       'aria-selected',
@@ -115,7 +116,7 @@ test.describe('Compare', () => {
     await tick(page, span).check();
     await tick(page, 'SPAN ×4, Alpine lake 2.jpg').check();
     await expect(page.getByText('The slider needs two versions of the same image')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Show in Compare 2' }).click();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
     await expect(page.getByText(/The slider needs two versions of the same image/)).toBeVisible();
     await page.getByRole('radio', { name: 'Boxes' }).click();
     await expect(page.getByRole('slider')).toHaveCount(0);
@@ -125,7 +126,7 @@ test.describe('Compare', () => {
   test('three or four picks switch to boxes and the fifth is refused', async ({ page }) => {
     await openOutputs(page);
     for (const label of [original, span, hat]) await tick(page, label).check();
-    await page.getByRole('button', { name: 'Show in Compare 3' }).click();
+    await page.getByRole('button', { name: 'Compare these 3' }).click();
     await expect(page.getByRole('radio', { name: 'Boxes' })).toBeChecked();
     await expect(page.getByRole('slider')).toHaveCount(0);
     await expect(slots(page)).toHaveCount(3);
@@ -134,7 +135,7 @@ test.describe('Compare', () => {
       .getByRole('tab', { name: /^Outputs/ })
       .click();
     await tick(page, esrgan).check();
-    await expect(page.getByText('4 of 4 slots')).toBeVisible();
+    await expect(page.getByText('4 of 4 chosen')).toBeVisible();
     await expect(tick(page, 'SPAN ×4, Alpine lake 2.jpg')).toBeDisabled();
     await expect(slots(page)).toHaveCount(4);
   });
@@ -142,7 +143,7 @@ test.describe('Compare', () => {
   test('removing a slot drops back to the empty state below two', async ({ page }) => {
     await openOutputs(page);
     for (const label of [original, span, hat]) await tick(page, label).check();
-    await page.getByRole('button', { name: 'Show in Compare 3' }).click();
+    await page.getByRole('button', { name: 'Compare these 3' }).click();
 
     await page.getByRole('button', { name: 'Remove SPAN ×4 from the compare' }).click();
     await expect(slots(page)).toHaveCount(2);
@@ -154,7 +155,7 @@ test.describe('Compare', () => {
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
-    await expect(page.getByText('0 of 4 slots')).toBeVisible();
+    await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
   });
 });
 
@@ -199,7 +200,7 @@ test.describe('Help buttons', () => {
     await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' }).check();
     await page.getByRole('checkbox', { name: 'HAT-S ×4, Alpine lake 1.jpg' }).check();
-    await page.getByRole('button', { name: 'Show in Compare 2' }).click();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
     await expect(page.getByRole('slider')).toBeVisible();
     await showPane(page, 'preview');
     // The left pane (Inputs, Outputs, Compare bar) has no ? button; the Compare tab has one.
@@ -256,6 +257,6 @@ test.describe('Clear', () => {
     await page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' }).check();
     await page.getByRole('button', { name: 'Clear', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect(page.getByText('0 of 4 slots')).toBeVisible();
+    await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
   });
 });

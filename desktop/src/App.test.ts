@@ -3917,7 +3917,11 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
     const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
+    // No picks, no Compare bar; one pick offers only Clear.
+    expect(document.querySelector('.compare-bar')).toBeNull();
     await user.click(original);
+    expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
+    expect(screen.getByText('1 of 4 chosen')).toBeTruthy();
     await user.click(output);
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([
@@ -3925,7 +3929,15 @@ describe('Comparing saved results', () => {
         { kind: 'output', media_id: 'photo', job_id: 'old' },
       ]),
     );
-    await user.click(screen.getByRole('button', { name: 'Show in Compare 2' }));
+    // A picked row shows its slot number at its end.
+    expect(original.querySelector('.slot-number')?.textContent).toBe('1');
+    expect(output.querySelector('.slot-number')?.textContent).toBe('2');
+    expect(
+      screen.getByRole('checkbox', { name: 'new, photo.png' }).querySelector('.slot-number'),
+    ).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.queryByRole('button', { name: /^Compare these|^Comparing/ })).toBeNull();
+    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
     expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
     // The tab names the mode only: how many are picked shows in the chips and in Outputs.
