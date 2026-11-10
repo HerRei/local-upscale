@@ -231,7 +231,8 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         let name = Path::new(&part.filename);
         if !safe_relative(name)
             || name.components().count() != 1
-            || !names.insert(part.filename.clone())
+            // Case-insensitive volumes read two spellings as one file.
+            || !names.insert(part.filename.to_lowercase())
             || part.size == 0
             || part.size >= 2 * 1024u64.pow(3)
             || part.sha256.len() != 64
@@ -1077,6 +1078,18 @@ mod tests {
         json["parts"] = serde_json::json!([first, first]);
         fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
         assert_refused_with(&manifest, root.path(), PART, "duplicate");
+        // The same name in another letter case is the same file on a case-insensitive
+        // volume.
+        let root = tempfile::tempdir().unwrap();
+        let manifest = payload(root.path(), false, false);
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        let first = json["parts"][0].clone();
+        let mut shouted = first.clone();
+        shouted["filename"] = first["filename"].as_str().unwrap().to_uppercase().into();
+        json["parts"] = serde_json::json!([first, shouted]);
+        fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_refused_with(&manifest, root.path(), PART, "duplicate in another case");
     }
 
     fn assert_refused_with(manifest: &Path, root: &Path, expected: &str, why: &str) {
