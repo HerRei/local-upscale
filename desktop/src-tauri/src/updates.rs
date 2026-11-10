@@ -1064,7 +1064,10 @@ fn active_engine_for_distribution(
     // A host compiled for an engine id runs exactly that id's engine: the shared
     // active-engine.txt may already name the engine of an installer that was cancelled.
     let id = if bundled_engine_id.is_empty() {
-        fs::read_to_string(paths.next_root.join("active-engine.txt")).ok()?
+        fs::read_to_string(paths.next_root.join("active-engine.txt"))
+            .ok()?
+            .trim()
+            .to_owned()
     } else {
         bundled_engine_id.to_string()
     };
@@ -3513,6 +3516,27 @@ mod tests {
 
     // Round 3, finding 7: a failed install resumes the worker only when the old one ended,
     // and always clears the flag that blocks workers.
+    #[test]
+    fn the_active_engine_is_found_when_its_file_ends_with_a_line_break() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let engine = paths
+            .next_root
+            .join("engines/edited/engine")
+            .join(if cfg!(windows) {
+                "localsr-worker.exe"
+            } else {
+                "localsr-worker"
+            });
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        fs::write(&engine, b"engine").unwrap();
+        fs::write(paths.next_root.join("active-engine.txt"), b"edited\r\n").unwrap();
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, ""),
+            Some(engine)
+        );
+    }
+
     #[test]
     fn round3_resuming_after_a_failed_install_never_doubles_the_worker() {
         let root = tempfile::tempdir().unwrap();
