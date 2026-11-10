@@ -259,8 +259,10 @@ pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
-    ensure_queue_idle(&state)?;
-    lock(&state.database)?.remove_media(&id)?;
+    // The scheduler lock keeps the dispatcher from sending this picture's job meanwhile. The
+    // batch the engine already holds is not removed from under it.
+    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
+    lock(&state.database)?.remove_media_guarded(&id, &engine_jobs)?;
     emit_state_changed(&app);
     Ok(())
 }

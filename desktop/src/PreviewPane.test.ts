@@ -422,7 +422,6 @@ it('shows overlapping SeedVR2 regions over the source without inventing a HAT gr
   const { component, container } = render(PreviewPane, {
     selectedMedia,
     processing: true,
-    activityLabel: 'Encoding clip',
     resultPreview: '',
     completedVideoOutput: '',
   });

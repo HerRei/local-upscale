@@ -852,3 +852,92 @@ fn only_the_scratch_folders_recorded_for_unfinished_jobs_come_back_after_a_stop(
         .collect();
     assert_eq!(ids, ["waiting"]);
 }
+
+fn queue_of_four(db: &Database) {
+    for n in 1..=4 {
+        db.insert_media(&format!("m{n}"), &format!("/tmp/m{n}.png"), "m", "image")
+            .unwrap();
+    }
+    db.insert_job("j1", "m1", "{}").unwrap();
+    db.finish_job("j1", "completed", "/out/1.png", "").unwrap();
+    db.insert_job("j2", "m2", "{}").unwrap();
+    db.set_job_status("j2", "running").unwrap();
+    db.insert_job("j3", "m3", "{}").unwrap();
+}
+
+#[test]
+fn removing_a_queued_picture_takes_its_job_out_of_the_next_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    queue_of_four(&db);
+    db.insert_job("j4", "m4", "{}").unwrap();
+    db.remove_media_guarded("m3", &[]).unwrap();
+    assert_eq!(db.next_queued_job().unwrap().unwrap().id, "j4");
+    assert!(!db.list_jobs().unwrap().iter().any(|job| job.id == "j3"));
+}
+
+#[test]
+fn removing_a_finished_picture_keeps_the_run_going() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    queue_of_four(&db);
+    db.remove_media_guarded("m1", &[]).unwrap();
+    let jobs = db.list_jobs().unwrap();
+    assert!(jobs
+        .iter()
+        .any(|job| job.id == "j2" && job.status == "running"));
+    assert!(jobs
+        .iter()
+        .any(|job| job.id == "j3" && job.status == "queued"));
+    assert!(db.has_inflight_jobs().unwrap());
+}
+
+#[test]
+fn removing_a_running_picture_is_refused_with_the_sentence() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    queue_of_four(&db);
+    let error = db.remove_media_guarded("m2", &[]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Cannot remove while it is running. Cancel the run instead."
+    );
+    assert!(db.get_media("m2").unwrap().is_some());
+}
+
+#[test]
+fn a_queued_photo_the_engine_already_holds_is_not_removed() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    queue_of_four(&db);
+    assert!(db
+        .remove_media_guarded("m3", &["j2".to_string(), "j3".to_string()])
+        .is_err());
+    assert!(db.get_media("m3").unwrap().is_some());
+}
+
+#[test]
+fn removal_never_leaves_a_job_for_a_missing_picture_and_selects_the_running_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    queue_of_four(&db);
+    db.select_media("m3").unwrap();
+    db.remove_media_guarded("m3", &[]).unwrap();
+    let orphans: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM jobs WHERE media_id NOT IN (SELECT id FROM media)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphans, 0);
+    let selected: Vec<String> = db
+        .list_media()
+        .unwrap()
+        .into_iter()
+        .filter(|media| media.selected)
+        .map(|media| media.id)
+        .collect();
+    assert_eq!(selected, ["m2"]);
+}

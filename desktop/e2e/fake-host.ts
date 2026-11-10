@@ -39,6 +39,12 @@ export interface Scenario {
   finished?: boolean;
   /** A queue is running: the first photo is processing and the rest wait. */
   running?: boolean;
+  /** With `running`: the state of each photo (1-based) instead of "first runs, rest wait". */
+  rows?: Record<number, { status: string; progress?: number; elapsed_seconds?: number }>;
+  /** With `running`: only the first n photos have jobs; the others are new input. */
+  jobPhotos?: number;
+  /** With `running`: the photo (1-based) that is selected; the first by default. */
+  selected?: number;
   /** The first photo could not be read: its name and the reason the host gives. */
   unreadable?: { name: string; error: string };
 }
@@ -159,6 +165,8 @@ function hostScript(scenario: Scenario): void {
       model.installed = true;
     }
     s.media = Array.from({ length: scenario.photos ?? 0 }, (_, i) => photo(i + 1));
+    if (scenario.running && scenario.selected)
+      for (const [i, m] of s.media.entries()) m.selected = i + 1 === scenario.selected;
     if (scenario.video) {
       s.media.push({
         ...photo(1),
@@ -176,19 +184,22 @@ function hostScript(scenario: Scenario): void {
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
-      s.runtime.active_job_id = 'job-photo-1';
+      const rows = scenario.rows ?? {};
+      const running = Object.entries(rows).find(([, row]) => row.status === 'running');
+      s.runtime.active_job_id = `job-photo-${running ? running[0] : 1}`;
       s.runtime.status_title = 'Processing';
       s.runtime.progress = 40;
-      s.jobs = Array.from({ length: scenario.photos ?? 1 }, (_, index) => ({
+      s.jobs = Array.from({ length: scenario.jobPhotos ?? scenario.photos ?? 1 }, (_, index) => ({
         id: `job-photo-${index + 1}`,
         media_id: `photo-${index + 1}`,
         media_name: `Alpine lake ${index + 1}.jpg`,
         media_kind: 'image',
-        status: index === 0 ? 'running' : 'queued',
-        progress: index === 0 ? 40 : 0,
+        status: rows[index + 1]?.status ?? (index === 0 ? 'running' : 'queued'),
+        progress: rows[index + 1]?.progress ?? (index === 0 ? 40 : 0),
+        elapsed_seconds: rows[index + 1]?.elapsed_seconds ?? 0,
         output_path: '',
         error: '',
-        created_at: 1794160000 + index,
+        created_at: 1794160000, // one enqueue: a batch's jobs are created together
       }));
     }
     if (scenario.finished) {

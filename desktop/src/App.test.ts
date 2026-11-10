@@ -532,6 +532,123 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Job activity', () => {
+  const mountRunning = async (snapshot: AppSnapshot) => {
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel' });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Editing/),
+    );
+  };
+  const running = () => {
+    const snapshot = editSnapshot(26);
+    snapshot.settings.task = 'edit';
+    snapshot.settings.edit_model_id = 'flux2_klein_4b_q4_0';
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.status_title = 'Editing';
+    snapshot.runtime.status_detail = 'Loading the model';
+    snapshot.runtime.progress = 5;
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 5,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  };
+
+  it('has one progress display for a running edit and names the model in the status bar', async () => {
+    await mountRunning(running());
+    expect(document.querySelector('.model-activity')).toBeNull();
+    const bars = screen.getAllByRole('progressbar').filter((bar) => !bar.closest('.media-list'));
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute('aria-valuenow')).toBe('5');
+    const bar = document.querySelector('.status-bar')!;
+    expect(bar.querySelector('strong')?.textContent).toBe('Editing · 5%');
+    const detail = bar.querySelector('.status-detail')!;
+    expect(detail.textContent).toMatch(/^FLUX\.2 klein 4B.* · Loading the model$/);
+    expect(detail.getAttribute('title')).toBe(detail.textContent);
+    expect(detail.getAttribute('role')).toBe('status');
+    expect(screen.getAllByRole('status').filter((node) => bar.contains(node))).toHaveLength(1);
+  });
+
+  it('offers no Add to queue button while the running picture is the selected one', async () => {
+    await mountRunning(running());
+    expect(screen.queryByRole('button', { name: /to queue$/ })).toBeNull();
+  });
+});
+
+describe('Cancel buttons while work runs', () => {
+  const job = (n: number, status: JobRecord['status']): JobRecord => ({
+    id: `job-${n}`,
+    media_id: `p${n}`,
+    media_name: `p${n}.png`,
+    media_kind: 'image',
+    status,
+    progress: 0,
+    output_path: '',
+    error: '',
+    created_at: 1_000,
+  });
+  const mount = async (jobs: JobRecord[], lanes: string[] = []) => {
+    const snapshot = readySnapshot([1, 2, 3, 4].map((n) => image(`p${n}`, n === 1)));
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.active_batch_job_ids = lanes;
+    snapshot.jobs = jobs;
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findAllByRole('button', { name: /^Cancel/ });
+  };
+  const cancels = () =>
+    [...document.querySelectorAll('.status-actions .button')]
+      .map((button) => button.textContent)
+      .filter((text) => /^Cancel/.test(text ?? ''));
+
+  it('says Cancel for the one job, with no queue and no per-image button', async () => {
+    await mount([job(1, 'running')]);
+    expect(cancels()).toEqual(['Cancel']);
+  });
+
+  it('says Cancel queue when jobs wait behind the running one', async () => {
+    await mount([job(1, 'running'), job(2, 'queued'), job(3, 'queued'), job(4, 'queued')]);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('says Cancel queue for two lanes with nothing queued', async () => {
+    await mount([job(1, 'running'), job(2, 'running')], ['job-1', 'job-2']);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('changes to Cancel when the queue drains to its last job', async () => {
+    const current = readySnapshot([image('p1', true), image('p2')]);
+    current.settings.task = 'upscale';
+    current.runtime.active_job_id = 'job-2';
+    current.jobs = [job(2, 'running'), job(1, 'completed')];
+    current.jobs.push(job(3, 'queued'));
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel queue' });
+    current.jobs = current.jobs.filter((entry) => entry.id !== 'job-3');
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await screen.findByRole('button', { name: 'Cancel' });
+    expect(screen.queryByRole('button', { name: 'Cancel queue' })).toBeNull();
+  });
+});
+
 describe('LocalSR desktop interface', () => {
   it('puts an imported folder batch in a LocalSR Results subfolder', async () => {
     const snapshot = readySnapshot();
@@ -1440,9 +1557,8 @@ describe('LocalSR desktop interface', () => {
       true,
     );
     expect(screen.getByRole('button', { name: 'Add Media…' }).matches(':disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Add selected to queue' }).matches(':disabled')).toBe(
-      true,
-    );
+    // The selected video cannot join an upscale queue: no button, not a disabled one.
+    expect(screen.queryByRole('button', { name: 'Add selected to queue' })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
@@ -2289,6 +2405,102 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('button', { name: /^Start \d+ items?$/ })).toBeNull();
   });
 
+  describe('adding to a running queue', () => {
+    const job = (n: number, status: JobRecord['status']): JobRecord => ({
+      id: `job-${n}`,
+      media_id: `p${n}`,
+      media_name: `p${n}.png`,
+      media_kind: 'image',
+      status,
+      progress: status === 'running' ? 40 : 0,
+      output_path: '',
+      error: status === 'failed' ? 'broke' : '',
+      created_at: 1_000, // one enqueue: the jobs of a batch are created together
+    });
+    // p1-p3 finished, p4 runs, p5-p7 wait: the queue of one run.
+    const running = (extra: MediaItem[] = [], selected = 'p4', batch = true) => {
+      const media = [1, 2, 3, 4, 5, 6, 7].map((n) => image(`p${n}`, `p${n}` === selected));
+      const snapshot = readySnapshot([...media, ...extra]);
+      for (const item of snapshot.media) item.selected = item.id === selected;
+      snapshot.settings.batch_mode = batch;
+      snapshot.settings.task = 'upscale';
+      snapshot.runtime.active_job_id = 'job-4';
+      snapshot.jobs = [
+        job(7, 'queued'),
+        job(6, 'queued'),
+        job(5, 'queued'),
+        job(4, 'running'),
+        job(3, 'completed'),
+        job(2, 'completed'),
+        job(1, 'completed'),
+      ];
+      return snapshot;
+    };
+    const addButton = () => screen.queryByRole('button', { name: /^Add (selected|\d+) to queue$/ });
+
+    it('offers nothing while every input has a job in this run', async () => {
+      await mountWith(running());
+      expect(addButton()).toBeNull();
+    });
+
+    it('counts only the inputs added after the queue started', async () => {
+      await mountWith(running([image('n1'), image('n2')]));
+      expect(addButton()?.textContent).toBe('Add 2 to queue');
+    });
+
+    it('does not count an input whose job in this run failed or was cancelled', async () => {
+      const snapshot = running([image('n1'), image('n2')]);
+      snapshot.jobs[6] = job(1, 'failed');
+      snapshot.jobs[5] = job(2, 'cancelled');
+      await mountWith(snapshot);
+      expect(addButton()?.textContent).toBe('Add 2 to queue');
+    });
+
+    it('counts a finished picture from an earlier run as old, but not as new input once it ran', async () => {
+      const snapshot = running([image('n1')]);
+      snapshot.jobs.push({ ...job(8, 'completed'), media_id: 'n1', created_at: 10 });
+      await mountWith(snapshot);
+      // The earlier run's job is not part of this run, so the picture is still offered.
+      expect(addButton()?.textContent).toBe('Add 1 to queue');
+    });
+
+    it('offers Add selected to queue only for a selected input that is new', async () => {
+      await mountWith(running([image('n1')], 'p2', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'p4', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'p6', false));
+      expect(addButton()).toBeNull();
+      cleanup();
+      await mountWith(running([image('n1')], 'n1', false));
+      expect(addButton()?.textContent).toBe('Add selected to queue');
+    });
+
+    it('shows the button when new inputs arrive while the queue runs', async () => {
+      const current = running();
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+      await screen.findByRole('button', { name: 'Cancel queue' });
+      expect(addButton()).toBeNull();
+      current.media.push(image('n1'), image('n2'));
+      await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+      (api.listenForStateChange.mock.calls[0][0] as () => void)();
+      await waitFor(() => expect(addButton()?.textContent).toBe('Add 2 to queue'));
+    });
+
+    it('leaves the idle counts alone once the queue has ended', async () => {
+      const snapshot = running();
+      snapshot.runtime.active_job_id = '';
+      snapshot.jobs = snapshot.jobs.map((entry) => ({ ...entry, status: 'completed' }));
+      await mountWith(snapshot);
+      expect(screen.getByRole('button', { name: 'Only this one' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /all 7/i })).toBeTruthy();
+    });
+  });
+
   it('has no Process line and keeps the scope buttons out of the Media pane', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     snapshot.settings.task = 'upscale';
@@ -2318,7 +2530,7 @@ describe('LocalSR desktop interface', () => {
     });
     render(App);
     const user = userEvent.setup();
-    const cancel = await screen.findByRole('button', { name: 'Cancel queue' });
+    const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);

@@ -316,7 +316,7 @@ input:focus-visible {
 /* Under the Enhance header while a queue runs; the header already says it is locked. */
 .settings-lock {
   flex: none;
-  margin: -12px 16px 0;
+  margin: 0 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.4;
@@ -418,8 +418,29 @@ input:focus-visible {
 .media-row:hover {
   background: rgba(255, 255, 255, 0.035);
 }
+/* Lighter at the thumbnail and fading out, so it reads differently from the flat selected grey. */
+.media-row.running {
+  background: linear-gradient(90deg, var(--raised), var(--panel));
+}
 .media-row.selected {
   background: rgba(255, 255, 255, 0.075);
+}
+/* The running picture's own progress, inside the row's bottom edge. */
+.row-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--border);
+}
+.row-progress i {
+  position: relative;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  background: var(--accent-hi);
+  transition: width 0.5s ease;
 }
 .media-select {
   min-width: 0;
@@ -488,10 +509,9 @@ input:focus-visible {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
   line-height: 1;
-  text-transform: capitalize;
 }
-.media-copy .queue-state.failed {
-  text-transform: none;
+.media-row.running .queue-state {
+  color: var(--text);
 }
 .remove {
   appearance: none;
@@ -1355,7 +1375,8 @@ input[type='number'],
   transition: width 0.5s ease;
 }
 /* A moving shine shows that work continues between progress updates. */
-.progress i::after {
+.progress i::after,
+.row-progress i::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1377,7 +1398,8 @@ input[type='number'],
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .progress i::after {
+  .progress i::after,
+  .row-progress i::after {
     animation: none;
   }
 }
