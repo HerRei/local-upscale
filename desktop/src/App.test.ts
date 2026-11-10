@@ -2055,6 +2055,22 @@ describe('LocalSR desktop interface', () => {
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });
 
+  it('asks before Clear: Cancel keeps the list, confirming clears it', async () => {
+    const snapshot = readySnapshot([image('first', true), image('second', false)]);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Clear all 2 items from the list?');
+    expect(screen.getByRole('dialog').textContent).toContain('not deleted');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.clearMedia).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(api.clearMedia).toHaveBeenCalledTimes(1));
+  });
+
   it('appends from the main Add Media action even in single mode', async () => {
     const snapshot = readySnapshot([image('first', true)]);
     api.chooseMediaFiles.mockResolvedValueOnce(['/private/second.png']);

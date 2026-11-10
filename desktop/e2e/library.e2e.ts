@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openApp } from './app';
+import { openApp, showPane } from './app';
 import { empty, upscale, withOutputs } from './fixtures';
 import { hostCalls } from './fake-host';
 
@@ -12,13 +12,13 @@ test.describe('Inputs and Outputs tabs', () => {
     page,
   }) => {
     await openApp(page, withOutputs);
-    await expect(mediaTabs(page).getByRole('tab', { name: 'Inputs 2' })).toHaveAttribute(
+    await expect(mediaTabs(page).getByRole('tab', { name: 'Inputs' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
     await expect(page.getByRole('button', { name: /^Alpine lake 2\.jpg/ })).toBeVisible();
 
-    await mediaTabs(page).getByRole('tab', { name: 'Outputs 4' }).click();
+    await mediaTabs(page).getByRole('tab', { name: 'Outputs' }).click();
     const outputs = page.getByRole('group', { name: 'Outputs' });
     await expect(outputs.getByText('3 outputs')).toBeVisible();
     await expect(outputs.getByText('1 output', { exact: true })).toBeVisible();
@@ -31,7 +31,7 @@ test.describe('Inputs and Outputs tabs', () => {
     await page.getByRole('button', { name: 'Unfold Alpine lake 1.jpg' }).click();
     await expect(tick(page, 'HAT-S ×4, Alpine lake 1.jpg')).toBeVisible();
 
-    await mediaTabs(page).getByRole('tab', { name: 'Inputs 2' }).click();
+    await mediaTabs(page).getByRole('tab', { name: 'Inputs' }).click();
     await expect(page.getByRole('button', { name: /^Alpine lake 1\.jpg/ })).toBeVisible();
   });
 
@@ -155,6 +155,101 @@ test.describe('Compare', () => {
     await mediaTabs(page)
       .getByRole('tab', { name: /^Outputs/ })
       .click();
+    await expect(page.getByText('0 of 4 slots')).toBeVisible();
+  });
+});
+
+test.describe('Help buttons', () => {
+  async function expectShown(page: Page, name: string): Promise<void> {
+    const tip = page.getByRole('button', { name });
+    const text = page.getByRole('tooltip').filter({ visible: true });
+    await expect(text).toHaveCount(1);
+    const box = (await text.boundingBox())!;
+    const view = page.viewportSize()!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(view.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(view.height);
+    // Nothing covers the text: the element at its centre is the text itself.
+    const covered = await text.evaluate((node) => {
+      const r = node.getBoundingClientRect();
+      (node as HTMLElement).style.pointerEvents = 'auto';
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      (node as HTMLElement).style.pointerEvents = '';
+      return !hit || !node.contains(hit);
+    });
+    expect(covered).toBe(false);
+    // And it is not clipped by an ancestor: its full height is inside the clipped area.
+    const clipped = await text.evaluate((node) => {
+      const r = node.getBoundingClientRect();
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        if (getComputedStyle(el).overflow === 'visible') continue;
+        const a = el.getBoundingClientRect();
+        if (r.bottom > a.bottom + 0.5 || r.right > a.right + 0.5 || r.top < a.top - 0.5)
+          return true;
+      }
+      return false;
+    });
+    expect(clipped).toBe(false);
+    await tip.blur();
+  }
+
+  test('every ? opens by click and by keyboard with its text fully visible', async ({ page }) => {
+    await openApp(page, withOutputs);
+    await showPane(page, 'media');
+    await page.getByRole('tab', { name: 'Outputs' }).click();
+    await page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' }).check();
+    await page.getByRole('checkbox', { name: 'HAT-S ×4, Alpine lake 1.jpg' }).check();
+    await page.getByRole('button', { name: 'Show in Compare 2' }).click();
+    await expect(page.getByRole('slider')).toBeVisible();
+    await showPane(page, 'preview');
+    // The left pane (Inputs, Outputs, Compare bar) has no ? button; the Compare tab has one.
+    await expect(page.getByRole('button', { name: 'About Compare' })).toHaveCount(1);
+    const tip = page.getByRole('button', { name: 'About Compare' });
+    await tip.click();
+    await expectShown(page, 'About Compare');
+    await page.mouse.move(0, 0);
+    await tip.focus();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('tooltip').filter({ visible: true })).toHaveCount(0);
+    await tip.blur();
+    await page.keyboard.press('Tab');
+    await tip.focus();
+    await expectShown(page, 'About Compare');
+  });
+});
+
+test.describe('Clear', () => {
+  test('asks first, Cancel and Escape keep the list, Clear empties it', async ({ page }) => {
+    await openApp(page, withOutputs);
+    await showPane(page, 'media');
+    const clear = page.getByRole('button', { name: 'Clear', exact: true });
+    const dialog = page.getByRole('dialog');
+    await clear.click();
+    await expect(dialog).toContainText('Clear all 2 items from the list?');
+    await expect(dialog).toContainText('not deleted');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(await hostCalls(page, 'clear_media')).toHaveLength(0);
+    await clear.click();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect(await hostCalls(page, 'clear_media')).toHaveLength(0);
+    await page.getByText('Alpine lake 2.jpg').first().waitFor();
+    await clear.click();
+    await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await hostCalls(page, 'clear_media')).length).toBe(1);
+    await expect(page.getByText('Add media to begin')).toBeVisible();
+  });
+
+  test('the Compare bar Clear only drops the picks and does not ask', async ({ page }) => {
+    await openApp(page, withOutputs);
+    await showPane(page, 'media');
+    await page.getByRole('tab', { name: 'Outputs' }).click();
+    await page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' }).check();
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText('0 of 4 slots')).toBeVisible();
   });
 });

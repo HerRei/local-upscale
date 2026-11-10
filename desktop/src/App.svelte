@@ -232,6 +232,8 @@
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
   let modalTitle = '';
   let modalMessage = '';
+  /** Set for a yes/no question: the modal then offers Cancel and the destructive action. */
+  let modalConfirm: { label: string; run: () => Promise<void> } | null = null;
   // The FFmpeg notice: once per batch of videos LocalSR cannot decode, and
   // before an H.264/HEVC export starts without a selected FFmpeg.
   let ffmpegNotice: { context: 'open' | 'export'; paths: string[] } | null = null;
@@ -2318,8 +2320,7 @@
           await api.openOutputDirectory();
           break;
         case 'file.clear':
-          await api.clearMedia();
-          await refresh();
+          askClearMedia();
           break;
         case 'file.start':
           if (canStart) await start();
@@ -2543,9 +2544,37 @@
   function closeModal(): void {
     modalTitle = '';
     modalMessage = '';
+    modalConfirm = null;
     modalKind = 'message';
     diagnostics = '';
     integration = null;
+  }
+
+  /** Clear removes the list entries only, so it asks first and says what stays. */
+  function askClearMedia(): void {
+    const count = snapshot.media.length;
+    if (count === 0 || snapshot.runtime.active_job_id) return;
+    showModal(
+      `Clear all ${count} ${count === 1 ? 'item' : 'items'} from the list?`,
+      'This removes them from the Inputs and Outputs lists and clears the current preview. The files on disk, including saved outputs, are not deleted.',
+    );
+    modalConfirm = {
+      label: 'Clear',
+      run: async () => {
+        await api.clearMedia();
+        await refresh();
+      },
+    };
+  }
+
+  async function confirmModal(): Promise<void> {
+    const confirm = modalConfirm;
+    closeModal();
+    await confirm?.run();
+  }
+
+  function modalKey(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && modalConfirm) closeModal();
   }
 
   function closeFromBackdrop(event: MouseEvent): void {
@@ -2565,6 +2594,8 @@
     previewPane?.queueProgressiveTile(message, snapshot.runtime.active_job_id);
   }
 </script>
+
+<svelte:window on:keydown={modalKey} />
 
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
@@ -2634,10 +2665,7 @@
         await api.removeMedia(id);
         await refresh();
       }}
-      clearMedia={async () => {
-        await api.clearMedia();
-        await refresh();
-      }}
+      clearMedia={askClearMedia}
     />
 
     <div class="main-area" class:compact-hidden={page !== 'preview'}>
@@ -4070,7 +4098,12 @@
             on:click={() => changeIntegrations(!integration?.installed)}
             >{integration.installed ? 'Remove integrations' : 'Install integrations'}</button
           >{/if}
-        <button class="button primary" on:click={closeModal}>OK</button>
+        {#if modalConfirm}
+          <button class="button" on:click={closeModal}>Cancel</button>
+          <button class="button danger" on:click={confirmModal}>{modalConfirm.label}</button>
+        {:else}
+          <button class="button primary" on:click={closeModal}>OK</button>
+        {/if}
       </div>
     </div>
   </div>

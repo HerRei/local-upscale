@@ -14,6 +14,7 @@
   export let compareActive: boolean;
   export let historyError = '';
   let tab: 'inputs' | 'outputs' = 'inputs';
+  $: outputCount = groups.reduce((n, group) => n + group.outputs.length, 0);
   function tabKey(event: KeyboardEvent): void {
     const next = tabFromKey(event.key, tab === 'inputs' ? 0 : 1, 2);
     if (next === null) return;
@@ -38,7 +39,7 @@
   export let selectQueueMedia: (id: string) => Promise<void>;
   export let addFolder: () => Promise<void>;
   export let removeMedia: (id: string) => Promise<void>;
-  export let clearMedia: () => Promise<void>;
+  export let clearMedia: () => void;
 
   /** The item's newest job when it failed, so the row says it has no result and why (tooltip).
    *  A later run that finished clears it. */
@@ -54,43 +55,51 @@
 
 <aside class="media-pane pane" class:compact-hidden={compactHidden}>
   <div class="pane-heading" data-tauri-drag-region>
-    <div class="pane-tabs" role="tablist" tabindex="-1" aria-label="Media" on:keydown={tabKey}>
-      <button
-        role="tab"
-        aria-selected={tab === 'inputs'}
-        tabindex={tab === 'inputs' ? 0 : -1}
-        class:active={tab === 'inputs'}
-        on:click={() => (tab = 'inputs')}>Inputs {items.length || ''}</button
-      >
-      <button
-        role="tab"
-        aria-selected={tab === 'outputs'}
-        tabindex={tab === 'outputs' ? 0 : -1}
-        class:active={tab === 'outputs'}
-        on:click={() => (tab = 'outputs')}
-        >Outputs {groups.reduce((n, group) => n + group.outputs.length, 0) || ''}</button
-      >
-    </div>
-    {#if items.length && tab === 'inputs'}
-      <button
-        class="icon-button add-media"
-        title="Add Media…"
-        aria-label="Add Media…"
-        disabled={locked || benchmarkRunning}
-        on:click={() => addFiles(false)}
-        ><svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
-        ></button
-      >
-    {/if}
+    <h1 data-tauri-drag-region>Media</h1>
+    <span class="pane-heading-end" data-tauri-drag-region
+      >{tab === 'inputs'
+        ? `${items.length} ${items.length === 1 ? 'input' : 'inputs'}`
+        : `${outputCount} ${outputCount === 1 ? 'output' : 'outputs'}`}{#if items.length && tab === 'inputs'}<button
+          class="icon-button add-media"
+          title="Add Media…"
+          aria-label="Add Media…"
+          disabled={locked || benchmarkRunning}
+          on:click={() => addFiles(false)}
+          ><svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
+          ></button
+        >{/if}</span
+    >
+  </div>
+  <div
+    class="seg-inline pane-tabs"
+    role="tablist"
+    tabindex="-1"
+    aria-label="Media"
+    on:keydown={tabKey}
+  >
+    <button
+      role="tab"
+      aria-selected={tab === 'inputs'}
+      tabindex={tab === 'inputs' ? 0 : -1}
+      class:active={tab === 'inputs'}
+      on:click={() => (tab = 'inputs')}>Inputs</button
+    >
+    <button
+      role="tab"
+      aria-selected={tab === 'outputs'}
+      tabindex={tab === 'outputs' ? 0 : -1}
+      class:active={tab === 'outputs'}
+      on:click={() => (tab = 'outputs')}>Outputs</button
+    >
   </div>
 
   {#if tab === 'outputs'}
@@ -212,34 +221,23 @@
   {#if items.length && tab === 'inputs'}
     <div class="media-actions">
       <button
-        class="button ghost"
+        class="button"
         title="Add every image in a folder as a batch"
         disabled={benchmarkRunning || Boolean(activeJobId)}
         on:click={addFolder}>Add Folder…</button
       >
-      <button class="button ghost" disabled={Boolean(activeJobId)} on:click={clearMedia}
-        >Clear</button
-      >
+      <button class="button" disabled={Boolean(activeJobId)} on:click={clearMedia}>Clear</button>
     </div>
   {/if}
 </aside>
 
 <style>
   .pane-tabs {
+    margin: 0 16px 12px;
+  }
+  .pane-heading-end {
     display: flex;
-    gap: 12px;
-    min-width: 0;
-  }
-  .pane-tabs button {
-    border: 0;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--secondary);
-    padding: 8px 0;
-    white-space: nowrap;
-  }
-  .pane-tabs button.active {
-    color: var(--text);
-    border-bottom-color: var(--text);
+    align-items: center;
+    gap: 4px;
   }
 </style>
