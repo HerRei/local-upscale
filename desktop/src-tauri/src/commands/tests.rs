@@ -896,6 +896,29 @@ fn output_names_do_not_overwrite_existing_or_batched_files() {
     assert_eq!(tiled.file_name().unwrap(), "clip_video_4x.mp4");
 }
 
+#[test]
+fn unrecorded_existing_and_missing_outputs_have_the_same_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        AppState::from_paths(crate::paths::AppPaths::under(&directory.path().join("app"))).unwrap();
+    let recorded = directory.path().join("recorded.png");
+    let existing = directory.path().join("existing.png");
+    fs::write(&recorded, b"result").unwrap();
+    fs::write(&existing, b"private").unwrap();
+    lock(&state.runtime).unwrap().last_output_path = recorded.to_string_lossy().into_owned();
+    let missing = directory.path().join("missing.png");
+    let error = authorized_result(&state, &existing.to_string_lossy())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("output path was not authorized"));
+    assert_eq!(
+        error,
+        authorized_result(&state, &missing.to_string_lossy())
+            .unwrap_err()
+            .to_string()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_recorded_output_that_became_a_link_is_not_authorized() {

@@ -1005,6 +1005,25 @@ fn clearing_the_results_hides_them_for_good_and_keeps_files_and_speed_history() 
 }
 
 #[test]
+fn clearing_results_keeps_queued_jobs_visible_when_they_finish() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+    db.insert_job("queued", "m", "{}").unwrap();
+    db.hide_all_results(&[]).unwrap();
+    let hidden: i64 = db
+        .connection
+        .query_row("SELECT hidden FROM jobs WHERE id='queued'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(hidden, 0);
+    db.finish_job("queued", "completed", "/out/result.png", "")
+        .unwrap();
+    assert_eq!(db.list_all_media_results().unwrap()[0].results.len(), 1);
+}
+
+#[test]
 fn results_are_not_cleared_while_a_picture_is_being_worked_on() {
     let directory = tempfile::tempdir().unwrap();
     let db = Database::open(&directory.path().join("queue.db")).unwrap();

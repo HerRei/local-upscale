@@ -636,7 +636,10 @@ impl Database {
         if working {
             return Err(AppError::Validation(CANNOT_REMOVE_RUNNING.into()));
         }
-        transaction.execute("UPDATE jobs SET hidden=1 WHERE hidden=0", [])?;
+        transaction.execute(
+            "UPDATE jobs SET hidden=1 WHERE hidden=0 AND status IN ('completed','failed','cancelled','interrupted')",
+            [],
+        )?;
         transaction.commit()?;
         Ok(())
     }

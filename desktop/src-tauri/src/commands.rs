@@ -818,7 +818,12 @@ fn refuse_when_disk_is_short(
     };
     let (width, height) = (u64::from(first.width), u64::from(first.height));
     let need = if input.task == "video" {
-        crate::disk_room::video_bytes(width * saved, height * saved, first.frame_count, false)
+        crate::disk_room::video_bytes(
+            width.saturating_mul(saved),
+            height.saturating_mul(saved),
+            first.frame_count,
+            false,
+        )
     } else {
         crate::disk_room::image_need(width, height, native, saved, &input.output_format, false)
             .total()
@@ -3346,8 +3351,15 @@ fn is_openable_output(path: &Path) -> bool {
 fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     let recorded = lock(&state.database)?.is_completed_output(requested)?;
     let last_output = lock(&state.runtime)?.last_output_path.clone();
-    if !recorded && last_output.is_empty() {
-        return Err(AppError::Validation("there is no completed output".into()));
+    let is_last_output = !last_output.is_empty()
+        && (last_output == requested
+            || fs::canonicalize(&last_output)
+                .map(|expected| expected == Path::new(requested))
+                .unwrap_or(false));
+    if !recorded && !is_last_output {
+        return Err(AppError::Validation(
+            "output path was not authorized".into(),
+        ));
     }
     fs::symlink_metadata(requested)?;
     crate::results::ensure_not_linked(Path::new(requested))?;

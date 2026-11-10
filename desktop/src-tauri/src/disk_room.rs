@@ -32,11 +32,43 @@ pub struct Volume {
 }
 
 pub fn reserve(volume: &Volume) -> u64 {
+    reserve_with_override(
+        volume,
+        &std::env::var("LOCALSR_DISK_RESERVE_BYTES").unwrap_or_default(),
+    )
+}
+
+fn reserve_with_override(volume: &Volume, value: &str) -> u64 {
+    let mut parsed = Some(0_u64);
+    let attributes = value.chars().map(decimal_digit).collect::<Option<Vec<_>>>();
+    if let Some(digits) = attributes.filter(|digits| !digits.is_empty()) {
+        for digit in digits {
+            parsed = parsed.and_then(|n| n.checked_mul(10)?.checked_add(u64::from(digit)));
+        }
+        return parsed.unwrap_or(u64::MAX);
+    }
     if volume.system {
         SYSTEM_RESERVE
     } else {
         OTHER_RESERVE
     }
+}
+
+fn decimal_digit(character: char) -> Option<u32> {
+    const ZEROES: &[u32] = &[
+        0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
+        0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
+        0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
+        0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450,
+        0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50,
+        0x11D50, 0x11DA0, 0x11DE0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0,
+        0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950,
+        0x1FBF0,
+    ];
+    let code = character as u32;
+    ZEROES
+        .iter()
+        .find_map(|zero| code.checked_sub(*zero).filter(|digit| *digit < 10))
 }
 
 /// Decimal units, as the app's other size messages.
@@ -51,16 +83,23 @@ pub fn format_size(bytes: u64) -> String {
 }
 
 pub fn encoded_bound(format: &str, width: u64, height: u64, alpha: bool) -> u64 {
-    let pixels = width * height;
-    match format.to_ascii_lowercase().as_str() {
-        "jpg" | "jpeg" => 2 * pixels + SLACK,
-        "heic" => pixels + SLACK,
-        "webp" => (if alpha { 3 } else { 2 }) * pixels + SLACK,
-        _ => {
-            let raw = (if alpha { 4 } else { 3 }) * pixels;
-            raw + raw / 256 + height + SLACK
+    let calculate = || -> Option<u64> {
+        let pixels = width.checked_mul(height)?;
+        match format.to_ascii_lowercase().as_str() {
+            "jpg" | "jpeg" => 2_u64.checked_mul(pixels)?.checked_add(SLACK),
+            "heic" => pixels.checked_add(SLACK),
+            "webp" => (if alpha { 3_u64 } else { 2 })
+                .checked_mul(pixels)?
+                .checked_add(SLACK),
+            _ => {
+                let raw = (if alpha { 4_u64 } else { 3 }).checked_mul(pixels)?;
+                raw.checked_add(raw / 256)?
+                    .checked_add(height)?
+                    .checked_add(SLACK)
+            }
         }
-    }
+    };
+    calculate().unwrap_or(u64::MAX)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,7 +112,7 @@ pub struct ImageNeed {
 
 impl ImageNeed {
     pub fn total(&self) -> u64 {
-        self.scratch + self.encoded
+        self.scratch.saturating_add(self.encoded)
     }
 }
 
@@ -91,20 +130,33 @@ pub fn image_need(
         output_scale
     };
     ImageNeed {
-        scratch: MEMMAP_CHANNELS * width * scale * height * scale,
-        encoded: encoded_bound(format, width * saved, height * saved, alpha),
+        scratch: MEMMAP_CHANNELS
+            .checked_mul(width)
+            .and_then(|n| n.checked_mul(scale))
+            .and_then(|n| n.checked_mul(height))
+            .and_then(|n| n.checked_mul(scale))
+            .unwrap_or(u64::MAX),
+        encoded: encoded_bound(
+            format,
+            width.saturating_mul(saved),
+            height.saturating_mul(saved),
+            alpha,
+        ),
     }
 }
 
 pub fn video_bytes(width: u64, height: u64, frames: u64, master: bool) -> u64 {
-    let frames = frames.max(1);
-    let encoded = width * height * frames / VIDEO_BYTES_PER_PIXEL_FRAME + SLACK;
-    let lossless = if master {
-        (width * height * frames) as f64 * 0.9
-    } else {
-        0.0
+    let calculate = || -> Option<u64> {
+        let pixels = width.checked_mul(height)?.checked_mul(frames.max(1))?;
+        let encoded = (pixels / VIDEO_BYTES_PER_PIXEL_FRAME).checked_add(SLACK)?;
+        let lossless = if master {
+            (pixels as f64 * 0.9) as u64
+        } else {
+            0
+        };
+        encoded.checked_mul(2)?.checked_add(lossless)
     };
-    2 * encoded + lossless as u64
+    calculate().unwrap_or(u64::MAX)
 }
 
 /// The output folder, not the hidden per-job folder the host makes inside it.
@@ -117,7 +169,7 @@ fn shown(folder: &Path) -> &Path {
 
 /// The sentence for a job that needs `need` bytes in `folder`, or None when it fits.
 pub fn refusal(folder: &Path, need: u64, volume: &Volume) -> Option<String> {
-    if volume.free.saturating_sub(reserve(volume)) >= need {
+    if need != u64::MAX && volume.free.saturating_sub(reserve(volume)) >= need {
         return None;
     }
     Some(format!(
@@ -239,9 +291,27 @@ pub fn request_need(
             } else {
                 output_scale
             };
+            if width == 0 || height == 0 {
+                return None;
+            }
+            let kind = data["model_kind"].as_str().unwrap_or("spandrel_image");
+            let (output_width, output_height) = if kind == "spandrel_image" {
+                (width.saturating_mul(scale), height.saturating_mul(scale))
+            } else if kind == "seedvr2" {
+                let shortest = width.min(height);
+                let target = data["target_resolution"].as_u64().unwrap_or(0);
+                let target = if target == 0 { shortest } else { target };
+                let grown = target as f64 / shortest as f64;
+                (
+                    (width as f64 * grown).round_ties_even() as u64,
+                    (height as f64 * grown).round_ties_even() as u64,
+                )
+            } else {
+                return None;
+            };
             Some((
                 folder.to_path_buf(),
-                video_bytes(width * scale, height * scale, media.frame_count, false),
+                video_bytes(output_width, output_height, media.frame_count, false),
             ))
         }
         _ => None,
@@ -306,6 +376,55 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn oversized_video_is_refused_without_overflow() {
+        let request = json!({"type": "video_job_request", "data": {
+            "output_video_path": "/out/a.mp4", "output_scale": 4,
+            "model_kind": "spandrel_image"}});
+        let mut clip = media(1024, 1024);
+        clip.frame_count = 1_u64 << 40;
+        let (folder, need) = request_need(&request, Some(&clip), 4).unwrap();
+        let volume = Volume {
+            free: 8_100_000_000,
+            total: 10_000_000_000,
+            system: true,
+        };
+        assert!(refusal(&folder, need, &volume).is_some());
+    }
+
+    #[test]
+    fn temporal_video_uses_target_resolution_for_disk_need() {
+        let request = json!({"type": "video_job_request", "data": {
+            "output_video_path": "/out/a.mp4", "output_scale": 4,
+            "model_kind": "seedvr2", "target_resolution": 1080}});
+        let mut clip = media(1920, 1080);
+        clip.frame_count = 300;
+        let (folder, need) = request_need(&request, Some(&clip), 4).unwrap();
+        let volume = Volume {
+            free: 8_100_000_000,
+            total: 10_000_000_000,
+            system: true,
+        };
+        assert!(refusal(&folder, need, &volume).is_none());
+    }
+
+    #[test]
+    fn disk_reserve_override_accepts_zero_and_decimal_values() {
+        let volume = Volume {
+            free: 0,
+            total: 0,
+            system: true,
+        };
+        assert_eq!(reserve_with_override(&volume, "0"), 0);
+        assert_eq!(reserve_with_override(&volume, "12345"), 12345);
+        assert_eq!(reserve_with_override(&volume, "١٢"), 12);
+        assert_eq!(
+            reserve_with_override(&volume, "18446744073709551616"),
+            u64::MAX
+        );
+        assert_eq!(reserve_with_override(&volume, "garbage"), SYSTEM_RESERVE);
     }
 
     #[test]
