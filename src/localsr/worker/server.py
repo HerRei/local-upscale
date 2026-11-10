@@ -26,6 +26,7 @@ from localsr.core.benchmark import (
     WORKLOAD_VERSION,
     run_benchmark,
 )
+from localsr.core.eta import RemainingTime
 from localsr.core.hardware import get_capability_report
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
@@ -1051,6 +1052,12 @@ class WorkerServer:
 
         started_at = _time.monotonic()
         state = {"done": 0, "remaining": 0.0}
+        # Whole chunks are the unit of work. The first one carries the model's loading and
+        # warm-up, so the speed comes from the chunks after it; one measured chunk is
+        # enough because a chunk is many frames.
+        remaining_time = (
+            RemainingTime(float(total_frames), min_intervals=1) if total_frames > 0 else None
+        )
 
         def report(stage: str, completed: int = 0, total: int = 0) -> None:
             memory.phase(stage)
@@ -1151,9 +1158,12 @@ class WorkerServer:
                 for frame, rgb in zip(chunk, result[len(context) :], strict=True)
             ]
             state["done"] += len(chunk)
-            elapsed = _time.monotonic() - started_at
-            per_frame = elapsed / max(1, state["done"])
-            remaining = per_frame * max(0, int(total_frames) - state["done"])
+            now = _time.monotonic()
+            elapsed = now - started_at
+            remaining = 0.0
+            if remaining_time is not None:
+                remaining_time.update(now, float(state["done"]))
+                remaining = remaining_time.remaining() or 0.0
             state["remaining"] = float(remaining)
             send_message(
                 VideoFrameCompleted(
@@ -1573,12 +1583,9 @@ class WorkerServer:
                 force=True,
             )
 
-        def progress_cb(frames_done: int, total_frames: int, elapsed: float) -> None:
-            if total_frames > 0:
-                per_frame = elapsed / max(frames_done, 1)
-                remaining = per_frame * max(0, total_frames - frames_done)
-            else:
-                remaining = 0.0
+        def progress_cb(
+            frames_done: int, total_frames: int, elapsed: float, remaining: float | None
+        ) -> None:
             send_message(
                 VideoFrameCompleted(
                     job_id=job_id,
@@ -1586,7 +1593,7 @@ class WorkerServer:
                     total_frames=int(total_frames),
                     frames_processed=int(frames_done),
                     elapsed_seconds=float(elapsed),
-                    estimated_remaining_seconds=float(remaining),
+                    estimated_remaining_seconds=float(remaining or 0.0),
                     jpeg_base64="",
                 )
             )

@@ -383,7 +383,7 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
         kwargs["frame_started_cb"](2, 10)
         kwargs["source_frame_cb"](2, 10, __import__("numpy").zeros((8, 8, 3), dtype="uint8"))
         kwargs["enhanced_frame_cb"](2, 10, __import__("numpy").zeros((8, 8, 3), dtype="uint8"))
-        kwargs["progress_cb"](3, 10, 6.0)
+        kwargs["progress_cb"](3, 10, 6.0, 14.0)
         return SimpleNamespace(
             output_path="output.mp4",
             frames_processed=10,

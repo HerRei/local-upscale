@@ -291,7 +291,7 @@ class AutomationRunner:
                 ),
                 self.engine,
                 self.cancel_event,
-                progress_cb=lambda done, total, elapsed: self.reporter.emit(
+                progress_cb=lambda done, total, elapsed, _remaining: self.reporter.emit(
                     "progress",
                     input_path=str(source),
                     completed=done,

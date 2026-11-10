@@ -7,11 +7,18 @@ compares every estimate it emits with the time that really remained in that simu
 from __future__ import annotations
 
 import math
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from test_video_timing import make_vfr
+
+from localsr.core import video_pipeline
 from localsr.core.pipeline import resolve_image_pipeline
+from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.worker.job_progress import ImageJobProgress
+from localsr.worker.server import WorkerServer
 
 
 def _pipeline(stage_count: int):
@@ -65,14 +72,17 @@ class Run:
         self.samples.append((self.now, update.estimated_remaining_seconds, self.stage))
 
     def check_against_truth(self, finished_at: float, *, after: float = 0.0) -> None:
-        """Every estimate is finite and not negative; later ones sit within a factor of two (a quarter after half the job)."""
+        """Every estimate is finite and not negative; later ones sit near the truth.
+
+        Within a factor of two in the first half of the job, a quarter after that.
+        """
         total = finished_at - 1000.0
-        for time, estimate, _stage in self.samples:
+        for moment, estimate, _stage in self.samples:
             assert math.isfinite(estimate) and estimate >= 0
-            true = finished_at - time
-            if estimate == 0 or time - 1000.0 < after * total:
+            true = finished_at - moment
+            if estimate == 0 or moment - 1000.0 < after * total:
                 continue
-            fraction = (time - 1000.0) / total
+            fraction = (moment - 1000.0) / total
             factor = 2.0 if fraction < 0.5 else 1.25
             assert true / factor <= estimate <= true * factor, (
                 f"at {fraction:.0%}: shows {estimate:.1f}s, {true:.1f}s remain"
@@ -159,5 +169,116 @@ def test_a_lasting_slowdown_is_followed(monkeypatch):
     _grid(run, 100, lambda n: 0.2 if n <= 40 else 2.0)
     finish = run.now
     late = [(t, e) for t, e, _s in run.samples[70:-1]]
-    for time, estimate in late:
-        assert (finish - time) / 1.6 <= estimate <= (finish - time) * 1.6
+    for moment, estimate in late:
+        assert (finish - moment) / 1.6 <= estimate <= (finish - moment) * 1.6
+
+
+class Clock:
+    now = 5000.0
+
+
+class SlowFirstEngine:
+    """Four tiles per frame; the model loads slowly and the first tile compiles for 30 s."""
+
+    def __init__(self, clock, frame_seconds=2.0, tiles=4):
+        self.clock, self.frame_seconds, self.tiles, self.frames = clock, frame_seconds, tiles, 0
+
+    def load_model(self, *_args):
+        self.clock.now += 20.0
+
+    def process_frame(self, *, img_tensor, tile_callback, **_kwargs):
+        first_frame = self.frames == 0
+        self.frames += 1
+        height, width = img_tensor.shape[-2:]
+        for number in range(1, self.tiles + 1):
+            tile_callback("started", None, None, number - 1, self.tiles, width, height, 64)
+            self.clock.now += self.frame_seconds / self.tiles
+            if first_frame and number == 1:
+                self.clock.now += 30.0
+            tile_callback("completed", None, None, number, self.tiles, width, height, 64)
+        return (img_tensor * 255).round().byte().numpy()
+
+
+def test_video_estimate_leaves_out_model_loading_and_the_first_frame(tmp_path, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(video_pipeline, "time", SimpleNamespace(perf_counter=lambda: clock.now))
+    source = make_vfr(tmp_path / "clip.mp4", tuple(index * 40 for index in range(30)))
+    tiles, frames = [], []
+    run_video_job(
+        VideoJobConfig(
+            str(source),
+            "test",
+            str(tmp_path / "out.mp4"),
+            SimpleNamespace(scale=1),
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+        ),
+        SlowFirstEngine(clock),
+        threading.Event(),
+        progress_cb=lambda done, total, elapsed, remaining=None: frames.append(
+            (clock.now, done, remaining)
+        ),
+        tile_progress_cb=lambda frame, total, done, count, elapsed, remaining, size: tiles.append(
+            (clock.now, frame + done / count, remaining)
+        ),
+    )
+    finished = clock.now
+    shown = [(t, f, r) for t, f, r in tiles if r is not None]
+    assert shown, "an estimate is shown once the speed is measured"
+    for time_now, fraction, remaining in shown:
+        true = finished - time_now
+        assert math.isfinite(remaining) and remaining >= 0
+        # The first frame (and so about 3 % of the job) is warm-up; after 10 % every
+        # estimate is within a factor of two of what really remains.
+        if fraction >= 3:
+            assert true / 2 <= remaining <= true * 2, f"{remaining:.0f}s shown, {true:.0f}s left"
+    # The frame-completed number is the same one, not a second formula.
+    for time_now, _done, remaining in frames[3:-1]:
+        assert remaining is not None
+        assert (finished - time_now) / 2 <= remaining <= (finished - time_now) * 2
+
+
+def test_temporal_estimate_leaves_out_model_loading_and_the_first_chunk(tmp_path, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(time, "monotonic", lambda: clock.now)
+    source = make_vfr(tmp_path / "long.mp4", tuple(index * 40 for index in range(73)))
+    messages = []
+    monkeypatch.setattr("localsr.worker.server.send_message", messages.append)
+
+    class Engine:
+        calls = 0
+        max_temporal_window = 9
+
+        def process_frames(self, frames, **_kwargs):
+            clock.now += 1.2 * len(frames) + (40.0 if self.calls == 0 else 0.0)
+            self.calls += 1
+            return frames
+
+    def load(*_args):
+        clock.now += 60.0
+        return Engine()
+
+    worker = SimpleNamespace(cancel_event=threading.Event(), _emit_live_preview=lambda _: None)
+    WorkerServer._run_temporal_video_job(
+        worker,
+        "long",
+        {
+            "video_path": str(source),
+            "output_video_path": str(tmp_path / "out.mp4"),
+            "preview_enabled": False,
+        },
+        load,
+    )
+    done = [m for m in messages if type(m).__name__ == "VideoFrameCompleted"]
+    finished = clock.now
+    assert len(done) > 5
+    # The job's clock started at 5000, so a report's time is 5000 plus its elapsed seconds.
+    first = done[0]
+    assert first.estimated_remaining_seconds == 0, "no speed is known after the warm-up chunk"
+    # The last chunk may hold a single new frame that still costs a model window.
+    for message in done[1:-2]:
+        true = finished - (5000.0 + message.elapsed_seconds)
+        assert true / 2 <= message.estimated_remaining_seconds <= true * 2
