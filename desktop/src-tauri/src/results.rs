@@ -12,6 +12,18 @@ use serde_json::Value;
 
 use crate::types::CatalogManifest;
 
+/// Refuse a result that is a link. A result is a file the engine wrote; one that has
+/// since become a link could lead anywhere, and resolving it would authorize its
+/// target. A path that does not exist is not a link.
+pub fn ensure_not_linked(path: &Path) -> crate::error::AppResult<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|info| info.file_type().is_symlink()) {
+        return Err(crate::error::AppError::Validation(
+            "output path was not authorized".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The columns `summary_from_row` reads, in its order.
 pub const SUMMARY_COLUMNS: &str =
     "id, updated_at, status, output_path, error, elapsed_seconds, request_json, ui_json";

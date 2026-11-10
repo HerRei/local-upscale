@@ -2106,7 +2106,10 @@ fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
 /// so it cannot race the completion state applied above.
 fn completion_preview_request(state: &AppState, envelope: &WorkerEnvelope) -> Option<Value> {
     let output_path = string(&envelope.data, "output_path");
-    if output_path.is_empty() {
+    // A result that is a link could show another file's pixels.
+    if output_path.is_empty()
+        || crate::results::ensure_not_linked(std::path::Path::new(&output_path)).is_err()
+    {
         return None;
     }
     match envelope.message_type.as_str() {

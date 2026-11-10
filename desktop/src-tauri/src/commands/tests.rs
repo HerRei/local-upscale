@@ -926,6 +926,43 @@ fn a_recorded_output_that_became_a_link_is_not_authorized() {
     assert!(authorized_result(&state, &requested).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn playback_and_comparison_refuse_a_result_that_became_a_link() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        AppState::from_paths(crate::paths::AppPaths::under(&directory.path().join("app"))).unwrap();
+    let output = directory.path().join("result.png");
+    let private = directory.path().join("private.png");
+    fs::write(&output, b"result").unwrap();
+    fs::write(&private, b"private").unwrap();
+    {
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media("m", "/in/photo.png", "photo.png", "image")
+            .unwrap();
+        database.insert_job("j", "m", "{}").unwrap();
+        database
+            .finish_job("j", "completed", &output.to_string_lossy(), "")
+            .unwrap();
+    }
+    assert_eq!(
+        canonical_result_video(output.clone()).unwrap(),
+        fs::canonicalize(&output).unwrap()
+    );
+    fs::remove_file(&output).unwrap();
+    std::os::unix::fs::symlink(&private, &output).unwrap();
+    // A link is never followed to the file it names, whatever it names.
+    let error = canonical_result_video(output.clone()).unwrap_err();
+    assert!(error.to_string().contains("not authorized"), "{error}");
+    let error = request_latest_comparison(&state, "m".into()).unwrap_err();
+    assert!(error.to_string().contains("not authorized"), "{error}");
+    assert!(lock(&state.runtime)
+        .unwrap()
+        .comparison_output_path
+        .is_empty());
+}
+
 #[test]
 fn open_launches_only_the_types_the_app_writes() {
     for name in [

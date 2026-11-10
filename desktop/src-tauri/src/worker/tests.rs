@@ -1831,3 +1831,31 @@ fn the_scratch_folders_made_for_a_dispatch_are_recorded_with_their_jobs() {
     );
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_result_that_is_a_link_gets_no_automatic_preview() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("private.png");
+    std::fs::write(&private, b"private").unwrap();
+    let link = directory.path().join("result.png");
+    std::os::unix::fs::symlink(&private, &link).unwrap();
+    for kind in ["job_completed", "video_job_completed"] {
+        let done = envelope(
+            kind,
+            json!({"job_id": "a", "output_path": link.to_string_lossy()}),
+        );
+        assert_eq!(
+            completion_preview_request(&idle_state(), &done),
+            None,
+            "{kind}"
+        );
+    }
+    let plain = directory.path().join("plain.png");
+    std::fs::write(&plain, b"result").unwrap();
+    let done = envelope(
+        "job_completed",
+        json!({"job_id": "a", "output_path": plain.to_string_lossy()}),
+    );
+    assert!(completion_preview_request(&idle_state(), &done).is_some());
+}

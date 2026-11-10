@@ -1438,6 +1438,7 @@ fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()
             .latest_completed_output_for_media(&media_id)?
             .ok_or_else(|| AppError::Validation("this image has no completed output".into()))?
     };
+    crate::results::ensure_not_linked(Path::new(&output))?;
     if !Path::new(&output).is_file() {
         return Err(AppError::Validation(
             "the completed image is no longer available".into(),
@@ -1492,6 +1493,13 @@ pub async fn prepare_video_comparison(
     .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
 }
 
+/// A completed video result: the real path of a file the engine wrote, never what a
+/// link left in its place points to.
+fn canonical_result_video(path: PathBuf) -> AppResult<PathBuf> {
+    crate::results::ensure_not_linked(&path)?;
+    canonical_video(path)
+}
+
 /// The real path of a video file, or the message that it is gone (a deleted or moved
 /// file) instead of the system's own error text.
 fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
@@ -1526,7 +1534,7 @@ fn video_comparison_sources(
         (PathBuf::from(media.path), output.map(PathBuf::from))
     };
     let original = canonical_video(original)?;
-    let enhanced = enhanced.map(canonical_video).transpose()?;
+    let enhanced = enhanced.map(canonical_result_video).transpose()?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
@@ -3131,13 +3139,8 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     if !recorded && last_output.is_empty() {
         return Err(AppError::Validation("there is no completed output".into()));
     }
-    // A result is a file the engine wrote. One that has since become a link could
-    // lead anywhere, and canonicalizing would authorize its target.
-    if fs::symlink_metadata(requested)?.file_type().is_symlink() {
-        return Err(AppError::Validation(
-            "output path was not authorized".into(),
-        ));
-    }
+    fs::symlink_metadata(requested)?;
+    crate::results::ensure_not_linked(Path::new(requested))?;
     let requested = fs::canonicalize(requested)?;
     let is_last_output = !last_output.is_empty()
         && fs::canonicalize(last_output)
