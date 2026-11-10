@@ -262,11 +262,17 @@ class FakeRunner:
     def __init__(self, unit, behaviour, reference):
         self.unit, self.behaviour, self.reference, self.calls = unit, behaviour, reference, 0
 
+    release = threading.Event()
+
     def predict(self, inputs):
         self.calls += 1
+        if self.behaviour == "hang-predict":
+            FakeRunner.release.wait()
         if self.behaviour == "raise":
             raise RuntimeError("ANE error")
         output = self.reference(torch.from_numpy(inputs["image"])).numpy()
+        if self.behaviour == "hang-predict":
+            return {"restored": output}
         # "flat-only": right on a tile without detail, wrong on real content, like an
         # FP16 program that overflows only where the picture has structure.
         matches = self.behaviour == "match" or (
@@ -1085,3 +1091,18 @@ def test_a_compile_that_finishes_in_the_background_is_used_by_the_next_job(
     again = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="late")
     run(again)
     assert again.model.active_unit == NEURAL_ENGINE
+
+
+def test_a_first_prediction_that_never_returns_is_bounded_like_the_load(fake_coreml, short_budget):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang-predict"
+    FakeRunner.release.clear()
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="fp")
+    notes = []
+    converted.set_note_callback(notes.append)
+    started = time.monotonic()
+    output = run(converted)
+    assert time.monotonic() - started < 2.0
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    assert FakeProgram.stores[("fp", (32, 32))][NEURAL_ENGINE]["timed_out"]
+    assert notes == ["Continuing on the CPU: Core ML was not ready in time."]
+    FakeRunner.release.set()

@@ -875,7 +875,14 @@ class _CoreMLImage(torch.nn.Module):
             reference_cpu.amin() < -4 or reference_cpu.amax() > 5
         ):
             return reference
-        candidate = self._predict(runner, padded)
+        # The program's first prediction can still hold lazy set-up, so it is bounded
+        # like the load; the timing runs after it are not.
+        try:
+            candidate = self._bounded(unit, lambda: self._predict(runner, padded))
+        except PreparationTimeout as error:
+            state["runner"], state["unit"], state["pending"] = None, None, False
+            self._give_up(state, error, [unit])
+            return None
         psnr = _psnr(candidate.numpy(), reference_cpu.numpy())
         accepted = bool(np.isfinite(candidate.numpy()).all()) and psnr >= MINIMUM_PSNR
         coreml_ms = torch_ms = None
