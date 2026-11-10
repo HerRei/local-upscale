@@ -2083,102 +2083,145 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
-  it('submits every compatible item when batch mode is selected', async () => {
-    const snapshot = readySnapshot([image('first', true), image('second')]);
-    const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'All 2' }));
-    await chooseTask(user, /^Upscale$/);
+  describe('start buttons with several inputs', () => {
+    const startButtons = () =>
+      [...document.querySelectorAll('.status-actions .start')] as HTMLButtonElement[];
 
-    const start = screen.getByRole('button', { name: 'Start 2 items' });
-    await user.click(start);
+    it('offers Only this one, then the primary for all, and starts the chosen scope', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second'), image('third')]);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.batch_mode = true;
+      const user = await mountWith(snapshot);
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['first', 'second'], batch_mode: true }),
-    );
-  });
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual([
+        'Only this one',
+        'Upscale all 3',
+      ]);
+      expect(startButtons()[0].classList).not.toContain('primary');
+      expect(startButtons()[1].classList).toContain('primary');
+      expect(screen.getByRole('button', { name: 'Upscale all 3' }).hasAttribute('title')).toBe(
+        false,
+      );
 
-  it('routes a mixed batch by the selected media type', async () => {
-    const snapshot = readySnapshot([
-      video('selected-video', true),
-      image('first-image'),
-      image('second-image'),
-    ]);
-    snapshot.settings.batch_mode = true;
-    snapshot.settings.task = 'upscale';
-    const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: 'Only this one' }));
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ media_ids: ['first'], batch_mode: false }),
+      );
+      // The scope used is the one File > Start and automatic starts follow afterwards.
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ batch_mode: false }),
+      );
+    });
 
-    const start = screen.getByRole('button', { name: 'Start 1 item' }) as HTMLButtonElement;
-    expect(start.disabled).toBe(false);
-    // The images are left out; the line under the tabs says why, and so does All on hover.
-    const why =
-      '1 video item can be queued with this setup; select the other media type to configure it separately.';
-    expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toBe(why);
-    // Nothing trails the line: the reason is its tooltip and the choice's description.
-    const scope = document.querySelector('.process-scope')!;
-    expect(scope.getAttribute('title')).toBe(why);
-    expect(scope.textContent?.replace(/\s+/g, ' ').trim()).toBe(`Process Selected All 1 ${why}`);
-    expect(document.querySelector('.process-hint')).toBeNull();
-    const describedBy = scope.querySelector('.view-switch')!.getAttribute('aria-describedby')!;
-    expect(document.getElementById(describedBy)?.textContent).toBe(why);
-    expect(document.getElementById(describedBy)?.classList).toContain('visually-hidden');
-    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect((screen.getByRole('button', { name: /^Upscale$/ }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    await user.click(start);
+    it('starts every compatible item from the primary and stores the scope', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second')]);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.batch_mode = false;
+      const user = await mountWith(snapshot);
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        media_ids: ['selected-video'],
-        batch_mode: true,
-        task: 'video',
-      }),
-    );
-  });
+      await user.click(screen.getByRole('button', { name: 'Upscale all 2' }));
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({ media_ids: ['first', 'second'], batch_mode: true }),
+      );
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ batch_mode: true }),
+      );
+    });
 
-  it('switches from batch to a non-destructive selected-item single scope', async () => {
-    const snapshot = readySnapshot([image('first', true), image('second')]);
-    snapshot.settings.batch_mode = true;
-    snapshot.settings.task = 'upscale';
-    const user = await mountWith(snapshot);
+    it('tabs from Only this one to the primary, and the primary is the last button', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second')]);
+      snapshot.settings.task = 'upscale';
+      await mountWith(snapshot);
+      const buttons = [...document.querySelectorAll('.status-actions button')];
+      expect(buttons.at(-1)!.textContent?.trim()).toBe('Upscale all 2');
+      expect(buttons.at(-2)!.textContent?.trim()).toBe('Only this one');
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Selected' }));
+    it.each([
+      ['denoise', 'Restore all 2', 'Restore selected'],
+      ['video', 'Start all 2 videos', 'Start selected video'],
+    ] as const)('names the %s task in the primary', async (task, all, single) => {
+      const make = task === 'video' ? video : image;
+      const snapshot = readySnapshot([make('first', true), make('second')]);
+      snapshot.settings.task = task;
+      await mountWith(snapshot);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Only this one', all]);
+      cleanup();
+      const lone = readySnapshot([make('only', true)]);
+      lone.settings.task = task;
+      await mountWith(lone);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual([single]);
+    });
 
-    expect(screen.getAllByText('first.png').length).toBeGreaterThan(0);
-    expect(screen.getByText('second.png')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Selected' }).classList).toContain('active');
-    // Selected says it all: no sentence under it, and All needs no explanation.
-    expect(document.querySelector('.process-hint')).toBeNull();
-    expect(screen.getByRole('button', { name: 'All 2' }).hasAttribute('title')).toBe(false);
-    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    it('says how many inputs are left out and why on the primary', async () => {
+      const snapshot = readySnapshot([image('selected', true), image('second'), video('clip')]);
+      snapshot.settings.task = 'upscale';
+      await mountWith(snapshot);
+      const primary = screen.getByRole('button', { name: 'Upscale all 2' });
+      expect(primary.getAttribute('title')).toBe(
+        '2 image items can be queued with this setup; select the other media type to configure it separately.',
+      );
+    });
 
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ media_ids: ['first'], batch_mode: false }),
-    );
-  });
+    it('gives one primary button with the explanation when only one item can run', async () => {
+      const snapshot = readySnapshot([
+        video('selected-video', true),
+        image('first-image'),
+        image('second-image'),
+      ]);
+      snapshot.settings.batch_mode = true;
+      snapshot.settings.task = 'upscale';
+      const user = await mountWith(snapshot);
 
-  it('automatically chooses the compatible task and disables mismatched task cards', async () => {
-    const snapshot = readySnapshot([video('selected-video', true), image('available-image')]);
-    snapshot.settings.batch_mode = true;
-    snapshot.settings.task = 'upscale';
-    const user = await mountWith(snapshot);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Start selected video']);
+      const why =
+        '1 video item can be queued with this setup; select the other media type to configure it separately.';
+      const start = screen.getByRole('button', { name: 'Start selected video' });
+      expect(start.getAttribute('title')).toBe(why);
+      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(true);
+      await user.click(start);
+      await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({ media_ids: ['selected-video'], task: 'video' }),
+      );
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Selected' }));
+    it('keeps Edit to one primary button that explains why', async () => {
+      const snapshot = editSnapshot(32);
+      snapshot.media = [image('photo', true), image('other')];
+      snapshot.settings.task = 'edit';
+      await mountWith(snapshot);
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Edit selected']);
+      expect(startButtons()[0].getAttribute('title')).toBe(
+        'Edit processes only “photo.png”; batches are not supported yet.',
+      );
+    });
 
-    expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toMatch(
-      /select the other media type/,
-    );
-    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect(
-      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement).disabled,
-    ).toBe(false);
+    it('puts the scope after the download note and the note in the tooltip of Only this one', async () => {
+      const snapshot = readySnapshot([image('first', true), image('second')]);
+      snapshot.settings.task = 'upscale';
+      snapshot.settings.quality = 'best';
+      snapshot.settings.selected_model_id = 'realplksr_nomoswebphoto_x4';
+      snapshot.catalog.models.find(
+        (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+      )!.installed = false;
+      const user = await mountWith(snapshot);
+      const [one, all] = startButtons();
+      expect(one.textContent?.trim()).toBe('Only this one');
+      expect(one.getAttribute('title')).toMatch(/^Downloads [\d.]+ MB first/);
+      expect(all.textContent?.trim()).toMatch(/^Download [\d.]+ MB, then upscale all 2$/);
+      await user.click(all);
+      await waitFor(() =>
+        expect(api.downloadModel).toHaveBeenCalledWith('realplksr_nomoswebphoto_x4', false),
+      );
+    });
+
+    it('leaves the buttons to the one input as before', async () => {
+      await mountWith(readySnapshot([image('only', true)]));
+      expect(startButtons().map((b) => b.textContent?.trim())).toEqual(['Upscale selected']);
+    });
   });
 
   it('reconciles a native photo launch with a persisted video task without requiring a preset', async () => {
@@ -2246,18 +2289,22 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('button', { name: /^Start \d+ items?$/ })).toBeNull();
   });
 
-  it('locks the single/batch scope for an active queue', async () => {
+  it('has no Process line and keeps the scope buttons out of the Media pane', async () => {
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.settings.task = 'upscale';
+    await mountWith(snapshot);
+    expect(document.querySelector('.process-scope')).toBeNull();
+    expect(document.querySelector('.media-pane')!.textContent).not.toMatch(/Process|All 2/);
+    expect(screen.queryByRole('button', { name: 'Selected' })).toBeNull();
+  });
+
+  it('shows no scope buttons while a queue runs', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     snapshot.settings.task = 'upscale';
     snapshot.runtime.active_job_id = 'running-job';
     await mountWith(snapshot);
-
-    expect((screen.getByRole('button', { name: 'Selected' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect((screen.getByRole('button', { name: 'All 2' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(screen.queryByRole('button', { name: 'Only this one' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Upscale all/ })).toBeNull();
   });
 
   it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {

@@ -99,6 +99,7 @@
     FixStageSelection,
     IntegrationStatus,
     LaunchIntent,
+    MediaItem,
     MediaResults,
     PairChoice,
     Quality,
@@ -432,20 +433,35 @@
       : selectedMedia && mediaMatchesTask && !inflightMediaIds.has(selectedMedia.id)
         ? [selectedMedia]
         : [];
-  $: canQueue =
+  // Everything a start needs except which items it takes.
+  $: queueReady =
     !startingJob &&
     !cancelling &&
     snapshot.runtime.worker === 'ready' &&
     Boolean(settings.task) &&
-    queueSelection.length > 0 &&
-    queueSelection.every((media) => media.probe_status === 'ready') &&
     modelReady &&
     hdrModelCompatible &&
     faceReady &&
     fixesReady &&
     interpolationReady &&
     snapshot.runtime.status_title !== 'Cancelling';
+  const allReady = (items: MediaItem[]): boolean =>
+    items.length > 0 && items.every((media) => media.probe_status === 'ready');
+  $: canQueue = queueReady && allReady(queueSelection);
   $: canStart = !snapshot.runtime.active_job_id && canQueue;
+  // The one picture the selection names, and the batch the task could take: the two scopes
+  // the status bar offers side by side when there is a choice.
+  $: selectedOnly =
+    selectedMedia && mediaMatchesTask && !inflightMediaIds.has(selectedMedia.id)
+      ? [selectedMedia]
+      : [];
+  $: scopeChoice =
+    snapshot.media.length > 1 &&
+    settings.task !== 'edit' &&
+    queueableMedia.length > 1 &&
+    !snapshot.runtime.active_job_id;
+  $: canStartOne = !snapshot.runtime.active_job_id && queueReady && allReady(selectedOnly);
+  $: canStartAll = !snapshot.runtime.active_job_id && queueReady && allReady(queueableMedia);
   // Edit always takes the selected image, and one item is no batch to count.
   $: batchLabel = settings.batch_mode && settings.task !== 'edit' && snapshot.media.length > 1;
   $: canAppendToQueue =
@@ -672,7 +688,7 @@
           ),
         }
       : undefined;
-  $: canPrepare =
+  $: prepareReady =
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
     !preparing &&
@@ -687,11 +703,12 @@
     ) &&
     snapshot.runtime.worker === 'ready' &&
     Boolean(settings.task) &&
-    queueSelection.length > 0 &&
-    queueSelection.every((media) => media.probe_status === 'ready') &&
     hdrModelCompatible &&
     (!usingTemporalVideo || !temporalUnavailableReason) &&
     (settings.task !== 'edit' || !editBlockReason);
+  $: canPrepare = prepareReady && allReady(queueSelection);
+  $: canPrepareOne = prepareReady && allReady(selectedOnly);
+  $: canPrepareAll = prepareReady && allReady(queueableMedia);
   $: startVerb =
     settings.task === 'video'
       ? 'start video'
@@ -782,17 +799,17 @@
     (device) => device.id === benchmarkDevice,
   );
   $: unreadyMedia = queueSelection.find((media) => media.probe_status !== 'ready');
-  // Process: Selected | All n. All counts the inputs the chosen task can take.
-  $: allCount = settings.task ? runnableMedia.length : snapshot.media.length;
+  const preparingNote = (media: MediaItem): string =>
+    media.probe_status === 'failed'
+      ? `“${media.name}” cannot be processed: ${media.error}`
+      : `Preparing preview… Wait for “${media.name}” before starting.`;
   $: incompatibleNote =
     settings.task && runnableMedia.length < snapshot.media.length
       ? `${queueableMedia.length} ${settings.task === 'video' ? 'video' : 'image'} item${queueableMedia.length === 1 ? '' : 's'} can be queued with this setup; select the other media type to configure it separately.`
       : '';
   // What the choice alone does not say; empty when there is nothing to explain.
   $: scopeHint = unreadyMedia
-    ? unreadyMedia.probe_status === 'failed'
-      ? `“${unreadyMedia.name}” cannot be processed: ${unreadyMedia.error}`
-      : `Preparing preview… Wait for “${unreadyMedia.name}” before starting.`
+    ? preparingNote(unreadyMedia)
     : settings.batch_mode && settings.task === 'edit'
       ? selectedMedia
         ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
@@ -804,6 +821,35 @@
         : selectedMedia && !mediaMatchesTask
           ? `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`
           : '';
+  $: mismatchNote =
+    selectedMedia && !mediaMatchesTask
+      ? `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`
+      : '';
+  // The lone start button of several inputs says what limits it; with a choice of two
+  // buttons each carries its own note.
+  $: singleHint =
+    snapshot.media.length < 2
+      ? ''
+      : unreadyMedia
+        ? preparingNote(unreadyMedia)
+        : settings.task === 'edit'
+          ? selectedMedia
+            ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
+            : 'Edit processes only the selected image.'
+          : mismatchNote ||
+            (queueableMedia.length === 0 && runnableMedia.length > 0
+              ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
+              : incompatibleNote);
+  $: oneUnready = selectedOnly.find((media) => media.probe_status !== 'ready');
+  $: allUnready = queueableMedia.find((media) => media.probe_status !== 'ready');
+  $: oneTitle = oneUnready
+    ? preparingNote(oneUnready)
+    : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
+  $: allTitle = allUnready ? preparingNote(allUnready) : incompatibleNote;
+  // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
+  $: allPhrase = `${startVerb === 'start video' ? 'start' : startVerb} all ${queueableMedia.length}${
+    settings.task === 'video' ? ' videos' : ''
+  }`;
   $: lockReason = cancelling
     ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
     : `${startingJob ? 'Starting your job…' : 'Settings locked.'} Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.`;
@@ -1443,6 +1489,16 @@
     if (canStart) await start();
   }
 
+  /** The status bar's two start buttons. The scope used is kept in the settings, so File > Start
+   *  and automatic starts repeat it. */
+  async function startScope(batch: boolean): Promise<void> {
+    if (settings.batch_mode !== batch) updateSettings({ batch_mode: batch });
+    await tick();
+    if (settings.batch_mode !== batch) return;
+    if (canPrepare) await prepareAndStart();
+    else await start();
+  }
+
   /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
    *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
   async function useTheCpu(): Promise<void> {
@@ -1654,11 +1710,6 @@
     page = 'preview';
     await refresh();
     ensureTaskMatchesSelection();
-  }
-
-  function setBatchMode(batchMode: boolean): void {
-    if (snapshot.runtime.active_job_id || settings.batch_mode === batchMode) return;
-    updateSettings({ batch_mode: batchMode });
   }
 
   async function addFolder(): Promise<void> {
@@ -2620,15 +2671,11 @@
       items={snapshot.media}
       jobs={snapshot.jobs}
       activeJobId={snapshot.runtime.active_job_id}
-      batchMode={settings.batch_mode}
       compactHidden={page !== 'media'}
       scopeWarning={Boolean(selectedMedia) && !mediaMatchesTask}
       {scopeHint}
-      {allCount}
-      allTitle={incompatibleNote}
       {benchmarkRunning}
       {inflightMediaIds}
-      {setBatchMode}
       {selectQueueMedia}
       {addFiles}
       {addFolder}
@@ -3561,21 +3608,42 @@
         <button class="button danger start" on:click={() => void cancelPreparation()}
           >{preparingCancelled ? 'Cancelling…' : 'Cancel download'}</button
         >
+      {:else if scopeChoice}
+        <button
+          class="button start scope-one"
+          disabled={!canStartOne && !canPrepareOne}
+          title={oneTitle || undefined}
+          on:click={() => void startScope(false)}>Only this one</button
+        >
+        <button
+          class="button primary start"
+          disabled={!canStartAll && !canPrepareAll}
+          title={allTitle || undefined}
+          on:click={() => void startScope(true)}
+          >{canPrepareAll
+            ? `Download ${formatBytes(downloads.bytes)}, then ${allPhrase}`
+            : allPhrase.charAt(0).toUpperCase() + allPhrase.slice(1)}</button
+        >
       {:else if canPrepare}
-        <button class="button primary start" on:click={() => void prepareAndStart()}
+        <button
+          class="button primary start"
+          title={singleHint || undefined}
+          on:click={() => void prepareAndStart()}
           >{`Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
         >
       {:else if !batchLabel || queueSelection.length}
-        <button class="button primary start" disabled={!canStart} on:click={() => start()}
-          >{batchLabel
-            ? `Start ${queueSelection.length} item${queueSelection.length === 1 ? '' : 's'}`
-            : settings.task === 'video'
-              ? 'Start selected video'
-              : settings.task === 'denoise'
-                ? 'Restore selected'
-                : settings.task === 'edit'
-                  ? 'Edit selected'
-                  : 'Upscale selected'}</button
+        <button
+          class="button primary start"
+          disabled={!canStart}
+          title={singleHint || undefined}
+          on:click={() => start()}
+          >{settings.task === 'video'
+            ? 'Start selected video'
+            : settings.task === 'denoise'
+              ? 'Restore selected'
+              : settings.task === 'edit'
+                ? 'Edit selected'
+                : 'Upscale selected'}</button
         >
       {/if}
     </div>

@@ -166,22 +166,98 @@ test('the narrow window switch is a row of words with a readable count', async (
   expect(await contrast(nav.locator('button').first().locator('span'))).toBeGreaterThanOrEqual(4.5);
 });
 
-test('the Process choice is one line inside the Media pane', async ({ page }) => {
+test('the Media pane has no Process line', async ({ page }) => {
   await openApp(page, { ...ready, photos: 3 });
   await showPane(page, 'media');
-  const line = page.locator('.process-scope');
-  await expect(line.getByRole('button', { name: 'Selected' })).toBeVisible();
-  await expect(line.getByRole('button', { name: 'All 3' })).toBeVisible();
-  expect((await box(line)).height).toBeLessThanOrEqual(30);
-  // Nothing trails the words: no visible text after All, however long an explanation is.
-  await expect(line.locator('.process-hint')).toHaveCount(0);
-  const lineBox = await box(line);
-  const allBox = await box(line.getByRole('button', { name: 'All 3' }));
-  expect(allBox.x + allBox.width).toBeLessThanOrEqual(lineBox.x + lineBox.width);
+  await expect(page.locator('.process-scope')).toHaveCount(0);
+  await expect(page.locator('.media-pane').getByText('Process', { exact: true })).toHaveCount(0);
   const overflow = await page
     .locator('.media-pane')
     .evaluate((pane) => pane.scrollWidth - pane.clientWidth);
   expect(overflow).toBe(0);
+});
+
+test('while a queue runs the bar keeps its cancel buttons inside and shows no scope buttons', async ({
+  page,
+}) => {
+  for (const size of [
+    { width: 880, height: 640 },
+    { width: 1380, height: 860 },
+  ]) {
+    await page.setViewportSize(size);
+    await openApp(page, { ...ready, photos: 7, running: true });
+    const bar = page.locator('.status-bar');
+    await expect(bar.getByRole('button', { name: 'Cancel queue' })).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Only this one' })).toHaveCount(0);
+    const barBox = await box(bar);
+    for (const button of await bar.locator('.status-actions button').all()) {
+      const rect = await box(button);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(barBox.x + barBox.width);
+    }
+  }
+});
+
+test.describe('status bar start buttons', () => {
+  // With a finished result Reveal and Open sit beside the two start buttons; the pending
+  // download makes the primary label its longest.
+  const scenarios = {
+    'a finished result': { ...withOutputs, worker: 'ready' as const, finished: true, photos: 7 },
+    'a finished result and a download': {
+      ...withOutputs,
+      worker: 'ready' as const,
+      finished: true,
+      photos: 7,
+      installed: [] as string[],
+    },
+  };
+  for (const [name, scenario] of Object.entries(scenarios)) {
+    for (const size of [
+      { width: 880, height: 640 },
+      { width: 1380, height: 860 },
+    ]) {
+      test(`${name} at ${size.width} x ${size.height}: the buttons stay apart and inside`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(size);
+        await openApp(page, scenario);
+        const bar = page.locator('.status-bar');
+        const buttons = bar.locator('.status-actions button');
+        await expect(buttons.getByText('Only this one')).toBeVisible();
+        await expect(bar.getByRole('button', { name: 'Reveal' })).toBeVisible();
+        const barBox = await box(bar);
+        const text = await box(bar.locator('.status-copy'));
+        const rects = [];
+        for (const button of await buttons.all()) rects.push(await box(button));
+        for (const [index, rect] of rects.entries()) {
+          expect(rect.x).toBeGreaterThanOrEqual(barBox.x);
+          expect(rect.x + rect.width).toBeLessThanOrEqual(barBox.x + barBox.width);
+          expect(rect.y).toBeGreaterThanOrEqual(barBox.y);
+          expect(rect.y + rect.height).toBeLessThanOrEqual(barBox.y + barBox.height + 0.5);
+          if (index > 0) {
+            const before = rects[index - 1];
+            expect(rect.x).toBeGreaterThanOrEqual(before.x + before.width);
+          }
+          // The status text ends before the first button starts.
+          expect(text.x + text.width).toBeLessThanOrEqual(rects[0].x + 0.5);
+        }
+        // One row of equal height; the primary is the rightmost.
+        expect(new Set(rects.map((rect) => Math.round(rect.height))).size).toBe(1);
+        const last = await buttons.last().textContent();
+        expect(last).toMatch(/all 7$/);
+        // The gap between the two starts is the gap between Reveal and Open.
+        const reveal = await box(bar.getByRole('button', { name: 'Reveal' }));
+        const open = await box(bar.getByRole('button', { name: 'Open', exact: true }));
+        const one = await box(bar.getByRole('button', { name: 'Only this one' }));
+        const all = rects[rects.length - 1];
+        expect(Math.round(all.x - (one.x + one.width))).toBe(
+          Math.round(open.x - (reveal.x + reveal.width)),
+        );
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          size.width,
+        );
+      });
+    }
+  }
 });
 
 test('the welcome note sits above the docked update notice', async ({ page }) => {
