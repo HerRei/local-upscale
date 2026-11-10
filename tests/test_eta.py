@@ -16,6 +16,7 @@ from unittest.mock import Mock
 from test_video_timing import make_vfr
 
 from localsr.core import video_pipeline
+from localsr.core.eta import RemainingTime
 from localsr.core.pipeline import resolve_image_pipeline
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.worker.job_progress import ImageJobProgress
@@ -364,3 +365,87 @@ def test_a_lasting_speed_up_is_followed(monkeypatch):
     finish = run.now
     for moment, estimate, _stage in run.samples[75:-1]:
         assert (finish - moment) / 1.6 <= estimate <= (finish - moment) * 1.6
+
+
+class Batch:
+    """Two photos of 100 tiles each, rendered by two lanes of different speed.
+
+    The lanes take tiles from one queue in photo order, so a lane's completion belongs to
+    whichever photo the tile was from, and the reports of the two lanes interleave.
+    """
+
+    def __init__(self, monkeypatch, speeds=(0.2, 0.55), warm=(1.0, 2.0), seed=3):
+        monkeypatch.setattr("localsr.worker.job_progress.get_memory_snapshot", lambda _: {})
+        self.now = 2000.0
+        rng = random.Random(seed)
+        self.messages: list[list] = [[], []]
+        pipeline = _pipeline(1)
+        self.rate = RemainingTime(2 * 100 * 64 * 64, warmup=len(speeds))
+        self.photos = [
+            ImageJobProgress(
+                f"photo{index}",
+                pipeline,
+                "mps",
+                self.messages[index].append,
+                Mock(),
+                clock=lambda: self.now,
+                rate=self.rate,
+            )
+            for index in range(2)
+        ]
+        # (time of completion, lane) for every tile, from the lanes working side by side.
+        free = [0.0] * len(speeds)
+        events = []
+        for number in range(200):
+            lane = free.index(min(free))
+            free[lane] += speeds[lane] * (1 + rng.uniform(-0.3, 0.3))
+            if number < len(speeds):
+                free[lane] += warm[lane]
+            events.append(free[lane])
+        self.events = sorted(events)
+        self.samples: list[tuple[int, float, float]] = []  # (photo, time, estimate)
+
+    def run(self):
+        start, done = self.now, [0, 0]
+        for number, moment in enumerate(self.events, 1):
+            index = 0 if number <= 100 else 1
+            self.now = start + moment
+            if done[index] == 0:
+                self.photos[index].start(0, self.photos[index].pipeline.primary)
+            done[index] += 1
+            tile = SimpleNamespace(out_x=0, out_y=0, out_w=64, out_h=64)
+            args = (done[index], 100, 640, 640, 64)
+            self.photos[index].tile("started", tile, None, done[index] - 1, 100, 640, 640, 64)
+            self.rate.update(self.now, number * 64 * 64)
+            self.photos[index].tile("completed", tile, b"", *args)
+            self.photos[index].update(done[index], 100, 64)
+            update = [m for m in self.messages[index] if type(m).__name__ == "ProgressUpdate"][-1]
+            self.samples.append((index, self.now, update.estimated_remaining_seconds))
+        return start + self.events[-1]
+
+
+def test_a_batch_shares_one_speed_across_its_lanes_and_photos(monkeypatch):
+    batch = Batch(monkeypatch)
+    finish = batch.run()
+    first_shown = {}
+    previous = {}
+    for index, moment, estimate in batch.samples:
+        first_shown.setdefault(index, moment) if estimate else None
+        if estimate and index in previous and moment > batch.events[14] + 2000.0:
+            # The lanes' reports interleave, but the number only counts down (a tile's worth
+            # of speed noise is the most it may rise by).
+            assert estimate <= previous[index] * 1.04, "the estimate went up"
+        if estimate:
+            previous[index] = estimate
+    # The second photo starts with the speed the batch has measured: no new "measuring".
+    starts = [m for m in batch.samples if m[0] == 1][:2]
+    assert all(estimate > 0 for _i, _t, estimate in starts)
+    # Photo 1 ends when its last tile is done; what it shows is that photo's time at the
+    # speed of both lanes together.
+    ends = [moment for index, moment, _e in batch.samples if index == 0][-1]
+    for index, moment, estimate in batch.samples:
+        number = len([s for s in batch.samples if s[0] == index and s[1] <= moment])
+        if index == 0 and number >= 15 and estimate:
+            true = ends - moment
+            assert abs(estimate - true) <= 0.25 * true + 1.0
+    assert finish > ends
