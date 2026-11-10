@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{BufRead, BufReader, Write},
+    io::{BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -17,6 +17,7 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{
     error::{AppError, AppResult},
+    pipe_lines::{read_frame, skip_line, Frame},
     settings,
     state::{emit_state_changed, lock, AppState},
     types::{
@@ -238,13 +239,25 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     let reader_app = app.clone();
     let drained = Arc::new(AtomicBool::new(false));
     let reader_drained = drained.clone();
+    let overflowed = Arc::new(AtomicBool::new(false));
+    let reader_overflowed = overflowed.clone();
     thread::spawn(move || {
         let mut event_gate = WorkerEventGate::default();
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            match serde_json::from_str::<WorkerEnvelope>(&line) {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            match read_frame(&mut reader, MAX_ENGINE_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => {}
+                Ok(Frame::End) | Err(_) => break,
+                Ok(Frame::TooLong) => {
+                    // An engine that sends a message this long is faulty. The
+                    // supervisor stops it and the usual restart takes over.
+                    eprintln!("LocalSR stopped the inference engine: a message passed {MAX_ENGINE_LINE_BYTES} bytes");
+                    reader_overflowed.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+            match serde_json::from_slice::<WorkerEnvelope>(&line) {
                 Ok(envelope) => {
                     if reader_state.worker.generation.load(Ordering::SeqCst) != generation {
                         break;
@@ -261,14 +274,29 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     let _ = reader_app.emit("worker-message", warning);
                 }
             }
+            // One large preview must not keep its buffer for the rest of the session.
+            line.shrink_to(READ_BUFFER_KEEP_BYTES);
         }
         reader_drained.store(true, Ordering::SeqCst);
     });
 
     thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let mut reader = BufReader::new(stderr);
+        let mut line = Vec::new();
+        loop {
+            match read_frame(&mut reader, MAX_ENGINE_STDERR_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => {}
+                Ok(Frame::End) | Err(_) => break,
+                // Only the start of a long line is kept; the rest is read and dropped
+                // so the engine never blocks on a full pipe.
+                Ok(Frame::TooLong) => {
+                    if skip_line(&mut reader).is_err() {
+                        break;
+                    }
+                }
+            }
             if cfg!(debug_assertions) {
-                eprintln!("LocalSR engine: {line}");
+                eprintln!("LocalSR engine: {}", String::from_utf8_lossy(&line));
             }
         }
     });
@@ -287,6 +315,12 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             }
             if state.worker.shutting_down.load(Ordering::SeqCst) {
                 stopped_by_app = true;
+                let _ = child.kill();
+                break child.wait();
+            }
+            if overflowed.load(Ordering::SeqCst) {
+                // Not an app-requested stop: the engine failed, and the restart
+                // counter says so.
                 let _ = child.kill();
                 break child.wait();
             }
@@ -785,6 +819,20 @@ fn mark_exited(runtime: &mut RuntimeStatus) {
         runtime.worker = "unavailable".into();
     }
 }
+
+/// The longest line the engine may send. A line must fit the largest message, a
+/// Compare crop: a PNG of at most 2048 x 2048 pixels (12.6 MB when the pixels are
+/// noise), in base64 (16.8 MB), inside its JSON. Previews, thumbnails and tiles are
+/// JPEGs of at most 2048 pixels on the long side and stay far below that. The limit
+/// leaves about twice the largest message and still keeps the host's memory bounded.
+pub(crate) const MAX_ENGINE_LINE_BYTES: usize = 32 * 1024 * 1024;
+
+/// The longest engine stderr line kept. Stderr is a diagnostic stream: the start of a
+/// line is enough, and the rest is dropped as it arrives.
+const MAX_ENGINE_STDERR_LINE_BYTES: usize = 64 * 1024;
+
+/// What the line buffer keeps between messages; a larger one is released.
+const READ_BUFFER_KEEP_BYTES: usize = 1024 * 1024;
 
 /// How long the app reads an exited engine's remaining output before moving on.
 const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);

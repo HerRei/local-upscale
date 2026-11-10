@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -13,6 +13,7 @@ use std::{
 
 use crate::{
     error::{AppError, AppResult},
+    pipe_lines::{read_frame, Frame},
     state::lock,
 };
 use sha2::{Digest, Sha256};
@@ -20,6 +21,9 @@ use tempfile::TempDir;
 
 const COPY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 const CACHE_LIMIT: u64 = 6 * 1024 * 1024 * 1024;
+/// The converter prints one small JSON progress object per line; a line this long is a
+/// fault, not progress.
+const MAX_CONVERTER_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 pub struct VideoPreviewControl {
@@ -190,9 +194,21 @@ fn run_conversion(
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().expect("piped converter stdout");
     let stderr = child.stderr.take().expect("piped converter stderr");
+    let overflowed = Arc::new(AtomicBool::new(false));
+    let progress_overflowed = Arc::clone(&overflowed);
     let progress = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(value) = serde_json::from_str(&line) {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            match read_frame(&mut reader, MAX_CONVERTER_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => {}
+                Ok(Frame::End) | Err(_) => break,
+                Ok(Frame::TooLong) => {
+                    progress_overflowed.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+            if let Ok(value) = serde_json::from_slice(&line) {
                 report(value);
             }
         }
@@ -217,6 +233,8 @@ fn run_conversion(
             Some("Playback conversion cancelled.")
         } else if started.elapsed() > timeout {
             Some("Playback conversion exceeded 30 minutes. Open the saved video in an external player.")
+        } else if overflowed.load(Ordering::SeqCst) {
+            Some("The playback converter sent a message that is too long.")
         } else if bytes > size_limit {
             Some("Playback copy exceeded its disk budget. Open the saved video in an external player.")
         } else {
@@ -317,6 +335,25 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("cancelled"));
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_line_that_never_ends_stops_the_converter() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec tr '\\0' x < /dev/zero"]);
+        let started = Instant::now();
+        let result = run_conversion(
+            command,
+            directory.path(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            Duration::from_secs(20),
+            1024,
+        );
+        assert!(result.unwrap_err().to_string().contains("too long"));
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[cfg(unix)]

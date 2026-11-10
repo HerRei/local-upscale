@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::mpsc,
@@ -10,12 +10,18 @@ use std::{
 
 use serde_json::{json, Value};
 
-use crate::types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION};
+use crate::{
+    pipe_lines::{read_frame, Frame},
+    types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
+    worker::MAX_ENGINE_LINE_BYTES,
+};
 
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_SHUTDOWN_TIMEOUT: u64 = 15;
 const MAX_SHUTDOWN_TIMEOUT: u64 = 120;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How much engine stderr is kept for the failure message; the rest is read and dropped.
+const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 pub fn run() -> i32 {
     let timeout = smoke_timeout();
@@ -190,23 +196,47 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
 
     let (sender, receiver) = mpsc::channel::<Result<WorkerEnvelope, String>>();
     let stdout_thread = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let envelope = line
-                .map_err(|error| format!("could not read the inference engine response: {error}"))
-                .and_then(|line| {
-                    serde_json::from_str::<WorkerEnvelope>(&line).map_err(|error| {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            let (envelope, last) = match read_frame(&mut reader, MAX_ENGINE_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => (
+                    serde_json::from_slice::<WorkerEnvelope>(&line).map_err(|error| {
                         format!("the inference engine sent an invalid JSON response: {error}")
-                    })
-                });
-            if sender.send(envelope).is_err() {
+                    }),
+                    false,
+                ),
+                Ok(Frame::End) => break,
+                Ok(Frame::TooLong) => (
+                    Err("the inference engine sent a message that is too long".to_owned()),
+                    true,
+                ),
+                Err(error) => (
+                    Err(format!(
+                        "could not read the inference engine response: {error}"
+                    )),
+                    true,
+                ),
+            };
+            if sender.send(envelope).is_err() || last {
                 break;
             }
         }
     });
     let stderr_thread = thread::spawn(move || {
-        let mut output = String::new();
-        let _ = stderr.read_to_string(&mut output);
-        output
+        // The end of a long diagnostic is what explains a failure.
+        let mut output = Vec::new();
+        let mut chunk = [0_u8; 8192];
+        while let Ok(read) = stderr.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            output.extend_from_slice(&chunk[..read]);
+            if output.len() > 2 * MAX_STDERR_BYTES {
+                output.drain(..output.len() - MAX_STDERR_BYTES);
+            }
+        }
+        String::from_utf8_lossy(&output).into_owned()
     });
 
     let handshake = wait_for_handshake(&mut child, &mut stdin, &receiver, timeout);

@@ -16,6 +16,7 @@ mod media_server;
 mod native_menu;
 mod output_names;
 mod paths;
+mod pipe_lines;
 mod queue_timing;
 mod results;
 mod settings;
