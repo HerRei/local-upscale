@@ -144,6 +144,60 @@ def test_cancel_requested_before_job_activation_is_not_lost():
     assert "queued-job" not in server.pending_cancel_job_ids
 
 
+@pytest.mark.parametrize("how", ["eof", "shutdown_request"])
+def test_a_job_queued_before_shutdown_stays_cancelled_when_it_activates(how):
+    server = WorkerServer()
+    if how == "eof":
+        import io
+        import sys
+
+        stdin, sys.stdin = sys.stdin, io.StringIO("")
+        try:
+            server.reader_thread_func()
+        finally:
+            sys.stdin = stdin
+    else:
+        server._read_line(json.dumps({"type": "shutdown_request"}))
+    assert server.cancel_event.is_set()
+
+    server._activate_job("queued-job")
+    assert server.cancel_event.is_set()
+    server._deactivate_job("queued-job")
+    assert server.cancel_event.is_set()
+
+    server._activate_batch(["a", "b"])
+    assert server.cancel_event.is_set()
+    server._deactivate_batch(["a", "b"])
+    assert server.cancel_event.is_set()
+
+
+def test_an_image_job_that_would_start_after_shutdown_does_not_run(monkeypatch, capsys):
+    server = WorkerServer()
+    server.model_adapter = DummyModelAdapter()
+    server.engine = DummyEngine()
+    server.engine.process_image = lambda *a, **k: pytest.fail("inference must not start")
+    from localsr.core.image_io import ImageManager
+
+    monkeypatch.setattr(ImageManager, "load", lambda *a: {"tensor": None})
+    server._read_line(json.dumps({"type": "shutdown_request"}))
+    request = JobRequest(
+        job_id="late",
+        image_path="test.png",
+        model_path="test.pth",
+        output_path="out.png",
+        output_format="png",
+        device="cpu",
+        tile_size=256,
+        halo=32,
+        precision="fp32",
+        jpeg_quality=98,
+        preserve_metadata=True,
+        safe_memory=True,
+    )
+    server._run_image_job(json.loads(request.to_json())["data"])
+    assert "job_cancelled" in capsys.readouterr().out
+
+
 def test_queued_cancel_does_not_affect_a_different_job():
     server = WorkerServer()
 
