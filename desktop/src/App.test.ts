@@ -583,6 +583,27 @@ describe('Job activity', () => {
     expect(screen.getAllByRole('status').filter((node) => bar.contains(node))).toHaveLength(1);
   });
 
+  it('says Saving the result from 100 % on, with the model and no percentage or time left', async () => {
+    const snapshot = running();
+    snapshot.runtime.progress = 100;
+    snapshot.runtime.status_title = 'Editing';
+    snapshot.runtime.status_detail = 'Step 4 of 4 · ETA ≈ 3s';
+    snapshot.runtime.estimated_remaining_seconds = 3;
+    snapshot.jobs[0].progress = 100;
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel' });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Saving the result'),
+    );
+    const bar = document.querySelector('.status-bar')!;
+    expect(bar.querySelector('.status-detail')?.textContent).toMatch(/^FLUX\.2 klein 4B/);
+    expect(bar.textContent).not.toMatch(/ETA|≈|100%/);
+    expect(document.querySelector('.media-pane')!.textContent).toContain('Saving…');
+    expect(document.querySelector('.media-pane')!.textContent).not.toContain('100 %');
+  });
+
   it('offers no Add to queue button while the running picture is the selected one', async () => {
     await mountRunning(running());
     expect(screen.queryByRole('button', { name: /to queue$/ })).toBeNull();

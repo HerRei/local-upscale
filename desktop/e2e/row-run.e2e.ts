@@ -136,3 +136,23 @@ test.describe('removing while a queue runs', () => {
     await expect(page.getByRole('dialog')).toContainText(sentence);
   });
 });
+
+test('from 100 % until the file is written the row and the status bar say Saving', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1380, height: 860 });
+  await openApp(page, {
+    ...batch(2),
+    rows: {
+      1: { status: 'completed', progress: 100, elapsed_seconds: 31 },
+      2: { status: 'running', progress: 100 },
+    },
+  });
+  const running = rows(page).nth(1);
+  await expect(running.getByText('Saving…')).toBeVisible();
+  await expect(running).not.toContainText('100 %');
+  const bar = page.locator('.status-bar');
+  await expect(bar.locator('strong')).toHaveText(/^Saving the result/);
+  await expect(bar).not.toContainText(/ETA|≈|100%/);
+  await expect(rows(page).nth(0)).toContainText('Done · 31 s');
+});

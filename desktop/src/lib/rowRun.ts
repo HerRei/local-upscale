@@ -10,6 +10,10 @@ const SAME_RUN_MS = 600_000;
 
 const INFLIGHT = ['queued', 'starting', 'running', 'cancelling'];
 
+/** From this progress on the work is done and the file is being written. */
+export const SAVING_FROM = 99.5;
+export const isSaving = (progress: number): boolean => progress >= SAVING_FROM;
+
 export interface RowRun {
   kind: 'idle' | 'queued' | 'running' | 'done';
   /** The running job's own progress, 0 to 100; null while it is not known yet. */
@@ -47,6 +51,8 @@ export function rowRun(jobs: JobRecord[], mediaId: string, activeJobId: string):
       return { kind: 'running', progress: null, text: 'Cancelling', title };
     const known = running.status === 'running' && running.progress > 0;
     const progress = known ? Math.min(100, Math.max(0, running.progress)) : null;
+    if (progress !== null && isSaving(progress))
+      return { kind: 'running', progress: 100, text: 'Saving…', title };
     return {
       kind: 'running',
       progress,

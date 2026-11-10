@@ -188,7 +188,7 @@ function hostScript(scenario: Scenario): void {
       const running = Object.entries(rows).find(([, row]) => row.status === 'running');
       s.runtime.active_job_id = `job-photo-${running ? running[0] : 1}`;
       s.runtime.status_title = 'Processing';
-      s.runtime.progress = 40;
+      s.runtime.progress = running ? (rows[Number(running[0])].progress ?? 40) : 40;
       s.jobs = Array.from({ length: scenario.jobPhotos ?? scenario.photos ?? 1 }, (_, index) => ({
         id: `job-photo-${index + 1}`,
         media_id: `photo-${index + 1}`,

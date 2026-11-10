@@ -32,6 +32,7 @@
   import { EtaDisplay, etaView, withEta } from './lib/eta-display';
   import MediaQueue from './MediaQueue.svelte';
   import { mediaInRun, queueRunSince } from './lib/queueRun';
+  import { isSaving } from './lib/rowRun';
   import AdvancedSettings from './AdvancedSettings.svelte';
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
@@ -508,7 +509,9 @@
   const secondsNow = (_second: number) => performance.now() / 1000;
   $: shownEta = etaView(snapshot, etaDisplay, secondsNow(etaSecond));
   $: queueEta = shownEta.timing;
-  $: runningStatusDetail = withEta(snapshot.runtime.status_detail, shownEta.job);
+  // Past the last tile only the file is left to write: nothing remains to estimate.
+  $: saving = Boolean(snapshot.runtime.active_job_id) && isSaving(snapshot.runtime.progress);
+  $: runningStatusDetail = withEta(snapshot.runtime.status_detail, saving ? null : shownEta.job);
   $: if (snapshot.runtime.active_job_id && !etaTimer) {
     etaTimer = setInterval(() => (etaSecond += 1), 1000);
   } else if (!snapshot.runtime.active_job_id && etaTimer) {
@@ -3568,8 +3571,13 @@
       <i class:working={Boolean(snapshot.runtime.active_job_id)}></i>
       <div>
         <strong
-          >{booting ? 'Starting' : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
-          snapshot.runtime.progress > 0
+          >{booting
+            ? 'Starting'
+            : saving
+              ? 'Saving the result'
+              : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+          snapshot.runtime.progress > 0 &&
+          !saving
             ? ` · ${Math.round(snapshot.runtime.progress)}%`
             : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
@@ -3591,7 +3599,7 @@
                 >Download page</button
               >{/if}</span
           >{/if}
-        {#if queueEta}<span
+        {#if queueEta && !saving}<span
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."
           >
