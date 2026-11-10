@@ -1488,6 +1488,17 @@ pub async fn prepare_video_comparison(
     .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
 }
 
+/// The real path of a video file, or the message that it is gone (a deleted or moved
+/// file) instead of the system's own error text.
+fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
+    match fs::canonicalize(path) {
+        Ok(real) if real.is_file() => Ok(real),
+        _ => Err(AppError::Validation(
+            "the original or enhanced video is no longer available".into(),
+        )),
+    }
+}
+
 fn video_comparison_sources(
     state: &AppState,
     app: &AppHandle,
@@ -1510,13 +1521,8 @@ fn video_comparison_sources(
         let output = database.latest_completed_output_for_media(media_id)?;
         (PathBuf::from(media.path), output.map(PathBuf::from))
     };
-    let original = fs::canonicalize(original)?;
-    let enhanced = enhanced.map(fs::canonicalize).transpose()?;
-    if !original.is_file() || enhanced.as_ref().is_some_and(|path| !path.is_file()) {
-        return Err(AppError::Validation(
-            "the original or enhanced video is no longer available".into(),
-        ));
-    }
+    let original = canonical_video(original)?;
+    let enhanced = enhanced.map(canonical_video).transpose()?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
@@ -1726,7 +1732,7 @@ pub fn remove_model(
         }
         // Editing bundles live beside the catalog; shared components survive.
         None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
-            return Err(AppError::Validation("unknown image model".into()));
+            return Err(AppError::Validation("unknown model".into()));
         }
         None => {}
     }
@@ -5103,6 +5109,24 @@ mod tests {
         let normalized = normalize_media_paths(vec![folder]).unwrap();
         assert_eq!(normalized.len(), 1);
         assert!(Path::new(&scanned[0]).exists());
+    }
+
+    #[test]
+    fn a_video_that_is_gone_is_reported_as_no_longer_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let present = directory.path().join("clip.mp4");
+        fs::write(&present, b"x").unwrap();
+        assert_eq!(
+            canonical_video(present.clone()).unwrap(),
+            fs::canonicalize(&present).unwrap()
+        );
+        for gone in [
+            directory.path().join("missing.mp4"),
+            directory.path().to_path_buf(),
+        ] {
+            let error = canonical_video(gone).unwrap_err();
+            assert!(error.to_string().contains("no longer available"), "{error}");
+        }
     }
 
     #[test]

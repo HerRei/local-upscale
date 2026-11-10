@@ -804,17 +804,14 @@ fn handle_worker_envelope(
 
     match envelope.message_type.as_str() {
         "job_completed" | "video_job_completed" => {
-            let body = if string(&envelope.data, "notes").is_empty() {
-                "Your enhanced media is ready."
-            } else {
-                "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
-            };
-            let _ = app
-                .notification()
-                .builder()
-                .title("LocalSR finished")
-                .body(body)
-                .show();
+            if let Some(body) = finished_notice(state, &envelope.data) {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("LocalSR finished")
+                    .body(body)
+                    .show();
+            }
         }
         "job_failed" => {
             let _ = app
@@ -906,6 +903,10 @@ fn engine_crashed(status: &std::io::Result<std::process::ExitStatus>) -> bool {
 
 /// An engine that stayed up this long, or finished a job, did work: its stopping
 /// starts the count of failed starts over.
+/// The title while frames of a video are enhanced; every message of that stage uses it, so
+/// the status line does not alternate between two wordings.
+const VIDEO_FRAMES_TITLE: &str = "Enhancing video";
+
 const STABLE_RUN: Duration = Duration::from_secs(60);
 /// Failed starts in a row after which the host gives up and shows the failure.
 const MAX_FAILED_STARTS: u32 = 3;
@@ -1414,7 +1415,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "video_frame_started" => {
             let mut runtime = lock(&state.runtime)?;
-            runtime.status_title = "Enhancing video · Labs".into();
+            runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
                 integer(data, "frame_index").saturating_add(1),
@@ -1438,7 +1439,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             } else {
                 0.0
             };
-            runtime.status_title = "Enhancing video".into();
+            runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
             runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
             runtime.active_tile_size = count32(data, "active_tile_size");
@@ -1471,7 +1472,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             runtime.progress = progress;
             let elapsed = seconds(data, "elapsed_seconds");
             let remaining = seconds(data, "estimated_remaining_seconds");
-            runtime.status_title = "Enhancing video · Labs".into();
+            runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
                 integer(data, "frames_processed"),
@@ -2021,6 +2022,25 @@ fn should_emit_state_changed(message_type: &str) -> bool {
 /// sides of a comparison, so a finished result is decoded once and then served
 /// from the decoder's cache.
 pub const RESULT_PREVIEW_MAX_DIMENSION: u32 = 2048;
+
+/// The text of the "finished" notice, or None while more work is queued: the notice says
+/// LocalSR is done, which a photo of a long batch is not.
+fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
+    let more_work = state
+        .database
+        .lock()
+        .ok()
+        .and_then(|database| database.has_inflight_jobs().ok())
+        .unwrap_or(false);
+    if more_work {
+        return None;
+    }
+    Some(if string(data, "notes").is_empty() {
+        "Your enhanced media is ready."
+    } else {
+        "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
+    })
+}
 
 /// A completed comparison must come from the full output file, never from the
 /// last progressive tile or video frame. Keep this request in the native host
@@ -3265,6 +3285,53 @@ mod tests {
                 .unwrap()
                 .begin_active_job("benchmark-1".into());
         }
+    }
+
+    #[test]
+    fn frame_messages_of_a_video_share_one_status_title() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        lock(&state.runtime).unwrap().active_job_id = "a".into();
+        let mut titles = Vec::new();
+        for (kind, data) in [
+            (
+                "video_frame_started",
+                json!({"frame_index": 0, "total_frames": 10}),
+            ),
+            (
+                "video_tile_progress",
+                json!({"frame_index": 0, "total_frames": 10, "completed_tiles": 1, "total_tiles": 4}),
+            ),
+            (
+                "video_frame_completed",
+                json!({"job_id": "a", "frames_processed": 1, "total_frames": 10}),
+            ),
+        ] {
+            apply_worker_envelope(&state, &envelope(kind, data)).unwrap();
+            titles.push(lock(&state.runtime).unwrap().status_title.clone());
+        }
+        assert!(
+            titles.windows(2).all(|pair| pair[0] == pair[1]),
+            "{titles:?}"
+        );
+    }
+
+    #[test]
+    fn the_finished_notice_waits_until_the_queue_is_done() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        let done = json!({"job_id": "a"});
+        assert_eq!(finished_notice(&state, &done), None);
+        lock(&state.database).unwrap().cancel_queued_jobs().unwrap();
+        assert_eq!(
+            finished_notice(&state, &done),
+            Some("Your enhanced media is ready.")
+        );
+        assert!(
+            finished_notice(&state, &json!({"notes": "Blur fix skipped"}))
+                .unwrap()
+                .contains("A fix was skipped")
+        );
     }
 
     fn ready_for_batches(state: &AppState) {

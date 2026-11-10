@@ -408,7 +408,7 @@ pub fn run_arguments(arguments: &[std::ffi::OsString]) -> Option<i32> {
         ) {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("CUDA engine installation failed: {error}");
+                eprintln!("Engine installation failed: {error}");
                 1
             }
         },

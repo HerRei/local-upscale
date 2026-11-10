@@ -355,7 +355,7 @@ async fn download_one(
     let needed = remaining.saturating_mul(115) / 100;
     if available < needed {
         return Err(AppError::Download(format!(
-            "not enough disk space: need about {} MB more, but only {} MB is free",
+            "not enough disk space: the download needs about {} MB free, but only {} MB is available",
             needed / 1_000_000,
             available / 1_000_000
         )));
