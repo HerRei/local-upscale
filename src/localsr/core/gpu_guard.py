@@ -42,6 +42,7 @@ GATE_CACHE_ENV = "LOCALSR_ONNX_GATE_CACHE"
 # Set by the app on the engine it starts after one that died of a native fault.
 CRASHED_ENGINE_ENV = "LOCALSR_CRASHED_ENGINE"
 PREFLIGHT_ARGUMENT = "--gpu-preflight"
+COMPILE_ARGUMENT = "--npu-compile"
 # Set in the preflight child: it must not start a preflight of its own.
 CHILD_ENV = "LOCALSR_GPU_PREFLIGHT_CHILD"
 TIMEOUT_SECONDS = 300.0
@@ -54,6 +55,8 @@ _CRASHED: dict[str, str] = {}
 # GPUs whose preflight ran in this process, whatever its outcome.
 _PREFLIGHT_TRIED: set[str] = set()
 _PREFLIGHT_TIMEOUTS: set[str] = set()
+# NPU programs whose compile ran out of time in this process (device, version, graph).
+COMPILE_TIMEOUTS: set[str] = set()
 
 
 def gate_cache_directory() -> Path:
@@ -322,11 +325,74 @@ def child_main(argv: list[str]) -> int:
     return 0
 
 
-def _command(device: str) -> list[str]:
+def _child_command(*arguments: str) -> list[str]:
     command = [sys.executable]
     if not getattr(sys, "frozen", False):
         command += ["-m", "localsr.worker"]
-    return [*command, PREFLIGHT_ARGUMENT, device]
+    return [*command, *arguments]
+
+
+def _command(device: str) -> list[str]:
+    return _child_command(PREFLIGHT_ARGUMENT, device)
+
+
+def compile_main(argv: list[str]) -> int:
+    """Compile the graph in file ``argv[1]`` of architecture ``argv[2]`` for the NPU ``argv[0]`` into the engine's NPU
+    cache. Exit 0 when the program is cached, UNTESTED when it could not be built."""
+    if os.name != "nt":
+        signal.alarm(int(TIMEOUT_SECONDS) + 30)  # as in child_main
+    try:
+        from .inference import _onnx_route
+        from .onnx_runtime import compile_into_cache
+
+        route = _onnx_route(argv[0])
+        if route is None:
+            raise RuntimeError(f"{argv[0]} is not an ONNX Runtime device")
+        compile_into_cache(route, Path(argv[1]).read_bytes(), argv[2])
+    except Exception:  # noqa: BLE001 - reported through the exit code
+        logger.exception("The NPU compile could not run")
+        return UNTESTED
+    return 0
+
+
+def compile_npu(device: str, graph: bytes, architecture: str, stop: threading.Event) -> str:
+    """Compile a graph for an NPU in a separate process, which leaves the program in the
+    NPU cache: "done", "failed" or "crashed" (a native fault). A compiler that never
+    returns holds the interpreter's lock for good, so the engine only waits here: the
+    child is killed when ``stop`` is set."""
+    with tempfile.TemporaryDirectory(
+        prefix="localsr-npu-compile-", ignore_cleanup_errors=True
+    ) as directory:
+        graph_path = Path(directory) / "graph.onnx"
+        graph_path.write_bytes(graph)
+        log_path = Path(directory) / "child.log"
+        # The child shares the engine's cache directory: that is where it leaves its result.
+        env = dict(os.environ, **{CHILD_ENV: "1"})
+        env.pop(CRASHED_ENGINE_ENV, None)
+        with log_path.open("wb") as log:
+            process = subprocess.Popen(
+                _child_command(COMPILE_ARGUMENT, device, str(graph_path), architecture),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
+            job = _bind_to_this_process(process)
+            try:
+                while process.poll() is None:
+                    if stop.wait(0.1):
+                        process.kill()
+                        process.wait()
+                        return "stopped"
+            finally:
+                _release_binding(job)
+        code = process.returncode
+        if code == 0:
+            return "done"
+        tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-12:]
+        logger.warning("The NPU compile ended with exit code %s:\n%s", code, "\n".join(tail))
+        return "crashed" if native_fault(code) else "failed"
 
 
 def run(
