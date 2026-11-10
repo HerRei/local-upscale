@@ -28,6 +28,26 @@ describe('setting hints', () => {
     expect(hint.hidden).toBe(false);
   });
 
+  it('stay usable inside a disabled fieldset, as while a job runs, and open with Enter or Space', async () => {
+    const fieldset = document.body.appendChild(document.createElement('fieldset'));
+    fieldset.disabled = true;
+    render(HelpTip, {
+      props: { label: 'Tile', text: 'How large a piece is processed at once.' },
+      target: fieldset,
+    });
+    const tip = screen.getByRole('button', { name: 'About Tile' });
+    const hint = screen.getByText('How large a piece is processed at once.');
+    expect(tip.matches(':disabled')).toBe(false);
+    expect(tip.tabIndex).toBe(0);
+    await fireEvent.keyDown(tip, { key: 'Enter' });
+    expect(hint.hidden).toBe(false);
+    await fireEvent.keyDown(tip, { key: 'Escape' });
+    expect(hint.hidden).toBe(true);
+    await fireEvent.keyDown(tip, { key: ' ' });
+    expect(hint.hidden).toBe(false);
+    fieldset.remove();
+  });
+
   it('sit next to Tile, Halo and Precision, whose labels still name their fields', async () => {
     const snapshot = demoSnapshot();
     snapshot.settings.task = 'upscale';
@@ -38,7 +58,7 @@ describe('setting hints', () => {
       usingTemporalVideo: false,
       updateSettings: () => undefined,
       chooseOutput: async () => undefined,
-      refreshCapabilities: async () => undefined,
+      refreshCapabilities: async () => true,
     });
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByRole('button', { name: 'About Hardware' })).toBeTruthy();

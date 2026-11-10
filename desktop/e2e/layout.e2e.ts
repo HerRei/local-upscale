@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { emit } from './fake-host';
-import { ready, video, windows, withOutputs } from './fixtures';
+import { emit, hostCalls, type Scenario } from './fake-host';
+import { ready, upscale, video, windows, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
 // centre header keeps its tabs, file name and view options in a single row.
@@ -318,6 +318,186 @@ test.describe('overflow and alignment', () => {
     const tip = page.getByRole('tooltip').filter({ visible: true });
     const sizes = await tip.evaluate((node) => [node.scrollWidth, node.clientWidth]);
     expect(sizes[0]).toBeLessThanOrEqual(sizes[1]);
+  });
+
+  const advancedScenarios = {
+    'Upscale on a Mac': { ...ready, settings: { ...ready.settings, output_format: 'heic' } },
+    'Upscale on Windows': { ...windows, worker: 'ready' as const },
+    Video: video,
+    Edit: {
+      ...upscale,
+      task: 'edit',
+      worker: 'ready' as const,
+      features: ['image_edit'],
+      settings: { edit_model_id: 'flux2_klein_4b_q4_0' },
+      installed: ['flux2_klein_4b_q4_0'],
+    },
+  };
+
+  for (const [name, scenario] of Object.entries(advancedScenarios)) {
+    test(`Advanced, ${name}: every tip wraps inside its box and the window`, async ({ page }) => {
+      await page.setViewportSize({ width: 880, height: 640 });
+      await openApp(page, scenario);
+      await showPane(page, 'enhance');
+      await page.getByRole('button', { name: /^Advanced/ }).click();
+      const column = await box(page.locator('.inspector-scroll'));
+      const tips = page.locator('.advanced-controls .help-tip');
+      const count = await tips.count();
+      expect(count).toBeGreaterThan(5);
+      for (let index = 0; index < count; index++) {
+        const tip = tips.nth(index);
+        await tip.scrollIntoViewIfNeeded();
+        const target = await box(tip);
+        expect(
+          Math.min(target.width, target.height),
+          await tip.getAttribute('aria-label'),
+        ).toBeGreaterThanOrEqual(24);
+        await tip.click();
+        const text = page.getByRole('tooltip').filter({ visible: true });
+        await expect(text).toHaveCount(1);
+        const label = await tip.getAttribute('aria-label');
+        const [scroll, client] = await text.evaluate((node) => [
+          node.scrollWidth,
+          node.clientWidth,
+        ]);
+        expect(scroll, label).toBeLessThanOrEqual(client);
+        const shown = await box(text);
+        expect(shown.x, label).toBeGreaterThanOrEqual(column.x);
+        expect(shown.x + shown.width, label).toBeLessThanOrEqual(column.x + column.width);
+        expect(shown.y, label).toBeGreaterThanOrEqual(0);
+        expect(shown.y + shown.height, label).toBeLessThanOrEqual(640);
+        await page.keyboard.press('Escape');
+      }
+    });
+  }
+
+  test('Advanced: a tip beside a label leaves the select column and the Steps and Seed pair where they were', async ({
+    page,
+  }) => {
+    await openApp(page, advancedScenarios.Edit);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    const select = await box(page.locator('#edit-size'));
+    expect(Math.abs((await left(page.locator('#device'))) - select.x)).toBeLessThan(0.5);
+    const steps = await box(page.locator('#edit-steps'));
+    const seed = await box(page.locator('#edit-seed'));
+    expect(Math.abs(steps.y - seed.y)).toBeLessThan(0.5);
+    expect(seed.x).toBeGreaterThan(steps.x + steps.width);
+    expect(Math.abs(seed.x - select.x)).toBeLessThan(0.5);
+  });
+
+  test.describe('while a queue runs', () => {
+    // Open Advanced before the lock: its toggle is disabled once settings are locked.
+    async function lockedPane(page: Page, scenario: Scenario): Promise<void> {
+      await openApp(page, scenario);
+      await showPane(page, 'enhance');
+      await page.evaluate(() => {
+        const fieldset = document.querySelector('fieldset.processing-settings');
+        (fieldset as HTMLFieldSetElement).disabled = false;
+        (document.querySelector('.disclosure') as HTMLButtonElement).click();
+      });
+      await expect(page.locator('#device')).toBeVisible();
+      await page.evaluate(() => {
+        const fieldset = document.querySelector('fieldset.processing-settings');
+        (fieldset as HTMLFieldSetElement).disabled = true;
+      });
+    }
+
+    const scenarios = {
+      image: { ...ready, running: true },
+      edit: { ...advancedScenarios.Edit, running: true },
+      video: { ...video, worker: 'ready' as const, running: true },
+    };
+
+    for (const [name, scenario] of Object.entries(scenarios)) {
+      test(`${name}: every control and label is dimmed alike; headings and tips are not`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: 1380, height: 900 });
+        await lockedPane(page, scenario);
+        const found = await page.evaluate(() => {
+          const effective = (element: Element) => {
+            let opacity = 1;
+            for (let node: Element | null = element; node; node = node.parentElement)
+              opacity *= Number(getComputedStyle(node).opacity);
+            return opacity;
+          };
+          const label = (element: Element) =>
+            `${element.tagName}.${element.className} "${(element.textContent ?? '').trim().slice(0, 30)}"`;
+          const dimmed = [
+            ...document.querySelectorAll(
+              '.processing-settings :is(button, select, input, textarea, label, .field-label, .directory-path, .directory-field small, .directory-field > b, .range-head > b):not(.disclosure)',
+            ),
+          ];
+          const full = [
+            ...document.querySelectorAll(
+              '.processing-settings :is(.eyebrow, .disclosure, .help-tip, .memory-refresh), .pane-heading',
+            ),
+          ];
+          return {
+            dimmed: dimmed.map((element) => [label(element), effective(element)] as const),
+            full: full.map((element) => [label(element), effective(element)] as const),
+          };
+        });
+        expect(found.dimmed.length).toBeGreaterThan(12);
+        for (const [what, opacity] of found.dimmed) {
+          expect(opacity, what).toBeCloseTo(0.38, 2);
+        }
+        for (const [what, opacity] of found.full) expect(opacity, what).toBe(1);
+      });
+    }
+
+    test('Refresh stays active, asks the host, says Refreshed and keeps its width', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1380, height: 900 });
+      await lockedPane(page, scenarios.image);
+      const refresh = page.locator('.memory-refresh');
+      await refresh.scrollIntoViewIfNeeded();
+      const before = await box(refresh);
+      await refresh.click();
+      await expect(refresh).toHaveText(/Refreshed/);
+      expect((await hostCalls(page, 'refresh_capabilities')).length).toBe(1);
+      expect((await box(refresh)).width).toBe(before.width);
+      await expect(
+        page.getByRole('status').filter({ hasText: 'Memory status refreshed' }),
+      ).toHaveCount(1);
+      await expect(page.locator('.refresh-now')).toHaveText('Refresh', { timeout: 3000 });
+      expect((await box(refresh)).width).toBe(before.width);
+    });
+
+    test('help tips still open while locked', async ({ page }) => {
+      await page.setViewportSize({ width: 1380, height: 900 });
+      await lockedPane(page, scenarios.image);
+      const tip = page.getByRole('button', { name: 'About Hardware' });
+      await tip.scrollIntoViewIfNeeded();
+      await tip.click();
+      await expect(page.getByRole('tooltip').filter({ visible: true })).toHaveCount(1);
+      await page.keyboard.press('Escape');
+      await tip.evaluate((element) => (element as HTMLElement).blur());
+      await tip.focus();
+      await expect(page.getByRole('tooltip').filter({ visible: true })).toHaveCount(1);
+    });
+
+    for (const size of [
+      { width: 1380, height: 860 },
+      { width: 880, height: 640 },
+    ]) {
+      test(`the Task heading stays where it was, at ${size.width} x ${size.height}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(size);
+        const heading = () => page.locator('.processing-settings .eyebrow', { hasText: 'Task' });
+        await openApp(page, ready);
+        await showPane(page, 'enhance');
+        const idle = (await box(heading())).y;
+        await openApp(page, { ...ready, running: true });
+        await showPane(page, 'enhance');
+        await expect(page.getByText('Locked while running')).toBeVisible();
+        await expect(page.getByText(/Finish or cancel the queue/)).toHaveCount(0);
+        expect((await box(heading())).y).toBe(idle);
+      });
+    }
   });
 
   test('Advanced: three selects share the select column; Find installed FFmpeg is one line', async ({

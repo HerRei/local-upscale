@@ -283,6 +283,26 @@ input:focus-visible {
   padding: 0;
   border: 0;
 }
+/* While a job runs the fieldset disables every setting. They all take the look the Task
+   and Quality cards already had when disabled; headings, the pane header and the "?" tips stay
+   at full strength so the pane can still be read. A label that wraps its checkbox dims as one,
+   so the checkbox itself is left out to keep the 38% from being applied twice. */
+.processing-settings:disabled
+  :is(
+    select,
+    textarea,
+    input:not([type='checkbox']),
+    label,
+    .field-label,
+    .directory-path,
+    .directory-field small,
+    .directory-field > b,
+    .range-head > b,
+    button:not(.disclosure)
+  ) {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
 .enhance-pane {
   min-height: 0;
   overflow: hidden;
@@ -312,14 +332,6 @@ input:focus-visible {
 .pane-heading span {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
-}
-/* Under the Enhance header while a queue runs; the header already says it is locked. */
-.settings-lock {
-  flex: none;
-  margin: 0 16px;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
-  line-height: 1.4;
 }
 .visually-hidden {
   position: absolute;
@@ -1020,7 +1032,7 @@ input[type='number'],
   font-size: calc(11px * var(--ui-scale));
 }
 .download-track,
-.hardware-card > i {
+.meter-clip > i {
   display: block;
   height: 3px;
   margin-top: 6px;
@@ -1029,14 +1041,14 @@ input[type='number'],
   background: #111113;
 }
 .download-track i,
-.hardware-card > i {
+.meter-clip > i {
   display: block;
   height: 100%;
   background: var(--accent-hi);
 }
 /* Memory pressure is information, not an action: grey, so terracotta stays on Start and
    progress. */
-.hardware-card > i {
+.meter-clip > i {
   background: var(--tertiary);
 }
 .inline-warning {
@@ -1090,13 +1102,18 @@ input[type='number'],
   gap: 8px;
 }
 .field-row label,
-.range-row label {
+.range-row label,
+.range-head {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.range-row label {
+.range-row {
+  position: relative;
+}
+.range-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 5px;
 }
 .range-row input {
@@ -1104,6 +1121,7 @@ input[type='number'],
   accent-color: #cfcfcf;
 }
 .directory-field {
+  position: relative;
   width: 100%;
   min-height: 46px;
   padding: 7px 9px;
@@ -1116,8 +1134,19 @@ input[type='number'],
   background: var(--recess);
   text-align: left;
 }
-.directory-field span {
+/* The whole card picks the folder; the "?" sits above this layer. */
+.directory-hit {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+.directory-text {
   min-width: 0;
+}
+.directory-path {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1151,7 +1180,6 @@ input[type='number'],
 }
 .hardware-card {
   position: relative;
-  overflow: hidden;
   min-height: 38px;
   padding: 8px;
   display: flex;
@@ -1163,13 +1191,40 @@ input[type='number'],
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.hardware-card button {
-  border: 0;
-  background: transparent;
+.memory-refresh {
+  display: inline-grid;
+  padding: 1px 6px;
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
+  cursor: pointer;
+  user-select: none;
 }
-.hardware-card > i {
+.memory-refresh:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.memory-refresh[aria-disabled='true'] {
+  cursor: default;
+}
+/* Both words share one cell, so the button is as wide as the longer one. */
+.refresh-ghost,
+.refresh-now {
+  grid-area: 1 / 1;
+  text-align: right;
+}
+.refresh-ghost {
+  visibility: hidden;
+}
+/* Clips the meter to the card's rounded corners; the card itself must not clip, or its help
+   tip would be cut off. */
+.meter-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.meter-clip > i {
   position: absolute;
   left: 0;
   bottom: 0;
@@ -2155,9 +2210,6 @@ input[type='number'],
     width: min(440px, calc(100% - 24px));
     margin-inline: auto;
   }
-  .enhance-pane .settings-lock {
-    margin-inline: max(16px, calc(50% - 204px));
-  }
   .enhance-pane .inspector-scroll {
     padding-inline: max(16px, calc(50% - 204px));
   }
@@ -2862,6 +2914,7 @@ input[type='number'],
   /* A 24 px target around the 14 px circle; the negative margins keep the layout of the
      14 px button. */
   width: calc(14px * var(--ui-scale) + 10px);
+  flex: none;
   min-width: 0;
   height: calc(14px * var(--ui-scale) + 10px);
   min-height: 0;
@@ -2875,6 +2928,7 @@ input[type='number'],
   line-height: 1;
   vertical-align: 1px;
   cursor: help;
+  user-select: none;
 }
 .help-tip::before {
   content: '';

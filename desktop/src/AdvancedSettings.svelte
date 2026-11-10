@@ -10,6 +10,7 @@
     imageFormatChoices,
     imageQualityName,
   } from './lib/outputFormats';
+  import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
@@ -32,7 +33,8 @@
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseOutput: () => Promise<void>;
-  export let refreshCapabilities: () => Promise<void>;
+  /** Resolves true when the host took the request, false when it refused (and said so). */
+  export let refreshCapabilities: () => Promise<boolean>;
 
   // ONNX Runtime GPU routes always run FP32, whatever the saved precision says.
   $: onnxGpu =
@@ -64,6 +66,25 @@
     group.options.some((option) => option.label.length > 22),
   );
   let advanced = false;
+  let refreshing = false;
+  let refreshed = false;
+  let refreshedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // The line says so for a moment once the host has taken the request; a refusal shows the
+  // host's own message instead and no confirmation.
+  async function refresh(): Promise<void> {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      if (!(await refreshCapabilities())) return;
+      refreshed = true;
+      clearTimeout(refreshedTimer);
+      refreshedTimer = setTimeout(() => (refreshed = false), 1500);
+    } finally {
+      refreshing = false;
+    }
+  }
+  onDestroy(() => clearTimeout(refreshedTimer));
   let ffmpegNote = '';
 
   $: codec = settings.video_codec ?? 'auto';
@@ -163,7 +184,12 @@
     <div class="advanced-controls">
       {#if settings.task === 'edit'}
         <div class="field-row">
-          <label for="edit-size">Edit size</label><select
+          <span class="label-with-tip"
+            ><label for="edit-size">Edit size</label><HelpTip
+              label="Edit size"
+              text="The photo is scaled down to this longest edge before editing, and the result has that size. Larger sizes keep more detail but need more memory; sizes this computer cannot hold are disabled."
+            /></span
+          ><select
             id="edit-size"
             value={Math.min(settings.edit_max_dimension, editSizeAllowed)}
             on:change={(event) =>
@@ -176,8 +202,12 @@
           >
         </div>
         <div class="field-grid">
-          <label
-            >Steps<input
+          <div>
+            <label for="edit-steps">Steps</label><HelpTip
+              label="Steps"
+              text="How many refinement passes the model makes, from 1 to 60. More steps take longer. Choosing another model resets this to that model's own number."
+            /><input
+              id="edit-steps"
               type="number"
               min="1"
               max="60"
@@ -189,9 +219,14 @@
                     Math.max(1, Math.round(Number(event.currentTarget.value)) || 40),
                   ),
                 })}
-            /></label
-          ><label
-            >Seed<input
+            />
+          </div>
+          <div>
+            <label for="edit-seed">Seed</label><HelpTip
+              label="Seed"
+              text="The number the model's random choices start from. Try another one to get a different version of the same edit."
+            /><input
+              id="edit-seed"
               type="number"
               min="0"
               max="2147483647"
@@ -203,8 +238,8 @@
                     Math.max(0, Math.round(Number(event.currentTarget.value)) || 0),
                   ),
                 })}
-            /></label
-          >
+            />
+          </div>
         </div>
         <p class="model-description">
           {editModel
@@ -213,7 +248,12 @@
         </p>
       {:else if settings.task !== 'denoise' && !(usingTemporalVideo && settings.video_target_resolution)}
         <div class="field-row">
-          <label for="scale">Output scale</label><select
+          <span class="label-with-tip"
+            ><label for="scale">Output scale</label><HelpTip
+              label="Output scale"
+              text={`How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+            /></span
+          ><select
             id="scale"
             value={settings.output_scale}
             on:change={(event) =>
@@ -226,7 +266,12 @@
       {/if}
       {#if settings.task !== 'video' && settings.task !== 'edit'}
         <div class="field-row">
-          <label for="format">Format</label><select
+          <span class="label-with-tip"
+            ><label for="format">Format</label><HelpTip
+              label="Format"
+              text="PNG and TIFF are lossless. JPEG, WebP and HEIC make smaller files at some loss of detail, which the quality slider sets. HEIC is offered on Mac only."
+            /></span
+          ><select
             id="format"
             value={settings.output_format}
             on:change={(event) =>
@@ -238,7 +283,15 @@
           >
         </div>
         {#if qualityName}<div class="range-row">
-            <label for="quality">{qualityName} quality <b>{settings.jpeg_quality}</b></label><input
+            <div class="range-head">
+              <span class="label-with-tip"
+                ><label for="quality">{qualityName} quality</label><HelpTip
+                  label={`${qualityName} quality`}
+                  text="Higher values keep more detail and make larger files; lower values make smaller files with more visible compression. The default is 98."
+                /></span
+              ><b>{settings.jpeg_quality}</b>
+            </div>
+            <input
               id="quality"
               type="range"
               min="70"
@@ -248,17 +301,27 @@
                 updateSettings({ jpeg_quality: Number(event.currentTarget.value) })}
             />
           </div>{/if}
-        <label class="check-row"
-          ><input
-            type="checkbox"
-            checked={settings.preserve_metadata}
-            on:change={(event) =>
-              updateSettings({ preserve_metadata: event.currentTarget.checked })}
-          /> Preserve safe metadata and color profile</label
-        >
+        <div class="check-line">
+          <label class="check-row"
+            ><input
+              type="checkbox"
+              checked={settings.preserve_metadata}
+              on:change={(event) =>
+                updateSettings({ preserve_metadata: event.currentTarget.checked })}
+            /> Preserve safe metadata and color profile</label
+          ><HelpTip
+            label="Metadata and color profile"
+            text="Keeps the date, artist and copyright tags and the color profile, converted to sRGB. GPS position, camera serial numbers and similar tags are never copied. With this off, the file carries none of it."
+          />
+        </div>
       {:else if settings.task === 'video'}
         <div class="field-row">
-          <label for="container">Container</label><select
+          <span class="label-with-tip"
+            ><label for="container">Container</label><HelpTip
+              label="Container"
+              text="The file type of the result. MP4 is the default; MKV keeps any audio LocalSR can decode as it is; MOV, on a Mac only, holds HEVC or ProRes. The video format list follows this choice."
+            /></span
+          ><select
             id="container"
             value={settings.video_container}
             on:change={(event) =>
@@ -270,7 +333,12 @@
           >
         </div>
         <div class="field-row">
-          <label for="video-codec">Video format</label><select
+          <span class="label-with-tip"
+            ><label for="video-codec">Video format</label><HelpTip
+              label="Video format"
+              text="How the video is compressed. AV1, VP9 and lossless FFV1 are built into LocalSR; H.264 and HEVC are written by macOS or by an FFmpeg you installed. Automatic picks what this computer offers."
+            /></span
+          ><select
             id="video-codec"
             value={codec}
             on:change={(event) => chooseCodec(event.currentTarget.value as VideoCodec)}
@@ -297,7 +365,12 @@
           </p>
         {/if}
         <div class="field-row">
-          <label for="external-ffmpeg">External FFmpeg</label><input
+          <span class="label-with-tip"
+            ><label for="external-ffmpeg">External FFmpeg</label><HelpTip
+              label="External FFmpeg"
+              text="FFmpeg is a free video program that you install yourself. Leave this empty unless a video will not open or an export format asks for it; LocalSR uses the one it finds on this computer."
+            /></span
+          ><input
             id="external-ffmpeg"
             type="text"
             placeholder={foundFfmpeg.length ? `Found automatically: ${foundFfmpeg[0]}` : 'Not used'}
@@ -325,7 +398,15 @@
           LocalSR never downloads or bundles FFmpeg.{#if ffmpegNote}<br />{ffmpegNote}{/if}
         </p>
         <div class="range-row">
-          <label for="crf">Video quality · CRF <b>{settings.video_crf}</b></label><input
+          <div class="range-head">
+            <span class="label-with-tip"
+              ><label for="crf">Video quality · CRF</label><HelpTip
+                label="Video quality"
+                text="Lower numbers keep more detail and make larger files; higher numbers make smaller files. It has no effect on lossless FFV1 or on ProRes. The default is 18."
+              /></span
+            ><b>{settings.video_crf}</b>
+          </div>
+          <input
             id="crf"
             type="range"
             min="12"
@@ -335,19 +416,29 @@
           />
         </div>
         {#if !usingTemporalVideo}
-          <label class="check-row"
-            ><input
-              type="checkbox"
-              disabled={settings.video_hdr_mode === 'preserve'}
-              checked={settings.deflicker}
-              on:change={(event) => updateSettings({ deflicker: event.currentTarget.checked })}
-            /> De-flicker · Labs</label
-          >
+          <div class="check-line">
+            <label class="check-row"
+              ><input
+                type="checkbox"
+                disabled={settings.video_hdr_mode === 'preserve'}
+                checked={settings.deflicker}
+                on:change={(event) => updateSettings({ deflicker: event.currentTarget.checked })}
+              /> De-flicker · Labs</label
+            ><HelpTip
+              label="De-flicker"
+              text="For clips whose still areas shimmer from frame to frame. Where nothing moves, each frame is blended halfway with the median of itself and its two neighbors."
+            />
+          </div>
           <p class="model-description">
             Gentle smoothing in static regions. Moving details and scene cuts bypass the filter.
           </p>
           <div class="field-row">
-            <label for="frame-rate">Frame rate</label><select
+            <span class="label-with-tip"
+              ><label for="frame-rate">Frame rate</label><HelpTip
+                label="Frame rate"
+                text="Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. The first use downloads a model of about 25 MB."
+              /></span
+            ><select
               id="frame-rate"
               disabled={preservingHdr || !interpolationSupported}
               value={settings.video_interpolation ?? 'off'}
@@ -392,10 +483,25 @@
           HDR uses FP32 and disables de-flicker and frame interpolation.
         </p>
       {/if}
-      <button class="directory-field" on:click={chooseOutput}
-        ><span><small>Save to</small>{settings.output_directory || 'Choose an output folder'}</span
-        ><b>Choose…</b></button
-      >
+      <div class="directory-field">
+        <button
+          type="button"
+          class="directory-hit"
+          aria-label={`Save to ${settings.output_directory || 'Choose an output folder'}`}
+          on:click={chooseOutput}
+        ></button>
+        <div class="directory-text">
+          <span class="label-with-tip"
+            ><small>Save to</small><HelpTip
+              label="Save to"
+              text="The folder where results are saved; it starts as your Desktop. Results get new names and never replace an existing file, and the original photo is not changed."
+            /></span
+          ><span class="directory-path"
+            >{settings.output_directory || 'Choose an output folder'}</span
+          >
+        </div>
+        <b>Choose…</b>
+      </div>
       <div class="field-row" class:stacked={hardwareStacked}>
         <span class="label-with-tip"
           ><label for="device">Hardware</label><HelpTip
@@ -435,7 +541,12 @@
         </p>
       {/if}
       <div class="field-row">
-        <label for="interface-scale">Interface text</label><select
+        <span class="label-with-tip"
+          ><label for="interface-scale">Interface text</label><HelpTip
+            label="Interface text"
+            text="Enlarges the app's text and controls. The pictures you edit and their results are not affected."
+          /></span
+        ><select
           id="interface-scale"
           value={String(settings.interface_scale)}
           on:change={(event) =>
@@ -500,22 +611,50 @@
             text="Leaves more memory to the rest of the computer: LocalSR takes a smaller share of the GPU's memory and clears its cache after every tile. A little slower. Turn it on if the computer gets sluggish or a job runs out of memory."
           />
         </div>{/if}
-      {#if settings.task !== 'edit'}<label class="check-row"
-          ><input
-            type="checkbox"
-            checked={settings.enable_live_preview}
-            on:change={(event) =>
-              updateSettings({ enable_live_preview: event.currentTarget.checked })}
-          /> Show sampled enhanced previews (max 2 fps)</label
-        >{/if}
+      {#if settings.task !== 'edit'}<div class="check-line">
+          <label class="check-row"
+            ><input
+              type="checkbox"
+              checked={settings.enable_live_preview}
+              on:change={(event) =>
+                updateSettings({ enable_live_preview: event.currentTarget.checked })}
+            /> Show sampled enhanced previews (max 2 fps)</label
+          ><HelpTip
+            label="Enhanced previews"
+            text="Shows the result in the preview while a job runs, as reduced pictures at most twice a second. They are made on the side, and the job does not wait for them."
+          />
+        </div>{/if}
       <div class="hardware-card">
-        <span
+        <span class="label-with-tip"
           >{capabilities.system_memory_pressure_level === 'unknown'
             ? 'Hardware ready'
-            : `${capabilities.system_memory_pressure_level} memory pressure`}</span
-        ><button on:click={refreshCapabilities}>Refresh</button><i
-          style={`width:${Math.max(3, capabilities.system_memory_pressure_percent)}%`}
-        ></i>
+            : `${capabilities.system_memory_pressure_level} memory pressure`}<HelpTip
+            label="Memory pressure"
+            text="How much of the computer's memory is in use: low below 75%, moderate from 75%, high from 90%. The bar shows that share. Refresh reads the hardware and the memory again."
+          /></span
+        ><!-- Not a <button>: this stays usable while the settings above are locked. The wider
+             word is laid out hidden, so the line does not move when the label changes. -->
+        <span
+          role="button"
+          tabindex="0"
+          class="memory-refresh"
+          aria-disabled={refreshing}
+          on:click={refresh}
+          on:keydown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              void refresh();
+            }
+          }}
+          ><span class="refresh-ghost" aria-hidden="true">Refreshed</span><span class="refresh-now"
+            >{refreshed ? 'Refreshed' : 'Refresh'}</span
+          ></span
+        ><span class="visually-hidden" role="status" aria-live="polite"
+          >{refreshed ? 'Memory status refreshed' : ''}</span
+        >
+        <div class="meter-clip">
+          <i style={`width:${Math.max(3, capabilities.system_memory_pressure_percent)}%`}></i>
+        </div>
       </div>
     </div>
   {/if}

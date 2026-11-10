@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AdvancedSettings from './AdvancedSettings.svelte';
 import { demoSnapshot } from './lib/demo';
@@ -42,7 +42,7 @@ async function open(
     usingTemporalVideo: false,
     updateSettings,
     chooseOutput: async () => undefined,
-    refreshCapabilities: async () => undefined,
+    refreshCapabilities: async () => true,
   });
   await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
   return updateSettings;
@@ -58,7 +58,7 @@ describe('HEIC image output', () => {
   it('is offered with a quality slider where the engine announces it', async () => {
     const update = await open({ task: 'upscale', output_format: 'heic' }, mac);
     expect(options('Format')).toEqual(['png', 'jpg', 'tif', 'webp', 'heic']);
-    const slider = screen.getByLabelText(/HEIC quality/);
+    const slider = screen.getByLabelText(/^HEIC quality/);
     await fireEvent.change(slider, { target: { value: '85' } });
     expect(update).toHaveBeenCalledWith({ jpeg_quality: 85 });
   });
@@ -114,4 +114,89 @@ it('shows the chosen FFmpeg path in a read-only field', async () => {
   expect(input.readOnly).toBe(true);
   await fireEvent.change(input, { target: { value: '/other' } });
   expect(update).not.toHaveBeenCalled();
+});
+
+describe('Refresh in the memory line', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function mount(refresh: () => Promise<boolean>) {
+    render(AdvancedSettings, {
+      settings: { ...demoSnapshot().settings, task: 'upscale' },
+      selectedModel: undefined,
+      capabilities: base,
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      refreshCapabilities: refresh,
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    return screen.getByRole('button', { name: /^Refresh/ });
+  }
+  // The wider word is always laid out, hidden, so the button never changes width.
+  const label = (button: HTMLElement) => button.querySelector('.refresh-now')?.textContent;
+
+  it('is disabled while the call is in flight, then reads Refreshed for 1.5 seconds', async () => {
+    let finish: (done: boolean) => void = () => undefined;
+    const call = vi.fn(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    const button = await mount(call);
+    await fireEvent.click(button);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(label(button)).toBe('Refresh');
+    await fireEvent.click(button);
+    expect(call).toHaveBeenCalledTimes(1);
+    finish(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(button.getAttribute('aria-disabled')).not.toBe('true');
+    expect(label(button)).toBe('Refreshed');
+    expect(screen.getByRole('status').textContent).toBe('Memory status refreshed');
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(label(button)).toBe('Refreshed');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(label(button)).toBe('Refresh');
+    expect(screen.getByRole('status').textContent).toBe('');
+  });
+
+  it('shows no confirmation when the call fails', async () => {
+    const button = await mount(async () => false);
+    await fireEvent.click(button);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(label(button)).toBe('Refresh');
+    expect(screen.getByRole('status').textContent).toBe('');
+    expect(button.getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('works from the keyboard', async () => {
+    const call = vi.fn(async () => true);
+    const button = await mount(call);
+    await fireEvent.keyDown(button, { key: 'Enter' });
+    await fireEvent.keyDown(button, { key: ' ' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('stays usable inside a disabled fieldset, as while a job runs', async () => {
+    const fieldset = document.body.appendChild(document.createElement('fieldset'));
+    const call = vi.fn(async () => true);
+    render(AdvancedSettings, {
+      target: fieldset,
+      props: {
+        settings: { ...demoSnapshot().settings, task: 'upscale' },
+        selectedModel: undefined,
+        capabilities: base,
+        usingTemporalVideo: false,
+        updateSettings: vi.fn(),
+        chooseOutput: async () => undefined,
+        refreshCapabilities: call,
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    fieldset.disabled = true;
+    const button = screen.getByRole('button', { name: /^Refresh/ });
+    expect(button.matches(':disabled')).toBe(false);
+    await fireEvent.click(button);
+    expect(call).toHaveBeenCalledTimes(1);
+    fieldset.remove();
+  });
 });

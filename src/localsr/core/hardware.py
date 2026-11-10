@@ -239,6 +239,19 @@ def get_memory_snapshot(device_id: str) -> dict:
     return snapshot
 
 
+def with_current_memory(report: dict) -> dict:
+    """``report`` with only its memory readings taken again.
+
+    The GPU drivers are not asked, so this is safe beside a running job."""
+    total_ram, available_ram = _system_memory()
+    return {
+        **report,
+        "system_ram_total": total_ram,
+        "system_ram_available": available_ram,
+        **_system_pressure_snapshot(total_ram, available_ram),
+    }
+
+
 def get_capability_report() -> dict:
     total_ram, available_ram = _system_memory()
     devices = []

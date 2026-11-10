@@ -33,8 +33,11 @@
   }
 </script>
 
-<button
-  type="button"
+<!-- Not a <button>: a button inside a disabled fieldset (settings while a job runs) is
+     disabled too, and reading help stays allowed then. -->
+<span
+  role="button"
+  tabindex="0"
   class="help-tip"
   aria-label={`About ${label}`}
   aria-describedby={id}
@@ -48,8 +51,11 @@
     if (event.key === 'Escape' && open) {
       open = false;
       event.preventDefault();
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      void show();
     }
-  }}>?</button
+  }}>?</span
 ><span bind:this={tip} class="help-tip-text" class:above role="tooltip" {id} hidden={!open}
   >{text}</span
 >

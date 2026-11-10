@@ -2,8 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openApp } from './app';
 import { ready } from './fixtures';
 
-// The status bar is the one place that reports a job: nothing floats over the stage, and the
-// locked note under the Enhance header sits clear of the Task heading.
+// The status bar is the one place that reports a job: nothing floats over the stage.
 
 const SHOTS = process.env.ROWRUN_SHOTS;
 async function look(page: Page, name: string) {
@@ -29,13 +28,6 @@ for (const size of [
         [box.x + box.width - 40, box.y + 30],
       );
       expect(String(hit)).not.toMatch(/activity/);
-    }
-    const note = page.locator('.settings-lock');
-    const task = page.locator('.eyebrow', { hasText: /^Task$/ });
-    if ((await note.isVisible()) && (await task.isVisible())) {
-      const a = (await note.boundingBox())!;
-      const b = (await task.boundingBox())!;
-      expect(a.y + a.height).toBeLessThanOrEqual(b.y);
     }
     await look(page, `running-image-${size.width}`);
   });

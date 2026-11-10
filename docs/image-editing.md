@@ -13,9 +13,9 @@ the **Edit with a prompt** group, which groups the bundles by model family and
 lists the sizes that fit this computer, with the memory each needs and the
 largest edit size it starts with. Heavier sizes stay behind **Show … more that
 need more memory than this computer has**.
-The **Edit size** control below the model row offers 512, 768 and 1024 px; sizes
-above this computer's profile are disabled. **Advanced** holds the step count,
-the seed, the output folder and the GPU. When Edit is chosen for the first
+**Advanced** holds the edit size (512, 768 or 1024 px; sizes above this
+computer's profile are disabled, and the photo is scaled down to that longest edge
+before editing), the step count, the seed, the output folder and the GPU. When Edit is chosen for the first
 time, a Mac starts with the best bundle whose estimated peak stays within 35% of
 its unified memory, so macOS and open apps keep the rest: FLUX.2 klein Q4_0 on
 16 GB, Q8_0 on 24–32 GB, then Qwen Q3_K_S (36 GB), Q4_K_M (48 GB), Q6_K (64 GB)

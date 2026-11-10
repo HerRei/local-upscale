@@ -912,9 +912,10 @@
   $: allPhrase = `${startVerb === 'start video' ? 'start' : startVerb} all ${queueableMedia.length}${
     settings.task === 'video' ? ' videos' : ''
   }`;
+  const lockedTitle = 'Finish or cancel the run to change settings.';
   $: lockReason = cancelling
     ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
-    : `${startingJob ? 'Starting your job…' : 'Settings locked.'} Your queue uses the settings shown below. Finish or cancel it to make changes. You can still view media and diagnostics.`;
+    : 'Finish or cancel the run to change settings.';
   $: startBlockReason = snapshot.runtime.active_job_id
     ? 'Wait for the current job to finish.'
     : snapshot.runtime.worker !== 'ready'
@@ -2845,9 +2846,9 @@
     <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>
       <div class="pane-heading" data-tauri-drag-region>
         <h1 data-tauri-drag-region>Enhance</h1>
-        <span data-tauri-drag-region
+        <span data-tauri-drag-region title={settingsLocked ? lockedTitle : undefined}
           >{settingsLocked
-            ? 'Locked during processing'
+            ? 'Locked while running'
             : settings.task === 'edit'
               ? editModel
                 ? editFamilyLabel(editModel.family)
@@ -2857,14 +2858,11 @@
                 : 'Choose a task'}</span
         >
       </div>
-      <!-- Locked: one quiet line instead of a block above Task, so the controls barely move.
-           Screen readers hear the full explanation, which also describes the settings. -->
-      {#if settingsLocked}<p class="settings-lock" role="status">
-          <span aria-hidden="true">Finish or cancel the queue to change settings.</span><span
-            id="settings-lock-reason"
-            class="visually-hidden">{lockReason}</span
-          >
-        </p>{/if}
+      <!-- Locked: the header says so once, and the dimmed controls show the rest. Screen readers
+           hear the explanation when the lock starts, and it describes the settings region. -->
+      {#if settingsLocked}<span id="settings-lock-reason" class="visually-hidden" role="status"
+          >{lockReason}</span
+        >{/if}
       <div
         bind:this={inspectorScroll}
         class="inspector-scroll"
@@ -3569,8 +3567,15 @@
                 true}
               {updateSettings}
               {chooseOutput}
-              refreshCapabilities={() =>
-                attempt('Could not refresh the hardware', () => api.refreshCapabilities())}
+              refreshCapabilities={async () => {
+                try {
+                  await api.refreshCapabilities();
+                  return true;
+                } catch (error) {
+                  showModal('Could not refresh the hardware', String(error));
+                  return false;
+                }
+              }}
             />
           {/if}
         </fieldset>
