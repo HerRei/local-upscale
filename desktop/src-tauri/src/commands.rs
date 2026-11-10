@@ -2887,6 +2887,13 @@ fn prepare_output_directory(state: &AppState, requested: &str) -> AppResult<Path
     } else {
         PathBuf::from(requested)
     };
+    // A relative folder would be made below the working directory, which for a
+    // desktop app is wherever the system started it.
+    if !path.is_absolute() {
+        return Err(AppError::Validation(
+            "choose the full path of the output folder".into(),
+        ));
+    }
     fs::create_dir_all(&path)?;
     let canonical = fs::canonicalize(path)?;
     if !canonical.is_dir() {
@@ -4941,6 +4948,25 @@ mod tests {
         let error = publish_without_replacing(&temporary, &destination, no_links).unwrap_err();
         assert!(error.to_string().contains("already exists"));
         assert_eq!(fs::read(&destination).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_relative_output_folder_is_refused_and_not_created() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let name = format!("relative-output-{}", std::process::id());
+        let outcome = prepare_output_directory(&state, &format!("{name}/inner"));
+        let created = Path::new(&name).exists();
+        let _ = fs::remove_dir_all(&name);
+        assert!(outcome.is_err());
+        assert!(!created);
+        let absolute = directory.path().join("made/here");
+        assert!(prepare_output_directory(&state, absolute.to_str().unwrap()).is_ok());
+        assert!(absolute.is_dir());
+        assert_eq!(
+            prepare_output_directory(&state, "  ").unwrap(),
+            fs::canonicalize(&state.paths.default_output).unwrap()
+        );
     }
 
     #[test]
