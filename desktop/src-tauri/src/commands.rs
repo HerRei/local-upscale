@@ -18,6 +18,7 @@ use crate::{
     integrations,
     launch::LaunchIntent,
     native_menu,
+    output_names::ReservedOutputs,
     results::{MediaResults, ResultUi},
     state::{emit_state_changed, lock, AppState},
     types::{
@@ -2797,7 +2798,7 @@ fn unique_output_path(
     directory: &Path,
     input_path: &str,
     input: &StartBatchInput,
-    reserved: &mut HashSet<PathBuf>,
+    reserved: &mut ReservedOutputs,
 ) -> PathBuf {
     let stem = Path::new(input_path)
         .file_stem()
@@ -2830,7 +2831,7 @@ fn unique_output_path(
             format!("_{counter}")
         };
         let candidate = directory.join(format!("{stem}{suffix}{numbered}.{extension}"));
-        if !candidate.exists() && reserved.insert(candidate.clone()) {
+        if !candidate.exists() && reserved.insert(&candidate) {
             return candidate;
         }
         counter = counter.saturating_add(1);
@@ -3751,7 +3752,7 @@ mod tests {
         let mut base = input("upscale");
         base.name_by_model = true;
         base.model_id = "../SwinIR_M///".into();
-        let mut reserved = HashSet::new();
+        let mut reserved = ReservedOutputs::default();
         let first = unique_output_path(directory.path(), "/photo.png", &base, &mut reserved);
         assert_eq!(first.file_name().unwrap(), "photo_upscaled_4x_swinir-m.png");
         let second = unique_output_path(directory.path(), "/photo.png", &base, &mut reserved);
@@ -3774,7 +3775,7 @@ mod tests {
             directory.path(),
             "/first/photo.png",
             &options,
-            &mut HashSet::new(),
+            &mut ReservedOutputs::default(),
         );
         db.insert_job(
             "j",
@@ -3797,7 +3798,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let options = input("upscale");
         fs::write(directory.path().join("photo_upscaled_4x.png"), b"old").unwrap();
-        let mut reserved = HashSet::new();
+        let mut reserved = ReservedOutputs::default();
         let first = unique_output_path(
             directory.path(),
             "/media/photo.png",
@@ -3821,6 +3822,23 @@ mod tests {
         video.video_model_id = "frame_by_frame".into();
         let tiled = unique_output_path(directory.path(), "/media/clip.mov", &video, &mut reserved);
         assert_eq!(tiled.file_name().unwrap(), "clip_video_4x.mp4");
+    }
+
+    #[test]
+    fn names_that_differ_only_by_case_are_one_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = input("upscale");
+        let mut reserved = ReservedOutputs::default();
+        let first = unique_output_path(directory.path(), "/day1/A.jpg", &options, &mut reserved);
+        let second = unique_output_path(directory.path(), "/day2/a.jpg", &options, &mut reserved);
+        let third = unique_output_path(directory.path(), "/day3/Ä.jpg", &options, &mut reserved);
+        let fourth = unique_output_path(directory.path(), "/day4/ä.jpg", &options, &mut reserved);
+        let names: Vec<String> = [&first, &second, &third, &fourth]
+            .iter()
+            .map(|path| path.to_string_lossy().to_uppercase().to_lowercase())
+            .collect();
+        let distinct: HashSet<&String> = names.iter().collect();
+        assert_eq!(distinct.len(), 4, "{names:?}");
     }
 
     #[test]
@@ -4227,7 +4245,7 @@ mod tests {
 
     #[test]
     fn exports_take_the_extension_of_the_chosen_format() {
-        let mut reserved = HashSet::new();
+        let mut reserved = ReservedOutputs::default();
         let directory = tempfile::tempdir().unwrap();
         let mut photo = input("upscale");
         photo.output_format = "heic".into();

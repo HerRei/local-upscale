@@ -1,6 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
+    collections::HashMap,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     error::{AppError, AppResult},
+    output_names::ReservedOutputs,
     results::{summary_from_row, MediaResults},
     types::{JobRecord, MediaItem},
 };
@@ -328,7 +329,7 @@ impl Database {
     /// returns the jobs to insert; nothing is written if it fails.
     pub fn admit_jobs<F>(&self, media_ids: &[&str], build: F) -> AppResult<()>
     where
-        F: FnOnce(&mut HashSet<PathBuf>) -> AppResult<Vec<NewJob>>,
+        F: FnOnce(&mut ReservedOutputs) -> AppResult<Vec<NewJob>>,
     {
         let transaction = self.connection.unchecked_transaction()?;
         for media_id in media_ids {
@@ -343,7 +344,7 @@ impl Database {
                 ));
             }
         }
-        let mut reserved: HashSet<PathBuf> = self.unfinished_output_paths()?.into_iter().collect();
+        let mut reserved: ReservedOutputs = self.unfinished_output_paths()?.into_iter().collect();
         let jobs = build(&mut reserved)?;
         let now = now_millis();
         for job in &jobs {
