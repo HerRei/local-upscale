@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { emit } from './fake-host';
+import { emit, type Scenario } from './fake-host';
 import { ready, upscale, video, windows, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
@@ -384,6 +384,101 @@ test.describe('overflow and alignment', () => {
     expect(Math.abs(steps.y - seed.y)).toBeLessThan(0.5);
     expect(seed.x).toBeGreaterThan(steps.x + steps.width);
     expect(Math.abs(seed.x - select.x)).toBeLessThan(0.5);
+  });
+
+  test.describe('while a queue runs', () => {
+    // Open Advanced before the lock: its toggle is disabled once settings are locked.
+    async function lockedPane(page: Page, scenario: Scenario): Promise<void> {
+      await openApp(page, scenario);
+      await showPane(page, 'enhance');
+      await page.evaluate(() => {
+        const fieldset = document.querySelector('fieldset.processing-settings');
+        (fieldset as HTMLFieldSetElement).disabled = false;
+        (document.querySelector('.disclosure') as HTMLButtonElement).click();
+      });
+      await expect(page.locator('#device')).toBeVisible();
+      await page.evaluate(() => {
+        const fieldset = document.querySelector('fieldset.processing-settings');
+        (fieldset as HTMLFieldSetElement).disabled = true;
+      });
+    }
+
+    const scenarios = {
+      image: { ...ready, running: true },
+      edit: { ...advancedScenarios.Edit, running: true },
+      video: { ...video, worker: 'ready' as const, running: true },
+    };
+
+    for (const [name, scenario] of Object.entries(scenarios)) {
+      test(`${name}: every control and label is dimmed alike; headings and tips are not`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: 1380, height: 900 });
+        await lockedPane(page, scenario);
+        const found = await page.evaluate(() => {
+          const effective = (element: Element) => {
+            let opacity = 1;
+            for (let node: Element | null = element; node; node = node.parentElement)
+              opacity *= Number(getComputedStyle(node).opacity);
+            return opacity;
+          };
+          const label = (element: Element) =>
+            `${element.tagName}.${element.className} "${(element.textContent ?? '').trim().slice(0, 30)}"`;
+          const dimmed = [
+            ...document.querySelectorAll(
+              '.processing-settings :is(button, select, input, textarea, label, .field-label, .directory-path, .directory-field small, .directory-field > b, .range-head > b):not(.disclosure)',
+            ),
+          ];
+          const full = [
+            ...document.querySelectorAll(
+              '.processing-settings :is(.eyebrow, .disclosure, .help-tip), .pane-heading',
+            ),
+          ];
+          return {
+            dimmed: dimmed.map((element) => [label(element), effective(element)] as const),
+            full: full.map((element) => [label(element), effective(element)] as const),
+          };
+        });
+        expect(found.dimmed.length).toBeGreaterThan(12);
+        for (const [what, opacity] of found.dimmed) {
+          expect(opacity, what).toBeCloseTo(0.38, 2);
+        }
+        for (const [what, opacity] of found.full) expect(opacity, what).toBe(1);
+      });
+    }
+
+    test('help tips still open while locked', async ({ page }) => {
+      await page.setViewportSize({ width: 1380, height: 900 });
+      await lockedPane(page, scenarios.image);
+      const tip = page.getByRole('button', { name: 'About Hardware' });
+      await tip.scrollIntoViewIfNeeded();
+      await tip.click();
+      await expect(page.getByRole('tooltip').filter({ visible: true })).toHaveCount(1);
+      await page.keyboard.press('Escape');
+      await tip.evaluate((element) => (element as HTMLElement).blur());
+      await tip.focus();
+      await expect(page.getByRole('tooltip').filter({ visible: true })).toHaveCount(1);
+    });
+
+    for (const size of [
+      { width: 1380, height: 860 },
+      { width: 880, height: 640 },
+    ]) {
+      test(`the Task heading stays where it was, at ${size.width} x ${size.height}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(size);
+        const heading = () => page.locator('.processing-settings .eyebrow', { hasText: 'Task' });
+        await openApp(page, ready);
+        await showPane(page, 'enhance');
+        const idle = (await box(heading())).y;
+        await openApp(page, { ...ready, running: true });
+        await showPane(page, 'enhance');
+        await expect(page.getByText('Locked while running')).toBeVisible();
+        await expect(page.getByText(/Finish or cancel the queue/)).toHaveCount(0);
+        expect((await box(heading())).y).toBe(idle);
+      });
+    }
   });
 
   test('Advanced: three selects share the select column; Find installed FFmpeg is one line', async ({

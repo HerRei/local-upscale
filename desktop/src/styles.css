@@ -283,6 +283,26 @@ input:focus-visible {
   padding: 0;
   border: 0;
 }
+/* While a job runs the fieldset disables every setting. They all take the look the Task
+   and Quality cards already had when disabled; headings, the pane header and the "?" tips stay
+   at full strength so the pane can still be read. A label that wraps its checkbox dims as one,
+   so the checkbox itself is left out to keep the 38% from being applied twice. */
+.processing-settings:disabled
+  :is(
+    select,
+    textarea,
+    input:not([type='checkbox']),
+    label,
+    .field-label,
+    .directory-path,
+    .directory-field small,
+    .directory-field > b,
+    .range-head > b,
+    button:not(.disclosure)
+  ) {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
 .enhance-pane {
   min-height: 0;
   overflow: hidden;
@@ -312,14 +332,6 @@ input:focus-visible {
 .pane-heading span {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
-}
-/* Under the Enhance header while a queue runs; the header already says it is locked. */
-.settings-lock {
-  flex: none;
-  margin: -12px 16px 0;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
-  line-height: 1.4;
 }
 .visually-hidden {
   position: absolute;
@@ -2158,9 +2170,6 @@ input[type='number'],
     width: min(440px, calc(100% - 24px));
     margin-inline: auto;
   }
-  .enhance-pane .settings-lock {
-    margin-inline: max(16px, calc(50% - 204px));
-  }
   .enhance-pane .inspector-scroll {
     padding-inline: max(16px, calc(50% - 204px));
   }
@@ -2879,6 +2888,7 @@ input[type='number'],
   line-height: 1;
   vertical-align: 1px;
   cursor: help;
+  user-select: none;
 }
 .help-tip::before {
   content: '';

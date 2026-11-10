@@ -1446,15 +1446,32 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
-    // One quiet line under the header instead of a block above Task; the full
-    // explanation stays with the settings region for screen readers.
-    expect(screen.getByText('Locked during processing')).toBeTruthy();
-    expect(screen.getByText('Finish or cancel the queue to change settings.')).toBeTruthy();
-    expect(document.querySelector('.inspector-scroll .settings-lock')).toBeNull();
+    // The header says it once, with the explanation as its tooltip; no second line under it.
+    const note = screen.getByText('Locked while running');
+    expect(note.getAttribute('title')).toBe('Finish or cancel the run to change settings.');
+    expect(screen.queryByText(/Finish or cancel the queue/)).toBeNull();
+    expect(document.querySelector('.settings-lock')).toBeNull();
     const region = screen.getByRole('region', { name: 'Enhancement settings' });
     const described = document.getElementById(region.getAttribute('aria-describedby') ?? '');
-    expect(described?.textContent).toMatch(/^Settings locked\. Your queue uses the settings/);
-    expect(described?.closest('[role="status"]')).toBeTruthy();
+    expect(described?.textContent).toBe('Finish or cancel the run to change settings.');
+    expect(described?.getAttribute('role')).toBe('status');
+  });
+
+  it('disables every control of the Enhance pane while a job runs, help tips apart', async () => {
+    const snapshot = readySnapshot([image('active-image')]);
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'image-job';
+    await mountWith(snapshot);
+    const region = screen.getByRole('region', { name: 'Enhancement settings' });
+    const interactive = [
+      ...region.querySelectorAll(
+        'button, select, input, textarea, a[href], [role=button], [tabindex]',
+      ),
+    ].filter((item) => !item.classList.contains('help-tip'));
+    expect(interactive.length).toBeGreaterThan(10);
+    const open = interactive.filter((item) => !item.matches(':disabled'));
+    expect(open.map((item) => item.outerHTML.slice(0, 80))).toEqual([]);
+    expect(region.querySelectorAll('.help-tip').length).toBeGreaterThan(0);
   });
 
   it('disables media-incompatible task cards', async () => {

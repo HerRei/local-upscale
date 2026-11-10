@@ -201,3 +201,41 @@ describe('the wording of the help tips', () => {
     }
   });
 });
+
+describe('while a job runs, the whole Advanced section is locked', () => {
+  // Help tips and Refresh stay usable; every other interactive thing must be disabled, so a
+  // control added later that sits outside the locked fieldset fails here.
+  const usable = (element: Element) =>
+    element.classList.contains('help-tip') || element.textContent?.trim() === 'Refresh';
+
+  for (const variant of variants) {
+    it(variant.name, async () => {
+      const fieldset = document.body.appendChild(document.createElement('fieldset'));
+      render(AdvancedSettings, {
+        target: fieldset,
+        props: {
+          settings: { ...demoSnapshot().settings, ...variant.settings },
+          selectedModel: undefined,
+          capabilities: variant.capabilities,
+          usingTemporalVideo: variant.temporal ?? false,
+          interpolationSupported: variant.interpolation ?? false,
+          updateSettings: () => undefined,
+          chooseOutput: async () => undefined,
+          refreshCapabilities: async () => undefined,
+        },
+      });
+      await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+      fieldset.disabled = true;
+      const interactive = [
+        ...fieldset.querySelectorAll(
+          'button, select, input, textarea, a[href], [role=button], [tabindex]',
+        ),
+      ];
+      expect(interactive.length).toBeGreaterThan(8);
+      const open = interactive.filter((item) => !usable(item) && !item.matches(':disabled'));
+      expect(open.map((item) => item.outerHTML.slice(0, 80))).toEqual([]);
+      expect(interactive.filter(usable).length).toBeGreaterThan(3);
+      fieldset.remove();
+    });
+  }
+});
