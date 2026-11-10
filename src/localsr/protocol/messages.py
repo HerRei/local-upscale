@@ -484,6 +484,8 @@ class JobFailed:
     # The GPU device was lost: the worker exits after this message and the app must
     # not hand it another job.
     restart_required: bool = False
+    # The job failed for lack of disk space: the app stops the rest of the queue.
+    disk_full: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_failed", "data": asdict(self)})

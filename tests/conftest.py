@@ -32,3 +32,10 @@ def no_leaked_threads():
         for thread in leaked:
             thread.join(timeout=max(0, deadline - time.monotonic()))
     assert not leaked, f"Test leaked threads: {leaked}"
+
+
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """Jobs in the suite write tiny files, also in worker subprocesses; the free space of
+    the machine that runs them must not decide them."""
+    monkeypatch.setenv("LOCALSR_DISK_RESERVE_BYTES", "0")

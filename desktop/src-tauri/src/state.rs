@@ -36,6 +36,9 @@ pub struct WorkerControl {
     /// The process ID of an engine that ended on its own with a failure, for its
     /// replacement: the engine then knows which GPU step crashed it.
     pub crashed_engine: AtomicU32,
+    /// The queue was stopped because the disk is full; it ends when the next job is sent.
+    /// One stop covers every failure that follows it.
+    pub disk_stop: AtomicBool,
 }
 
 impl Default for WorkerControl {
@@ -49,6 +52,7 @@ impl Default for WorkerControl {
             finished_job: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
             crashed_engine: AtomicU32::new(0),
+            disk_stop: AtomicBool::new(false),
         }
     }
 }

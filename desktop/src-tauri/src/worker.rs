@@ -619,6 +619,12 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if lock(&state.runtime)?.worker != "ready" {
         return Ok(Dispatch::Idle);
     }
+    // Space changes while a queue runs: the next job is checked again before it is sent.
+    if let Some(reason) = short_of_disk(state, &pending.request_json)? {
+        lock(&state.database)?.finish_job(&pending.id, "failed", "", &reason)?;
+        stop_queue_locked(state, &reason)?;
+        return Ok(Dispatch::Failed);
+    }
     let paths = batch_model_paths(state, batches)?;
     let mut window = Vec::new();
     if !paths.is_empty() {
@@ -667,6 +673,8 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         runtime.progress = 0.0;
         runtime.result_preview_data_url.clear();
     }
+    // A job being sent ends any earlier stop for a full disk.
+    state.worker.disk_stop.store(false, Ordering::SeqCst);
     // The other photos of a batch stay queued until the engine starts each one.
     lock(&state.database)?.set_job_status(&first, "starting")?;
     if let Err(error) = send(state, &message) {
@@ -678,6 +686,79 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         return Err(error);
     }
     Ok(Dispatch::Sent)
+}
+
+/// Why the job stored as `request_json` cannot be written, or None when it fits.
+pub(crate) fn short_of_disk(state: &AppState, request_json: &str) -> AppResult<Option<String>> {
+    let request: Value = serde_json::from_str(request_json)?;
+    let data = &request["data"];
+    let source = data["image_path"]
+        .as_str()
+        .or_else(|| data["video_path"].as_str())
+        .unwrap_or_default();
+    let media = lock(&state.database)?.get_media_by_path(source)?;
+    let (model_id, _) = crate::results::request_model(&request);
+    let native = lock(&state.catalog)?
+        .models
+        .iter()
+        .find(|model| model.model_id == model_id)
+        .map_or(0, |model| u64::from(model.native_scale));
+    let native = native.max(data["output_scale"].as_u64().unwrap_or(1));
+    Ok(
+        crate::disk_room::request_need(&request, media.as_ref(), native)
+            .and_then(|(folder, need)| crate::disk_room::check(&folder, need)),
+    )
+}
+
+/// The engine failed a job for lack of disk space: the rest of the queue is stopped.
+fn stop_if_disk_full(state: &Arc<AppState>, envelope: &WorkerEnvelope) {
+    if envelope.message_type == "job_failed" && envelope.data["disk_full"] == true {
+        if let Err(error) =
+            stop_queue_for_full_disk(state, &string(&envelope.data, "error_message"))
+        {
+            eprintln!("LocalSR could not stop the queue after the disk filled: {error}");
+        }
+    }
+}
+
+/// A job failed or could not start for lack of disk space, and the jobs after it would
+/// fail the same way: stop the queue once, with the reason. Finished results stay; queued
+/// jobs end as not started, and a running photo batch is asked to stop like a cancel.
+pub(crate) fn stop_queue_for_full_disk(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    stop_queue_locked(state, reason)
+}
+
+/// `stop_queue_for_full_disk` for a caller that holds the scheduler.
+fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
+    if !state.worker.disk_stop.swap(true, Ordering::SeqCst) {
+        let mut cancellation = lock(&state.worker.cancellation)?;
+        lock(&state.database)?.stop_queued_jobs(crate::disk_room::NOT_STARTED)?;
+        let active = lock(&state.runtime)?.active_job_id.clone();
+        if !active.is_empty() {
+            cancellation.request(&active, Instant::now());
+            for id in &cancellation.job_ids {
+                lock(&state.database)?.mark_cancelling(id)?;
+            }
+            let _ = send(
+                state,
+                &json!({"type": "cancel_request", "data": {"job_id": active}}),
+            );
+        }
+    }
+    let mut runtime = lock(&state.runtime)?;
+    runtime.status_title = "Could not finish".into();
+    runtime.status_detail = format!("The queue stopped: the disk is full. {reason}");
+    Ok(())
+}
+
+/// What a job ended by a full-disk stop says in its row.
+fn cancelled_reason(state: &AppState) -> &'static str {
+    if state.worker.disk_stop.load(Ordering::SeqCst) {
+        "Stopped because the disk is full."
+    } else {
+        "Cancelled by the user."
+    }
 }
 
 /// Record the folders just made for this dispatch with their jobs, before the engine
@@ -809,6 +890,7 @@ fn handle_worker_envelope(
         set_worker_failure(state, app, error.to_string());
         return;
     }
+    stop_if_disk_full(state, &envelope);
     // Apply native state first so a frontend callback can immediately issue a
     // command against the state represented by this envelope.
     let _ = app.emit("worker-message", envelope.clone());
@@ -1159,7 +1241,7 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
             hold_until_restart(&mut *lock(&state.runtime)?, data);
         }
         "job_cancelled" => {
-            lock(&state.database)?.finish_job(&id, "cancelled", "", "Cancelled by the user.")?;
+            lock(&state.database)?.finish_job(&id, "cancelled", "", cancelled_reason(state))?;
         }
         _ => {}
     }
@@ -1729,11 +1811,14 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "job_cancelled" => {
             let id = string(data, "job_id");
-            lock(&state.database)?.finish_job(&id, "cancelled", "", "Cancelled by the user.")?;
+            lock(&state.database)?.finish_job(&id, "cancelled", "", cancelled_reason(state))?;
             let mut runtime = lock(&state.runtime)?;
             runtime.take_active_job();
-            runtime.status_title = "Cancelled".into();
-            runtime.status_detail = "Temporary output was cleaned up.".into();
+            // A stop for a full disk keeps its reason on the status line.
+            if !state.worker.disk_stop.load(Ordering::SeqCst) {
+                runtime.status_title = "Cancelled".into();
+                runtime.status_detail = "Temporary output was cleaned up.".into();
+            }
             runtime.estimated_remaining_seconds = 0.0;
         }
         "job_failed" => {

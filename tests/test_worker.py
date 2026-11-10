@@ -1,10 +1,14 @@
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from localsr.protocol.messages import JobRequest
 from localsr.worker.server import WorkerServer
+
+# The size of the decoded image is all the job reads before the engine runs.
+TINY = SimpleNamespace(shape=(3, 8, 8))
 
 
 class DummyModelAdapter:
@@ -62,7 +66,7 @@ def test_worker_cancellation(monkeypatch, capsys):
     from localsr.core.image_io import ImageManager
 
     def fake_load(*args):
-        return {"tensor": None}
+        return {"tensor": TINY}
 
     def fake_save(*args, **kwargs):
         pass
@@ -178,7 +182,7 @@ def test_an_image_job_that_would_start_after_shutdown_does_not_run(monkeypatch, 
     server.engine.process_image = lambda *a, **k: pytest.fail("inference must not start")
     from localsr.core.image_io import ImageManager
 
-    monkeypatch.setattr(ImageManager, "load", lambda *a: {"tensor": None})
+    monkeypatch.setattr(ImageManager, "load", lambda *a: {"tensor": TINY})
     server._read_line(json.dumps({"type": "shutdown_request"}))
     request = JobRequest(
         job_id="late",
@@ -289,7 +293,7 @@ def test_worker_job_completion_and_cleanup(monkeypatch):
         nonlocal load_called
         load_called = True
         return {
-            "tensor": None,
+            "tensor": TINY,
             "icc_profile": b"dummy_icc",
             "safe_exif": {315: "Artist"},
         }
@@ -369,7 +373,7 @@ def test_worker_hands_progressive_tiles_to_nonblocking_preview_encoder(monkeypat
 
     submitted = []
     server.engine = FastTiledEngine()
-    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": None})
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": TINY})
     monkeypatch.setattr(ImageManager, "save", lambda *_, **__: None)
 
     class FakePreviewEncoder:
@@ -495,7 +499,7 @@ def test_worker_memmap_cleanup_on_error(monkeypatch):
     from localsr.core.image_io import ImageManager
 
     def fake_load(self, path):
-        return {"tensor": None}
+        return {"tensor": TINY}
 
     def bad_save(*args, **kwargs):
         raise RuntimeError("Save failed")

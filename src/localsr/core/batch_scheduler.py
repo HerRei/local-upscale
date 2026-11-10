@@ -33,6 +33,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def max_open_photos(encoders: int) -> int:
+    """The photos open at once: one decoding, one being tiled, and each encoder's."""
+    return encoders + 2
+
+
 class PhotoFallback(Exception):
     """A tile these lanes cannot render; the photo goes back to the normal runner."""
 
@@ -119,7 +124,7 @@ def run_photo_batch(
     # Bounded by construction: every result is a queued tile that a lane took.
     results: queue.SimpleQueue = queue.SimpleQueue()
     stop = threading.Event()
-    max_open = encoders + 2
+    max_open = max_open_photos(encoders)
 
     pending = deque(range(len(items)))
     opening: list[tuple[int, Future]] = []

@@ -20,13 +20,14 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .disk_space import require_video_room
 from .eta import RemainingTime
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
 from .frame_interpolation import ORDERS, InterpolationTarget, interpolate_frames
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine
-from .media_codecs import validate_output
+from .media_codecs import EXTERNAL_OUTPUT_CODECS, validate_output
 from .tiling import generate_tiles
 from .video_io import (
     TimedVideoFrame,
@@ -332,6 +333,16 @@ def _run_video_job(
         config.container,
         size=(output_width, output_height),
         fps=float(fps),
+    )
+    require_video_room(
+        {
+            "temporary_directory": config.temporary_directory,
+            "output_video_path": config.output_video_path,
+        },
+        output_width,
+        output_height,
+        total_frames,
+        master=config.video_codec in EXTERNAL_OUTPUT_CODECS,
     )
 
     # Load the model once and reuse it for every frame.
