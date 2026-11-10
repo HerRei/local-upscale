@@ -162,7 +162,9 @@ def media_capabilities() -> dict:
             {
                 "label": system.label,
                 "decode": ["h264", "hevc", "aac"],
-                "encode": ["h264", "hevc", "prores", "aac"],
+                "encode": [
+                    codec for codec in ("h264", "hevc", "prores", "aac") if system.can_encode(codec)
+                ],
                 "containers": ["mp4", "mov"],
             }
             if system is not None

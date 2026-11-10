@@ -531,8 +531,15 @@ def test_mov_codec_validation():
         helper.encoder_for("prores", container="mp4")
 
 
+def prores_or_skip(helper: SystemCodecs) -> None:
+    if not helper.can_encode("prores"):
+        pytest.skip("this Mac (a virtual machine, perhaps) has no Apple ProRes encoder")
+
+
 @pytest.mark.parametrize("codec,fourcc", [("hevc", "hvc1"), ("prores", "apcn")])
 def test_mov_system_export_with_audio(tmp_path, bridge, codec, fourcc):
+    if codec == "prores":
+        prores_or_skip(bridge.system)
     source = make_vfr(tmp_path / "source.mp4")
     frames = source_frames(source)
     tone = tmp_path / "tone.mkv"
@@ -595,8 +602,21 @@ def test_mov_and_prores_exports_need_the_system_codecs(monkeypatch):
     assert "prores" in report["encode"] and "mov" in report["containers"]
 
 
+@pytest.mark.parametrize("available", [True, False])
+def test_prores_is_offered_only_when_the_system_can_encode_it(monkeypatch, available):
+    fake = SystemCodecs("/fake-prores-probe", 1)
+    monkeypatch.setattr(system_codecs, "_encode_probe", {})
+    monkeypatch.setattr(fake.__class__, "_run", lambda self, args, timeout: {"prores": available})
+    monkeypatch.setattr(media_bridge, "detect_system_codecs", lambda: fake)
+    monkeypatch.setattr(media_bridge, "implicit_user_ffmpeg", lambda: None)
+    encode = media_bridge.media_capabilities()["system_codecs"]["encode"]
+    assert ("prores" in encode) is available
+    assert {"h264", "hevc", "aac"} <= set(encode)
+
+
 def test_mov_export_through_the_lossless_master(tmp_path, bridge):
     """Odd sizes cannot stream to the encoder: the FFV1 master route writes MOV as well."""
+    prores_or_skip(bridge.system)
     source = make_vfr(tmp_path / "source.mp4")
     frames = source_frames(source)
     output = tmp_path / "master.mov"

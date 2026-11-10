@@ -120,6 +120,7 @@ def _helper_version(path: Path) -> int | None:
 
 _detected: dict[str, SystemCodecs | None] = {}
 _detect_lock = threading.Lock()
+_encode_probe: dict[tuple[str, str], bool] = {}
 
 
 def detect_system_codecs(*, refresh: bool = False) -> SystemCodecs | None:
@@ -362,6 +363,23 @@ class SystemCodecs:
             return json.loads(result.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError) as error:
             raise SystemCodecsError("The system codec helper returned no result.") from error
+
+    def can_encode(self, video_codec: str) -> bool:
+        """Whether this computer can write ``video_codec``. Only ProRes is in doubt: it
+        needs hardware or a codec some Macs (virtual machines) lack. Asked once per run."""
+        if video_codec != "prores":
+            return True
+        key = (self.path, video_codec)
+        with _detect_lock:
+            if key in _encode_probe:
+                return _encode_probe[key]
+        try:
+            answer = bool(self._run(["canencode"], timeout=30).get("prores", True))
+        except SystemCodecsError:
+            answer = True  # an older helper cannot say; the export reports the failure
+        with _detect_lock:
+            _encode_probe[key] = answer
+        return answer
 
     def probe(self, path: str) -> dict:
         return self._run(["probe", str(path)], timeout=120)

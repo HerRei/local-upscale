@@ -2679,9 +2679,10 @@ mod tests {
         fs::write(&executable, b"host").unwrap();
         let elsewhere = root.path().join("localsr-next");
         fs::write(&elsewhere, b"host").unwrap();
+        // The result is the canonical path (macOS temp folders sit behind a /var link).
         assert_eq!(
             running_appimage(Some(image.clone()), Some(mount.clone()), &executable),
-            Some(image.clone())
+            Some(image.canonicalize().unwrap())
         );
         // An APPIMAGE variable alone, a host outside the mount, a relative or missing
         // image: nothing to replace.

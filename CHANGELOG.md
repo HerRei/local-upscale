@@ -33,6 +33,8 @@
 
 ### Fixed
 
+- Apple ProRes is offered only on Macs that can encode it. Virtual machines and some
+  other Macs cannot, and the export used to fail there.
 - The Core ML route no longer stores a rejection for a model and size after a
   resource failure (out of memory on the GPU, a full disk, a killed or timed-out
   compile); the next run tries the faster program again, and rejections already

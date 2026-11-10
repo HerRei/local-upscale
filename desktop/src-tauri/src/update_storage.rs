@@ -228,6 +228,7 @@ pub(crate) mod fault {
         }
     }
 
+    #[cfg(unix)]
     /// `recover_swap`, again while the folder lock is briefly held by a child process
     /// that another test thread forked while it held the lock (the descriptor closes at
     /// the child's exec, a moment after the lock was released here).
