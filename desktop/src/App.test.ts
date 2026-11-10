@@ -3321,12 +3321,12 @@ describe('LocalSR desktop interface', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           content: 'illustration',
-          selected_model_id: 'span_photo_x4',
+          selected_model_id: 'realesrgan_x4plus_anime_6b',
         }),
       ),
     );
     expect(screen.getByText('Quick · Illustration')).toBeTruthy();
-    // The photo model stands in without a note about it.
+    // An illustration model is picked outright, with no note about a stand-in.
     expect(screen.queryByText(/fully verified illustration/)).toBeNull();
     expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
@@ -3337,7 +3337,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          model_id: 'realplksr_nomoswebphoto_x4',
+          model_id: 'realplksr_hfa2k_anime_x4',
         }),
       ),
     );
@@ -3806,6 +3806,20 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
   });
 
+  it('offers the illustration model as a download on Start when it is not installed', async () => {
+    const snapshot = readySnapshot([image('frame', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.content = 'illustration';
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await user.click(
+      screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
+    );
+    await waitFor(() =>
+      expect(api.downloadModel).toHaveBeenCalledWith('realesrgan_x4plus_anime_6b', false),
+    );
+  });
+
   it('keeps Best selected when the content type changes', async () => {
     const snapshot = readySnapshot([image('frame', true)]);
     const user = await mountWith(snapshot);
@@ -3824,7 +3838,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          selected_model_id: 'realplksr_hfa2k_anime_x4',
         }),
       ),
     );

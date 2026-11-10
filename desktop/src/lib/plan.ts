@@ -427,11 +427,6 @@ export function choosePresetModel(
     (model) => presetMayPick(model) && (task === 'denoise' || contentMatch(model, content) > 0),
   );
   if (task === 'denoise') return rankForQuality(eligible, quality)[0];
-  if (content === 'illustration') {
-    const preferred = quality === 'quick' ? 'span_photo_x4' : 'realplksr_nomoswebphoto_x4';
-    const measured = eligible.find((model) => model.model_id === preferred);
-    if (measured) return measured;
-  }
   const ranked = rankForQuality(eligible, quality);
   return ranked.sort(
     (left, right) => contentMatch(right, content) - contentMatch(left, content),

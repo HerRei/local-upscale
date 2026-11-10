@@ -312,7 +312,6 @@
       "commercial_use_allowed": true,
       "commercial_use_status": "allowed",
       "content": [
-        "photo",
         "illustration"
       ],
       "description": "Experimental anime-frame upscaler. It can soften fine lines and screentones, darken white paper, and reduce colour saturation.",
@@ -328,17 +327,16 @@
       "name": "RealPLKSR 4x HFA2k \u2014 Anime",
       "native_scale": 4,
       "pair_with": "",
-      "preset_eligible": false,
+      "preset_eligible": true,
       "purposes": [
         "illustration",
-        "anime",
-        "general"
+        "anime"
       ],
       "quality_tier": 2,
       "recommended_halo": 16,
       "redistribution_allowed": true,
       "rights_status": "attribution",
-      "role": "Anime video frames \u00b7 Labs",
+      "role": "Anime and illustration \u00b7 high quality",
       "sha256": "c6e44af18fd3159787b0dbf81d432a6c1ba12c736fc1184b107ed091e49e327c",
       "size_bytes": 29715988,
       "source_url": "https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample",

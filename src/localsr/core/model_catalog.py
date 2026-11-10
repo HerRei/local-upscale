@@ -346,7 +346,7 @@ MODEL_CATALOG = (
     ),
     CatalogModel(
         model_id="realplksr_hfa2k_anime_x4",
-        role="Anime video frames · Labs",
+        role="Anime and illustration · high quality",
         stage="upscale",
         name="RealPLKSR 4x HFA2k — Anime",
         filename="4xHFA2k_ludvae_realplksr_dysample.pth",
@@ -362,7 +362,7 @@ MODEL_CATALOG = (
         ),
         architecture="RealPLKSR",
         native_scale=4,
-        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME, ModelPurpose.GENERAL),
+        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME),
         quality_tier=QualityTier.HIGH,
         speed_tier=SpeedTier.FAST,
         recommended_halo=16,
@@ -374,7 +374,6 @@ MODEL_CATALOG = (
         speed_factor=0.85,
         vram_estimate_mb=800,
         commercial_use_status="allowed",
-        preset_eligible=False,
     ),
     CatalogModel(
         model_id="span_photo_x4",
