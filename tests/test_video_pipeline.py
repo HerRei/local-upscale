@@ -276,6 +276,39 @@ def test_frame_video_respects_smaller_requested_scale(synthetic_video, tmp_path)
     assert (probe.width, probe.height) == (FRAME_WIDTH * 2, FRAME_HEIGHT * 2)
 
 
+def test_a_video_that_does_not_fit_is_refused_before_any_frame_and_leaves_nothing(
+    synthetic_video, tmp_path, monkeypatch
+):
+    import shutil
+
+    from localsr.core import disk_space
+
+    monkeypatch.delenv("LOCALSR_DISK_RESERVE_BYTES")
+
+    monkeypatch.setattr(
+        disk_space,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(100 * 10**9, 99 * 10**9, 10**9),
+    )
+    adapter = DummyAdapter(2)
+    folder = tmp_path / "out"
+    folder.mkdir()
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(folder / "clip.mp4"),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+    )
+    with pytest.raises(disk_space.DiskFullError, match="Not enough free disk space"):
+        run_video_job(config, InferenceEngine(adapter), threading.Event())
+    assert list(folder.iterdir()) == []
+
+
 def test_frame_video_rejects_scale_above_model_native_scale(synthetic_video, tmp_path):
     adapter = DummyAdapter(scale=2)
     engine = InferenceEngine(adapter)

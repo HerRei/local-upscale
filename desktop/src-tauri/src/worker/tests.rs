@@ -1918,3 +1918,161 @@ fn a_retry_is_refused_in_every_other_state_and_changes_nothing() {
         "Engine incompatible"
     );
 }
+
+fn short_volume() -> crate::disk_room::Volume {
+    // 4.7 GB free on a 500 GB system volume, as on the incident's Mac.
+    crate::disk_room::Volume {
+        free: 4_700_000_000,
+        total: 500_000_000_000,
+        system: true,
+    }
+}
+
+#[test]
+fn a_job_that_does_not_fit_fails_before_it_is_sent_and_stops_the_queue_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    crate::disk_room::set_test_volume(Some(short_volume()));
+    assert!(begin_dispatch(&state, true).unwrap());
+    crate::disk_room::set_test_volume(None);
+    // Nothing reached the engine, and no scratch folder was made for it.
+    assert!(receiver.try_recv().is_err());
+    assert!(std::fs::read_dir(directory.path().join("out"))
+        .unwrap()
+        .next()
+        .is_none());
+    let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+    let error = |id: &str| jobs.iter().find(|job| job.id == id).unwrap().error.clone();
+    assert_eq!(status(&state, "a"), "failed");
+    assert!(error("a").starts_with("Not enough free disk space in "));
+    assert!(error("a").contains("must stay free so the computer keeps working."));
+    // The jobs behind it end as not started, once, instead of failing the same way.
+    for id in ["b", "c"] {
+        assert_eq!(status(&state, id), "cancelled");
+        assert_eq!(error(id), crate::disk_room::NOT_STARTED);
+    }
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Could not finish");
+    assert!(runtime
+        .status_detail
+        .starts_with("The queue stopped: the disk is full. Not enough free disk space in "));
+    assert!(runtime.active_job_id.is_empty());
+}
+
+#[test]
+fn space_is_checked_again_before_every_job_of_a_queue() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["data"]["job_id"], "a");
+    // The disk fills while "a" runs; "b" is the next to go out.
+    apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "a", "output_path": directory.path().join("out").join("a.png")}),
+        ),
+    )
+    .unwrap();
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    crate::disk_room::set_test_volume(Some(short_volume()));
+    begin_dispatch(&state, false).unwrap();
+    crate::disk_room::set_test_volume(None);
+    assert!(receiver.try_recv().is_err());
+    // The finished result is kept; the next job failed and the one after it was not started.
+    assert_eq!(status(&state, "a"), "completed");
+    assert_eq!(status(&state, "b"), "failed");
+    assert_eq!(status(&state, "c"), "cancelled");
+}
+
+#[test]
+fn a_disk_that_fills_during_a_batch_stops_the_queue_once_and_keeps_finished_photos() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    lock(&state.worker.cancellation).unwrap().job_ids = vec!["a".into(), "b".into(), "c".into()];
+    let apply = |kind: &str, data: Value| apply_worker_envelope(&state, &envelope(kind, data));
+    apply("job_started", json!({"job_id": "a"})).unwrap();
+    apply("job_started", json!({"job_id": "b"})).unwrap();
+    apply("job_started", json!({"job_id": "c"})).unwrap();
+    apply(
+        "job_completed",
+        json!({"job_id": "a", "output_path": "/out/a.png"}),
+    )
+    .unwrap();
+    let reason = "No space was left on the disk to write in \"/out\" (0 KB free).";
+    let failure = |id: &str| {
+        envelope(
+            "job_failed",
+            json!({"job_id": id, "error_message": reason, "disk_full": true}),
+        )
+    };
+    assert!(accept_envelope(&state, &failure("b")).unwrap());
+    stop_if_disk_full(&state, &failure("b"));
+    // "c" still runs: the engine is asked to stop the batch, as for a cancel.
+    assert_eq!(status(&state, "a"), "completed");
+    assert_eq!(status(&state, "b"), "failed");
+    assert_eq!(status(&state, "c"), "cancelling");
+    let stop: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(stop["type"], "cancel_request");
+    assert_eq!(stop["data"]["job_id"], "c");
+    // Another photo failing for the same reason asks for nothing more.
+    stop_if_disk_full(&state, &failure("c"));
+    assert!(receiver.try_recv().is_err());
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.status_title, "Could not finish");
+        assert_eq!(
+            runtime.status_detail,
+            format!("The queue stopped: the disk is full. {reason}")
+        );
+    }
+    // The photo the stop ended says why, and the status line keeps the reason.
+    apply("job_cancelled", json!({"job_id": "c"})).unwrap();
+    let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+    let ended = jobs.iter().find(|job| job.id == "c").unwrap();
+    assert_eq!(
+        (ended.status.as_str(), ended.error.as_str()),
+        ("cancelled", "Stopped because the disk is full.")
+    );
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Could not finish");
+    assert!(runtime.status_detail.starts_with("The queue stopped"));
+}
+
+#[test]
+fn the_next_job_that_is_sent_ends_the_stop() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    stop_queue_for_full_disk(&state, "full").unwrap();
+    assert!(state.worker.disk_stop.load(Ordering::SeqCst));
+    lock(&state.database)
+        .unwrap()
+        .insert_media("d", "/in/d.png", "d", "image")
+        .unwrap();
+    let mut job = photo_job("d");
+    job["data"]["output_path"] = json!(directory.path().join("out").join("d.png"));
+    lock(&state.database)
+        .unwrap()
+        .insert_job("d", "d", &job.to_string())
+        .unwrap();
+    assert!(begin_dispatch(&state, false).unwrap());
+    assert_eq!(
+        serde_json::from_str::<Value>(&receiver.try_recv().unwrap()).unwrap()["data"]["job_id"],
+        "d"
+    );
+    assert!(!state.worker.disk_stop.load(Ordering::SeqCst));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}

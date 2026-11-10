@@ -856,9 +856,14 @@ impl Database {
     }
 
     pub fn cancel_queued_jobs(&self) -> AppResult<()> {
+        self.stop_queued_jobs("Cancelled before starting.")
+    }
+
+    /// End every queued job as cancelled with `reason`; finished ones are not touched.
+    pub fn stop_queued_jobs(&self, reason: &str) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE jobs SET status='cancelled', error='Cancelled before starting.', updated_at=?1 WHERE status='queued'",
-            [now_millis()],
+            "UPDATE jobs SET status='cancelled', error=?2, updated_at=?1 WHERE status='queued'",
+            params![now_millis(), reason],
         )?;
         Ok(())
     }

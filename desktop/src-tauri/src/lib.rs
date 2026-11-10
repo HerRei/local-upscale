@@ -3,6 +3,7 @@ mod catalog;
 mod commands;
 mod compare;
 mod database;
+mod disk_room;
 mod distribution;
 mod downloads;
 mod editing;

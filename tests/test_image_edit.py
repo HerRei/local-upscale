@@ -393,6 +393,51 @@ def test_edit_job_lifecycle_with_tiny_files_and_no_model_runtime(monkeypatch, tm
     assert all(child.stdin.closed and child.stdout.closed for child in children)
 
 
+def test_an_edit_that_does_not_fit_is_refused_before_anything_is_written(monkeypatch, tmp_path):
+    import shutil
+
+    from PIL import Image
+
+    from localsr.core import disk_space
+
+    monkeypatch.delenv("LOCALSR_DISK_RESERVE_BYTES")
+
+    request = {
+        "job_id": "fixture-edit",
+        "model_id": model()["model_id"],
+        "prompt": "Change the background.",
+        "device": "mps",
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": str(tmp_path),
+        "image_path": str(tmp_path / "source.png"),
+        "output_path": str(tmp_path / "output.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    (tmp_path / "scratch").mkdir()
+    Image.new("RGB", (128, 96)).save(request["image_path"])
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+    monkeypatch.setattr(
+        image_edit,
+        "verify_bundle",
+        lambda *_: {entry["role"]: Path(entry["filename"]) for entry in model()["files"]},
+    )
+    monkeypatch.setattr(
+        disk_space,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(100 * 10**9, 99 * 10**9, 10**9),
+    )
+    monkeypatch.setattr(
+        image_edit.subprocess, "Popen", lambda *a, **k: pytest.fail("the editor must not start")
+    )
+    memory = EditMemory(26 * GIB, 25 * GIB, unified=True)
+    with pytest.raises(disk_space.DiskFullError, match="Not enough free disk space"):
+        image_edit.run_edit_job(
+            request, threading.Event(), lambda _: None, sampler=lambda _: memory
+        )
+    assert not list((tmp_path / "scratch").iterdir())
+    assert not Path(request["output_path"]).exists()
+
+
 def test_a_cancel_during_verification_stops_the_edit_before_it_is_published(monkeypatch, tmp_path):
     from PIL import Image
 
