@@ -179,6 +179,30 @@ fn cache_key(source: &Path) -> AppResult<String> {
     Ok(format!("{hex}.webm"))
 }
 
+/// The size of every file below `work`, however deep the converter put it. Links are
+/// not followed: a link to a large file or to a folder above is not data the
+/// conversion wrote, and a link back up cannot make the count run for ever.
+fn tree_bytes(work: &Path) -> u64 {
+    let mut total = 0_u64;
+    let mut folders = vec![work.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                folders.push(entry.path());
+            } else if kind.is_file() {
+                total = total.saturating_add(entry.metadata().map_or(0, |m| m.len()));
+            }
+        }
+    }
+    total
+}
+
 fn run_conversion(
     mut command: Command,
     work: &Path,
@@ -222,13 +246,7 @@ fn run_conversion(
     });
     let started = Instant::now();
     let result = loop {
-        let bytes = fs::read_dir(work)
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .filter_map(|e| e.metadata().ok())
-            .map(|m| m.len())
-            .sum::<u64>();
+        let bytes = tree_bytes(work);
         let problem = if cancel.load(Ordering::SeqCst) {
             Some("Playback conversion cancelled.")
         } else if started.elapsed() > timeout {
@@ -354,6 +372,52 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("too long"));
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn intermediates_in_subfolders_count_against_the_disk_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.current_dir(directory.path()).args([
+            "-c",
+            "mkdir -p deep/er; printf 'sixteen bytes...' > deep/er/partial.tmp; exec sleep 30",
+        ]);
+        let started = Instant::now();
+        let result = run_conversion(
+            command,
+            directory.path(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            Duration::from_secs(5),
+            8,
+        );
+        assert!(result.unwrap_err().to_string().contains("disk budget"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_disk_budget_counts_files_and_never_follows_links() {
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("big.bin"), vec![0_u8; 4096]).unwrap();
+        fs::create_dir(outside.path().join("folder")).unwrap();
+        fs::write(
+            outside.path().join("folder").join("big.bin"),
+            vec![0_u8; 4096],
+        )
+        .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("big.bin"), work.path().join("file"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path().join("folder"), work.path().join("folder"))
+            .unwrap();
+        // A loop must not make the count run for ever.
+        std::os::unix::fs::symlink(work.path(), work.path().join("loop")).unwrap();
+        fs::create_dir_all(work.path().join("a").join("b")).unwrap();
+        fs::write(work.path().join("a").join("b").join("one"), vec![0_u8; 100]).unwrap();
+        fs::write(work.path().join("two"), vec![0_u8; 50]).unwrap();
+        assert_eq!(tree_bytes(work.path()), 150);
     }
 
     #[cfg(unix)]
