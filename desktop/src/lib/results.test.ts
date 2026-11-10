@@ -117,6 +117,10 @@ describe('sides and labels', () => {
       '1× output',
     );
     expect(scaleLabel(result('e', { kind: 'edit', scale: 0 }))).toBe('Edit');
+    // An edit is not an enlargement: its label gives the pixels the file really has.
+    const edited = result('e', { kind: 'edit', scale: 0, model_label: 'Qwen Edit' });
+    expect(scaleLabel(edited, { width: 512, height: 320 }, source)).toBe('512 × 320');
+    expect(sideLabel(edited, { width: 512, height: 320 }, source)).toBe('Qwen Edit · 512 × 320');
     expect(sideLabel(undefined)).toBe('Original');
   });
 

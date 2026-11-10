@@ -4186,11 +4186,10 @@ describe('Comparing saved results', () => {
         : {
             target_id: target,
             preview_data_url: `data:image/jpeg;base64,${target}`,
-            width: 2560,
-            height: 1920,
-            preview_width: 2048,
-            preview_height: 1536,
-            ...sizes[target],
+            width: sizes[target]?.width ?? 2560,
+            height: sizes[target]?.height ?? 1920,
+            preview_width: Math.min(sizes[target]?.width ?? 2048, 2048),
+            preview_height: Math.min(sizes[target]?.height ?? 1536, 1536),
           };
     api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
       if (!pair) return;
@@ -4270,7 +4269,9 @@ describe('Comparing saved results', () => {
         'true',
       );
       expect(document.querySelector('.comparison-note')).toBeNull();
-      expect(document.querySelector('.divider-labels')?.textContent).toContain('Qwen Edit');
+      expect(document.querySelector('.divider-labels')?.textContent).toContain(
+        'Qwen Edit · 512 × 320',
+      );
       expect(document.querySelector('.source-image.contained')).toBeNull();
     });
 

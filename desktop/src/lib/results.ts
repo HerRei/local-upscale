@@ -110,10 +110,12 @@ function times(value: number): string {
 /**
  * How large the saved file is against the source ("4× output"), from the
  * decoded output dimensions when they are known, else from the recorded
- * scale. Both sides are bounded previews, so neither is called enlarged.
+ * scale. Both sides are bounded previews, so neither is called enlarged. An
+ * Edit is not an enlargement, so it gives the size of its file.
  */
 export function scaleLabel(result: ResultSummary, output: Size = {}, source: Size = {}): string {
-  if (result.kind === 'edit') return 'Edit';
+  if (result.kind === 'edit')
+    return output.width && output.height ? `${output.width} × ${output.height}` : 'Edit';
   if (output.width && source.width) return `${times(output.width / source.width)} output`;
   return result.scale > 0 ? `${result.scale}× output` : '';
 }
