@@ -19,7 +19,9 @@ def fast_waits(monkeypatch):
 
 
 def call(work, limit=1.0, slot="test", **options):
-    return bounded_preparation("Preparing X", limit, work, fallback="Going on", slot=slot, **options)
+    return bounded_preparation(
+        "Preparing X", limit, work, fallback="Going on", slot=slot, **options
+    )
 
 
 def test_returns_the_result_and_reraises_the_errors_of_the_work():

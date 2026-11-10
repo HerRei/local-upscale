@@ -91,6 +91,7 @@ class ImageJobRunner:
         self.engine.status_callback = lambda message: self.emit(
             EngineStatus(job_id=job_id, message=message)
         )
+        self._take_engine_notes()
         pipeline = resolve_image_pipeline(
             raw_stages=data.get("stages"),
             model_path=str(data["model_path"]),
@@ -141,6 +142,7 @@ class ImageJobRunner:
                 self._check_cancelled()
                 self._log("Writing final output...")
                 notes.extend(self._save(manager, writer, image, info, data))
+                notes.extend(self._take_engine_notes())
             completed_at = time.monotonic()
             self.emit(
                 JobCompleted(
@@ -158,6 +160,11 @@ class ImageJobRunner:
             )
         except InterruptedError:
             self.emit(JobCancelled(job_id=job_id))
+
+    def _take_engine_notes(self) -> list[str]:
+        """What the engine's backends said about the route they took, once per job."""
+        take: Callable[[], list[str]] | None = getattr(self.engine, "take_notes", None)
+        return take() if callable(take) else []
 
     def _preprocess(
         self,

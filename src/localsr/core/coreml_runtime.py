@@ -28,12 +28,15 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+from .. import __version__ as APP_VERSION
+from .preparation import PreparationTimeout, bounded_preparation
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,19 @@ WHOLE_FRAME_ARCHITECTURES = {"SPAN"}
 COMPILE_BYTES_PER_PIXEL = 1600
 COMPILE_FREE_HEADROOM = 3 * 1024**3
 SIDE_ALIGNMENT = 16
-LOAD_TIMEOUT_SECONDS = 180.0
+# One budget for everything a job waits for before Core ML runs its first tile:
+# converting, compiling and loading, across all compute units together. When it is
+# spent the job continues on PyTorch.
+PREPARE_BUDGET_SECONDS = 120.0
+# A program that did not finish within the budget is skipped for this long, and
+# again after an app update or an OS update (the verdict key holds the OS build).
+# A week lets a one-off slow compile on a busy Mac try again, but spares every
+# job the wait for a program that never compiles.
+TIMEOUT_RETRY_SECONDS = 7 * 86400
+# A load after a late finish that takes no longer than this came from the system's
+# compile cache, so the next job can use the program at once.
+CACHED_LOAD_SECONDS = 15.0
+COREML_SLOT = "coreml"
 # Bump when the conversion recipe changes so stale programs are not reused.
 RECIPE_VERSION = 1
 GATE_VERSION = 1
@@ -259,35 +274,47 @@ def _is_resource_failure(error: BaseException | str) -> bool:
     return bool(_RESOURCE_FAILURE.search(str(error)))
 
 
-def _load_compiled(path: Path, unit: str, timeout: float):
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def timeout_verdict(seconds: float, now: datetime | None = None) -> dict:
+    """The stored verdict for a program that did not finish preparing in time."""
+    now = now or _now()
+    return {
+        "accepted": False,
+        "timed_out": True,
+        "reason": f"Core ML had not finished preparing this program after {seconds:.0f} s",
+        "retry_after": (now + timedelta(seconds=TIMEOUT_RETRY_SECONDS)).isoformat(
+            timespec="seconds"
+        ),
+        "app": APP_VERSION,
+    }
+
+
+def _timeout_holds(value: dict) -> bool:
+    try:
+        retry_after = datetime.fromisoformat(str(value["retry_after"]))
+    except (KeyError, ValueError):
+        return False
+    return value.get("app") == APP_VERSION and _now() < retry_after
+
+
+def _load_compiled(path: Path, unit: str):
     """Load a compiled program; the Neural Engine compiles it on first load.
 
-    That compile can run for minutes on some graphs and cannot be interrupted,
-    so it runs on a daemon thread and the job continues on PyTorch on timeout.
+    That compile can run for minutes on some graphs and cannot be interrupted, so
+    callers run this through ``bounded_preparation``.
     """
-    result: dict[str, object] = {}
-
-    def load():
+    try:
         try:
-            try:
-                result["model"] = _NativeRunner(path, unit)
-            except ImportError:
-                import coremltools as ct
+            return _NativeRunner(path, unit)
+        except ImportError:
+            import coremltools as ct
 
-                result["model"] = ct.models.CompiledMLModel(
-                    str(path), compute_units=getattr(ct.ComputeUnit, unit)
-                )
-        except Exception as error:  # noqa: BLE001
-            result["error"] = error
-
-    thread = threading.Thread(target=load, name="localsr-coreml-load", daemon=True)
-    thread.start()
-    thread.join(timeout)
-    if thread.is_alive():
-        raise TimeoutError(f"Core ML did not finish compiling for {unit} in {timeout:.0f} s")
-    if "error" in result:
-        raise RuntimeError(f"Core ML could not load the program: {result['error']}")
-    return result["model"]
+            return ct.models.CompiledMLModel(str(path), compute_units=getattr(ct.ComputeUnit, unit))
+    except Exception as error:  # noqa: BLE001
+        raise RuntimeError(f"Core ML could not load the program: {error}") from error
 
 
 class _Program:
@@ -320,6 +347,8 @@ class _Program:
         value = verdicts.get(self._verdict_key(unit))
         if not isinstance(value, dict) or value.get("gate_version") != GATE_VERSION:
             return None
+        if value.get("timed_out"):
+            return value if _timeout_holds(value) else None
         # Rejections stored by older builds for a resource failure are not trusted.
         if not value.get("accepted") and _is_resource_failure(str(value.get("reason", ""))):
             return None
@@ -348,6 +377,31 @@ class _Program:
             os.replace(temporary, self.verdicts_path)
         except OSError:
             logger.warning("Could not store the Core ML verdict", exc_info=True)
+
+    def clear_timeouts(self, units) -> None:
+        """Forget stored timeouts of these units, after the program finished late."""
+        try:
+            verdicts = json.loads(self.verdicts_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(verdicts, dict):
+            return
+        kept = {
+            key: value
+            for key, value in verdicts.items()
+            if not (
+                isinstance(value, dict)
+                and value.get("timed_out")
+                and any(key.startswith(f"{unit}|") for unit in units)
+            )
+        }
+        if kept != verdicts:
+            temporary = self.verdicts_path.with_suffix(".tmp")
+            try:
+                temporary.write_text(json.dumps(kept, indent=2), encoding="utf-8")
+                os.replace(temporary, self.verdicts_path)
+            except OSError:
+                logger.warning("Could not update the Core ML verdicts", exc_info=True)
 
     def _prune(self) -> None:
         """Drop this shape's programs from older recipes or toolchains, and
@@ -387,6 +441,10 @@ class _Program:
                 convert_to="mlprogram",
                 compute_precision=ct.precision.FLOAT16,
                 minimum_deployment_target=ct.target.macOS14,
+                # Without this, convert() loads the program on every compute unit
+                # to hand back a model that is only saved here, and that load
+                # compiles it for the Neural Engine with no bound.
+                skip_model_load=True,
             )
             package = staging / "model.mlpackage"
             program.save(str(package))
@@ -433,6 +491,10 @@ class _CoreMLImage(torch.nn.Module):
         self.shape: tuple[int, int] | None = None
         self.cancel_event: threading.Event | None = None
         self.status_callback: Callable[[str], None] | None = None
+        self.note_callback: Callable[[str], None] | None = None
+        # When this job's preparation budget ends (a monotonic time), once it started.
+        self.deadline: float | None = None
+        self.clock: Callable[[], float] = time.monotonic
         # shape -> {"program", "runner", "unit", "pending", "remaining"}
         self.states: OrderedDict[tuple[int, int], dict] = OrderedDict()
         self.active_unit: str | None = None
@@ -453,6 +515,12 @@ class _CoreMLImage(torch.nn.Module):
         else:
             side = tile_size + 2 * halo
             shape = self._shape_for(side, side)
+        # A new job gets its own budget, and tries again the routes it gave up for lack
+        # of time (a stored timeout still skips its unit at once).
+        self.deadline = None
+        for state in self.states.values():
+            if state.pop("retry", False) and state["runner"] is None:
+                state["remaining"] = list(self.units)
         current = self.shape
         # Keep a larger existing program for smaller tiles (the OOM retry), but not
         # one so much larger that padding would waste most of the work.
@@ -524,6 +592,18 @@ class _CoreMLImage(torch.nn.Module):
             except Exception:  # noqa: BLE001
                 logger.debug("Core ML status callback failed", exc_info=True)
 
+    def _note(self, message: str) -> None:
+        """A sentence for the finished result as well as the status line."""
+        self._status(message)
+        if self.note_callback is not None:
+            try:
+                self.note_callback(message)
+            except Exception:  # noqa: BLE001
+                logger.debug("Core ML note callback failed", exc_info=True)
+
+    def _fallback_label(self) -> str:
+        return "the Apple GPU" if self.fallback_device.type == "mps" else "the CPU"
+
     def _check_cancelled(self) -> None:
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise InterruptedError("Cancelled")
@@ -570,6 +650,95 @@ class _CoreMLImage(torch.nn.Module):
             self.states.popitem(last=False)
         return state
 
+    def _bounded(self, unit: str, work, on_late=None):
+        """Run one preparation step inside the job's shared budget.
+
+        Raises ``PreparationTimeout`` (with ``allowed``, the seconds the step had) when
+        the budget runs out, and ``InterruptedError`` on cancellation.
+        """
+        if self.deadline is None:
+            self.deadline = self.clock() + PREPARE_BUDGET_SECONDS
+        allowed = self.deadline - self.clock()
+        name = (
+            f"Preparing {self.architecture} for {UNIT_LABELS.get(unit, unit)} "
+            "(first run of this model and tile size)"
+        )
+        if allowed <= 0:
+            error = PreparationTimeout(name, PREPARE_BUDGET_SECONDS)
+            error.allowed = 0.0
+            raise error
+        try:
+            return bounded_preparation(
+                name,
+                PREPARE_BUDGET_SECONDS,
+                work,
+                fallback=f"Continuing on {self._fallback_label()}",
+                slot=COREML_SLOT,
+                cancel_event=self.cancel_event,
+                status=self._status,
+                deadline=self.deadline,
+                on_late=on_late,
+                clock=self.clock,
+            )
+        except PreparationTimeout as error:
+            error.allowed = allowed
+            raise
+
+    def _load_unit(self, program: _Program, unit: str):
+        """Load the compiled program on one unit, within the budget.
+
+        A load that finishes after the job gave up is timed again: when the second
+        load is quick, the system kept the result and stored timeouts are lifted, so
+        the next job uses Core ML at once.
+        """
+
+        def finished_late(kind: str, value) -> None:
+            if kind != "ok":
+                return
+            del value
+            started = time.perf_counter()
+            try:
+                again = _load_compiled(program.compiled, unit)
+            except Exception:  # noqa: BLE001
+                return
+            del again
+            if time.perf_counter() - started <= CACHED_LOAD_SECONDS:
+                program.clear_timeouts((unit,))
+
+        return self._bounded(unit, lambda: _load_compiled(program.compiled, unit), finished_late)
+
+    def _convert(self, state: dict, unit: str) -> None:
+        program: _Program = state["program"]
+        from .onnx_runtime import _RawImage
+
+        def convert() -> None:
+            program.ensure_compiled(_RawImage(self.source_descriptor).eval(), self.input_channels)
+
+        def finished_late(kind: str, _value) -> None:
+            if kind == "ok":
+                program.clear_timeouts(self.units)
+
+        self._bounded(unit, convert, finished_late)
+
+    def _give_up(self, state: dict, error: PreparationTimeout, units: list[str]) -> None:
+        """Continue this job on PyTorch because Core ML was not ready within the budget."""
+        program: _Program = state["program"]
+        state["remaining"].clear()
+        state["retry"] = True
+        allowed = getattr(error, "allowed", 0.0)
+        # A program that had less than half the budget, or that was refused because an
+        # earlier compile still runs, may be fine with more time: store nothing.
+        if not error.busy and allowed >= PREPARE_BUDGET_SECONDS / 2:
+            for unit in units:
+                program.store_verdict(unit, timeout_verdict(allowed))
+        reason = (
+            "Core ML is still preparing an earlier model in the background"
+            if error.busy
+            else "Core ML was not ready in time"
+        )
+        logger.warning("%s for %s: %s", reason, self.architecture, error)
+        self._note(f"Continuing on {self._fallback_label()}: {reason}.")
+
     def _next_runner(self, state: dict) -> None:
         """Load the next candidate unit, honouring stored verdicts."""
         program: _Program = state["program"]
@@ -580,19 +749,15 @@ class _CoreMLImage(torch.nn.Module):
             if verdict is not None and not verdict.get("accepted"):
                 continue
             if not (program.compiled / "coremldata.bin").exists():
-                target = "the Neural Engine" if unit == NEURAL_ENGINE else "Core ML"
-                self._status(
-                    f"Preparing {self.architecture} for {target}. This happens once per "
-                    "model and tile size and can take a minute."
-                )
                 try:
-                    from .onnx_runtime import _RawImage
-
-                    program.ensure_compiled(
-                        _RawImage(self.source_descriptor).eval(), self.input_channels
-                    )
-                except Exception as error:  # noqa: BLE001
+                    self._convert(state, unit)
+                except InterruptedError:
+                    raise
+                except PreparationTimeout as error:
                     # Conversion does not depend on the compute unit.
+                    self._give_up(state, error, [unit, *state["remaining"]])
+                    return
+                except Exception as error:  # noqa: BLE001
                     logger.warning("Core ML conversion of %s failed: %s", self.architecture, error)
                     if not _is_resource_failure(error):
                         for rejected in (unit, *state["remaining"]):
@@ -604,9 +769,12 @@ class _CoreMLImage(torch.nn.Module):
                     break
             try:
                 self._check_cancelled()
-                runner = _load_compiled(program.compiled, unit, LOAD_TIMEOUT_SECONDS)
+                runner = self._load_unit(program, unit)
             except InterruptedError:
                 raise
+            except PreparationTimeout as error:
+                self._give_up(state, error, [unit])
+                return
             except Exception as error:  # noqa: BLE001
                 logger.warning("Core ML %s for %s failed: %s", unit, self.architecture, error)
                 if not _is_resource_failure(error):
@@ -655,7 +823,7 @@ class _CoreMLImage(torch.nn.Module):
                     runner = state["runner"]
                     second = None
                     if isinstance(runner, _NativeRunner) and not state["pending"]:
-                        second = _load_compiled(program.compiled, unit, LOAD_TIMEOUT_SECONDS)
+                        second = self._load_unit(program, unit)
                     if not isinstance(second, _NativeRunner):
                         if unit == NEURAL_ENGINE:
                             return []
@@ -832,6 +1000,9 @@ class CoreMLImageDescriptor:
 
     def set_status_callback(self, callback):
         self.model.status_callback = callback
+
+    def set_note_callback(self, callback):
+        self.model.note_callback = callback
 
     def prepare_tiles(self, tile_size: int, halo: int, frame: tuple[int, int] | None = None):
         self.model.prepare(tile_size, halo, frame)

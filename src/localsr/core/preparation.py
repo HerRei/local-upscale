@@ -102,13 +102,17 @@ def bounded_preparation(
             box.outcome = outcome
             box.done.set()
             late = box.abandoned
-            if late and _abandoned.get(slot) is thread:
-                del _abandoned[slot]
-        if late and on_late is not None:
+        if late:
+            # The slot stays busy while the hook runs: it may load the result again.
             try:
-                on_late(*outcome)
+                if on_late is not None:
+                    on_late(*outcome)
             except Exception:  # noqa: BLE001
                 logger.debug("Late preparation hook failed", exc_info=True)
+            finally:
+                with _lock:
+                    if _abandoned.get(slot) is thread:
+                        del _abandoned[slot]
 
     thread = threading.Thread(target=run, name=f"localsr-prepare-{slot}", daemon=True)
     thread.start()
