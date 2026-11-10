@@ -578,7 +578,8 @@ def test_every_damaged_file_gives_one_plain_sentence_and_keeps_the_library_text_
         assert str(raised.value) == (
             f"{path.name} is damaged or is not a picture format LocalSR can read."
         ), path.name
-        assert raised.value.__cause__ is not None, path.name
+        if path.name != "cut.png":  # the PNG row check finds that one before any decoder does
+            assert raised.value.__cause__ is not None, path.name
 
 
 def test_a_real_input_output_failure_keeps_its_own_message(tmp_path):
@@ -801,3 +802,69 @@ def test_a_single_picture_gets_no_frame_note(tmp_path):
     manager = ImageManager()
     manager.load(str(path))
     assert manager.notes == []
+
+
+def _png_with_rows(path, width, height, rows_present, interlace=False):
+    """A grey 8-bit PNG whose compressed data is complete but holds only some of its rows."""
+    import zlib
+
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        )
+
+    passes = (
+        (
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        )
+        if interlace
+        else ((0, 0, 1, 1),)
+    )
+    rows = []
+    for x0, y0, dx, dy in passes:
+        columns, count = -(-(width - x0) // dx), -(-(height - y0) // dy)
+        if columns > 0 and count > 0:
+            rows += [b"\x00" + bytes([200]) * columns] * count
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, int(interlace)))
+        + chunk(b"IDAT", zlib.compress(b"".join(rows[:rows_present])))
+        + chunk(b"IEND", b"")
+    )
+    return len(rows)
+
+
+@pytest.mark.parametrize("interlace", [False, True])
+def test_a_png_that_ends_before_its_last_rows_is_refused_not_filled_with_black(tmp_path, interlace):
+    path = tmp_path / "short.png"
+    total = _png_with_rows(path, 37, 29, 1_000, interlace)
+    assert ImageManager().load(str(path))["tensor"].shape == (3, 29, 37)
+    _png_with_rows(path, 37, 29, total - 1, interlace)
+    with pytest.raises(OSError, match="short.png is damaged"):
+        ImageManager().load(str(path))
+    _png_with_rows(path, 37, 29, 2, interlace)
+    with pytest.raises(OSError, match="short.png is damaged"):
+        ImageManager().load(str(path))
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])
+@pytest.mark.parametrize("size", [(1, 1), (7, 5), (33, 17), (64, 64)])
+def test_the_png_rows_check_accepts_every_png_pillow_writes(tmp_path, mode, size):
+    rng = np.random.default_rng(3)
+    channels = {"1": 1, "L": 1, "LA": 2, "P": 1, "RGB": 3, "RGBA": 4, "I;16": 1}[mode]
+    shape = (size[1], size[0]) if channels == 1 else (size[1], size[0], channels)
+    if mode == "I;16":
+        image = Image.fromarray(rng.integers(0, 65535, shape, dtype=np.uint16))
+    elif mode in ("L", "LA", "RGB", "RGBA"):
+        image = Image.fromarray(rng.integers(0, 255, shape, dtype=np.uint8))
+    else:
+        image = Image.fromarray(rng.integers(0, 255, shape, dtype=np.uint8)).convert(mode)
+    path = tmp_path / "ok.png"
+    image.save(path)
+    assert ImageManager().load(str(path))["tensor"].shape == (3, size[1], size[0])

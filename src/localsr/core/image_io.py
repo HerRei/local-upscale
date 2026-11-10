@@ -82,6 +82,66 @@ def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
     return narrowed
 
 
+_PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+# Adam7 passes: first column, first row, column step, row step.
+_ADAM7 = (
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+)
+
+
+def _png_scanline_bytes(path: str | Path) -> tuple[int, int] | None:
+    """The bytes of scanline data a PNG's header promises, and what its IDAT chunks hold.
+
+    Pillow reads a PNG whose compressed data ends after too few rows without an error and
+    leaves the missing rows black. Returns None when the file is not one this can follow;
+    the decoder then reports its own problem.
+    """
+    try:
+        with open(path, "rb") as file:
+            if file.read(8) != b"\x89PNG\r\n\x1a\n":
+                return None
+            length, kind = struct.unpack(">I4s", file.read(8))
+            if kind != b"IHDR" or length < 13:
+                return None
+            width, height, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", file.read(13))
+            file.seek(length - 13 + 4, os.SEEK_CUR)
+            channels = _PNG_CHANNELS.get(colour)
+            if channels is None or interlace not in (0, 1):
+                return None
+            bits = channels * depth
+            passes = _ADAM7 if interlace else ((0, 0, 1, 1),)
+            expected = 0
+            for x0, y0, dx, dy in passes:
+                columns, rows = -(-(width - x0) // dx), -(-(height - y0) // dy)
+                if columns > 0 and rows > 0:
+                    expected += rows * (1 + -(-columns * bits // 8))
+            inflated, decoder = 0, zlib.decompressobj()
+            while inflated < expected:
+                header = file.read(8)
+                if len(header) < 8:
+                    break
+                length, kind = struct.unpack(">I4s", header)
+                if kind == b"IEND":
+                    break
+                if kind != b"IDAT":
+                    file.seek(length + 4, os.SEEK_CUR)
+                    continue
+                pending = file.read(length)
+                file.seek(4, os.SEEK_CUR)
+                while pending and inflated < expected:
+                    inflated += len(decoder.decompress(pending, 1 << 20))
+                    pending = decoder.unconsumed_tail
+            return expected, inflated
+    except (OSError, zlib.error, struct.error):
+        return None
+
+
 def require_pixel_budget(width: int, height: int) -> None:
     """Refuse an image that has more pixels than LocalSR reads, before decoding any."""
     if width * height > MAX_INPUT_PIXELS:
@@ -337,6 +397,11 @@ class ImageManager:
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+        if metadata_img is not None and metadata_img.format == "PNG":
+            counted = _png_scanline_bytes(path)
+            if counted is not None and counted[1] < counted[0]:
+                raise _unreadable(path)
 
         frames = getattr(metadata_img, "n_frames", 1)
         if frames > 1 and metadata_img.format in ANIMATED_OR_PAGED_FORMATS:
