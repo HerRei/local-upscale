@@ -17,6 +17,7 @@
     else folded.add(id);
   }
   $: slot = (pick: ComparePick) => picks.findIndex((entry) => pickKey(entry) === pickKey(pick)) + 1;
+  const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 </script>
 
 {#if error}<div class="empty-card" role="alert">Could not load outputs: {error}</div>
@@ -43,32 +44,42 @@
       {#if !folded.has(group.media.id)}
         {#each [{ pick: group.original, result: null }, ...group.outputs] as entry (pickKey(entry.pick))}
           {@const n = slot(entry.pick)}
-          <label class="output-row" class:picked={n > 0}>
-            <input
-              type="checkbox"
-              checked={n > 0}
-              disabled={!n && (picks.length >= MAX_SLOTS || entry.result?.available === false)}
+          <!-- Rows read like the Inputs list; a click marks one for Compare. -->
+          <div class="media-row" class:selected={n > 0}>
+            <button
+              class="media-select"
+              type="button"
+              role="checkbox"
+              aria-checked={n > 0}
               aria-label={`${entry.result?.model_label ?? 'Original'}, ${group.media.name}`}
-              on:change={() => togglePick(entry.pick)}
-            />
-            <b class="slot">{n || ''}</b>
-            <span class="copy"
-              ><strong>{entry.result?.model_label || 'Original'}</strong><small
-                >{entry.result
-                  ? [
-                      entry.result.ui?.quality,
-                      entry.result.scale ? `${entry.result.scale}×` : '',
-                      entry.result.elapsed_seconds
-                        ? formatDuration(entry.result.elapsed_seconds)
-                        : '',
-                      entry.result.available ? '' : 'File missing',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')
-                  : `${group.media.width} × ${group.media.height}`}</small
-              ></span
+              disabled={!n && (picks.length >= MAX_SLOTS || entry.result?.available === false)}
+              on:click={() => togglePick(entry.pick)}
             >
-          </label>
+              <div class="thumb">
+                {#if group.media.preview_data_url}<img
+                    src={group.media.preview_data_url}
+                    alt=""
+                  />{:else}<span>IMG</span>{/if}
+              </div>
+              <div class="media-copy">
+                <strong>{entry.result?.model_label || 'Original'}</strong>
+                <span
+                  >{entry.result
+                    ? [
+                        capitalize(entry.result.ui?.quality ?? ''),
+                        entry.result.scale ? `${entry.result.scale}×` : '',
+                        entry.result.elapsed_seconds
+                          ? formatDuration(entry.result.elapsed_seconds)
+                          : '',
+                        entry.result.available ? '' : 'File missing',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')
+                    : `${group.media.width} × ${group.media.height}`}</span
+                >
+              </div>
+            </button>
+          </div>
         {/each}
       {/if}
     {/each}
@@ -92,13 +103,14 @@
     top: 0;
     background: var(--panel);
     z-index: 1;
-    padding: 6px 0 2px;
+    padding: 8px 4px 2px;
   }
   .fold {
     border: 0;
     background: transparent;
     color: var(--secondary);
-    width: 24px;
+    width: 20px;
+    padding: 0;
     font-size: calc(12px * var(--ui-scale));
   }
   .group-select {
@@ -111,60 +123,25 @@
     flex: 1;
     border: 0;
     background: transparent;
-    padding: 6px 4px;
+    padding: 6px 6px 6px 2px;
   }
   /* Group headers read like the inspector's section labels. */
   .group-select strong {
     font-size: calc(12px * var(--ui-scale));
     font-weight: 600;
-  }
-  .group-select strong,
-  .copy strong {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .group-select span,
-  .copy small {
+  .group-select span {
     color: var(--secondary);
     font-size: calc(12px * var(--ui-scale));
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .output-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin-left: 24px;
-    padding: 5px;
-    border-radius: var(--radius);
-    cursor: pointer;
-  }
-  .output-row:hover,
-  .output-row.picked {
-    background: var(--raised);
-  }
-  .output-row input {
-    margin: 0;
-  }
-  .slot {
-    width: 16px;
-    text-align: center;
-    font-size: calc(11px * var(--ui-scale));
-  }
-  .picked .slot {
-    color: var(--base);
-    background: var(--text);
-  }
-  .copy {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .copy strong {
-    font-size: calc(13px * var(--ui-scale));
-    font-weight: 500;
+  .media-select:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
   .compare-bar {
     flex-wrap: wrap;
