@@ -333,19 +333,17 @@
 
 <section class="preview-pane compare-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header compare-header" data-tauri-drag-region>
-    <div data-tauri-drag-region>
-      <strong data-tauri-drag-region>Compare</strong>
-      <span class="compare-names"
-        ><span class="names"
-          >{#if inputs.length > 2}{inputs.length} images{:else}{#each inputs as name, index (name)}{#if index}<span
-                  class="names-and">and</span
-                >{/if}<FileName {name} />{/each}{/if}</span
-        ><HelpTip
-          label="Compare"
-          text="The slider holds slot 1 against slot 2; boxes show every slot with one zoom and pan. Zoom enlarges the preview."
-        /></span
-      >
-    </div>
+    <slot name="tabs" />
+    <span class="compare-names"
+      ><span class="names"
+        >{#if inputs.length > 2}{inputs.length} images{:else}{#each inputs as name, index (name)}{#if index}<span
+                class="names-and">and</span
+              >{/if}<FileName {name} />{/each}{/if}</span
+      ><HelpTip
+        label="Compare"
+        text="The slider holds slot 1 against slot 2; boxes show every slot with one zoom and pan. Zoom enlarges the preview."
+      /></span
+    >
     <div class="compare-tools">
       <div class="view-switch" role="radiogroup" aria-label="Compare layout">
         <button
@@ -611,16 +609,15 @@
   .compare-header span :global(.help-tip) {
     vertical-align: 0;
   }
-  .compare-header > div:first-child {
-    position: relative;
-    min-width: 0;
-  }
   /* The help text is positioned inside this block, so it must not clip: only the
      file names truncate. */
   .compare-names {
+    position: relative;
+    flex: 1 1 auto;
     display: flex;
     align-items: center;
     min-width: 0;
+    font-size: calc(12px * var(--ui-scale));
   }
   .compare-names .names {
     display: flex;
@@ -637,9 +634,11 @@
     white-space: normal;
   }
   .compare-tools {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 12px;
+    margin-left: auto;
   }
   .view-switch button:disabled {
     color: var(--tertiary);

@@ -3864,11 +3864,33 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('button', { name: 'Show in Compare 2' }));
     expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
-    await user.click(screen.getByRole('tab', { name: 'Compare 2' }));
+    // The tab names the mode only: how many are picked shows in the chips and in Outputs.
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
     expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
-    const tabs = screen.getByRole('tablist', { name: 'Main pane' });
-    await fireEvent.keyDown(tabs, { key: 'ArrowLeft' });
-    expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
+    await fireEvent.keyDown(screen.getByRole('tablist', { name: 'Main pane' }), {
+      key: 'ArrowLeft',
+    });
+    const preview = screen.getByRole('tab', { name: 'Preview' });
+    expect(preview.getAttribute('aria-selected')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(preview));
+  });
+
+  it('shows the centre tabs, the file name with its size and the view options in one row', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('saved')];
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('saved')]));
+    await mountWith(snapshot);
+    const header = document.querySelector<HTMLElement>('.preview-header')!;
+    const tabs = within(header).getByRole('tablist', { name: 'Main pane' });
+    expect(
+      within(tabs)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual(['Preview', 'Compare']);
+    expect(header.querySelector('.file-name')?.getAttribute('title')).toBe('photo.png');
+    expect(within(header).getByText('640 × 480')).toBeTruthy();
+    expect(await within(header).findByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
+    expect(document.querySelector('.main-heading')).toBeNull();
   });
 
   it('keeps the end of a long file name in the list, the header and Outputs, with the full name on hover', async () => {
@@ -3896,7 +3918,9 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
     await user.click(screen.getByRole('checkbox', { name: 'b1, second.png' }));
-    expect(screen.getByRole('tab', { name: 'Compare 2' })).toBeTruthy();
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([expect.anything(), expect.anything()]),
+    );
     api.removeMedia.mockImplementationOnce(async () => {
       const left = structuredClone(snapshot);
       left.media = left.media.filter((item) => item.id === 'first');
@@ -3906,7 +3930,6 @@ describe('Comparing saved results', () => {
     });
     await user.click(screen.getByRole('tab', { name: 'Inputs' }));
     await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Compare 1' })).toBeTruthy());
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([
         { kind: 'original', media_id: 'first' },

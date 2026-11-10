@@ -76,7 +76,7 @@ test.describe('Compare', () => {
       .getByRole('tab', { name: /^Outputs/ })
       .click();
     await tick(page, span).check();
-    await expect(mainTabs(page).getByRole('tab', { name: 'Compare 1' })).toBeVisible();
+    await expect(slots(page)).toHaveCount(1);
     await expect(page.getByRole('heading', { name: 'Pick two outputs' })).toBeVisible();
   });
 
@@ -87,7 +87,7 @@ test.describe('Compare', () => {
     await expect(page.getByText('2 of 4 slots')).toBeVisible();
     await page.getByRole('button', { name: 'Show in Compare 2' }).click();
 
-    await expect(mainTabs(page).getByRole('tab', { name: 'Compare 2' })).toHaveAttribute(
+    await expect(mainTabs(page).getByRole('tab', { name: 'Compare' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -146,7 +146,6 @@ test.describe('Compare', () => {
 
     await page.getByRole('button', { name: 'Remove SPAN ×4 from the compare' }).click();
     await expect(slots(page)).toHaveCount(2);
-    await expect(mainTabs(page).getByRole('tab', { name: 'Compare 2' })).toBeVisible();
     await page.getByRole('button', { name: 'Remove HAT-S ×4 from the compare' }).click();
     await expect(page.getByRole('heading', { name: 'Pick two outputs' })).toBeVisible();
 

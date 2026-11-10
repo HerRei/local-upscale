@@ -860,11 +860,10 @@
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header" data-tauri-drag-region>
-    <div data-tauri-drag-region>
-      <strong data-tauri-drag-region
-        >{#if selectedMedia}<FileName name={selectedMedia.name} />{:else}Preview{/if}</strong
-      >
-      <span
+    <slot name="tabs" />
+    <div class="header-file" data-tauri-drag-region>
+      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
+        >{/if}<span class="header-size" data-tauri-drag-region
         >{selectedMedia
           ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
           : 'No media selected'}</span

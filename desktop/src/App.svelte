@@ -169,14 +169,15 @@
       error: slot?.error ?? '',
     };
   });
-  function mainTabKey(event: KeyboardEvent): void {
+  let mainTabs: HTMLElement | undefined;
+  async function mainTabKey(event: KeyboardEvent): Promise<void> {
     const next = tabFromKey(event.key, mainTab === 'preview' ? 0 : 1, 2);
     if (next === null) return;
     event.preventDefault();
     mainTab = next === 0 ? 'preview' : 'compare';
-    (event.currentTarget as HTMLElement)
-      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
-      [next]?.focus();
+    // The tabs sit in the header of the pane they show, so they are drawn anew.
+    await tick();
+    mainTabs?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
   }
   async function loadBulkHistories(key: string): Promise<void> {
     bulkKey = key;
@@ -2742,9 +2743,10 @@
     />
 
     <div class="main-area" class:compact-hidden={page !== 'preview'}>
-      <div class="pane-heading main-heading" data-tauri-drag-region>
+      {#snippet paneTabs()}
         <div
-          class="seg-inline main-switch"
+          bind:this={mainTabs}
+          class="view-switch pane-tabs"
           role="tablist"
           tabindex="-1"
           aria-label="Main pane"
@@ -2762,11 +2764,10 @@
             aria-selected={mainTab === 'compare'}
             tabindex={mainTab === 'compare' ? 0 : -1}
             class:active={mainTab === 'compare'}
-            on:click={() => (mainTab = 'compare')}
-            >Compare{comparePicks.length ? ` ${comparePicks.length}` : ''}</button
+            on:click={() => (mainTab = 'compare')}>Compare</button
           >
         </div>
-      </div>
+      {/snippet}
       {#if mainTab === 'compare'}
         {#if compareRequestError}<div class="compare-request-error" role="alert">
             {compareRequestError}
@@ -2784,7 +2785,9 @@
             setComparePicks(comparePicks.filter((pick) => pickKey(pick) !== key))}
           close={() => (mainTab = 'preview')}
           asTab
-        />
+        >
+          <svelte:fragment slot="tabs">{@render paneTabs()}</svelte:fragment>
+        </ComparePane>
       {:else}
         <PreviewPane
           bind:this={previewPane}
@@ -2819,7 +2822,9 @@
           compactHidden={page !== 'preview'}
           addFiles={() => void addFiles()}
           dropping={filesDragging}
-        ></PreviewPane>
+        >
+          <svelte:fragment slot="tabs">{@render paneTabs()}</svelte:fragment>
+        </PreviewPane>
       {/if}
     </div>
 

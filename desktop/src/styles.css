@@ -540,36 +540,49 @@ input:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
+  /* A long name in the header must not widen the pane. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--base);
 }
+/* One row: the pane tabs, the file and its size, the view options at the end. The words
+   carry 8 px of padding, so the row's 8 px puts their text on the panes' 16 px line. */
 .preview-header {
   min-height: 52px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  column-gap: 12px;
-  padding: 0 16px;
+  gap: 8px;
+  padding: 0 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   background: #1b1b1d;
+  white-space: nowrap;
 }
-.preview-header > div:first-child {
+.preview-header > .view-switch {
+  flex: none;
+  margin-left: auto;
+}
+/* The name shrinks first and keeps its end. When even a short name would not fit beside
+   the size, the size wraps onto a second line that the fixed height hides. */
+.header-file {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.preview-header strong {
-  max-width: 45vw;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  height: 1.4em;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: calc(13px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
 }
-.preview-header span {
+.header-name {
+  flex: 1 1 96px;
+  min-width: 0;
+  max-width: max-content;
+}
+.header-size {
+  flex: none;
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
 }
 .labs-chip,
 .original-chip {
@@ -599,6 +612,11 @@ input:focus-visible {
 .view-switch button.active {
   color: var(--text);
   box-shadow: inset 0 -1px 0 var(--text);
+}
+/* Pane tabs: the same words a size up; they head their pane. */
+.view-switch.pane-tabs button {
+  font-size: calc(13px * var(--ui-scale));
+  font-weight: 600;
 }
 .canvas-well {
   position: relative;
@@ -2945,13 +2963,6 @@ input[type='text'],
 }
 .main-area > .preview-pane {
   flex: 1;
-}
-/* Preview | Compare: the heading row and switch the side panes use. */
-.main-heading {
-  background: var(--panel);
-}
-.main-switch {
-  width: min(220px, 100%);
 }
 .compare-request-error {
   color: var(--text);
