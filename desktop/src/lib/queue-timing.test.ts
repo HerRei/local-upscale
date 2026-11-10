@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
+import { formatDuration } from './format';
 import type { JobRecord } from './types';
 import { queueTiming, queueModelState } from './queue-timing';
 
@@ -176,5 +177,16 @@ describe('the queue and Try others', () => {
     expect(queueModelState([job('a', 'cancelling', 'SwinIR')], 'photo', 'a')).toBe(
       'Cancelling SwinIR',
     );
+  });
+});
+
+describe('time text', () => {
+  it('never shows 60 in the seconds place, a negative or a not-a-number time', () => {
+    expect(formatDuration(59.6)).toBe('1:00');
+    expect(formatDuration(3599.6)).toBe('1h 0m');
+    expect(formatDuration(86399.6)).toBe('1d 0h');
+    for (const bad of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+      expect(formatDuration(bad)).toBe('—');
+    }
   });
 });

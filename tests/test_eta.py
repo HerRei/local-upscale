@@ -282,3 +282,12 @@ def test_temporal_estimate_leaves_out_model_loading_and_the_first_chunk(tmp_path
     for message in done[1:-2]:
         true = finished - (5000.0 + message.elapsed_seconds)
         assert true / 2 <= message.estimated_remaining_seconds <= true * 2
+
+
+def test_a_sleep_inside_one_tile_does_not_poison_the_estimate(monkeypatch):
+    # The computer sleeps for an hour during tile 50 on a clock that keeps counting.
+    run = Run(monkeypatch)
+    run.start_stage(0)
+    _grid(run, 100, lambda n: 3600.0 if n == 50 else 1.0)
+    for _moment, estimate, _stage in run.samples[48:]:
+        assert estimate < 120
