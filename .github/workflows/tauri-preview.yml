@@ -214,31 +214,38 @@ jobs:
         run: python scripts/export_desktop_catalog.py --check
       - name: Enforce the additive desktop architecture boundary
         run: python scripts/check_desktop_architecture.py
+      # One command per step: under pwsh (Windows) only the last command's exit code fails a step.
+      - name: Install the Python desktop tooling test dependencies
+        run: python -m pip install --disable-pip-version-check "pytest==9.1.1" "pytest-timeout==2.4.0"
       - name: Verify Python desktop tooling and the worker contract
         env:
           PYTHONPATH: src
-        run: |
-          python -m pip install --disable-pip-version-check "pytest==9.1.1" "pytest-timeout==2.4.0"
-          python -m pytest tests/test_desktop_architecture.py tests/test_worker_protocol_contract.py tests/test_tauri_build_script.py tests/test_tauri_installer_smoke.py tests/test_tauri_release_tools.py -q
+        run: python -m pytest tests/test_desktop_architecture.py tests/test_worker_protocol_contract.py tests/test_tauri_build_script.py tests/test_tauri_installer_smoke.py tests/test_tauri_release_tools.py -q
       - name: Install locked frontend dependencies
         working-directory: desktop
         run: npm ci
-      - name: Check and test the Svelte interface
+      - name: Type-check the Svelte interface
         working-directory: desktop
-        run: |
-          npm run check
-          npm run knip
-          npm test
-          npm run build
+        run: npm run check
+      - name: Check for unused frontend code
+        working-directory: desktop
+        run: npm run knip
+      - name: Test the Svelte interface
+        working-directory: desktop
+        run: npm test
+      - name: Build the Svelte interface
+        working-directory: desktop
+        run: npm run build
       - name: Check Rust formatting
         if: runner.os == 'Linux'
         working-directory: desktop/src-tauri
         run: cargo fmt --all -- --check
-      - name: Lint and test the native control plane
+      - name: Lint the native control plane
         working-directory: desktop/src-tauri
-        run: |
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test the native control plane
+        working-directory: desktop/src-tauri
+        run: cargo test --locked --all-targets
 
   package-preview:
     name: Package private preview (${{ matrix.os }})

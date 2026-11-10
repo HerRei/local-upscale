@@ -21,7 +21,9 @@ adds only the growth to `daily` under `github/<tag>/<file>`.
   `localsr_stats.py serve` on 127.0.0.1:8791. No access log is written to disk.
 - The collector hashes IP + user agent with a random per-day salt to recognise repeats. Salts and
   hashes are deleted after two days; only the `daily` table (day, kind, key, uniques, requests)
-  is kept, forever. Tests: `tests/test_localsr_stats.py`.
+  is kept, forever. Pages, referrers and app versions come from whoever sends the request, so past
+  500 distinct keys of one kind in a day the rest are counted together as `(other)`.
+  Tests: `tests/test_localsr_stats.py`, `tests/test_stats_server_tools.py`.
 - Database: `/mnt/hdd/localsr-stats/stats.sqlite3`. Nightly totals-only backups (90 kept) in
   `/mnt/hdd/localsr-stats/backups/` via `localsr-stats-backup.timer`. Both are on the same disk:
   copy a backup off the mini now and then.
