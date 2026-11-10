@@ -320,6 +320,14 @@ def _run_video_job(
         )
     output_width = probe.width * output_scale
     output_height = probe.height * output_scale
+    from .media_bridge import validate_export
+
+    validate_export(
+        config.external_ffmpeg,
+        config.video_codec,
+        config.container,
+        size=(output_width, output_height),
+    )
 
     # Load the model once and reuse it for every frame.
     engine.load_model(

@@ -63,7 +63,7 @@ def replace(root: Path, relative: str, old: str, new: str, count: int = 1) -> No
     found = text.count(old)
     if found != count:
         raise ValueError(f"{relative}: expected {count} x {old!r}, found {found}")
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    path.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
 
 
 def sub(root: Path, relative: str, pattern: str, new: str) -> None:
@@ -73,12 +73,14 @@ def sub(root: Path, relative: str, pattern: str, new: str) -> None:
     result, found = re.subn(pattern, lambda _: new, text, count=1, flags=re.MULTILINE | re.DOTALL)
     if found != 1:
         raise ValueError(f"{relative}: pattern {pattern!r} not found")
-    path.write_text(result, encoding="utf-8")
+    path.write_text(result, encoding="utf-8", newline="\n")
 
 
 def write_manifest(root: Path, version: str) -> None:
     data = {"schema_version": 1, "version": version, "artifacts": artifact_entries(version)}
-    (root / "ci/tauri-release-artifacts.json").write_text(json.dumps(data, indent=2) + "\n")
+    (root / "ci/tauri-release-artifacts.json").write_text(
+        json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
 
 
 def published_version(root: Path) -> str:
@@ -115,7 +117,7 @@ def set_readme_notice(root: Path, notice: str | None) -> None:
         if text.count(anchor) != 1:
             raise ValueError("README.md: expected exactly one '## Download' heading")
         text = text.replace(anchor, f"\n{notice}\n{anchor}")
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
@@ -159,7 +161,13 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
 
     plan = root / "ci/public-beta-release.json"
     replace(root, "ci/public-beta-release.json", f'"version": "{current}"', f'"version": "{new}"')
-    plan.write_text(plan.read_text().replace('"package": "published"', '"package": "candidate"'))
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            '"package": "published"', '"package": "candidate"'
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
     replace(root, "ci/public-beta-readiness.json", f'"release": "{current}"', f'"release": "{new}"')
     write_manifest(root, new)
 
@@ -188,7 +196,7 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
         section = changelog[start:next_section].rstrip()
         remainder = changelog[next_section:].lstrip("\n")
         changelog = f"{changelog[:start]}{section}\n\n{notes.strip()}\n\n{remainder}"
-        changelog_path.write_text(changelog, encoding="utf-8")
+        changelog_path.write_text(changelog, encoding="utf-8", newline="\n")
     else:
         sub(
             root,
@@ -201,6 +209,7 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
         f"Release candidate, not published yet (prepared {today.isoformat()}).\n\n"
         f"## What changed\n\n{notes.strip()}\n",
         encoding="utf-8",
+        newline="\n",
     )
     return current
 
@@ -214,7 +223,13 @@ def mark_published(root: Path, today: dt.date) -> list[str]:
         f"## [{version}] - {today.isoformat()}",
     )
     plan = root / "ci/public-beta-release.json"
-    plan.write_text(plan.read_text().replace('"package": "candidate"', '"package": "published"'))
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            '"package": "candidate"', '"package": "published"'
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
     sub(
         root,
         "docs/releasing.md",
@@ -227,7 +242,9 @@ def mark_published(root: Path, today: dt.date) -> list[str]:
     )
     # README must still name the version for check_public_beta; the downloads prose does.
     return [
-        relative for relative in PROSE_FILES if f"v{version}" not in (root / relative).read_text()
+        relative
+        for relative in PROSE_FILES
+        if f"v{version}" not in (root / relative).read_text(encoding="utf-8")
     ]
 
 

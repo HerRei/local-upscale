@@ -37,7 +37,7 @@ def _valid_update(target: dict) -> bool:
 
 
 def targets() -> list[dict]:
-    data = json.loads(REGISTRY.read_text())
+    data = json.loads(REGISTRY.read_text(encoding="utf-8"))
     entries = data["targets"]
     if data.get("schema_version") != 1 or len({x["id"] for x in entries}) != len(entries):
         raise ValueError("invalid or duplicate release target IDs")
@@ -248,7 +248,9 @@ def main() -> None:
             "version": current,
             "artifacts": artifact_entries(current),
         }
-        (ROOT / "ci" / "tauri-release-artifacts.json").write_text(json.dumps(data, indent=2) + "\n")
+        (ROOT / "ci" / "tauri-release-artifacts.json").write_text(
+            json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as stream:
             for platform in ("linux", "windows"):
