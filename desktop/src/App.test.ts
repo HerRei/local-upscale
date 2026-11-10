@@ -3818,6 +3818,35 @@ describe('Comparing saved results', () => {
     expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
   });
 
+  it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {
+    const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
+    snapshot.jobs = [completedJob('a1', 'first'), completedJob('b1', 'second')];
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('first', [row('a1')]),
+      historyOf('second', [row('b1')]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'b1, second.png' }));
+    expect(screen.getByRole('tab', { name: 'Compare 2' })).toBeTruthy();
+    api.removeMedia.mockImplementationOnce(async () => {
+      const left = structuredClone(snapshot);
+      left.media = left.media.filter((item) => item.id === 'first');
+      left.jobs = left.jobs.filter((job) => job.media_id === 'first');
+      api.refreshSnapshot.mockResolvedValue(left);
+      api.listAllMediaResults.mockResolvedValue([historyOf('first', [row('a1')])]);
+    });
+    await user.click(screen.getByRole('tab', { name: 'Inputs' }));
+    await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Compare 1' })).toBeTruthy());
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([
+        { kind: 'original', media_id: 'first' },
+      ]),
+    );
+  });
+
   it('drops a late history answer that belongs to another image', async () => {
     const snapshot = pairHost(readySnapshot([image('first', true), image('second')]));
     snapshot.jobs = [completedJob('a1', 'first'), completedJob('a2', 'first')];

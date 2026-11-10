@@ -190,6 +190,11 @@
       if (request === bulkRequest) bulkHistoryError = String(error);
     }
   }
+  // A pick whose image left the list (Remove, Clear) has nothing to show and no way to be unticked.
+  $: if (comparePicks.some((pick) => !snapshot.media.some((media) => media.id === pick.media_id)))
+    setComparePicks(
+      comparePicks.filter((pick) => snapshot.media.some((media) => media.id === pick.media_id)),
+    );
   function setComparePicks(picks: ComparePick[]): void {
     if (picks.length >= 3 && comparePicks.length < 3) compareLayout = 'boxes';
     comparePicks = picks;
