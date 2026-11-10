@@ -537,6 +537,8 @@ pub fn start_jobs(
     {
         return Err(AppError::Validation("An update is being installed".into()));
     }
+    let mut input = input;
+    input.device = resolve_device(&state, &input.device)?;
     validate_start(&input, &state)?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     if input.task == "video"
@@ -787,6 +789,9 @@ fn trial_candidates(
             "Try others needs one selected image in Upscale or Restore.".into(),
         ));
     }
+    let mut resolved = base.clone();
+    resolved.device = resolve_device(state, &base.device)?;
+    let base = &resolved;
     validate_start(base, state)?;
     // The Restore model is the fix: each candidate must fix the active problem.
     // With several fixes it is the last one: the fixes before it keep their models.
@@ -2185,6 +2190,28 @@ fn validate_system_outputs(input: &StartBatchInput, media: &Value) -> AppResult<
         ));
     }
     Ok(())
+}
+
+/// The device a run uses. A device this computer does not report is refused, except
+/// the one saved in the settings: it stays saved, since the device may come back,
+/// and the run uses the CPU, which is always there.
+fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
+    let capabilities = lock(&state.capabilities)?;
+    let reported = |id: &str| capabilities.devices.iter().any(|device| device.id == id);
+    if reported(requested) {
+        return Ok(requested.to_owned());
+    }
+    if capabilities.system_ram_total == 0 {
+        return Err(AppError::Validation(
+            "LocalSR is still detecting this computer's hardware. Try again in a moment.".into(),
+        ));
+    }
+    if requested == lock(&state.settings)?.device_id && reported("cpu") {
+        return Ok("cpu".into());
+    }
+    Err(AppError::Validation(
+        "The selected device is not available on this computer. Choose another one in Advanced settings.".into(),
+    ))
 }
 
 fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
@@ -3738,6 +3765,50 @@ mod tests {
                 stages.len() == 1 && stages[0]["model_id"] == id.as_str()
             }));
         }
+    }
+
+    #[test]
+    fn a_run_names_only_a_device_the_computer_reports() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+        assert_eq!(resolve_device(&state, "cpu").unwrap(), "cpu");
+        let error = resolve_device(&state, "cuda:3").unwrap_err();
+        assert!(error.to_string().contains("not available"));
+    }
+
+    #[test]
+    fn a_saved_device_that_is_gone_runs_on_the_cpu_and_stays_saved() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+        lock(&state.settings).unwrap().device_id = "cuda:1".into();
+        assert_eq!(resolve_device(&state, "cuda:1").unwrap(), "cpu");
+        assert_eq!(lock(&state.settings).unwrap().device_id, "cuda:1");
+        assert!(resolve_device(&state, "cuda:2").is_err());
+    }
+
+    #[test]
+    fn no_device_is_judged_before_the_hardware_has_been_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        lock(&state.settings).unwrap().device_id = "mps".into();
+        let error = resolve_device(&state, "mps").unwrap_err();
+        assert!(error.to_string().contains("still detecting"));
+    }
+
+    #[test]
+    fn try_others_runs_a_gone_saved_device_on_the_cpu() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ids) = trial_state(directory.path(), 2, upscaler);
+        lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+        lock(&state.settings).unwrap().device_id = "cuda:1".into();
+        let mut base = input("upscale");
+        base.device = "cuda:1".into();
+        let candidates = trial_candidates(&state, "media", &ids, &base).unwrap();
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.input.device == "cpu"));
     }
 
     #[test]
