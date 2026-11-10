@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc, Arc,
     },
     thread,
@@ -216,6 +216,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         .ok_or_else(|| AppError::Worker("worker stderr was not available".into()))?;
 
     let generation = state.worker.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.worker.finished_job.store(false, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel::<String>();
     *lock(&state.worker.sender)? = Some(sender);
     {
@@ -311,6 +312,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         let mut forced_jobs: Vec<String> = Vec::new();
         let mut restart_requested: Option<Instant> = None;
         let engine_pid = child.id();
+        let engine_started = Instant::now();
         let mut stopped_by_app = false;
         let status = loop {
             match child.try_wait() {
@@ -445,13 +447,15 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         }
         emit_state_changed(&app);
 
-        let attempt = if forced_jobs.is_empty() && !requested_restart {
-            state.worker.restart_count.fetch_add(1, Ordering::SeqCst) + 1
-        } else {
-            1
-        };
-        if attempt <= 3 {
-            thread::sleep(Duration::from_secs(u64::from(attempt)));
+        let failed = forced_jobs.is_empty() && !requested_restart;
+        let finished_job = state.worker.finished_job.swap(false, Ordering::SeqCst);
+        if let Some(delay) = restart_delay(
+            &state.worker.restart_count,
+            engine_started.elapsed(),
+            finished_job,
+            failed,
+        ) {
+            thread::sleep(delay);
             if let Err(error) = start_worker(state.clone(), app.clone()) {
                 set_worker_failure(&state, &app, error.to_string());
             }
@@ -877,6 +881,33 @@ fn engine_crashed(status: &std::io::Result<std::process::ExitStatus>) -> bool {
     }
 }
 
+/// An engine that stayed up this long, or finished a job, did work: its stopping
+/// starts the count of failed starts over.
+const STABLE_RUN: Duration = Duration::from_secs(60);
+/// Failed starts in a row after which the host gives up and shows the failure.
+const MAX_FAILED_STARTS: u32 = 3;
+
+/// How long to wait before starting the engine again after it stopped, or None when
+/// it has failed too often. A start counts as failed when the engine stopped on its
+/// own; its handshake does not clear the count, only a stable run or a finished job.
+/// A stop the host asked for restarts at once, after the first delay.
+fn restart_delay(
+    failed_starts: &AtomicU32,
+    ran: Duration,
+    finished_job: bool,
+    failed: bool,
+) -> Option<Duration> {
+    if ran >= STABLE_RUN || finished_job {
+        failed_starts.store(0, Ordering::SeqCst);
+    }
+    let attempt = if failed {
+        failed_starts.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        1
+    };
+    (attempt <= MAX_FAILED_STARTS).then(|| Duration::from_secs(u64::from(attempt)))
+}
+
 fn restart_overdue(restarting: bool, since: &mut Option<Instant>, now: Instant) -> bool {
     if !restarting {
         *since = None;
@@ -906,6 +937,12 @@ fn accept_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResul
         return Ok(false);
     }
     apply_worker_envelope(state, envelope)?;
+    if matches!(
+        envelope.message_type.as_str(),
+        "job_completed" | "video_job_completed"
+    ) {
+        state.worker.finished_job.store(true, Ordering::SeqCst);
+    }
     Ok(true)
 }
 
@@ -1099,7 +1136,6 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 )));
             }
             *lock(&state.engine)? = Some(info);
-            state.worker.restart_count.store(0, Ordering::SeqCst);
             {
                 let mut runtime = lock(&state.runtime)?;
                 runtime.worker = "ready".into();
@@ -2663,6 +2699,71 @@ mod tests {
             assert!(engine_crashed(&Ok(status)), "{status:?}");
         }
         assert!(!engine_crashed(&Err(std::io::Error::other("no status"))));
+    }
+
+    #[test]
+    fn an_engine_that_starts_and_stops_again_and_again_is_given_up_on() {
+        let count = AtomicU32::new(0);
+        let quick = Duration::from_secs(3);
+        let delays: Vec<_> = (0..5)
+            .map(|_| restart_delay(&count, quick, false, true))
+            .collect();
+        assert_eq!(
+            delays,
+            [
+                Some(Duration::from_secs(1)),
+                Some(Duration::from_secs(2)),
+                Some(Duration::from_secs(3)),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn an_engine_that_ran_for_a_while_or_finished_a_job_starts_the_count_over() {
+        let count = AtomicU32::new(0);
+        let quick = Duration::from_secs(3);
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert_eq!(
+            restart_delay(&count, STABLE_RUN, false, true),
+            Some(Duration::from_secs(1))
+        );
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert!(restart_delay(&count, quick, false, true).is_some());
+        assert_eq!(
+            restart_delay(&count, quick, true, true),
+            Some(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn a_stop_the_host_asked_for_never_counts_as_a_failed_start() {
+        let count = AtomicU32::new(0);
+        for _ in 0..10 {
+            assert_eq!(
+                restart_delay(&count, Duration::from_secs(1), false, false),
+                Some(Duration::from_secs(1))
+            );
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_engine_handshake_does_not_clear_the_failed_starts() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        state.worker.restart_count.store(2, Ordering::SeqCst);
+        let (sender, _receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        let info = json!({"protocol_version": PROTOCOL_VERSION, "minimum_protocol_version": 1,
+            "engine_id": "e", "engine_version": "1", "features": [], "model_formats": [],
+            "video_engines": []});
+        apply_worker_envelope(&state, &envelope("engine_info", info)).unwrap();
+        assert_eq!(state.worker.restart_count.load(Ordering::SeqCst), 2);
     }
 
     #[test]

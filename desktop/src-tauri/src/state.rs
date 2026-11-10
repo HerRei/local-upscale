@@ -26,7 +26,12 @@ pub struct WorkerControl {
     pub sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub generation: AtomicU64,
     pub pid: AtomicU32,
+    /// Starts in a row after which the engine stopped by itself, before it ran long
+    /// enough or finished a job.
     pub restart_count: AtomicU32,
+    /// Whether the running engine has finished a job; with a long run it shows the
+    /// engine works, so its stopping later is not a failing start.
+    pub finished_job: AtomicBool,
     pub shutting_down: AtomicBool,
     /// The process ID of an engine that ended on its own with a failure, for its
     /// replacement: the engine then knows which GPU step crashed it.
@@ -41,6 +46,7 @@ impl Default for WorkerControl {
             generation: AtomicU64::new(0),
             pid: AtomicU32::new(0),
             restart_count: AtomicU32::new(0),
+            finished_job: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
             crashed_engine: AtomicU32::new(0),
         }
