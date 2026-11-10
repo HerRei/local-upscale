@@ -321,12 +321,12 @@ def smoke_linux(artifact: Path, report: Path, env: dict[str, str], timeout: floa
         with temporary_directory(
             prefix="localsr-appimage-runtime-", dir=appimage_tmp_parent
         ) as appimage_tmp:
-            env["TMPDIR"] = appimage_tmp
+            direct_env = {**env, "TMPDIR": appimage_tmp}
             # A CI runner may not provide a functional GTK/Wayland session even
             # under Xvfb. Exercise the actual AppImage host, its
             # resource layout and bundled worker before WebView initialization.
             try:
-                run([str(artifact), "--headless-smoke-test"], env=env, timeout=timeout)
+                run([str(artifact), "--headless-smoke-test"], env=direct_env, timeout=timeout)
                 direct_smoke_passed = True
             except subprocess.CalledProcessError as error:
                 print(
