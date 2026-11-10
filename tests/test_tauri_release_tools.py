@@ -4,6 +4,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -1710,6 +1711,7 @@ def test_round3_checksum_file_lines_are_unique_and_well_formed() -> None:
             verify_prepared.parse_checksums(lines)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="the signer runs on macOS and checks POSIX modes")
 def test_round3_every_key_read_first_checks_the_key_folder_and_the_helper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

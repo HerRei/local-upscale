@@ -193,7 +193,12 @@ def system_codecs_available() -> bool:
 
 
 def validate_export(
-    ffmpeg: MediaBridge | Provider | None, video_codec: str, container: str, *, hdr: bool = False
+    ffmpeg: MediaBridge | Provider | None,
+    video_codec: str,
+    container: str,
+    *,
+    hdr: bool = False,
+    size: tuple[int, int] | None = None,
 ) -> None:
     """Fail before inference when nothing can write an H.264/HEVC, MOV or ProRes export."""
     container = normalize_container(container)
@@ -212,6 +217,11 @@ def validate_export(
         bridge.export_provider(video_codec, hdr=hdr, container=container)
     except ExternalFFmpegError as error:
         raise ValueError(str(error)) from error
+    if size is not None and bridge.system is not None and video_codec == "prores":
+        if not bridge.system.can_encode(video_codec, *size):
+            raise ValueError(
+                f"This Mac cannot encode Apple ProRes at {size[0]}x{size[1]}. Choose HEVC or H.264."
+            )
 
 
 def platform_label() -> str:

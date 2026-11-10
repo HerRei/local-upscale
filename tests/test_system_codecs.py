@@ -531,9 +531,11 @@ def test_mov_codec_validation():
         helper.encoder_for("prores", container="mp4")
 
 
-def prores_or_skip(helper: SystemCodecs) -> None:
-    if not helper.can_encode("prores"):
-        pytest.skip("this Mac (a virtual machine, perhaps) has no Apple ProRes encoder")
+def prores_or_skip(helper: SystemCodecs, width: int = 48, height: int = 32) -> None:
+    if not helper.can_encode("prores", width, height):
+        pytest.skip(
+            f"this Mac (a virtual machine, perhaps) cannot encode Apple ProRes at {width}x{height}"
+        )
 
 
 @pytest.mark.parametrize("codec,fourcc", [("hevc", "hvc1"), ("prores", "apcn")])
@@ -607,6 +609,8 @@ def test_prores_is_offered_only_when_the_system_can_encode_it(monkeypatch, avail
     fake = SystemCodecs("/fake-prores-probe", 1)
     monkeypatch.setattr(system_codecs, "_encode_probe", {})
     monkeypatch.setattr(fake.__class__, "_run", lambda self, args, timeout: {"prores": available})
+    assert fake.can_encode("prores", 48, 32) is available
+    assert fake.can_encode("prores") is available
     monkeypatch.setattr(media_bridge, "detect_system_codecs", lambda: fake)
     monkeypatch.setattr(media_bridge, "implicit_user_ffmpeg", lambda: None)
     encode = media_bridge.media_capabilities()["system_codecs"]["encode"]
