@@ -87,8 +87,8 @@ def test_every_format_has_its_own_bound_and_alpha_adds_to_the_ones_that_keep_it(
 @pytest.mark.parametrize(
     ("facts", "reserve"),
     [
-        # The system volume keeps the larger of 8 GB and 5 % of itself free.
-        (volume(0, total=500 * GB, system=True), 25 * GB),
+        # The system volume keeps 8 GB free, whatever its size.
+        (volume(0, total=500 * GB, system=True), 8 * GB),
         (volume(0, total=60 * GB, system=True), 8 * GB),
         (volume(0, total=100 * GB, system=True), 8 * GB),
         # Any other volume keeps 1 GB.
@@ -101,7 +101,7 @@ def test_the_reserve_protects_the_system_volume_more_than_others(facts, reserve)
 
 def test_a_job_fits_when_its_need_stays_inside_free_space_minus_the_reserve(tmp_path):
     need = 1_173_856_576
-    free = need + 25 * GB
+    free = need + 8 * GB
     require_room([(tmp_path, need)], lookup=lambda _folder: volume(free))
     with pytest.raises(DiskFullError):
         require_room([(tmp_path, need)], lookup=lambda _folder: volume(free - 1))
@@ -119,7 +119,7 @@ def test_the_refusal_is_one_sentence_naming_the_folder_the_need_and_what_is_free
     text = str(caught.value)
     assert text == (
         f'Not enough free disk space in "{folder}": about 1.2 GB is needed, but only 4.7 GB is '
-        "free, and 25.0 GB must stay free so the computer keeps working."
+        "free, and 8.0 GB must stay free so the computer keeps working."
     )
     assert "\n" not in text and "Errno" not in text
 
@@ -335,7 +335,7 @@ def test_a_photo_batch_runs_with_fewer_encoders_when_the_usual_ones_do_not_fit(
     runner, emitted = _batch_runner(tmp_path)
     need = image_need(3024, 4032, 4, None, "png", False)
     # Room, above the reserve, for the memmaps and files of two encoders but not of three.
-    free = _batch_total(need, 2) + 25 * GB
+    free = _batch_total(need, 2) + 8 * GB
     monkeypatch.setattr(
         disk_space, "disk_usage", lambda _path: shutil._ntuple_diskusage(500 * GB, 0, free)
     )

@@ -23,10 +23,9 @@ from typing import Any
 
 from localsr.core.batch_scheduler import max_open_photos
 
-# The system volume keeps the larger of this and 5 % of its size free; others keep less. The
-# floor is what swap can grow by while the engine works: a 12 MP photo at 4x peaks near
+# The system volume keeps this much free, other volumes less. It is what swap can grow by while the engine works: a 12 MP photo at 4x peaks near
 # 5.8 GB of memory, the desktop app about 1 GB more, and macOS pages memory out to this volume.
-SYSTEM_RESERVE_FLOOR = 8_000_000_000
+SYSTEM_RESERVE = 8_000_000_000
 OTHER_RESERVE = 1_000_000_000
 # Headers, an ICC profile and EXIF around the pixels.
 _SLACK = 1 << 20
@@ -77,7 +76,7 @@ def volume_of(folder: str | os.PathLike) -> Volume:
 
 
 def reserve_for(volume: Volume) -> int:
-    """What must stay free: the system volume keeps max(8 GB, 5 %), any other 1 GB.
+    """What must stay free: the system volume keeps 8 GB, any other 1 GB.
 
     ``LOCALSR_DISK_RESERVE_BYTES`` replaces the rule; the test suite sets it to 0, so that
     its small jobs do not depend on the free space of the machine that runs them.
@@ -87,7 +86,7 @@ def reserve_for(volume: Volume) -> int:
         return int(override)
     if not volume.system:
         return OTHER_RESERVE
-    return max(SYSTEM_RESERVE_FLOOR, volume.total // 20)
+    return SYSTEM_RESERVE
 
 
 def format_size(nbytes: int) -> str:
