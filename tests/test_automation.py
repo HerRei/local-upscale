@@ -379,3 +379,31 @@ def test_automation_writes_mov_and_heic_only_where_macos_provides_them(monkeypat
     monkeypatch.setattr("localsr.automation.sys.platform", "linux")
     with pytest.raises(AutomationError, match="HEIC output needs macOS"):
         _validate_automation_args(build_automation_parser().parse_args(arguments))
+
+
+class _IdleRunner:
+    def __init__(self):
+        self.reporter = Reporter(json_lines=True)
+        self.cancel_event = threading.Event()
+        self.processed = []
+
+    def process(self, path, destination, **_options):
+        self.processed.append(path)
+
+
+@pytest.mark.parametrize("relation", ["same", "output_holds_input"])
+def test_watch_refuses_an_output_folder_that_would_hide_every_input(tmp_path, relation):
+    from localsr.automation import AutomationError
+
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    (inner / "photo.png").write_bytes(b"fixture")
+    watched, output = (inner, inner) if relation == "same" else (inner, outer)
+    args = build_automation_parser().parse_args(
+        ["watch", str(watched), "--output", str(output), "--once"]
+    )
+    runner = _IdleRunner()
+    with pytest.raises(AutomationError, match="output folder"):
+        _watch(args, runner, "cpu")
+    assert runner.processed == []

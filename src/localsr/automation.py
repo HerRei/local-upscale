@@ -475,6 +475,12 @@ def _watch(
         raise AutomationError(f"Watch path is not a directory: {input_directory}")
     args.output.mkdir(parents=True, exist_ok=True)
     output_directory = args.output.resolve(strict=True)
+    # LocalSR's own output is never watched, so such a folder would hide every input.
+    if output_directory == input_directory or output_directory in input_directory.parents:
+        raise AutomationError(
+            "The output folder must not be the watched folder or a folder that holds it. "
+            "Choose another folder, or one inside the watched folder."
+        )
     state_file = args.state_file or output_directory / ".localsr-watch-state.json"
     ledger = WatchLedger(state_file)
     observations: dict[Path, StableObservation] = {}
