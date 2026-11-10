@@ -168,6 +168,15 @@ def test_a_missing_required_field_is_named(missing):
         validate_image_job(data)
 
 
+def test_an_output_name_the_file_system_cannot_hold_is_refused_before_any_work(tmp_path):
+    longest = "y" * 251 + ".png"
+    validate_image_job(image_request(output_path=str(tmp_path / longest)))
+    with pytest.raises(InvalidRequest, match="256 characters long.*at most 255"):
+        validate_image_job(image_request(output_path=str(tmp_path / ("y" + longest))))
+    with pytest.raises(InvalidRequest, match="at most 255"):
+        validate_video_job(video_request(output_video_path=str(tmp_path / ("y" * 252 + ".mp4"))))
+
+
 def test_a_request_that_is_not_an_object_is_refused():
     with pytest.raises(InvalidRequest, match="data object"):
         validate_image_job("a string")

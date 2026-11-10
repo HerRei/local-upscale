@@ -12,6 +12,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from localsr.core.output_publish import require_output_name
+
 
 class InvalidRequest(ValueError):
     """The request breaks the published protocol; the message is shown to the user."""
@@ -169,12 +171,21 @@ def validate_fields(data: Any, fields: tuple[Field, ...], request: str) -> None:
             )
 
 
+def _check_output_name(path: str) -> None:
+    try:
+        require_output_name(path)
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from None
+
+
 def validate_image_job(data: Any) -> None:
     validate_fields(data, IMAGE_JOB_FIELDS, "image job request")
+    _check_output_name(data["output_path"])
 
 
 def validate_video_job(data: Any) -> None:
     validate_fields(data, VIDEO_JOB_FIELDS, "video job request")
+    _check_output_name(data["output_video_path"])
 
 
 def usable_job_id(data: Any) -> str | None:

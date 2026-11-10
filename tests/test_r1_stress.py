@@ -83,13 +83,13 @@ def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
         # file behind.  Output names are intentionally randomized so LocalSR
         # never adopts or deletes a user's pre-existing ``<output>.tmp`` file.
         assert os.path.exists(dest_path), f"Destination {dest_path} should exist"
-        assert not list(tmp_path.glob(f".{filename}.localsr-image-*.tmp"))
+        assert not list(tmp_path.glob(".localsr-image-*.tmp"))
 
         # Confirm one unique same-directory temporary was atomically replaced.
         assert len(replace_history) == calls_before + 1
         temporary, destination = replace_history[-1]
         assert Path(temporary).parent == tmp_path
-        assert Path(temporary).name.startswith(f".{filename}.localsr-image-")
+        assert Path(temporary).name.startswith(".localsr-image-")
         assert Path(destination) == Path(dest_path)
 
     # An existing file is refused, left as it was, and no temporary stays behind.
@@ -109,7 +109,7 @@ def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
         )
 
     assert overwrite_target.read_text() == "old data"
-    assert not list(tmp_path.glob(".overwrite_test.png.localsr-image-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-image-*.tmp"))
 
 
 def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
@@ -141,7 +141,7 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
             scale=1,
         )
 
-    assert not list(tmp_path.glob(".fail_replace.png.localsr-image-*.tmp")), (
+    assert not list(tmp_path.glob(".localsr-image-*.tmp")), (
         "Orphaned app-owned temporary must be cleaned up on replace failure"
     )
     assert not os.path.exists(dest_path1), "Destination path should not exist on replace failure"
@@ -171,7 +171,7 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
             scale=1,
         )
 
-    assert not list(tmp_path.glob(".fail_pil_save.png.localsr-image-*.tmp")), (
+    assert not list(tmp_path.glob(".localsr-image-*.tmp")), (
         "Orphaned app-owned temporary must be cleaned up on PIL save failure"
     )
     assert not os.path.exists(dest_path2), "Destination path should not exist on PIL save failure"

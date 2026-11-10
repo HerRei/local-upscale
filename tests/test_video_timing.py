@@ -202,7 +202,7 @@ def test_hdr_is_rejected_before_silent_sdr_export(tmp_path, transfer):
     with pytest.raises(RuntimeError, match="HDR.*SDR"):
         run_standard(source, output)
     assert not output.exists()
-    assert not list(tmp_path.glob(".output.mp4.localsr-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-*.tmp"))
 
 
 def ffmpeg(*args):
@@ -388,4 +388,4 @@ def test_cancel_during_remux_preserves_existing_destination(tmp_path):
             cancel_event=cancel,
         )
     assert output.read_bytes() == b"existing user output"
-    assert not list(tmp_path.glob(".out.mp4.localsr-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-*.tmp"))

@@ -169,7 +169,7 @@ def test_image_manager_save_delegation(tmp_path):
 
     assert os.path.exists(out_path)
     assert unrelated.read_text(encoding="utf-8") == "belongs to the user"
-    assert not list(tmp_path.glob(".out_save.png.localsr-image-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-image-*.tmp"))
     out_img = Image.open(out_path)
     assert out_img.size == (10, 10)
 
@@ -188,7 +188,7 @@ def test_atomic_save_error_cleanup(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Disk error during publish"):
         manager.save_from_writer(out_mmap, out_path, "png", 98, False, None, {}, 1)
 
-    assert not list(tmp_path.glob(".out_fail.png.localsr-image-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-image-*.tmp"))
     assert not os.path.exists(out_path)
 
 

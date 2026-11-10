@@ -38,7 +38,7 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
-from .output_publish import OutputExistsError, publish_output
+from .output_publish import OutputExistsError, owned_temporary, publish_output
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -794,13 +794,7 @@ def encode_video(
 
 def _owned_output_temporary(destination: Path, phase: str, directory: str | None = None) -> Path:
     """Reserve one unique LocalSR-owned sibling for an atomic final replace."""
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{destination.name}.localsr-{phase}-",
-        suffix=".tmp",
-        dir=directory or destination.parent,
-    )
-    os.close(descriptor)
-    return Path(name)
+    return owned_temporary(directory or destination.parent, phase)
 
 
 def _packet_time(packet: av.Packet) -> float:

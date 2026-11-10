@@ -13,7 +13,7 @@ import torch
 from PIL import Image, ImageCms, ImageOps, TiffImagePlugin, UnidentifiedImageError
 
 from localsr.core.image_formats import is_raw_input, is_system_decoded
-from localsr.core.output_publish import publish_output
+from localsr.core.output_publish import owned_temporary, publish_output
 
 SAFE_EXIF_TAGS = frozenset({306, 315, 33432})
 # 16-bit grey PNG and TIFF scans open as I;16, and some files as 32-bit I. Pillow
@@ -457,15 +457,9 @@ class ImageManager:
         destination = Path(destination_path)
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError("Cancelled before image export.")
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.localsr-image-",
-            suffix=".tmp",
-            # The native host provides a per-job directory on the output's
-            # filesystem, so even a force-stopped encode can be cleaned up.
-            dir=temporary_directory or destination.parent,
-        )
-        os.close(descriptor)
-        tmp_path = Path(temporary_name)
+        # The native host provides a per-job directory on the output's
+        # filesystem, so even a force-stopped encode can be cleaned up.
+        tmp_path = owned_temporary(temporary_directory or destination.parent, "image")
         try:
             if fmt in ["jpg", "jpeg"]:
                 if out_img.mode == "RGBA":
